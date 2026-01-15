@@ -27,3 +27,13 @@ Desktop.ini
 
 # Linux specific
 *~
+
+# Large files to exclude
+old_cpp/uffs/UltraFastFileSearch-code/.vs/
+old_cpp/uffs/llvm/lib/
+old_cpp/uffs/Original Packages/
+old_cpp/uffs/UltraFastFileSearch-code/x64/
+*.pch
+*.ipch
+*.lib
+*.7z
