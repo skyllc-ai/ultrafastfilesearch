@@ -1,0 +1,56 @@
+# ============================================================================
+# uffs-cli: Command-Line Interface
+# ============================================================================
+# Fast file search from the command line.
+#
+# Usage:
+#   uffs search "*.rs" --drive C
+#   uffs index --drive C --output c_drive.parquet
+#   uffs search "*.txt" --index c_drive.parquet
+# ============================================================================
+
+[package]
+name = "uffs-cli"
+description = "Command-line interface for UltraFastFileSearch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "uffs"
+path = "src/main.rs"
+
+[dependencies]
+# Internal crates
+uffs-polars.workspace = true
+uffs-mft.workspace = true
+uffs-core.workspace = true
+
+# Async runtime
+tokio.workspace = true
+
+# CLI
+clap.workspace = true
+indicatif.workspace = true
+
+# Error handling
+anyhow.workspace = true
+miette.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Time
+chrono.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+

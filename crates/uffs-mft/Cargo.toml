@@ -1,0 +1,65 @@
+# ============================================================================
+# uffs-mft: MFT Reading & Parsing Library
+# ============================================================================
+# This crate provides direct NTFS Master File Table (MFT) reading
+# capabilities, outputting data as Polars DataFrames.
+#
+# Features:
+# - Direct MFT reading (bypasses Windows file enumeration APIs)
+# - Async I/O for high throughput
+# - Parquet persistence for fast index loading
+# - Cross-platform abstractions (Windows-only for MFT, but API is portable)
+# ============================================================================
+
+[package]
+name = "uffs-mft"
+description = "NTFS MFT reading library for UltraFastFileSearch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Internal: Polars facade
+uffs-polars.workspace = true
+
+# Async runtime
+tokio.workspace = true
+futures.workspace = true
+
+# Data structures
+bitflags.workspace = true
+bitvec.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Time
+chrono.workspace = true
+
+# Windows APIs (Windows only)
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+windows-core.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+tokio = { workspace = true, features = ["test-util", "macros"] }
+
+[[bench]]
+name = "mft_read"
+harness = false
+
+[lints.rust]
+unsafe_code = "warn"  # Some unsafe needed for Windows FFI
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+

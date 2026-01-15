@@ -1,0 +1,65 @@
+# ============================================================================
+# uffs-polars: Polars Facade Crate
+# ============================================================================
+# This crate exists for compilation time isolation. Polars is a heavy
+# dependency that takes ~4 minutes to compile. By isolating it here,
+# changes to other crates don't trigger Polars recompilation.
+#
+# All other crates depend on this instead of Polars directly.
+# ============================================================================
+
+[package]
+name = "uffs-polars"
+description = "Polars facade for UltraFastFileSearch - compilation isolation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+polars = { version = "0.46", features = [
+    # ===== Core Features =====
+    "lazy",              # Lazy evaluation (query optimization)
+    "streaming",         # Process larger-than-RAM datasets
+    "dtype-full",        # All data types
+
+    # ===== String Operations =====
+    "strings",           # String manipulation
+    "regex",             # Regex pattern matching
+    "concat_str",        # String concatenation
+
+    # ===== Temporal Operations =====
+    "temporal",          # Date/time operations
+    "timezones",         # Timezone support
+
+    # ===== I/O Formats =====
+    "parquet",           # Parquet read/write (primary persistence)
+    "json",              # JSON export
+    "csv",               # CSV export
+
+    # ===== Performance =====
+    "performant",        # Performance optimizations
+
+    # ===== Query Operations =====
+    "is_in",             # IN operator
+    "rows",              # Row operations
+    "arg_where",         # Argument where
+    "rank",              # Ranking operations
+    "round_series",      # Rounding
+    "abs",               # Absolute value
+
+    # ===== DataFrame Operations =====
+    "diagonal_concat",   # Diagonal concatenation
+    "cross_join",        # Cross join
+    "describe",          # DataFrame describe
+] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+

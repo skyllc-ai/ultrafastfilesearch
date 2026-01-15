@@ -1,0 +1,54 @@
+# ============================================================================
+# uffs-core: Query Engine Library
+# ============================================================================
+# This crate provides the query engine for searching and filtering MFT data
+# using Polars lazy API for optimal performance.
+#
+# Features:
+# - Fluent query builder API
+# - Glob and regex pattern matching
+# - Path resolution (FRS → full path)
+# - Multiple export formats (table, JSON, CSV)
+# ============================================================================
+
+[package]
+name = "uffs-core"
+description = "Query engine for UltraFastFileSearch using Polars"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Internal crates
+uffs-polars.workspace = true
+uffs-mft.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Serialization (for export)
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+tokio = { workspace = true, features = ["test-util", "macros"] }
+
+[[bench]]
+name = "query"
+harness = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+

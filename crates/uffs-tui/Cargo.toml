@@ -1,0 +1,53 @@
+# ============================================================================
+# uffs-tui: Terminal User Interface
+# ============================================================================
+# Interactive file search in the terminal using ratatui.
+#
+# Features:
+# - Real-time search as you type
+# - File preview
+# - Keyboard navigation
+# - Multiple views (list, tree, details)
+# ============================================================================
+
+[package]
+name = "uffs-tui"
+description = "Terminal UI for UltraFastFileSearch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "uffs-tui"
+path = "src/main.rs"
+
+[dependencies]
+# Internal crates
+uffs-polars.workspace = true
+uffs-mft.workspace = true
+uffs-core.workspace = true
+
+# Async runtime
+tokio.workspace = true
+
+# TUI
+ratatui.workspace = true
+crossterm.workspace = true
+
+# Error handling
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+

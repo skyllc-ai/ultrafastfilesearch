@@ -1,0 +1,49 @@
+# ============================================================================
+# uffs-gui: Graphical User Interface
+# ============================================================================
+# Native GUI for UltraFastFileSearch.
+#
+# This crate is a placeholder for future GUI implementation.
+# Planned technologies: egui or Tauri
+# ============================================================================
+
+[package]
+name = "uffs-gui"
+description = "Graphical UI for UltraFastFileSearch (future)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "uffs-gui"
+path = "src/main.rs"
+
+[dependencies]
+# Internal crates
+uffs-polars.workspace = true
+uffs-mft.workspace = true
+uffs-core.workspace = true
+
+# Async runtime
+tokio.workspace = true
+
+# Error handling
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# GUI framework (placeholder - will be added when implemented)
+# egui = "0.28"
+# eframe = "0.28"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+
