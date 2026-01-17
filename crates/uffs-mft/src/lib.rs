@@ -113,7 +113,9 @@ pub use ntfs::{
 };
 // Re-export platform types
 #[cfg(windows)]
-pub use platform::{MftBitmap, MftExtent, NtfsVolumeData, VolumeHandle, detect_ntfs_drives};
+pub use platform::{
+    MftBitmap, MftExtent, NtfsVolumeData, VolumeHandle, detect_ntfs_drives, is_elevated,
+};
 pub use raw::{
     LoadRawOptions, RawMftData, RawMftHeader, SaveRawOptions, load_raw_mft, load_raw_mft_header,
     save_raw_mft,

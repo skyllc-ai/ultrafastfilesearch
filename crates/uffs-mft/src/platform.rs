@@ -973,19 +973,19 @@ pub fn detect_ntfs_drives() -> Vec<char> {
 
 /// Checks if a drive is an NTFS volume.
 ///
-/// This attempts to get NTFS volume data from the drive. If successful,
-/// the drive is NTFS formatted.
-#[allow(unsafe_code)] // Required: Windows FFI (GetDriveTypeW, CreateFileW, DeviceIoControl)
+/// Uses `GetVolumeInformationW` to check the filesystem name, which doesn't
+/// require elevated privileges.
+#[allow(unsafe_code)] // Required: Windows FFI (GetDriveTypeW, GetVolumeInformationW)
 fn is_ntfs_volume(drive_letter: char) -> bool {
-    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+    use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetVolumeInformationW};
 
     // First check if it's a fixed or removable drive (skip network, CD-ROM, etc.)
-    let path: Vec<u16> = format!("{}:\\", drive_letter.to_ascii_uppercase())
+    let root_path: Vec<u16> = format!("{}:\\", drive_letter.to_ascii_uppercase())
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
 
-    let drive_type = unsafe { GetDriveTypeW(PCWSTR(path.as_ptr())) };
+    let drive_type = unsafe { GetDriveTypeW(PCWSTR(root_path.as_ptr())) };
 
     // DRIVE_FIXED = 3, DRIVE_REMOVABLE = 2
     // Skip DRIVE_UNKNOWN (0), DRIVE_NO_ROOT_DIR (1), DRIVE_REMOTE (4), DRIVE_CDROM
@@ -994,50 +994,29 @@ fn is_ntfs_volume(drive_letter: char) -> bool {
         return false;
     }
 
-    // Try to open the volume and get NTFS data
-    let volume_path: Vec<u16> = format!("\\\\.\\{}:", drive_letter.to_ascii_uppercase())
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-
-    let handle = unsafe {
-        CreateFileW(
-            PCWSTR(volume_path.as_ptr()),
-            FILE_READ_ATTRIBUTES.0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            None,
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
-            None,
-        )
-    };
-
-    let Ok(handle) = handle else {
-        return false;
-    };
-
-    // Try to get NTFS volume data
-    use windows::Win32::System::IO::DeviceIoControl;
-
-    let mut buffer = NTFS_VOLUME_DATA_BUFFER::default();
-    let mut bytes_returned: u32 = 0;
+    // Get filesystem name using GetVolumeInformationW (no admin required)
+    let mut fs_name_buffer: [u16; 32] = [0; 32];
 
     let result = unsafe {
-        DeviceIoControl(
-            handle,
-            FSCTL_GET_NTFS_VOLUME_DATA,
-            None,
-            0,
-            Some(core::ptr::from_mut(&mut buffer).cast()),
-            size_of::<NTFS_VOLUME_DATA_BUFFER>() as u32,
-            Some(&mut bytes_returned),
-            None,
+        GetVolumeInformationW(
+            PCWSTR(root_path.as_ptr()),
+            None,                                   // Volume name buffer (not needed)
+            None,                                   // Volume serial number (not needed)
+            None,                                   // Max component length (not needed)
+            None,                                   // File system flags (not needed)
+            Some(&mut fs_name_buffer),              // File system name buffer
         )
     };
 
-    let _ = unsafe { CloseHandle(handle) };
+    if result.is_err() {
+        return false;
+    }
 
-    result.is_ok()
+    // Convert filesystem name to string and check if it's NTFS
+    let fs_name = String::from_utf16_lossy(&fs_name_buffer);
+    let fs_name = fs_name.trim_end_matches('\0');
+
+    fs_name == "NTFS"
 }
 
 #[cfg(test)]

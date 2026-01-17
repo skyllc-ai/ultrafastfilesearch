@@ -79,6 +79,18 @@ pub async fn search(
             // No drive specified - search ALL available NTFS drives
             #[cfg(windows)]
             {
+                // Check for admin privileges first - MFT reading requires elevation
+                if !uffs_mft::is_elevated() {
+                    bail!(
+                        "Administrator privileges required.\n\
+                         \n\
+                         UFFS reads the NTFS Master File Table directly, which requires elevated access.\n\
+                         \n\
+                         Solutions:\n\
+                         1. Run PowerShell/Terminal as Administrator\n\
+                         2. Use a pre-built index: uffs search --index <file.parquet> \"*.txt\""
+                    );
+                }
                 let all_drives = uffs_mft::detect_ntfs_drives();
                 if all_drives.is_empty() {
                     bail!("No NTFS drives found on this system");
