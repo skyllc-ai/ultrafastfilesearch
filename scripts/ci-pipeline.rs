@@ -482,10 +482,11 @@ async fn phase1_optimized(ctx: &PipelineContext) -> Result<()> {
     execute_command("Format code", "cargo", &["fmt", "--all"], ctx).await?;
 
     // Step 3: Coverage tests
+    // NOTE: Using --lib --bins --tests instead of --all-targets to exclude benchmarks.
     execute_command_with_env(
         "Coverage tests",
         "cargo",
-        &["llvm-cov", "nextest", "--workspace", "--all-features", "--all-targets", "--jobs", "8", "--no-report"],
+        &["llvm-cov", "nextest", "--workspace", "--all-features", "--lib", "--bins", "--tests", "--jobs", "8", "--no-report"],
         &[],
         ctx,
     ).await?;
@@ -688,7 +689,7 @@ async fn coverage_report_command(ctx: &PipelineContext) -> Result<()> {
         execute_command_with_env(
             "Coverage tests",
             "cargo",
-            &["llvm-cov", "nextest", "--workspace", "--all-features", "--all-targets", "--jobs", "8", "--html"],
+            &["llvm-cov", "nextest", "--workspace", "--all-features", "--lib", "--bins", "--tests", "--jobs", "8", "--html"],
             &[],
             ctx,
         ).await?;
@@ -800,11 +801,14 @@ async fn run_enhanced_phase1(state: &mut WorkflowState, ctx: &PipelineContext) -
     }).await?;
 
     // Step 3: Coverage tests
+    // NOTE: Using --lib --bins --tests instead of --all-targets to exclude benchmarks.
+    // Benchmarks create large DataFrames during initialization which causes SIGKILL
+    // when nextest tries to enumerate tests.
     execute_step_with_tracking(state, STEP_COVERAGE_TESTS, || async {
         execute_command_with_env(
             "Coverage tests",
             "cargo",
-            &["llvm-cov", "nextest", "--workspace", "--all-features", "--all-targets", "--bins", "--jobs", "8", "--no-report"],
+            &["llvm-cov", "nextest", "--workspace", "--all-features", "--lib", "--bins", "--tests", "--jobs", "8", "--no-report"],
             &[],
             ctx,
         ).await

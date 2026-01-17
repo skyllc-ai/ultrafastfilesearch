@@ -23,6 +23,8 @@
 
 #![cfg(windows)]
 
+use std::mem::size_of;
+
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
@@ -58,7 +60,7 @@ impl AlignedBuffer {
     pub fn new(size: usize) -> Self {
         // Allocate extra space for alignment
         let alloc_size = size + SECTOR_SIZE;
-        let mut data = vec![0_u8; alloc_size];
+        let data = vec![0_u8; alloc_size];
 
         // Calculate alignment offset
         let ptr = data.as_ptr() as usize;
@@ -343,6 +345,7 @@ impl MftRecordReader {
     /// # Errors
     ///
     /// Returns an error if the record cannot be read or is invalid.
+    #[allow(unsafe_code)] // Required: Windows FFI (SetFilePointerEx, ReadFile)
     pub fn read_record(&mut self, handle: HANDLE, frs: u64) -> Result<&[u8]> {
         // Use extent map to get the physical offset (handles fragmentation)
         let record_offset =
@@ -424,12 +427,13 @@ impl MftRecordReader {
 /// # Returns
 ///
 /// `true` if the fixup was successful, `false` if the record is corrupted.
+#[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
 pub fn apply_fixup(data: &mut [u8]) -> bool {
-    if data.len() < core::mem::size_of::<MultiSectorHeader>() {
+    if data.len() < size_of::<MultiSectorHeader>() {
         return false;
     }
 
-    // Read the multi-sector header
+    // SAFETY: We've verified the buffer is large enough.
     let header: MultiSectorHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
 
     // Validate magic number
@@ -599,12 +603,13 @@ pub enum ParseResult {
 ///
 /// `ParseResult::Base` for base records, `ParseResult::Extension` for
 /// extension records, or `ParseResult::Skip` if invalid/not in use.
+#[allow(unsafe_code)] // Required: ptr::read for packed NTFS structs
 pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
-    if data.len() < core::mem::size_of::<FileRecordSegmentHeader>() {
+    if data.len() < size_of::<FileRecordSegmentHeader>() {
         return ParseResult::Skip;
     }
 
-    // Read the file record header
+    // SAFETY: We've verified the buffer is large enough for the header.
     let header: FileRecordSegmentHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
 
     // Check if record is in use
@@ -612,8 +617,9 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
         return ParseResult::Skip;
     }
 
-    // Check magic number
-    if !header.multi_sector_header.is_file_record() {
+    // Copy the packed field to avoid unaligned reference
+    let multi_sector_header = header.multi_sector_header;
+    if !multi_sector_header.is_file_record() {
         return ParseResult::Skip;
     }
 
@@ -637,7 +643,8 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     let mut offset = header.first_attribute_offset as usize;
     let max_offset = core::cmp::min(header.bytes_in_use as usize, data.len());
 
-    while offset + core::mem::size_of::<AttributeRecordHeader>() <= max_offset {
+    // SAFETY: We've verified the buffer is large enough.
+    while offset + size_of::<AttributeRecordHeader>() <= max_offset {
         let attr_header: AttributeRecordHeader =
             unsafe { core::ptr::read(data[offset..].as_ptr().cast()) };
 
@@ -737,10 +744,11 @@ pub fn parse_record(data: &[u8], frs: u64) -> Option<ParsedRecord> {
 }
 
 /// Parses the `$STANDARD_INFORMATION` attribute.
+#[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
 fn parse_standard_info(
     data: &[u8],
     attr_offset: usize,
-    header: &AttributeRecordHeader,
+    _header: &AttributeRecordHeader,
     result: &mut ParsedRecord,
 ) {
     use crate::ntfs::filetime_to_unix_micros;
@@ -750,23 +758,30 @@ fn parse_standard_info(
     let value_offset = u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0])) as usize;
 
     let si_offset = attr_offset + value_offset;
-    if si_offset + core::mem::size_of::<StandardInformation>() > data.len() {
+    if si_offset + size_of::<StandardInformation>() > data.len() {
         return;
     }
 
+    // SAFETY: We've verified the buffer is large enough.
     let si: StandardInformation = unsafe { core::ptr::read(data[si_offset..].as_ptr().cast()) };
 
-    result.created = filetime_to_unix_micros(si.creation_time);
-    result.modified = filetime_to_unix_micros(si.modification_time);
-    result.accessed = filetime_to_unix_micros(si.access_time);
-    result.flags = (si.file_attributes & 0xFFFF) as u16;
+    result.std_info.created = filetime_to_unix_micros(si.creation_time);
+    result.std_info.modified = filetime_to_unix_micros(si.modification_time);
+    result.std_info.accessed = filetime_to_unix_micros(si.access_time);
+    // Extract flags from file_attributes
+    let attrs = si.file_attributes;
+    result.std_info.is_readonly = (attrs & 0x0001) != 0;
+    result.std_info.is_hidden = (attrs & 0x0002) != 0;
+    result.std_info.is_system = (attrs & 0x0004) != 0;
+    result.std_info.is_archive = (attrs & 0x0020) != 0;
 }
 
 /// Parses the `$FILE_NAME` attribute.
+#[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
 fn parse_file_name(
     data: &[u8],
     attr_offset: usize,
-    header: &AttributeRecordHeader,
+    _header: &AttributeRecordHeader,
     result: &mut ParsedRecord,
 ) {
     use crate::ntfs::file_reference_to_frs;
@@ -776,10 +791,11 @@ fn parse_file_name(
     let value_offset = u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0])) as usize;
 
     let fn_offset = attr_offset + value_offset;
-    if fn_offset + core::mem::size_of::<FileNameAttribute>() > data.len() {
+    if fn_offset + size_of::<FileNameAttribute>() > data.len() {
         return;
     }
 
+    // SAFETY: We've verified the buffer is large enough.
     let fn_attr: FileNameAttribute = unsafe { core::ptr::read(data[fn_offset..].as_ptr().cast()) };
 
     // Get namespace
@@ -803,7 +819,7 @@ fn parse_file_name(
 
     // Extract file name (UTF-16LE)
     let name_len = fn_attr.file_name_length as usize;
-    let name_offset = fn_offset + core::mem::size_of::<FileNameAttribute>();
+    let name_offset = fn_offset + size_of::<FileNameAttribute>();
 
     if name_offset + name_len * 2 > data.len() {
         return;
@@ -826,6 +842,7 @@ fn parse_file_name(
 }
 
 /// Parses `$STANDARD_INFORMATION` into `ExtendedStandardInfo`.
+#[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
 fn parse_standard_info_full(data: &[u8], attr_offset: usize, result: &mut ExtendedStandardInfo) {
     use crate::ntfs::filetime_to_unix_micros;
 
@@ -834,10 +851,11 @@ fn parse_standard_info_full(data: &[u8], attr_offset: usize, result: &mut Extend
     let value_offset = u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0])) as usize;
 
     let si_offset = attr_offset + value_offset;
-    if si_offset + core::mem::size_of::<StandardInformation>() > data.len() {
+    if si_offset + size_of::<StandardInformation>() > data.len() {
         return;
     }
 
+    // SAFETY: We've verified the buffer is large enough.
     let si: StandardInformation = unsafe { core::ptr::read(data[si_offset..].as_ptr().cast()) };
 
     result.created = filetime_to_unix_micros(si.creation_time);
@@ -856,6 +874,7 @@ fn parse_standard_info_full(data: &[u8], attr_offset: usize, result: &mut Extend
 }
 
 /// Parses `$FILE_NAME` and returns a `NameInfo`.
+#[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
 fn parse_file_name_full(data: &[u8], attr_offset: usize) -> Option<NameInfo> {
     use crate::ntfs::file_reference_to_frs;
 
@@ -864,15 +883,16 @@ fn parse_file_name_full(data: &[u8], attr_offset: usize) -> Option<NameInfo> {
     let value_offset = u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0])) as usize;
 
     let fn_offset = attr_offset + value_offset;
-    if fn_offset + core::mem::size_of::<FileNameAttribute>() > data.len() {
+    if fn_offset + size_of::<FileNameAttribute>() > data.len() {
         return None;
     }
 
+    // SAFETY: We've verified the buffer is large enough.
     let fn_attr: FileNameAttribute = unsafe { core::ptr::read(data[fn_offset..].as_ptr().cast()) };
 
     // Extract file name (UTF-16LE)
     let name_len = fn_attr.file_name_length as usize;
-    let name_offset = fn_offset + core::mem::size_of::<FileNameAttribute>();
+    let name_offset = fn_offset + size_of::<FileNameAttribute>();
 
     if name_offset + name_len * 2 > data.len() {
         return None;
@@ -1152,6 +1172,7 @@ impl BatchMftReader {
     /// # Returns
     ///
     /// A tuple of (buffer slice, first FRS in buffer, number of records read).
+    #[allow(unsafe_code)] // Required: Windows FFI (SetFilePointerEx, ReadFile)
     pub fn read_batch(&mut self, handle: HANDLE, start_frs: u64) -> Result<(&[u8], u64, usize)> {
         // Get physical offset for the starting FRS
         let start_offset =
@@ -1543,6 +1564,7 @@ impl ParallelMftReader {
     }
 
     /// Reads a single chunk from disk.
+    #[allow(unsafe_code)] // Required: Windows FFI (SetFilePointerEx, ReadFile)
     fn read_chunk(&self, handle: HANDLE, chunk: &ReadChunk, record_size: u32) -> Result<Vec<u8>> {
         let read_size = chunk.record_count * u64::from(record_size);
 

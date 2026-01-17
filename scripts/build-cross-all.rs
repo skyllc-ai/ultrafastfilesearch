@@ -106,9 +106,11 @@ fn main() {
             target.platform_name,
             "═".repeat(60)
         );
-        if build_for_target(target, &target_dir) {
-            copy_binaries_to_dist(&version, target, &target_dir);
+        if !build_for_target(target, &target_dir) {
+            eprintln!("\n❌ Build failed for {} - aborting!", target.triple);
+            exit(1);
         }
+        copy_binaries_to_dist(&version, target, &target_dir);
     }
 
     update_all_checksums(&version, &available);

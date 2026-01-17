@@ -32,7 +32,7 @@ members = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.1.1"
+version = "0.1.4"
 edition = "2024"
 rust-version = "1.85"
 license = "MPL-2.0 OR LicenseRef-UFFS-Commercial"
@@ -66,11 +66,14 @@ futures = "0.3.31"
 
 # ───── Windows APIs (Windows only) ─────
 windows = { version = "0.62.2", features = [
-    "Win32_Storage_FileSystem",
-    "Win32_System_Ioctl",
-    "Win32_Storage",
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage",
+    "Win32_Storage_FileSystem",
     "Win32_System_Com",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_Threading",
     "Win32_System_Wmi",
 ] }
 windows-core = "0.62.2"

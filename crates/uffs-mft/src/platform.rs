@@ -11,8 +11,7 @@
 
 #![cfg(windows)]
 
-use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
+use std::mem::size_of;
 use std::path::PathBuf;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
@@ -22,7 +21,7 @@ use windows::Win32::Storage::FileSystem::{
 };
 use windows::Win32::System::Ioctl::{
     FSCTL_GET_NTFS_VOLUME_DATA, FSCTL_GET_RETRIEVAL_POINTERS, NTFS_VOLUME_DATA_BUFFER,
-    RETRIEVAL_POINTERS_BUFFER, STARTING_VCN_INPUT_BUFFER,
+    STARTING_VCN_INPUT_BUFFER,
 };
 use windows::core::PCWSTR;
 
@@ -98,6 +97,7 @@ impl VolumeHandle {
     ///
     /// This function opens a raw volume handle which requires Administrator
     /// privileges.
+    #[allow(unsafe_code)] // Required: Windows FFI (CreateFileW)
     pub fn open(volume: char) -> Result<Self> {
         let volume = volume.to_ascii_uppercase();
 
@@ -156,6 +156,7 @@ impl VolumeHandle {
     }
 
     /// Retrieves NTFS volume data using `FSCTL_GET_NTFS_VOLUME_DATA`.
+    #[allow(unsafe_code)] // Required: Windows FFI (DeviceIoControl)
     fn get_ntfs_volume_data(handle: HANDLE, volume: char) -> Result<NtfsVolumeData> {
         use windows::Win32::System::IO::DeviceIoControl;
 
@@ -166,12 +167,12 @@ impl VolumeHandle {
             DeviceIoControl(
                 handle,
                 FSCTL_GET_NTFS_VOLUME_DATA,
-                None,                                                   // Input buffer
-                0,                                                      // Input buffer size
-                Some(core::ptr::from_mut(&mut buffer).cast()),          // Output buffer
-                core::mem::size_of::<NTFS_VOLUME_DATA_BUFFER>() as u32, // Output buffer size
-                Some(&mut bytes_returned),                              // Bytes returned
-                None,                                                   // Overlapped
+                None,                                          // Input buffer
+                0,                                             // Input buffer size
+                Some(core::ptr::from_mut(&mut buffer).cast()), // Output buffer
+                size_of::<NTFS_VOLUME_DATA_BUFFER>() as u32,   // Output buffer size
+                Some(&mut bytes_returned),                     // Bytes returned
+                None,                                          // Overlapped
             )
         };
 
@@ -181,20 +182,20 @@ impl VolumeHandle {
         }
 
         Ok(NtfsVolumeData {
-            volume_serial_number: buffer.VolumeSerialNumber.QuadPart as u64,
-            number_of_sectors: buffer.NumberSectors.QuadPart as u64,
-            total_clusters: buffer.TotalClusters.QuadPart as u64,
-            free_clusters: buffer.FreeClusters.QuadPart as u64,
-            total_reserved: buffer.TotalReserved.QuadPart as u64,
+            volume_serial_number: buffer.VolumeSerialNumber as u64,
+            number_of_sectors: buffer.NumberSectors as u64,
+            total_clusters: buffer.TotalClusters as u64,
+            free_clusters: buffer.FreeClusters as u64,
+            total_reserved: buffer.TotalReserved as u64,
             bytes_per_sector: buffer.BytesPerSector,
             bytes_per_cluster: buffer.BytesPerCluster,
             bytes_per_file_record_segment: buffer.BytesPerFileRecordSegment,
             clusters_per_file_record_segment: buffer.ClustersPerFileRecordSegment,
-            mft_valid_data_length: buffer.MftValidDataLength.QuadPart as u64,
-            mft_start_lcn: buffer.MftStartLcn.QuadPart as u64,
-            mft2_start_lcn: buffer.Mft2StartLcn.QuadPart as u64,
-            mft_zone_start: buffer.MftZoneStart.QuadPart as u64,
-            mft_zone_end: buffer.MftZoneEnd.QuadPart as u64,
+            mft_valid_data_length: buffer.MftValidDataLength as u64,
+            mft_start_lcn: buffer.MftStartLcn as u64,
+            mft2_start_lcn: buffer.Mft2StartLcn as u64,
+            mft_zone_start: buffer.MftZoneStart as u64,
+            mft_zone_end: buffer.MftZoneEnd as u64,
         })
     }
 
@@ -245,6 +246,7 @@ impl VolumeHandle {
     /// # Errors
     ///
     /// Returns an error if the boot sector cannot be read.
+    #[allow(unsafe_code)] // Required: Windows FFI and ptr::read for packed struct
     pub fn read_boot_sector(&self) -> Result<NtfsBootSector> {
         use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
@@ -290,6 +292,7 @@ impl VolumeHandle {
     ///
     /// Returns an error if the MFT file cannot be opened or the extents
     /// cannot be retrieved.
+    #[allow(unsafe_code)] // Required: Windows FFI (CreateFileW, DeviceIoControl, CloseHandle)
     pub fn get_mft_extents(&self) -> Result<Vec<MftExtent>> {
         // Open the $MFT file
         let mft_path: Vec<u16> = format!("\\\\.\\{}:\\$MFT", self.volume)
@@ -311,7 +314,7 @@ impl VolumeHandle {
 
         let mft_handle = match mft_handle {
             Ok(h) => h,
-            Err(err) => {
+            Err(_err) => {
                 // Fall back to using volume data if we can't open $MFT directly
                 // This happens on some systems where direct $MFT access is restricted
                 return Ok(vec![MftExtent {
@@ -342,6 +345,7 @@ impl VolumeHandle {
     /// # Errors
     ///
     /// Returns an error if the bitmap cannot be read.
+    #[allow(unsafe_code)] // Required: Windows FFI for CreateFileW, GetFileSizeEx, ReadFile
     pub fn get_mft_bitmap(&self) -> Result<MftBitmap> {
         // Open the $MFT::$BITMAP stream
         let bitmap_path: Vec<u16> = format!("{}:\\$MFT::$BITMAP", self.volume)
@@ -418,6 +422,7 @@ impl VolumeHandle {
 struct HandleGuard(HANDLE);
 
 impl Drop for HandleGuard {
+    #[allow(unsafe_code)] // Required: Windows FFI for CloseHandle
     fn drop(&mut self) {
         if !self.0.is_invalid() {
             unsafe {
@@ -462,13 +467,14 @@ impl MftExtent {
 }
 
 /// Retrieves the extent map for a file using `FSCTL_GET_RETRIEVAL_POINTERS`.
+#[allow(unsafe_code)] // Required: Windows FFI (DeviceIoControl) and mem::zeroed
 fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
     use windows::Win32::System::IO::DeviceIoControl;
 
     let mut extents = Vec::new();
-    let mut starting_vcn = STARTING_VCN_INPUT_BUFFER {
-        StartingVcn: windows::Win32::Foundation::LARGE_INTEGER { QuadPart: 0 },
-    };
+    // SAFETY: STARTING_VCN_INPUT_BUFFER is a simple struct with a single i64 field.
+    // Zeroing it sets StartingVcn to 0, which is what we want.
+    let mut starting_vcn: STARTING_VCN_INPUT_BUFFER = unsafe { std::mem::zeroed() };
 
     // Initial buffer size - will grow if needed
     let mut buffer_size = 64 * 1024; // 64KB initial
@@ -482,7 +488,7 @@ fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
                 handle,
                 FSCTL_GET_RETRIEVAL_POINTERS,
                 Some(core::ptr::from_ref(&starting_vcn).cast()),
-                core::mem::size_of::<STARTING_VCN_INPUT_BUFFER>() as u32,
+                size_of::<STARTING_VCN_INPUT_BUFFER>() as u32,
                 Some(buffer.as_mut_ptr().cast()),
                 buffer_size as u32,
                 Some(&mut bytes_returned),
@@ -506,7 +512,7 @@ fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
 
                     // Update starting VCN for next call
                     if let Some(last) = extents.last() {
-                        starting_vcn.StartingVcn.QuadPart = (last.vcn + last.cluster_count) as i64;
+                        starting_vcn.StartingVcn = (last.vcn + last.cluster_count) as i64;
                     }
 
                     // Grow buffer
@@ -537,7 +543,7 @@ fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
 
 /// Parses the RETRIEVAL_POINTERS_BUFFER structure.
 fn parse_retrieval_pointers(buffer: &[u8], size: usize, extents: &mut Vec<MftExtent>) {
-    if size < core::mem::size_of::<u32>() + core::mem::size_of::<i64>() {
+    if size < size_of::<u32>() + size_of::<i64>() {
         return;
     }
 
@@ -574,6 +580,7 @@ fn parse_retrieval_pointers(buffer: &[u8], size: usize, extents: &mut Vec<MftExt
 }
 
 impl Drop for VolumeHandle {
+    #[allow(unsafe_code)] // Required: Windows FFI for CloseHandle
     fn drop(&mut self) {
         if !self.handle.is_invalid() {
             unsafe {
@@ -880,13 +887,14 @@ impl Iterator for InUseClusterRangeIterator<'_> {
 ///
 /// MFT reading requires Administrator privileges or `SE_BACKUP_PRIVILEGE`.
 #[must_use]
+#[allow(unsafe_code)] // Required: Windows FFI (OpenProcessToken, GetTokenInformation)
 pub fn is_elevated() -> bool {
-    use windows::Win32::Foundation::BOOL;
     use windows::Win32::Security::{
         GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
     };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
+    // SAFETY: All Windows API calls are properly checked for errors.
     unsafe {
         let mut token_handle = HANDLE::default();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle).is_err() {
@@ -900,7 +908,7 @@ pub fn is_elevated() -> bool {
             token_handle,
             TokenElevation,
             Some(core::ptr::from_mut(&mut elevation).cast()),
-            core::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            size_of::<TOKEN_ELEVATION>() as u32,
             &mut return_length,
         );
 
@@ -935,12 +943,13 @@ pub fn volume_root_path(volume: char) -> PathBuf {
 /// // Output: Found NTFS drives: ['C', 'D', 'E']
 /// ```
 #[must_use]
+#[allow(unsafe_code)] // Required: Windows FFI (GetLogicalDrives)
 pub fn detect_ntfs_drives() -> Vec<char> {
     use windows::Win32::Storage::FileSystem::GetLogicalDrives;
 
     let mut ntfs_drives = Vec::new();
 
-    // Get bitmask of available drives
+    // SAFETY: GetLogicalDrives is a simple Windows API call with no side effects.
     let drive_mask = unsafe { GetLogicalDrives() };
 
     if drive_mask == 0 {
@@ -966,6 +975,7 @@ pub fn detect_ntfs_drives() -> Vec<char> {
 ///
 /// This attempts to get NTFS volume data from the drive. If successful,
 /// the drive is NTFS formatted.
+#[allow(unsafe_code)] // Required: Windows FFI (GetDriveTypeW, CreateFileW, DeviceIoControl)
 fn is_ntfs_volume(drive_letter: char) -> bool {
     use windows::Win32::Storage::FileSystem::GetDriveTypeW;
 
@@ -980,7 +990,7 @@ fn is_ntfs_volume(drive_letter: char) -> bool {
     // DRIVE_FIXED = 3, DRIVE_REMOVABLE = 2
     // Skip DRIVE_UNKNOWN (0), DRIVE_NO_ROOT_DIR (1), DRIVE_REMOTE (4), DRIVE_CDROM
     // (5), DRIVE_RAMDISK (6)
-    if drive_type.0 != 2 && drive_type.0 != 3 {
+    if drive_type != 2 && drive_type != 3 {
         return false;
     }
 
@@ -1019,7 +1029,7 @@ fn is_ntfs_volume(drive_letter: char) -> bool {
             None,
             0,
             Some(core::ptr::from_mut(&mut buffer).cast()),
-            core::mem::size_of::<NTFS_VOLUME_DATA_BUFFER>() as u32,
+            size_of::<NTFS_VOLUME_DATA_BUFFER>() as u32,
             Some(&mut bytes_returned),
             None,
         )

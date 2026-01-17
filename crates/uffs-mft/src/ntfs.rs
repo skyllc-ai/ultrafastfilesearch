@@ -240,12 +240,13 @@ pub fn apply_usa_fixup(buffer: &mut [u8], usa_offset: u16, usa_count: u16) -> bo
 /// `true` if fixup was successful, `false` if the record is invalid
 /// or corrupted.
 #[must_use]
+#[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
 pub fn fixup_file_record(buffer: &mut [u8]) -> bool {
     if buffer.len() < size_of::<MultiSectorHeader>() {
         return false;
     }
 
-    // Read the header
+    // SAFETY: We've verified the buffer is large enough for the header.
     let header: MultiSectorHeader = unsafe { core::ptr::read(buffer.as_ptr().cast()) };
 
     // Verify magic
@@ -754,14 +755,18 @@ impl<'a> AttributeIterator<'a> {
     ///
     /// `None` if the buffer is too small or doesn't contain a valid record.
     #[must_use]
+    #[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
     pub fn new(record: &'a [u8]) -> Option<Self> {
         if record.len() < size_of::<FileRecordSegmentHeader>() {
             return None;
         }
 
+        // SAFETY: We've verified the buffer is large enough for the header.
         let header: FileRecordSegmentHeader = unsafe { core::ptr::read(record.as_ptr().cast()) };
 
-        if !header.multi_sector_header.is_file_record() {
+        // Copy the packed field to avoid unaligned reference
+        let multi_sector_header = header.multi_sector_header;
+        if !multi_sector_header.is_file_record() {
             return None;
         }
 
@@ -804,6 +809,7 @@ impl<'a> AttributeRef<'a> {
 
     /// Returns the resident attribute value, if this is a resident attribute.
     #[must_use]
+    #[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
     pub fn resident_value(&self) -> Option<&'a [u8]> {
         if self.is_non_resident() {
             return None;
@@ -814,6 +820,7 @@ impl<'a> AttributeRef<'a> {
             return None;
         }
 
+        // SAFETY: We've verified the buffer is large enough.
         let resident: ResidentAttributeData =
             unsafe { core::ptr::read(self.data[header_size..].as_ptr().cast()) };
 
@@ -830,6 +837,7 @@ impl<'a> AttributeRef<'a> {
     /// Returns the non-resident attribute data, if this is a non-resident
     /// attribute.
     #[must_use]
+    #[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
     pub fn non_resident_data(&self) -> Option<NonResidentAttributeData> {
         if !self.is_non_resident() {
             return None;
@@ -840,6 +848,7 @@ impl<'a> AttributeRef<'a> {
             return None;
         }
 
+        // SAFETY: We've verified the buffer is large enough.
         Some(unsafe { core::ptr::read(self.data[header_size..].as_ptr().cast()) })
     }
 
@@ -894,13 +903,14 @@ impl<'a> AttributeRef<'a> {
 impl<'a> Iterator for AttributeIterator<'a> {
     type Item = AttributeRef<'a>;
 
+    #[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
     fn next(&mut self) -> Option<Self::Item> {
         // Check if we've reached the end
         if self.offset + size_of::<AttributeRecordHeader>() > self.max_offset {
             return None;
         }
 
-        // Read the attribute header
+        // SAFETY: We've verified the buffer is large enough.
         let header: AttributeRecordHeader =
             unsafe { core::ptr::read(self.data[self.offset..].as_ptr().cast()) };
 
@@ -1078,12 +1088,13 @@ fn parse_variable_length_signed(data: &[u8]) -> i64 {
 ///
 /// A vector of `DataRun` entries, or an empty vector if parsing fails.
 #[must_use]
+#[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
 pub fn extract_data_runs_from_attribute(attr_data: &[u8]) -> Vec<DataRun> {
-    if attr_data.len() < core::mem::size_of::<AttributeRecordHeader>() {
+    if attr_data.len() < size_of::<AttributeRecordHeader>() {
         return Vec::new();
     }
 
-    // Read the attribute header
+    // SAFETY: We've verified the buffer is large enough.
     let header: AttributeRecordHeader = unsafe { core::ptr::read(attr_data.as_ptr().cast()) };
 
     // Must be non-resident
@@ -1092,11 +1103,12 @@ pub fn extract_data_runs_from_attribute(attr_data: &[u8]) -> Vec<DataRun> {
     }
 
     // Read non-resident data
-    let nr_offset = core::mem::size_of::<AttributeRecordHeader>();
-    if attr_data.len() < nr_offset + core::mem::size_of::<NonResidentAttributeData>() {
+    let nr_offset = size_of::<AttributeRecordHeader>();
+    if attr_data.len() < nr_offset + size_of::<NonResidentAttributeData>() {
         return Vec::new();
     }
 
+    // SAFETY: We've verified the buffer is large enough.
     let nr_data: NonResidentAttributeData =
         unsafe { core::ptr::read(attr_data[nr_offset..].as_ptr().cast()) };
 

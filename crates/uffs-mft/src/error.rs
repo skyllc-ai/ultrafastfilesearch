@@ -84,4 +84,8 @@ pub enum MftError {
     /// Feature not available on this platform.
     #[error("MFT reading is only available on Windows")]
     PlatformNotSupported,
+
+    /// Invalid input provided.
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }

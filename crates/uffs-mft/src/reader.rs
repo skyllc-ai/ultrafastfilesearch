@@ -5,6 +5,8 @@
 use core::time::Duration;
 use std::path::Path;
 #[cfg(windows)]
+use std::sync::Arc;
+#[cfg(windows)]
 use std::time::Instant;
 
 use uffs_polars::{DataFrame, ParquetReader, ParquetWriter, SerReader};
@@ -277,6 +279,10 @@ impl MftReader {
         let mut is_temporary_vec: Vec<bool> = Vec::with_capacity(capacity);
 
         for parsed in parsed_records {
+            // Compute counts before moving any fields
+            let name_count = parsed.name_count();
+            let stream_count = parsed.stream_count();
+
             frs_vec.push(parsed.frs);
             parent_frs_vec.push(parsed.parent_frs);
             name_vec.push(parsed.name);
@@ -287,8 +293,8 @@ impl MftReader {
             accessed_vec.push(parsed.std_info.accessed);
             mft_changed_vec.push(parsed.std_info.mft_changed);
             is_directory_vec.push(parsed.is_directory);
-            name_count_vec.push(parsed.name_count());
-            stream_count_vec.push(parsed.stream_count());
+            name_count_vec.push(name_count);
+            stream_count_vec.push(stream_count);
             // Extended flags
             is_readonly_vec.push(parsed.std_info.is_readonly);
             is_hidden_vec.push(parsed.std_info.is_hidden);
@@ -345,7 +351,7 @@ impl MftReader {
         accessed_vec: Vec<i64>,
         flags_vec: Vec<u16>,
     ) -> Result<DataFrame> {
-        use uffs_polars::{DataType, IntoColumn, Series, TimeUnit};
+        use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
 
         let columns = vec![
             Series::new("frs".into(), frs_vec).into_column(),
@@ -395,7 +401,7 @@ impl MftReader {
         is_not_indexed_vec: Vec<bool>,
         is_temporary_vec: Vec<bool>,
     ) -> Result<DataFrame> {
-        use uffs_polars::{DataType, IntoColumn, Series, TimeUnit};
+        use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
 
         let columns = vec![
             // Core identifiers
@@ -548,10 +554,12 @@ impl MftReader {
 
     /// Internal raw MFT reading implementation.
     #[cfg(windows)]
+    #[allow(unsafe_code)] // Required: Windows FFI (SetFilePointerEx, ReadFile)
     fn read_raw_internal(&self) -> Result<(Vec<u8>, u32)> {
         use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
-        use crate::io::{AlignedBuffer, MftExtentMap, SECTOR_SIZE, generate_read_chunks};
+        use crate::io::{AlignedBuffer, MftExtentMap, generate_read_chunks};
+        use crate::ntfs::SECTOR_SIZE;
 
         let record_size = self.handle.file_record_size();
         let volume_data = self.handle.volume_data();
@@ -700,7 +708,7 @@ impl MftReader {
         }
 
         // Merge extensions and get final records
-        let parsed_records = merger.finalize();
+        let parsed_records = merger.merge();
 
         // Convert to DataFrame (same as read_mft_internal)
         Self::parsed_records_to_dataframe(parsed_records)
@@ -748,6 +756,10 @@ impl MftReader {
         let mut is_temporary_vec: Vec<bool> = Vec::with_capacity(capacity);
 
         for parsed in parsed_records {
+            // Compute counts before moving any fields
+            let name_count = parsed.name_count();
+            let stream_count = parsed.stream_count();
+
             frs_vec.push(parsed.frs);
             parent_frs_vec.push(parsed.parent_frs);
             name_vec.push(parsed.name);
@@ -758,8 +770,8 @@ impl MftReader {
             accessed_vec.push(parsed.std_info.accessed);
             mft_changed_vec.push(parsed.std_info.mft_changed);
             is_directory_vec.push(parsed.is_directory);
-            name_count_vec.push(parsed.name_count());
-            stream_count_vec.push(parsed.stream_count());
+            name_count_vec.push(name_count);
+            stream_count_vec.push(stream_count);
             is_readonly_vec.push(parsed.std_info.is_readonly);
             is_hidden_vec.push(parsed.std_info.is_hidden);
             is_system_vec.push(parsed.std_info.is_system);
@@ -1003,14 +1015,15 @@ impl MultiDriveMftReader {
         }
 
         // Reorder columns to put "drive" first
-        let columns: Vec<_> = std::iter::once("drive")
-            .chain(
-                result
-                    .get_column_names()
-                    .into_iter()
-                    .filter(|&c| c != "drive"),
-            )
-            .map(|s| col(s))
+        let column_names: Vec<String> = result
+            .get_column_names()
+            .into_iter()
+            .filter(|c| c.as_str() != "drive")
+            .map(|c| c.to_string())
+            .collect();
+        let columns: Vec<_> = std::iter::once("drive".to_string())
+            .chain(column_names)
+            .map(|s| col(&s))
             .collect();
 
         result
@@ -1021,22 +1034,35 @@ impl MultiDriveMftReader {
     }
 
     /// Read a single drive with optional progress callback.
+    ///
+    /// Uses `spawn_blocking` because `MftReader` contains Windows HANDLEs
+    /// which are not `Send`.
     #[cfg(windows)]
     async fn read_single_drive<F>(drive: char, callback: Option<Arc<F>>) -> Result<DataFrame>
     where
         F: Fn(char, MftProgress) + Send + Sync + 'static,
     {
-        let reader = MftReader::open(drive).await?;
+        // Use spawn_blocking because MftReader contains Windows HANDLEs (*mut c_void)
+        // which are not Send. All MFT I/O is blocking anyway.
+        tokio::task::spawn_blocking(move || {
+            // Create a new runtime for the blocking task
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                let reader = MftReader::open(drive).await?;
 
-        if let Some(cb) = callback {
-            reader
-                .read_with_progress(move |progress| {
-                    cb(drive, progress);
-                })
-                .await
-        } else {
-            reader.read_all().await
-        }
+                if let Some(cb) = callback {
+                    reader
+                        .read_with_progress(move |progress| {
+                            cb(drive, progress);
+                        })
+                        .await
+                } else {
+                    reader.read_all().await
+                }
+            })
+        })
+        .await
+        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
     }
 
     /// Read all drives and return individual results (for detailed error
@@ -1051,8 +1077,6 @@ impl MultiDriveMftReader {
     /// drives).
     #[cfg(windows)]
     pub async fn read_all_detailed(&self) -> Result<Vec<DriveReadResult>> {
-        use std::sync::Arc;
-
         use tokio::task::JoinSet;
 
         if self.drives.is_empty() {

@@ -66,7 +66,7 @@ name = "mft_read"
 harness = false
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Lints (inherit from workspace, with unsafe allowed for Windows FFI)
+# Lints (inherit from workspace, unsafe allowed case-by-case via #[allow])
 # ─────────────────────────────────────────────────────────────────────────────
 [lints]
 workspace = true

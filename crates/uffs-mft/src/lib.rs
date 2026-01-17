@@ -48,12 +48,25 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
-// Suppress unused crate warnings for dev-dependencies (used in benchmarks only)
+// ============================================================================
+// Suppress unused crate warnings
+// ============================================================================
+// These dependencies are used by the uffs_mft binary (src/main.rs), not the
+// library. Cargo doesn't support per-binary dependencies, so we suppress the
+// warnings here. The binary uses these for CLI, logging, and async runtime.
+// Platform-specific dependencies (used on Windows only)
+#[cfg(not(windows))]
+use bitflags as _;
+// Dev-dependencies (used in benchmarks only)
 #[cfg(test)]
 use criterion as _;
-// Suppress unused crate warnings for platform-specific dependencies
 #[cfg(not(windows))]
 use rayon as _;
+#[cfg(not(windows))]
+use thiserror as _;
+#[cfg(not(windows))]
+use uffs_polars as _;
+use {anyhow as _, clap as _, indicatif as _, tokio as _, tracing as _, tracing_subscriber as _};
 
 // ============================================================================
 // Module declarations
