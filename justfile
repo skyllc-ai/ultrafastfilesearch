@@ -721,30 +721,15 @@ deploy-release:
 # This recipe uses PowerShell on Windows, bash on Unix (where it will fail gracefully)
 [windows]
 use:
-    Write-Host "📦 Installing latest UFFS binaries to ~/bin..." -ForegroundColor Blue
-    Write-Host "ℹ️  Note: UFFS is Windows-only (requires NTFS MFT access)" -ForegroundColor Yellow
-    $binDir = "$env:USERPROFILE\bin"
-    if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }
-    $binaries = @("uffs", "uffs_mft", "uffs_tui", "uffs_gui")
-    $installed = 0; $skipped = 0
-    foreach ($bin in $binaries) {
-        $src = "dist\latest\$bin\$bin-windows-x64.exe"
-        $dest = "$binDir\$bin.exe"
-        if (Test-Path $src) {
-            Copy-Item $src $dest -Force
-            Write-Host "  ✅ $bin.exe" -ForegroundColor Green
-            $installed++
-        } else {
-            Write-Host "  ⚠️  $bin (not found - run 'just go' first)" -ForegroundColor Yellow
-            $skipped++
-        }
-    }
-    Write-Host "✅ Installed $installed binaries to ~/bin" -ForegroundColor Green
+    Write-Host "📦 Installing latest UFFS binaries to ~/bin..." -ForegroundColor Blue; \
+    Write-Host "ℹ️  Note: UFFS is Windows-only (requires NTFS MFT access)" -ForegroundColor Yellow; \
+    $binDir = "$env:USERPROFILE\bin"; \
+    if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }; \
+    $binaries = @("uffs", "uffs_mft", "uffs_tui", "uffs_gui"); \
+    $installed = 0; $skipped = 0; \
+    foreach ($bin in $binaries) { $src = "dist\latest\$bin\$bin-windows-x64.exe"; $dest = "$binDir\$bin.exe"; if (Test-Path $src) { Copy-Item $src $dest -Force; Write-Host "  ✅ $bin.exe" -ForegroundColor Green; $installed++ } else { Write-Host "  ⚠️  $bin (not found - run 'just go' first)" -ForegroundColor Yellow; $skipped++ } }; \
+    Write-Host "✅ Installed $installed binaries to ~/bin" -ForegroundColor Green; \
     if ($skipped -gt 0) { Write-Host "⚠️  Skipped $skipped (run 'just go' to build all binaries)" -ForegroundColor Yellow }
-    if (-not ($env:PATH -split ';' | Where-Object { $_ -eq $binDir })) {
-        Write-Host "⚠️  ~/bin not in PATH. Add to your PowerShell profile:" -ForegroundColor Yellow
-        Write-Host '   $env:PATH = "$env:USERPROFILE\bin;$env:PATH"'
-    }
 
 # Unix version of 'use' - explains that UFFS is Windows-only
 [unix]
