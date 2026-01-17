@@ -1336,7 +1336,7 @@ impl ParallelMftReader {
     ///
     /// Vector of parsed records.
     pub fn read_all_parallel(&self, handle: HANDLE) -> Result<Vec<ParsedRecord>> {
-        self.read_all_parallel_with_merge(handle, false)
+        self.read_all_parallel_with_progress::<fn(u64, u64)>(handle, false, None)
     }
 
     /// Reads and parses all MFT records in parallel with full C++ parity.
@@ -1357,6 +1357,35 @@ impl ParallelMftReader {
         handle: HANDLE,
         merge_extensions: bool,
     ) -> Result<Vec<ParsedRecord>> {
+        self.read_all_parallel_with_progress::<fn(u64, u64)>(handle, merge_extensions, None)
+    }
+
+    /// Reads and parses all MFT records in parallel with progress callback.
+    ///
+    /// This function handles extension records by merging their attributes
+    /// into the base records, matching the C++ implementation behavior.
+    /// The progress callback is called during the I/O phase with (bytes_read,
+    /// total_bytes).
+    ///
+    /// # Arguments
+    ///
+    /// * `handle` - The raw volume handle
+    /// * `merge_extensions` - If true, merge extension record attributes
+    /// * `progress_callback` - Optional callback called with (bytes_read,
+    ///   total_bytes)
+    ///
+    /// # Returns
+    ///
+    /// Vector of parsed records with all attributes merged.
+    pub fn read_all_parallel_with_progress<F>(
+        &self,
+        handle: HANDLE,
+        merge_extensions: bool,
+        progress_callback: Option<F>,
+    ) -> Result<Vec<ParsedRecord>>
+    where
+        F: Fn(u64, u64),
+    {
         info!(
             chunk_size = self.chunk_size,
             merge_extensions, "Starting parallel MFT read"
@@ -1381,36 +1410,45 @@ impl ParallelMftReader {
         let record_size = self.extent_map.bytes_per_record;
         let records_processed = Arc::clone(&self.records_processed);
 
+        // Calculate total bytes to read for progress reporting
+        let total_bytes_to_read: u64 = chunks
+            .iter()
+            .map(|c| c.record_count * u64::from(record_size))
+            .sum();
+
         // Read all chunks (sequential I/O for handle safety)
         debug!("Reading all chunks into memory...");
-        let mut total_bytes_read: usize = 0;
-        let chunk_data: Vec<(ReadChunk, Vec<u8>)> = chunks
-            .into_iter()
-            .enumerate()
-            .filter_map(|(idx, chunk)| {
-                trace!(
-                    chunk_idx = idx,
-                    start_frs = chunk.start_frs,
-                    "Reading chunk"
-                );
-                match self.read_chunk(handle, &chunk, record_size) {
-                    Ok(data) => {
-                        total_bytes_read += data.len();
-                        trace!(
-                            chunk_idx = idx,
-                            bytes = data.len(),
-                            total_bytes = total_bytes_read,
-                            "Chunk read successfully"
-                        );
-                        Some((chunk, data))
+        let mut total_bytes_read: u64 = 0;
+        let mut chunk_data: Vec<(ReadChunk, Vec<u8>)> = Vec::with_capacity(chunks.len());
+
+        for (idx, chunk) in chunks.into_iter().enumerate() {
+            trace!(
+                chunk_idx = idx,
+                start_frs = chunk.start_frs,
+                "Reading chunk"
+            );
+            match self.read_chunk(handle, &chunk, record_size) {
+                Ok(data) => {
+                    total_bytes_read += data.len() as u64;
+                    trace!(
+                        chunk_idx = idx,
+                        bytes = data.len(),
+                        total_bytes = total_bytes_read,
+                        "Chunk read successfully"
+                    );
+
+                    // Report progress after each chunk
+                    if let Some(ref cb) = progress_callback {
+                        cb(total_bytes_read, total_bytes_to_read);
                     }
-                    Err(e) => {
-                        warn!(chunk_idx = idx, error = ?e, "Failed to read chunk");
-                        None
-                    }
+
+                    chunk_data.push((chunk, data));
                 }
-            })
-            .collect();
+                Err(e) => {
+                    warn!(chunk_idx = idx, error = ?e, "Failed to read chunk");
+                }
+            }
+        }
 
         info!(
             chunks_read = chunk_data.len(),

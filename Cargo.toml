@@ -32,7 +32,7 @@ members = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.1.8"
+version = "0.1.23"
 edition = "2024"
 rust-version = "1.85"
 license = "MPL-2.0 OR LicenseRef-UFFS-Commercial"
@@ -116,7 +116,7 @@ chrono = { version = "0.4.41", features = ["serde"] }
 time = { version = "0.3.45", features = ["macros", "formatting"] }
 
 # ───── Configuration ─────
-toml = "0.9.8"
+toml = "0.1.30"
 dirs-next = "2.0.0"
 
 # ───── Testing & Benchmarking ─────
@@ -127,7 +127,7 @@ tempfile = "3.24.0"
 
 # ───── Memory Allocator ─────
 # mimalloc reduces fragmentation and improves allocation performance for large datasets
-mimalloc = "0.1"
+mimalloc = "0.1.48"
 
 # ───── Utilities ─────
 glob = "0.3.3"
@@ -395,6 +395,7 @@ codegen-units = 1
 lto = "fat"
 panic = "abort"
 strip = "symbols"
+rpath = false
 
 [profile.profiling]
 inherits = "release"
@@ -423,6 +424,67 @@ inherits = "dev"
 opt-level = 2                           # Optimize Polars even in dev for usable performance
 
 [profile.dev.package."*"]
+opt-level = 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cross-compile profile for cargo-xwin (macOS → Windows MSVC)
+# ─────────────────────────────────────────────────────────────────────────────
+# Workaround for COFF archive size limits. Debug builds of polars produce
+# ~5.5 GB .rlib files that exceed what lld-link can parse.
+# See: docs/xwin-msvc-rlib-size-root-cause-and-workarounds.md
+#
+# Usage: cargo xwin build --profile xwin-dev --target x86_64-pc-windows-msvc
+# ─────────────────────────────────────────────────────────────────────────────
+[profile.xwin-dev]
+inherits = "dev"
+debug = 2                               # Full debug for YOUR code
+debug-assertions = true
+overflow-checks = true
+incremental = false                     # Required: incremental breaks xwin archives
+opt-level = 0                           # Fast compile for your code
+
+# Tame polars crates to keep .rlib under COFF limits
+# codegen-units=1 dramatically reduces archive member count
+# opt-level=1 often REDUCES code size for generic-heavy crates
+# debug=1 keeps line tables for backtraces but skips variable info
+[profile.xwin-dev.package.polars]
+debug = 1
+opt-level = 1
+codegen-units = 1
+
+[profile.xwin-dev.package.polars-ops]
+debug = 1
+opt-level = 1
+codegen-units = 1
+
+[profile.xwin-dev.package.polars-core]
+debug = 1
+opt-level = 1
+codegen-units = 1
+
+[profile.xwin-dev.package.polars-lazy]
+debug = 1
+opt-level = 1
+codegen-units = 1
+
+[profile.xwin-dev.package.polars-plan]
+debug = 1
+opt-level = 1
+codegen-units = 1
+
+[profile.xwin-dev.package.polars-expr]
+debug = 1
+opt-level = 1
+codegen-units = 1
+
+[profile.xwin-dev.package.polars-io]
+debug = 1
+opt-level = 1
+codegen-units = 1
+
+# All other deps: fast compile, minimal debug
+[profile.xwin-dev.package."*"]
+debug = 1
 opt-level = 0
 
 
@@ -454,3 +516,20 @@ targets = [
 ]
 pr-run-mode = "plan"
 allow-dirty = ["ci"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Vendor patches (DISABLED)
+# ─────────────────────────────────────────────────────────────────────────────
+# The vendor/ directory contains patched versions of fs4, errno, stacker, and
+# winapi-util with updated windows-sys dependencies. These were created to fix
+# windows-targets version mismatches, but the real issue was COFF archive size
+# limits with polars debug builds. The xwin-dev profile (with reduced debug info
+# for polars crates) is the actual fix. Vendor patches kept for reference.
+#
+# [patch.crates-io]
+# fs4 = { path = "vendor/fs4" }
+# errno = { path = "vendor/errno" }
+# stacker = { path = "vendor/stacker" }
+# winapi-util = { path = "vendor/winapi-util" }
+
+

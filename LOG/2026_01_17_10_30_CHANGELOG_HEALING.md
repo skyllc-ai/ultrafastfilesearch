@@ -81,3 +81,170 @@ On non-Windows platforms, the platform-gated code is not compiled, making those 
 Run: `cargo check --package uffs-mft`
 - Should complete with no warnings
 
+---
+
+## Issue 4: WMI crate 0.18.0 breaking API changes
+
+### What Failed
+Compilation errors in 16 files in `uffs-legacy` crate:
+```
+error[E0432]: unresolved import `wmi::COMLibrary`
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+```
+
+### Root Cause
+The `wmi` crate version 0.18.0 introduced breaking changes:
+1. `COMLibrary` was removed from the public API
+2. `WMIConnection::with_namespace_path` now takes only 1 argument (namespace path) instead of 2 (namespace path + COM library)
+
+### Fix Applied
+
+**16 files in `crates/uffs-legacy/src/modules/disk/`:**
+- `drive_info.rs`, `wim_defrag_analysis.rs`, `wim_disk_quota.rs`, `wmi_disk_drive.rs`
+- `wmi_disk_partition.rs`, `wmi_encryptable_volume.rs`, `wmi_logical_disk.rs`, `wmi_mount_point.rs`
+- `wmi_msft_disk.rs`, `wmi_msft_partition.rs`, `wmi_perf_disk_physical_disk.rs`, `wmi_physical_media.rs`
+- `wmi_quota_setting.rs`, `wmi_shadow_copy.rs`, `wmi_volume.rs`, `wmi_volume_quota.rs`
+
+For each file:
+- Changed `use wmi::{COMLibrary, WMIConnection}` to `use wmi::WMIConnection`
+- Removed COM library initialization: `let com_con = COMLibrary::new()?;`
+- Changed `WMIConnection::with_namespace_path("...", com_con.into())?` to `WMIConnection::with_namespace_path("...")?`
+
+---
+
+## Issue 5: Noop `.clone()` call on `&OsStr`
+
+### What Failed
+Warning in `drive_info.rs`:
+```
+warning: call to `.clone()` on a reference in this situation does nothing
+   --> crates/uffs-legacy/src/modules/disk/drive_info.rs:419:41
+    |
+419 |         &mut drive.root_path.as_os_str().clone(),
+```
+
+### Root Cause
+`OsStr` does not implement `Clone`, so calling `.clone()` on `&OsStr` just copies the reference, which is a no-op.
+
+### Fix Applied
+
+**File: `crates/uffs-legacy/src/modules/disk/drive_info.rs`**
+- Changed `&mut drive.root_path.as_os_str().clone()` to `drive.root_path.as_os_str()`
+
+---
+
+## Issue 6: Progress bar enhancement with environment variable control
+
+### What Changed
+Added fancy progress bars for MFT reading with:
+- Spinner, drive letter, elapsed time, progress bar, bytes read/total
+- Environment variable control: `UFFS_NO_PROGRESS=1` disables progress bars
+
+### Implementation
+
+**File: `crates/uffs-cli/src/commands.rs`**
+- Added `#[cfg(windows)]` helper functions:
+  - `is_progress_disabled()` - checks `UFFS_NO_PROGRESS` env var
+  - `create_multi_progress()` - creates multi-progress container
+  - `add_drive_progress()` - adds drive progress bar to container
+  - `create_save_raw_progress()` - creates progress bar for saving raw MFT
+- Updated progress bar styles to show bytes, elapsed time, and ETA
+- Made `MultiProgress` import conditional on Windows
+
+### Verification
+- `cargo clippy --workspace --all-targets -- -D warnings` passes
+- `cargo xwin check --target x86_64-pc-windows-msvc` passes
+- `cargo test --workspace` passes
+
+---
+
+## Issue 7: CI pipeline doesn't clean cargo-xwin SDK cache
+
+### What Failed
+The CI pipeline failed with a linker error during Windows cross-compilation:
+```
+lld-link: error: truncated or malformed archive (string table at long name offset 210not terminated)
+```
+
+The error occurred when linking against Windows SDK libraries in `~/Library/Caches/cargo-xwin/xwin/`.
+
+### Root Cause
+The cargo-xwin tool downloads Windows SDK and CRT files to `~/Library/Caches/cargo-xwin/xwin/`. These files can become corrupted (truncated archives) due to:
+- Interrupted downloads
+- Disk space issues
+- Network problems during download
+
+The CI pipeline's clean step only cleaned `/tmp/rust-target/uffs` (cross-compilation target directory) but NOT the cargo-xwin SDK cache.
+
+### Fix Applied
+
+**File: `scripts/ci-pipeline.rs`**
+- Added cargo-xwin SDK cache cleaning to the `01-clean-artifacts` step
+- Now cleans `~/Library/Caches/cargo-xwin/xwin` in addition to `/tmp/rust-target/uffs`
+- Added comment explaining why this cache needs to be cleaned
+
+### Verification
+Run: `rm -f build/.uffs-workflow-state.json && rust-script scripts/ci-pipeline.rs go -v`
+- Should see "🧹 Cleaning cargo-xwin SDK cache: ..." in the output
+- Cross-compilation should succeed without linker errors
+
+---
+
+## Issue 8: Cargo-xwin cache corruption between pipeline steps
+
+### What Failed
+Even after adding xwin cache cleaning to step 01 (clean-artifacts), the cross-compilation in step 08 (deploy-binary) still failed with:
+```
+lld-link: error: truncated or malformed archive (string table at long name offset 210not terminated)
+```
+
+### Root Cause
+The xwin cache was only cleaned at the START of the pipeline (step 01), but by the time step 08 runs:
+1. Step 03 (coverage-tests) runs native compilation
+2. Step 04-07 run various validation steps
+3. By step 08, the xwin cache may have been corrupted or partially downloaded
+
+Additionally, there's a version mismatch in windows crates:
+- `fs4` → `windows-sys v0.59.0` → `windows_x86_64_msvc v0.52.6`
+- `socket2` → `windows-sys v0.60.2` → `windows_x86_64_msvc v0.53.1`
+
+This mismatch (both 0.52.6 and 0.53.1 in the same link) increases the chance of edge-case linker issues.
+
+### Fix Applied
+
+**File: `scripts/ci-pipeline.rs`**
+- Added xwin cache cleaning RIGHT BEFORE cross-compilation in step 08 (deploy-binary)
+- This ensures a fresh xwin SDK download immediately before it's needed
+- The cache is now cleaned in TWO places:
+  1. Step 01 (clean-artifacts) - for fresh pipeline starts
+  2. Step 08 (deploy-binary) - right before cross-compilation
+
+### Verification
+Run: `rm -f build/.uffs-workflow-state.json && rust-script scripts/ci-pipeline.rs go -v`
+- Should see "🧹 Cleaning cargo-xwin SDK cache before cross-compilation: ..." in step 08
+- Cross-compilation should succeed without linker errors
+
+---
+
+## Issue 9: Xwin cache cleaning not happening in build-cross-all.rs
+
+### What Failed
+The xwin cache cleaning in `ci-pipeline.rs` step 08 was conditional on the cache existing, but since step 01 already cleaned it, the cache didn't exist and the cleaning was skipped. The xwin SDK was then downloaded fresh during `cargo xwin build`, but the download got corrupted.
+
+### Root Cause
+The xwin cache cleaning logic was in `ci-pipeline.rs` but the actual `cargo xwin` command runs in `build-cross-all.rs`. The cleaning in `ci-pipeline.rs` happened before calling `build-cross-all.rs`, but since the cache was already cleaned in step 01, the conditional check `if xwin_cache.exists()` was false.
+
+### Fix Applied
+
+**File: `scripts/build-cross-all.rs`**
+- Added xwin cache cleaning directly in `build-cross-all.rs` right before the build loop
+- This ensures the cache is cleaned immediately before `cargo xwin` runs
+- Added verbose command output showing exactly what cargo command is being executed
+- Format: `→ binary (profile) → cargo args (target: triple)`
+
+### Verification
+Run: `rm -f build/.uffs-workflow-state.json && rust-script scripts/ci-pipeline.rs go -v`
+- Should see "🧹 Cleaning cargo-xwin SDK cache: ..." in the build-cross-all.rs output
+- Should see verbose command output like "→ uffs (debug) → cargo xwin build ..."
+- Cross-compilation should succeed without linker errors
+

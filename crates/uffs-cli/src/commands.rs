@@ -9,9 +9,67 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+#[cfg(windows)]
+use indicatif::MultiProgress;
 use indicatif::{ProgressBar, ProgressStyle};
 use tracing::info;
 use uffs_core::extensions::ExtensionFilter;
+
+/// Check if progress bars are disabled via `UFFS_NO_PROGRESS=1` environment
+/// variable.
+#[cfg(windows)]
+#[inline]
+fn is_progress_disabled() -> bool {
+    std::env::var("UFFS_NO_PROGRESS")
+        .map(|val| val == "1" || val.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Create a multi-progress container for multiple drives.
+/// Returns `None` if progress is disabled via `UFFS_NO_PROGRESS=1`.
+#[cfg(windows)]
+fn create_multi_progress() -> Option<MultiProgress> {
+    if is_progress_disabled() {
+        None
+    } else {
+        Some(MultiProgress::new())
+    }
+}
+
+/// Add a drive progress bar to a multi-progress container.
+#[cfg(windows)]
+fn add_drive_progress(multi_progress: &MultiProgress, drive: char) -> ProgressBar {
+    let progress_bar = multi_progress.add(ProgressBar::new(0));
+    let template = format!(
+        "{{spinner:.cyan}} [{drive}:] [{{elapsed_precise}}] {{bar:30.cyan/blue}} {{bytes}}/{{total_bytes}} ({{eta}})"
+    );
+    progress_bar.set_style(
+        ProgressStyle::default_bar()
+            .template(&template)
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("━━╸"),
+    );
+    progress_bar
+}
+
+/// Create a progress bar for saving raw MFT bytes.
+/// Returns `None` if progress is disabled via `UFFS_NO_PROGRESS=1`.
+#[cfg(windows)]
+fn create_save_raw_progress() -> Option<ProgressBar> {
+    if is_progress_disabled() {
+        return None;
+    }
+
+    let progress_bar = ProgressBar::new(0);
+    progress_bar.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.cyan} [{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} 💾 saving...")
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("━━╸"),
+    );
+    Some(progress_bar)
+}
+
 use uffs_core::output::OutputConfig;
 use uffs_core::pattern::ParsedPattern;
 use uffs_core::tree::add_tree_columns;
@@ -260,7 +318,6 @@ async fn search_multi_drive_filtered(
     drives: &[char],
     filters: &QueryFilters<'_>,
 ) -> Result<uffs_mft::DataFrame> {
-    use indicatif::MultiProgress;
     use uffs_mft::{IntoLazy, col, lit};
 
     if drives.is_empty() {
@@ -272,27 +329,24 @@ async fn search_multi_drive_filtered(
         "Searching drives sequentially (memory-efficient mode)"
     );
 
-    let multi_progress = MultiProgress::new();
+    let multi_progress = create_multi_progress();
     let mut filtered_results: Vec<uffs_mft::DataFrame> = Vec::new();
     let mut total_matches = 0usize;
 
     // Process drives sequentially to limit memory usage
     for &drive_char in drives {
         // Create progress bar for this drive (wrapped in Arc for closure sharing)
-        let pb = std::sync::Arc::new(multi_progress.add(ProgressBar::new(0)));
-        let style = ProgressStyle::default_bar()
-            .template(&format!(
-                "{{spinner:.green}} [{drive_char}:] [{{elapsed_precise}}] [{{bar:30.cyan/blue}}] {{pos}}/{{len}} ({{eta}})"
-            ))
-            .context("Invalid progress bar template")?
-            .progress_chars("#>-");
-        pb.set_style(style);
+        let pb: Option<std::sync::Arc<ProgressBar>> = multi_progress
+            .as_ref()
+            .map(|mp| std::sync::Arc::new(add_drive_progress(mp, drive_char)));
 
         // Read this drive
         let reader = match MftReader::open(drive_char).await {
             Ok(r) => r,
             Err(e) => {
-                pb.finish_with_message(format!("Error: {e}"));
+                if let Some(ref p) = pb {
+                    p.finish_with_message(format!("Error: {e}"));
+                }
                 info!(drive = %drive_char, error = %e, "Skipping drive due to error");
                 continue;
             }
@@ -301,23 +355,29 @@ async fn search_multi_drive_filtered(
         let pb_clone = pb.clone();
         let df = match reader
             .read_with_progress(move |progress| {
-                if let Some(total) = progress.total_records {
-                    pb_clone.set_length(total);
+                if let Some(ref p) = pb_clone {
+                    if let Some(total) = progress.total_records {
+                        p.set_length(progress.bytes_read.max(total));
+                    }
+                    p.set_position(progress.bytes_read);
                 }
-                pb_clone.set_position(progress.records_read);
             })
             .await
         {
             Ok(df) => df,
             Err(e) => {
-                pb.finish_with_message(format!("Error: {e}"));
+                if let Some(ref p) = pb {
+                    p.finish_with_message(format!("Error: {e}"));
+                }
                 info!(drive = %drive_char, error = %e, "Skipping drive due to read error");
                 continue;
             }
         };
 
         let records_read = df.height();
-        pb.finish();
+        if let Some(ref p) = pb {
+            p.finish();
+        }
 
         // Apply filters immediately to reduce memory
         let filtered = execute_query(df, filters)?;
@@ -428,22 +488,36 @@ pub async fn index(
                 .await
                 .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
 
-            // Create progress bar
-            let pb = ProgressBar::new(0);
-            pb.set_style(
-                ProgressStyle::default_bar()
-                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} records ({eta})")
-                    .context("Invalid progress bar template")?
-                    .progress_chars("#>-"),
-            );
+            // Create progress bar (None if disabled via UFFS_NO_PROGRESS=1)
+            let progress_disabled = std::env::var("UFFS_NO_PROGRESS")
+                .map(|val| val == "1" || val.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+
+            let progress_bar: Option<ProgressBar> = if progress_disabled {
+                None
+            } else {
+                let bar = ProgressBar::new(0);
+                let template = format!(
+                    "{{spinner:.cyan}} [{drive_letter}:] [{{elapsed_precise}}] {{bar:40.cyan/blue}} {{bytes}}/{{total_bytes}} 📖 reading MFT..."
+                );
+                bar.set_style(
+                    ProgressStyle::default_bar()
+                        .template(&template)
+                        .unwrap_or_else(|_| ProgressStyle::default_bar())
+                        .progress_chars("━━╸"),
+                );
+                Some(bar)
+            };
 
             // Read MFT with progress callback
             let mut df = reader
                 .read_with_progress(move |progress: MftProgress| {
-                    if let Some(total) = progress.total_records {
-                        pb.set_length(total);
+                    if let Some(bar) = &progress_bar {
+                        if let Some(total) = progress.total_records {
+                            bar.set_length(progress.bytes_read.max(total));
+                        }
+                        bar.set_position(progress.bytes_read);
                     }
-                    pb.set_position(progress.records_read);
                 })
                 .await?;
 
@@ -475,41 +549,39 @@ async fn index_multi_drive(drives: &[char], output: &Path) -> Result<()> {
 
     let reader = MultiDriveMftReader::new(drives.to_vec());
 
-    // Create a multi-progress bar for each drive
-    let mp = indicatif::MultiProgress::new();
-    let mut progress_bars = std::collections::HashMap::new();
-    for &drive_char in drives {
-        let pb = mp.add(ProgressBar::new(0));
-        let style = ProgressStyle::default_bar()
-            .template(&format!(
-                "{{spinner:.green}} {drive_char}: [{{bar:30.cyan/blue}}] {{pos}}/{{len}} ({{eta}})"
-            ))
-            .context("Invalid progress bar template")?
-            .progress_chars("#>-");
-        pb.set_style(style);
-        progress_bars.insert(drive_char, pb);
-    }
+    // Create a multi-progress bar for each drive (if not disabled)
+    let mp = create_multi_progress();
+    let progress_bars: Option<std::sync::Arc<std::collections::HashMap<char, ProgressBar>>> =
+        mp.as_ref().map(|m| {
+            let mut pbs = std::collections::HashMap::new();
+            for &drive_char in drives {
+                pbs.insert(drive_char, add_drive_progress(m, drive_char));
+            }
+            std::sync::Arc::new(pbs)
+        });
 
-    // Wrap in Arc for sharing across async callbacks
-    let progress_bars = std::sync::Arc::new(progress_bars);
     let pbs = progress_bars.clone();
 
     // Read all drives with progress
     let mut df = reader
         .read_with_progress(move |drive, progress| {
-            if let Some(pb) = pbs.get(&drive) {
-                if let Some(total) = progress.total_records {
-                    pb.set_length(total);
+            if let Some(ref bars) = pbs {
+                if let Some(pb) = bars.get(&drive) {
+                    if let Some(total) = progress.total_records {
+                        pb.set_length(progress.bytes_read.max(total));
+                    }
+                    pb.set_position(progress.bytes_read);
                 }
-                pb.set_position(progress.records_read);
             }
         })
         .await
         .context("Failed to read MFTs from drives")?;
 
     // Finish all progress bars
-    for pb in progress_bars.values() {
-        pb.finish();
+    if let Some(ref bars) = progress_bars {
+        for pb in bars.values() {
+            pb.finish();
+        }
     }
 
     info!(
@@ -654,14 +726,8 @@ pub async fn save_raw(
         .await
         .with_context(|| format!("Failed to open drive {drive}:"))?;
 
-    // Create progress bar
-    let pb = ProgressBar::new(0);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} bytes")
-            .context("Invalid progress bar template")?
-            .progress_chars("#>-"),
-    );
+    // Create progress bar (None if disabled)
+    let pb = create_save_raw_progress();
 
     let options = SaveRawOptions {
         compress,
@@ -673,7 +739,9 @@ pub async fn save_raw(
         .await
         .with_context(|| format!("Failed to save raw MFT to {}", output.display()))?;
 
-    pb.finish_and_clear();
+    if let Some(ref p) = pb {
+        p.finish_and_clear();
+    }
 
     let mut stdout = std::io::stdout().lock();
     writeln!(stdout)?;

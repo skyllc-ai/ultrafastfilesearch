@@ -15,6 +15,18 @@
 //! uffs_mft drives
 //! ```
 //!
+//! ## Logging
+//!
+//! Use `-v` / `--verbose` for debug-level terminal output:
+//! ```bash
+//! uffs_mft -v info --drive C
+//! ```
+//!
+//! For finer control, use environment variables:
+//! - `RUST_LOG`: Terminal log level (default: `info`, or `debug` with `-v`)
+//! - `RUST_LOG_FILE`: File log level (default: `info`)
+//! - `UFFS_LOG_DIR`: Log directory (default: `~/bin/uffs/logs`)
+//!
 //! **Note**: This tool requires Administrator privileges on Windows.
 
 // ============================================================================
@@ -23,6 +35,7 @@
 // These dependencies are used by the uffs-mft library, not this binary.
 // Cargo doesn't support per-binary dependencies, so we suppress the warnings
 // here.
+use std::io::stdout;
 use std::path::PathBuf;
 
 #[cfg(windows)]
@@ -41,7 +54,12 @@ use indicatif::{ProgressBar, ProgressStyle};
 use tracing as _;
 #[cfg(windows)]
 use tracing::info;
-use tracing_subscriber::EnvFilter;
+use tracing_appender::non_blocking::NonBlocking;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::fmt::time::UtcTime;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::registry::Registry;
+use tracing_subscriber::{EnvFilter, Layer};
 #[cfg(not(windows))]
 use uffs_mft as _;
 #[cfg(windows)]
@@ -90,26 +108,92 @@ enum Commands {
     Drives,
 }
 
+/// Initialize logging with terminal + file support.
+///
+/// If `verbose` is true and `RUST_LOG` is not set, uses `debug` level for terminal.
+/// Otherwise, terminal logging is controlled by `RUST_LOG` (default: `info`).
+/// File logging is controlled by `RUST_LOG_FILE` (default: `info`).
+/// Log directory is controlled by `UFFS_LOG_DIR` (default: `~/bin/uffs/logs`).
+#[allow(clippy::single_call_fn)]
+fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
+    use std::fs;
+
+    // Get log directory (default: ~/bin/uffs/logs)
+    let log_dir = std::env::var("UFFS_LOG_DIR").map_or_else(
+        |_| {
+            dirs_next::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("bin")
+                .join("uffs")
+                .join("logs")
+        },
+        PathBuf::from,
+    );
+
+    // Create log directory if it doesn't exist
+    drop(fs::create_dir_all(&log_dir));
+
+    // Create rolling file appender (daily rotation)
+    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "uffs_mft_log_");
+    let (non_blocking, guard): (NonBlocking, _) = NonBlocking::new(file_appender);
+
+    // Terminal filter: -v sets debug if RUST_LOG not explicitly set
+    let terminal_default = if verbose { "debug" } else { "info" };
+    let terminal_filter =
+        EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(|_| terminal_default.to_owned()));
+
+    // File filter (default: info)
+    let file_filter =
+        EnvFilter::new(std::env::var("RUST_LOG_FILE").unwrap_or_else(|_| "info".to_owned()));
+
+    // Timer format
+    let timer = UtcTime::rfc_3339();
+
+    // Terminal layer (with ANSI colors)
+    let terminal_layer = tracing_subscriber::fmt::layer()
+        .with_writer(stdout)
+        .with_timer(timer.clone())
+        .with_ansi(true)
+        .with_filter(terminal_filter);
+
+    // File layer (no ANSI colors)
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_timer(timer)
+        .with_ansi(false)
+        .with_filter(file_filter);
+
+    // Combine layers
+    let subscriber = Registry::default().with(terminal_layer).with(file_layer);
+
+    #[allow(clippy::expect_used)]
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("Failed to set global tracing subscriber");
+
+    guard
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    // Check for -v/--verbose flag early
+    let verbose = std::env::args().any(|arg| arg == "-v" || arg == "--verbose");
 
-    // Initialize logging
-    let filter = if cli.verbose {
-        EnvFilter::new("debug")
-    } else {
-        EnvFilter::new("info")
-    };
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // Initialize logging with terminal + file support
+    let _guard = init_logging(verbose);
 
     // Platform check - this tool only works on Windows
     #[cfg(not(windows))]
     {
+        // Parse CLI to show help/version even on non-Windows
+        let _cli = Cli::parse();
         anyhow::bail!(
             "uffs_mft only works on Windows.\n\
              It requires direct access to the NTFS Master File Table via Windows APIs."
         );
     }
+
+    #[cfg(windows)]
+    let cli = Cli::parse();
 
     #[cfg(windows)]
     {

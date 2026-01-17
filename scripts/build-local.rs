@@ -26,16 +26,17 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 use sha2::{Sha256, Digest};
 
-/// Check if dev build mode is enabled via UFFS_DEV_BUILD env var
-fn is_dev_build() -> bool {
-    env::var("UFFS_DEV_BUILD")
+/// Check if release build mode is enabled via UFFS_RELEASE_BUILD env var.
+/// Default is DEV mode for faster iteration during development.
+fn is_release_build() -> bool {
+    env::var("UFFS_RELEASE_BUILD")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }
 
 /// Get the build profile name ("debug" or "release")
 fn build_profile() -> &'static str {
-    if is_dev_build() { "debug" } else { "release" }
+    if is_release_build() { "release" } else { "debug" }
 }
 
 /// UFFS binaries: (binary_name, package_name)
@@ -53,6 +54,10 @@ const BINARIES: &[(&str, &str)] = &[
 fn main() {
     println!("🚀 UFFS Local Build & Install");
     println!("ℹ️  UFFS is Windows-only (requires NTFS MFT access)");
+
+    // Show build mode (DEV is default, set UFFS_RELEASE_BUILD=1 for release)
+    let build_mode = if is_release_build() { "RELEASE (optimized)" } else { "DEV (fast, default)" };
+    println!("🔧 Build mode: {}", build_mode);
 
     // Detect platform
     let platform = detect_platform();
@@ -86,7 +91,7 @@ fn main() {
             println!("\n🔨 Building {} for {} ({})...", binary, platform, profile);
 
             let mut args = vec!["build", "-p", *package, "--bin", *binary];
-            if !is_dev_build() {
+            if is_release_build() {
                 args.push("--release");
             }
 
@@ -187,7 +192,7 @@ fn parse_cargo_config_target_dir() -> Option<PathBuf> {
     None
 }
 
-/// Get the path to a binary in the target directory (debug or release based on UFFS_DEV_BUILD)
+/// Get the path to a binary in the target directory (debug or release based on UFFS_RELEASE_BUILD)
 fn get_binary_path(target_dir: &Path, binary_name: &str) -> PathBuf {
     let binary_name_with_ext = if cfg!(windows) {
         format!("{}.exe", binary_name)

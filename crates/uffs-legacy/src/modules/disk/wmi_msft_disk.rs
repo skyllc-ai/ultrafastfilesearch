@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 #[cfg(windows)]
-use wmi::{COMLibrary, WMIConnection};
+use wmi::WMIConnection;
 
 use crate::modules::errors::UFFSError;
 
@@ -269,16 +269,11 @@ impl fmt::Display for MSFTDisk {
 /// Query MSFT disks via WMI (Windows only)
 #[cfg(windows)]
 pub fn query_msft_disks() -> Result<Vec<MSFTDisk>, UFFSError> {
-    // Initialize COM library
-    let com_con = COMLibrary::new()
-        .map_err(|e| UFFSError::WMIQueryFailed(format!("Failed to initialize COM: {:?}", e)))?;
-
     // Establish a connection to WMI in the correct namespace
     let wmi_con =
-        WMIConnection::with_namespace_path("ROOT\\Microsoft\\Windows\\Storage", com_con.into())
-            .map_err(|e| {
-                UFFSError::WMIQueryFailed(format!("Failed to connect to WMI namespace: {:?}", e))
-            })?;
+        WMIConnection::with_namespace_path("ROOT\\Microsoft\\Windows\\Storage").map_err(|e| {
+            UFFSError::WMIQueryFailed(format!("Failed to connect to WMI namespace: {:?}", e))
+        })?;
 
     // Define the WMI query for MSFT disks
     let query = "SELECT * FROM MSFT_Disk";

@@ -11,9 +11,10 @@
 # =============================================================================
 
 [build]
-# Target directory - use /tmp for macOS (fast SSD, avoids iCloud sync)
+# Target directory - use ~/Library/Caches for macOS (stable, avoids iCloud sync)
+# /tmp can be cleaned by macOS or cause race conditions with concurrent builds
 # Windows users: set CARGO_TARGET_DIR=C:\rust-target\uffs environment variable
-target-dir = "/tmp/rust-target/uffs"
+target-dir = "~/Library/Caches/uffs/target"
 
 # sccache for compilation caching (significant speedup on rebuilds)
 rustc-wrapper = "sccache"
@@ -48,6 +49,10 @@ rustflags = [
 # NOTE: Do NOT use target-cpu=native here - it breaks cross-compilation from
 # macOS ARM64 (the host CPU "apple-m4" is not valid for x86_64 targets).
 # Use x86-64-v2 for good compatibility (SSE4.2, POPCNT - supported since ~2009).
+#
+# NOTE: Do NOT use embed-bitcode=no here - it's incompatible with LTO (release builds).
+# The xwin-dev profile handles COFF archive size limits for debug builds instead.
+# See: docs/xwin-msvc-rlib-size-root-cause-and-workarounds.md
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld"
 rustflags = [

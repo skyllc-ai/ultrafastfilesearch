@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 #[cfg(windows)]
-use wmi::{COMLibrary, WMIConnection};
+use wmi::WMIConnection;
 
 use crate::modules::errors::UFFSError;
 
@@ -267,15 +267,10 @@ impl fmt::Display for Win32ShadowCopy {
 /// Query shadow copies via WMI (Windows only)
 #[cfg(windows)]
 pub fn query_shadow_copy() -> Result<Vec<Win32ShadowCopy>, UFFSError> {
-    // Initialize COM library
-    let com_con = COMLibrary::new()
-        .map_err(|e| UFFSError::WMIQueryFailed(format!("Failed to initialize COM: {:?}", e)))?;
-
     // Establish a connection to WMI in the correct namespace
-    let wmi_con =
-        WMIConnection::with_namespace_path("ROOT\\CIMv2", com_con.into()).map_err(|e| {
-            UFFSError::WMIQueryFailed(format!("Failed to connect to WMI namespace: {:?}", e))
-        })?;
+    let wmi_con = WMIConnection::with_namespace_path("ROOT\\CIMv2").map_err(|e| {
+        UFFSError::WMIQueryFailed(format!("Failed to connect to WMI namespace: {:?}", e))
+    })?;
 
     // Define the WMI query
     let query = "SELECT * FROM Win32_ShadowCopy";

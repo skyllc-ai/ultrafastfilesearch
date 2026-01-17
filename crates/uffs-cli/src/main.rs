@@ -4,10 +4,15 @@
 //!
 //! ## Logging
 //!
-//! Logging is controlled by environment variables:
-//! - `RUST_LOG`: Terminal log level (default: `error`)
+//! Use `-v` / `--verbose` for info-level terminal output:
+//! ```bash
+//! uffs -v search *.txt
+//! ```
+//!
+//! For finer control, use environment variables:
+//! - `RUST_LOG`: Terminal log level (default: `error`, or `info` with `-v`)
 //! - `RUST_LOG_FILE`: File log level (default: `info`)
-//! - `UFFS_LOG_DIR`: Log directory (default: `~/bin/rust`)
+//! - `UFFS_LOG_DIR`: Log directory (default: `~/bin/uffs/logs`)
 //!
 //! Examples:
 //! ```bash
@@ -315,7 +320,8 @@ enum Commands {
 
 /// Initialize logging with terminal + file support.
 ///
-/// Terminal logging is controlled by `RUST_LOG` (default: `error`).
+/// If `verbose` is true and `RUST_LOG` is not set, uses `info` level for terminal.
+/// Otherwise, terminal logging is controlled by `RUST_LOG` (default: `error`).
 /// File logging is controlled by `RUST_LOG_FILE` (default: `info`).
 /// Log directory is controlled by `UFFS_LOG_DIR` (default: `~/bin/rust`).
 ///
@@ -328,20 +334,21 @@ enum Commands {
 // Extracted for clarity and maintainability - logging setup is complex enough
 // to warrant its own function even if only called once.
 #[allow(clippy::single_call_fn)]
-fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
+fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     use std::fs;
 
     use tracing_appender::non_blocking::NonBlocking;
     use tracing_appender::rolling::{RollingFileAppender, Rotation};
     use tracing_subscriber::registry::Registry;
 
-    // Get log directory (default: ~/bin/rust)
+    // Get log directory (default: ~/bin/uffs/logs)
     let log_dir = std::env::var("UFFS_LOG_DIR").map_or_else(
         |_| {
             dirs_next::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join("bin")
-                .join("rust")
+                .join("uffs")
+                .join("logs")
         },
         PathBuf::from,
     );
@@ -354,9 +361,10 @@ fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
     let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "uffs_log_");
     let (non_blocking, guard): (NonBlocking, _) = NonBlocking::new(file_appender);
 
-    // Terminal filter (default: error - minimal output)
+    // Terminal filter: -v sets info if RUST_LOG not explicitly set
+    let terminal_default = if verbose { "info" } else { "error" };
     let terminal_filter =
-        EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(|_| "error".to_owned()));
+        EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(|_| terminal_default.to_owned()));
 
     // File filter (default: info - more verbose for debugging)
     let file_filter =
@@ -393,8 +401,12 @@ fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() -> Result<()> {
+    // Check for -v/--verbose flag early to set log level before initializing logging
+    // This allows `uffs -v search ...` to show info-level logs without RUST_LOG=info
+    let verbose = std::env::args().any(|arg| arg == "-v" || arg == "--verbose");
+
     // Initialize logging with terminal + file support
-    let _guard = init_logging();
+    let _guard = init_logging(verbose);
 
     let cli = Cli::parse();
 

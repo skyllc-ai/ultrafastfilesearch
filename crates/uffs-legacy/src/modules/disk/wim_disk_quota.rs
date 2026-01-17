@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 #[cfg(windows)]
-use wmi::{COMLibrary, WMIConnection};
+use wmi::WMIConnection;
 
 use crate::modules::errors::UFFSError;
 
@@ -147,15 +147,10 @@ impl fmt::Display for Win32DiskQuota {
 /// Query disk quota information via WMI (Windows only)
 #[cfg(windows)]
 pub fn query_disk_quota() -> Result<Vec<Win32DiskQuota>, UFFSError> {
-    // Initialize the COM library required for WMI
-    let com_con = COMLibrary::new()
-        .map_err(|e| UFFSError::WMIQueryFailed(format!("Failed to initialize COM: {:?}", e)))?;
-
     // Establish a connection to WMI in the ROOT\CIMV2 namespace
-    let wmi_con =
-        WMIConnection::with_namespace_path("ROOT\\CIMV2", com_con.into()).map_err(|e| {
-            UFFSError::WMIQueryFailed(format!("Failed to connect to WMI namespace: {:?}", e))
-        })?;
+    let wmi_con = WMIConnection::with_namespace_path("ROOT\\CIMV2").map_err(|e| {
+        UFFSError::WMIQueryFailed(format!("Failed to connect to WMI namespace: {:?}", e))
+    })?;
 
     // Define the WMI query to select all properties from Win32_DiskQuota
     let query = "SELECT * FROM Win32_DiskQuota";

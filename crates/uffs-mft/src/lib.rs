@@ -66,7 +66,13 @@ use rayon as _;
 use thiserror as _;
 #[cfg(not(windows))]
 use uffs_polars as _;
-use {anyhow as _, clap as _, indicatif as _, tokio as _, tracing as _, tracing_subscriber as _};
+// Binary dependencies (used by src/main.rs)
+use {
+    anyhow as _, clap as _, dirs_next as _, indicatif as _, tokio as _, tracing as _,
+    tracing_appender as _, tracing_subscriber as _,
+};
+#[cfg(windows)]
+use windows as _;
 
 // ============================================================================
 // Module declarations

@@ -49,6 +49,8 @@ anyhow.workspace = true
 # Logging
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+dirs-next.workspace = true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lints (inherit from workspace)

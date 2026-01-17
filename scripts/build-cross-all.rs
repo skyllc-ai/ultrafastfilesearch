@@ -54,16 +54,23 @@ struct Target {
     requires_linker: Option<&'static str>,
 }
 
-/// Check if dev build mode is enabled via UFFS_DEV_BUILD env var
-fn is_dev_build() -> bool {
-    env::var("UFFS_DEV_BUILD")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+/// Check if release build mode is enabled via UFFS_RELEASE_BUILD env var.
+/// Default is DEV mode for faster iteration during development.
+fn is_release_build() -> bool {
+    env::var("UFFS_RELEASE_BUILD")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(true) // Default to release builds
 }
 
-/// Get the build profile name ("debug" or "release")
+/// Get the build profile name for display purposes
 fn build_profile() -> &'static str {
-    if is_dev_build() { "debug" } else { "release" }
+    if is_release_build() { "release" } else { "xwin-dev" }
+}
+
+/// Get the cargo output directory name (where binaries are placed)
+/// Note: Custom profiles like "xwin-dev" output to their own directory
+fn build_output_dir() -> &'static str {
+    if is_release_build() { "release" } else { "xwin-dev" }
 }
 
 /// UFFS only runs on Windows (requires NTFS MFT access via Windows APIs).
@@ -80,6 +87,11 @@ const TARGETS: &[Target] = &[
 fn main() {
     println!("🚀 UFFS Cross-Platform Build (Windows Only)");
     println!("ℹ️  UFFS is Windows-only (requires NTFS MFT access)");
+
+    // Show build mode (DEV is default, set UFFS_RELEASE_BUILD=1 for release)
+    let build_mode = if is_release_build() { "RELEASE (optimized)" } else { "DEV (fast, default)" };
+    println!("🔧 Build mode: {}", build_mode);
+
     let (host_os, host_arch) = (env::consts::OS, env::consts::ARCH);
     println!("🖥️  Host: {} {} (cross-compilation host)", host_os, host_arch);
 
@@ -109,6 +121,11 @@ fn main() {
     for t in &available {
         println!("   ✅ {} ({})", t.triple, t.platform_name);
     }
+
+    // Note: We no longer clean cargo-xwin SDK cache here since the windows-targets
+    // version mismatch issue has been fixed by vendoring fs4, errno, stacker, and
+    // winapi-util with updated windows-sys dependencies. The xwin cache is stable
+    // and doesn't need to be cleaned on every run.
 
     for target in &available {
         println!(
@@ -291,11 +308,10 @@ fn cmd_exists(c: &str) -> bool {
 }
 
 fn build_for_target(target: &Target, _target_dir: &Path) -> bool {
-    let dev_build = is_dev_build();
+    let release_build = is_release_build();
     let profile = build_profile();
 
     for (binary, package) in BINARIES {
-        println!("  🔨 Building {} ({})...", binary, profile);
         let mut args: Vec<&str> = if target.use_xwin {
             vec![
                 "xwin",
@@ -307,9 +323,13 @@ fn build_for_target(target: &Target, _target_dir: &Path) -> bool {
             ]
         };
 
-        // Add --release only for release builds
-        if !dev_build {
+        // Add profile: --release for release, --profile xwin-dev for xwin dev builds
+        if release_build {
             args.push("--release");
+        } else if target.use_xwin {
+            // Use xwin-dev profile for xwin dev builds to avoid COFF archive size limits
+            // See: docs/xwin-msvc-rlib-size-root-cause-and-workarounds.md
+            args.extend_from_slice(&["--profile", "xwin-dev"]);
         }
 
         // Add target and package args
@@ -321,6 +341,9 @@ fn build_for_target(target: &Target, _target_dir: &Path) -> bool {
             "-p",
             package,
         ]);
+
+        // Print verbose command info (similar to CI pipeline format)
+        println!("  → {} ({}) → cargo {} (target: {})", binary, profile, args.join(" "), target.triple);
 
         let mut cmd = Command::new("cargo");
         cmd.args(&args);
@@ -369,6 +392,7 @@ fn build_for_target(target: &Target, _target_dir: &Path) -> bool {
 
 fn copy_binaries_to_dist(version: &str, target: &Target, target_dir: &Path) {
     let profile = build_profile();
+    let output_dir = build_output_dir();
     println!("  📁 Copying {} binaries to dist/{}...", profile, version);
 
     for (binary, _) in BINARIES {
@@ -379,7 +403,7 @@ fn copy_binaries_to_dist(version: &str, target: &Target, target_dir: &Path) {
         };
         let source = target_dir
             .join(target.triple)
-            .join(profile)
+            .join(output_dir)
             .join(&bin_name);
         let dest_dir = format!("dist/{}/{}", version, binary);
         let dest_name = if target.triple.contains("windows") {

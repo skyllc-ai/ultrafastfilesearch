@@ -371,7 +371,7 @@ use serde::Deserialize;
 #[cfg(windows)]
 use windows::Win32::Storage::FileSystem::QueryDosDeviceW;
 #[cfg(windows)]
-use wmi::{COMLibrary, WMIConnection};
+use wmi::WMIConnection;
 
 #[cfg(windows)]
 #[derive(Deserialize, Debug)]
@@ -382,14 +382,10 @@ struct Win32_EncryptableVolume {
 
 #[cfg(windows)]
 fn is_bitlocker_encrypted(device_id: &OsString) -> Option<bool> {
-    let com_con = COMLibrary::new().unwrap();
-
     // Establish a connection to WMI and specify the correct namespace
-    let wmi_con = WMIConnection::with_namespace_path(
-        "ROOT\\CIMv2\\Security\\MicrosoftVolumeEncryption",
-        com_con.into(),
-    )
-    .unwrap();
+    let wmi_con =
+        WMIConnection::with_namespace_path("ROOT\\CIMv2\\Security\\MicrosoftVolumeEncryption")
+            .unwrap();
 
     let query = "SELECT * FROM Win32_EncryptableVolume";
 
@@ -419,9 +415,7 @@ fn collect_windows_specific_info(drive: &mut DriveInfo) {
 
     drive.physical_device_path = Some(OsString::from_wide(&device_name));
 
-    drive.device_path = Some(convert_to_device_path(
-        &mut drive.root_path.as_os_str().clone(),
-    ));
+    drive.device_path = Some(convert_to_device_path(drive.root_path.as_os_str()));
 
     // drive.volume_guid_path =
     // Some(get_volume_guid_path(&drive.drive_letter.clone().unwrap()).unwrap());

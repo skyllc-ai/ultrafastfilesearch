@@ -265,7 +265,34 @@ impl MftReader {
 
         // Read all records in parallel with extension merging for full C++ parity
         debug!("Starting parallel read with extension merging");
-        let parsed_records = parallel_reader.read_all_parallel_with_merge(handle, true)?;
+
+        // Create a progress callback wrapper that converts bytes to records
+        let total_bytes = total_records * u64::from(record_size);
+        let parsed_records = if let Some(ref cb) = callback {
+            let cb_ref = cb;
+            let start = start_time;
+            parallel_reader.read_all_parallel_with_progress(
+                handle,
+                true,
+                Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                    // Convert bytes to approximate record count
+                    let records_approx = if total_bytes_expected > 0 {
+                        (bytes_read * total_records) / total_bytes_expected
+                    } else {
+                        0
+                    };
+                    cb_ref(MftProgress {
+                        records_read: records_approx,
+                        total_records: Some(total_records),
+                        bytes_read,
+                        elapsed: start.elapsed(),
+                    });
+                }),
+            )?
+        } else {
+            parallel_reader.read_all_parallel_with_progress::<fn(u64, u64)>(handle, true, None)?
+        };
+
         info!(
             records_parsed = parsed_records.len(),
             elapsed_ms = start_time.elapsed().as_millis(),
@@ -277,7 +304,7 @@ impl MftReader {
             cb(MftProgress {
                 records_read: total_records,
                 total_records: Some(total_records),
-                bytes_read: total_records * u64::from(record_size),
+                bytes_read: total_bytes,
                 elapsed: start_time.elapsed(),
             });
         }

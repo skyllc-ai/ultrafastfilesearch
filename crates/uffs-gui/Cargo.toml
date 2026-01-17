@@ -38,6 +38,12 @@ anyhow.workspace = true
 
 # Logging
 tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+dirs-next.workspace = true
+
+# CLI
+clap.workspace = true
 
 # GUI framework (placeholder - will be added when implemented)
 # egui = "0.28"

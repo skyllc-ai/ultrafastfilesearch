@@ -582,22 +582,23 @@ async fn version_bump(ctx: &PipelineContext) -> Result<()> {
     Ok(())
 }
 
-/// Check if dev build mode is enabled via UFFS_DEV_BUILD env var
-fn is_dev_build() -> bool {
-    std::env::var("UFFS_DEV_BUILD")
+/// Check if release build mode is enabled via UFFS_RELEASE_BUILD env var.
+/// Default is DEV mode for faster iteration during development.
+fn is_release_build() -> bool {
+    std::env::var("UFFS_RELEASE_BUILD")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }
 
 async fn build_release(ctx: &PipelineContext) -> Result<()> {
-    let dev_build = is_dev_build();
-    let build_type = if dev_build { "dev" } else { "release" };
+    let release_build = is_release_build();
+    let build_type = if release_build { "release" } else { "dev" };
     println!("{}", format!("🔨 Building {} binary...", build_type).blue());
 
-    let args: Vec<&str> = if dev_build {
-        vec!["build", "--workspace"]
-    } else {
+    let args: Vec<&str> = if release_build {
         vec!["build", "--release", "--workspace"]
+    } else {
+        vec!["build", "--workspace"]
     };
 
     execute_command(
@@ -620,6 +621,8 @@ async fn deploy_binary(ctx: &PipelineContext) -> Result<()> {
     let is_macos_arm64 = std::env::consts::OS == "macos" && std::env::consts::ARCH == "aarch64";
 
     if is_macos_arm64 {
+        // Cross-compile for Windows from macOS
+        // Note: The xwin-dev profile handles COFF archive size limits for polars crates
         println!("{} Running cross-platform build...", "🌍".blue());
         execute_command(
             "Cross-platform build",
@@ -980,6 +983,10 @@ async fn main() -> Result<()> {
         println!("{} Verbose mode enabled", "🔍".blue());
         println!("{} Coverage report: {}", "📊".blue(), if ctx.coverage_report { "enabled" } else { "disabled" });
     }
+
+    // Show build mode (DEV is default, set UFFS_RELEASE_BUILD=1 for release)
+    let build_mode = if is_release_build() { "RELEASE (optimized)" } else { "DEV (fast, default)" };
+    println!("{} Build mode: {}", "🔧".blue(), build_mode);
 
     match cli.command {
         Commands::Go => {
