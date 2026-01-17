@@ -725,9 +725,12 @@ use:
     Write-Host "ℹ️  Note: UFFS is Windows-only (requires NTFS MFT access)" -ForegroundColor Yellow; \
     $binDir = "$env:USERPROFILE\bin"; \
     if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }; \
+    $distDir = if (Test-Path "dist\latest") { "dist\latest" } else { $versions = Get-ChildItem -Path "dist" -Directory | Where-Object { $_.Name -match '^v\d' } | Sort-Object Name -Descending; if ($versions) { $versions[0].FullName } else { $null } }; \
+    if (-not $distDir) { Write-Host "❌ No binaries found in dist/. Run 'just go' first." -ForegroundColor Red; exit 1 }; \
+    Write-Host "  → Using: $distDir" -ForegroundColor Cyan; \
     $binaries = @("uffs", "uffs_mft", "uffs_tui", "uffs_gui"); \
     $installed = 0; $skipped = 0; \
-    foreach ($bin in $binaries) { $src = "dist\latest\$bin\$bin-windows-x64.exe"; $dest = "$binDir\$bin.exe"; if (Test-Path $src) { Copy-Item $src $dest -Force; Write-Host "  ✅ $bin.exe" -ForegroundColor Green; $installed++ } else { Write-Host "  ⚠️  $bin (not found - run 'just go' first)" -ForegroundColor Yellow; $skipped++ } }; \
+    foreach ($bin in $binaries) { $src = "$distDir\$bin\$bin-windows-x64.exe"; $dest = "$binDir\$bin.exe"; if (Test-Path $src) { Copy-Item $src $dest -Force; Write-Host "  ✅ $bin.exe" -ForegroundColor Green; $installed++ } else { Write-Host "  ⚠️  $bin (not found)" -ForegroundColor Yellow; $skipped++ } }; \
     Write-Host "✅ Installed $installed binaries to ~/bin" -ForegroundColor Green; \
     if ($skipped -gt 0) { Write-Host "⚠️  Skipped $skipped (run 'just go' to build all binaries)" -ForegroundColor Yellow }
 
