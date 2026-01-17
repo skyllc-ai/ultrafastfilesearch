@@ -18,7 +18,7 @@ use uffs_core::tree::add_tree_columns;
 use uffs_core::{MftQuery, export_csv, export_json, export_table};
 use uffs_mft::{MftProgress, MftReader, load_raw_mft_header};
 #[cfg(windows)]
-use uffs_mft::{MultiDriveMftReader, SaveRawOptions};
+use uffs_mft::SaveRawOptions;
 
 /// Search for files matching a pattern.
 ///
@@ -58,10 +58,7 @@ pub async fn search(
         .with_context(|| format!("Invalid pattern: {pattern}"))?
         .with_case_sensitive(case_sensitive);
 
-    // Load data from index, multi-drive, single drive, or all drives (default)
-    let df = load_search_data(index, multi_drives, single_drive, &parsed).await?;
-
-    // Build and execute query
+    // Build filters struct for reuse
     let filters = QueryFilters {
         parsed: &parsed,
         ext_filter,
@@ -71,7 +68,9 @@ pub async fn search(
         max_size,
         limit,
     };
-    let mut results = execute_query(df, &filters)?;
+
+    // Load and filter data - for multi-drive, filter per-drive to reduce memory
+    let mut results = load_and_filter_data(index, multi_drives, single_drive, &filters).await?;
 
     // Build output configuration
     let output_config = OutputConfig::new()
@@ -97,34 +96,39 @@ pub async fn search(
     Ok(())
 }
 
-/// Load search data from index file, multiple drives, single drive, or all NTFS
-/// drives.
+/// Load and filter search data from index file, multiple drives, single drive,
+/// or all NTFS drives.
+///
+/// For multi-drive searches, applies filters per-drive to reduce memory usage.
+/// This prevents OOM errors when searching many drives with millions of files.
 #[allow(clippy::single_call_fn)] // Extracted to reduce search() line count below clippy::too_many_lines limit
-async fn load_search_data(
+async fn load_and_filter_data(
     index: Option<std::path::PathBuf>,
     multi_drives: Option<Vec<char>>,
     single_drive: Option<char>,
-    parsed: &ParsedPattern,
+    filters: &QueryFilters<'_>,
 ) -> Result<uffs_mft::DataFrame> {
     if let Some(index_path) = index {
-        // Load from pre-built index
-        return MftReader::load_parquet(&index_path)
-            .with_context(|| format!("Failed to load index: {}", index_path.display()));
+        // Load from pre-built index and filter
+        let df = MftReader::load_parquet(&index_path)
+            .with_context(|| format!("Failed to load index: {}", index_path.display()))?;
+        return execute_query(df, filters);
     }
 
     if let Some(drives) = multi_drives {
-        // Multi-drive concurrent search (explicit)
-        return search_multi_drive(&drives).await;
+        // Multi-drive search with per-drive filtering (memory efficient)
+        return search_multi_drive_filtered(&drives, filters).await;
     }
 
     // Check for single drive: CLI flag overrides pattern-embedded drive
-    let effective_drive = single_drive.or_else(|| parsed.drive());
+    let effective_drive = single_drive.or_else(|| filters.parsed.drive());
     if let Some(drive_letter) = effective_drive {
         // Single drive search
         let reader = MftReader::open(drive_letter)
             .await
             .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
-        return Ok(reader.read_all().await?);
+        let df = reader.read_all().await?;
+        return execute_query(df, filters);
     }
 
     // No drive specified - search ALL available NTFS drives
@@ -144,7 +148,7 @@ async fn load_search_data(
             bail!("No NTFS drives found on this system");
         }
         info!(drives = ?all_drives, count = all_drives.len(), "No drive specified - searching all NTFS drives");
-        search_multi_drive(&all_drives).await
+        search_multi_drive_filtered(&all_drives, filters).await
     }
     #[cfg(not(windows))]
     {
@@ -246,24 +250,36 @@ fn write_results(
     Ok(())
 }
 
-/// Search multiple drives concurrently.
+/// Search multiple drives sequentially with per-drive filtering.
+///
+/// This approach processes one drive at a time and applies filters immediately,
+/// keeping only matching results in memory. This prevents OOM errors when
+/// searching many drives with millions of files.
 #[cfg(windows)]
-async fn search_multi_drive(drives: &[char]) -> Result<uffs_mft::DataFrame> {
+async fn search_multi_drive_filtered(
+    drives: &[char],
+    filters: &QueryFilters<'_>,
+) -> Result<uffs_mft::DataFrame> {
     use indicatif::MultiProgress;
+    use uffs_mft::{IntoLazy, col, lit};
 
     if drives.is_empty() {
         bail!("No drives specified for multi-drive search");
     }
 
-    info!(count = drives.len(), "Searching drives concurrently");
+    info!(
+        count = drives.len(),
+        "Searching drives sequentially (memory-efficient mode)"
+    );
 
-    let reader = MultiDriveMftReader::new(drives.to_vec());
     let multi_progress = MultiProgress::new();
+    let mut filtered_results: Vec<uffs_mft::DataFrame> = Vec::new();
+    let mut total_matches = 0usize;
 
-    // Create progress bars for each drive
-    let mut progress_bars = std::collections::HashMap::new();
-    for &drive_char in reader.drives() {
-        let pb = multi_progress.add(ProgressBar::new(0));
+    // Process drives sequentially to limit memory usage
+    for &drive_char in drives {
+        // Create progress bar for this drive (wrapped in Arc for closure sharing)
+        let pb = std::sync::Arc::new(multi_progress.add(ProgressBar::new(0)));
         let style = ProgressStyle::default_bar()
             .template(&format!(
                 "{{spinner:.green}} [{drive_char}:] [{{elapsed_precise}}] [{{bar:30.cyan/blue}}] {{pos}}/{{len}} ({{eta}})"
@@ -271,41 +287,106 @@ async fn search_multi_drive(drives: &[char]) -> Result<uffs_mft::DataFrame> {
             .context("Invalid progress bar template")?
             .progress_chars("#>-");
         pb.set_style(style);
-        progress_bars.insert(drive_char, pb);
-    }
 
-    let progress_bars = std::sync::Arc::new(progress_bars);
-    let pbs = progress_bars.clone();
-
-    let df = reader
-        .read_with_progress(move |drive_char, progress| {
-            if let Some(pb) = pbs.get(&drive_char) {
-                if let Some(total) = progress.total_records {
-                    pb.set_length(total);
-                }
-                pb.set_position(progress.records_read);
+        // Read this drive
+        let reader = match MftReader::open(drive_char).await {
+            Ok(r) => r,
+            Err(e) => {
+                pb.finish_with_message(format!("Error: {e}"));
+                info!(drive = %drive_char, error = %e, "Skipping drive due to error");
+                continue;
             }
-        })
-        .await
-        .context("Failed to read MFTs from drives")?;
+        };
 
-    for pb in progress_bars.values() {
+        let pb_clone = pb.clone();
+        let df = match reader
+            .read_with_progress(move |progress| {
+                if let Some(total) = progress.total_records {
+                    pb_clone.set_length(total);
+                }
+                pb_clone.set_position(progress.records_read);
+            })
+            .await
+        {
+            Ok(df) => df,
+            Err(e) => {
+                pb.finish_with_message(format!("Error: {e}"));
+                info!(drive = %drive_char, error = %e, "Skipping drive due to read error");
+                continue;
+            }
+        };
+
+        let records_read = df.height();
         pb.finish();
+
+        // Apply filters immediately to reduce memory
+        let filtered = execute_query(df, filters)?;
+        let matches = filtered.height();
+        total_matches += matches;
+
+        info!(
+            drive = %drive_char,
+            records = records_read,
+            matches = matches,
+            "Drive processed"
+        );
+
+        if matches > 0 {
+            // Add drive column and store filtered results
+            let df_with_drive = filtered
+                .lazy()
+                .with_column(lit(format!("{drive_char}:")).alias("drive"))
+                .collect()
+                .context("Failed to add drive column")?;
+            filtered_results.push(df_with_drive);
+        }
     }
+
+    if filtered_results.is_empty() {
+        // Return empty DataFrame with correct schema
+        bail!("No matching files found across {} drives", drives.len());
+    }
+
+    // Concatenate filtered results (much smaller than full data)
+    let mut result = filtered_results.remove(0);
+    for df in filtered_results {
+        result = result.vstack(&df).context("Failed to merge results")?;
+    }
+
+    // Reorder columns to put "drive" first
+    let column_names: Vec<String> = result
+        .get_column_names()
+        .into_iter()
+        .filter(|c| c.as_str() != "drive")
+        .map(|c| c.to_string())
+        .collect();
+    let columns: Vec<_> = std::iter::once("drive".to_string())
+        .chain(column_names)
+        .map(|s| col(&s))
+        .collect();
+
+    let result = result
+        .lazy()
+        .select(columns)
+        .collect()
+        .context("Failed to reorder columns")?;
 
     info!(
-        records = df.height(),
+        total_matches = total_matches,
         drives = drives.len(),
-        "Read records from drives"
+        "Multi-drive search complete"
     );
-    Ok(df)
+
+    Ok(result)
 }
 
 /// Stub for non-Windows platforms.
 #[cfg(not(windows))]
-// Platform-specific stub must match Windows signature; called once per platform is expected.
 #[allow(clippy::unused_async, clippy::single_call_fn)]
-async fn search_multi_drive(_drives: &[char]) -> Result<uffs_mft::DataFrame> {
+async fn search_multi_drive_filtered(
+    _drives: &[char],
+    _filters: &QueryFilters<'_>,
+) -> Result<uffs_mft::DataFrame> {
     bail!("Multi-drive search is only supported on Windows")
 }
 

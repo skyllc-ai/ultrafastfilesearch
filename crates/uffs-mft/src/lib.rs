@@ -122,4 +122,4 @@ pub use raw::{
 };
 pub use reader::{DriveReadResult, MftProgress, MftReader, MultiDriveMftReader};
 // Re-export Polars types for convenience
-pub use uffs_polars::{DataFrame, LazyFrame};
+pub use uffs_polars::{DataFrame, IntoLazy, LazyFrame, col, lit};
