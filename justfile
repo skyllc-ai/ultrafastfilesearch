@@ -725,7 +725,11 @@ use:
     Write-Host "ℹ️  Note: UFFS is Windows-only (requires NTFS MFT access)" -ForegroundColor Yellow; \
     $binDir = "$env:USERPROFILE\bin"; \
     if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }; \
-    $distDir = if (Test-Path "dist\latest") { "dist\latest" } else { $versions = Get-ChildItem -Path "dist" -Directory | Where-Object { $_.Name -match '^v\d' } | Sort-Object Name -Descending; if ($versions) { $versions[0].FullName } else { $null } }; \
+    $distDir = $null; \
+    $latestItem = Get-Item "dist\latest" -ErrorAction SilentlyContinue; \
+    if ($latestItem -and $latestItem.LinkType -eq 'SymbolicLink') { $distDir = $latestItem.Target } \
+    elseif ($latestItem -and -not $latestItem.PSIsContainer) { $target = (Get-Content "dist\latest" -Raw).Trim(); if (Test-Path "dist\$target") { $distDir = "dist\$target" } }; \
+    if (-not $distDir) { $versions = Get-ChildItem -Path "dist" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^v\d' } | Sort-Object Name -Descending; if ($versions) { $distDir = $versions[0].FullName } }; \
     if (-not $distDir) { Write-Host "❌ No binaries found in dist/. Run 'just go' first." -ForegroundColor Red; exit 1 }; \
     Write-Host "  → Using: $distDir" -ForegroundColor Cyan; \
     $binaries = @("uffs", "uffs_mft", "uffs_tui", "uffs_gui"); \
