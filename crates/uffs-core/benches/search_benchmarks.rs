@@ -1,0 +1,376 @@
+//! Search benchmarks for UFFS.
+//!
+//! This benchmark suite measures the performance of file search operations:
+//! - Pattern parsing and matching
+//! - Glob to regex conversion
+//! - Query building and execution
+//! - Path resolution
+//! - Tree index building and metric computation
+//!
+//! Run with: `cargo bench --bench search_benchmarks`
+
+// =============================================================================
+// Benchmark-specific lint exceptions
+// =============================================================================
+// These are acceptable in benchmark code because:
+// 1. Benchmark functions are called once by criterion_group! macro by design
+// 2. Benchmarks intentionally discard results to measure pure computation time
+// 3. Benchmarks use std types directly for simplicity
+// 4. Benchmarks use unwrap/expect on controlled test data that cannot fail
+// 5. Benchmarks may have similar variable names for different sizes
+// 6. Benchmarks reuse variable names in loops for clarity
+// 7. Benchmarks don't need full documentation
+// =============================================================================
+#![allow(clippy::single_call_fn)]
+#![allow(clippy::let_underscore_must_use)]
+#![allow(clippy::let_underscore_untyped)]
+#![allow(clippy::std_instead_of_core)]
+#![allow(clippy::std_instead_of_alloc)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::missing_docs_in_private_items)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::shadow_reuse)]
+#![allow(clippy::shadow_same)]
+#![allow(clippy::semicolon_if_nothing_returned)]
+#![allow(clippy::semicolon_inside_block)]
+#![allow(clippy::semicolon_outside_block)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::indexing_slicing)]
+#![allow(clippy::min_ident_chars)]
+// uffs-mft is a dependency of uffs-core but not directly used in benchmarks
+#![allow(unused_crate_dependencies)]
+
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use uffs_core::pattern::ParsedPattern;
+use uffs_core::tree::{TreeColumn, TreeIndex};
+use uffs_core::{MftQuery, PathResolver};
+use uffs_polars::{Column, DataFrame};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Test Data Generation
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Create a test `DataFrame` with the specified number of rows.
+/// Simulates a realistic MFT structure with directories and files.
+fn create_test_dataframe(num_rows: usize) -> DataFrame {
+    let mut frs_values: Vec<u64> = Vec::with_capacity(num_rows);
+    let mut parent_values: Vec<u64> = Vec::with_capacity(num_rows);
+    let mut name_values: Vec<String> = Vec::with_capacity(num_rows);
+    let mut is_dir_values: Vec<bool> = Vec::with_capacity(num_rows);
+    let mut size_values: Vec<u64> = Vec::with_capacity(num_rows);
+    let mut alloc_values: Vec<u64> = Vec::with_capacity(num_rows);
+
+    // Root directory (FRS 5)
+    frs_values.push(5);
+    parent_values.push(5);
+    name_values.push(String::new());
+    is_dir_values.push(true);
+    size_values.push(0);
+    alloc_values.push(0);
+
+    // Create a tree structure: ~10% directories, ~90% files
+    let mut current_dir = 5_u64;
+    let mut dir_count = 0_usize;
+
+    for i in 1..num_rows {
+        let frs = (i + 100) as u64;
+        frs_values.push(frs);
+
+        // Every 10th entry is a directory
+        let is_dir = i % 10 == 0;
+        is_dir_values.push(is_dir);
+
+        if is_dir {
+            // Directories are children of root or previous directories
+            parent_values.push(if dir_count % 3 == 0 { 5 } else { current_dir });
+            name_values.push(format!("dir_{i}"));
+            size_values.push(0);
+            alloc_values.push(4096);
+            current_dir = frs;
+            dir_count += 1;
+        } else {
+            // Files are children of current directory
+            parent_values.push(current_dir);
+            name_values.push(format!("file_{i}.txt"));
+            let size = ((i * 1024) % 1_000_000) as u64;
+            size_values.push(size);
+            // Allocated size is cluster-aligned (4KB)
+            alloc_values.push(size.div_ceil(4096) * 4096);
+        }
+    }
+
+    DataFrame::new_infer_height(vec![
+        Column::new("frs".into(), frs_values),
+        Column::new("parent_frs".into(), parent_values),
+        Column::new("name".into(), name_values),
+        Column::new("is_directory".into(), is_dir_values),
+        Column::new("size".into(), size_values),
+        Column::new("allocated_size".into(), alloc_values),
+    ])
+    .expect("Failed to create test DataFrame")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Pattern Parsing Benchmarks
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn bench_pattern_parsing(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pattern_parsing");
+
+    // Simple glob pattern
+    group.bench_function("simple_glob", |b| {
+        b.iter(|| ParsedPattern::parse(std::hint::black_box("*.txt")))
+    });
+
+    // Complex glob pattern
+    group.bench_function("complex_glob", |b| {
+        b.iter(|| {
+            ParsedPattern::parse(std::hint::black_box(
+                "c:/users/**/documents/*.{doc,docx,pdf}",
+            ))
+        })
+    });
+
+    // Regex pattern
+    group.bench_function("regex_pattern", |b| {
+        b.iter(|| ParsedPattern::parse(std::hint::black_box(r">C:\\Temp.*\.txt$")))
+    });
+
+    // Literal pattern
+    group.bench_function("literal_pattern", |b| {
+        b.iter(|| ParsedPattern::parse(std::hint::black_box("main")))
+    });
+
+    // Pattern with drive prefix
+    group.bench_function("drive_prefix", |b| {
+        b.iter(|| ParsedPattern::parse(std::hint::black_box("d:/projects/*.rs")))
+    });
+
+    group.finish();
+}
+
+fn bench_pattern_to_regex(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pattern_to_regex");
+
+    let patterns = [
+        ("simple_glob", "*.txt"),
+        ("complex_glob", "**/src/**/*.rs"),
+        ("literal", "main"),
+    ];
+
+    for (name, pattern_str) in patterns {
+        let parsed = ParsedPattern::parse(pattern_str).expect("valid pattern");
+        group.bench_function(name, |b| b.iter(|| parsed.to_regex()));
+    }
+
+    group.finish();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Query Building Benchmarks
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn bench_query_building(c: &mut Criterion) {
+    let mut group = c.benchmark_group("query_building");
+
+    // Test with different DataFrame sizes
+    for size in [1_000, 10_000, 100_000] {
+        let df = create_test_dataframe(size);
+
+        group.throughput(Throughput::Elements(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("new", size), &df, |b, df| {
+            b.iter(|| MftQuery::new(std::hint::black_box(df.clone())))
+        });
+
+        group.bench_with_input(BenchmarkId::new("files_only", size), &df, |b, df| {
+            b.iter(|| MftQuery::new(std::hint::black_box(df.clone())).files_only())
+        });
+
+        group.bench_with_input(BenchmarkId::new("chained_filters", size), &df, |b, df| {
+            b.iter(|| {
+                MftQuery::new(std::hint::black_box(df.clone()))
+                    .files_only()
+                    .min_size(1024)
+                    .limit(100)
+            })
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_query_execution(c: &mut Criterion) {
+    let mut group = c.benchmark_group("query_execution");
+    group.sample_size(50); // Reduce sample size for slower benchmarks
+
+    for size in [1_000, 10_000, 100_000] {
+        let df = create_test_dataframe(size);
+
+        group.throughput(Throughput::Elements(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("collect_all", size), &df, |b, df| {
+            b.iter_batched(
+                || MftQuery::new(df.clone()),
+                |query: MftQuery| query.collect(),
+                BatchSize::SmallInput,
+            )
+        });
+
+        group.bench_with_input(
+            BenchmarkId::new("files_only_collect", size),
+            &df,
+            |b, df| {
+                b.iter_batched(
+                    || MftQuery::new(df.clone()).files_only(),
+                    |query: MftQuery| query.collect(),
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+
+        group.bench_with_input(BenchmarkId::new("filtered_collect", size), &df, |b, df| {
+            b.iter_batched(
+                || {
+                    MftQuery::new(df.clone())
+                        .files_only()
+                        .min_size(10_000)
+                        .limit(100)
+                },
+                |query: MftQuery| query.collect(),
+                BatchSize::SmallInput,
+            )
+        });
+    }
+
+    group.finish();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tree Index Benchmarks
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn bench_tree_index_building(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tree_index_building");
+    group.sample_size(30); // Reduce sample size for slower benchmarks
+
+    for size in [1_000, 10_000, 100_000] {
+        let df = create_test_dataframe(size);
+
+        group.throughput(Throughput::Elements(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("from_dataframe", size), &df, |b, df| {
+            b.iter(|| TreeIndex::from_dataframe(std::hint::black_box(df)))
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_tree_column_computation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tree_column_computation");
+    group.sample_size(20); // Reduce sample size for slower benchmarks
+
+    for size in [1_000, 10_000, 50_000] {
+        let df = create_test_dataframe(size);
+
+        group.throughput(Throughput::Elements(size as u64));
+
+        // Benchmark adding all tree columns
+        group.bench_with_input(BenchmarkId::new("all_columns", size), &df, |b, df| {
+            b.iter_batched(
+                || TreeIndex::from_dataframe(df).expect("valid tree"),
+                |mut tree| {
+                    tree.add_columns(
+                        df,
+                        &[
+                            TreeColumn::Descendants,
+                            TreeColumn::TreeSize,
+                            TreeColumn::TreeAllocated,
+                            TreeColumn::Bulkiness,
+                        ],
+                    )
+                },
+                BatchSize::SmallInput,
+            )
+        });
+
+        // Benchmark adding just descendants
+        group.bench_with_input(BenchmarkId::new("descendants_only", size), &df, |b, df| {
+            b.iter_batched(
+                || TreeIndex::from_dataframe(df).expect("valid tree"),
+                |mut tree| tree.add_columns(df, &[TreeColumn::Descendants]),
+                BatchSize::SmallInput,
+            )
+        });
+    }
+
+    group.finish();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Path Resolution Benchmarks
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn bench_path_resolution(c: &mut Criterion) {
+    let mut group = c.benchmark_group("path_resolution");
+
+    for size in [1_000, 10_000, 100_000] {
+        let df = create_test_dataframe(size);
+
+        group.throughput(Throughput::Elements(size as u64));
+
+        // Benchmark building the resolver
+        group.bench_with_input(BenchmarkId::new("build", size), &df, |b, df| {
+            b.iter(|| PathResolver::build(std::hint::black_box(df), 'C'))
+        });
+
+        // Benchmark resolving paths (with caching)
+        group.bench_with_input(BenchmarkId::new("resolve_cached", size), &df, |b, df| {
+            b.iter_batched(
+                || {
+                    let resolver = PathResolver::build(df, 'C').expect("valid resolver");
+                    // Get some FRS values to resolve
+                    let frs_col = df.column("frs").unwrap().u64().unwrap();
+                    let frs_values: Vec<u64> = (0..std::cmp::min(100, df.height()))
+                        .filter_map(|i| frs_col.get(i))
+                        .collect();
+                    (resolver, frs_values)
+                },
+                |(mut resolver, frs_values): (PathResolver, Vec<u64>)| {
+                    for frs in frs_values {
+                        let _ = resolver.resolve(frs);
+                    }
+                },
+                BatchSize::SmallInput,
+            )
+        });
+    }
+
+    group.finish();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Criterion Groups
+// ═══════════════════════════════════════════════════════════════════════════
+
+criterion_group!(
+    pattern_benches,
+    bench_pattern_parsing,
+    bench_pattern_to_regex
+);
+
+criterion_group!(query_benches, bench_query_building, bench_query_execution);
+
+criterion_group!(
+    tree_benches,
+    bench_tree_index_building,
+    bench_tree_column_computation
+);
+
+criterion_group!(path_benches, bench_path_resolution);
+
+criterion_main!(pattern_benches, query_benches, tree_benches, path_benches);

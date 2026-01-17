@@ -1,4 +1,4 @@
-//! # uffs-core: Query Engine for `UltraFastFileSearch`
+//! # uffs-core: Query Engine for UFFS (Ultra Fast File Search)
 //!
 //! This crate provides a powerful query engine for searching and filtering
 //! MFT data using Polars lazy API.
@@ -41,15 +41,26 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
+// Suppress unused crate warnings for dev-dependencies (used in benchmarks/tests
+// only)
+#[cfg(test)]
+use criterion as _;
+#[cfg(test)]
+use tokio as _;
+
 // ============================================================================
 // Module declarations
 // ============================================================================
 
 mod error;
 mod export;
-mod glob;
+pub mod extensions;
+pub mod glob;
+pub mod output;
 mod path_resolver;
+pub mod pattern;
 mod query;
+pub mod tree;
 
 // ============================================================================
 // Public API re-exports
@@ -59,8 +70,6 @@ pub use error::{CoreError, Result};
 pub use export::{export_csv, export_json, export_table};
 pub use path_resolver::PathResolver;
 pub use query::MftQuery;
-
 // Re-export commonly used types
 pub use uffs_mft::{DataFrame, FileFlags, LazyFrame};
 pub use uffs_polars::columns;
-

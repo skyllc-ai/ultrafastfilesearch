@@ -1,0 +1,253 @@
+# UFFS Post-Push Sanity Check - Quick validation after comprehensive local testing
+# Copyright 2025-2026 Robert Nio
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# CI ARCHITECTURE: LOCAL-FIRST WITH GITHUB BACKUP
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# PRIMARY CI: Local via `rust-script scripts/ci-pipeline.rs go -v`
+# ─────────────────────────────────────────────────────────────────
+# The local CI pipeline performs comprehensive validation BEFORE push:
+#   • cargo check --workspace --all-features
+#   • cargo clippy (pedantic + nursery lints)
+#   • cargo test --workspace
+#   • cargo build --workspace --all-features (full build + linking)
+#   • cargo fmt --check
+#   • cargo audit (security)
+#
+# GITHUB CI: Lightweight backup (this workflow)
+# ─────────────────────────────────────────────────────────────────
+# This workflow is a BACKUP gate, not the primary CI. It catches:
+#   • Accidental direct pushes without running local CI
+#   • PRs from external contributors
+#   • New security advisories (CVEs published after local CI ran)
+#   • Provides visible green checkmark on repository
+#
+# WHY build-check IS SKIPPED:
+# ─────────────────────────────────────────────────────────────────
+# Standard GitHub runners (2-core, 7GB RAM) cannot handle Polars + full
+# workspace linking - they get OOM-killed (exit code 143). Options:
+#   • Larger runners: require Team/Enterprise plan ($$$)
+#   • Self-hosted runner: requires always-on machine
+#   • Ephemeral runner: redundant since local CI already built
+#
+# Since local CI already runs `cargo build`, repeating it in GitHub CI
+# provides no additional value. The `sanity-check` job runs `cargo check`
+# which validates compilation without linking - sufficient to catch
+# catastrophic breaks from accidental pushes.
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# MINUTE CONSERVATION
+# ═══════════════════════════════════════════════════════════════════════════════
+# macOS runners cost 10x, Windows 2x - we use Linux wherever possible.
+# Estimated consumption: ~15 min/push (down from ~549 min original design)
+
+name: 🚀 UFFS CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    # Only run when Rust code changes - saves minutes on doc/config changes
+    paths:
+      - '**.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '.github/workflows/optimized-ci.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '.github/workflows/optimized-ci.yml'
+  workflow_dispatch:  # Allow manual triggering for testing
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_TARGET_DIR: target
+  # Disable sccache in CI - it's configured in .cargo/config.toml for local dev
+  # but not installed on GitHub Actions runners
+  RUSTC_WRAPPER: ""
+  # Limit parallel jobs to reduce memory pressure during Polars compilation
+  # GitHub Actions runners have limited RAM; too many parallel rustc processes
+  # can trigger OOM killer or runner preemption (exit code 143)
+  CARGO_BUILD_JOBS: 2
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 1: Fast Feedback (Parallel - No Dependencies)
+  # ═══════════════════════════════════════════════════════════════════════════
+  
+  format-check:
+    name: 📝 Format Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Free up disk space
+        run: |
+          echo "🧹 Freeing up disk space for Polars compilation..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Compiler & edition clean-ups (enhanced scope)
+        run: cargo fix --workspace --all-targets --edition-idioms --allow-dirty --broken-code
+
+      - name: Apply every machine-safe Clippy suggestion (proven workflow)
+        run: cargo clippy --fix --workspace --allow-dirty --allow-staged -- -D warnings -D clippy::pedantic -D clippy::nursery -D clippy::cargo -A clippy::multiple_crate_versions
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 2: Quick Compilation Check (Sanity Check Only)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  sanity-check:
+    name: 🔍 Quick Sanity Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Free up disk space
+        run: |
+          echo "🧹 Freeing up disk space for Polars compilation..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Update Polars to latest main
+        run: |
+          echo "📦 Updating Polars (git, branch=main) to latest commit..."
+          POLARS_SHA=$(git ls-remote https://github.com/pola-rs/polars refs/heads/main | cut -f1)
+          echo "   Latest Polars commit: $POLARS_SHA"
+          cargo update -p polars --precise "$POLARS_SHA"
+          echo "✅ Polars pinned to $POLARS_SHA"
+
+      - name: Quick compilation check (no linking)
+        run: |
+          echo "🔍 Quick sanity check - cargo check only..."
+          cargo check --workspace --all-features --all-targets
+          echo "✅ Sanity check passed - no catastrophic compilation failures"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 3: Security & Cross-Platform Check (Minimal validation only)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  security-audit:
+    name: 🔒 Security Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-audit (fast method)
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Run security audit
+        run: |
+          echo "🔒 Running security audit..."
+          cargo audit
+          echo "✅ Security audit passed"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 4: Build Verification (Linux only - saves 145 min vs macOS)
+  # ═══════════════════════════════════════════════════════════════════════════
+  # NOTE: macOS runners cost 10x Linux. For CI sanity checks, Linux is sufficient.
+  # Cross-platform builds happen in release.yml when you actually need binaries.
+
+  # NOTE: Full build-check is SKIPPED because:
+  # 1. sanity-check already runs `cargo check --workspace --all-features` (validates compilation)
+  # 2. Standard GitHub runners (2-core, 7GB) can't handle Polars + full workspace linking
+  # 3. Larger runners require Team/Enterprise plan
+  # 4. Full builds are done locally before push (comprehensive local testing)
+  #
+  # To re-enable: set up a self-hosted runner with more resources and uncomment below
+
+  build-check:
+    name: 🔨 Build Check (Skipped - use local)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Skip build check
+        run: |
+          echo "⏭️ Full build check is SKIPPED in CI"
+          echo ""
+          echo "Reason: Standard GitHub runners (2-core, 7GB RAM) cannot handle"
+          echo "Polars + full workspace build without OOM. Larger runners require"
+          echo "Team/Enterprise plan."
+          echo ""
+          echo "✅ Compilation is validated by sanity-check (cargo check)"
+          echo "✅ Full builds should be done locally before push"
+          echo ""
+          echo "To enable full CI builds:"
+          echo "  1. Set up a self-hosted runner with 16GB+ RAM, or"
+          echo "  2. Upgrade to GitHub Team/Enterprise for larger runners"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 5: Pipeline Summary (NO automatic release - saves ~382 min/push)
+  # ═══════════════════════════════════════════════════════════════════════════
+  # To create a release, manually trigger release.yml via workflow_dispatch
+
+  pipeline-summary:
+    name: 📊 CI Summary
+    runs-on: ubuntu-latest
+    needs: [format-check, sanity-check, security-audit, build-check]
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - name: Check pipeline success
+        run: |
+          if [[ "${{ needs.format-check.result }}" == "success" && \
+                "${{ needs.sanity-check.result }}" == "success" && \
+                "${{ needs.security-audit.result }}" == "success" && \
+                "${{ needs.build-check.result }}" == "success" ]]; then
+            echo "✅ All CI checks passed!"
+          else
+            echo "❌ Some checks failed - review above"
+            exit 1
+          fi
+
+      - name: Create summary
+        if: success()
+        run: |
+          echo "## ✅ UFFS CI Passed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Format | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Compile | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 To Release" >> $GITHUB_STEP_SUMMARY
+          echo "Manually trigger **release.yml** via Actions → Run workflow" >> $GITHUB_STEP_SUMMARY

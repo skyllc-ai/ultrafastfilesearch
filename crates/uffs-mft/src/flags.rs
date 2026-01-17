@@ -117,14 +117,25 @@ impl FileFlags {
 ///     .collect()?;
 /// ```
 pub mod raw_flags {
+    // Raw flag constants for direct Polars bitwise operations.
+
+    /// Read-only file attribute.
     pub const READONLY: u16 = 0x0001;
+    /// Hidden file attribute.
     pub const HIDDEN: u16 = 0x0002;
+    /// System file attribute.
     pub const SYSTEM: u16 = 0x0004;
+    /// Directory attribute.
     pub const DIRECTORY: u16 = 0x0010;
+    /// Archive attribute (file has been modified).
     pub const ARCHIVE: u16 = 0x0020;
+    /// Sparse file attribute.
     pub const SPARSE: u16 = 0x0200;
+    /// Reparse point attribute (symlinks, junctions).
     pub const REPARSE: u16 = 0x0400;
+    /// Compressed file attribute.
     pub const COMPRESSED: u16 = 0x0800;
+    /// Encrypted file attribute.
     pub const ENCRYPTED: u16 = 0x4000;
 }
 
@@ -154,4 +165,3 @@ mod tests {
         assert_eq!(raw_flags::HIDDEN, 0x0002);
     }
 }
-

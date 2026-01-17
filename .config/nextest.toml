@@ -1,0 +1,67 @@
+# =============================================================================
+# .config/nextest.toml
+# =============================================================================
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2025-2026 Robert Nio
+#
+# UFFS - Ultra Fast File Search
+#
+
+# Nextest configuration optimized for M1 Mac with 64GB RAM
+# https://nexte.st/book/configuration.html
+
+[profile.default]
+# Optimize for M1 Mac (8-10 cores, 64GB RAM)
+test-threads = 12
+retries = 1
+
+# Timeout settings - generous for integration tests
+slow-timeout = { period = "120s", terminate-after = 2 }
+leak-timeout = "100ms"
+
+# Test execution settings
+failure-output = "immediate-final"
+success-output = "never"
+status-level = "retry"
+
+# Memory and resource optimization
+junit = { path = "target/nextest-junit.xml" }
+
+[profile.ci]
+# CI profile with more conservative settings
+test-threads = 8
+retries = 2
+slow-timeout = { period = "300s", terminate-after = 3 }
+
+[profile.fast]
+# Ultra-fast profile for development (maximum parallelism)
+# Excludes ignored tests by default (nextest behavior)
+test-threads = 16
+retries = 0
+slow-timeout = { period = "60s", terminate-after = 1 }
+failure-output = "immediate"
+
+[profile.ludicrous]
+# LUDICROUS SPEED profile for M1 + 64GB (use with caution!)
+test-threads = 20
+retries = 0
+slow-timeout = { period = "45s", terminate-after = 1 }
+failure-output = "immediate"
+
+[profile.slow]
+# Profile for slow/ignored tests
+test-threads = 8
+retries = 1
+slow-timeout = { period = "1800s", terminate-after = 2 }
+
+# Test filtering and grouping
+[test-groups]
+# Group slow tests to run with lower concurrency
+slow-tests = { max-threads = 4 }
+
+# Override settings for specific slow tests
+# Note: All slow tests are marked with #[ignore] and run via 'just test-slow'
+# Examples: test_validate_production, test_validate_all (comprehensive validation)
+
+

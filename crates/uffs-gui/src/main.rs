@@ -1,13 +1,21 @@
-//! `UltraFastFileSearch` GUI
+//! UFFS (Ultra Fast File Search) GUI
 //!
 //! Native graphical user interface for file search.
 //!
 //! This is a placeholder for future GUI implementation.
 //! Planned technologies: egui or Tauri
 
+// Suppress lints for GUI binary - these are intentional for GUI apps
+#![allow(clippy::print_stdout)]
+#![allow(clippy::print_stderr)]
+#![allow(clippy::use_debug)]
+#![allow(clippy::single_call_fn)]
+#![allow(clippy::missing_docs_in_private_items)]
+#![allow(unused_crate_dependencies)]
+
 fn main() {
     eprintln!("╔══════════════════════════════════════════════════════════════╗");
-    eprintln!("║           UltraFastFileSearch GUI - Coming Soon!             ║");
+    eprintln!("║       UFFS (Ultra Fast File Search) GUI - Coming Soon!       ║");
     eprintln!("╠══════════════════════════════════════════════════════════════╣");
     eprintln!("║                                                              ║");
     eprintln!("║  The GUI is not yet implemented.                             ║");
@@ -27,4 +35,3 @@ fn main() {
 
     std::process::exit(1);
 }
-

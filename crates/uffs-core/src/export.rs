@@ -28,7 +28,7 @@ pub fn export_json<W: Write>(df: &DataFrame, writer: W) -> Result<()> {
     let mut json_writer = uffs_polars::JsonWriter::new(writer);
     json_writer
         .finish(&mut df.clone())
-        .map_err(|e| CoreError::Export(e.to_string()))?;
+        .map_err(|err| CoreError::Export(err.to_string()))?;
     Ok(())
 }
 
@@ -41,50 +41,54 @@ pub fn export_csv<W: Write>(df: &DataFrame, writer: W) -> Result<()> {
     let mut csv_writer = uffs_polars::CsvWriter::new(writer);
     csv_writer
         .finish(&mut df.clone())
-        .map_err(|e| CoreError::Export(e.to_string()))?;
+        .map_err(|err| CoreError::Export(err.to_string()))?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use uffs_polars::Column;
 
-    fn create_test_df() -> DataFrame {
-        DataFrame::new(vec![
+    use super::*;
+
+    type TestResult = core::result::Result<(), Box<dyn core::error::Error>>;
+
+    fn create_test_df() -> core::result::Result<DataFrame, uffs_polars::PolarsError> {
+        DataFrame::new_infer_height(vec![
             Column::new("name".into(), &["file1.txt", "file2.rs"]),
-            Column::new("size".into(), &[1024u64, 2048]),
+            Column::new("size".into(), &[1024_u64, 2048]),
         ])
-        .unwrap()
     }
 
     #[test]
-    fn test_export_table() {
-        let df = create_test_df();
+    fn test_export_table() -> TestResult {
+        let df = create_test_df()?;
         let mut output = Vec::new();
-        export_table(&df, &mut output).unwrap();
-        let output_str = String::from_utf8(output).unwrap();
+        export_table(&df, &mut output)?;
+        let output_str = String::from_utf8(output)?;
         assert!(output_str.contains("file1.txt"));
         assert!(output_str.contains("1024"));
+        Ok(())
     }
 
     #[test]
-    fn test_export_json() {
-        let df = create_test_df();
+    fn test_export_json() -> TestResult {
+        let df = create_test_df()?;
         let mut output = Vec::new();
-        export_json(&df, &mut output).unwrap();
-        let output_str = String::from_utf8(output).unwrap();
+        export_json(&df, &mut output)?;
+        let output_str = String::from_utf8(output)?;
         assert!(output_str.contains("file1.txt"));
+        Ok(())
     }
 
     #[test]
-    fn test_export_csv() {
-        let df = create_test_df();
+    fn test_export_csv() -> TestResult {
+        let df = create_test_df()?;
         let mut output = Vec::new();
-        export_csv(&df, &mut output).unwrap();
-        let output_str = String::from_utf8(output).unwrap();
+        export_csv(&df, &mut output)?;
+        let output_str = String::from_utf8(output)?;
         assert!(output_str.contains("name"));
         assert!(output_str.contains("file1.txt"));
+        Ok(())
     }
 }
-

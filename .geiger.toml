@@ -1,0 +1,32 @@
+# =============================================================================
+# .geiger.toml - Cargo Geiger Configuration
+# =============================================================================
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2025-2026 Robert Nio
+#
+# UltraFastFileSearch - Ultra-high-performance file search
+#
+
+# Configuration for cargo-geiger panic safety auditing
+# This file allows us to ignore specific external crates that have
+# parsing issues but are outside our control.
+
+[geiger]
+# Skip scanning these problematic external crates that cause infinite loops
+skip_crates = [
+    "signal-hook-registry",
+    "fxhash", 
+    "rkyv",
+    "zerocopy-derive"
+]
+
+# Additional configuration options
+forbid_only = true
+include_tests = false
+output_format = "human"
+
+# Ignore specific unsafe patterns (if needed)
+# ignore_patterns = [
+#     "unsafe_code_in_external_crate"
+# ]

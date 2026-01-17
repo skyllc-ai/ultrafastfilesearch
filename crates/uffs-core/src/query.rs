@@ -4,10 +4,7 @@
 
 use std::path::Path;
 
-use uffs_mft::flags::raw_flags;
-use uffs_polars::{
-    col, lit, DataFrame, DataType, Expr, IntoLazy, LazyFrame, SortMultipleOptions,
-};
+use uffs_polars::{DataFrame, Expr, IntoLazy, LazyFrame, SortMultipleOptions, col, lit};
 
 use crate::error::{CoreError, Result};
 use crate::glob::glob_to_regex;
@@ -32,6 +29,7 @@ use crate::glob::glob_to_regex;
 /// ```
 #[derive(Clone)]
 pub struct MftQuery {
+    /// The underlying lazy frame for query operations.
     lazy: LazyFrame,
 }
 
@@ -44,7 +42,7 @@ impl MftQuery {
 
     /// Create a new query from a `LazyFrame`.
     #[must_use]
-    pub fn from_lazy(lazy: LazyFrame) -> Self {
+    pub const fn from_lazy(lazy: LazyFrame) -> Self {
         Self { lazy }
     }
 
@@ -53,7 +51,7 @@ impl MftQuery {
     /// # Errors
     ///
     /// Returns an error if the file cannot be read.
-    pub fn from_parquet(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn from_parquet<P: AsRef<Path>>(path: P) -> Result<Self> {
         let df = uffs_mft::MftReader::load_parquet(path)?;
         Ok(Self::new(df))
     }
@@ -70,7 +68,9 @@ impl MftQuery {
     pub fn glob(self, pattern: &str) -> Result<Self> {
         let regex = glob_to_regex(pattern)?;
         Ok(Self {
-            lazy: self.lazy.filter(col("name").str().contains(lit(regex), false)),
+            lazy: self
+                .lazy
+                .filter(col("name").str().contains(lit(regex), false)),
         })
     }
 
@@ -78,15 +78,92 @@ impl MftQuery {
     #[must_use]
     pub fn regex(self, pattern: &str) -> Self {
         Self {
-            lazy: self.lazy.filter(col("name").str().contains(lit(pattern), false)),
+            lazy: self
+                .lazy
+                .filter(col("name").str().contains(lit(pattern), false)),
         }
+    }
+
+    /// Match files by regex pattern with case sensitivity control.
+    #[must_use]
+    pub fn regex_with_case(self, pattern: &str, case_sensitive: bool) -> Self {
+        // Polars str().contains() second arg is `literal` not `case_sensitive`
+        // For case-insensitive, we need to use (?i) prefix in regex
+        let regex_pattern = if case_sensitive {
+            pattern.to_owned()
+        } else {
+            format!("(?i){pattern}")
+        };
+        Self {
+            lazy: self
+                .lazy
+                .filter(col("name").str().contains(lit(regex_pattern), false)),
+        }
+    }
+
+    /// Match files using a parsed pattern (supports glob, regex, and literal).
+    ///
+    /// This is the recommended method for user-provided patterns as it
+    /// automatically handles pattern type detection and case sensitivity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pattern is invalid.
+    pub fn pattern(self, parsed: &crate::pattern::ParsedPattern) -> Result<Self> {
+        let regex = parsed.to_regex()?;
+        let case_sensitive = parsed.is_case_sensitive();
+
+        // For case-insensitive matching, prepend (?i)
+        let final_regex = if case_sensitive {
+            regex
+        } else {
+            format!("(?i){regex}")
+        };
+
+        Ok(Self {
+            lazy: self
+                .lazy
+                .filter(col("name").str().contains(lit(final_regex), false)),
+        })
     }
 
     /// Match files containing exact substring (fastest).
     #[must_use]
     pub fn contains(self, substring: &str) -> Self {
         Self {
-            lazy: self.lazy.filter(col("name").str().contains_literal(lit(substring))),
+            lazy: self
+                .lazy
+                .filter(col("name").str().contains_literal(lit(substring))),
+        }
+    }
+
+    /// Filter files by extension(s).
+    ///
+    /// Accepts an `ExtensionFilter` which can contain individual extensions
+    /// or collection aliases like "pictures", "documents", "videos", "music".
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use uffs_core::{MftQuery, extensions::ExtensionFilter};
+    ///
+    /// let filter = ExtensionFilter::parse("pictures,mp4").unwrap();
+    /// let results = MftQuery::new(df)
+    ///     .extension_filter(&filter)
+    ///     .collect()?;
+    /// ```
+    #[must_use]
+    pub fn extension_filter(self, filter: &crate::extensions::ExtensionFilter) -> Self {
+        let regex = filter.to_regex();
+        if regex.is_empty() {
+            return self;
+        }
+        // Case-insensitive extension matching
+        let regex_pattern = format!("(?i){regex}");
+        Self {
+            lazy: self
+                .lazy
+                .filter(col("name").str().contains(lit(regex_pattern), false)),
         }
     }
 
@@ -106,12 +183,7 @@ impl MftQuery {
     #[must_use]
     pub fn files_only(self) -> Self {
         Self {
-            lazy: self.lazy.filter(
-                col("flags")
-                    .cast(DataType::UInt16)
-                    .and(lit(raw_flags::DIRECTORY))
-                    .eq(lit(0u16)),
-            ),
+            lazy: self.lazy.filter(col("is_directory").eq(lit(false))),
         }
     }
 
@@ -119,12 +191,7 @@ impl MftQuery {
     #[must_use]
     pub fn directories_only(self) -> Self {
         Self {
-            lazy: self.lazy.filter(
-                col("flags")
-                    .cast(DataType::UInt16)
-                    .and(lit(raw_flags::DIRECTORY))
-                    .neq(lit(0u16)),
-            ),
+            lazy: self.lazy.filter(col("is_directory").eq(lit(true))),
         }
     }
 
@@ -132,12 +199,7 @@ impl MftQuery {
     #[must_use]
     pub fn exclude_hidden(self) -> Self {
         Self {
-            lazy: self.lazy.filter(
-                col("flags")
-                    .cast(DataType::UInt16)
-                    .and(lit(raw_flags::HIDDEN))
-                    .eq(lit(0u16)),
-            ),
+            lazy: self.lazy.filter(col("is_hidden").eq(lit(false))),
         }
     }
 
@@ -145,12 +207,7 @@ impl MftQuery {
     #[must_use]
     pub fn exclude_system(self) -> Self {
         Self {
-            lazy: self.lazy.filter(
-                col("flags")
-                    .cast(DataType::UInt16)
-                    .and(lit(raw_flags::SYSTEM))
-                    .eq(lit(0u16)),
-            ),
+            lazy: self.lazy.filter(col("is_system").eq(lit(false))),
         }
     }
 
@@ -230,6 +287,58 @@ impl MftQuery {
     }
 
     // =========================================================================
+    // Date Filters
+    // =========================================================================
+
+    /// Filter files modified after a given timestamp (Unix microseconds).
+    #[must_use]
+    pub fn modified_after(self, timestamp_micros: i64) -> Self {
+        Self {
+            lazy: self.lazy.filter(col("modified").gt(lit(timestamp_micros))),
+        }
+    }
+
+    /// Filter files modified before a given timestamp (Unix microseconds).
+    #[must_use]
+    pub fn modified_before(self, timestamp_micros: i64) -> Self {
+        Self {
+            lazy: self.lazy.filter(col("modified").lt(lit(timestamp_micros))),
+        }
+    }
+
+    /// Filter files created after a given timestamp (Unix microseconds).
+    #[must_use]
+    pub fn created_after(self, timestamp_micros: i64) -> Self {
+        Self {
+            lazy: self.lazy.filter(col("created").gt(lit(timestamp_micros))),
+        }
+    }
+
+    /// Filter files created before a given timestamp (Unix microseconds).
+    #[must_use]
+    pub fn created_before(self, timestamp_micros: i64) -> Self {
+        Self {
+            lazy: self.lazy.filter(col("created").lt(lit(timestamp_micros))),
+        }
+    }
+
+    /// Filter files accessed after a given timestamp (Unix microseconds).
+    #[must_use]
+    pub fn accessed_after(self, timestamp_micros: i64) -> Self {
+        Self {
+            lazy: self.lazy.filter(col("accessed").gt(lit(timestamp_micros))),
+        }
+    }
+
+    /// Filter files accessed before a given timestamp (Unix microseconds).
+    #[must_use]
+    pub fn accessed_before(self, timestamp_micros: i64) -> Self {
+        Self {
+            lazy: self.lazy.filter(col("accessed").lt(lit(timestamp_micros))),
+        }
+    }
+
+    // =========================================================================
     // Limiting
     // =========================================================================
 
@@ -269,7 +378,7 @@ impl MftQuery {
     /// Returns an error if query execution fails.
     pub fn collect_streaming(self) -> Result<DataFrame> {
         self.lazy
-            .with_streaming(true)
+            .with_new_streaming(true)
             .collect()
             .map_err(CoreError::from)
     }
@@ -282,7 +391,7 @@ impl MftQuery {
     /// Select specific columns.
     #[must_use]
     pub fn select(self, columns: &[&str]) -> Self {
-        let cols: Vec<Expr> = columns.iter().map(|&c| col(c)).collect();
+        let cols: Vec<Expr> = columns.iter().map(|&col_name| col(col_name)).collect();
         Self {
             lazy: self.lazy.select(cols),
         }
@@ -291,58 +400,67 @@ impl MftQuery {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use uffs_polars::Column;
 
-    fn create_test_df() -> DataFrame {
-        DataFrame::new(vec![
-            Column::new("frs".into(), &[1u64, 2, 3, 4]),
-            Column::new("parent_frs".into(), &[0u64, 0, 1, 1]),
+    use super::*;
+
+    type TestResult = core::result::Result<(), Box<dyn core::error::Error>>;
+
+    fn create_test_df() -> core::result::Result<DataFrame, uffs_polars::PolarsError> {
+        DataFrame::new_infer_height(vec![
+            Column::new("frs".into(), &[1_u64, 2, 3, 4]),
+            Column::new("parent_frs".into(), &[0_u64, 0, 1, 1]),
             Column::new("name".into(), &["root", "file.txt", "src", "main.rs"]),
-            Column::new("size".into(), &[0u64, 1024, 0, 2048]),
-            Column::new("flags".into(), &[0x0010u16, 0x0000, 0x0010, 0x0000]),
+            Column::new("size".into(), &[0_u64, 1024, 0, 2048]),
+            // Use boolean columns matching MFT reader schema
+            Column::new("is_directory".into(), &[true, false, true, false]),
+            Column::new("is_hidden".into(), &[false, false, false, false]),
+            Column::new("is_system".into(), &[false, false, false, false]),
         ])
-        .unwrap()
     }
 
     #[test]
-    fn test_files_only() {
-        let df = create_test_df();
-        let result = MftQuery::new(df).files_only().collect().unwrap();
+    fn test_files_only() -> TestResult {
+        let df = create_test_df()?;
+        let result = MftQuery::new(df).files_only().collect()?;
         assert_eq!(result.height(), 2); // file.txt and main.rs
+        Ok(())
     }
 
     #[test]
-    fn test_directories_only() {
-        let df = create_test_df();
-        let result = MftQuery::new(df).directories_only().collect().unwrap();
+    fn test_directories_only() -> TestResult {
+        let df = create_test_df()?;
+        let result = MftQuery::new(df).directories_only().collect()?;
         assert_eq!(result.height(), 2); // root and src
+        Ok(())
     }
 
     #[test]
-    fn test_min_size() {
-        let df = create_test_df();
-        let result = MftQuery::new(df).min_size(1500).collect().unwrap();
+    fn test_min_size() -> TestResult {
+        let df = create_test_df()?;
+        let result = MftQuery::new(df).min_size(1500).collect()?;
         assert_eq!(result.height(), 1); // only main.rs (2048)
+        Ok(())
     }
 
     #[test]
-    fn test_limit() {
-        let df = create_test_df();
-        let result = MftQuery::new(df).limit(2).collect().unwrap();
+    fn test_limit() -> TestResult {
+        let df = create_test_df()?;
+        let result = MftQuery::new(df).limit(2).collect()?;
         assert_eq!(result.height(), 2);
+        Ok(())
     }
 
     #[test]
-    fn test_chained_filters() {
-        let df = create_test_df();
+    fn test_chained_filters() -> TestResult {
+        let df = create_test_df()?;
         let result = MftQuery::new(df)
             .files_only()
             .min_size(500)
             .sort_by_size(true)
             .limit(10)
-            .collect()
-            .unwrap();
+            .collect()?;
         assert_eq!(result.height(), 2);
+        Ok(())
     }
 }

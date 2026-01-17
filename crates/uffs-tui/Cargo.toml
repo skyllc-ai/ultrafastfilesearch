@@ -12,13 +12,16 @@
 
 [package]
 name = "uffs-tui"
-description = "Terminal UI for UltraFastFileSearch"
+description = "Terminal UI for UFFS (Ultra Fast File Search)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [[bin]]
 name = "uffs-tui"
@@ -33,6 +36,9 @@ uffs-core.workspace = true
 # Async runtime
 tokio.workspace = true
 
+# CLI
+clap.workspace = true
+
 # TUI
 ratatui.workspace = true
 crossterm.workspace = true
@@ -44,10 +50,9 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-[lints.rust]
-unsafe_code = "forbid"
-
-[lints.clippy]
-all = "warn"
-pedantic = "warn"
+# ─────────────────────────────────────────────────────────────────────────────
+# Lints (inherit from workspace)
+# ─────────────────────────────────────────────────────────────────────────────
+[lints]
+workspace = true
 

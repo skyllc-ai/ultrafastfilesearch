@@ -13,13 +13,16 @@
 
 [package]
 name = "uffs-core"
-description = "Query engine for UltraFastFileSearch using Polars"
+description = "Query engine for UFFS (Ultra Fast File Search) using Polars"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 # Internal crates
@@ -28,14 +31,12 @@ uffs-mft.workspace = true
 
 # Error handling
 thiserror.workspace = true
-anyhow.workspace = true
-
-# Logging
-tracing.workspace = true
 
 # Serialization (for export)
-serde.workspace = true
 serde_json.workspace = true
+
+# Parallelization
+rayon.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
@@ -45,10 +46,13 @@ tokio = { workspace = true, features = ["test-util", "macros"] }
 name = "query"
 harness = false
 
-[lints.rust]
-unsafe_code = "forbid"
+[[bench]]
+name = "search_benchmarks"
+harness = false
 
-[lints.clippy]
-all = "warn"
-pedantic = "warn"
+# ─────────────────────────────────────────────────────────────────────────────
+# Lints (inherit from workspace)
+# ─────────────────────────────────────────────────────────────────────────────
+[lints]
+workspace = true
 

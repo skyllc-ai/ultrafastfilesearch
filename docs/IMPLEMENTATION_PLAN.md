@@ -1,8 +1,8 @@
-# UltraFastFileSearch-Rust Implementation Plan
+# UFFS (Ultra Fast File Search) Implementation Plan
 
 ## Executive Summary
 
-This document outlines the comprehensive plan to reimplement UltraFastFileSearch (UFFS) in Rust using a **modern workspace architecture** with **Polars-based data processing**. The project is structured as multiple independent crates, enabling:
+This document outlines the comprehensive plan to implement UFFS (Ultra Fast File Search) in Rust using a **modern workspace architecture** with **Polars-based data processing**. The project is structured as multiple independent crates, enabling:
 
 - **Modularity**: Each crate has a single responsibility
 - **Reusability**: External tools can consume MFT data as a library
@@ -31,13 +31,13 @@ This document outlines the comprehensive plan to reimplement UltraFastFileSearch
 Following Rust best practices, the project uses a **Cargo workspace** with distinct crates and a **Polars facade crate** for compilation isolation:
 
 ```
-UltraFastFileSearch-Rust/
+UltraFastFileSearch/
 ├── Cargo.toml                    # Workspace manifest
 ├── crates/
 │   ├── uffs-polars/              # 🔧 Polars facade (compilation isolation)
 │   ├── uffs-mft/                 # 📦 MFT reading → Polars DataFrame
 │   ├── uffs-core/                # 📦 Query engine using Polars lazy API
-│   ├── uffs-cli/                 # 🔧 Command-line interface binary
+│   ├── uffs-cli/                 # 🔧 Command-line interface binary (produces `uffs`)
 │   ├── uffs-tui/                 # 🖥️  Terminal UI binary
 │   └── uffs-gui/                 # 🪟 Graphical UI binary
 ├── examples/                     # Usage examples
@@ -253,24 +253,65 @@ pub struct MftReader { ... }
 
 impl MftReader {
     /// Open a volume for MFT reading (requires admin privileges)
-    pub async fn open(volume: char) -> Result<Self>;
+    pub fn open(volume: char) -> Result<Self>;
 
     /// Read entire MFT and return as DataFrame
-    pub async fn read_all(&self) -> Result<DataFrame>;
+    pub fn read_all(&self) -> Result<DataFrame>;
 
     /// Read with progress callback
-    pub async fn read_with_progress<F>(&self, callback: F) -> Result<DataFrame>
+    pub fn read_with_progress<F>(&self, callback: F) -> Result<DataFrame>
     where
-        F: Fn(MftProgress) + Send + 'static;
+        F: Fn(MftProgress);
+
+    /// Save DataFrame to Parquet file
+    pub fn save_parquet(df: &DataFrame, path: &Path) -> Result<()>;
+
+    /// Load DataFrame from Parquet file
+    pub fn load_parquet(path: &Path) -> Result<DataFrame>;
 }
 
 /// Progress information during MFT reading
 pub struct MftProgress {
     pub records_read: u64,
-    pub total_records: u64,
+    pub total_records: Option<u64>,
     pub bytes_read: u64,
     pub elapsed: Duration,
 }
+
+// ===== High-Performance I/O =====
+pub struct ParallelMftReader { ... }  // Rayon-based parallel reader
+pub struct BatchMftReader { ... }     // 1MB batch I/O
+pub struct MftExtentMap { ... }       // VCN-to-LCN mapping for fragmented MFT
+pub struct MftRecordReader { ... }    // Single record reader with extent support
+
+// ===== Platform Types =====
+pub struct VolumeHandle { ... }       // Windows volume handle
+pub struct MftBitmap { ... }          // $MFT::$BITMAP for record validity
+pub struct MftExtent { ... }          // Single extent (VCN, cluster_count, LCN)
+pub struct NtfsVolumeData { ... }     // FSCTL_GET_NTFS_VOLUME_DATA result
+
+// ===== NTFS Structures =====
+pub struct NtfsBootSector { ... }           // Boot sector parsing
+pub struct FileRecordSegmentHeader { ... }  // FILE record header
+pub struct AttributeRecordHeader { ... }    // Attribute header
+pub struct StandardInformation { ... }      // $STANDARD_INFORMATION (0x10)
+pub struct FileNameAttribute { ... }        // $FILE_NAME (0x30)
+pub struct DataRun { ... }                  // Non-resident data run
+pub struct AttributeListEntry { ... }       // $ATTRIBUTE_LIST entry
+pub struct IndexHeader { ... }              // Directory index header
+pub struct IndexRoot { ... }                // $INDEX_ROOT (0x90)
+pub struct ReparsePointHeader { ... }       // $REPARSE_POINT (0xC0)
+pub struct ReparseMountPointBuffer { ... }  // Junction/symlink target
+
+// ===== Iteration =====
+pub struct AttributeIterator<'a> { ... }    // Iterate attributes in a record
+pub struct AttributeRef<'a> { ... }         // Reference to an attribute
+
+// ===== Functions =====
+pub fn apply_usa_fixup(data: &mut [u8]) -> bool;           // USA fixup
+pub fn fixup_file_record(data: &mut [u8]) -> bool;         // Convenience wrapper
+pub fn parse_data_runs(data: &[u8]) -> Vec<DataRun>;       // Parse run list
+pub fn generate_read_chunks(...) -> Vec<ReadChunk>;        // Optimized read chunks
 
 // ===== DataFrame Schema =====
 // The returned DataFrame has these columns:
@@ -314,22 +355,73 @@ pub mod flags {
 ```
 crates/uffs-mft/src/
 ├── lib.rs              # Public API exports
-├── reader.rs           # MftReader implementation
-├── dataframe.rs        # DataFrame construction
-├── ntfs/               # NTFS structure definitions
-│   ├── mod.rs
-│   ├── boot_sector.rs  # NTFS boot sector parsing
-│   ├── file_record.rs  # FILE record header
-│   ├── attributes.rs   # Attribute parsing
-│   └── run_list.rs     # Mapping pairs / data runs
-├── io/                 # Low-level I/O
-│   ├── mod.rs
-│   ├── volume.rs       # Volume handle management
-│   └── async_read.rs   # Async disk reading
-└── platform/           # OS-specific code
-    ├── mod.rs
-    └── windows.rs      # Windows API wrappers
+├── reader.rs           # MftReader implementation (uses ParallelMftReader)
+├── ntfs.rs             # NTFS structure definitions (boot sector, attributes, data runs)
+├── io.rs               # Low-level I/O (aligned buffers, extent map, parallel reader)
+├── platform.rs         # Windows API wrappers (volume handle, bitmap, extents)
+├── flags.rs            # File attribute flags
+└── error.rs            # Error types with thiserror
 ```
+
+#### High-Performance MFT Reading Architecture
+
+The MFT reading implementation matches the C++ reference for performance:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         ParallelMftReader                                    │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────────┐  │
+│  │  MftExtentMap   │  │   MftBitmap     │  │    ReadChunk Generator      │  │
+│  │  VCN → LCN      │  │  Skip unused    │  │    1MB batch chunks         │  │
+│  │  Fragmented MFT │  │  clusters       │  │    skip_begin/skip_end      │  │
+│  └────────┬────────┘  └────────┬────────┘  └──────────────┬──────────────┘  │
+│           │                    │                          │                  │
+│           └────────────────────┴──────────────────────────┘                  │
+│                                │                                             │
+│                    ┌───────────▼───────────┐                                 │
+│                    │   Batch I/O (1MB)     │                                 │
+│                    │   AlignedBuffer       │                                 │
+│                    │   Sector-aligned      │                                 │
+│                    └───────────┬───────────┘                                 │
+│                                │                                             │
+│                    ┌───────────▼───────────┐                                 │
+│                    │   Rayon par_iter()    │                                 │
+│                    │   Parallel parsing    │                                 │
+│                    │   apply_fixup()       │                                 │
+│                    │   parse_record()      │                                 │
+│                    └───────────┬───────────┘                                 │
+│                                │                                             │
+│                    ┌───────────▼───────────┐                                 │
+│                    │   Vec<ParsedRecord>   │                                 │
+│                    │   → DataFrame         │                                 │
+│                    └───────────────────────┘                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key Components:**
+
+| Component | File | Description |
+|-----------|------|-------------|
+| `MftExtentMap` | `io.rs` | Maps VCN to LCN for fragmented MFT support |
+| `MftBitmap` | `platform.rs` | Tracks which MFT records are in use |
+| `calculate_skip_range()` | `platform.rs` | Calculates cluster-level skip ranges |
+| `in_use_cluster_ranges()` | `platform.rs` | Iterator over clusters with in-use records |
+| `generate_read_chunks()` | `io.rs` | Creates optimized 1MB read chunks |
+| `ParallelMftReader` | `io.rs` | Orchestrates parallel reading and parsing |
+| `BatchMftReader` | `io.rs` | Reads multiple records per I/O operation |
+| `AlignedBuffer` | `io.rs` | Sector-aligned buffer for direct I/O |
+
+**Performance Features:**
+
+1. **Fragmented MFT Support**: The MFT can be scattered across multiple non-contiguous extents. `MftExtentMap` handles VCN-to-LCN translation transparently.
+
+2. **Cluster-Level Bitmap Skipping**: Uses `$MFT::$BITMAP` to skip entire clusters where all records are unused, reducing I/O.
+
+3. **Batch I/O**: Reads 1MB chunks instead of individual records, reducing syscall overhead.
+
+4. **Parallel Processing**: Uses Rayon to parse records in parallel across all CPU cores.
+
+5. **USA Fixup**: Applies Update Sequence Array fixup to detect torn writes.
 
 ---
 
@@ -687,18 +779,19 @@ crates/uffs-cli/src/
 **Goal**: CLI tool and performance optimization
 
 **Week 13-14: CLI Implementation**
-- [ ] Argument parsing with clap derive
-- [ ] `search` command
-- [ ] `index` command
-- [ ] `stats` command
-- [ ] Progress reporting (indicatif)
-- [ ] Error messages (miette)
+- [x] Argument parsing with clap derive
+- [x] `search` command
+- [x] `index` command
+- [x] `stats` command
+- [x] Progress reporting (indicatif)
+- [x] Error messages (anyhow + context)
 
-**Week 15-16: Performance**
-- [ ] Async I/O with tokio
-- [ ] Parallel MFT reading
-- [ ] Polars streaming mode for large datasets
-- [ ] Bitmap pre-filtering
+**Week 15-16: High-Performance MFT Reading**
+- [x] **Fragmented MFT support** - `MftExtentMap` for VCN-to-LCN mapping
+- [x] **Batch I/O** - `BatchMftReader` with 1MB chunks
+- [x] **Parallel record processing** - `ParallelMftReader` with Rayon
+- [x] **Cluster-level bitmap skipping** - `calculate_skip_range()`, `in_use_cluster_ranges()`
+- [x] Polars streaming mode for large datasets
 - [ ] Benchmark suite (criterion)
 - [ ] Profile and optimize hot paths
 
@@ -780,7 +873,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"  # MSRV (Polars requires recent Rust)
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/githubrobbi/UltraFastFileSearch-Rust"
+repository = "https://github.com/githubrobbi/UltraFastFileSearch"
 
 [workspace.dependencies]
 # Internal crates
@@ -852,8 +945,8 @@ External tools can depend on `uffs-mft` for raw MFT access as Polars DataFrame:
 ```toml
 # In external tool's Cargo.toml
 [dependencies]
-uffs-mft = { git = "https://github.com/githubrobbi/UltraFastFileSearch-Rust" }
-uffs-polars = { git = "https://github.com/githubrobbi/UltraFastFileSearch-Rust" }
+uffs-mft = { git = "https://github.com/githubrobbi/UltraFastFileSearch" }
+uffs-polars = { git = "https://github.com/githubrobbi/UltraFastFileSearch" }
 ```
 
 ```rust

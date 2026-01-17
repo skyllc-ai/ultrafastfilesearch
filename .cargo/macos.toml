@@ -1,0 +1,98 @@
+# =============================================================================
+# ~/.cargo/config.toml (macOS Home Directory)
+# =============================================================================
+# Copy this file to: ~/.cargo/config.toml
+#
+# OPTIMIZED FOR: macOS (Apple Silicon M1/M2/M3/M4 and Intel Macs)
+# =============================================================================
+
+[build]
+# Target directory outside iCloud/Dropbox to avoid sync conflicts
+# Use a fast local SSD path - uffs-specific to avoid conflicts with other projects
+target-dir = "/tmp/rust-target/uffs"
+# For persistent builds (survives reboot), use:
+# target-dir = "~/.rust-target"
+
+# Parallel jobs: adjust based on your Mac
+# Apple Silicon: M1=8, M1 Pro=10, M1 Max=10, M2=8, M2 Pro=12, M3=8, M3 Pro=12, M3 Max=16, M4 Pro=14
+# Intel: Use physical core count (check: sysctl -n hw.physicalcpu)
+# Omit to auto-detect (uses logical CPU count)
+# jobs = 8
+
+# sccache for compilation caching - HIGHLY RECOMMENDED
+# Install: cargo +stable install sccache
+# Uncomment after installing:
+rustc-wrapper = "sccache"
+
+[net]
+retry = 3
+git-fetch-with-cli = true
+
+# =============================================================================
+# Apple Silicon (M1/M2/M3/M4) Target Optimizations
+# =============================================================================
+[target.aarch64-apple-darwin]
+# Use Apple's linker - fastest on macOS, no extra install needed
+# Alternative: install lld via `brew install llvm` then use "lld"
+linker = "clang"
+
+rustflags = [
+    # Native CPU detection works well on Apple Silicon
+    "-C", "target-cpu=native",
+    # Enable frame pointers for better profiling/debugging
+    "-C", "force-frame-pointers=yes",
+    # Use Apple's fast linker
+    "-C", "link-arg=-fuse-ld=/usr/bin/ld",
+]
+
+# =============================================================================
+# Intel Mac Target Optimizations
+# =============================================================================
+[target.x86_64-apple-darwin]
+linker = "clang"
+
+rustflags = [
+    # Native CPU detection for Intel Macs
+    "-C", "target-cpu=native",
+    # Enable frame pointers for better profiling/debugging
+    "-C", "force-frame-pointers=yes",
+    # Use Apple's linker
+    "-C", "link-arg=-fuse-ld=/usr/bin/ld",
+]
+
+[term]
+verbose = false
+color = "auto"
+
+# =============================================================================
+# Profile overrides for faster dev iteration
+# =============================================================================
+[profile.dev]
+# More codegen units = faster compile, slightly larger binary
+codegen-units = 16
+# unpacked is fastest for debug info on macOS
+split-debuginfo = "unpacked"
+
+[profile.test]
+codegen-units = 16
+split-debuginfo = "unpacked"
+
+# Release profile: prioritize runtime performance over compile time
+[profile.release]
+codegen-units = 1      # Maximum optimization (slower compile)
+lto = "thin"           # Good balance of optimization vs compile time
+# For maximum performance (much slower compile): lto = "fat"
+
+# =============================================================================
+# Optional: Faster linking with mold (requires: brew install mold)
+# =============================================================================
+# Uncomment to use mold linker (can be 2-5x faster than default):
+#
+# [target.aarch64-apple-darwin]
+# linker = "clang"
+# rustflags = ["-C", "target-cpu=native", "-C", "link-arg=-fuse-ld=mold"]
+#
+# [target.x86_64-apple-darwin]
+# linker = "clang"
+# rustflags = ["-C", "target-cpu=native", "-C", "link-arg=-fuse-ld=mold"]
+

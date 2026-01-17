@@ -1,0 +1,70 @@
+{
+  "_comment": "SPDX-License-Identifier: MPL-2.0",
+  "_copyright": "Copyright (c) 2025 SKY, LLC.",
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in library 'tastytrade_library'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=tastytrade"
+                ],
+                "filter": {
+                    "name": "tastytrade_library",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'tt'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=tt",
+                    "--package=tastytrade"
+                ],
+                "filter": {
+                    "name": "tt",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                    "RUST_BACKTRACE": "1"
+                    }
+
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'tt'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=tt",
+                    "--package=tastytrade"
+                ],
+                "filter": {
+                    "name": "tt",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

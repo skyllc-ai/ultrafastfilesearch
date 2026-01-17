@@ -11,13 +11,16 @@
 
 [package]
 name = "uffs-cli"
-description = "Command-line interface for UltraFastFileSearch"
+description = "Command-line interface for UFFS (Ultra Fast File Search)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [[bin]]
 name = "uffs"
@@ -25,7 +28,6 @@ path = "src/main.rs"
 
 [dependencies]
 # Internal crates
-uffs-polars.workspace = true
 uffs-mft.workspace = true
 uffs-core.workspace = true
 
@@ -38,19 +40,14 @@ indicatif.workspace = true
 
 # Error handling
 anyhow.workspace = true
-miette.workspace = true
 
 # Logging
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-# Time
-chrono.workspace = true
-
-[lints.rust]
-unsafe_code = "forbid"
-
-[lints.clippy]
-all = "warn"
-pedantic = "warn"
+# ─────────────────────────────────────────────────────────────────────────────
+# Lints (inherit from workspace)
+# ─────────────────────────────────────────────────────────────────────────────
+[lints]
+workspace = true
 

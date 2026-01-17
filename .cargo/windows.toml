@@ -1,0 +1,64 @@
+# =============================================================================
+# ~/.cargo/config.toml (Windows Home Directory)
+# =============================================================================
+# Copy this file to: C:\Users\<username>\.cargo\config.toml
+#
+# OPTIMIZED FOR: AMD Ryzen 9 3900XT (12C/24T Zen 2) | 64GB DDR4 | NVMe SSDs
+# =============================================================================
+
+[build]
+# Target directory on NVMe SSD, outside Dropbox to avoid file locking
+# uffs-specific path to avoid conflicts with other projects
+target-dir = "C:/rust-target/uffs"
+
+# Parallel jobs: Ryzen 9 3900XT has 12 cores/24 threads
+# 16 jobs balances parallelism with Windows file locking overhead
+# With 64GB RAM, each rustc process (~2-4GB peak) has plenty of headroom
+jobs = 16
+
+# sccache for compilation caching - HIGHLY RECOMMENDED with 64GB RAM
+# Install: cargo +stable install sccache
+# Uncomment after installing:
+# rustc-wrapper = "sccache"
+
+[net]
+retry = 3
+git-fetch-with-cli = true
+
+# =============================================================================
+# MSVC Target Optimizations for Ryzen 9 3900XT (Zen 2 / Matisse)
+# =============================================================================
+[target.x86_64-pc-windows-msvc]
+# LLD linker: 2-5x faster than default MSVC linker
+linker = "rust-lld"
+
+rustflags = [
+    # Zen 2 (Matisse) specific optimizations - better than generic "native"
+    "-C", "target-cpu=znver2",
+    # MSVC linker optimizations (still apply with LLD)
+    "-C", "link-arg=/OPT:REF",   # Remove unreferenced functions/data
+    "-C", "link-arg=/OPT:ICF",   # Fold identical COMDATs
+]
+
+[term]
+verbose = false
+color = "auto"
+
+# =============================================================================
+# Profile overrides for faster dev iteration on this machine
+# =============================================================================
+[profile.dev]
+# More codegen units = faster compile, slightly larger binary
+codegen-units = 16
+# Packed debug info is faster to generate on Windows
+split-debuginfo = "packed"
+
+[profile.test]
+codegen-units = 16
+split-debuginfo = "packed"
+
+# Release profile: prioritize runtime performance over compile time
+[profile.release]
+codegen-units = 1      # Maximum optimization (slower compile)
+lto = "thin"           # Good balance of optimization vs compile time
+# For maximum performance (much slower compile): lto = "fat"

@@ -13,35 +13,28 @@
 
 [package]
 name = "uffs-mft"
-description = "NTFS MFT reading library for UltraFastFileSearch"
+description = "NTFS MFT reading library for UFFS (Ultra Fast File Search)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 # Internal: Polars facade
 uffs-polars.workspace = true
 
-# Async runtime
-tokio.workspace = true
-futures.workspace = true
-
 # Data structures
 bitflags.workspace = true
-bitvec.workspace = true
 
 # Error handling
 thiserror.workspace = true
-anyhow.workspace = true
-
-# Logging
-tracing.workspace = true
-
-# Time
-chrono.workspace = true
+rayon.workspace = true
+zstd = { version = "0.13.3", optional = true }
 
 # Windows APIs (Windows only)
 [target.'cfg(windows)'.dependencies]
@@ -56,10 +49,12 @@ tokio = { workspace = true, features = ["test-util", "macros"] }
 name = "mft_read"
 harness = false
 
-[lints.rust]
-unsafe_code = "warn"  # Some unsafe needed for Windows FFI
+# ─────────────────────────────────────────────────────────────────────────────
+# Lints (inherit from workspace, with unsafe allowed for Windows FFI)
+# ─────────────────────────────────────────────────────────────────────────────
+[lints]
+workspace = true
 
-[lints.clippy]
-all = "warn"
-pedantic = "warn"
+[features]
+zstd = ["dep:zstd"]
 

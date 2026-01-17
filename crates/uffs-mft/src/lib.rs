@@ -7,7 +7,8 @@
 //!
 //! - **Direct MFT Access**: Bypasses Windows file enumeration APIs for speed
 //! - **Async I/O**: Uses tokio for high-throughput disk reading
-//! - **Polars Integration**: Returns `DataFrame`s for powerful data manipulation
+//! - **Polars Integration**: Returns `DataFrame`s for powerful data
+//!   manipulation
 //! - **Parquet Persistence**: Save/load indexes in compressed Parquet format
 //!
 //! ## Quick Start
@@ -47,12 +48,20 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
+// Suppress unused crate warnings for dev-dependencies (used in benchmarks only)
+#[cfg(test)]
+use criterion as _;
+// Suppress unused crate warnings for platform-specific dependencies
+#[cfg(not(windows))]
+use rayon as _;
+
 // ============================================================================
 // Module declarations
 // ============================================================================
 
 pub mod error;
 pub mod flags;
+pub mod raw;
 
 #[cfg(windows)]
 pub mod ntfs;
@@ -71,8 +80,31 @@ mod reader;
 
 pub use error::{MftError, Result};
 pub use flags::FileFlags;
-pub use reader::{MftProgress, MftReader};
-
+// Re-export I/O types for advanced usage
+#[cfg(windows)]
+pub use io::{
+    AlignedBuffer, BatchMftReader, ExtensionAttributes, MftExtentMap, MftRecordMerger,
+    MftRecordReader, ParallelMftReader, ParseResult, ParsedRecord, ReadChunk, apply_fixup,
+    generate_read_chunks, parse_record_full,
+};
+// Re-export NTFS constants
+#[cfg(windows)]
+pub use ntfs::SECTOR_SIZE;
+#[cfg(windows)]
+pub use ntfs::{
+    AttributeIterator, AttributeListEntry, AttributeRecordHeader, AttributeRef, AttributeType,
+    DataRun, ExtendedStandardInfo, FileNameAttribute, FileRecordSegmentHeader, IndexHeader,
+    IndexRoot, NameInfo, NonResidentAttributeData, NtfsBootSector, ReparseMountPointBuffer,
+    ReparsePointHeader, ReparseTag, ResidentAttributeData, StandardInformation, StreamInfo,
+    apply_usa_fixup, extract_data_runs_from_attribute, fixup_file_record, parse_data_runs,
+};
+// Re-export platform types
+#[cfg(windows)]
+pub use platform::{MftBitmap, MftExtent, NtfsVolumeData, VolumeHandle, detect_ntfs_drives};
+pub use raw::{
+    LoadRawOptions, RawMftData, RawMftHeader, SaveRawOptions, load_raw_mft, load_raw_mft_header,
+    save_raw_mft,
+};
+pub use reader::{DriveReadResult, MftProgress, MftReader, MultiDriveMftReader};
 // Re-export Polars types for convenience
 pub use uffs_polars::{DataFrame, LazyFrame};
-

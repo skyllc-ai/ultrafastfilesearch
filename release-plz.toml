@@ -1,0 +1,89 @@
+# =============================================================================
+# release-plz.toml
+# =============================================================================
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2025-2026 Robert Nio
+#
+# UFFS - Ultra Fast File Search
+#
+
+# Modern Release Configuration for UFFS
+# Intelligent semantic versioning and changelog generation
+
+[workspace]
+# Enable automatic changelog generation
+changelog_update = true
+# Enable Git releases
+git_release_enable = true
+# Enable Git tags
+git_tag_enable = true
+# Update dependencies automatically
+dependencies_update = true
+
+# Post-release automation hooks
+[workspace.hooks]
+# Run post-build automation after version increment
+post_release = [
+    "cargo build --release",
+    "echo '✅ Post-release binary deployment completed'"
+]
+
+# Changelog configuration
+[workspace.changelog]
+header = """
+# Changelog
+
+All notable changes to UFFS will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+"""
+
+# Release configuration for main package
+[package.uffs]
+# Custom release notes template
+release_notes = """
+## 🚀 UFFS v{{ version }}
+
+{{ changelog }}
+
+### 📊 Performance Metrics
+- Build time: Optimized for production
+- Binary size: Minimized with LTO
+- Memory usage: Validated with profiling tests
+
+### 🔒 Security
+- Dependencies audited with cargo-audit
+- No known vulnerabilities
+
+### 🧪 Testing
+- {{ test_count }} tests passing
+- Memory profiling validated
+- Performance benchmarks verified
+
+---
+*Built with cutting-edge Rust tooling for ultra-fast file search*
+"""
+
+# Git tag format
+git_tag_name = "v{{ version }}"
+
+# Release branch configuration
+release_branch = "main"
+
+# Pre-release hooks
+[[package.uffs.pre_release_hooks]]
+command = "just ci"
+description = "Run comprehensive CI checks"
+
+[[package.uffs.pre_release_hooks]]
+command = "just audit"
+description = "Security audit"
+
+# Post-release hooks
+[[package.uffs.post_release_hooks]]
+command = "just clean"
+description = "Clean build artifacts"

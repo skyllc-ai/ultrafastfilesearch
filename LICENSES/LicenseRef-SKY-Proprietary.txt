@@ -1,0 +1,14 @@
+SPDX-License-Identifier: LicenseRef-SKY-Proprietary
+
+SKY Proprietary License
+
+This software is proprietary to SKY, LLC. and is protected by copyright law.
+Unauthorized use, reproduction, or distribution is strictly prohibited.
+Contact legal@nios.net for licensing inquiries.
+
+For internal SKY, LLC. use only.
+
+This license covers all source code, documentation, and related materials
+in this repository unless otherwise specified.
+
+Copyright 2025 SKY, LLC. All rights reserved.

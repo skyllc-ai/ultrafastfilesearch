@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2025-2026 Robert Nio
+
+version = 1
+
+# Default license for all files
+[[annotations]]
+path = "**"
+SPDX-FileCopyrightText = "2025-2026 Robert Nio"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+# Third-party and external files (add minimal headers)
+[[annotations]]
+path = [
+    ".vscode/**",
+    ".idea/**",
+    "reference/**"
+]
+precedence = "override"
+SPDX-FileCopyrightText = "2025-2026 Robert Nio"
+SPDX-License-Identifier = "MIT OR Apache-2.0"

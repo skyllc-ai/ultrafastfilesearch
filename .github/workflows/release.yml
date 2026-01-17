@@ -1,0 +1,353 @@
+# SPDX-FileCopyrightText: 2025-2026 Robert Nio
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+name: 🚀 UFFS Release Pipeline
+
+run-name: 🚀 UFFS Release ${{ inputs.version || github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v0.1.192)'
+        required: true
+        type: string
+      triggered_by:
+        description: 'Workflow that triggered this release'
+        required: false
+        default: 'manual'
+        type: string
+      commit_sha:
+        description: 'Commit SHA to release'
+        required: false
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUSTFLAGS: "-C target-cpu=native"
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 1: Release Preparation & Validation
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  release-preparation:
+    name: 📋 Release Preparation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+      tag: ${{ steps.validate.outputs.tag }}
+      release-name: ${{ steps.validate.outputs.release-name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Validate release inputs
+        id: validate
+        shell: bash
+        run: |
+          # Handle both workflow_dispatch and tag push
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${{ github.ref_name }}"
+          fi
+
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Invalid version format: $VERSION"
+            echo "Expected format: v0.1.192"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$VERSION" >> $GITHUB_OUTPUT
+          echo "release-name=UFFS $VERSION" >> $GITHUB_OUTPUT
+
+          echo "✅ Release validation passed"
+          echo "📦 Version: $VERSION"
+          echo "🏷️ Tag: $VERSION"
+          echo "🚀 Triggered by: ${{ inputs.triggered_by || 'tag-push' }}"
+
+      - name: Check if tag already exists (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          if git tag -l | grep -q "^${{ steps.validate.outputs.tag }}$"; then
+            echo "❌ Tag ${{ steps.validate.outputs.tag }} already exists"
+            exit 1
+          fi
+          echo "✅ Tag is available"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 2: Cross-Platform Binary Builds
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  build-release-binaries:
+    name: 🔨 Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs: release-preparation
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact-name: uffs-linux-x64
+            binary-suffix: ""
+            timeout: 20
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact-name: uffs-windows-x64
+            binary-suffix: ".exe"
+            timeout: 50
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact-name: uffs-macos-x64
+            binary-suffix: ""
+            timeout: 20
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact-name: uffs-macos-arm64
+            binary-suffix: ""
+            timeout: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha || github.sha }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup just
+        uses: extractions/setup-just@v2
+
+      - name: Build optimized release binaries
+        shell: bash
+        run: |
+          echo "🔨 Building optimized release binaries for ${{ matrix.target }}"
+
+          # Set target-specific optimizations
+          export CARGO_TARGET_DIR=target
+
+          # Use conservative CPU settings for Apple Silicon to avoid ring crate issues
+          # Also disable LTO via environment variable to avoid library compilation issues
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            export RUSTFLAGS="-C opt-level=3 -C codegen-units=1"
+          else
+            export RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C codegen-units=1"
+          fi
+
+          # Disable LTO for workspace builds to avoid library compilation issues
+          export CARGO_PROFILE_RELEASE_LTO=false
+
+          # Build all binaries
+          cargo build --release --target ${{ matrix.target }} --workspace --bins
+
+          echo "✅ Build completed for ${{ matrix.target }}"
+
+      - name: Package binaries
+        shell: bash
+        run: |
+          mkdir -p release-artifacts
+
+          # Copy all binaries (cross-platform compatible)
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            # Windows: copy .exe files
+            find target/${{ matrix.target }}/release -name "*.exe" -type f -exec cp {} release-artifacts/ \;
+          else
+            # macOS (Intel & Apple Silicon) and Linux: copy known binary names
+            for binary in uffs; do
+              if [[ -f "target/${{ matrix.target }}/release/$binary" ]]; then
+                cp "target/${{ matrix.target }}/release/$binary" release-artifacts/
+              fi
+            done
+          fi
+
+          # Create checksums
+          cd release-artifacts
+          if command -v sha256sum >/dev/null; then
+            sha256sum * > checksums.txt
+          else
+            shasum -a 256 * > checksums.txt
+          fi
+
+          echo "📦 Packaged binaries:"
+          ls -la
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: release-artifacts/
+          retention-days: 30
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 3: Create GitHub Release
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  create-github-release:
+    name: 📦 Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [release-preparation, build-release-binaries]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Organize release assets
+        shell: bash
+        run: |
+          mkdir -p final-release
+
+          # Organize artifacts by platform
+          for artifact_dir in release-artifacts/*/; do
+            artifact_name=$(basename "$artifact_dir")
+            echo "Processing $artifact_name..."
+
+            # Copy binaries with platform suffix
+            for file in "$artifact_dir"*; do
+              if [[ -f "$file" && "$file" != *"checksums.txt" ]]; then
+                filename=$(basename "$file")
+                # Add platform suffix to binary names
+                if [[ "$artifact_name" == *"linux"* ]]; then
+                  cp "$file" "final-release/${filename}-linux-x64"
+                elif [[ "$artifact_name" == *"windows"* ]]; then
+                  cp "$file" "final-release/${filename}-windows-x64.exe"
+                elif [[ "$artifact_name" == *"macos-x64"* ]]; then
+                  cp "$file" "final-release/${filename}-macos-x64"
+                elif [[ "$artifact_name" == *"macos-arm64"* ]]; then
+                  cp "$file" "final-release/${filename}-macos-arm64"
+                fi
+              fi
+            done
+          done
+
+          # Create combined checksums
+          cd final-release
+          sha256sum * > CHECKSUMS.txt
+
+          echo "📦 Final release assets:"
+          ls -la
+
+      - name: Generate release notes
+        id: release-notes
+        shell: bash
+        run: |
+          cat > release-notes.md << 'EOF'
+          # UFFS ${{ needs.release-preparation.outputs.version }}
+
+          ## 🚀 What's New
+
+          This release includes the latest improvements and bug fixes for UltraFastFileSearch.
+
+          ## 📦 Downloads
+
+          Choose the appropriate binary for your platform:
+
+          ### Linux (x86_64)
+          - `uffs-linux-x64` - Ultra-fast file search CLI
+
+          ### Windows (x86_64)
+          - `uffs-windows-x64.exe` - Ultra-fast file search CLI
+
+          ### macOS (x86_64)
+          - `uffs-macos-x64` - Ultra-fast file search CLI
+
+          ### macOS (ARM64)
+          - `uffs-macos-arm64` - Ultra-fast file search CLI
+
+          ## 🔐 Verification
+
+          All binaries include SHA256 checksums in `CHECKSUMS.txt` for verification.
+
+          ## 📋 Installation
+
+          1. Download the appropriate binary for your platform
+          2. Make it executable: `chmod +x uffs-*` (Linux/macOS)
+          3. Optionally, move to your PATH: `mv uffs-* /usr/local/bin/uffs`
+
+          ## 🛠️ Build Information
+
+          - **Triggered by**: ${{ inputs.triggered_by || 'tag-push' }}
+          - **Commit**: ${{ inputs.commit_sha || github.sha }}
+          - **Built with**: Rust nightly with full optimizations
+          - **Features**: All workspace features enabled
+
+          ---
+
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/v0.1.0...${{ needs.release-preparation.outputs.version }}
+          EOF
+
+      - name: Create Git tag (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git tag -a "${{ needs.release-preparation.outputs.tag }}" -m "Release ${{ needs.release-preparation.outputs.version }}"
+          git push origin "${{ needs.release-preparation.outputs.tag }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.release-preparation.outputs.tag }}
+          name: ${{ needs.release-preparation.outputs.release-name }}
+          body_path: release-notes.md
+          files: final-release/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release summary
+        shell: bash
+        run: |
+          echo "## 🎉 Release ${{ needs.release-preparation.outputs.version }} Created!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Release Details:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ needs.release-preparation.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: ${{ needs.release-preparation.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by**: ${{ inputs.triggered_by || 'tag-push' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ inputs.commit_sha || github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 Artifacts Built:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Linux x86_64 binaries" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Windows x86_64 binaries" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ macOS x86_64 binaries" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ macOS ARM64 binaries" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Links:" >> $GITHUB_STEP_SUMMARY
+          echo "- [📦 Release Page](https://github.com/${{ github.repository }}/releases/tag/${{ needs.release-preparation.outputs.tag }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [📋 Full Changelog](https://github.com/${{ github.repository }}/compare/v0.1.0...${{ needs.release-preparation.outputs.version }})" >> $GITHUB_STEP_SUMMARY

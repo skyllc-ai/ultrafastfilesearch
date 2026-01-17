@@ -53,7 +53,7 @@ impl PathResolver {
             if let (Some(frs), Some(parent), Some(name)) =
                 (frs_col.get(i), parent_col.get(i), name_col.get(i))
             {
-                entries.insert(frs, (parent, name.to_string()));
+                entries.insert(frs, (parent, name.to_owned()));
             }
         }
 
@@ -68,7 +68,8 @@ impl PathResolver {
     ///
     /// # Errors
     ///
-    /// Returns an error if the FRS is not found or a circular reference is detected.
+    /// Returns an error if the FRS is not found or a circular reference is
+    /// detected.
     pub fn resolve(&mut self, frs: u64) -> Result<String> {
         // Check cache first
         if let Some(path) = self.cache.get(&frs) {
@@ -116,8 +117,11 @@ impl PathResolver {
             .into_iter()
             .map(|frs| {
                 frs.map_or_else(
-                    || "<null>".to_string(),
-                    |f| self.resolve(f).unwrap_or_else(|_| "<unknown>".to_string()),
+                    || "<null>".to_owned(),
+                    |frs_val| {
+                        self.resolve(frs_val)
+                            .unwrap_or_else(|_| "<unknown>".to_owned())
+                    },
                 )
             })
             .collect();
@@ -134,35 +138,37 @@ impl PathResolver {
 mod tests {
     use super::*;
 
-    fn create_test_df() -> DataFrame {
-        DataFrame::new(vec![
-            Column::new("frs".into(), &[5u64, 100, 101, 102]),
-            Column::new("parent_frs".into(), &[0u64, 5, 100, 101]),
+    type TestResult = core::result::Result<(), Box<dyn core::error::Error>>;
+
+    fn create_test_df() -> core::result::Result<DataFrame, uffs_polars::PolarsError> {
+        DataFrame::new_infer_height(vec![
+            Column::new("frs".into(), &[5_u64, 100, 101, 102]),
+            Column::new("parent_frs".into(), &[0_u64, 5, 100, 101]),
             Column::new("name".into(), &["", "Users", "john", "Documents"]),
         ])
-        .unwrap()
     }
 
     #[test]
-    fn test_resolve_path() {
-        let df = create_test_df();
-        let mut resolver = PathResolver::build(&df, 'C').unwrap();
+    fn test_resolve_path() -> TestResult {
+        let df = create_test_df()?;
+        let mut resolver = PathResolver::build(&df, 'C')?;
 
-        let path = resolver.resolve(102).unwrap();
+        let path = resolver.resolve(102)?;
         assert_eq!(path, "C:\\Users\\john\\Documents");
+        Ok(())
     }
 
     #[test]
-    fn test_path_caching() {
-        let df = create_test_df();
-        let mut resolver = PathResolver::build(&df, 'C').unwrap();
+    fn test_path_caching() -> TestResult {
+        let df = create_test_df()?;
+        let mut resolver = PathResolver::build(&df, 'C')?;
 
         // First resolution
-        let path1 = resolver.resolve(102).unwrap();
+        let path1 = resolver.resolve(102)?;
         // Second resolution (should use cache)
-        let path2 = resolver.resolve(102).unwrap();
+        let path2 = resolver.resolve(102)?;
 
         assert_eq!(path1, path2);
+        Ok(())
     }
 }
-

@@ -1,0 +1,14 @@
+# UFFS rustfmt configuration
+# Copyright 2025-2026 Robert Nio
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+max_width = 100
+imports_granularity = "Module"
+group_imports = "StdExternalCrate"
+wrap_comments = true
+format_code_in_doc_comments = true
+normalize_comments = true
+newline_style = "Unix"
+use_small_heuristics = "Default"
+reorder_imports = true
+reorder_modules = true

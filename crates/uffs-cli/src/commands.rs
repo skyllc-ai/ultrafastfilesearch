@@ -1,16 +1,41 @@
 //! CLI command implementations.
+//!
+//! This module provides the core command implementations for the UFFS CLI.
+//! All public functions are async where I/O is involved and return
+//! `anyhow::Result`.
 
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use uffs_core::{export_csv, export_json, export_table, MftQuery};
-use uffs_mft::MftReader;
+use anyhow::{Context, Result, bail};
+use indicatif::{ProgressBar, ProgressStyle};
+use tracing::info;
+use uffs_core::extensions::ExtensionFilter;
+use uffs_core::output::OutputConfig;
+use uffs_core::pattern::ParsedPattern;
+use uffs_core::tree::add_tree_columns;
+use uffs_core::{MftQuery, export_csv, export_json, export_table};
+use uffs_mft::{MftProgress, MftReader, load_raw_mft_header};
+#[cfg(windows)]
+use uffs_mft::{MultiDriveMftReader, SaveRawOptions};
 
 /// Search for files matching a pattern.
-#[allow(clippy::too_many_arguments)]
+///
+/// Supports:
+/// - Drive prefix in pattern: `c:/pro*` extracts drive C
+/// - REGEX patterns: `>C:\\Temp.*` (starts with `>`)
+/// - Glob patterns: `*.txt`, `**/*.rs`
+/// - Literal search: `readme` (no wildcards)
+/// - Multi-drive search: `--drives C,D,E`
+/// - Extension filtering: `--ext pictures,mp4,pdf`
+/// - Output customization: `--out`, `--columns`, `--sep`, `--quotes`,
+///   `--header`, `--pos`, `--neg`
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub async fn search(
     pattern: &str,
-    drive: Option<char>,
+    single_drive: Option<char>,
+    multi_drives: Option<Vec<char>>,
     index: Option<std::path::PathBuf>,
     files_only: bool,
     dirs_only: bool,
@@ -18,24 +43,70 @@ pub async fn search(
     max_size: Option<u64>,
     limit: u32,
     format: &str,
+    case_sensitive: bool,
+    ext_filter: Option<&str>,
+    out: &str,
+    columns: &str,
+    sep: &str,
+    quotes: &str,
+    header: bool,
+    pos: &str,
+    neg: &str,
 ) -> Result<()> {
-    // Load data from index or live MFT
+    // Parse the pattern to extract drive prefix and pattern type
+    let parsed = ParsedPattern::parse(pattern)
+        .with_context(|| format!("Invalid pattern: {pattern}"))?
+        .with_case_sensitive(case_sensitive);
+
+    // Load data from index, multi-drive, single drive, or all drives (default)
     let df = if let Some(index_path) = index {
+        // Load from pre-built index
         MftReader::load_parquet(&index_path)
             .with_context(|| format!("Failed to load index: {}", index_path.display()))?
+    } else if let Some(drives) = multi_drives {
+        // Multi-drive concurrent search (explicit)
+        search_multi_drive(&drives).await?
     } else {
-        let drive = drive.context("Either --drive or --index must be specified")?;
-        let reader = MftReader::open(drive)
-            .await
-            .with_context(|| format!("Failed to open drive {drive}:"))?;
-        reader.read_all().await?
+        // Check for single drive: CLI flag overrides pattern-embedded drive
+        let effective_drive = single_drive.or_else(|| parsed.drive());
+        if let Some(drive_letter) = effective_drive {
+            // Single drive search
+            let reader = MftReader::open(drive_letter)
+                .await
+                .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
+            reader.read_all().await?
+        } else {
+            // No drive specified - search ALL available NTFS drives
+            #[cfg(windows)]
+            {
+                let all_drives = uffs_mft::detect_ntfs_drives();
+                if all_drives.is_empty() {
+                    bail!("No NTFS drives found on this system");
+                }
+                info!(drives = ?all_drives, count = all_drives.len(), "No drive specified - searching all NTFS drives");
+                search_multi_drive(&all_drives).await?
+            }
+            #[cfg(not(windows))]
+            {
+                bail!(
+                    "No drive specified. Use --drive, --drives, --index, or include drive in pattern (e.g., c:/pro*)"
+                );
+            }
+        }
     };
 
     // Build query
     let mut query = MftQuery::new(df);
 
-    // Apply pattern filter
-    query = query.glob(pattern)?;
+    // Apply pattern filter using the parsed pattern
+    query = query.pattern(&parsed)?;
+
+    // Apply extension filter if specified
+    if let Some(ext_str) = ext_filter {
+        let parsed_ext_filter = ExtensionFilter::parse(ext_str)
+            .map_err(|err| anyhow::anyhow!("Invalid extension filter: {err}"))?;
+        query = query.extension_filter(&parsed_ext_filter);
+    }
 
     // Apply type filters
     if files_only {
@@ -56,56 +127,530 @@ pub async fn search(
     query = query.limit(limit);
 
     // Execute query
-    let results = query.collect()?;
+    let mut results = query.collect()?;
 
-    // Output results
-    let stdout = std::io::stdout();
-    match format {
-        "json" => export_json(&results, stdout)?,
-        "csv" => export_csv(&results, stdout)?,
-        _ => export_table(&results, stdout)?,
+    // Build output configuration first to check what columns are needed
+    let output_config = OutputConfig::new()
+        .with_columns(columns)
+        .with_separator(sep)
+        .with_quote(quotes)
+        .with_header(header)
+        .with_pos(pos)
+        .with_neg(neg);
+
+    // Compute tree columns only if specifically requested
+    if output_config.needs_tree_columns() {
+        let tree_cols = output_config.get_tree_columns();
+        info!(columns = tree_cols.len(), "Computing tree metrics");
+        results =
+            add_tree_columns(&results, &tree_cols).context("Failed to compute tree columns")?;
     }
 
-    eprintln!("\nFound {} results", results.height());
+    // Determine output destination
+    let is_console = matches!(
+        out.to_lowercase().as_str(),
+        "console" | "con" | "term" | "terminal"
+    );
+
+    // Output results based on format and destination
+    if is_console {
+        let stdout = std::io::stdout();
+        match format {
+            "json" => export_json(&results, stdout)?,
+            "csv" => export_csv(&results, stdout)?,
+            "custom" => output_config.write(&results, stdout)?,
+            _ => export_table(&results, stdout)?,
+        }
+    } else {
+        // Write to file
+        let file =
+            File::create(out).with_context(|| format!("Failed to create output file: {out}"))?;
+        let writer = BufWriter::new(file);
+
+        match format {
+            "json" => export_json(&results, writer)?,
+            "csv" => export_csv(&results, writer)?,
+            _ => output_config.write(&results, writer)?,
+        }
+        info!(file = out, "Results written to file");
+    }
+
+    info!(count = results.height(), "Search complete");
 
     Ok(())
 }
 
+/// Search multiple drives concurrently.
+#[cfg(windows)]
+async fn search_multi_drive(drives: &[char]) -> Result<uffs_mft::DataFrame> {
+    use indicatif::MultiProgress;
+
+    if drives.is_empty() {
+        bail!("No drives specified for multi-drive search");
+    }
+
+    info!(count = drives.len(), "Searching drives concurrently");
+
+    let reader = MultiDriveMftReader::new(drives.to_vec());
+    let multi_progress = MultiProgress::new();
+
+    // Create progress bars for each drive
+    let mut progress_bars = std::collections::HashMap::new();
+    for &drive_char in reader.drives() {
+        let pb = multi_progress.add(ProgressBar::new(0));
+        let style = ProgressStyle::default_bar()
+            .template(&format!(
+                "{{spinner:.green}} [{drive_char}:] [{{elapsed_precise}}] [{{bar:30.cyan/blue}}] {{pos}}/{{len}} ({{eta}})"
+            ))
+            .context("Invalid progress bar template")?
+            .progress_chars("#>-");
+        pb.set_style(style);
+        progress_bars.insert(drive_char, pb);
+    }
+
+    let progress_bars = std::sync::Arc::new(progress_bars);
+    let pbs = progress_bars.clone();
+
+    let df = reader
+        .read_with_progress(move |drive_char, progress| {
+            if let Some(pb) = pbs.get(&drive_char) {
+                if let Some(total) = progress.total_records {
+                    pb.set_length(total);
+                }
+                pb.set_position(progress.records_read);
+            }
+        })
+        .await
+        .context("Failed to read MFTs from drives")?;
+
+    for pb in progress_bars.values() {
+        pb.finish();
+    }
+
+    info!(
+        records = df.height(),
+        drives = drives.len(),
+        "Read records from drives"
+    );
+    Ok(df)
+}
+
+/// Stub for non-Windows platforms.
+#[cfg(not(windows))]
+// Platform-specific stub must match Windows signature; called once per platform is expected.
+#[allow(clippy::unused_async, clippy::single_call_fn)]
+async fn search_multi_drive(_drives: &[char]) -> Result<uffs_mft::DataFrame> {
+    bail!("Multi-drive search is only supported on Windows")
+}
+
 /// Build an index from a drive's MFT.
-pub async fn index(drive: char, output: &Path) -> Result<()> {
-    eprintln!("Indexing drive {drive}:...");
+///
+/// Supports both single drive (`--drive C`) and multiple drives (`--drives
+/// C,D,E`). When multiple drives are specified, they are read concurrently and
+/// merged into a single `DataFrame` with a `drive` column.
+// CLI command handler - separate function for testability and maintainability.
+#[allow(clippy::shadow_unrelated, clippy::single_call_fn)]
+pub async fn index(
+    single_drive: Option<char>,
+    multi_drives: Option<Vec<char>>,
+    output: &Path,
+) -> Result<()> {
+    // Determine which drives to index
+    let drive_list: Vec<char> = match (single_drive, multi_drives) {
+        (Some(drv), None) => vec![drv],
+        (None, Some(drvs)) => drvs,
+        (None, None) => {
+            anyhow::bail!("Either --drive or --drives must be specified");
+        }
+        (Some(_), Some(_)) => {
+            // This shouldn't happen due to clap's conflicts_with, but handle it anyway
+            anyhow::bail!("Cannot specify both --drive and --drives");
+        }
+    };
+
+    if drive_list.is_empty() {
+        anyhow::bail!("No drives specified");
+    }
+
+    // Single drive: use the original simple path
+    if let Some(&drive_letter) = drive_list.first() {
+        if drive_list.len() == 1 {
+            info!(drive = %drive_letter, "Indexing drive");
+
+            let reader = MftReader::open(drive_letter)
+                .await
+                .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
+
+            // Create progress bar
+            let pb = ProgressBar::new(0);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} records ({eta})")
+                    .context("Invalid progress bar template")?
+                    .progress_chars("#>-"),
+            );
+
+            // Read MFT with progress callback
+            let mut df = reader
+                .read_with_progress(move |progress: MftProgress| {
+                    if let Some(total) = progress.total_records {
+                        pb.set_length(total);
+                    }
+                    pb.set_position(progress.records_read);
+                })
+                .await?;
+
+            info!(records = df.height(), "Read records");
+
+            MftReader::save_parquet(&mut df, output)
+                .with_context(|| format!("Failed to save index to {}", output.display()))?;
+
+            info!(path = %output.display(), "Index saved");
+            return Ok(());
+        }
+    }
+
+    // Multiple drives: use MultiDriveMftReader
+    index_multi_drive(&drive_list, output).await
+}
+
+/// Index multiple drives concurrently.
+#[cfg(windows)]
+async fn index_multi_drive(drives: &[char], output: &Path) -> Result<()> {
+    use uffs_mft::MultiDriveMftReader;
+
+    let drive_str: String = drives
+        .iter()
+        .map(|c| format!("{c}:"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    info!(drives = %drive_str, "Indexing drives");
+
+    let reader = MultiDriveMftReader::new(drives.to_vec());
+
+    // Create a multi-progress bar for each drive
+    let mp = indicatif::MultiProgress::new();
+    let mut progress_bars = std::collections::HashMap::new();
+    for &drive_char in drives {
+        let pb = mp.add(ProgressBar::new(0));
+        let style = ProgressStyle::default_bar()
+            .template(&format!(
+                "{{spinner:.green}} {drive_char}: [{{bar:30.cyan/blue}}] {{pos}}/{{len}} ({{eta}})"
+            ))
+            .context("Invalid progress bar template")?
+            .progress_chars("#>-");
+        pb.set_style(style);
+        progress_bars.insert(drive_char, pb);
+    }
+
+    // Wrap in Arc for sharing across async callbacks
+    let progress_bars = std::sync::Arc::new(progress_bars);
+    let pbs = progress_bars.clone();
+
+    // Read all drives with progress
+    let mut df = reader
+        .read_with_progress(move |drive, progress| {
+            if let Some(pb) = pbs.get(&drive) {
+                if let Some(total) = progress.total_records {
+                    pb.set_length(total);
+                }
+                pb.set_position(progress.records_read);
+            }
+        })
+        .await
+        .context("Failed to read MFTs from drives")?;
+
+    // Finish all progress bars
+    for pb in progress_bars.values() {
+        pb.finish();
+    }
+
+    info!(
+        records = df.height(),
+        drives = drives.len(),
+        "Read records from drives"
+    );
+
+    MftReader::save_parquet(&mut df, output)
+        .with_context(|| format!("Failed to save index to {}", output.display()))?;
+
+    info!(path = %output.display(), "Index saved");
+
+    Ok(())
+}
+
+/// Index multiple drives (non-Windows stub).
+#[cfg(not(windows))]
+// Platform-specific stub must match Windows signature; called once per platform is expected.
+#[allow(clippy::unused_async, clippy::single_call_fn)]
+async fn index_multi_drive(_drives: &[char], _output: &Path) -> Result<()> {
+    anyhow::bail!("Multi-drive indexing is only supported on Windows")
+}
+
+/// Show information about an index file.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The index file cannot be loaded
+/// - Writing to stdout fails
+// CLI command handler - separate function for testability and maintainability.
+#[allow(clippy::single_call_fn)]
+pub fn info(path: &Path) -> Result<()> {
+    let df = MftReader::load_parquet(path)
+        .with_context(|| format!("Failed to load index: {}", path.display()))?;
+
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "Index: {}", path.display())?;
+    writeln!(stdout, "Records: {}", df.height())?;
+    writeln!(stdout, "Columns: {}", df.width())?;
+    writeln!(stdout)?;
+    writeln!(stdout, "Schema:")?;
+    let schema = df.schema();
+    for (name, dtype) in schema.iter() {
+        writeln!(stdout, "  {name}: {dtype}")?;
+    }
+
+    Ok(())
+}
+
+/// Show statistics about files in an index.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The index file cannot be loaded
+/// - Query execution fails
+/// - Writing to stdout fails
+// CLI command handler - separate function for testability and maintainability.
+#[allow(clippy::single_call_fn)]
+pub fn stats(path: &Path, top: u32) -> Result<()> {
+    let df = MftReader::load_parquet(path)
+        .with_context(|| format!("Failed to load index: {}", path.display()))?;
+
+    let total_records = df.height();
+
+    // Count files vs directories
+    let files = MftQuery::new(df.clone()).files_only().collect()?;
+    let dirs = MftQuery::new(df.clone()).directories_only().collect()?;
+
+    let file_count = files.height();
+    let dir_count = dirs.height();
+
+    // Calculate total size
+    let file_size_col = files.column("size")?.u64()?;
+    let total_size: u64 = file_size_col.into_iter().flatten().sum();
+
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "=== Index Statistics ===")?;
+    writeln!(stdout)?;
+    writeln!(stdout, "Total records: {total_records}")?;
+    writeln!(stdout, "Files:         {file_count}")?;
+    writeln!(stdout, "Directories:   {dir_count}")?;
+    writeln!(stdout, "Total size:    {}", format_size(total_size))?;
+    writeln!(stdout)?;
+
+    // Top N largest files
+    writeln!(stdout, "=== Top {top} Largest Files ===")?;
+    writeln!(stdout)?;
+
+    let largest = MftQuery::new(df)
+        .files_only()
+        .sort_by_size(true)
+        .limit(top)
+        .collect()?;
+
+    let name_col = largest.column("name")?.str()?;
+    let largest_size_col = largest.column("size")?.u64()?;
+
+    for idx in 0..largest.height() {
+        let name = name_col.get(idx).unwrap_or("<unknown>");
+        let size = largest_size_col.get(idx).unwrap_or(0);
+        writeln!(stdout, "  {:>12}  {}", format_size(size), name)?;
+    }
+
+    Ok(())
+}
+
+/// Format file size in human-readable format.
+#[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    const TB: u64 = GB * 1024;
+
+    if bytes >= TB {
+        format!("{:.2} TB", bytes as f64 / TB as f64)
+    } else if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// Save raw MFT bytes to a file for offline analysis.
+#[cfg(windows)]
+pub async fn save_raw(
+    drive: char,
+    output: &Path,
+    compress: bool,
+    compression_level: i32,
+) -> Result<()> {
+    info!(drive = %drive, "Reading raw MFT from drive");
 
     let reader = MftReader::open(drive)
         .await
         .with_context(|| format!("Failed to open drive {drive}:"))?;
 
-    let mut df = reader.read_all().await?;
+    // Create progress bar
+    let pb = ProgressBar::new(0);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} bytes")
+            .context("Invalid progress bar template")?
+            .progress_chars("#>-"),
+    );
 
-    eprintln!("Read {} records", df.height());
+    let options = SaveRawOptions {
+        compress,
+        compression_level,
+    };
 
-    MftReader::save_parquet(&mut df, output)
-        .with_context(|| format!("Failed to save index to {}", output.display()))?;
+    let header = reader
+        .save_raw_to_file(output, &options)
+        .await
+        .with_context(|| format!("Failed to save raw MFT to {}", output.display()))?;
 
-    eprintln!("Index saved to {}", output.display());
+    pb.finish_and_clear();
 
-    Ok(())
-}
-
-/// Show information about an index file.
-pub fn info(path: &Path) -> Result<()> {
-    let df = MftReader::load_parquet(path)
-        .with_context(|| format!("Failed to load index: {}", path.display()))?;
-
-    println!("Index: {}", path.display());
-    println!("Records: {}", df.height());
-    println!("Columns: {}", df.width());
-    println!();
-    println!("Schema:");
-    let schema = df.schema();
-    for (name, dtype) in schema.iter() {
-        println!("  {name}: {dtype:?}");
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout)?;
+    writeln!(stdout, "=== Raw MFT Saved ===")?;
+    writeln!(stdout, "Output:          {}", output.display())?;
+    writeln!(stdout, "Records:         {}", header.record_count)?;
+    writeln!(stdout, "Record size:     {} bytes", header.record_size)?;
+    writeln!(
+        stdout,
+        "Original size:   {}",
+        format_size(header.original_size)
+    )?;
+    if header.is_compressed() {
+        writeln!(
+            stdout,
+            "Compressed size: {}",
+            format_size(header.compressed_size)
+        )?;
+        #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+        let ratio = header.compressed_size as f64 / header.original_size as f64 * 100.0_f64;
+        writeln!(stdout, "Compression:     {ratio:.1}%")?;
+    } else {
+        writeln!(stdout, "Compression:     none")?;
     }
 
     Ok(())
 }
 
+/// Save raw MFT bytes - non-Windows stub.
+#[cfg(not(windows))]
+// Platform-specific stub must match Windows signature; called once per platform is expected.
+#[allow(clippy::unused_async, clippy::single_call_fn)]
+pub async fn save_raw(
+    _drive: char,
+    _output: &Path,
+    _compress: bool,
+    _compression_level: i32,
+) -> Result<()> {
+    anyhow::bail!("Raw MFT saving is only supported on Windows");
+}
+
+/// Load raw MFT from a saved file.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The raw MFT file cannot be loaded
+/// - Writing to stdout fails
+/// - On non-Windows: always fails (NTFS parsing not supported)
+// CLI command handler - separate function for testability and maintainability.
+#[allow(clippy::single_call_fn)]
+pub fn load_raw(input: &Path, output: Option<&Path>, info_only: bool) -> Result<()> {
+    // Load header first
+    let header = load_raw_mft_header(input)
+        .with_context(|| format!("Failed to load raw MFT header from {}", input.display()))?;
+
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "=== Raw MFT File Info ===")?;
+    writeln!(stdout, "File:            {}", input.display())?;
+    writeln!(stdout, "Version:         {}", header.version)?;
+    writeln!(stdout, "Records:         {}", header.record_count)?;
+    writeln!(stdout, "Record size:     {} bytes", header.record_size)?;
+    writeln!(
+        stdout,
+        "Original size:   {}",
+        format_size(header.original_size)
+    )?;
+    if header.is_compressed() {
+        writeln!(
+            stdout,
+            "Compressed size: {}",
+            format_size(header.compressed_size)
+        )?;
+        #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+        let ratio = header.compressed_size as f64 / header.original_size as f64 * 100.0_f64;
+        writeln!(stdout, "Compression:     {ratio:.1}%")?;
+    } else {
+        writeln!(stdout, "Compression:     none")?;
+    }
+    // Drop stdout lock before potentially long operations
+    drop(stdout);
+
+    if info_only {
+        return Ok(());
+    }
+
+    // Parse and export
+    #[cfg(windows)]
+    {
+        let output = output.context("--output is required when not using --info-only")?;
+
+        info!("Parsing MFT records");
+
+        let df = MftReader::load_raw_to_dataframe(input)
+            .with_context(|| format!("Failed to parse raw MFT from {}", input.display()))?;
+
+        info!(records = df.height(), "Parsed records");
+
+        // Determine output format from extension
+        let ext = output
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("parquet");
+
+        match ext {
+            "csv" => {
+                let mut file = std::fs::File::create(output)?;
+                uffs_core::export_csv(&df, &mut file)?;
+                info!(path = %output.display(), "Exported to CSV");
+            }
+            _ => {
+                let mut df = df;
+                MftReader::save_parquet(&mut df, output)?;
+                info!(path = %output.display(), "Exported to Parquet");
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    {
+        // Silence unused variable warning on non-Windows
+        let _: Option<&Path> = output;
+        anyhow::bail!("Raw MFT parsing is only supported on Windows (requires NTFS parsing)");
+    }
+}

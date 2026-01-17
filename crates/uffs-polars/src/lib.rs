@@ -1,4 +1,4 @@
-//! # uffs-polars: Polars Facade for `UltraFastFileSearch`
+//! # uffs-polars: Polars Facade for UFFS (Ultra Fast File Search)
 //!
 //! This crate provides a pre-compiled Polars wrapper for the UFFS project.
 //! It exists solely for **compilation time isolation**.
@@ -9,7 +9,8 @@
 //! By isolating it in this facade crate:
 //!
 //! - Polars compiles **once** and is cached
-//! - Changes to `uffs-mft`, `uffs-core`, etc. don't trigger Polars recompilation
+//! - Changes to `uffs-mft`, `uffs-core`, etc. don't trigger Polars
+//!   recompilation
 //! - Development iteration time drops from ~4 min to ~25 seconds
 //!
 //! ## Usage
@@ -27,7 +28,7 @@
 //! ```rust,ignore
 //! use uffs_polars::prelude::*;
 //!
-//! let df = DataFrame::new(vec![
+//! let df = DataFrame::new_infer_height(vec![
 //!     Column::new("name".into(), &["file1.txt", "file2.rs"]),
 //!     Column::new("size".into(), &[1024u64, 2048]),
 //! ])?;
@@ -46,7 +47,6 @@
 // Re-export polars prelude (primary API)
 // ============================================================================
 pub use polars::prelude::*;
-
 // ============================================================================
 // Re-export specific modules for advanced usage
 // ============================================================================
@@ -105,34 +105,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_dataframe_creation() {
+    fn test_dataframe_creation() -> Result<(), PolarsError> {
         // Verify we can create a DataFrame using re-exported types
         let names = Column::new("name".into(), &["test.txt", "data.rs"]);
-        let sizes = Column::new("size".into(), &[100u64, 200]);
+        let sizes = Column::new("size".into(), &[100_u64, 200]);
 
-        let df = DataFrame::new(vec![names, sizes]);
-        assert!(df.is_ok());
-
-        let df = df.unwrap();
+        let df = DataFrame::new_infer_height(vec![names, sizes])?;
         assert_eq!(df.height(), 2);
         assert_eq!(df.width(), 2);
+        Ok(())
     }
 
     #[test]
-    fn test_lazy_operations() {
+    fn test_lazy_operations() -> Result<(), PolarsError> {
         let names = Column::new("name".into(), &["a.txt", "b.rs", "c.txt"]);
-        let sizes = Column::new("size".into(), &[100u64, 200, 300]);
+        let sizes = Column::new("size".into(), &[100_u64, 200, 300]);
 
-        let df = DataFrame::new(vec![names, sizes]).unwrap();
+        let df = DataFrame::new_infer_height(vec![names, sizes])?;
 
         // Test lazy filtering
-        let result = df
-            .lazy()
-            .filter(col("size").gt(lit(150u64)))
-            .collect()
-            .unwrap();
+        let result = df.lazy().filter(col("size").gt(lit(150_u64))).collect()?;
 
         assert_eq!(result.height(), 2);
+        Ok(())
     }
 
     #[test]
@@ -143,4 +138,3 @@ mod tests {
         assert_eq!(columns::SIZE, "size");
     }
 }
-

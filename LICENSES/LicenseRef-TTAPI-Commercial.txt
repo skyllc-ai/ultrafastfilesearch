@@ -1,0 +1,21 @@
+SPDX-License-Identifier: LicenseRef-TTAPI-Commercial
+
+TTAPI Commercial License Reference
+
+This file references the commercial licensing terms for TTAPI.
+
+The full commercial license terms can be found in the LICENSE-COMMERCIAL
+file in the root directory of this project.
+
+For commercial licensing inquiries, contact:
+Robert Nio <50460704+githubrobbi@users.noreply.github.com>
+
+This license identifier should be used in SPDX headers as:
+SPDX-License-Identifier: LicenseRef-TTAPI-Commercial
+
+Commercial licensing provides:
+- Freedom from copyleft obligations
+- Right to modify without sharing changes
+- Commercial distribution rights
+- Enterprise support options
+- Custom licensing terms available

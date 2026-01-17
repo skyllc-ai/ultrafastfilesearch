@@ -1,7 +1,7 @@
 # ============================================================================
 # uffs-gui: Graphical User Interface
 # ============================================================================
-# Native GUI for UltraFastFileSearch.
+# Native GUI for UFFS (Ultra Fast File Search).
 #
 # This crate is a placeholder for future GUI implementation.
 # Planned technologies: egui or Tauri
@@ -9,13 +9,16 @@
 
 [package]
 name = "uffs-gui"
-description = "Graphical UI for UltraFastFileSearch (future)"
+description = "Graphical UI for UFFS (Ultra Fast File Search) - future"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [[bin]]
 name = "uffs-gui"
@@ -40,10 +43,9 @@ tracing.workspace = true
 # egui = "0.28"
 # eframe = "0.28"
 
-[lints.rust]
-unsafe_code = "forbid"
-
-[lints.clippy]
-all = "warn"
-pedantic = "warn"
+# ─────────────────────────────────────────────────────────────────────────────
+# Lints (inherit from workspace)
+# ─────────────────────────────────────────────────────────────────────────────
+[lints]
+workspace = true
 

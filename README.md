@@ -1,2 +1,5 @@
-# UltraFastFileSearch-Rust
-This will become the RUST version of my current UFFS for C++ ... right now it does NOT read the MFT
+# UFFS - Ultra Fast File Search
+
+Ultra-high-performance file search using direct NTFS MFT reading and Polars DataFrames.
+
+> **Note**: This is the Rust implementation of UFFS, replacing the original C++ version.

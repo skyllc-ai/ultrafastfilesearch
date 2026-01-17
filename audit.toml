@@ -1,0 +1,61 @@
+# =============================================================================
+# audit.toml - Cargo Audit Configuration
+# =============================================================================
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2025-2026 Robert Nio
+#
+# UFFS - Ultra Fast File Search
+#
+
+# Configuration for cargo-audit security scanning
+# This file allows us to ignore specific vulnerabilities in external crates
+# that we cannot control but have assessed as acceptable risks.
+
+[advisories]
+# Ignore specific vulnerability IDs
+# Format: ignore = ["RUSTSEC-YYYY-NNNN"]
+ignore = []
+
+# Ignore vulnerabilities in specific crates
+# This is useful when external dependencies have known issues
+# but we cannot update them due to compatibility constraints
+[advisories.ignore]
+# Example format:
+# crate-name = ["RUSTSEC-2023-0001", "RUSTSEC-2023-0002"]
+
+# Ignore all vulnerabilities for specific crates (use with caution)
+# This should only be used for external crates that we cannot control
+# and have assessed the risks as acceptable for our use case
+[advisories.ignore-crates]
+# Add problematic external crates here
+# Format: crate-name = true
+
+# Example - replace with your actual problematic crate names:
+# problematic-crate-1 = true
+# problematic-crate-2 = true
+
+# Database configuration
+[database]
+# Path to the advisory database
+path = "~/.cargo/advisory-db"
+# URL to fetch the database from
+url = "https://github.com/RustSec/advisory-db.git"
+# Whether to fetch the database automatically
+fetch = true
+
+# Output configuration
+[output]
+# Output format: "human", "json", "toml"
+format = "human"
+# Whether to show informational advisories
+show-info = false
+# Whether to show warnings
+show-warnings = true
+
+# Target configuration
+[target]
+# Target architecture (leave empty for all)
+arch = ""
+# Target OS (leave empty for all)
+os = ""

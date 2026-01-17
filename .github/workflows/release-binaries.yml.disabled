@@ -1,0 +1,204 @@
+# SPDX-License-Identifier: LicenseRef-SKY-Proprietary
+# SPDX-FileCopyrightText: 2025 SKY, LLC. <legal@sky-llc.net>
+
+name: Release Binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag'
+        required: true
+        default: 'v0.1.0'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: linux-x64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: linux-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: windows-x64
+          - target: x86_64-apple-darwin
+            os: macos-13
+            name: macos-x64
+          - target: aarch64-apple-darwin
+            os: macos-14
+            name: macos-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Configure cross-compilation (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build binary
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p ttapi-devenv
+
+      - name: Prepare binary (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cp target/${{ matrix.target }}/release/ttapi-devenv ttapi-devenv-${{ matrix.name }}
+          chmod +x ttapi-devenv-${{ matrix.name }}
+
+      - name: Prepare binary (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          cp target/${{ matrix.target }}/release/ttapi-devenv.exe ttapi-devenv-${{ matrix.name }}.exe
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ttapi-devenv-${{ matrix.name }}
+          path: ttapi-devenv-${{ matrix.name }}*
+
+  create-release:
+    name: Create Release
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-binaries
+
+      - name: Create installation scripts
+        run: |
+          # Create Unix installation script
+          cat > install.sh << 'EOF'
+          #!/bin/bash
+          # TTAPI DevEnv Installation Script
+          set -euo pipefail
+          
+          detect_platform() {
+              local os=$(uname -s)
+              local arch=$(uname -m)
+              
+              case "$os" in
+                  Linux)
+                      case "$arch" in
+                          x86_64) echo "linux-x64" ;;
+                          aarch64|arm64) echo "linux-arm64" ;;
+                          *) echo "unsupported" ;;
+                      esac
+                      ;;
+                  Darwin)
+                      case "$arch" in
+                          x86_64) echo "macos-x64" ;;
+                          arm64) echo "macos-arm64" ;;
+                          *) echo "unsupported" ;;
+                      esac
+                      ;;
+                  *)
+                      echo "unsupported"
+                      ;;
+              esac
+          }
+          
+          PLATFORM=$(detect_platform)
+          INSTALL_DIR="$HOME/.local/bin"
+          BINARY_URL="https://github.com/githubrobbi/ttapi/releases/latest/download/ttapi-devenv-$PLATFORM"
+          
+          echo "🦀 Installing TTAPI DevEnv for $PLATFORM..."
+          
+          mkdir -p "$INSTALL_DIR"
+          curl -sSL "$BINARY_URL" -o "$INSTALL_DIR/ttapi-devenv"
+          chmod +x "$INSTALL_DIR/ttapi-devenv"
+          
+          echo "✅ Installed to $INSTALL_DIR/ttapi-devenv"
+          echo "ℹ️  Add $INSTALL_DIR to your PATH if not already there"
+          echo "ℹ️  Run 'ttapi-devenv setup' to configure your environment"
+          EOF
+          
+          chmod +x install.sh
+
+      - name: Upload release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Upload all binaries
+          for dir in release-binaries/*/; do
+            for file in "$dir"*; do
+              if [ -f "$file" ]; then
+                echo "Uploading $(basename "$file")..."
+                gh release upload ${{ github.event.release.tag_name }} "$file"
+              fi
+            done
+          done
+          
+          # Upload installation script
+          gh release upload ${{ github.event.release.tag_name }} install.sh
+
+  update-bootstrap:
+    name: Update Bootstrap Script
+    needs: create-release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update bootstrap script version
+        run: |
+          # Update version in bootstrap script if needed
+          sed -i 's/releases\/latest/releases\/latest/g' bootstrap.sh
+
+      - name: Commit and push if changed
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add bootstrap.sh
+          git diff --staged --quiet || git commit -m "Update bootstrap script for release ${{ github.event.release.tag_name }}"
+          git push

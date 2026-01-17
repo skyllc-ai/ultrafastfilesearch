@@ -1,16 +1,24 @@
 //! Benchmarks for MFT reading operations.
 
-use criterion::{criterion_group, criterion_main, Criterion};
+// Suppress unused crate warnings for dependencies used by the main crate.
+// Note: zstd is an optional dependency, so we conditionally suppress it.
+use criterion::{Criterion, criterion_group, criterion_main};
+use {bitflags as _, rayon as _, thiserror as _, tokio as _, uffs_mft as _, uffs_polars as _};
 
-fn bench_placeholder(c: &mut Criterion) {
-    c.bench_function("placeholder", |b| {
-        b.iter(|| {
+// zstd is optional - only suppress when the feature is enabled
+#[cfg(feature = "zstd")]
+extern crate zstd as _;
+
+/// Placeholder benchmark for MFT reading operations.
+#[allow(clippy::single_call_fn)] // Required by criterion_group! macro
+fn bench_placeholder(criterion: &mut Criterion) {
+    criterion.bench_function("placeholder", |bencher| {
+        bencher.iter(|| {
             // TODO: Add actual MFT reading benchmarks
-            std::hint::black_box(1 + 1)
-        })
+            core::hint::black_box(1_i32 + 1_i32)
+        });
     });
 }
 
 criterion_group!(benches, bench_placeholder);
 criterion_main!(benches);
-

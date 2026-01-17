@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2025-2026 Robert Nio
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Rust Toolchain Configuration for UFFS Project
+# This file ensures consistent toolchain usage across all environments
+# and prevents issues caused by switching between stable/nightly toolchains
+
+[toolchain]
+# Always use the latest nightly toolchain
+# This ensures we get the latest features, improvements, and clippy lints
+channel = "nightly"
+
+# Specify components that should always be available
+components = [
+    "rustc",          # The Rust compiler
+    "cargo",          # Package manager and build tool
+    "rustfmt",        # Code formatter
+    "clippy",         # Linter for catching common mistakes
+    "rust-src",       # Source code for standard library (needed for IDE features)
+    "rust-analyzer",  # Language server for IDE support
+    "llvm-tools",     # LLVM tools for coverage and profiling
+    "miri",           # Interpreter for detecting undefined behavior
+]
+
+# Specify targets for cross-compilation support
+targets = [
+    "x86_64-unknown-linux-gnu",    # Linux x64
+    "x86_64-pc-windows-msvc",      # Windows x64
+    "x86_64-apple-darwin",         # macOS Intel
+    "aarch64-apple-darwin",        # macOS Apple Silicon
+    "aarch64-unknown-linux-gnu",   # Linux ARM64
+]
+
+# Profile for development - optimized for fast compilation and good debugging
+profile = "default"

@@ -1,0 +1,1048 @@
+//! Platform-specific implementations for Windows.
+//!
+//! This module provides Windows API wrappers for:
+//! - Volume handle management
+//! - NTFS volume data retrieval
+//! - Privilege checking
+//!
+//! # Safety
+//!
+//! This module uses Windows FFI and requires careful handling of raw handles.
+
+#![cfg(windows)]
+
+use std::ffi::OsString;
+use std::os::windows::ffi::OsStringExt;
+use std::path::PathBuf;
+
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_NO_BUFFERING, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+};
+use windows::Win32::System::Ioctl::{
+    FSCTL_GET_NTFS_VOLUME_DATA, FSCTL_GET_RETRIEVAL_POINTERS, NTFS_VOLUME_DATA_BUFFER,
+    RETRIEVAL_POINTERS_BUFFER, STARTING_VCN_INPUT_BUFFER,
+};
+use windows::core::PCWSTR;
+
+use crate::error::{MftError, Result};
+use crate::ntfs::NtfsBootSector;
+
+// ============================================================================
+// Volume Handle
+// ============================================================================
+
+/// A handle to an NTFS volume for direct disk access.
+///
+/// This handle is opened with backup semantics and no buffering for
+/// optimal MFT reading performance.
+#[derive(Debug)]
+pub struct VolumeHandle {
+    /// The raw Windows handle.
+    handle: HANDLE,
+    /// The volume letter.
+    volume: char,
+    /// NTFS volume data from `FSCTL_GET_NTFS_VOLUME_DATA`.
+    volume_data: NtfsVolumeData,
+}
+
+/// NTFS volume data retrieved from `FSCTL_GET_NTFS_VOLUME_DATA`.
+#[derive(Debug, Clone, Copy)]
+pub struct NtfsVolumeData {
+    /// Volume serial number.
+    pub volume_serial_number: u64,
+    /// Number of sectors on the volume.
+    pub number_of_sectors: u64,
+    /// Total number of clusters.
+    pub total_clusters: u64,
+    /// Number of free clusters.
+    pub free_clusters: u64,
+    /// Total number of reserved clusters.
+    pub total_reserved: u64,
+    /// Bytes per sector.
+    pub bytes_per_sector: u32,
+    /// Bytes per cluster.
+    pub bytes_per_cluster: u32,
+    /// Bytes per file record segment.
+    pub bytes_per_file_record_segment: u32,
+    /// Clusters per file record segment.
+    pub clusters_per_file_record_segment: u32,
+    /// MFT valid data length.
+    pub mft_valid_data_length: u64,
+    /// MFT start LCN (Logical Cluster Number).
+    pub mft_start_lcn: u64,
+    /// MFT2 start LCN.
+    pub mft2_start_lcn: u64,
+    /// MFT zone start.
+    pub mft_zone_start: u64,
+    /// MFT zone end.
+    pub mft_zone_end: u64,
+}
+
+impl VolumeHandle {
+    /// Opens a volume for direct MFT reading.
+    ///
+    /// # Arguments
+    ///
+    /// * `volume` - The drive letter (e.g., 'C', 'D')
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The volume cannot be opened (invalid letter, access denied)
+    /// - The volume is not NTFS formatted
+    /// - Insufficient privileges
+    ///
+    /// # Safety
+    ///
+    /// This function opens a raw volume handle which requires Administrator
+    /// privileges.
+    pub fn open(volume: char) -> Result<Self> {
+        let volume = volume.to_ascii_uppercase();
+
+        // Validate volume letter
+        if !volume.is_ascii_alphabetic() {
+            return Err(MftError::VolumeOpen {
+                volume,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Invalid volume letter",
+                ),
+            });
+        }
+
+        // Create volume path: \\.\X:
+        let volume_path: Vec<u16> = format!("\\\\.\\{}:", volume)
+            .encode_utf16()
+            .chain(core::iter::once(0))
+            .collect();
+
+        // Open the volume with backup semantics and no buffering
+        let handle = unsafe {
+            CreateFileW(
+                PCWSTR::from_raw(volume_path.as_ptr()),
+                FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0, // Access mode
+                FILE_SHARE_READ | FILE_SHARE_WRITE,     // Share mode
+                None,                                   // Security attributes
+                OPEN_EXISTING,                          // Creation disposition
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_NO_BUFFERING, // Flags
+                None,                                   // Template file
+            )
+        };
+
+        let handle = match handle {
+            Ok(h) => h,
+            Err(err) => {
+                // Check for access denied
+                if err.code().0 as u32 == 0x8007_0005 {
+                    return Err(MftError::InsufficientPrivileges);
+                }
+                return Err(MftError::VolumeOpen {
+                    volume,
+                    source: std::io::Error::from_raw_os_error(err.code().0 as i32),
+                });
+            }
+        };
+
+        // Get NTFS volume data
+        let volume_data = Self::get_ntfs_volume_data(handle, volume)?;
+
+        Ok(Self {
+            handle,
+            volume,
+            volume_data,
+        })
+    }
+
+    /// Retrieves NTFS volume data using `FSCTL_GET_NTFS_VOLUME_DATA`.
+    fn get_ntfs_volume_data(handle: HANDLE, volume: char) -> Result<NtfsVolumeData> {
+        use windows::Win32::System::IO::DeviceIoControl;
+
+        let mut buffer = NTFS_VOLUME_DATA_BUFFER::default();
+        let mut bytes_returned: u32 = 0;
+
+        let result = unsafe {
+            DeviceIoControl(
+                handle,
+                FSCTL_GET_NTFS_VOLUME_DATA,
+                None,                                                   // Input buffer
+                0,                                                      // Input buffer size
+                Some(core::ptr::from_mut(&mut buffer).cast()),          // Output buffer
+                core::mem::size_of::<NTFS_VOLUME_DATA_BUFFER>() as u32, // Output buffer size
+                Some(&mut bytes_returned),                              // Bytes returned
+                None,                                                   // Overlapped
+            )
+        };
+
+        if result.is_err() {
+            // Volume might not be NTFS
+            return Err(MftError::NotNtfs(volume));
+        }
+
+        Ok(NtfsVolumeData {
+            volume_serial_number: buffer.VolumeSerialNumber.QuadPart as u64,
+            number_of_sectors: buffer.NumberSectors.QuadPart as u64,
+            total_clusters: buffer.TotalClusters.QuadPart as u64,
+            free_clusters: buffer.FreeClusters.QuadPart as u64,
+            total_reserved: buffer.TotalReserved.QuadPart as u64,
+            bytes_per_sector: buffer.BytesPerSector,
+            bytes_per_cluster: buffer.BytesPerCluster,
+            bytes_per_file_record_segment: buffer.BytesPerFileRecordSegment,
+            clusters_per_file_record_segment: buffer.ClustersPerFileRecordSegment,
+            mft_valid_data_length: buffer.MftValidDataLength.QuadPart as u64,
+            mft_start_lcn: buffer.MftStartLcn.QuadPart as u64,
+            mft2_start_lcn: buffer.Mft2StartLcn.QuadPart as u64,
+            mft_zone_start: buffer.MftZoneStart.QuadPart as u64,
+            mft_zone_end: buffer.MftZoneEnd.QuadPart as u64,
+        })
+    }
+
+    /// Returns the volume letter.
+    #[must_use]
+    pub const fn volume(&self) -> char {
+        self.volume
+    }
+
+    /// Returns the NTFS volume data.
+    #[must_use]
+    pub const fn volume_data(&self) -> &NtfsVolumeData {
+        &self.volume_data
+    }
+
+    /// Returns the raw Windows handle.
+    ///
+    /// # Safety
+    ///
+    /// The caller must not close this handle or use it after the
+    /// `VolumeHandle` is dropped.
+    #[must_use]
+    pub const fn raw_handle(&self) -> HANDLE {
+        self.handle
+    }
+
+    /// Returns the byte offset of the MFT on the volume.
+    #[must_use]
+    pub fn mft_byte_offset(&self) -> u64 {
+        self.volume_data.mft_start_lcn * u64::from(self.volume_data.bytes_per_cluster)
+    }
+
+    /// Returns the size of a file record segment in bytes.
+    #[must_use]
+    pub const fn file_record_size(&self) -> u32 {
+        self.volume_data.bytes_per_file_record_segment
+    }
+
+    /// Returns the estimated number of MFT records.
+    #[must_use]
+    pub fn estimated_record_count(&self) -> u64 {
+        self.volume_data.mft_valid_data_length
+            / u64::from(self.volume_data.bytes_per_file_record_segment)
+    }
+
+    /// Reads the boot sector from the volume.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the boot sector cannot be read.
+    pub fn read_boot_sector(&self) -> Result<NtfsBootSector> {
+        use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
+
+        // Seek to the beginning of the volume
+        let mut new_position = 0_i64;
+        unsafe {
+            SetFilePointerEx(self.handle, 0, Some(&mut new_position), FILE_BEGIN)?;
+        }
+
+        // Read the boot sector
+        let mut buffer = [0_u8; 512];
+        let mut bytes_read = 0_u32;
+
+        unsafe {
+            ReadFile(self.handle, Some(&mut buffer), Some(&mut bytes_read), None)?;
+        }
+
+        if bytes_read != 512 {
+            return Err(MftError::BootSectorRead(format!(
+                "Expected 512 bytes, got {}",
+                bytes_read
+            )));
+        }
+
+        // SAFETY: NtfsBootSector is repr(C, packed) and exactly 512 bytes
+        let boot_sector: NtfsBootSector = unsafe { core::ptr::read(buffer.as_ptr().cast()) };
+
+        if !boot_sector.is_valid() {
+            return Err(MftError::InvalidBootSector(
+                "Invalid OEM ID (not NTFS)".to_owned(),
+            ));
+        }
+
+        Ok(boot_sector)
+    }
+
+    /// Gets the MFT extents (data runs) using `FSCTL_GET_RETRIEVAL_POINTERS`.
+    ///
+    /// This is essential for reading fragmented MFT files. Returns a list of
+    /// (VCN, cluster_count, LCN) tuples representing the physical layout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the MFT file cannot be opened or the extents
+    /// cannot be retrieved.
+    pub fn get_mft_extents(&self) -> Result<Vec<MftExtent>> {
+        // Open the $MFT file
+        let mft_path: Vec<u16> = format!("\\\\.\\{}:\\$MFT", self.volume)
+            .encode_utf16()
+            .chain(core::iter::once(0))
+            .collect();
+
+        let mft_handle = unsafe {
+            CreateFileW(
+                PCWSTR::from_raw(mft_path.as_ptr()),
+                FILE_READ_ATTRIBUTES.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_NO_BUFFERING,
+                None,
+            )
+        };
+
+        let mft_handle = match mft_handle {
+            Ok(h) => h,
+            Err(err) => {
+                // Fall back to using volume data if we can't open $MFT directly
+                // This happens on some systems where direct $MFT access is restricted
+                return Ok(vec![MftExtent {
+                    vcn: 0,
+                    cluster_count: self.volume_data.mft_valid_data_length
+                        / u64::from(self.volume_data.bytes_per_cluster),
+                    lcn: self.volume_data.mft_start_lcn as i64,
+                }]);
+            }
+        };
+
+        // Use RAII guard for handle cleanup
+        let _guard = HandleGuard(mft_handle);
+
+        // Get retrieval pointers
+        get_retrieval_pointers(mft_handle)
+    }
+
+    /// Gets the MFT bitmap which indicates which records are in use.
+    ///
+    /// The bitmap is read from `$MFT::$BITMAP`. Each bit corresponds to one
+    /// MFT record - if the bit is set, the record is in use.
+    ///
+    /// # Returns
+    ///
+    /// Returns `MftBitmap` containing the bitmap data and helper methods.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the bitmap cannot be read.
+    pub fn get_mft_bitmap(&self) -> Result<MftBitmap> {
+        // Open the $MFT::$BITMAP stream
+        let bitmap_path: Vec<u16> = format!("{}:\\$MFT::$BITMAP", self.volume)
+            .encode_utf16()
+            .chain(core::iter::once(0))
+            .collect();
+
+        let bitmap_handle = unsafe {
+            CreateFileW(
+                PCWSTR::from_raw(bitmap_path.as_ptr()),
+                FILE_READ_ATTRIBUTES.0 | 0x0001, // FILE_READ_DATA
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT,
+                None,
+            )
+        };
+
+        let bitmap_handle = match bitmap_handle {
+            Ok(h) => h,
+            Err(_) => {
+                // If we can't open the bitmap, return an empty one
+                // (all records will be checked individually)
+                return Ok(MftBitmap::new_all_valid(
+                    self.estimated_record_count() as usize
+                ));
+            }
+        };
+
+        let _guard = HandleGuard(bitmap_handle);
+
+        // Get file size
+        let mut file_size: i64 = 0;
+        unsafe {
+            use windows::Win32::Storage::FileSystem::GetFileSizeEx;
+            if GetFileSizeEx(bitmap_handle, &mut file_size).is_err() {
+                return Ok(MftBitmap::new_all_valid(
+                    self.estimated_record_count() as usize
+                ));
+            }
+        }
+
+        // Read the bitmap
+        let mut buffer = vec![0u8; file_size as usize];
+        let mut bytes_read: u32 = 0;
+
+        unsafe {
+            use windows::Win32::Storage::FileSystem::ReadFile;
+            if ReadFile(
+                bitmap_handle,
+                Some(&mut buffer),
+                Some(&mut bytes_read),
+                None,
+            )
+            .is_err()
+            {
+                return Ok(MftBitmap::new_all_valid(
+                    self.estimated_record_count() as usize
+                ));
+            }
+        }
+
+        buffer.truncate(bytes_read as usize);
+        Ok(MftBitmap::from_bytes(buffer))
+    }
+}
+
+// ============================================================================
+// Handle Guard (RAII)
+// ============================================================================
+
+/// RAII guard for Windows handles.
+struct HandleGuard(HANDLE);
+
+impl Drop for HandleGuard {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// MFT Extent
+// ============================================================================
+
+/// Represents a contiguous extent of the MFT on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MftExtent {
+    /// Virtual Cluster Number (offset within the file).
+    pub vcn: u64,
+    /// Number of clusters in this extent.
+    pub cluster_count: u64,
+    /// Logical Cluster Number (physical location on disk).
+    /// Negative values indicate sparse/unallocated regions.
+    pub lcn: i64,
+}
+
+impl MftExtent {
+    /// Returns the byte offset of this extent on the volume.
+    #[must_use]
+    pub fn byte_offset(&self, bytes_per_cluster: u32) -> u64 {
+        if self.lcn < 0 {
+            0 // Sparse extent
+        } else {
+            self.lcn as u64 * u64::from(bytes_per_cluster)
+        }
+    }
+
+    /// Returns the size of this extent in bytes.
+    #[must_use]
+    pub fn byte_size(&self, bytes_per_cluster: u32) -> u64 {
+        self.cluster_count * u64::from(bytes_per_cluster)
+    }
+}
+
+/// Retrieves the extent map for a file using `FSCTL_GET_RETRIEVAL_POINTERS`.
+fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
+    use windows::Win32::System::IO::DeviceIoControl;
+
+    let mut extents = Vec::new();
+    let mut starting_vcn = STARTING_VCN_INPUT_BUFFER {
+        StartingVcn: windows::Win32::Foundation::LARGE_INTEGER { QuadPart: 0 },
+    };
+
+    // Initial buffer size - will grow if needed
+    let mut buffer_size = 64 * 1024; // 64KB initial
+    let mut buffer: Vec<u8> = vec![0; buffer_size];
+
+    loop {
+        let mut bytes_returned: u32 = 0;
+
+        let result = unsafe {
+            DeviceIoControl(
+                handle,
+                FSCTL_GET_RETRIEVAL_POINTERS,
+                Some(core::ptr::from_ref(&starting_vcn).cast()),
+                core::mem::size_of::<STARTING_VCN_INPUT_BUFFER>() as u32,
+                Some(buffer.as_mut_ptr().cast()),
+                buffer_size as u32,
+                Some(&mut bytes_returned),
+                None,
+            )
+        };
+
+        match result {
+            Ok(()) => {
+                // Parse the buffer
+                parse_retrieval_pointers(&buffer, bytes_returned as usize, &mut extents);
+                break;
+            }
+            Err(err) => {
+                let error_code = err.code().0 as u32;
+
+                // ERROR_MORE_DATA (234) - buffer too small, need to grow and retry
+                if error_code == 234 {
+                    // Parse what we have so far
+                    parse_retrieval_pointers(&buffer, bytes_returned as usize, &mut extents);
+
+                    // Update starting VCN for next call
+                    if let Some(last) = extents.last() {
+                        starting_vcn.StartingVcn.QuadPart = (last.vcn + last.cluster_count) as i64;
+                    }
+
+                    // Grow buffer
+                    buffer_size *= 2;
+                    buffer.resize(buffer_size, 0);
+                    continue;
+                }
+
+                // ERROR_HANDLE_EOF (38) - no more extents
+                if error_code == 38 {
+                    break;
+                }
+
+                // Other error - return what we have or error
+                if extents.is_empty() {
+                    return Err(MftError::RetrievalPointers(format!(
+                        "FSCTL_GET_RETRIEVAL_POINTERS failed: 0x{:08X}",
+                        error_code
+                    )));
+                }
+                break;
+            }
+        }
+    }
+
+    Ok(extents)
+}
+
+/// Parses the RETRIEVAL_POINTERS_BUFFER structure.
+fn parse_retrieval_pointers(buffer: &[u8], size: usize, extents: &mut Vec<MftExtent>) {
+    if size < core::mem::size_of::<u32>() + core::mem::size_of::<i64>() {
+        return;
+    }
+
+    // RETRIEVAL_POINTERS_BUFFER layout:
+    // - ExtentCount: u32
+    // - StartingVcn: i64
+    // - Extents[]: array of { NextVcn: i64, Lcn: i64 }
+
+    let extent_count = u32::from_le_bytes(buffer[0..4].try_into().unwrap()) as usize;
+    let mut prev_vcn = i64::from_le_bytes(buffer[8..16].try_into().unwrap()) as u64;
+
+    let extent_size = 16; // sizeof(LARGE_INTEGER) * 2
+    let extents_offset = 16; // After ExtentCount (4) + padding (4) + StartingVcn (8)
+
+    for i in 0..extent_count {
+        let offset = extents_offset + i * extent_size;
+        if offset + extent_size > size {
+            break;
+        }
+
+        let next_vcn = i64::from_le_bytes(buffer[offset..offset + 8].try_into().unwrap()) as u64;
+        let lcn = i64::from_le_bytes(buffer[offset + 8..offset + 16].try_into().unwrap());
+
+        let cluster_count = next_vcn.saturating_sub(prev_vcn);
+
+        extents.push(MftExtent {
+            vcn: prev_vcn,
+            cluster_count,
+            lcn,
+        });
+
+        prev_vcn = next_vcn;
+    }
+}
+
+impl Drop for VolumeHandle {
+    fn drop(&mut self) {
+        if !self.handle.is_invalid() {
+            unsafe {
+                let _ = CloseHandle(self.handle);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// MFT Bitmap
+// ============================================================================
+
+/// Bitmap indicating which MFT records are in use.
+///
+/// The `$MFT::$BITMAP` stream contains one bit per MFT record.
+/// If the bit is set (1), the record is in use; if clear (0), it's free.
+#[derive(Debug, Clone)]
+pub struct MftBitmap {
+    /// Raw bitmap data.
+    data: Vec<u8>,
+    /// Number of records this bitmap covers.
+    record_count: usize,
+}
+
+impl MftBitmap {
+    /// Creates a new bitmap from raw bytes.
+    #[must_use]
+    pub fn from_bytes(data: Vec<u8>) -> Self {
+        let record_count = data.len() * 8;
+        Self { data, record_count }
+    }
+
+    /// Creates a bitmap where all records are marked as valid.
+    ///
+    /// Used as a fallback when the actual bitmap cannot be read.
+    #[must_use]
+    pub fn new_all_valid(record_count: usize) -> Self {
+        let byte_count = (record_count + 7) / 8;
+        Self {
+            data: vec![0xFF; byte_count],
+            record_count,
+        }
+    }
+
+    /// Checks if a specific record is in use.
+    ///
+    /// # Arguments
+    ///
+    /// * `frs` - The File Record Segment number to check.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the record is in use, `false` if it's free or out of range.
+    #[must_use]
+    pub fn is_record_in_use(&self, frs: u64) -> bool {
+        let frs = frs as usize;
+        if frs >= self.record_count {
+            return false;
+        }
+
+        let byte_index = frs / 8;
+        let bit_index = frs % 8;
+
+        if byte_index >= self.data.len() {
+            return false;
+        }
+
+        (self.data[byte_index] & (1 << bit_index)) != 0
+    }
+
+    /// Returns the number of records marked as in use.
+    #[must_use]
+    pub fn count_in_use(&self) -> usize {
+        // Use popcount for efficiency
+        self.data
+            .iter()
+            .map(|&byte| byte.count_ones() as usize)
+            .sum()
+    }
+
+    /// Returns the total number of records this bitmap covers.
+    #[must_use]
+    pub fn record_count(&self) -> usize {
+        self.record_count
+    }
+
+    /// Returns the raw bitmap data.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// Returns an iterator over the FRS numbers of records that are in use.
+    pub fn in_use_records(&self) -> impl Iterator<Item = u64> + '_ {
+        self.data.iter().enumerate().flat_map(|(byte_idx, &byte)| {
+            (0..8).filter_map(move |bit_idx| {
+                if (byte & (1 << bit_idx)) != 0 {
+                    Some((byte_idx * 8 + bit_idx) as u64)
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
+    /// Finds the first N records that are in use, starting from a given FRS.
+    ///
+    /// This is useful for batch processing.
+    pub fn find_in_use_range(&self, start_frs: u64, count: usize) -> Vec<u64> {
+        let mut result = Vec::with_capacity(count);
+        let start = start_frs as usize;
+
+        for frs in start..self.record_count {
+            if result.len() >= count {
+                break;
+            }
+
+            let byte_index = frs / 8;
+            let bit_index = frs % 8;
+
+            if byte_index < self.data.len() && (self.data[byte_index] & (1 << bit_index)) != 0 {
+                result.push(frs as u64);
+            }
+        }
+
+        result
+    }
+
+    /// Calculates skip ranges for a cluster-aligned read.
+    ///
+    /// Given a range of FRS numbers that would be read in a single I/O
+    /// operation, this returns how many records at the beginning and end
+    /// can be skipped because they are not in use.
+    ///
+    /// This is the key optimization from the C++ implementation - we can avoid
+    /// reading entire clusters if all records in them are unused.
+    ///
+    /// # Arguments
+    ///
+    /// * `start_frs` - First FRS in the range
+    /// * `end_frs` - Last FRS in the range (exclusive)
+    ///
+    /// # Returns
+    ///
+    /// `(skip_begin, skip_end)` - Number of records to skip at start and end.
+    #[must_use]
+    pub fn calculate_skip_range(&self, start_frs: u64, end_frs: u64) -> (u64, u64) {
+        let start = start_frs as usize;
+        let end = (end_frs as usize).min(self.record_count);
+
+        if start >= end {
+            return (0, 0);
+        }
+
+        // Find first in-use record from the beginning
+        let mut skip_begin = 0u64;
+        for frs in start..end {
+            if self.is_record_in_use(frs as u64) {
+                break;
+            }
+            skip_begin += 1;
+        }
+
+        // If all records are unused, skip the entire range
+        if skip_begin == (end - start) as u64 {
+            return (skip_begin, 0);
+        }
+
+        // Find first in-use record from the end
+        let mut skip_end = 0u64;
+        for frs in (start..end).rev() {
+            if self.is_record_in_use(frs as u64) {
+                break;
+            }
+            skip_end += 1;
+        }
+
+        (skip_begin, skip_end)
+    }
+
+    /// Checks if an entire cluster range has any in-use records.
+    ///
+    /// This is a fast check using byte-level operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `start_frs` - First FRS in the cluster
+    /// * `records_per_cluster` - Number of records per cluster
+    ///
+    /// # Returns
+    ///
+    /// `true` if any record in the cluster is in use.
+    #[must_use]
+    pub fn cluster_has_in_use(&self, start_frs: u64, records_per_cluster: u32) -> bool {
+        let start = start_frs as usize;
+        let end = (start + records_per_cluster as usize).min(self.record_count);
+
+        // Fast path: check whole bytes when aligned
+        let start_byte = start / 8;
+        let end_byte = (end + 7) / 8;
+
+        // Check if any byte in the range has any bits set
+        for byte_idx in start_byte..end_byte.min(self.data.len()) {
+            let byte = self.data[byte_idx];
+
+            // Mask for partial bytes at boundaries
+            let mask = if byte_idx == start_byte && start % 8 != 0 {
+                // Mask out bits before start
+                0xFF << (start % 8)
+            } else if byte_idx == end_byte - 1 && end % 8 != 0 {
+                // Mask out bits after end
+                (1u8 << (end % 8)) - 1
+            } else {
+                0xFF
+            };
+
+            if (byte & mask) != 0 {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Returns ranges of clusters that contain in-use records.
+    ///
+    /// This is the key optimization for skipping entire clusters during I/O.
+    ///
+    /// # Arguments
+    ///
+    /// * `records_per_cluster` - Number of MFT records per cluster
+    ///
+    /// # Returns
+    ///
+    /// Iterator of `(start_cluster, cluster_count)` tuples for ranges with
+    /// in-use records.
+    pub fn in_use_cluster_ranges(
+        &self,
+        records_per_cluster: u32,
+    ) -> impl Iterator<Item = (u64, u64)> + '_ {
+        let total_clusters =
+            (self.record_count + records_per_cluster as usize - 1) / records_per_cluster as usize;
+
+        InUseClusterRangeIterator {
+            bitmap: self,
+            records_per_cluster,
+            current_cluster: 0,
+            total_clusters: total_clusters as u64,
+        }
+    }
+}
+
+/// Iterator over ranges of clusters containing in-use records.
+struct InUseClusterRangeIterator<'a> {
+    bitmap: &'a MftBitmap,
+    records_per_cluster: u32,
+    current_cluster: u64,
+    total_clusters: u64,
+}
+
+impl Iterator for InUseClusterRangeIterator<'_> {
+    type Item = (u64, u64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Skip clusters with no in-use records
+        while self.current_cluster < self.total_clusters {
+            let start_frs = self.current_cluster * u64::from(self.records_per_cluster);
+            if self
+                .bitmap
+                .cluster_has_in_use(start_frs, self.records_per_cluster)
+            {
+                break;
+            }
+            self.current_cluster += 1;
+        }
+
+        if self.current_cluster >= self.total_clusters {
+            return None;
+        }
+
+        // Found a cluster with in-use records, find the end of this range
+        let range_start = self.current_cluster;
+        while self.current_cluster < self.total_clusters {
+            let start_frs = self.current_cluster * u64::from(self.records_per_cluster);
+            if !self
+                .bitmap
+                .cluster_has_in_use(start_frs, self.records_per_cluster)
+            {
+                break;
+            }
+            self.current_cluster += 1;
+        }
+
+        Some((range_start, self.current_cluster - range_start))
+    }
+}
+
+// ============================================================================
+// Privilege Checking
+// ============================================================================
+
+/// Checks if the current process has Administrator privileges.
+///
+/// MFT reading requires Administrator privileges or `SE_BACKUP_PRIVILEGE`.
+#[must_use]
+pub fn is_elevated() -> bool {
+    use windows::Win32::Foundation::BOOL;
+    use windows::Win32::Security::{
+        GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+    };
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    unsafe {
+        let mut token_handle = HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle).is_err() {
+            return false;
+        }
+
+        let mut elevation = TOKEN_ELEVATION::default();
+        let mut return_length = 0_u32;
+
+        let result = GetTokenInformation(
+            token_handle,
+            TokenElevation,
+            Some(core::ptr::from_mut(&mut elevation).cast()),
+            core::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut return_length,
+        );
+
+        let _ = CloseHandle(token_handle);
+
+        result.is_ok() && elevation.TokenIsElevated != 0
+    }
+}
+
+/// Returns the path to the volume root (e.g., "C:\").
+#[must_use]
+pub fn volume_root_path(volume: char) -> PathBuf {
+    PathBuf::from(format!("{}:\\", volume.to_ascii_uppercase()))
+}
+
+/// Detects all available NTFS drives on the system.
+///
+/// This function iterates through all possible drive letters (A-Z) and
+/// checks which ones are valid NTFS volumes that can be read.
+///
+/// # Returns
+///
+/// A vector of drive letters (uppercase) for all available NTFS drives.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use uffs_mft::platform::detect_ntfs_drives;
+///
+/// let drives = detect_ntfs_drives();
+/// println!("Found NTFS drives: {:?}", drives);
+/// // Output: Found NTFS drives: ['C', 'D', 'E']
+/// ```
+#[must_use]
+pub fn detect_ntfs_drives() -> Vec<char> {
+    use windows::Win32::Storage::FileSystem::GetLogicalDrives;
+
+    let mut ntfs_drives = Vec::new();
+
+    // Get bitmask of available drives
+    let drive_mask = unsafe { GetLogicalDrives() };
+
+    if drive_mask == 0 {
+        return ntfs_drives;
+    }
+
+    // Check each drive letter A-Z
+    for i in 0..26_u32 {
+        if (drive_mask & (1 << i)) != 0 {
+            let drive_letter = char::from(b'A' + i as u8);
+
+            // Try to open the volume to check if it's NTFS
+            if is_ntfs_volume(drive_letter) {
+                ntfs_drives.push(drive_letter);
+            }
+        }
+    }
+
+    ntfs_drives
+}
+
+/// Checks if a drive is an NTFS volume.
+///
+/// This attempts to get NTFS volume data from the drive. If successful,
+/// the drive is NTFS formatted.
+fn is_ntfs_volume(drive_letter: char) -> bool {
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+
+    // First check if it's a fixed or removable drive (skip network, CD-ROM, etc.)
+    let path: Vec<u16> = format!("{}:\\", drive_letter.to_ascii_uppercase())
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let drive_type = unsafe { GetDriveTypeW(PCWSTR(path.as_ptr())) };
+
+    // DRIVE_FIXED = 3, DRIVE_REMOVABLE = 2
+    // Skip DRIVE_UNKNOWN (0), DRIVE_NO_ROOT_DIR (1), DRIVE_REMOTE (4), DRIVE_CDROM
+    // (5), DRIVE_RAMDISK (6)
+    if drive_type.0 != 2 && drive_type.0 != 3 {
+        return false;
+    }
+
+    // Try to open the volume and get NTFS data
+    let volume_path: Vec<u16> = format!("\\\\.\\{}:", drive_letter.to_ascii_uppercase())
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(volume_path.as_ptr()),
+            FILE_READ_ATTRIBUTES.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            None,
+        )
+    };
+
+    let Ok(handle) = handle else {
+        return false;
+    };
+
+    // Try to get NTFS volume data
+    use windows::Win32::System::IO::DeviceIoControl;
+
+    let mut buffer = NTFS_VOLUME_DATA_BUFFER::default();
+    let mut bytes_returned: u32 = 0;
+
+    let result = unsafe {
+        DeviceIoControl(
+            handle,
+            FSCTL_GET_NTFS_VOLUME_DATA,
+            None,
+            0,
+            Some(core::ptr::from_mut(&mut buffer).cast()),
+            core::mem::size_of::<NTFS_VOLUME_DATA_BUFFER>() as u32,
+            Some(&mut bytes_returned),
+            None,
+        )
+    };
+
+    let _ = unsafe { CloseHandle(handle) };
+
+    result.is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_volume_root_path() {
+        assert_eq!(volume_root_path('c'), PathBuf::from("C:\\"));
+        assert_eq!(volume_root_path('D'), PathBuf::from("D:\\"));
+    }
+
+    #[test]
+    fn test_is_elevated() {
+        // Just verify it doesn't panic
+        let _ = is_elevated();
+    }
+}

@@ -1,0 +1,14 @@
+SPDX-License-Identifier: LicenseRef-Proprietary
+
+Proprietary License
+
+This software is proprietary and confidential. All rights reserved.
+
+Unauthorized copying, modification, distribution, or use of this software
+is strictly prohibited without explicit written permission from the
+copyright holder.
+
+This license is used for legacy files that have not yet been migrated
+to the dual licensing system (MPL-2.0 OR LicenseRef-TTAPI-Commercial).
+
+For licensing inquiries, contact: skylegal@nios.net

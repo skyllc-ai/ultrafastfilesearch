@@ -16,68 +16,73 @@ use crate::error::{CoreError, Result};
 /// # Errors
 ///
 /// Returns an error if the glob pattern is invalid.
+#[allow(clippy::single_call_fn)] // Intentionally separate for clarity and testability
 pub fn glob_to_regex(pattern: &str) -> Result<String> {
     let mut regex = String::with_capacity(pattern.len() * 2);
     regex.push('^');
 
     let chars: Vec<char> = pattern.chars().collect();
-    let mut i = 0;
+    let mut idx = 0;
 
-    while i < chars.len() {
-        match chars[i] {
-            '*' => {
-                if i + 1 < chars.len() && chars[i + 1] == '*' {
+    while idx < chars.len() {
+        let current_char = chars.get(idx).copied();
+        match current_char {
+            Some('*') => {
+                if idx + 1 < chars.len() && chars.get(idx + 1) == Some(&'*') {
                     // ** matches everything including path separators
                     regex.push_str(".*");
-                    i += 1;
+                    idx += 1;
                 } else {
                     // * matches everything except path separators
                     regex.push_str("[^/\\\\]*");
                 }
             }
-            '?' => {
+            Some('?') => {
                 regex.push_str("[^/\\\\]");
             }
-            '[' => {
+            Some('[') => {
                 // Character class
                 regex.push('[');
-                i += 1;
+                idx += 1;
 
-                if i < chars.len() && chars[i] == '!' {
+                if idx < chars.len() && chars.get(idx) == Some(&'!') {
                     regex.push('^');
-                    i += 1;
+                    idx += 1;
                 }
 
-                while i < chars.len() && chars[i] != ']' {
-                    if chars[i] == '\\' && i + 1 < chars.len() {
+                while idx < chars.len() && chars.get(idx) != Some(&']') {
+                    if chars.get(idx) == Some(&'\\') && idx + 1 < chars.len() {
                         regex.push('\\');
-                        i += 1;
-                        regex.push(chars[i]);
-                    } else {
-                        regex.push(chars[i]);
+                        idx += 1;
+                        if let Some(&ch) = chars.get(idx) {
+                            regex.push(ch);
+                        }
+                    } else if let Some(&ch) = chars.get(idx) {
+                        regex.push(ch);
                     }
-                    i += 1;
+                    idx += 1;
                 }
 
-                if i >= chars.len() {
+                if idx >= chars.len() {
                     return Err(CoreError::InvalidGlob {
-                        pattern: pattern.to_string(),
-                        reason: "Unclosed character class".to_string(),
+                        pattern: pattern.to_owned(),
+                        reason: "Unclosed character class".to_owned(),
                     });
                 }
 
                 regex.push(']');
             }
-            '.' | '+' | '^' | '$' | '(' | ')' | '{' | '}' | '|' | '\\' => {
+            Some(ch @ ('.' | '+' | '^' | '$' | '(' | ')' | '{' | '}' | '|' | '\\')) => {
                 // Escape regex metacharacters
                 regex.push('\\');
-                regex.push(chars[i]);
+                regex.push(ch);
             }
-            c => {
-                regex.push(c);
+            Some(ch) => {
+                regex.push(ch);
             }
+            None => break,
         }
-        i += 1;
+        idx += 1;
     }
 
     regex.push('$');
@@ -88,34 +93,41 @@ pub fn glob_to_regex(pattern: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    type TestResult = core::result::Result<(), Box<dyn core::error::Error>>;
+
     #[test]
-    fn test_simple_extension() {
-        let regex = glob_to_regex("*.rs").unwrap();
+    fn test_simple_extension() -> TestResult {
+        let regex = glob_to_regex("*.rs")?;
         assert_eq!(regex, "^[^/\\\\]*\\.rs$");
+        Ok(())
     }
 
     #[test]
-    fn test_double_star() {
-        let regex = glob_to_regex("**/*.rs").unwrap();
+    fn test_double_star() -> TestResult {
+        let regex = glob_to_regex("**/*.rs")?;
         assert_eq!(regex, "^.*/[^/\\\\]*\\.rs$");
+        Ok(())
     }
 
     #[test]
-    fn test_question_mark() {
-        let regex = glob_to_regex("file?.txt").unwrap();
+    fn test_question_mark() -> TestResult {
+        let regex = glob_to_regex("file?.txt")?;
         assert_eq!(regex, "^file[^/\\\\]\\.txt$");
+        Ok(())
     }
 
     #[test]
-    fn test_character_class() {
-        let regex = glob_to_regex("[abc].txt").unwrap();
+    fn test_character_class() -> TestResult {
+        let regex = glob_to_regex("[abc].txt")?;
         assert_eq!(regex, "^[abc]\\.txt$");
+        Ok(())
     }
 
     #[test]
-    fn test_negated_class() {
-        let regex = glob_to_regex("[!abc].txt").unwrap();
+    fn test_negated_class() -> TestResult {
+        let regex = glob_to_regex("[!abc].txt")?;
         assert_eq!(regex, "^[^abc]\\.txt$");
+        Ok(())
     }
 
     #[test]
@@ -124,4 +136,3 @@ mod tests {
         assert!(result.is_err());
     }
 }
-

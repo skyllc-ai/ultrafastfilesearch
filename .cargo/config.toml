@@ -1,0 +1,75 @@
+# =============================================================================
+# Cargo Configuration - All Platforms (macOS ARM/Intel, Windows, Linux)
+# =============================================================================
+#
+# WINDOWS DROPBOX USERS: Set environment variable to avoid file locking:
+#   set CARGO_TARGET_DIR=C:\rust-target\uffs
+#
+# PREREQUISITES:
+#   cargo install sccache
+#
+# =============================================================================
+
+[build]
+# Target directory - use /tmp for macOS (fast SSD, avoids iCloud sync)
+# Windows users: set CARGO_TARGET_DIR=C:\rust-target\uffs environment variable
+target-dir = "/tmp/rust-target/uffs"
+
+# sccache for compilation caching (significant speedup on rebuilds)
+rustc-wrapper = "sccache"
+
+[net]
+retry = 3
+git-fetch-with-cli = true
+
+# =============================================================================
+# macOS Apple Silicon (M1/M2/M3/M4)
+# =============================================================================
+[target.aarch64-apple-darwin]
+linker = "clang"
+rustflags = [
+    "-C", "target-cpu=native",
+    "-C", "link-arg=-Wl,-dead_strip",
+]
+
+# =============================================================================
+# macOS Intel
+# =============================================================================
+[target.x86_64-apple-darwin]
+linker = "clang"
+rustflags = [
+    "-C", "target-cpu=native",
+    "-C", "link-arg=-Wl,-dead_strip",
+]
+
+# =============================================================================
+# Windows x86_64 MSVC
+# =============================================================================
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+rustflags = [
+    "-C", "target-cpu=native",
+    "-C", "link-arg=/OPT:REF",
+    "-C", "link-arg=/OPT:ICF",
+]
+
+# =============================================================================
+# Linux x86_64
+# =============================================================================
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = [
+    "-C", "target-cpu=native",
+    "-C", "link-arg=-Wl,--gc-sections",
+]
+
+# =============================================================================
+# Terminal
+# =============================================================================
+[term]
+verbose = false
+color = "auto"
+
+# =============================================================================
+# Profiles - defined in Cargo.toml (do not duplicate here)
+# =============================================================================

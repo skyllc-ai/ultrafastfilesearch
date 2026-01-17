@@ -1,52 +1,71 @@
-# ============================================================================
-# UltraFastFileSearch-Rust Workspace
-# ============================================================================
-# A high-performance file search tool using direct MFT reading and Polars
-# for data processing.
-# ============================================================================
+# =============================================================================
+# Cargo.toml - UFFS (Ultra Fast File Search) Workspace
+# =============================================================================
+#
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025-2026 Robert Nio
+#
+# UFFS - Ultra Fast File Search
+# Ultra-high-performance file search using direct MFT reading and Polars
+# DataFrames for blazing-fast queries.
+# Contact: 50460704+githubrobbi@users.noreply.github.com for licensing inquiries
+#
+# Last Updated: January 2026 - Rust 1.85+ / Edition 2024
+# =============================================================================
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Workspace Configuration
+# ─────────────────────────────────────────────────────────────────────────────
 [workspace]
 resolver = "2"
 members = [
-    "crates/uffs-polars",   # Polars facade (compilation isolation)
-    "crates/uffs-mft",      # MFT reading → Polars DataFrame
-    "crates/uffs-core",     # Query engine using Polars lazy API
-    "crates/uffs-cli",      # Command-line interface
-    "crates/uffs-tui",      # Terminal UI
-    "crates/uffs-gui",      # Graphical UI (future)
+    "crates/uffs-polars",   # 🚀 Polars facade (compilation isolation)
+    "crates/uffs-mft",      # 📦 MFT reading → Polars DataFrame
+    "crates/uffs-core",     # 🎯 Query engine using Polars lazy API
+    "crates/uffs-cli",      # 🖥️  Command-line interface
+    "crates/uffs-tui",      # 📟 Terminal UI
+    "crates/uffs-gui",      # 🪟 Graphical UI (future)
+    "crates/uffs-legacy",   # 📜 Legacy code (reference only)
 ]
 
-# ============================================================================
+# ─────────────────────────────────────────────────────────────────────────────
 # Workspace Package Metadata (inherited by all crates)
-# ============================================================================
+# ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/githubrobbi/UltraFastFileSearch-Rust"
+license = "MPL-2.0 OR LicenseRef-UFFS-Commercial"
+repository = "https://github.com/githubrobbi/UltraFastFileSearch"
 authors = ["Robert Nio <50460704+githubrobbi@users.noreply.github.com>"]
+description = "UFFS - Ultra Fast File Search using direct NTFS MFT reading and Polars DataFrames"
+documentation = "https://docs.rs/uffs"
+readme = "README.md"
 keywords = ["mft", "ntfs", "file-search", "windows", "polars"]
 categories = ["filesystem", "command-line-utilities"]
 
-# ============================================================================
-# Workspace Dependencies (shared across all crates)
-# ============================================================================
+# ─────────────────────────────────────────────────────────────────────────────
+# Workspace Dependencies (shared versions & pins)
+# ─────────────────────────────────────────────────────────────────────────────
 [workspace.dependencies]
-# ----- Internal Crates -----
+# ───── Internal Crates ─────
 uffs-polars = { path = "crates/uffs-polars" }
 uffs-mft = { path = "crates/uffs-mft" }
 uffs-core = { path = "crates/uffs-core" }
+uffs-cli = { path = "crates/uffs-cli" }
+uffs-tui = { path = "crates/uffs-tui" }
 
-# ----- Polars (via facade crate) -----
-polars = { version = "0.46", default-features = false }
+# ───── Polars (via facade crate for compilation isolation) ─────
+# NOTE: Polars is pulled from git main branch in uffs-polars crate
+# CI step 'update_polars_git' pins the lockfile to latest main HEAD
+# polars = { git = "https://github.com/pola-rs/polars", branch = "main", default-features = false }
 
-# ----- Async Runtime -----
-tokio = { version = "1.43", features = ["full"] }
-futures = "0.3"
+# ───── Async Runtime ─────
+tokio = { version = "1.49.0", features = ["full", "macros", "rt-multi-thread", "time", "tracing"] }
+futures = "0.3.31"
 
-# ----- Windows APIs (Windows only) -----
-windows = { version = "0.58", features = [
+# ───── Windows APIs (Windows only) ─────
+windows = { version = "0.62.2", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Ioctl",
     "Win32_Storage",
@@ -54,42 +73,296 @@ windows = { version = "0.58", features = [
     "Win32_System_Com",
     "Win32_System_Wmi",
 ] }
-windows-core = "0.58"
+windows-core = "0.62.2"
+wmi = "0.18.0"
 
-# ----- Data Structures -----
-bitflags = "2.6"
-bitvec = "1.0"
+# ───── Data Structures ─────
+bitflags = "2.10.0"
+bitvec = "1.0.1"
+smallvec = "1.15.1"
 
-# ----- Serialization -----
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# ───── Serialization ─────
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
 
-# ----- CLI -----
-clap = { version = "4.5", features = ["derive", "env", "unicode", "wrap_help"] }
-indicatif = "0.17"
+# ───── CLI ─────
+clap = { version = "4.5.54", features = ["derive", "env", "unicode", "wrap_help"] }
+indicatif = "0.18.3"
+console = "0.16.2"
+dialoguer = "0.12.0"
 
-# ----- TUI -----
-ratatui = "0.29"
-crossterm = "0.28"
+# ───── TUI ─────
+ratatui = "0.30.0"
+crossterm = "0.29.0"
 
-# ----- Error Handling -----
-thiserror = "2.0"
-anyhow = "1.0"
-miette = { version = "7.4", features = ["fancy"] }
+# ───── Error Handling ─────
+thiserror = "2.0.17"
+anyhow = "1.0.100"
+miette = { version = "7.6.0", features = ["fancy"] }
 
-# ----- Logging -----
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["time", "env-filter"] }
+# ───── Logging & Tracing ─────
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["fmt", "time", "env-filter"] }
+tracing-appender = "0.2.4"
+log = "0.4.29"
+simplelog = "0.12.2"
 
-# ----- Time -----
-chrono = "0.4"
+# ───── Time ─────
+# Note: chrono version constrained by Polars git dependency (requires <= 0.4.41)
+chrono = { version = "0.4.41", features = ["serde"] }
+time = { version = "0.3.45", features = ["macros", "formatting"] }
 
-# ----- Testing -----
-criterion = "0.5"
+# ───── Configuration ─────
+toml = "0.9.8"
+dirs-next = "2.0.0"
 
-# ============================================================================
-# Workspace Profiles
-# ============================================================================
+# ───── Testing & Benchmarking ─────
+criterion = "0.8.1"
+divan = "0.1.21"
+proptest = "1.9.0"
+tempfile = "3.24.0"
+
+# ───── Utilities ─────
+glob = "0.3.3"
+regex = "1.12.2"
+walkdir = "2.5.0"
+memmap2 = "0.9.9"
+parking_lot = "0.12.5"
+rayon = "1.11.0"
+num_cpus = "1.17.0"
+once_cell = "1.21.3"
+colored = "3.1.1"
+ignore = "0.4.25"
+jwalk = "0.8.1"
+sysinfo = "0.37.2"
+num-format = "0.4.4"
+async-recursion = "1.1.1"
+async-trait = "0.1.89"
+rand = "0.9"
+tokio-stream = "0.1.18"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WORKSPACE-WIDE SUPER STRICT LINTING CONFIGURATION (2026 CUTTING-EDGE STANDARDS)
+# ═══════════════════════════════════════════════════════════════════════════════
+# All crates inherit these STRICTEST possible clippy settings for maximum code quality
+# This ensures consistent, high-quality standards across the entire workspace
+# Updated: January 2026 - Rust 1.85+ / Edition 2024
+
+[workspace.lints.clippy]
+# ───── Core lint groups (strictest levels) ─────
+cargo = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+
+# ───── DENY level lints (strictest possible - no exceptions) ─────
+wildcard_imports = "deny"
+unwrap_used = "deny"                    # Force proper error handling
+expect_used = "deny"                    # Force proper error handling
+panic = "deny"                          # No panics allowed
+todo = "deny"                           # No TODOs in production code
+unimplemented = "deny"                  # No unimplemented code
+unreachable = "deny"                    # No unreachable code
+missing_docs_in_private_items = "deny"  # Document everything
+undocumented_unsafe_blocks = "deny"     # Document all unsafe (if any)
+multiple_unsafe_ops_per_block = "deny"  # Limit unsafe operations
+unnecessary_safety_doc = "deny"         # Accurate safety docs
+unnecessary_safety_comment = "deny"     # Accurate safety comments
+
+# ───── WARN level lints (very strict but not blocking) ─────
+missing_errors_doc = "warn"             # Document error conditions
+missing_panics_doc = "warn"             # Document panic conditions
+missing_safety_doc = "warn"             # Document safety requirements
+cognitive_complexity = "warn"           # Keep functions simple
+too_many_lines = "warn"                 # Keep functions short
+type_complexity = "warn"                # Keep types simple
+large_enum_variant = "warn"             # Optimize enum memory usage
+large_stack_arrays = "warn"             # Avoid large stack allocations
+large_types_passed_by_value = "warn"    # Pass large types by reference
+trivially_copy_pass_by_ref = "warn"     # Pass small types by value
+clone_on_ref_ptr = "warn"               # Avoid unnecessary clones
+redundant_clone = "warn"                # Remove redundant clones
+unnecessary_wraps = "warn"              # Remove unnecessary Result/Option wraps
+option_option = "warn"                  # Avoid Option<Option<T>>
+result_unit_err = "warn"                # Use better error types
+bool_to_int_with_if = "warn"            # Use more idiomatic conversions
+cast_lossless = "warn"                  # Use lossless casts
+cast_possible_truncation = "warn"       # Warn about truncating casts
+cast_possible_wrap = "warn"             # Warn about wrapping casts
+cast_precision_loss = "warn"            # Warn about precision loss
+cast_sign_loss = "warn"                 # Warn about sign loss
+float_cmp = "warn"                      # Proper float comparisons
+float_cmp_const = "warn"                # Proper float constant comparisons
+lossy_float_literal = "warn"            # Avoid lossy float literals
+imprecise_flops = "warn"                # Precise floating point operations
+suboptimal_flops = "warn"               # Optimal floating point operations
+fn_params_excessive_bools = "warn"      # Avoid too many boolean parameters
+struct_excessive_bools = "warn"         # Avoid too many boolean fields
+verbose_bit_mask = "warn"               # Use cleaner bit operations
+inefficient_to_string = "warn"          # Use efficient string conversions
+string_add = "warn"                     # Use format! instead of string addition
+string_add_assign = "warn"              # Use format! instead of +=
+string_slice = "warn"                   # Use proper string slicing
+str_to_string = "warn"                  # Use to_owned() instead of to_string()
+implicit_clone = "warn"                 # Make clones explicit
+cloned_instead_of_copied = "warn"       # Use copy when possible
+map_clone = "warn"                      # Use copied() instead of map(clone)
+filter_map_next = "warn"                # Use find_map instead
+flat_map_option = "warn"                # Use filter_map instead
+manual_filter_map = "warn"              # Use filter_map
+manual_find_map = "warn"                # Use find_map
+map_unwrap_or = "warn"                  # Use map_or instead
+unnecessary_unwrap = "warn"             # Remove unnecessary unwraps
+or_fun_call = "warn"                    # Use or_else for expensive operations
+single_match_else = "warn"              # Use if let instead of match
+match_bool = "warn"                     # Use if instead of match on bool
+indexing_slicing = "warn"               # Avoid indexing and slicing on Vec
+match_same_arms = "warn"                # Combine identical match arms
+redundant_pattern_matching = "warn"     # Simplify pattern matching
+single_match = "warn"                   # Use if let instead of single match
+wildcard_enum_match_arm = "warn"        # Handle all enum variants explicitly
+enum_glob_use = "warn"                  # Avoid glob imports of enums
+use_self = "warn"                       # Use Self instead of type name
+needless_pass_by_value = "warn"         # Pass by reference when appropriate
+trivial_regex = "warn"                  # Use string methods instead of regex
+naive_bytecount = "warn"               # Use bytecount crate for counting
+manual_memcpy = "warn"                  # Use copy_from_slice
+manual_swap = "warn"                    # Use mem::swap
+ptr_as_ptr = "warn"                     # Use cast() instead of as
+ptr_cast_constness = "warn"             # Proper const pointer casts
+ref_as_ptr = "warn"                     # Proper reference to pointer conversion
+borrow_as_ptr = "warn"                  # Proper borrow to pointer conversion
+case_sensitive_file_extension_comparisons = "warn"  # Case-insensitive file extensions
+path_buf_push_overwrite = "warn"        # Avoid PathBuf overwrite bugs
+same_name_method = "warn"               # Avoid method name conflicts
+shadow_reuse = "warn"                   # Avoid variable shadowing
+shadow_same = "warn"                    # Avoid identical variable shadowing
+shadow_unrelated = "warn"               # Avoid unrelated variable shadowing
+similar_names = "warn"                  # Avoid confusingly similar names
+suspicious_else_formatting = "warn"     # Proper else formatting
+suspicious_unary_op_formatting = "warn" # Proper unary operator formatting
+tabs_in_doc_comments = "warn"           # Use spaces in doc comments
+trailing_empty_array = "warn"           # Remove trailing empty arrays
+unicode_not_nfc = "warn"                # Use NFC Unicode normalization
+unseparated_literal_suffix = "warn"     # Separate literal suffixes
+unused_self = "warn"                    # Remove unused self parameters
+used_underscore_binding = "warn"        # Don't use underscore bindings
+useless_let_if_seq = "warn"             # Simplify let-if sequences
+zero_sized_map_values = "warn"          # Avoid zero-sized map values
+
+# ───── Additional 2026 cutting-edge lints ─────
+assigning_clones = "warn"               # Use clone_from instead of clone + assign
+collection_is_never_read = "warn"       # Detect unused collections
+debug_assert_with_mut_call = "warn"     # Avoid side effects in debug_assert
+default_numeric_fallback = "warn"       # Explicit numeric types
+empty_drop = "warn"                     # Remove empty Drop implementations
+empty_structs_with_brackets = "warn"    # Use unit struct syntax
+equatable_if_let = "warn"               # Use == instead of if let for equality
+error_impl_error = "warn"               # Proper Error trait implementations
+exit = "deny"                           # No std::process::exit
+filetype_is_file = "warn"               # Use is_file() properly
+float_arithmetic = "warn"               # Be careful with float arithmetic
+format_push_string = "warn"             # Use write! instead of format! + push
+get_unwrap = "deny"                     # Use get().ok_or() instead
+if_then_some_else_none = "warn"         # Use bool::then instead
+impl_trait_in_params = "warn"           # Prefer generics over impl Trait in params
+infinite_loop = "warn"                  # Detect infinite loops
+iter_on_empty_collections = "warn"      # Avoid iterating empty collections
+iter_on_single_items = "warn"           # Use std::iter::once instead
+iter_over_hash_type = "warn"            # Non-deterministic iteration order
+let_underscore_must_use = "warn"        # Don't ignore must_use values
+let_underscore_untyped = "warn"         # Type underscore bindings
+manual_assert = "warn"                  # Use assert! macro
+manual_instant_elapsed = "warn"         # Use Instant::elapsed()
+manual_is_ascii_check = "warn"          # Use is_ascii methods
+manual_let_else = "warn"                # Use let-else syntax
+manual_ok_or = "warn"                   # Use ok_or instead of match
+manual_string_new = "warn"              # Use String::new()
+map_err_ignore = "warn"                 # Don't ignore map_err values
+mem_forget = "deny"                     # Avoid mem::forget
+min_ident_chars = "warn"                # Minimum identifier length
+missing_assert_message = "warn"         # Add messages to assertions
+missing_asserts_for_indexing = "warn"   # Assert before indexing
+mixed_read_write_in_expression = "warn" # Avoid read+write in same expression
+mutex_atomic = "warn"                   # Use atomics instead of mutex for simple types
+needless_collect = "warn"               # Avoid unnecessary collect()
+needless_for_each = "warn"              # Use for loop instead of for_each
+needless_raw_string_hashes = "warn"     # Minimize raw string hashes
+needless_raw_strings = "warn"           # Avoid unnecessary raw strings
+no_effect_underscore_binding = "warn"   # Remove no-effect underscore bindings
+nonstandard_macro_braces = "warn"       # Consistent macro brace style
+option_if_let_else = "warn"             # Use map_or_else instead
+partial_pub_fields = "warn"             # Consistent field visibility
+print_stderr = "warn"                   # Use proper logging instead
+print_stdout = "warn"                   # Use proper logging instead
+pub_without_shorthand = "warn"          # Use pub(crate) shorthand
+rc_buffer = "warn"                      # Avoid Rc<String> or Rc<Vec>
+rc_mutex = "warn"                       # Avoid Rc<Mutex<T>>
+read_zero_byte_vec = "warn"             # Avoid reading into zero-capacity vec
+redundant_type_annotations = "warn"     # Remove redundant type annotations
+ref_patterns = "warn"                   # Avoid ref patterns
+rest_pat_in_fully_bound_structs = "warn" # Avoid .. in fully bound structs
+same_functions_in_if_condition = "warn" # Avoid duplicate function calls
+semicolon_inside_block = "warn"         # Consistent semicolon placement
+semicolon_outside_block = "warn"        # Consistent semicolon placement
+significant_drop_in_scrutinee = "warn"  # Avoid drops in match scrutinee
+significant_drop_tightening = "warn"    # Tighten significant drop scope
+single_call_fn = "warn"                 # Inline single-call functions
+stable_sort_primitive = "warn"          # Use unstable_sort for primitives
+std_instead_of_alloc = "warn"           # Use alloc when std not needed
+std_instead_of_core = "warn"            # Use core when std not needed
+string_lit_chars_any = "warn"           # Use contains instead of chars().any()
+# string_to_string removed - superseded by implicit_clone (already enabled)
+suspicious_xor_used_as_pow = "warn"     # Detect ^ used as power
+tests_outside_test_module = "warn"      # Keep tests in test modules
+try_err = "warn"                        # Use ? instead of try!
+unneeded_field_pattern = "warn"         # Remove unneeded field patterns
+unnecessary_self_imports = "warn"       # Remove unnecessary self imports
+unnecessary_struct_initialization = "warn" # Simplify struct initialization
+unreadable_literal = "warn"             # Use underscores in large literals
+unused_async = "warn"                   # Remove unused async
+unused_peekable = "warn"                # Remove unused peekable
+unused_rounding = "warn"                # Remove unused rounding
+use_debug = "warn"                      # Avoid Debug in production
+verbose_file_reads = "warn"             # Use fs::read_to_string
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Professional Platform Exceptions (Rust Master Approach)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Multiple crate versions: Keep as ALLOW for necessary functionality
+# Rationale: External deps (polars, tokio ecosystem) bring version conflicts
+# We ACKNOWLEDGE this situation as necessary for professional platform
+multiple_crate_versions = "allow"
+
+[workspace.lints.rust]
+# ───── Rust compiler lints (strictest possible) ─────
+unsafe_code = "deny"                    # No unsafe code without explicit allow
+missing_docs = "warn"                   # Warn on missing public docs
+rust_2024_compatibility = { level = "warn", priority = -1 }  # Ensure 2024 edition compatibility
+# ───── Future-proofing lints ─────
+future_incompatible = { level = "deny", priority = -1 }  # Catch future breaking changes
+nonstandard_style = { level = "warn", priority = -1 }    # Consistent naming conventions
+# ───── Additional safety lints ─────
+unsafe_op_in_unsafe_fn = "deny"         # Require unsafe blocks inside unsafe fn
+unused_crate_dependencies = "warn"      # Detect unused dependencies
+unused_import_braces = "warn"           # Clean import style
+unused_lifetimes = "warn"               # Remove unnecessary lifetimes
+unused_macro_rules = "warn"             # Remove unused macro rules
+unused_qualifications = "warn"          # Remove unnecessary path qualifications
+variant_size_differences = "warn"       # Warn about enum variant size differences
+
+[workspace.lints.rustdoc]
+# ───── Documentation quality lints ─────
+broken_intra_doc_links = "deny"         # No broken doc links
+private_intra_doc_links = "warn"        # Warn about private doc links
+missing_crate_level_docs = "warn"       # Require crate-level documentation
+invalid_codeblock_attributes = "warn"   # Valid code block attributes
+invalid_html_tags = "warn"              # Valid HTML in docs
+invalid_rust_codeblocks = "warn"        # Valid Rust in doc code blocks
+bare_urls = "warn"                      # Use proper markdown links
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cargo Profiles
+# ─────────────────────────────────────────────────────────────────────────────
 [profile.dev]
 opt-level = 0
 debug = true
@@ -98,6 +371,13 @@ overflow-checks = true
 incremental = true
 codegen-units = 256
 
+[profile.debug-optimized]
+inherits = "dev"
+opt-level = 2
+debug = true
+debug-assertions = true
+overflow-checks = true
+
 [profile.release]
 opt-level = 3
 debug = false
@@ -105,18 +385,65 @@ debug-assertions = false
 overflow-checks = false
 incremental = false
 codegen-units = 1
-lto = true
+lto = "fat"
 panic = "abort"
 strip = "symbols"
 
+[profile.profiling]
+inherits = "release"
+debug = true                            # Enable debug symbols for flamegraph
+strip = false                           # Don't strip symbols (needed for profiling)
+
+[profile.bench]
+inherits = "release"
+codegen-units = 1
+debug = false
+debug-assertions = false
+incremental = false
+lto = "thin"
+opt-level = 3
+overflow-checks = false
+strip = "debuginfo"
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[profile.test]
+inherits = "dev"
+
 [profile.dev.package.polars]
-opt-level = 2  # Optimize Polars even in dev for usable performance
+opt-level = 2                           # Optimize Polars even in dev for usable performance
 
 [profile.dev.package."*"]
 opt-level = 0
 
-[profile.bench]
-inherits = "release"
-lto = "thin"
-strip = "debuginfo"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Workspace Metadata
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Workspace-level release-plz configuration
+[workspace.metadata.release-plz]
+git_release_enable = true
+git_tag_enable = true
+changelog_update = true
+dependencies_update = true
+allow_dirty = false
+publish = true
+git_release_draft = false
+
+# Workspace-level cargo-dist configuration
+[workspace.metadata.dist]
+cargo-dist-version = "0.30.0"
+ci = ["github"]
+installers = ["shell", "powershell"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc"
+]
+pr-run-mode = "plan"
+allow-dirty = ["ci"]

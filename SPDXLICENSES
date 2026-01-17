@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025 SKY, LLC.
+
+# SPDX License Identifier Map
+# This file maps custom license identifiers to their full license files
+# for tools like reuse, cargo-license, and other SPDX scanners.
+
+LicenseRef-Proprietary		LICENSES/LicenseRef-Proprietary.txt
+LicenseRef-SKY-Proprietary	LICENSES/LicenseRef-SKY-Proprietary.txt
+LicenseRef-TTAPI-Commercial	LICENSES/LicenseRef-TTAPI-Commercial.txt

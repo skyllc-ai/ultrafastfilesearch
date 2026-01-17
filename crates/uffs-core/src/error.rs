@@ -3,18 +3,37 @@
 use thiserror::Error;
 
 /// Result type for core operations.
-pub type Result<T> = std::result::Result<T, CoreError>;
+pub type Result<T> = core::result::Result<T, CoreError>;
 
 /// Errors that can occur during query operations.
 #[derive(Error, Debug)]
 pub enum CoreError {
     /// Invalid glob pattern.
     #[error("Invalid glob pattern '{pattern}': {reason}")]
-    InvalidGlob { pattern: String, reason: String },
+    InvalidGlob {
+        /// The invalid glob pattern.
+        pattern: String,
+        /// The reason the pattern is invalid.
+        reason: String,
+    },
 
     /// Invalid regex pattern.
     #[error("Invalid regex pattern '{pattern}': {reason}")]
-    InvalidRegex { pattern: String, reason: String },
+    InvalidRegex {
+        /// The invalid regex pattern.
+        pattern: String,
+        /// The reason the pattern is invalid.
+        reason: String,
+    },
+
+    /// Invalid search pattern.
+    #[error("Invalid pattern '{pattern}': {reason}")]
+    InvalidPattern {
+        /// The invalid pattern.
+        pattern: String,
+        /// The reason the pattern is invalid.
+        reason: String,
+    },
 
     /// Path resolution failed.
     #[error("Failed to resolve path for FRS {0}")]
@@ -44,4 +63,3 @@ pub enum CoreError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 }
-

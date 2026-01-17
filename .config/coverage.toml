@@ -1,0 +1,58 @@
+# =============================================================================
+# .config/coverage.toml
+# =============================================================================
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2025-2026 Robert Nio
+#
+# UFFS - Ultra Fast File Search
+#
+
+# LLVM Coverage Configuration for UFFS
+# Addresses "functions have mismatched data" warnings
+
+[coverage]
+# Exclude problematic patterns that cause mismatched data warnings
+exclude-from-report = [
+    "target/*",
+    "*/target/*", 
+    "build.rs",
+    "*/build.rs",
+    "tests/mocks/*",
+    "benches/*"
+]
+
+# Ignore filename patterns that cause issues
+ignore-filename-regex = [
+    "target/.*",
+    ".*/target/.*",
+    ".*build\\.rs$"
+]
+
+# Function-level exclusions for generated code
+exclude-functions = [
+    # Exclude test helper functions that cause mismatched data
+    ".*::test_.*_helper",
+    ".*::mock_.*",
+    ".*::setup_.*",
+    ".*::teardown_.*"
+]
+
+# Workspace-specific settings
+[workspace]
+# Ensure consistent feature flags across coverage builds
+default-features = true
+all-features = true
+
+# Compilation settings to reduce mismatched data
+[compilation]
+# Use consistent compilation flags
+rustflags = [
+    "-C", "instrument-coverage",
+    "-C", "debug-assertions=on"
+]
+
+# Environment variables for consistent builds
+[environment]
+CARGO_INCREMENTAL = "0"
+RUSTFLAGS = "-C instrument-coverage -C debug-assertions=on"
