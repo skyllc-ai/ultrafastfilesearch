@@ -105,11 +105,8 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Compiler & edition clean-ups (enhanced scope)
-        run: cargo fix --workspace --all-targets --edition-idioms --allow-dirty --broken-code
-
-      - name: Apply every machine-safe Clippy suggestion (proven workflow)
-        run: cargo clippy --fix --workspace --allow-dirty --allow-staged -- -D warnings -D clippy::pedantic -D clippy::nursery -D clippy::cargo -A clippy::multiple_crate_versions
+      # NOTE: We don't run `cargo fix` or `cargo clippy --fix` in CI.
+      # CI should only CHECK code, not modify it. Fixes are done locally.
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -152,7 +149,10 @@ jobs:
       - name: Quick compilation check (no linking)
         run: |
           echo "🔍 Quick sanity check - cargo check only..."
-          cargo check --workspace --all-features --all-targets
+          # NOTE: We don't use --all-features because some features are Windows-only.
+          # The Windows-specific code is gated with #[cfg(windows)] and won't compile on Linux.
+          # We check the workspace without platform-specific features.
+          cargo check --workspace --all-targets
           echo "✅ Sanity check passed - no catastrophic compilation failures"
 
   # ═══════════════════════════════════════════════════════════════════════════

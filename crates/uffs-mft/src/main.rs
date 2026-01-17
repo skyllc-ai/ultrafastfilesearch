@@ -102,10 +102,10 @@ async fn main() -> Result<()> {
     };
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    // Check platform
+    // Platform check - this tool only works on Windows
     #[cfg(not(windows))]
     {
-        bail!(
+        anyhow::bail!(
             "uffs_mft only works on Windows.\n\
              It requires direct access to the NTFS Master File Table via Windows APIs."
         );
