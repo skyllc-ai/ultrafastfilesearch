@@ -9,6 +9,8 @@ use std::sync::Arc;
 #[cfg(windows)]
 use std::time::Instant;
 
+#[cfg(windows)]
+use tracing::{debug, info, warn};
 use uffs_polars::{DataFrame, ParquetReader, ParquetWriter, SerReader};
 
 use crate::error::{MftError, Result};
@@ -201,12 +203,22 @@ impl MftReader {
     {
         use crate::io::{MftExtentMap, ParallelMftReader};
 
+        info!(volume = %self.volume, "Starting MFT read");
+
         let start_time = Instant::now();
         let record_size = self.handle.file_record_size();
         let volume_data = self.handle.volume_data();
 
+        debug!(
+            record_size,
+            bytes_per_cluster = volume_data.bytes_per_cluster,
+            mft_valid_data_length = volume_data.mft_valid_data_length,
+            "Volume data retrieved"
+        );
+
         // Get MFT extents for fragmented MFT support
-        let extents = self.handle.get_mft_extents().unwrap_or_else(|_| {
+        let extents = self.handle.get_mft_extents().unwrap_or_else(|e| {
+            warn!(error = ?e, "Failed to get MFT extents, using fallback");
             // Fallback to single contiguous extent
             vec![crate::platform::MftExtent {
                 vcn: 0,
@@ -216,13 +228,26 @@ impl MftReader {
             }]
         });
 
+        info!(num_extents = extents.len(), "MFT extents retrieved");
+
         // Create extent map
         let extent_map = MftExtentMap::new(extents, volume_data.bytes_per_cluster, record_size);
 
         let total_records = extent_map.total_records();
+        info!(total_records, "Total MFT records to read");
 
         // Try to get the MFT bitmap for optimization
         let bitmap = self.handle.get_mft_bitmap().ok();
+        if let Some(ref bm) = bitmap {
+            let in_use = bm.count_in_use();
+            info!(
+                in_use_records = in_use,
+                skip_percentage = 100.0 - (in_use as f64 / total_records as f64 * 100.0),
+                "MFT bitmap loaded - will skip unused records"
+            );
+        } else {
+            debug!("No MFT bitmap available - reading all records");
+        }
 
         // Report initial progress
         if let Some(ref cb) = callback {
@@ -239,7 +264,13 @@ impl MftReader {
         let handle = self.handle.raw_handle();
 
         // Read all records in parallel with extension merging for full C++ parity
+        debug!("Starting parallel read with extension merging");
         let parsed_records = parallel_reader.read_all_parallel_with_merge(handle, true)?;
+        info!(
+            records_parsed = parsed_records.len(),
+            elapsed_ms = start_time.elapsed().as_millis(),
+            "Parallel read complete"
+        );
 
         // Report final progress
         if let Some(ref cb) = callback {

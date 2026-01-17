@@ -1,12 +1,39 @@
 //! UFFS (Ultra Fast File Search) CLI
 //!
 //! Fast file search from the command line.
+//!
+//! ## Logging
+//!
+//! Logging is controlled by environment variables:
+//! - `RUST_LOG`: Terminal log level (default: `error`)
+//! - `RUST_LOG_FILE`: File log level (default: `info`)
+//! - `UFFS_LOG_DIR`: Log directory (default: `~/bin/rust`)
+//!
+//! Examples:
+//! ```bash
+//! # Debug mode - verbose terminal output
+//! RUST_LOG=debug uffs search *.txt
+//!
+//! # Trace mode - maximum verbosity
+//! RUST_LOG=trace RUST_LOG_FILE=trace uffs search *.txt
+//! ```
 
+use std::io::stdout;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tracing_subscriber::EnvFilter;
+// Memory allocator optimization for Windows - mimalloc reduces fragmentation
+// and improves allocation performance for large datasets
+#[cfg(target_os = "windows")]
+use mimalloc::MiMalloc;
+use tracing_subscriber::fmt::time::UtcTime;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{EnvFilter, Layer};
+
+#[cfg(target_os = "windows")]
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 mod commands;
 
@@ -286,13 +313,88 @@ enum Commands {
     },
 }
 
+/// Initialize logging with terminal + file support.
+///
+/// Terminal logging is controlled by `RUST_LOG` (default: `error`).
+/// File logging is controlled by `RUST_LOG_FILE` (default: `info`).
+/// Log directory is controlled by `UFFS_LOG_DIR` (default: `~/bin/rust`).
+///
+/// Returns a guard that must be kept alive for the duration of the program.
+///
+/// # Panics
+///
+/// Panics if the global tracing subscriber cannot be set (should only happen
+/// if called more than once).
+// Extracted for clarity and maintainability - logging setup is complex enough
+// to warrant its own function even if only called once.
+#[allow(clippy::single_call_fn)]
+fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
+    use std::fs;
+
+    use tracing_appender::non_blocking::NonBlocking;
+    use tracing_appender::rolling::{RollingFileAppender, Rotation};
+    use tracing_subscriber::registry::Registry;
+
+    // Get log directory (default: ~/bin/rust)
+    let log_dir = std::env::var("UFFS_LOG_DIR").map_or_else(
+        |_| {
+            dirs_next::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("bin")
+                .join("rust")
+        },
+        PathBuf::from,
+    );
+
+    // Create log directory if it doesn't exist (ignore errors - logging will fail
+    // gracefully)
+    drop(fs::create_dir_all(&log_dir));
+
+    // Create rolling file appender (daily rotation)
+    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "uffs_log_");
+    let (non_blocking, guard): (NonBlocking, _) = NonBlocking::new(file_appender);
+
+    // Terminal filter (default: error - minimal output)
+    let terminal_filter =
+        EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(|_| "error".to_owned()));
+
+    // File filter (default: info - more verbose for debugging)
+    let file_filter =
+        EnvFilter::new(std::env::var("RUST_LOG_FILE").unwrap_or_else(|_| "info".to_owned()));
+
+    // Timer format
+    let timer = UtcTime::rfc_3339();
+
+    // Terminal layer (with ANSI colors)
+    let terminal_layer = tracing_subscriber::fmt::layer()
+        .with_writer(stdout)
+        .with_timer(timer.clone())
+        .with_ansi(true)
+        .with_filter(terminal_filter);
+
+    // File layer (no ANSI colors)
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_timer(timer)
+        .with_ansi(false)
+        .with_filter(file_filter);
+
+    // Combine layers
+    let subscriber = Registry::default().with(terminal_layer).with(file_layer);
+
+    // This should only be called once at program startup
+    #[allow(clippy::expect_used)]
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("Failed to set global tracing subscriber - was init_logging called twice?");
+
+    guard
+}
+
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() -> Result<()> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    // Initialize logging with terminal + file support
+    let _guard = init_logging();
 
     let cli = Cli::parse();
 

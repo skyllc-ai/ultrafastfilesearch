@@ -32,7 +32,7 @@ members = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.1.6"
+version = "0.1.8"
 edition = "2024"
 rust-version = "1.85"
 license = "MPL-2.0 OR LicenseRef-UFFS-Commercial"
@@ -124,6 +124,10 @@ criterion = "0.8.1"
 divan = "0.1.21"
 proptest = "1.9.0"
 tempfile = "3.24.0"
+
+# ───── Memory Allocator ─────
+# mimalloc reduces fragmentation and improves allocation performance for large datasets
+mimalloc = "0.1"
 
 # ───── Utilities ─────
 glob = "0.3.3"

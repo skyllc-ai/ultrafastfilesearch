@@ -44,6 +44,12 @@ anyhow.workspace = true
 # Logging
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+dirs-next.workspace = true
+
+# Memory allocator (Windows only - reduces fragmentation)
+[target.'cfg(windows)'.dependencies]
+mimalloc.workspace = true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lints (inherit from workspace)

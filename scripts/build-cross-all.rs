@@ -54,6 +54,18 @@ struct Target {
     requires_linker: Option<&'static str>,
 }
 
+/// Check if dev build mode is enabled via UFFS_DEV_BUILD env var
+fn is_dev_build() -> bool {
+    env::var("UFFS_DEV_BUILD")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Get the build profile name ("debug" or "release")
+fn build_profile() -> &'static str {
+    if is_dev_build() { "debug" } else { "release" }
+}
+
 /// UFFS only runs on Windows (requires NTFS MFT access via Windows APIs).
 /// We only build Windows binaries - macOS/Linux are just cross-compilation hosts.
 const TARGETS: &[Target] = &[
@@ -279,32 +291,36 @@ fn cmd_exists(c: &str) -> bool {
 }
 
 fn build_for_target(target: &Target, _target_dir: &Path) -> bool {
+    let dev_build = is_dev_build();
+    let profile = build_profile();
+
     for (binary, package) in BINARIES {
-        println!("  🔨 Building {}...", binary);
-        let args: Vec<&str> = if target.use_xwin {
+        println!("  🔨 Building {} ({})...", binary, profile);
+        let mut args: Vec<&str> = if target.use_xwin {
             vec![
                 "xwin",
                 "build",
-                "--release",
-                "--target",
-                target.triple,
-                "--bin",
-                binary,
-                "-p",
-                package,
             ]
         } else {
             vec![
                 "build",
-                "--release",
-                "--target",
-                target.triple,
-                "--bin",
-                binary,
-                "-p",
-                package,
             ]
         };
+
+        // Add --release only for release builds
+        if !dev_build {
+            args.push("--release");
+        }
+
+        // Add target and package args
+        args.extend_from_slice(&[
+            "--target",
+            target.triple,
+            "--bin",
+            binary,
+            "-p",
+            package,
+        ]);
 
         let mut cmd = Command::new("cargo");
         cmd.args(&args);
@@ -352,7 +368,8 @@ fn build_for_target(target: &Target, _target_dir: &Path) -> bool {
 }
 
 fn copy_binaries_to_dist(version: &str, target: &Target, target_dir: &Path) {
-    println!("  📁 Copying to dist/{}...", version);
+    let profile = build_profile();
+    println!("  📁 Copying {} binaries to dist/{}...", profile, version);
 
     for (binary, _) in BINARIES {
         let bin_name = if target.triple.contains("windows") {
@@ -362,7 +379,7 @@ fn copy_binaries_to_dist(version: &str, target: &Target, target_dir: &Path) {
         };
         let source = target_dir
             .join(target.triple)
-            .join("release")
+            .join(profile)
             .join(&bin_name);
         let dest_dir = format!("dist/{}/{}", version, binary);
         let dest_name = if target.triple.contains("windows") {

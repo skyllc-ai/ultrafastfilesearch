@@ -582,15 +582,31 @@ async fn version_bump(ctx: &PipelineContext) -> Result<()> {
     Ok(())
 }
 
+/// Check if dev build mode is enabled via UFFS_DEV_BUILD env var
+fn is_dev_build() -> bool {
+    std::env::var("UFFS_DEV_BUILD")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 async fn build_release(ctx: &PipelineContext) -> Result<()> {
-    println!("{}", "🔨 Building release binary...".blue());
+    let dev_build = is_dev_build();
+    let build_type = if dev_build { "dev" } else { "release" };
+    println!("{}", format!("🔨 Building {} binary...", build_type).blue());
+
+    let args: Vec<&str> = if dev_build {
+        vec!["build", "--workspace"]
+    } else {
+        vec!["build", "--release", "--workspace"]
+    };
+
     execute_command(
-        "Build release",
+        &format!("Build {}", build_type),
         "cargo",
-        &["build", "--release", "--workspace"],
+        &args,
         ctx,
     ).await?;
-    println!("{} Release binary built successfully", "✅".green());
+    println!("{} {} binary built successfully", "✅".green(), build_type);
     Ok(())
 }
 

@@ -16,9 +16,9 @@ use uffs_core::output::OutputConfig;
 use uffs_core::pattern::ParsedPattern;
 use uffs_core::tree::add_tree_columns;
 use uffs_core::{MftQuery, export_csv, export_json, export_table};
-use uffs_mft::{MftProgress, MftReader, load_raw_mft_header};
 #[cfg(windows)]
 use uffs_mft::SaveRawOptions;
+use uffs_mft::{MftProgress, MftReader, load_raw_mft_header};
 
 /// Search for files matching a pattern.
 ///

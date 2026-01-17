@@ -26,6 +26,18 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 use sha2::{Sha256, Digest};
 
+/// Check if dev build mode is enabled via UFFS_DEV_BUILD env var
+fn is_dev_build() -> bool {
+    env::var("UFFS_DEV_BUILD")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Get the build profile name ("debug" or "release")
+fn build_profile() -> &'static str {
+    if is_dev_build() { "debug" } else { "release" }
+}
+
 /// UFFS binaries: (binary_name, package_name)
 /// - uffs: Main CLI tool
 /// - uffs_mft: Low-level MFT reading tool
@@ -70,10 +82,16 @@ fn main() {
         if !needs_rebuild {
             println!("  ✅ {} is up-to-date (SHA matches)", binary);
         } else {
-            println!("\n🔨 Building {} for {}...", binary, platform);
+            let profile = build_profile();
+            println!("\n🔨 Building {} for {} ({})...", binary, platform, profile);
+
+            let mut args = vec!["build", "-p", *package, "--bin", *binary];
+            if !is_dev_build() {
+                args.push("--release");
+            }
 
             let status = Command::new("cargo")
-                .args(["build", "-p", *package, "--bin", *binary, "--release"])
+                .args(&args)
                 .status()
                 .expect("Failed to execute cargo build");
 
@@ -169,7 +187,7 @@ fn parse_cargo_config_target_dir() -> Option<PathBuf> {
     None
 }
 
-/// Get the path to a release binary in the target directory
+/// Get the path to a binary in the target directory (debug or release based on UFFS_DEV_BUILD)
 fn get_binary_path(target_dir: &Path, binary_name: &str) -> PathBuf {
     let binary_name_with_ext = if cfg!(windows) {
         format!("{}.exe", binary_name)
@@ -177,7 +195,7 @@ fn get_binary_path(target_dir: &Path, binary_name: &str) -> PathBuf {
         binary_name.to_string()
     };
 
-    target_dir.join("release").join(binary_name_with_ext)
+    target_dir.join(build_profile()).join(binary_name_with_ext)
 }
 
 fn read_current_version() -> String {
@@ -388,11 +406,12 @@ fn get_stored_hash_from_checksums(version: &str, binary_path: &str) -> Option<St
 fn check_dist_binary_needs_rebuild(version: &str, platform: &str, target_dir: &Path, binary: &str) -> bool {
     let ext = if platform.contains("windows") { ".exe" } else { "" };
     let dist_path = format!("dist/{}/{}/{}-{}{}", version, binary, binary, platform, ext);
-    let release_path = get_binary_path(target_dir, binary);
+    let profile = build_profile();
+    let binary_path = get_binary_path(target_dir, binary);
 
-    // If release binary doesn't exist, need to build
-    if !release_path.exists() {
-        println!("   📦 {} - release binary missing", binary);
+    // If binary doesn't exist, need to build
+    if !binary_path.exists() {
+        println!("   📦 {} - {} binary missing", binary, profile);
         return true;
     }
 
@@ -403,16 +422,16 @@ fn check_dist_binary_needs_rebuild(version: &str, platform: &str, target_dir: &P
     }
 
     // Compare hashes
-    let release_hash = calculate_file_hash_path(&release_path);
+    let build_hash = calculate_file_hash_path(&binary_path);
     let dist_hash = calculate_file_hash(&dist_path);
 
-    match (release_hash, dist_hash) {
-        (Some(r), Some(d)) if r == d => {
-            println!("   ✅ {} - SHA matches ({}...)", binary, &r[..8]);
+    match (build_hash, dist_hash) {
+        (Some(b), Some(d)) if b == d => {
+            println!("   ✅ {} - SHA matches ({}...)", binary, &b[..8]);
             false
         }
-        (Some(r), Some(d)) => {
-            println!("   🔄 {} - SHA changed ({}... -> {}...)", binary, &d[..8], &r[..8]);
+        (Some(b), Some(d)) => {
+            println!("   🔄 {} - SHA changed ({}... -> {}...)", binary, &d[..8], &b[..8]);
             true
         }
         _ => {

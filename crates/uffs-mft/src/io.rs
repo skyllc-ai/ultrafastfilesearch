@@ -25,6 +25,7 @@
 
 use std::mem::size_of;
 
+use tracing::{debug, info, trace, warn};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
@@ -1356,8 +1357,15 @@ impl ParallelMftReader {
         handle: HANDLE,
         merge_extensions: bool,
     ) -> Result<Vec<ParsedRecord>> {
+        info!(
+            chunk_size = self.chunk_size,
+            merge_extensions, "Starting parallel MFT read"
+        );
+
         // Generate optimized read chunks
         let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
+        let num_chunks = chunks.len();
+        info!(num_chunks, "Generated read chunks");
 
         // Estimate capacity
         let estimated_records = if let Some(ref bm) = self.bitmap {
@@ -1365,6 +1373,7 @@ impl ParallelMftReader {
         } else {
             self.extent_map.total_records() as usize
         };
+        info!(estimated_records, "Estimated record count");
 
         // Process chunks in parallel
         // Note: We read sequentially but parse in parallel for thread safety with
@@ -1373,13 +1382,42 @@ impl ParallelMftReader {
         let records_processed = Arc::clone(&self.records_processed);
 
         // Read all chunks (sequential I/O for handle safety)
+        debug!("Reading all chunks into memory...");
+        let mut total_bytes_read: usize = 0;
         let chunk_data: Vec<(ReadChunk, Vec<u8>)> = chunks
             .into_iter()
-            .filter_map(|chunk| {
-                let data = self.read_chunk(handle, &chunk, record_size).ok()?;
-                Some((chunk, data))
+            .enumerate()
+            .filter_map(|(idx, chunk)| {
+                trace!(
+                    chunk_idx = idx,
+                    start_frs = chunk.start_frs,
+                    "Reading chunk"
+                );
+                match self.read_chunk(handle, &chunk, record_size) {
+                    Ok(data) => {
+                        total_bytes_read += data.len();
+                        trace!(
+                            chunk_idx = idx,
+                            bytes = data.len(),
+                            total_bytes = total_bytes_read,
+                            "Chunk read successfully"
+                        );
+                        Some((chunk, data))
+                    }
+                    Err(e) => {
+                        warn!(chunk_idx = idx, error = ?e, "Failed to read chunk");
+                        None
+                    }
+                }
             })
             .collect();
+
+        info!(
+            chunks_read = chunk_data.len(),
+            total_bytes = total_bytes_read,
+            total_mb = total_bytes_read / (1024 * 1024),
+            "All chunks read into memory"
+        );
 
         if merge_extensions {
             // Full parsing with extension merging
