@@ -1,9 +1,13 @@
 //! Benchmarks for MFT reading operations.
 
-// Suppress unused crate warnings for dependencies used by the main crate.
-// Note: zstd is an optional dependency, so we conditionally suppress it.
+// Suppress unused crate warnings for dependencies used by the main crate but
+// not by benchmarks. Note: zstd is an optional dependency, so we conditionally
+// suppress it.
 use criterion::{Criterion, criterion_group, criterion_main};
-use {bitflags as _, rayon as _, thiserror as _, tokio as _, uffs_mft as _, uffs_polars as _};
+use {
+    anyhow as _, bitflags as _, clap as _, indicatif as _, rayon as _, thiserror as _, tokio as _,
+    tracing as _, tracing_subscriber as _, uffs_mft as _, uffs_polars as _,
+};
 
 // zstd is optional - only suppress when the feature is enabled
 #[cfg(feature = "zstd")]

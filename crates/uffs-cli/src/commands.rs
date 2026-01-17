@@ -59,89 +59,21 @@ pub async fn search(
         .with_case_sensitive(case_sensitive);
 
     // Load data from index, multi-drive, single drive, or all drives (default)
-    let df = if let Some(index_path) = index {
-        // Load from pre-built index
-        MftReader::load_parquet(&index_path)
-            .with_context(|| format!("Failed to load index: {}", index_path.display()))?
-    } else if let Some(drives) = multi_drives {
-        // Multi-drive concurrent search (explicit)
-        search_multi_drive(&drives).await?
-    } else {
-        // Check for single drive: CLI flag overrides pattern-embedded drive
-        let effective_drive = single_drive.or_else(|| parsed.drive());
-        if let Some(drive_letter) = effective_drive {
-            // Single drive search
-            let reader = MftReader::open(drive_letter)
-                .await
-                .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
-            reader.read_all().await?
-        } else {
-            // No drive specified - search ALL available NTFS drives
-            #[cfg(windows)]
-            {
-                // Check for admin privileges first - MFT reading requires elevation
-                if !uffs_mft::is_elevated() {
-                    bail!(
-                        "Administrator privileges required.\n\
-                         \n\
-                         UFFS reads the NTFS Master File Table directly, which requires elevated access.\n\
-                         \n\
-                         Solutions:\n\
-                         1. Run PowerShell/Terminal as Administrator\n\
-                         2. Use a pre-built index: uffs search --index <file.parquet> \"*.txt\""
-                    );
-                }
-                let all_drives = uffs_mft::detect_ntfs_drives();
-                if all_drives.is_empty() {
-                    bail!("No NTFS drives found on this system");
-                }
-                info!(drives = ?all_drives, count = all_drives.len(), "No drive specified - searching all NTFS drives");
-                search_multi_drive(&all_drives).await?
-            }
-            #[cfg(not(windows))]
-            {
-                bail!(
-                    "No drive specified. Use --drive, --drives, --index, or include drive in pattern (e.g., c:/pro*)"
-                );
-            }
-        }
+    let df = load_search_data(index, multi_drives, single_drive, &parsed).await?;
+
+    // Build and execute query
+    let filters = QueryFilters {
+        parsed: &parsed,
+        ext_filter,
+        files_only,
+        dirs_only,
+        min_size,
+        max_size,
+        limit,
     };
+    let mut results = execute_query(df, &filters)?;
 
-    // Build query
-    let mut query = MftQuery::new(df);
-
-    // Apply pattern filter using the parsed pattern
-    query = query.pattern(&parsed)?;
-
-    // Apply extension filter if specified
-    if let Some(ext_str) = ext_filter {
-        let parsed_ext_filter = ExtensionFilter::parse(ext_str)
-            .map_err(|err| anyhow::anyhow!("Invalid extension filter: {err}"))?;
-        query = query.extension_filter(&parsed_ext_filter);
-    }
-
-    // Apply type filters
-    if files_only {
-        query = query.files_only();
-    } else if dirs_only {
-        query = query.directories_only();
-    }
-
-    // Apply size filters
-    if let Some(min) = min_size {
-        query = query.min_size(min);
-    }
-    if let Some(max) = max_size {
-        query = query.max_size(max);
-    }
-
-    // Apply limit
-    query = query.limit(limit);
-
-    // Execute query
-    let mut results = query.collect()?;
-
-    // Build output configuration first to check what columns are needed
+    // Build output configuration
     let output_config = OutputConfig::new()
         .with_columns(columns)
         .with_separator(sep)
@@ -158,36 +90,158 @@ pub async fn search(
             add_tree_columns(&results, &tree_cols).context("Failed to compute tree columns")?;
     }
 
-    // Determine output destination
+    // Output results
+    write_results(&results, format, out, &output_config)?;
+
+    info!(count = results.height(), "Search complete");
+    Ok(())
+}
+
+/// Load search data from index file, multiple drives, single drive, or all NTFS
+/// drives.
+#[allow(clippy::single_call_fn)] // Extracted to reduce search() line count below clippy::too_many_lines limit
+async fn load_search_data(
+    index: Option<std::path::PathBuf>,
+    multi_drives: Option<Vec<char>>,
+    single_drive: Option<char>,
+    parsed: &ParsedPattern,
+) -> Result<uffs_mft::DataFrame> {
+    if let Some(index_path) = index {
+        // Load from pre-built index
+        return MftReader::load_parquet(&index_path)
+            .with_context(|| format!("Failed to load index: {}", index_path.display()));
+    }
+
+    if let Some(drives) = multi_drives {
+        // Multi-drive concurrent search (explicit)
+        return search_multi_drive(&drives).await;
+    }
+
+    // Check for single drive: CLI flag overrides pattern-embedded drive
+    let effective_drive = single_drive.or_else(|| parsed.drive());
+    if let Some(drive_letter) = effective_drive {
+        // Single drive search
+        let reader = MftReader::open(drive_letter)
+            .await
+            .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
+        return Ok(reader.read_all().await?);
+    }
+
+    // No drive specified - search ALL available NTFS drives
+    #[cfg(windows)]
+    {
+        if !uffs_mft::is_elevated() {
+            bail!(
+                "Administrator privileges required.\n\n\
+                 UFFS reads the NTFS Master File Table directly, which requires elevated access.\n\n\
+                 Solutions:\n\
+                 1. Run PowerShell/Terminal as Administrator\n\
+                 2. Use a pre-built index: uffs search --index <file.parquet> \"*.txt\""
+            );
+        }
+        let all_drives = uffs_mft::detect_ntfs_drives();
+        if all_drives.is_empty() {
+            bail!("No NTFS drives found on this system");
+        }
+        info!(drives = ?all_drives, count = all_drives.len(), "No drive specified - searching all NTFS drives");
+        search_multi_drive(&all_drives).await
+    }
+    #[cfg(not(windows))]
+    {
+        bail!(
+            "No drive specified. Use --drive, --drives, --index, or include drive in pattern (e.g., c:/pro*)"
+        )
+    }
+}
+
+/// Query filter options for the search command.
+struct QueryFilters<'a> {
+    /// Parsed search pattern (glob, regex, or literal).
+    parsed: &'a ParsedPattern,
+    /// Extension filter string (e.g., "pictures,mp4,pdf").
+    ext_filter: Option<&'a str>,
+    /// Only return files (not directories).
+    files_only: bool,
+    /// Only return directories (not files).
+    dirs_only: bool,
+    /// Minimum file size filter.
+    min_size: Option<u64>,
+    /// Maximum file size filter.
+    max_size: Option<u64>,
+    /// Maximum number of results to return.
+    limit: u32,
+}
+
+/// Build and execute the MFT query with all filters applied.
+#[allow(clippy::single_call_fn)] // Extracted to reduce search() line count below clippy::too_many_lines limit
+fn execute_query(
+    df: uffs_mft::DataFrame,
+    filters: &QueryFilters<'_>,
+) -> Result<uffs_mft::DataFrame> {
+    let mut query = MftQuery::new(df);
+
+    // Apply pattern filter
+    query = query.pattern(filters.parsed)?;
+
+    // Apply extension filter if specified
+    if let Some(ext_str) = filters.ext_filter {
+        let parsed_ext_filter = ExtensionFilter::parse(ext_str)
+            .map_err(|err| anyhow::anyhow!("Invalid extension filter: {err}"))?;
+        query = query.extension_filter(&parsed_ext_filter);
+    }
+
+    // Apply type filters
+    if filters.files_only {
+        query = query.files_only();
+    } else if filters.dirs_only {
+        query = query.directories_only();
+    }
+
+    // Apply size filters
+    if let Some(min) = filters.min_size {
+        query = query.min_size(min);
+    }
+    if let Some(max) = filters.max_size {
+        query = query.max_size(max);
+    }
+
+    // Apply limit and execute
+    Ok(query.limit(filters.limit).collect()?)
+}
+
+/// Write search results to console or file.
+#[allow(clippy::single_call_fn)] // Extracted to reduce search() line count below clippy::too_many_lines limit
+fn write_results(
+    results: &uffs_mft::DataFrame,
+    format: &str,
+    out: &str,
+    output_config: &OutputConfig,
+) -> Result<()> {
     let is_console = matches!(
         out.to_lowercase().as_str(),
         "console" | "con" | "term" | "terminal"
     );
 
-    // Output results based on format and destination
     if is_console {
         let stdout = std::io::stdout();
         match format {
-            "json" => export_json(&results, stdout)?,
-            "csv" => export_csv(&results, stdout)?,
-            "custom" => output_config.write(&results, stdout)?,
-            _ => export_table(&results, stdout)?,
+            "json" => export_json(results, stdout)?,
+            "csv" => export_csv(results, stdout)?,
+            "custom" => output_config.write(results, stdout)?,
+            _ => export_table(results, stdout)?,
         }
     } else {
-        // Write to file
         let file =
             File::create(out).with_context(|| format!("Failed to create output file: {out}"))?;
         let writer = BufWriter::new(file);
 
         match format {
-            "json" => export_json(&results, writer)?,
-            "csv" => export_csv(&results, writer)?,
-            _ => output_config.write(&results, writer)?,
+            "json" => export_json(results, writer)?,
+            "csv" => export_csv(results, writer)?,
+            _ => output_config.write(results, writer)?,
         }
         info!(file = out, "Results written to file");
     }
-
-    info!(count = results.height(), "Search complete");
 
     Ok(())
 }
