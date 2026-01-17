@@ -1000,11 +1000,11 @@ fn is_ntfs_volume(drive_letter: char) -> bool {
     let result = unsafe {
         GetVolumeInformationW(
             PCWSTR(root_path.as_ptr()),
-            None,                                   // Volume name buffer (not needed)
-            None,                                   // Volume serial number (not needed)
-            None,                                   // Max component length (not needed)
-            None,                                   // File system flags (not needed)
-            Some(&mut fs_name_buffer),              // File system name buffer
+            None,                      // Volume name buffer (not needed)
+            None,                      // Volume serial number (not needed)
+            None,                      // Max component length (not needed)
+            None,                      // File system flags (not needed)
+            Some(&mut fs_name_buffer), // File system name buffer
         )
     };
 

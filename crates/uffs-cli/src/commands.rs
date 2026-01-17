@@ -645,8 +645,8 @@ pub fn load_raw(input: &Path, output: Option<&Path>, info_only: bool) -> Result<
 
         match ext {
             "csv" => {
-                let mut file = std::fs::File::create(output)?;
-                uffs_core::export_csv(&df, &mut file)?;
+                let mut file = File::create(output)?;
+                export_csv(&df, &mut file)?;
                 info!(path = %output.display(), "Exported to CSV");
             }
             _ => {

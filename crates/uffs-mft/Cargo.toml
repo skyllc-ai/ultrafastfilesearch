@@ -55,7 +55,6 @@ tracing-subscriber.workspace = true
 # Windows APIs (Windows only)
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
-windows-core.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
