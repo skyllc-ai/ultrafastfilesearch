@@ -714,6 +714,71 @@ deploy-release:
     @printf "\033[0;34m📦 Deploying release binary...\033[0m\n"
     just copy-binary release
 
+# Install latest pre-built binaries from dist/ to ~/bin (platform-aware)
+# Install UFFS binaries to ~/bin (Windows only)
+# UFFS is Windows-only - it requires NTFS MFT access via Windows APIs
+# Binaries: uffs, uffs_mft, uffs_tui, uffs_gui
+use:
+    #!/usr/bin/env bash
+    printf "\033[0;34m📦 Installing latest UFFS binaries to ~/bin...\033[0m\n"
+    printf "\033[1;33mℹ️  Note: UFFS is Windows-only (requires NTFS MFT access)\033[0m\n"
+
+    # Detect platform
+    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+    ARCH=$(uname -m)
+
+    case "$OS-$ARCH" in
+        mingw*|msys*|cygwin*)
+            PLATFORM="windows-x64"
+            ;;
+        darwin-arm64|darwin-x86_64|linux-x86_64|linux-aarch64)
+            printf "\033[0;31m❌ UFFS only runs on Windows.\033[0m\n"
+            printf "\033[0;34m   UFFS reads the NTFS Master File Table directly using Windows APIs.\033[0m\n"
+            printf "\033[0;34m   Use 'just go' to cross-compile Windows binaries from this host.\033[0m\n"
+            exit 1
+            ;;
+        *)
+            printf "\033[0;31m❌ Unsupported platform: $OS-$ARCH\033[0m\n"
+            exit 1
+            ;;
+    esac
+
+    printf "\033[0;34m  → Platform: $PLATFORM\033[0m\n"
+
+    # Create ~/bin if needed
+    mkdir -p ~/bin
+
+    # Binaries to install
+    BINARIES="uffs uffs_mft uffs_tui uffs_gui"
+    INSTALLED=0
+    SKIPPED=0
+
+    for BINARY in $BINARIES; do
+        SRC="dist/latest/$BINARY/$BINARY-$PLATFORM.exe"
+        DEST="$HOME/bin/$BINARY.exe"
+
+        if [[ -f "$SRC" ]]; then
+            cp "$SRC" "$DEST"
+            chmod +x "$DEST"
+            printf "\033[0;32m  ✅ $BINARY.exe\033[0m\n"
+            INSTALLED=$((INSTALLED + 1))
+        else
+            printf "\033[1;33m  ⚠️  $BINARY (not found for $PLATFORM)\033[0m\n"
+            SKIPPED=$((SKIPPED + 1))
+        fi
+    done
+
+    printf "\033[0;32m✅ Installed $INSTALLED binaries to ~/bin\033[0m\n"
+    if [[ $SKIPPED -gt 0 ]]; then
+        printf "\033[1;33m⚠️  Skipped $SKIPPED (run 'just go' to build all binaries)\033[0m\n"
+    fi
+
+    # PATH guidance
+    if ! echo "$PATH" | grep -q "$HOME/bin"; then
+        printf "\033[1;33m⚠️  ~/bin not in PATH. Add to your shell profile:\033[0m\n"
+        printf "   export PATH=\"\$HOME/bin:\$PATH\"\n"
+    fi
+
 # Git commit with auto-generated message
 commit:
     @printf "\033[0;34m📝 Creating auto-generated commit...\033[0m\n"

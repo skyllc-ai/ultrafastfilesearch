@@ -21,7 +21,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [[bin]]
-name = "uffs-gui"
+name = "uffs_gui"
 path = "src/main.rs"
 
 [dependencies]

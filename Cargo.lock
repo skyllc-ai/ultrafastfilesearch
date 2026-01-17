@@ -4420,11 +4420,16 @@ dependencies = [
 name = "uffs-mft"
 version = "0.1.1"
 dependencies = [
+ "anyhow",
  "bitflags 2.10.0",
+ "clap",
  "criterion",
+ "indicatif",
  "rayon",
  "thiserror 2.0.17",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "uffs-polars",
  "windows 0.62.2",
  "windows-core 0.62.2",

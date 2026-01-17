@@ -60,8 +60,9 @@ const STEP_PARALLEL_VALIDATION: &str = "04-parallel-validation";
 const STEP_FORMAT_CHECK: &str = "05-format-check";
 const STEP_VERSION_INCREMENT: &str = "06-version-increment";
 const STEP_BUILD_RELEASE: &str = "07-build-release";
-const STEP_GIT_COMMIT: &str = "08-git-commit";
-const STEP_GIT_PUSH: &str = "09-git-push";
+const STEP_DEPLOY_BINARY: &str = "08-deploy-binary"; // Copy to dist/ and ~/bin
+const STEP_GIT_COMMIT: &str = "09-git-commit";
+const STEP_GIT_PUSH: &str = "10-git-push";
 
 const ALL_STEPS: &[&str] = &[
     STEP_UPDATE_POLARS,
@@ -72,6 +73,7 @@ const ALL_STEPS: &[&str] = &[
     STEP_FORMAT_CHECK,
     STEP_VERSION_INCREMENT,
     STEP_BUILD_RELEASE,
+    STEP_DEPLOY_BINARY,
     STEP_GIT_COMMIT,
     STEP_GIT_PUSH,
 ];
@@ -591,6 +593,37 @@ async fn build_release(ctx: &PipelineContext) -> Result<()> {
     Ok(())
 }
 
+/// Deploy binary to dist/ directory and ~/bin
+/// On macOS ARM64, runs cross-compilation for all platforms
+/// On other platforms, runs local build only
+async fn deploy_binary(ctx: &PipelineContext) -> Result<()> {
+    println!("{}", "📦 Deploying binary to dist/ and ~/bin...".blue());
+
+    // Detect if we're on macOS ARM64 for cross-compilation
+    let is_macos_arm64 = std::env::consts::OS == "macos" && std::env::consts::ARCH == "aarch64";
+
+    if is_macos_arm64 {
+        println!("{} Running cross-platform build...", "🌍".blue());
+        execute_command(
+            "Cross-platform build",
+            "rust-script",
+            &["scripts/build-cross-all.rs"],
+            ctx,
+        ).await?;
+    } else {
+        println!("{} Running local build...", "🖥️".blue());
+        execute_command(
+            "Local build & install",
+            "rust-script",
+            &["scripts/build-local.rs"],
+            ctx,
+        ).await?;
+    }
+
+    println!("{} Binary deployed successfully", "✅".green());
+    Ok(())
+}
+
 async fn git_commit(ctx: &PipelineContext) -> Result<()> {
     println!("{}", "📝 Creating auto-generated commit...".blue());
     execute_command("Git add", "git", &["add", "."], ctx).await?;
@@ -835,10 +868,15 @@ async fn run_enhanced_phase2(state: &mut WorkflowState, ctx: &PipelineContext) -
         build_release(ctx).await
     }).await?;
 
-    // Step 8: Git commit
+    // Step 8: Deploy binary (copy to dist/ and ~/bin)
+    execute_step_with_tracking(state, STEP_DEPLOY_BINARY, || async {
+        deploy_binary(ctx).await
+    }).await?;
+
+    // Step 9: Git commit
     execute_step_with_tracking(state, STEP_GIT_COMMIT, || async { git_commit(ctx).await }).await?;
 
-    // Step 9: Git push
+    // Step 10: Git push
     execute_step_with_tracking(state, STEP_GIT_PUSH, || async { git_push(ctx).await }).await?;
 
     println!("{}", "✅ PHASE 2 COMPLETE - Build and deploy successful!".green().bold());

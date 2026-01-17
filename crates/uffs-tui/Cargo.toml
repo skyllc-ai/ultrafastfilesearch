@@ -24,7 +24,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [[bin]]
-name = "uffs-tui"
+name = "uffs_tui"
 path = "src/main.rs"
 
 [dependencies]
