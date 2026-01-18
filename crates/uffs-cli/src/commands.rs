@@ -68,7 +68,10 @@ impl<W: Write> StreamingWriter<W> {
             }
         }
 
-        let mut writer = self.writer.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
 
         match self.format {
             StreamingFormat::Csv => self.write_csv_batch(&mut *writer, df),
@@ -77,11 +80,23 @@ impl<W: Write> StreamingWriter<W> {
     }
 
     fn write_csv_batch(&self, writer: &mut W, df: &uffs_mft::DataFrame) -> Result<usize> {
-        let columns: Vec<_> = df.get_column_names().iter().map(|s| s.to_string()).collect();
+        let columns: Vec<_> = df
+            .get_column_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
 
         // Write header only once
         if !self.header_written.swap(true, Ordering::SeqCst) {
-            writeln!(writer, "{}", columns.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(","))?;
+            writeln!(
+                writer,
+                "{}",
+                columns
+                    .iter()
+                    .map(|c| format!("\"{c}\""))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )?;
         }
 
         let mut rows_written = 0;
@@ -100,7 +115,9 @@ impl<W: Write> StreamingWriter<W> {
 
             let mut values = Vec::with_capacity(columns.len());
             for col_name in &columns {
-                let col = df.column(col_name).map_err(|e| anyhow::anyhow!("Column error: {e}"))?;
+                let col = df
+                    .column(col_name)
+                    .map_err(|e| anyhow::anyhow!("Column error: {e}"))?;
                 let val = format_cell_value(col, row_idx);
                 values.push(val);
             }
@@ -113,7 +130,11 @@ impl<W: Write> StreamingWriter<W> {
     }
 
     fn write_json_batch(&self, writer: &mut W, df: &uffs_mft::DataFrame) -> Result<usize> {
-        let columns: Vec<_> = df.get_column_names().iter().map(|s| s.to_string()).collect();
+        let columns: Vec<_> = df
+            .get_column_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
 
         let mut rows_written = 0;
         let height = df.height();
@@ -135,7 +156,9 @@ impl<W: Write> StreamingWriter<W> {
                 if i > 0 {
                     obj.push_str(", ");
                 }
-                let col = df.column(col_name).map_err(|e| anyhow::anyhow!("Column error: {e}"))?;
+                let col = df
+                    .column(col_name)
+                    .map_err(|e| anyhow::anyhow!("Column error: {e}"))?;
                 let val = format_json_value(col, row_idx);
                 obj.push_str(&format!("\"{col_name}\": {val}"));
             }
