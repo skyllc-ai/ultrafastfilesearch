@@ -309,8 +309,7 @@ enum Commands {
     /// Show statistics about files in an index
     Stats {
         /// Index file path
-        #[arg(short, long)]
-        index: PathBuf,
+        path: PathBuf,
 
         /// Show top N largest files
         #[arg(long, default_value = "10")]
@@ -479,8 +478,8 @@ async fn run() -> Result<()> {
         Some(Commands::Info { path }) => {
             commands::info(&path)?;
         }
-        Some(Commands::Stats { index, top }) => {
-            commands::stats(&index, top)?;
+        Some(Commands::Stats { path, top }) => {
+            commands::stats(&path, top)?;
         }
         None => {
             // Default action: search with top-level arguments
