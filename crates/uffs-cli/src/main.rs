@@ -221,8 +221,8 @@ enum Commands {
         #[arg(long)]
         max_size: Option<u64>,
 
-        /// Maximum number of results
-        #[arg(short = 'n', long, default_value = "100")]
+        /// Maximum number of results (0 = unlimited)
+        #[arg(short = 'n', long, default_value = "0")]
         limit: u32,
 
         /// Output format: table, json, csv

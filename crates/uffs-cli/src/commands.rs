@@ -7,49 +7,218 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(windows)]
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
-#[cfg(windows)]
-use indicatif::MultiProgress;
 use indicatif::{ProgressBar, ProgressStyle};
 use tracing::info;
 use uffs_core::extensions::ExtensionFilter;
 
-/// Check if progress bars are disabled via `UFFS_NO_PROGRESS=1` environment
-/// variable.
+/// Streaming output writer for multi-drive search.
+///
+/// Supports CSV (header + rows) and NDJSON (one JSON object per line) formats.
+/// Writes results as each drive completes for immediate user feedback.
 #[cfg(windows)]
-#[inline]
-fn is_progress_disabled() -> bool {
-    std::env::var("UFFS_NO_PROGRESS")
-        .map(|val| val == "1" || val.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+struct StreamingWriter<W: Write> {
+    writer: Mutex<W>,
+    format: StreamingFormat,
+    header_written: AtomicBool,
+    rows_written: AtomicUsize,
+    limit: u32,
 }
 
-/// Create a multi-progress container for multiple drives.
-/// Returns `None` if progress is disabled via `UFFS_NO_PROGRESS=1`.
+/// Output format for streaming writer.
 #[cfg(windows)]
-fn create_multi_progress() -> Option<MultiProgress> {
-    if is_progress_disabled() {
-        None
-    } else {
-        Some(MultiProgress::new())
+#[derive(Clone, Copy)]
+enum StreamingFormat {
+    Csv,
+    Json,
+}
+
+#[cfg(windows)]
+impl<W: Write> StreamingWriter<W> {
+    fn new(writer: W, format: &str, limit: u32) -> Self {
+        let fmt = match format.to_lowercase().as_str() {
+            "json" => StreamingFormat::Json,
+            _ => StreamingFormat::Csv,
+        };
+        Self {
+            writer: Mutex::new(writer),
+            format: fmt,
+            header_written: AtomicBool::new(false),
+            rows_written: AtomicUsize::new(0),
+            limit,
+        }
+    }
+
+    /// Write a DataFrame batch. Returns number of rows written.
+    fn write_batch(&self, df: &uffs_mft::DataFrame) -> Result<usize> {
+        if df.height() == 0 {
+            return Ok(0);
+        }
+
+        // Check if we've hit the limit
+        if self.limit > 0 {
+            let current = self.rows_written.load(Ordering::Relaxed);
+            if current >= self.limit as usize {
+                return Ok(0);
+            }
+        }
+
+        let mut writer = self.writer.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+
+        match self.format {
+            StreamingFormat::Csv => self.write_csv_batch(&mut *writer, df),
+            StreamingFormat::Json => self.write_json_batch(&mut *writer, df),
+        }
+    }
+
+    fn write_csv_batch(&self, writer: &mut W, df: &uffs_mft::DataFrame) -> Result<usize> {
+        let columns: Vec<_> = df.get_column_names().iter().map(|s| s.to_string()).collect();
+
+        // Write header only once
+        if !self.header_written.swap(true, Ordering::SeqCst) {
+            writeln!(writer, "{}", columns.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(","))?;
+        }
+
+        let mut rows_written = 0;
+        let height = df.height();
+
+        for row_idx in 0..height {
+            // Check limit
+            if self.limit > 0 {
+                let current = self.rows_written.fetch_add(1, Ordering::Relaxed);
+                if current >= self.limit as usize {
+                    break;
+                }
+            } else {
+                self.rows_written.fetch_add(1, Ordering::Relaxed);
+            }
+
+            let mut values = Vec::with_capacity(columns.len());
+            for col_name in &columns {
+                let col = df.column(col_name).map_err(|e| anyhow::anyhow!("Column error: {e}"))?;
+                let val = format_cell_value(col, row_idx);
+                values.push(val);
+            }
+            writeln!(writer, "{}", values.join(","))?;
+            rows_written += 1;
+        }
+
+        writer.flush()?;
+        Ok(rows_written)
+    }
+
+    fn write_json_batch(&self, writer: &mut W, df: &uffs_mft::DataFrame) -> Result<usize> {
+        let columns: Vec<_> = df.get_column_names().iter().map(|s| s.to_string()).collect();
+
+        let mut rows_written = 0;
+        let height = df.height();
+
+        for row_idx in 0..height {
+            // Check limit
+            if self.limit > 0 {
+                let current = self.rows_written.fetch_add(1, Ordering::Relaxed);
+                if current >= self.limit as usize {
+                    break;
+                }
+            } else {
+                self.rows_written.fetch_add(1, Ordering::Relaxed);
+            }
+
+            // Build JSON object for this row
+            let mut obj = String::from("{");
+            for (i, col_name) in columns.iter().enumerate() {
+                if i > 0 {
+                    obj.push_str(", ");
+                }
+                let col = df.column(col_name).map_err(|e| anyhow::anyhow!("Column error: {e}"))?;
+                let val = format_json_value(col, row_idx);
+                obj.push_str(&format!("\"{col_name}\": {val}"));
+            }
+            obj.push('}');
+            writeln!(writer, "{obj}")?;
+            rows_written += 1;
+        }
+
+        writer.flush()?;
+        Ok(rows_written)
+    }
+
+    /// Check if we've hit the output limit.
+    fn limit_reached(&self) -> bool {
+        if self.limit == 0 {
+            return false;
+        }
+        self.rows_written.load(Ordering::Relaxed) >= self.limit as usize
+    }
+
+    /// Get total rows written.
+    fn total_rows(&self) -> usize {
+        self.rows_written.load(Ordering::Relaxed)
     }
 }
 
-/// Add a drive progress bar to a multi-progress container.
+/// Format a cell value for CSV output.
 #[cfg(windows)]
-fn add_drive_progress(multi_progress: &MultiProgress, drive: char) -> ProgressBar {
-    let progress_bar = multi_progress.add(ProgressBar::new(0));
-    let template = format!(
-        "{{spinner:.cyan}} [{drive}:] [{{elapsed_precise}}] {{bar:30.cyan/blue}} {{bytes}}/{{total_bytes}} ({{eta}})"
-    );
-    progress_bar.set_style(
-        ProgressStyle::default_bar()
-            .template(&template)
-            .unwrap_or_else(|_| ProgressStyle::default_bar())
-            .progress_chars("━━╸"),
-    );
-    progress_bar
+fn format_cell_value(col: &uffs_mft::polars::prelude::Column, row_idx: usize) -> String {
+    use uffs_mft::polars::prelude::*;
+
+    let val = col.get(row_idx);
+    match val {
+        Ok(AnyValue::Null) => String::new(),
+        Ok(AnyValue::String(s)) => format!("\"{}\"", s.replace('"', "\"\"")),
+        Ok(AnyValue::Boolean(b)) => if b { "1" } else { "0" }.to_string(),
+        Ok(AnyValue::Datetime(ts, TimeUnit::Microseconds, _)) => {
+            // Convert microseconds to datetime string
+            let secs = ts / 1_000_000;
+            let micros = (ts % 1_000_000) as u32;
+            if let Some(dt) = chrono::DateTime::from_timestamp(secs, micros * 1000) {
+                format!("\"{}\"", dt.format("%Y-%m-%d %H:%M:%S"))
+            } else {
+                String::new()
+            }
+        }
+        Ok(v) => v.to_string(),
+        Err(_) => String::new(),
+    }
+}
+
+/// Format a cell value for JSON output.
+#[cfg(windows)]
+fn format_json_value(col: &uffs_mft::polars::prelude::Column, row_idx: usize) -> String {
+    use uffs_mft::polars::prelude::*;
+
+    let val = col.get(row_idx);
+    match val {
+        Ok(AnyValue::Null) => "null".to_string(),
+        Ok(AnyValue::String(s)) => format!("\"{}\"", s.replace('"', "\\\"").replace('\n', "\\n")),
+        Ok(AnyValue::Boolean(b)) => if b { "true" } else { "false" }.to_string(),
+        Ok(AnyValue::Datetime(ts, TimeUnit::Microseconds, _)) => {
+            let secs = ts / 1_000_000;
+            let micros = (ts % 1_000_000) as u32;
+            if let Some(dt) = chrono::DateTime::from_timestamp(secs, micros * 1000) {
+                format!("\"{}\"", dt.format("%Y-%m-%d %H:%M:%S"))
+            } else {
+                "null".to_string()
+            }
+        }
+        Ok(AnyValue::UInt8(n)) => n.to_string(),
+        Ok(AnyValue::UInt16(n)) => n.to_string(),
+        Ok(AnyValue::UInt32(n)) => n.to_string(),
+        Ok(AnyValue::UInt64(n)) => n.to_string(),
+        Ok(AnyValue::Int8(n)) => n.to_string(),
+        Ok(AnyValue::Int16(n)) => n.to_string(),
+        Ok(AnyValue::Int32(n)) => n.to_string(),
+        Ok(AnyValue::Int64(n)) => n.to_string(),
+        Ok(AnyValue::Float32(n)) => n.to_string(),
+        Ok(AnyValue::Float64(n)) => n.to_string(),
+        Ok(v) => format!("\"{}\"", v.to_string().replace('"', "\\\"")),
+        Err(_) => "null".to_string(),
+    }
 }
 
 use uffs_core::output::OutputConfig;
@@ -107,9 +276,6 @@ pub async fn search(
         limit,
     };
 
-    // Load and filter data - for multi-drive, filter per-drive to reduce memory
-    let mut results = load_and_filter_data(index, multi_drives, single_drive, &filters).await?;
-
     // Build output configuration
     let output_config = OutputConfig::new()
         .with_columns(columns)
@@ -118,6 +284,30 @@ pub async fn search(
         .with_header(header)
         .with_pos(pos)
         .with_neg(neg);
+
+    // Streaming mode for multi-drive searches (Windows only)
+    #[cfg(windows)]
+    {
+        let needs_streaming = index.is_none()
+            && (multi_drives.is_some()
+                || (single_drive.is_none() && filters.parsed.drive().is_none()));
+
+        if needs_streaming {
+            // Streaming mode: output results as each drive completes
+            return search_streaming(
+                multi_drives,
+                single_drive,
+                &filters,
+                format,
+                out,
+                &output_config,
+            )
+            .await;
+        }
+    }
+
+    // Non-streaming mode: load all data, then output
+    let mut results = load_and_filter_data(index, multi_drives, single_drive, &filters).await?;
 
     // Compute tree columns only if specifically requested
     if output_config.needs_tree_columns() {
@@ -132,6 +322,62 @@ pub async fn search(
 
     info!(count = results.height(), "Search complete");
     Ok(())
+}
+
+/// Streaming search for multi-drive queries.
+///
+/// Outputs results as each drive completes, providing immediate feedback.
+/// Uses CSV or NDJSON format for streaming compatibility.
+#[cfg(windows)]
+async fn search_streaming(
+    multi_drives: Option<Vec<char>>,
+    single_drive: Option<char>,
+    filters: &QueryFilters<'_>,
+    format: &str,
+    out: &str,
+    _output_config: &OutputConfig,
+) -> Result<()> {
+    // Determine drives to search
+    let drives: Vec<char> = if let Some(drives) = multi_drives {
+        drives
+    } else if let Some(drive) = single_drive.or_else(|| filters.parsed.drive()) {
+        vec![drive]
+    } else {
+        // All drives
+        if !uffs_mft::is_elevated() {
+            bail!(
+                "Administrator privileges required.\n\n\
+                 UFFS reads the NTFS Master File Table directly, which requires elevated access.\n\n\
+                 Solutions:\n\
+                 1. Run PowerShell/Terminal as Administrator\n\
+                 2. Use a pre-built index: uffs search --index <file.parquet> \"*.txt\""
+            );
+        }
+        let all_drives = uffs_mft::detect_ntfs_drives();
+        if all_drives.is_empty() {
+            bail!("No NTFS drives found on this system");
+        }
+        info!(drives = ?all_drives, count = all_drives.len(), "Searching all NTFS drives");
+        all_drives
+    };
+
+    // Create streaming writer
+    let is_console = matches!(
+        out.to_lowercase().as_str(),
+        "console" | "con" | "term" | "terminal"
+    );
+
+    if is_console {
+        let stdout = std::io::stdout();
+        search_multi_drive_streaming(&drives, filters, format, stdout).await
+    } else {
+        let file =
+            File::create(out).with_context(|| format!("Failed to create output file: {out}"))?;
+        let writer = BufWriter::new(file);
+        search_multi_drive_streaming(&drives, filters, format, writer).await?;
+        info!(file = out, "Results written to file");
+        Ok(())
+    }
 }
 
 /// Load and filter search data from index file, multiple drives, single drive,
@@ -247,8 +493,11 @@ fn execute_query(
         query = query.max_size(max);
     }
 
-    // Apply limit and execute
-    Ok(query.limit(filters.limit).collect()?)
+    // Apply limit (0 = unlimited) and execute
+    if filters.limit > 0 {
+        query = query.limit(filters.limit);
+    }
+    Ok(query.collect()?)
 }
 
 /// Write search results to console or file.
@@ -354,8 +603,8 @@ impl OwnedQueryFilters {
             query = query.max_size(max);
         }
 
-        // Apply limit and execute
-        Ok(query.limit(self.limit).collect()?)
+        // Don't apply limit per-drive - limit is applied to final merged result
+        Ok(query.collect()?)
     }
 }
 
@@ -599,11 +848,14 @@ async fn search_multi_drive_filtered(
         .map(|s| col(&s))
         .collect();
 
-    let result = merged
-        .lazy()
-        .select(columns)
-        .collect()
-        .context("Failed to reorder columns")?;
+    let mut lazy_result = merged.lazy().select(columns);
+
+    // Apply limit to final merged result (0 = unlimited)
+    if filters.limit > 0 {
+        lazy_result = lazy_result.limit(filters.limit);
+    }
+
+    let result = lazy_result.collect().context("Failed to reorder columns")?;
 
     info!(
         total_matches = total_matches,
@@ -622,6 +874,205 @@ async fn search_multi_drive_filtered(
     _filters: &QueryFilters<'_>,
 ) -> Result<uffs_mft::DataFrame> {
     bail!("Multi-drive search is only supported on Windows")
+}
+
+/// Search multiple drives in parallel with streaming output.
+///
+/// Outputs results as each drive completes, providing immediate feedback.
+/// No progress bars - the streaming output IS the progress indicator.
+#[cfg(windows)]
+async fn search_multi_drive_streaming<W: Write + Send + 'static>(
+    drives: &[char],
+    filters: &QueryFilters<'_>,
+    format: &str,
+    writer: W,
+) -> Result<()> {
+    use tokio::sync::mpsc;
+    use uffs_mft::lit;
+
+    if drives.is_empty() {
+        bail!("No drives specified for multi-drive search");
+    }
+
+    info!(
+        count = drives.len(),
+        "Streaming search across drives (results appear as each drive completes)"
+    );
+
+    // Create owned filters that can be sent to tasks
+    let owned_filters = Arc::new(OwnedQueryFilters::from_borrowed(filters));
+
+    // Create streaming writer (shared across all results)
+    let streaming_writer = Arc::new(StreamingWriter::new(writer, format, filters.limit));
+
+    // Channel for receiving results from drive tasks
+    let (tx, mut rx) = mpsc::channel::<DriveResult>(drives.len());
+
+    // Spawn all drive reads concurrently
+    for &drive_char in drives {
+        let tx = tx.clone();
+        let filters = Arc::clone(&owned_filters);
+
+        tokio::spawn(async move {
+            // Open the drive
+            let reader = match MftReader::open(drive_char).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx
+                        .send(DriveResult {
+                            drive: drive_char,
+                            df: None,
+                            records_read: 0,
+                            matches: 0,
+                            error: Some(e.to_string()),
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            // Read without progress callback (streaming output is the progress)
+            let df = reader.read_all().await;
+
+            let df = match df {
+                Ok(df) => df,
+                Err(e) => {
+                    let _ = tx
+                        .send(DriveResult {
+                            drive: drive_char,
+                            df: None,
+                            records_read: 0,
+                            matches: 0,
+                            error: Some(e.to_string()),
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            let records_read = df.height();
+
+            // Apply filters
+            let filtered = match filters.execute(df) {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = tx
+                        .send(DriveResult {
+                            drive: drive_char,
+                            df: None,
+                            records_read,
+                            matches: 0,
+                            error: Some(e.to_string()),
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            let matches = filtered.height();
+
+            // Add drive column
+            let df_with_drive = if matches > 0 {
+                match filtered
+                    .lazy()
+                    .with_column(lit(format!("{drive_char}:")).alias("drive"))
+                    .collect()
+                {
+                    Ok(df) => Some(df),
+                    Err(e) => {
+                        let _ = tx
+                            .send(DriveResult {
+                                drive: drive_char,
+                                df: None,
+                                records_read,
+                                matches,
+                                error: Some(e.to_string()),
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+
+            let _ = tx
+                .send(DriveResult {
+                    drive: drive_char,
+                    df: df_with_drive,
+                    records_read,
+                    matches,
+                    error: None,
+                })
+                .await;
+        });
+    }
+
+    // Drop our sender so the channel closes when all tasks complete
+    drop(tx);
+
+    // Stream results as they arrive
+    let mut total_matches = 0usize;
+    let mut drives_processed = 0usize;
+
+    while let Some(result) = rx.recv().await {
+        drives_processed += 1;
+
+        if let Some(error) = result.error {
+            // Log errors to stderr, not stdout (which has streaming data)
+            eprintln!("[{}:] Error: {}", result.drive, error);
+            continue;
+        }
+
+        total_matches += result.matches;
+
+        // Stream output immediately
+        if let Some(ref df) = result.df {
+            // Reorder columns to put "drive" first
+            let column_names: Vec<String> = df
+                .get_column_names()
+                .into_iter()
+                .filter(|c| c.as_str() != "drive")
+                .map(|c| c.to_string())
+                .collect();
+            let columns: Vec<_> = std::iter::once("drive".to_string())
+                .chain(column_names)
+                .map(|s| uffs_mft::col(&s))
+                .collect();
+
+            if let Ok(reordered) = df.clone().lazy().select(columns).collect() {
+                if let Err(e) = streaming_writer.write_batch(&reordered) {
+                    eprintln!("[{}:] Write error: {}", result.drive, e);
+                }
+            }
+        }
+
+        // Check if we've hit the limit
+        if streaming_writer.limit_reached() {
+            info!(
+                limit = filters.limit,
+                "Output limit reached, stopping early"
+            );
+            break;
+        }
+
+        info!(
+            drive = %result.drive,
+            records = result.records_read,
+            matches = result.matches,
+            progress = format!("{}/{}", drives_processed, drives.len()),
+            "Drive completed"
+        );
+    }
+
+    info!(
+        total_matches = total_matches,
+        rows_output = streaming_writer.total_rows(),
+        drives = drives.len(),
+        "Streaming search complete"
+    );
+
+    Ok(())
 }
 
 /// Build an index from drive MFT(s).
