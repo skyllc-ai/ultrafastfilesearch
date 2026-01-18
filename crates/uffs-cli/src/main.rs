@@ -283,30 +283,27 @@ enum Commands {
         neg: String,
     },
 
-    /// Build an index from a drive's MFT
+    /// Build an index from drive MFT(s)
     ///
-    /// The drive to index is inferred from the output path:
-    ///   - `c:\tmp\index.parquet` → indexes drive C:
-    ///   - `index.parquet` → indexes the drive of the current directory
-    ///
-    /// Use --drive or --drives to override the inferred drive.
+    /// By default, indexes ALL available NTFS drives. Use --drive or --drives
+    /// to limit to specific drives.
     ///
     /// If no extension is provided, defaults to `.parquet`.
     ///
     /// Examples:
-    ///   uffs index index.parquet        # Index current drive
-    ///   uffs index c:\data\files.parquet # Index C: drive
-    ///   uffs index myindex              # Creates myindex.parquet
-    ///   uffs index -d D index.parquet   # Override: index D: drive
+    ///   uffs index index.parquet           # Index ALL drives
+    ///   uffs index -d C index.parquet      # Index only C: drive
+    ///   uffs index --drives C,D,E out.parquet  # Index C:, D:, E:
+    ///   uffs index myindex                 # Creates myindex.parquet
     Index {
         /// Output file path (extension defaults to .parquet)
         output: PathBuf,
 
-        /// Drive letter to index (overrides path inference)
+        /// Drive letter to index (limits to single drive)
         #[arg(short, long, conflicts_with = "drives", value_parser = parse_drive_letter)]
         drive: Option<char>,
 
-        /// Multiple drive letters to index concurrently (e.g., C,D,E)
+        /// Multiple drive letters to index (e.g., C,D,E)
         #[arg(long, value_delimiter = ',', conflicts_with = "drive", value_parser = parse_drive_letter)]
         drives: Option<Vec<char>>,
     },

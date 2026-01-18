@@ -652,19 +652,29 @@ pub async fn index(
         (Some(drv), None) => vec![drv],
         (None, Some(drvs)) => drvs,
         (None, None) => {
-            // Infer drive from output path
+            // No drives specified - index ALL available NTFS drives
             #[cfg(windows)]
-            let inferred = uffs_mft::infer_drive_from_path(&output);
+            {
+                if !uffs_mft::is_elevated() {
+                    anyhow::bail!(
+                        "Administrator privileges required.\n\n\
+                         UFFS reads the NTFS Master File Table directly, which requires elevated access.\n\n\
+                         Solutions:\n\
+                         1. Run PowerShell/Terminal as Administrator\n\
+                         2. Specify a drive explicitly: uffs index --drive C output.parquet"
+                    );
+                }
+                let all_drives = uffs_mft::detect_ntfs_drives();
+                if all_drives.is_empty() {
+                    anyhow::bail!("No NTFS drives found on this system");
+                }
+                info!(drives = ?all_drives, count = all_drives.len(), "No drive specified - indexing all NTFS drives");
+                all_drives
+            }
             #[cfg(not(windows))]
-            let inferred: Option<char> = None;
-
-            if let Some(drive) = inferred {
-                info!(drive = %drive, "Inferred drive from output path");
-                vec![drive]
-            } else {
+            {
                 anyhow::bail!(
-                    "Could not infer drive from path '{}'. Use --drive or --drives to specify.",
-                    output.display()
+                    "No drive specified. Use --drive or --drives to specify which drive(s) to index."
                 );
             }
         }
