@@ -189,6 +189,12 @@ enum Commands {
         /// - prefetch: Double-buffered reads for I/O overlap (best for HDD)
         #[arg(short, long, default_value = "auto")]
         mode: String,
+
+        /// Merge extension records for complete data (slower).
+        /// By default, extension records (~1% of files with many hard
+        /// links/ADS) are skipped for ~15-25% faster reads.
+        #[arg(long)]
+        full: bool,
     },
 
     /// Show MFT information for a drive
@@ -226,6 +232,12 @@ enum Commands {
         /// Read mode: auto, parallel, streaming, prefetch
         #[arg(short, long, default_value = "auto")]
         mode: String,
+
+        /// Merge extension records for complete data (slower).
+        /// By default, extension records (~1% of files) are skipped for faster
+        /// reads.
+        #[arg(long)]
+        full: bool,
     },
 
     /// Benchmark ALL NTFS drives and save results to a file
@@ -242,6 +254,12 @@ enum Commands {
         /// Number of runs per drive for averaging (default: 1)
         #[arg(long, default_value = "1")]
         runs: u32,
+
+        /// Merge extension records for complete data (slower).
+        /// By default, extension records (~1% of files) are skipped for faster
+        /// reads.
+        #[arg(long)]
+        full: bool,
     },
 
     /// Diagnose MFT bitmap to investigate record skipping
@@ -380,7 +398,8 @@ async fn main() -> Result<()> {
                 drive,
                 output,
                 mode,
-            } => cmd_read(drive, output, &mode).await,
+                full,
+            } => cmd_read(drive, output, &mode, full).await,
             Commands::Info { drive, deep } => cmd_info(drive, deep).await,
             Commands::Drives => cmd_drives().await,
             Commands::Bench {
@@ -389,19 +408,21 @@ async fn main() -> Result<()> {
                 no_df,
                 runs,
                 mode,
-            } => cmd_bench(drive, json, no_df, runs, &mode).await,
+                full,
+            } => cmd_bench(drive, json, no_df, runs, &mode, full).await,
             Commands::BenchAll {
                 output,
                 no_df,
                 runs,
-            } => cmd_bench_all(output, no_df, runs).await,
+                full,
+            } => cmd_bench_all(output, no_df, runs, full).await,
             Commands::BitmapDiag { drive, samples } => cmd_bitmap_diag(drive, samples).await,
         }
     }
 }
 
 #[cfg(windows)]
-async fn cmd_read(drive: char, output: PathBuf, mode_str: &str) -> Result<()> {
+async fn cmd_read(drive: char, output: PathBuf, mode_str: &str, full: bool) -> Result<()> {
     use std::time::Instant;
 
     use tracing::debug;
@@ -417,6 +438,7 @@ async fn cmd_read(drive: char, output: PathBuf, mode_str: &str) -> Result<()> {
         drive = %drive_upper,
         output = %output.display(),
         mode = %mode,
+        full,
         "📂 Starting MFT read operation"
     );
 
@@ -434,7 +456,8 @@ async fn cmd_read(drive: char, output: PathBuf, mode_str: &str) -> Result<()> {
     let reader = MftReader::open(drive)
         .await
         .with_context(|| format!("Failed to open drive {}:", drive))?
-        .with_mode(mode);
+        .with_mode(mode)
+        .with_merge_extensions(full);
 
     info!(
         drive = %drive_upper,
@@ -1159,7 +1182,14 @@ fn truncate_string(text: &str, max_len: usize) -> String {
 // ============================================================================
 
 #[cfg(windows)]
-async fn cmd_bench(drive: char, json: bool, no_df: bool, runs: u32, mode_str: &str) -> Result<()> {
+async fn cmd_bench(
+    drive: char,
+    json: bool,
+    no_df: bool,
+    runs: u32,
+    mode_str: &str,
+    full: bool,
+) -> Result<()> {
     use uffs_mft::{BenchmarkResult, MftReadMode, MftReader};
 
     let drive_upper = drive.to_ascii_uppercase();
@@ -1173,6 +1203,7 @@ async fn cmd_bench(drive: char, json: bool, no_df: bool, runs: u32, mode_str: &s
         println!("   Runs: {}", runs);
         println!("   Skip DataFrame: {}", no_df);
         println!("   Mode: {}", mode);
+        println!("   Full (merge extensions): {}", full);
         println!();
     }
 
@@ -1181,6 +1212,7 @@ async fn cmd_bench(drive: char, json: bool, no_df: bool, runs: u32, mode_str: &s
         runs,
         skip_df = no_df,
         mode = %mode,
+        full,
         "📊 Starting benchmark"
     );
 
@@ -1188,7 +1220,8 @@ async fn cmd_bench(drive: char, json: bool, no_df: bool, runs: u32, mode_str: &s
     let reader = MftReader::open(drive)
         .await
         .with_context(|| format!("Failed to open drive {}:", drive))?
-        .with_mode(mode);
+        .with_mode(mode)
+        .with_merge_extensions(full);
 
     let mut results: Vec<BenchmarkResult> = Vec::with_capacity(runs as usize);
 
@@ -1402,7 +1435,7 @@ impl FullBenchmarkReport {
 }
 
 #[cfg(windows)]
-async fn cmd_bench_all(output: Option<PathBuf>, no_df: bool, runs: u32) -> Result<()> {
+async fn cmd_bench_all(output: Option<PathBuf>, no_df: bool, runs: u32, full: bool) -> Result<()> {
     use std::time::Instant;
 
     use uffs_mft::detect_ntfs_drives;
@@ -1443,12 +1476,14 @@ async fn cmd_bench_all(output: Option<PathBuf>, no_df: bool, runs: u32) -> Resul
     println!("📊 Runs per drive: {}", runs);
     println!("📄 Output file: {}", output_path.display());
     println!("⏳ Skip DataFrame: {}", no_df);
+    println!("🔗 Full (merge extensions): {}", full);
     println!();
 
     info!(
         drives = ?drives,
         runs,
         output = %output_path.display(),
+        full,
         "📊 Starting full benchmark"
     );
 
@@ -1464,7 +1499,7 @@ async fn cmd_bench_all(output: Option<PathBuf>, no_df: bool, runs: u32) -> Resul
         );
         println!("─────────────────────────────────────────────────────────────────");
 
-        match benchmark_single_drive(*drive, no_df, runs).await {
+        match benchmark_single_drive(*drive, no_df, runs, full).await {
             Ok(result) => {
                 // Print summary for this drive
                 println!("  ✅ Drive {}:", drive);
@@ -1539,12 +1574,14 @@ async fn benchmark_single_drive(
     drive: char,
     no_df: bool,
     runs: u32,
+    full: bool,
 ) -> Result<uffs_mft::BenchmarkResult> {
     use uffs_mft::MftReader;
 
     let reader = MftReader::open(drive)
         .await
-        .with_context(|| format!("Failed to open drive {}:", drive))?;
+        .with_context(|| format!("Failed to open drive {}:", drive))?
+        .with_merge_extensions(full);
 
     let mut results: Vec<uffs_mft::BenchmarkResult> = Vec::with_capacity(runs as usize);
 

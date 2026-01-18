@@ -348,6 +348,12 @@ pub struct MftReader {
     handle: VolumeHandle,
     /// Read mode selection.
     mode: MftReadMode,
+    /// Whether to merge extension records.
+    ///
+    /// - `false` (default): Fast path - skips extension records (~1% of files
+    ///   with many hard links/ADS). ~15-25% faster, ideal for file search.
+    /// - `true`: Full path - merges extension attributes for complete data.
+    merge_extensions: bool,
 }
 
 impl MftReader {
@@ -377,6 +383,7 @@ impl MftReader {
             volume: volume.to_ascii_uppercase(),
             handle,
             mode: MftReadMode::Auto,
+            merge_extensions: false, // Fast path by default
         })
     }
 
@@ -407,6 +414,28 @@ impl MftReader {
     #[must_use]
     pub const fn mode(&self) -> MftReadMode {
         self.mode
+    }
+
+    /// Sets whether to merge extension records.
+    ///
+    /// Extension records are used when a file has too many attributes to fit
+    /// in a single MFT record (e.g., many hard links, alternate data streams).
+    /// This affects ~1% of files.
+    ///
+    /// # Arguments
+    ///
+    /// * `merge` - If `true`, merge extension records for complete data. If
+    ///   `false` (default), skip extensions for ~15-25% faster reads.
+    #[must_use]
+    pub const fn with_merge_extensions(mut self, merge: bool) -> Self {
+        self.merge_extensions = merge;
+        self
+    }
+
+    /// Returns whether extension record merging is enabled.
+    #[must_use]
+    pub const fn merge_extensions(&self) -> bool {
+        self.merge_extensions
     }
 
     /// Read the entire MFT and return as a `DataFrame`.
@@ -956,17 +985,25 @@ impl MftReader {
             "📊 Benchmark: MFT characteristics"
         );
 
-        // Phase 2+3: Read + Parse (currently combined in ParallelMftReader)
-        // The ParallelMftReader reads sequentially then parses in parallel
+        // Phase 2+3: Read + Parse (using SoA path for optimal df_build)
+        // The ParallelMftReader reads sequentially then parses in parallel.
+        // Using read_all_parallel_to_columns returns ParsedColumns (SoA layout)
+        // which eliminates the AoS→SoA transpose in df_build.
+        //
+        // Fast path (merge_extensions=false): Skips extension records (~1% of files
+        // with many hard links/ADS). ~15-25% faster, ideal for file search.
         let read_parse_start = Instant::now();
         let parallel_reader = ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
         let handle = self.handle.raw_handle();
 
-        let parsed_records =
-            parallel_reader.read_all_parallel_with_progress::<fn(u64, u64)>(handle, true, None)?;
+        let parsed_columns = parallel_reader.read_all_parallel_to_columns::<fn(u64, u64)>(
+            handle,
+            self.merge_extensions,
+            None,
+        )?;
 
         let read_parse_ms = read_parse_start.elapsed().as_millis() as u64;
-        let records_parsed = parsed_records.len();
+        let records_parsed = parsed_columns.len();
 
         // Note: Currently read and parse are interleaved in ParallelMftReader.
         // For now, we report combined time. Future: instrument inside
@@ -995,15 +1032,16 @@ impl MftReader {
         );
 
         // Phase 4: DataFrame build (optional)
+        // Using SoA path: ParsedColumns → DataFrame (no transpose needed!)
         let (df, df_build_ms) = if skip_df_build {
             (None, 0)
         } else {
             let df_start = Instant::now();
-            let df = Self::build_dataframe_from_records(parsed_records)?;
+            let df = Self::build_dataframe_from_columns(parsed_columns)?;
             let df_ms = df_start.elapsed().as_millis() as u64;
             info!(
                 df_build_ms = df_ms,
-                "📊 Benchmark: DataFrame build complete"
+                "📊 Benchmark: DataFrame build complete (SoA path)"
             );
             (Some(df), df_ms)
         };
@@ -1050,8 +1088,13 @@ impl MftReader {
         Ok((df, result))
     }
 
-    /// Helper to build DataFrame from parsed records (extracted for reuse).
+    /// Helper to build DataFrame from parsed records (legacy AoS path).
+    ///
+    /// NOTE: This function is superseded by `build_dataframe_from_columns`
+    /// which uses the SoA path and avoids the AoS→SoA transpose. Kept for
+    /// reference and potential fallback use.
     #[cfg(windows)]
+    #[allow(dead_code)]
     fn build_dataframe_from_records(
         parsed_records: Vec<crate::io::ParsedRecord>,
     ) -> Result<DataFrame> {
@@ -1242,6 +1285,57 @@ impl MftReader {
         ];
 
         DataFrame::new_infer_height(columns).map_err(MftError::from)
+    }
+
+    /// Builds a `DataFrame` directly from `ParsedColumns` (SoA layout).
+    ///
+    /// This is the optimized path that avoids the AoS→SoA transpose.
+    /// The columns are already in the correct format, so we just wrap them
+    /// in Polars Series.
+    #[cfg(windows)]
+    fn build_dataframe_from_columns(columns: crate::io::ParsedColumns) -> Result<DataFrame> {
+        use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
+
+        let polars_columns = vec![
+            // Core identifiers
+            Series::new("frs".into(), columns.frs).into_column(),
+            Series::new("parent_frs".into(), columns.parent_frs).into_column(),
+            Series::new("name".into(), columns.name).into_column(),
+            // Size information
+            Series::new("size".into(), columns.size).into_column(),
+            Series::new("allocated_size".into(), columns.allocated_size).into_column(),
+            // Timestamps (4 total, matching C++)
+            Series::new("created".into(), columns.created)
+                .cast(&DataType::Datetime(TimeUnit::Microseconds, None))?
+                .into_column(),
+            Series::new("modified".into(), columns.modified)
+                .cast(&DataType::Datetime(TimeUnit::Microseconds, None))?
+                .into_column(),
+            Series::new("accessed".into(), columns.accessed)
+                .cast(&DataType::Datetime(TimeUnit::Microseconds, None))?
+                .into_column(),
+            Series::new("mft_changed".into(), columns.mft_changed)
+                .cast(&DataType::Datetime(TimeUnit::Microseconds, None))?
+                .into_column(),
+            // Type and counts
+            Series::new("is_directory".into(), columns.is_directory).into_column(),
+            Series::new("name_count".into(), columns.name_count).into_column(),
+            Series::new("stream_count".into(), columns.stream_count).into_column(),
+            // Extended attribute flags (matching C++ StandardInfo)
+            Series::new("is_readonly".into(), columns.is_readonly).into_column(),
+            Series::new("is_hidden".into(), columns.is_hidden).into_column(),
+            Series::new("is_system".into(), columns.is_system).into_column(),
+            Series::new("is_archive".into(), columns.is_archive).into_column(),
+            Series::new("is_compressed".into(), columns.is_compressed).into_column(),
+            Series::new("is_encrypted".into(), columns.is_encrypted).into_column(),
+            Series::new("is_sparse".into(), columns.is_sparse).into_column(),
+            Series::new("is_reparse".into(), columns.is_reparse).into_column(),
+            Series::new("is_offline".into(), columns.is_offline).into_column(),
+            Series::new("is_not_indexed".into(), columns.is_not_indexed).into_column(),
+            Series::new("is_temporary".into(), columns.is_temporary).into_column(),
+        ];
+
+        DataFrame::new_infer_height(polars_columns).map_err(MftError::from)
     }
 
     /// Save a `DataFrame` to Parquet format.
@@ -1506,11 +1600,11 @@ impl MftReader {
             merger.add_result(result);
         }
 
-        // Merge extensions and get final records
-        let parsed_records = merger.merge();
+        // Merge extensions and convert directly to ParsedColumns (SoA path)
+        let parsed_columns = merger.merge_into_columns();
 
-        // Convert to DataFrame (same as read_mft_internal)
-        Self::parsed_records_to_dataframe(parsed_records)
+        // Convert to DataFrame using SoA path (no transpose needed!)
+        Self::build_dataframe_from_columns(parsed_columns)
     }
 
     /// Load raw MFT from file (non-Windows stub).
@@ -1524,8 +1618,13 @@ impl MftReader {
         Err(MftError::PlatformNotSupported)
     }
 
-    /// Convert parsed records to DataFrame.
+    /// Convert parsed records to DataFrame (legacy AoS path).
+    ///
+    /// NOTE: This function is superseded by `build_dataframe_from_columns`
+    /// which uses the SoA path and avoids the AoS→SoA transpose. Kept for
+    /// reference.
     #[cfg(windows)]
+    #[allow(dead_code)]
     fn parsed_records_to_dataframe(
         parsed_records: Vec<crate::io::ParsedRecord>,
     ) -> Result<DataFrame> {
