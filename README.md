@@ -192,15 +192,14 @@ uffs load-raw c_mft.raw --output parsed.parquet
 
 UFFS is built as a modular Rust workspace:
 
-```
-crates/
-├── uffs-polars   # Polars facade (compilation isolation)
-├── uffs-mft      # Direct MFT reading → Polars DataFrame
-├── uffs-core     # Query engine using Polars lazy API
-├── uffs-cli      # Command-line interface
-├── uffs-tui      # Terminal UI (interactive)
-└── uffs-gui      # Graphical UI (future)
-```
+| Crate | Description | Documentation |
+|-------|-------------|---------------|
+| `uffs-polars` | Polars facade (compilation isolation) | - |
+| `uffs-mft` | Direct MFT reading → Polars DataFrame | [📖 README](crates/uffs-mft/README.md) |
+| `uffs-core` | Query engine using Polars lazy API | - |
+| `uffs-cli` | Command-line interface (`uffs`) | - |
+| `uffs-tui` | Terminal UI (`uffs_tui`) | - |
+| `uffs-gui` | Graphical UI (`uffs_gui`) | - |
 
 ### Key Features
 
@@ -210,6 +209,26 @@ crates/
 - **Parquet Persistence**: Compressed, columnar index storage
 - **Multi-drive Parallel Search**: Query all drives concurrently
 - **SIMD-accelerated Pattern Matching**: Fast glob and regex support
+
+### Low-Level MFT Tools
+
+The `uffs_mft` binary provides direct MFT access for advanced users:
+
+```bash
+# Quick MFT info (~10ms)
+uffs_mft info --drive C
+
+# Full MFT analysis with file statistics (~10-30s)
+uffs_mft info --drive C --deep
+
+# Export MFT to Parquet
+uffs_mft read --drive C --output mft.parquet
+
+# List NTFS drives
+uffs_mft drives
+```
+
+See [uffs-mft README](crates/uffs-mft/README.md) for detailed documentation.
 
 ---
 

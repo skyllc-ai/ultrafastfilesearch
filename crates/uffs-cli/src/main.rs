@@ -42,6 +42,36 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 mod commands;
 
+/// Parse a drive letter from various formats for CPP compatibility.
+///
+/// Accepts:
+/// - Single letter: `C`, `c`
+/// - With colon: `C:`, `c:`
+///
+/// Returns uppercase drive letter.
+fn parse_drive_letter(input: &str) -> Result<char, String> {
+    let trimmed = input.trim();
+    // Strip trailing colon if present (CPP compatibility: "C:" -> "C")
+    let letter_str = trimmed.strip_suffix(':').unwrap_or(trimmed);
+
+    if letter_str.len() != 1 {
+        return Err(format!(
+            "Invalid drive letter '{input}': expected single letter like 'C' or 'C:'"
+        ));
+    }
+
+    let ch = letter_str
+        .chars()
+        .next()
+        .ok_or_else(|| format!("Invalid drive letter '{input}'"))?;
+
+    if !ch.is_ascii_alphabetic() {
+        return Err(format!("Invalid drive letter '{input}': must be A-Z"));
+    }
+
+    Ok(ch.to_ascii_uppercase())
+}
+
 /// UFFS - Ultra Fast File Search using direct MFT reading
 #[derive(Parser)]
 #[command(name = "uffs")]
@@ -68,12 +98,12 @@ struct Cli {
     #[arg(value_name = "PATTERN")]
     pattern: Option<String>,
 
-    /// Drive letter to search (e.g., C). Overrides drive in pattern.
-    #[arg(short, long, conflicts_with = "drives")]
+    /// Drive letter to search (e.g., C or C:). Overrides drive in pattern.
+    #[arg(short, long, conflicts_with = "drives", value_parser = parse_drive_letter)]
     drive: Option<char>,
 
-    /// Multiple drive letters to search concurrently (e.g., C,D,E)
-    #[arg(long, value_delimiter = ',', conflicts_with = "drive")]
+    /// Multiple drive letters to search concurrently (e.g., C,D,E or C:,D:,E:)
+    #[arg(long, value_delimiter = ',', conflicts_with = "drive", value_parser = parse_drive_letter)]
     drives: Option<Vec<char>>,
 
     /// Use pre-built index file instead of live MFT
@@ -162,12 +192,13 @@ enum Commands {
         ///   `">.*\.log$"`     - REGEX for .log files
         pattern: String,
 
-        /// Drive letter to search (e.g., C). Overrides drive in pattern.
-        #[arg(short, long, conflicts_with = "drives")]
+        /// Drive letter to search (e.g., C or C:). Overrides drive in pattern.
+        #[arg(short, long, conflicts_with = "drives", value_parser = parse_drive_letter)]
         drive: Option<char>,
 
-        /// Multiple drive letters to search concurrently (e.g., C,D,E)
-        #[arg(long, value_delimiter = ',', conflicts_with = "drive")]
+        /// Multiple drive letters to search concurrently (e.g., C,D,E or
+        /// C:,D:,E:)
+        #[arg(long, value_delimiter = ',', conflicts_with = "drive", value_parser = parse_drive_letter)]
         drives: Option<Vec<char>>,
 
         /// Use pre-built index file instead of live MFT
@@ -254,12 +285,14 @@ enum Commands {
 
     /// Build an index from a drive's MFT
     Index {
-        /// Drive letter to index (e.g., C). Use --drives for multiple drives.
-        #[arg(short, long, conflicts_with = "drives")]
+        /// Drive letter to index (e.g., C or C:). Use --drives for multiple
+        /// drives.
+        #[arg(short, long, conflicts_with = "drives", value_parser = parse_drive_letter)]
         drive: Option<char>,
 
-        /// Multiple drive letters to index concurrently (e.g., C,D,E)
-        #[arg(long, value_delimiter = ',', conflicts_with = "drive")]
+        /// Multiple drive letters to index concurrently (e.g., C,D,E or
+        /// C:,D:,E:)
+        #[arg(long, value_delimiter = ',', conflicts_with = "drive", value_parser = parse_drive_letter)]
         drives: Option<Vec<char>>,
 
         /// Output file path
@@ -286,8 +319,8 @@ enum Commands {
 
     /// Save raw MFT bytes to a file for offline analysis
     SaveRaw {
-        /// Drive letter to read MFT from (e.g., C)
-        #[arg(short, long)]
+        /// Drive letter to read MFT from (e.g., C or C:)
+        #[arg(short, long, value_parser = parse_drive_letter)]
         drive: char,
 
         /// Output file path for raw MFT data
@@ -320,9 +353,9 @@ enum Commands {
 
 /// Initialize logging with terminal + file support.
 ///
-/// If `verbose` is true and `RUST_LOG` is not set, uses `info` level for terminal.
-/// Otherwise, terminal logging is controlled by `RUST_LOG` (default: `error`).
-/// File logging is controlled by `RUST_LOG_FILE` (default: `info`).
+/// If `verbose` is true and `RUST_LOG` is not set, uses `info` level for
+/// terminal. Otherwise, terminal logging is controlled by `RUST_LOG` (default:
+/// `error`). File logging is controlled by `RUST_LOG_FILE` (default: `info`).
 /// Log directory is controlled by `UFFS_LOG_DIR` (default: `~/bin/rust`).
 ///
 /// Returns a guard that must be kept alive for the duration of the program.
@@ -373,18 +406,26 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     // Timer format
     let timer = UtcTime::rfc_3339();
 
-    // Terminal layer (with ANSI colors)
+    // Terminal layer (with ANSI colors, file/line info, thread IDs)
     let terminal_layer = tracing_subscriber::fmt::layer()
         .with_writer(stdout)
         .with_timer(timer.clone())
         .with_ansi(true)
+        .with_file(true)
+        .with_line_number(true)
+        .with_thread_ids(true)
+        .with_target(true)
         .with_filter(terminal_filter);
 
-    // File layer (no ANSI colors)
+    // File layer (no ANSI colors, but with full context)
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_timer(timer)
         .with_ansi(false)
+        .with_file(true)
+        .with_line_number(true)
+        .with_thread_ids(true)
+        .with_target(true)
         .with_filter(file_filter);
 
     // Combine layers
@@ -401,8 +442,9 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() -> Result<()> {
-    // Check for -v/--verbose flag early to set log level before initializing logging
-    // This allows `uffs -v search ...` to show info-level logs without RUST_LOG=info
+    // Check for -v/--verbose flag early to set log level before initializing
+    // logging This allows `uffs -v search ...` to show info-level logs without
+    // RUST_LOG=info
     let verbose = std::env::args().any(|arg| arg == "-v" || arg == "--verbose");
 
     // Initialize logging with terminal + file support

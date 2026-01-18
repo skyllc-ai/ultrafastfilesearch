@@ -293,10 +293,117 @@ impl MftReader {
             parallel_reader.read_all_parallel_with_progress::<fn(u64, u64)>(handle, true, None)?
         };
 
+        let read_elapsed = start_time.elapsed();
+        let records_parsed_count = parsed_records.len();
+        let throughput_mb_s = if read_elapsed.as_secs_f64() > 0.0 {
+            (total_bytes as f64 / (1024.0 * 1024.0)) / read_elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
+        let records_per_sec = if read_elapsed.as_secs_f64() > 0.0 {
+            records_parsed_count as f64 / read_elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
+
         info!(
-            records_parsed = parsed_records.len(),
-            elapsed_ms = start_time.elapsed().as_millis(),
-            "Parallel read complete"
+            records_parsed = records_parsed_count,
+            total_records,
+            elapsed_ms = read_elapsed.as_millis(),
+            throughput_mb_s = format!("{:.1}", throughput_mb_s),
+            records_per_sec = format!("{:.0}", records_per_sec),
+            "✅ Parallel read complete"
+        );
+
+        // Calculate and log MFT statistics
+        let mut dir_count = 0u64;
+        let mut file_count = 0u64;
+        let mut hidden_count = 0u64;
+        let mut system_count = 0u64;
+        let mut compressed_count = 0u64;
+        let mut encrypted_count = 0u64;
+        let mut sparse_count = 0u64;
+        let mut reparse_count = 0u64;
+        let mut multi_stream_count = 0u64;
+        let mut multi_name_count = 0u64;
+        let mut total_file_size: u64 = 0;
+        let mut total_allocated_size: u64 = 0;
+
+        for rec in &parsed_records {
+            if rec.is_directory {
+                dir_count += 1;
+            } else {
+                file_count += 1;
+                total_file_size = total_file_size.saturating_add(rec.size);
+                total_allocated_size = total_allocated_size.saturating_add(rec.allocated_size);
+            }
+            if rec.std_info.is_hidden {
+                hidden_count += 1;
+            }
+            if rec.std_info.is_system {
+                system_count += 1;
+            }
+            if rec.std_info.is_compressed {
+                compressed_count += 1;
+            }
+            if rec.std_info.is_encrypted {
+                encrypted_count += 1;
+            }
+            if rec.std_info.is_sparse {
+                sparse_count += 1;
+            }
+            if rec.std_info.is_reparse {
+                reparse_count += 1;
+            }
+            if rec.stream_count() > 1 {
+                multi_stream_count += 1;
+            }
+            if rec.name_count() > 1 {
+                multi_name_count += 1;
+            }
+        }
+
+        let slack_space = total_allocated_size.saturating_sub(total_file_size);
+        let slack_percentage = if total_allocated_size > 0 {
+            (slack_space as f64 / total_allocated_size as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        info!(
+            directories = dir_count,
+            files = file_count,
+            "📊 Record type breakdown"
+        );
+
+        info!(
+            hidden = hidden_count,
+            system = system_count,
+            compressed = compressed_count,
+            encrypted = encrypted_count,
+            sparse = sparse_count,
+            reparse_points = reparse_count,
+            "🏷️  Attribute flags summary"
+        );
+
+        if multi_stream_count > 0 || multi_name_count > 0 {
+            info!(
+                files_with_ads = multi_stream_count,
+                files_with_hardlinks = multi_name_count,
+                "🔗 Extended attributes"
+            );
+        }
+
+        debug!(
+            total_file_size_gb =
+                format!("{:.2}", total_file_size as f64 / (1024.0 * 1024.0 * 1024.0)),
+            total_allocated_gb = format!(
+                "{:.2}",
+                total_allocated_size as f64 / (1024.0 * 1024.0 * 1024.0)
+            ),
+            slack_space_mb = format!("{:.2}", slack_space as f64 / (1024.0 * 1024.0)),
+            slack_percentage = format!("{:.1}%", slack_percentage),
+            "💾 Storage analysis"
         );
 
         // Report final progress

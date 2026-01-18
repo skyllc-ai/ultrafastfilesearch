@@ -81,6 +81,16 @@ pub enum OutputColumn {
 
 impl OutputColumn {
     /// Parse column name from string.
+    ///
+    /// Supports both full names and short aliases for CPP compatibility:
+    /// - `r` → readonly
+    /// - `a` → archive
+    /// - `s` → system
+    /// - `h` → hidden
+    /// - `o` → offline
+    /// - `directory` → `is_directory` (mapped to Type)
+    /// - `notcontent` → notindexed
+    /// - `written` → modified
     #[must_use]
     pub fn parse(name: &str) -> Option<Self> {
         match name.to_lowercase().as_str() {
@@ -90,25 +100,30 @@ impl OutputColumn {
             "size" => Some(Self::Size),
             "sizeondisk" => Some(Self::SizeOnDisk),
             "created" => Some(Self::Created),
-            "modified" => Some(Self::Modified),
+            // CPP uses "written", Rust uses "modified" - support both
+            "modified" | "written" => Some(Self::Modified),
             "accessed" => Some(Self::Accessed),
-            "type" => Some(Self::Type),
+            // "directory" maps to Type (which shows file/directory)
+            "type" | "directory" => Some(Self::Type),
             "attributes" => Some(Self::Attributes),
             "attributevalue" => Some(Self::AttributeValue),
-            "hidden" => Some(Self::Hidden),
-            "system" => Some(Self::System),
-            "archive" => Some(Self::Archive),
-            "readonly" => Some(Self::ReadOnly),
+            // Short aliases for CPP compatibility
+            "hidden" | "h" => Some(Self::Hidden),
+            "system" | "s" => Some(Self::System),
+            "archive" | "a" => Some(Self::Archive),
+            "readonly" | "r" => Some(Self::ReadOnly),
             "compressed" => Some(Self::Compressed),
             "encrypted" => Some(Self::Encrypted),
             "sparse" => Some(Self::Sparse),
             "reparse" => Some(Self::Reparse),
-            "offline" => Some(Self::Offline),
-            "notindexed" => Some(Self::NotIndexed),
+            "offline" | "o" => Some(Self::Offline),
+            // CPP uses "notcontent", Rust uses "notindexed" - support both
+            "notindexed" | "notcontent" => Some(Self::NotIndexed),
             "temporary" => Some(Self::Temporary),
             "virtual" => Some(Self::Virtual),
             "pinned" => Some(Self::Pinned),
             "unpinned" => Some(Self::Unpinned),
+            // CPP typo "decendents" supported for compatibility
             "descendants" | "decendents" => Some(Self::Descendants),
             "treesize" | "tree_size" => Some(Self::TreeSize),
             "treeallocated" | "tree_allocated" => Some(Self::TreeAllocated),
@@ -273,12 +288,24 @@ impl OutputConfig {
 
     /// Parse separator with special character handling.
     ///
-    /// Supports: TAB, NEWLINE (case-insensitive).
+    /// Supports (case-insensitive):
+    /// - TAB → `\t`
+    /// - NEWLINE, NEW LINE → `\n`
+    /// - SPACE → ` `
+    /// - RETURN → `\r`
+    /// - DOUBLE → `"`
+    /// - SINGLE → `'`
+    /// - NULL → `\0`
     #[must_use]
     pub fn parse_separator(input: &str) -> String {
         match input.to_uppercase().as_str() {
             "TAB" => "\t".to_owned(),
-            "NEWLINE" => "\n".to_owned(),
+            "NEWLINE" | "NEW LINE" => "\n".to_owned(),
+            "SPACE" => " ".to_owned(),
+            "RETURN" => "\r".to_owned(),
+            "DOUBLE" => "\"".to_owned(),
+            "SINGLE" => "'".to_owned(),
+            "NULL" => "\0".to_owned(),
             _ => input.to_owned(),
         }
     }
@@ -503,10 +530,40 @@ mod tests {
 
     #[test]
     fn test_parse_separator_special() {
+        // Original values
         assert_eq!(OutputConfig::parse_separator("TAB"), "\t");
         assert_eq!(OutputConfig::parse_separator("tab"), "\t");
         assert_eq!(OutputConfig::parse_separator("NEWLINE"), "\n");
         assert_eq!(OutputConfig::parse_separator(";"), ";");
+        // CPP compatibility values
+        assert_eq!(OutputConfig::parse_separator("NEW LINE"), "\n");
+        assert_eq!(OutputConfig::parse_separator("SPACE"), " ");
+        assert_eq!(OutputConfig::parse_separator("RETURN"), "\r");
+        assert_eq!(OutputConfig::parse_separator("DOUBLE"), "\"");
+        assert_eq!(OutputConfig::parse_separator("SINGLE"), "'");
+        assert_eq!(OutputConfig::parse_separator("NULL"), "\0");
+    }
+
+    #[test]
+    fn test_parse_column_aliases() {
+        // Short aliases for CPP compatibility
+        assert_eq!(OutputColumn::parse("r"), Some(OutputColumn::ReadOnly));
+        assert_eq!(OutputColumn::parse("a"), Some(OutputColumn::Archive));
+        assert_eq!(OutputColumn::parse("s"), Some(OutputColumn::System));
+        assert_eq!(OutputColumn::parse("h"), Some(OutputColumn::Hidden));
+        assert_eq!(OutputColumn::parse("o"), Some(OutputColumn::Offline));
+        // CPP name aliases
+        assert_eq!(OutputColumn::parse("written"), Some(OutputColumn::Modified));
+        assert_eq!(
+            OutputColumn::parse("notcontent"),
+            Some(OutputColumn::NotIndexed)
+        );
+        assert_eq!(OutputColumn::parse("directory"), Some(OutputColumn::Type));
+        // CPP typo support
+        assert_eq!(
+            OutputColumn::parse("decendents"),
+            Some(OutputColumn::Descendants)
+        );
     }
 
     #[test]

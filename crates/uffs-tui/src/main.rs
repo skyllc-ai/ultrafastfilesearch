@@ -77,9 +77,9 @@ struct Cli {
 
 /// Initialize logging with terminal + file support.
 ///
-/// If `verbose` is true and `RUST_LOG` is not set, uses `info` level for terminal.
-/// Otherwise, terminal logging is controlled by `RUST_LOG` (default: `error`).
-/// File logging is controlled by `RUST_LOG_FILE` (default: `info`).
+/// If `verbose` is true and `RUST_LOG` is not set, uses `info` level for
+/// terminal. Otherwise, terminal logging is controlled by `RUST_LOG` (default:
+/// `error`). File logging is controlled by `RUST_LOG_FILE` (default: `info`).
 fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     use std::fs;
 
@@ -115,18 +115,27 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     // Timer format
     let timer = UtcTime::rfc_3339();
 
-    // Terminal layer (to stderr to avoid TUI interference, with ANSI colors)
+    // Terminal layer (to stderr to avoid TUI interference, with ANSI colors,
+    // file/line info)
     let terminal_layer = tracing_subscriber::fmt::layer()
         .with_writer(io::stderr)
         .with_timer(timer.clone())
         .with_ansi(true)
+        .with_file(true)
+        .with_line_number(true)
+        .with_thread_ids(true)
+        .with_target(true)
         .with_filter(terminal_filter);
 
-    // File layer (no ANSI colors)
+    // File layer (no ANSI colors, but with full context)
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_timer(timer)
         .with_ansi(false)
+        .with_file(true)
+        .with_line_number(true)
+        .with_thread_ids(true)
+        .with_target(true)
         .with_filter(file_filter);
 
     // Combine layers

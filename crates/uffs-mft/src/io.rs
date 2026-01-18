@@ -124,6 +124,52 @@ impl MftExtentMap {
     /// * `bytes_per_record` - File record size in bytes
     #[must_use]
     pub fn new(extents: Vec<MftExtent>, bytes_per_cluster: u32, bytes_per_record: u32) -> Self {
+        let num_extents = extents.len();
+        let total_clusters: u64 = extents.iter().map(|e| e.cluster_count).sum();
+        let total_size_mb =
+            (total_clusters * u64::from(bytes_per_cluster)) as f64 / (1024.0 * 1024.0);
+        let records_per_cluster = bytes_per_cluster / bytes_per_record;
+        let total_records = total_clusters * u64::from(records_per_cluster);
+
+        // Analyze fragmentation
+        let sparse_extents = extents.iter().filter(|e| e.lcn < 0).count();
+        let is_fragmented = num_extents > 1;
+
+        if is_fragmented {
+            info!(
+                extents = num_extents,
+                sparse_extents,
+                total_clusters,
+                total_records,
+                mft_size_mb = format!("{:.2}", total_size_mb),
+                "⚠️  MFT is fragmented"
+            );
+
+            // Log extent details at debug level
+            for (i, ext) in extents.iter().enumerate() {
+                debug!(
+                    extent = i,
+                    vcn = ext.vcn,
+                    lcn = ext.lcn,
+                    clusters = ext.cluster_count,
+                    is_sparse = ext.lcn < 0,
+                    "  Extent {}: VCN {} → LCN {}, {} clusters{}",
+                    i,
+                    ext.vcn,
+                    ext.lcn,
+                    ext.cluster_count,
+                    if ext.lcn < 0 { " (SPARSE)" } else { "" }
+                );
+            }
+        } else {
+            info!(
+                total_clusters,
+                total_records,
+                mft_size_mb = format!("{:.2}", total_size_mb),
+                "✅ MFT is contiguous (single extent)"
+            );
+        }
+
         Self {
             extents,
             bytes_per_cluster,
@@ -143,6 +189,16 @@ impl MftExtentMap {
     ) -> Self {
         let cluster_count =
             (mft_size_bytes + u64::from(bytes_per_cluster) - 1) / u64::from(bytes_per_cluster);
+        let total_records = mft_size_bytes / u64::from(bytes_per_record);
+        let mft_size_mb = mft_size_bytes as f64 / (1024.0 * 1024.0);
+
+        info!(
+            mft_start_lcn,
+            cluster_count,
+            total_records,
+            mft_size_mb = format!("{:.2}", mft_size_mb),
+            "📁 Creating contiguous MFT extent map (fallback)"
+        );
 
         Self {
             extents: vec![MftExtent {
@@ -1226,15 +1282,37 @@ pub fn generate_read_chunks(
     let cluster_size = extent_map.bytes_per_cluster;
     let records_per_cluster = cluster_size / record_size;
 
+    let num_extents = extent_map.extent_count();
+    let mut sparse_extents = 0u64;
+    let mut total_records_to_read = 0u64;
+    let mut total_records_skipped = 0u64;
+
+    debug!(
+        num_extents,
+        record_size, cluster_size, records_per_cluster, chunk_size, "📐 Generating read chunks"
+    );
+
     // Process each extent
-    for extent in extent_map.extents() {
+    for (extent_idx, extent) in extent_map.extents().enumerate() {
         if extent.lcn < 0 {
-            continue; // Skip sparse extents
+            sparse_extents += 1;
+            trace!(extent_idx, vcn = extent.vcn, "Skipping sparse extent");
+            continue;
         }
 
         let extent_start_frs = extent.vcn * u64::from(records_per_cluster);
         let extent_records = extent.cluster_count * u64::from(records_per_cluster);
         let extent_disk_offset = (extent.lcn as u64) * u64::from(cluster_size);
+
+        trace!(
+            extent_idx,
+            vcn = extent.vcn,
+            lcn = extent.lcn,
+            clusters = extent.cluster_count,
+            records = extent_records,
+            disk_offset = extent_disk_offset,
+            "Processing extent"
+        );
 
         // Split extent into chunks
         let records_per_chunk = (chunk_size / record_size as usize) as u64;
@@ -1254,6 +1332,10 @@ pub fn generate_read_chunks(
 
             // Only add chunk if it has any in-use records
             if skip_begin + skip_end < chunk_records {
+                let effective_records = chunk_records - skip_begin - skip_end;
+                total_records_to_read += effective_records;
+                total_records_skipped += skip_begin + skip_end;
+
                 chunks.push(ReadChunk {
                     disk_offset: extent_disk_offset + chunk_start * u64::from(record_size),
                     start_frs: chunk_frs_start,
@@ -1261,11 +1343,34 @@ pub fn generate_read_chunks(
                     skip_begin,
                     skip_end,
                 });
+            } else {
+                total_records_skipped += chunk_records;
             }
 
             chunk_start += chunk_records;
         }
     }
+
+    if sparse_extents > 0 {
+        debug!(sparse_extents, "Skipped sparse extents");
+    }
+
+    info!(
+        chunks = chunks.len(),
+        records_to_read = total_records_to_read,
+        records_skipped = total_records_skipped,
+        skip_percentage = format!(
+            "{:.1}%",
+            if total_records_to_read + total_records_skipped > 0 {
+                (total_records_skipped as f64
+                    / (total_records_to_read + total_records_skipped) as f64)
+                    * 100.0
+            } else {
+                0.0
+            }
+        ),
+        "📊 Read plan generated"
+    );
 
     chunks
 }
@@ -1287,6 +1392,12 @@ pub struct ParallelMftReader {
     chunk_size: usize,
     /// Progress counter (atomic for thread-safe updates).
     records_processed: Arc<AtomicU64>,
+    /// Fixup failure counter (potential corruption).
+    fixup_failures: Arc<AtomicU64>,
+    /// Invalid magic number counter.
+    invalid_magic: Arc<AtomicU64>,
+    /// Skipped records counter (not in use or invalid).
+    skipped_records: Arc<AtomicU64>,
 }
 
 impl ParallelMftReader {
@@ -1301,6 +1412,9 @@ impl ParallelMftReader {
             bitmap,
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             records_processed: Arc::new(AtomicU64::new(0)),
+            fixup_failures: Arc::new(AtomicU64::new(0)),
+            invalid_magic: Arc::new(AtomicU64::new(0)),
+            skipped_records: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -1457,8 +1571,15 @@ impl ParallelMftReader {
             "All chunks read into memory"
         );
 
+        // Clone atomic counters for parallel access
+        let fixup_failures = Arc::clone(&self.fixup_failures);
+        let skipped_records = Arc::clone(&self.skipped_records);
+
         if merge_extensions {
             // Full parsing with extension merging
+            let fixup_failures_clone = Arc::clone(&fixup_failures);
+            let skipped_records_clone = Arc::clone(&skipped_records);
+
             let parse_results: Vec<ParseResult> = chunk_data
                 .par_iter()
                 .flat_map(|(chunk, data)| {
@@ -1475,15 +1596,21 @@ impl ParallelMftReader {
 
                         let record_data = &data[offset..offset + record_size];
                         let mut record_buf = record_data.to_vec();
+                        let frs = chunk.start_frs + skip_begin as u64 + i as u64;
 
                         // Apply fixup
                         if !apply_fixup(&mut record_buf) {
+                            fixup_failures_clone.fetch_add(1, Ordering::Relaxed);
+                            trace!(frs, "⚠️  Fixup failed - possible torn write or corruption");
                             continue;
                         }
 
                         // Parse record (full)
-                        let frs = chunk.start_frs + skip_begin as u64 + i as u64;
-                        results.push(parse_record_full(&record_buf, frs));
+                        let result = parse_record_full(&record_buf, frs);
+                        if matches!(result, ParseResult::Skip) {
+                            skipped_records_clone.fetch_add(1, Ordering::Relaxed);
+                        }
+                        results.push(result);
 
                         records_processed.fetch_add(1, Ordering::Relaxed);
                     }
@@ -1491,6 +1618,24 @@ impl ParallelMftReader {
                     results
                 })
                 .collect();
+
+            // Log corruption statistics
+            let fixup_fail_count = fixup_failures.load(Ordering::Relaxed);
+            let skipped_count = skipped_records.load(Ordering::Relaxed);
+
+            if fixup_fail_count > 0 {
+                warn!(
+                    fixup_failures = fixup_fail_count,
+                    "⚠️  MFT records with fixup failures detected (possible corruption)"
+                );
+            }
+
+            if skipped_count > 0 {
+                debug!(
+                    skipped_records = skipped_count,
+                    "📋 Records skipped (not in use or invalid)"
+                );
+            }
 
             // Merge extensions into base records
             let mut merger = MftRecordMerger::with_capacity(estimated_records);
@@ -1501,6 +1646,9 @@ impl ParallelMftReader {
             Ok(merger.merge())
         } else {
             // Legacy parsing (skips extension records)
+            let fixup_failures_clone = Arc::clone(&fixup_failures);
+            let skipped_records_clone = Arc::clone(&skipped_records);
+
             let results: Vec<ParsedRecord> = chunk_data
                 .par_iter()
                 .flat_map(|(chunk, data)| {
@@ -1517,16 +1665,20 @@ impl ParallelMftReader {
 
                         let record_data = &data[offset..offset + record_size];
                         let mut record_buf = record_data.to_vec();
+                        let frs = chunk.start_frs + skip_begin as u64 + i as u64;
 
                         // Apply fixup
                         if !apply_fixup(&mut record_buf) {
+                            fixup_failures_clone.fetch_add(1, Ordering::Relaxed);
+                            trace!(frs, "⚠️  Fixup failed - possible torn write or corruption");
                             continue;
                         }
 
                         // Parse record
-                        let frs = chunk.start_frs + skip_begin as u64 + i as u64;
                         if let Some(parsed) = parse_record(&record_buf, frs) {
                             records.push(parsed);
+                        } else {
+                            skipped_records_clone.fetch_add(1, Ordering::Relaxed);
                         }
 
                         records_processed.fetch_add(1, Ordering::Relaxed);
@@ -1535,6 +1687,24 @@ impl ParallelMftReader {
                     records
                 })
                 .collect();
+
+            // Log corruption statistics
+            let fixup_fail_count = fixup_failures.load(Ordering::Relaxed);
+            let skipped_count = skipped_records.load(Ordering::Relaxed);
+
+            if fixup_fail_count > 0 {
+                warn!(
+                    fixup_failures = fixup_fail_count,
+                    "⚠️  MFT records with fixup failures detected (possible corruption)"
+                );
+            }
+
+            if skipped_count > 0 {
+                debug!(
+                    skipped_records = skipped_count,
+                    "📋 Records skipped (not in use or invalid)"
+                );
+            }
 
             Ok(results)
         }
