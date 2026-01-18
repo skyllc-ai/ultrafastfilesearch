@@ -1,0 +1,697 @@
+# UFFS MFT Optimization Plan
+
+_Last updated: 2026-01-18_
+
+This document describes an **experiment-driven roadmap** to make `uffs-mft` the **fastest possible MFT reader and parser**, while preserving correctness and compatibility with the existing C++ behavior.
+
+**Core philosophy**: Every optimization follows the cycle **hypothesis → measurement → accept/reject**. We never "feel" improvements—we prove them with data.
+
+---
+
+## 1. Scope and Goals
+
+**Scope**
+- Windows NTFS Master File Table (MFT) reading and parsing, primarily in:
+  - `crates/uffs-mft/src/reader.rs`
+  - `crates/uffs-mft/src/io.rs`
+  - Supporting modules: `platform.rs`, `ntfs.rs`, `raw.rs`
+
+**Goals**
+- Minimize **wall-clock time** from start of read to DataFrame ready.
+- Keep **memory usage** bounded and predictable on very large volumes.
+- Maintain or improve **correctness** and parity with the C++ implementation.
+- Provide clear hooks for testing, benchmarking, and future tuning.
+
+**Non-goals (for now)**
+- Changing on-disk raw MFT dump format.
+- Changing public CLI surface in incompatible ways.
+
+**Workload context**
+- Typical target systems have multiple large NTFS volumes, ranging from hundreds of GB to multi-TB.
+- Example real-world runs:
+  - ~2.7M files / 0.45M dirs on a 1.76 TB SSD (C:) in ~3m20s.
+  - ~4.46M files / 0.30M dirs on a 7.28 TB HDD (D:) in ~49m40s.
+  - ~7.16M files / 1.12M dirs on a 7.28 TB HDD (S:) in ~1h52m.
+- Across all volumes, totals exceed 21M files and 3.2M directories.
+- At this scale, even tiny inefficiencies per record (extra atomics, extra passes, extra copies) compound into many minutes of wall-clock time.
+
+---
+
+## 2. Bottleneck Analysis by Drive Type
+
+Before optimizing, we must understand **where time is spent** on each drive type:
+
+| Phase | SSD (C:, F:) | HDD (D:, E:, M:, S:) |
+|-------|--------------|----------------------|
+| **I/O Read** | Fast (~1-2 GB/s) | Slow (~100-200 MB/s), seek-bound |
+| **Parse** | Often the bottleneck | Usually idle waiting for I/O |
+| **Merge** | Can be significant with many extensions | Same |
+| **DataFrame Build** | Can dominate on fast I/O | Usually negligible vs I/O |
+
+**Key insight**: Optimizations that help SSD (CPU-bound) may not help HDD (I/O-bound), and vice versa. We must measure both.
+
+**Phase breakdown we need to track**:
+- `read_time_ms`: Time spent in `ReadFile` calls
+- `parse_time_ms`: Time spent in `parse_record_zero_alloc`
+- `merge_time_ms`: Time spent in `MftRecordMerger`
+- `df_build_time_ms`: Time spent building DataFrame columns
+- `peak_rss_mb`: Peak resident set size
+- `bytes_read`: Total bytes read from disk
+- `records_parsed`: Total records successfully parsed
+
+---
+
+## 3. Current Architecture (High Level)
+
+Main live path (simplified):
+- `MftReader::read_all` / `read_with_progress` (in `reader.rs`).
+- `read_mft_internal`:
+  - Opens `VolumeHandle` for `\\.\C:`.
+  - Builds `MftExtentMap` and optional `MftBitmap`.
+  - Chooses chunk size based on `DriveType`.
+  - Instantiates `ParallelMftReader::new_optimized`.
+- `ParallelMftReader::read_all_parallel_with_progress` (in `io.rs`):
+  - Uses `generate_read_chunks` to plan I/O.
+  - Reads all chunks sequentially with aligned buffers.
+  - Then parses records in parallel using Rayon and `parse_record_zero_alloc`.
+  - Merges extension records using `MftRecordMerger`.
+- `MftReader` converts `Vec<ParsedRecord>` into a `uffs_polars::DataFrame`.
+
+Other existing readers:
+- `StreamingMftReader`: single reusable aligned buffer, parse-while-reading.
+- `PrefetchMftReader`: double-buffering with a background prefetcher.
+- `read_raw_internal` + `RawMftData`: raw MFT dump workflows.
+
+---
+
+## 4. Principles and Constraints
+
+- **Experiment-driven**: Every change has a hypothesis, measurement method, and accept/reject criteria.
+- **Zero cheating**: No disabling lints, no skipping tests, no ignoring errors.
+- **Surgical changes**: Prefer minimal, well-scoped optimizations.
+- **Behavior preservation**: Public behavior and schemas must remain compatible.
+- **Visibility**: Use `tracing` for key performance metrics (bytes, records, timings).
+- **Measure before optimizing**: Phase timings must exist before any "quick win" is attempted.
+
+---
+
+## 5. Correctness and Parity Harness
+
+Before optimizing, we need a **repeatable validation loop** to ensure we don't break correctness.
+
+### 5.1 Golden Datasets
+
+- Maintain a small raw MFT dump (or synthetic test data) as a test asset.
+- Store expected normalized output alongside it.
+- CI runs against this golden dataset on every PR.
+
+### 5.2 Normalization Rules
+
+Before comparing outputs:
+- Sort records by a stable key (e.g., record number).
+- Use canonical timestamp format (ISO 8601).
+- Strip run-specific fields (e.g., absolute paths that vary by machine).
+- Normalize invalid/deleted entry representation.
+
+### 5.3 Diff Tooling
+
+- Produce a human-friendly "first mismatch" report.
+- Show context around mismatches (5 records before/after).
+- Exit with clear error code on mismatch.
+
+**Success criteria**: Any optimization PR must pass the parity harness with zero diffs.
+
+---
+
+## 6. Milestones Overview
+
+Each milestone has explicit **success criteria** and **measurement methods**.
+
+| Milestone | Focus | Success Criteria |
+|-----------|-------|------------------|
+| **M0** | Instrumentation Foundation | Phase timings logged, baseline established |
+| **M1** | Quick Wins | ≥10% reduction in parse_time on SSD baseline |
+| **M2** | Streaming & Prefetch | ≥15% reduction in wall-clock on HDD baseline |
+| **M3** | Overlapped I/O | ≥10% additional reduction on HDD |
+| **M4** | Data Layout Overhaul | ≥20% reduction in df_build_time |
+| **M5** | Benchmarks & Auto-Tuning | Reproducible benchmark suite, CI integration |
+
+**Benchmark Matrix** (required for validation):
+- One SSD run (CPU-limited baseline)
+- One big HDD run (I/O-limited baseline)
+- One fragmented/many-extents run (worst-case chunk planning)
+
+---
+
+## 7. Milestone 0 – Instrumentation Foundation
+
+**This milestone must be completed before any optimization work begins.**
+
+### Goal
+
+Establish phase-level timing instrumentation so we can measure the impact of every subsequent change.
+
+### Success Criteria
+
+- [ ] All five phases (read, parse, merge, df_build, total) are timed and logged.
+- [ ] Baseline measurements recorded for at least one SSD and one HDD volume.
+- [ ] Metrics are emitted in a structured format (JSON or structured tracing).
+
+### 7.1 Add Phase Timing Instrumentation
+
+**Tasks**
+1. Add timing spans around each phase in `read_mft_internal`:
+   - `read_time`: Time in I/O operations (all `ReadFile` calls).
+   - `parse_time`: Time in `parse_record_zero_alloc` loop.
+   - `merge_time`: Time in `MftRecordMerger`.
+   - `df_build_time`: Time building DataFrame columns.
+2. Log a summary line at end of run:
+   ```
+   MFT scan complete: read=1234ms parse=5678ms merge=123ms df_build=456ms total=7491ms records=2700000
+   ```
+3. Add optional `--json-metrics` flag to emit structured JSON for scripting.
+
+### 7.2 Establish Baselines
+
+**Tasks**
+1. Run on representative SSD volume (e.g., C:) and record all phase timings.
+2. Run on representative HDD volume (e.g., D: or S:) and record all phase timings.
+3. Document baselines in a `BENCHMARKS.md` or similar.
+
+### 7.3 Add Memory Tracking (Optional)
+
+**Tasks**
+1. Track peak RSS using platform APIs or `jemalloc` stats.
+2. Log peak memory alongside phase timings.
+
+### 7.4 Extension Record Merging Metrics
+
+**Rationale**: The merger can become a hidden O(n) or worse cost if it does lots of hashmap work.
+
+**Tasks**
+1. Add separate timing for `MftRecordMerger` operations.
+2. Log extension record count and merge time.
+3. Track hashmap operations if significant.
+
+---
+
+## 8. Milestone 1 – Quick Wins
+
+### Goal
+
+Reduce CPU overhead in the hot path without changing I/O strategy.
+
+### Success Criteria
+
+- [ ] ≥10% reduction in `parse_time` on SSD baseline.
+- [ ] No regression in `read_time` or correctness.
+- [ ] All parity tests pass.
+
+### Measurement Method
+
+Compare phase timings before/after on the same SSD volume. Run 3x and take median.
+
+---
+
+### 8.1 Eliminate Per-Record Atomics with Rayon fold/reduce
+
+**Problem**
+- In `ParallelMftReader::read_all_parallel_with_progress`, each record updates atomics (`records_processed`, `skipped_records`).
+- On very large MFTs this causes cache-line ping-pong and slows parsing.
+
+**Plan (Preferred: Zero Atomics in Hot Loop)**
+- Use Rayon's `fold` → `reduce` pattern:
+  - Each worker returns `(processed_count, skipped_count, Vec<ParsedRecord>)` for its chunk.
+  - Reduce counters at the end with a single aggregation.
+- For progress reporting, use a **separate** `AtomicU64` updated once per chunk (or every ~8192 records), not per record.
+
+**Why this is better than batching**
+- Batching (local counters + periodic `fetch_add`) still has atomic operations in the hot loop.
+- `fold/reduce` moves all counting to the reduction phase, completely eliminating contention during parsing.
+
+**Expected Impact**
+- 5-15% reduction in parse_time on CPU-bound SSD workloads.
+- Negligible impact on HDD (I/O-bound), but no regression.
+
+**Tasks**
+1. Refactor the Rayon `par_iter().flat_map(...)` to use `fold` → `reduce`.
+2. Each fold closure returns `(processed, skipped, records)`.
+3. Final reduce aggregates counts and flattens record vectors.
+4. Add a coarse progress counter (per-chunk or every N records) for UI feedback.
+5. Verify counts match previous behavior in tests.
+
+---
+
+### 8.2 Pre-size All Hot Vectors
+
+**Problem**
+- Column vectors and parsed record storage grow dynamically.
+- At 20M+ records, capacity misses cause many reallocations.
+
+**Plan**
+- Use `Vec::with_capacity(estimated_records)` for:
+  - All column vectors in DataFrame building.
+  - The `parsed_records` vector (if still used).
+  - Any intermediate buffers.
+
+**Expected Impact**
+- Reduces allocator pressure and memory fragmentation.
+- 5-10% reduction in df_build_time.
+
+**Tasks**
+1. Compute `estimated_records` from MFT size / record size (or bitmap popcount).
+2. Pre-size all column vectors with this estimate.
+3. Pre-size `parsed_records` vector in parallel reader.
+4. Verify no change in output.
+
+---
+
+### 8.3 Fuse Stats with DataFrame Building
+
+**Problem**
+- `MftReader::read_mft_internal` walks `Vec<ParsedRecord>` multiple times:
+  - Once for stats (counts, sizes, flag breakdowns).
+  - Once to fill column `Vec`s for the DataFrame.
+
+**Plan**
+- Merge stats calculation into the same loop that builds the columns.
+- Consider a "stats-only" fast path for users who don't need a DataFrame.
+
+**Expected Impact**
+- Halves the number of linear passes over records.
+- 10-20% reduction in df_build_time.
+
+**Tasks**
+1. Identify the stats loop over `parsed_records`.
+2. Identify the loop that constructs column vectors.
+3. Merge into a single loop that pushes fields and updates counters.
+4. Remove the redundant loop.
+5. Verify logs and DataFrame content remain correct.
+
+---
+
+### 8.4 Reuse Aligned Buffer (No Mutex)
+
+**Problem**
+- `read_chunk` allocates a fresh `AlignedBuffer` for every chunk.
+- This causes extra allocations and churn.
+
+**Plan (Corrected: No Mutex Needed)**
+- Since reads are sequential (not concurrent), use `&mut self` and store `AlignedBuffer` directly in `ParallelMftReader`.
+- Resize with `ensure_capacity` as needed, but avoid reallocating for every chunk.
+
+**Why not Mutex?**
+- The read phase is single-threaded; parsing is parallel but happens after reading.
+- A `Mutex` adds overhead for no benefit in this architecture.
+- If we later pipeline multiple in-flight reads, allocate N buffers (one per in-flight read) rather than mutex-serializing.
+
+**Note**: This still returns a per-chunk `Vec<u8>` copy. The bigger win (avoiding that copy) comes in M2/M4 with streaming/direct parsing.
+
+**Expected Impact**
+- Reduces aligned allocation churn.
+- 2-5% reduction in read_time on volumes with many chunks.
+
+**Tasks**
+1. Change `read_chunk` signature to take `&mut self`.
+2. Add `buffer: AlignedBuffer` field to `ParallelMftReader`.
+3. Initialize in `new_optimized` with size `chunk_size + SECTOR_SIZE`.
+4. In `read_chunk`, ensure capacity and reuse buffer.
+5. Run tests and validate behavior.
+
+---
+
+### 8.5 Tune Raw MFT Chunk Size
+
+**Problem**
+- `read_raw_internal` uses a hard-coded 1 MB chunk size, ignoring drive type optimizations.
+
+**Plan**
+- Use `DriveType::optimal_chunk_size()` to pick chunk size, mirroring `ParallelMftReader`.
+
+**Guardrail**
+- Chunk size must be a multiple of **record size** and **sector size** (and ideally cluster size) to avoid partial-record complexity.
+
+**Expected Impact**
+- 5-15% reduction in raw dump time on HDD.
+
+**Tasks**
+1. Compute `chunk_size` using drive type.
+2. Ensure alignment constraints are met.
+3. Pass to `generate_read_chunks` and buffer allocations.
+4. Test raw dump on SSD and HDD volumes.
+
+---
+
+### 8.6 Chunk Planner: Merge Adjacent Tiny Ranges
+
+**Problem**
+- `generate_read_chunks` may produce many small chunks on fragmented MFTs.
+- Each chunk incurs kernel call overhead.
+
+**Plan**
+- Merge adjacent or nearly-adjacent ranges when the gap is small.
+- Prefer fewer, larger reads even if we "over-read" some slack.
+
+**Guardrails**
+- Don't merge across extent boundaries if it would violate alignment.
+- Maintain record boundary alignment.
+
+**Expected Impact**
+- Reduces kernel call overhead on fragmented volumes.
+- 2-10% reduction in read_time on worst-case fragmented MFTs.
+
+**Tasks**
+1. Add merge logic to `generate_read_chunks`.
+2. Define "small gap" threshold (e.g., < 64KB).
+3. Test on fragmented volume or synthetic test case.
+
+---
+
+### 8.7 Micro-Optimizations (Only After Phase Timings Exist)
+
+**Ideas**
+- Replace repeated `(skip_begin + i) * record_size` with an incrementing offset.
+- Guard expensive stats/logging with level checks.
+
+**Prerequisite**: M0 instrumentation must be in place to measure impact.
+
+**Expected Impact**
+- 1-3% reduction in parse_time (marginal but free).
+
+---
+
+## 9. Milestone 2 – Streaming & Prefetch Integration
+
+### Goal
+
+Overlap I/O and parsing to reduce wall-clock time on HDD volumes.
+
+### Success Criteria
+
+- [ ] ≥15% reduction in wall-clock time on HDD baseline.
+- [ ] Consistent progress reporting across all modes.
+- [ ] No correctness regressions.
+
+### Measurement Method
+
+Compare wall-clock time before/after on the same HDD volume. Run 3x and take median.
+
+---
+
+### 9.1 Add `MftReadMode` Configuration
+
+**Plan**
+- Introduce an enum `MftReadMode` in `reader.rs`:
+  - `Parallel` (current default).
+  - `Streaming`.
+  - `Prefetch`.
+  - `Overlapped` (future, M3).
+- Add `read_mode: MftReadMode` field to `MftReader` with a builder-style `with_read_mode` method.
+
+**Additional Requirements**
+- Log "mode chosen" + "chunk size" + "queue depth (if overlapped)" at start of run.
+- Expose "merge extensions on/off" if it's a big cost and not always needed.
+
+**Tasks**
+1. Define `MftReadMode` enum.
+2. Add `read_mode` field to `MftReader` with default `Parallel`.
+3. Add `with_read_mode` to configure it.
+4. Add CLI flag `--mode parallel|streaming|prefetch|overlapped`.
+
+---
+
+### 9.2 Wire Up `StreamingMftReader`
+
+**Plan**
+- In `read_mft_internal`, when `read_mode == Streaming`:
+  - Construct `StreamingMftReader::new(extent_map.clone(), bitmap.clone(), drive_type)`.
+  - Call `read_all_streaming(handle, merge_extensions = true, progress_callback)`.
+
+**Expected Impact**
+- Lower peak memory usage on large volumes.
+- Useful for memory-constrained environments.
+
+**Tasks**
+1. Branch on `self.read_mode` in `read_mft_internal`.
+2. For `Streaming`, use `StreamingMftReader` to produce `Vec<ParsedRecord>`.
+3. Ensure extension merging is handled via `MftRecordMerger`.
+4. Run tests and compare results with the `Parallel` mode.
+
+---
+
+### 9.3 Wire Up `PrefetchMftReader`
+
+**Plan**
+- In `read_mft_internal`, when `read_mode == Prefetch`:
+  - Construct `PrefetchMftReader` similarly.
+  - Call `read_all_prefetch` with merge and progress callback.
+
+**Expected Impact**
+- Overlaps I/O latency with CPU work.
+- On HDDs, can approach 2× improvement over strict "read-then-parse".
+
+**Important**: Ensure progress reporting is consistent across modes, or users will think a mode "hangs".
+
+**Tasks**
+1. Add a branch for `Prefetch` in `read_mft_internal`.
+2. Pass the same `extent_map`, `bitmap`, `drive_type`, and `HANDLE`.
+3. Ensure DataFrame content matches the `Parallel` path on test volumes.
+
+---
+
+### 9.4 Heuristics and Configuration
+
+**Default Mode Selection** (data-driven, after benchmarking):
+- HDD default: **Prefetch** (overlaps I/O with parsing)
+- SSD/NVMe default: **Parallel** (if parsing dominates) OR **Streaming** (if memory matters)
+
+**Tasks**
+1. Add simple CLI flag to select mode.
+2. Implement auto-detection based on `DriveType`.
+3. Allow manual override via CLI/config.
+
+---
+
+
+
+## 10. Milestone 3 – Advanced I/O Parallelism (Overlapped I/O)
+
+### Goal
+
+Allow multiple in-flight reads using Windows overlapped I/O to overlap disk latency and parsing.
+
+### Success Criteria
+
+- [ ] ≥10% additional reduction in wall-clock time on HDD (beyond M2).
+- [ ] Stable under various queue depths.
+- [ ] Feature-flagged and opt-in until mature.
+
+### Key Risks
+
+- Too much queue depth on HDD can degrade throughput (seeks/queue thrash).
+- Alignment rules must remain consistent (sector alignment, record boundaries).
+- Error handling becomes complex (partial reads, cancellation, device-specific quirks).
+
+---
+
+### 10.1 Stepped Implementation Approach
+
+**Do NOT jump straight to full IOCP. Follow these steps:**
+
+1. **Step 1: Validate Prefetch Helps**
+   - Confirm M2 prefetch mode shows measurable overlap benefit.
+   - If prefetch doesn't help, overlapped I/O won't either.
+
+2. **Step 2: Overlapped-Lite (Fixed Queue Depth 2-4)**
+   - Simple `OVERLAPPED` + `GetOverlappedResult`.
+   - No IOCP complexity.
+   - Validate correctness and measure improvement.
+
+3. **Step 3: IOCP (Only If Needed)**
+   - Only if overlapped-lite shows promise but needs more queue depth.
+   - Consider using `tokio` or `mio` for async I/O abstraction.
+
+---
+
+### 10.2 Implementation Details
+
+**High-Level Design**
+- New reader `OverlappedMftReader` that:
+  - Opens the volume handle with `FILE_FLAG_OVERLAPPED`.
+  - Uses `generate_read_chunks` for offsets.
+  - Issues N overlapped `ReadFile` calls with distinct `OVERLAPPED` structs.
+  - Waits for completions via `GetOverlappedResult`.
+  - Feeds completed buffers into a parsing pool.
+
+**Tasks**
+1. Build a tiny Rust prototype outside UFFS:
+   - Opens a regular file with `FILE_FLAG_OVERLAPPED`.
+   - Issues 2–4 overlapped reads.
+   - Waits for all and verifies data.
+2. Port to `uffs-mft`:
+   - Implement `OverlappedMftReader` with fixed in-flight reads.
+   - Integrate with `generate_read_chunks` and parsing logic.
+3. Add `MftReadMode::Overlapped` and wire through `MftReader`.
+4. Add feature flag `overlapped-io` (off by default).
+5. Test on real NTFS volumes and compare timings.
+
+---
+
+## 11. Milestone 4 – Parsing & Data Layout Overhaul
+
+### Goal
+
+Move toward struct-of-arrays (SoA) layout and direct-to-columns parsing to reduce allocations and copies.
+
+### Success Criteria
+
+- [ ] ≥20% reduction in `df_build_time`.
+- [ ] No increase in `parse_time`.
+- [ ] All parity tests pass.
+
+### Key Insight
+
+The current approach parses into `ParsedRecord` structs (array-of-structs), then walks them again to populate 20+ column vectors (struct-of-arrays) for Polars. This double-handling wastes CPU and memory bandwidth.
+
+---
+
+### 11.1 Incremental Approach (Recommended)
+
+**Do NOT rewrite everything at once. Follow these steps:**
+
+1. **Step 1: `ParsedColumns` + Conversion**
+   - Define `ParsedColumns` struct holding column vectors directly.
+   - Write `parsed_records_to_columns(Vec<ParsedRecord>) -> ParsedColumns`.
+   - Switch DataFrame construction to use `ParsedColumns`.
+   - Validate correctness.
+
+2. **Step 2: Direct-to-Columns for Easy Fields**
+   - Parse fixed fields (record number, flags, sizes) directly into columns.
+   - Keep complex fields (timestamps, names, extensions) in `ParsedRecord` for now.
+
+3. **Step 3: Direct-to-Columns for Complex Fields**
+   - Handle timestamps, names, and extension attributes directly.
+   - This is where correctness bugs are most likely—test heavily.
+
+---
+
+### 11.2 Hot vs Cold Column Grouping
+
+**Idea**: SoA doesn't have to mean "all columns at once."
+
+- **Hot columns** (always used): record_number, parent_record, filename, flags, size
+- **Cold columns** (rarely used): all timestamps, security_id, reparse_point, etc.
+
+**Plan**
+- Optionally compute cold columns behind a flag.
+- Reduces work for use cases that only need hot columns.
+
+---
+
+### 11.3 Tasks
+
+1. Define `ParsedColumns` in `reader.rs` mirroring the current DataFrame schema.
+2. Write conversion function `parsed_records_to_columns`.
+3. Switch DataFrame construction to use `ParsedColumns`.
+4. Measure df_build_time improvement.
+5. Once stable, explore direct-to-columns parsing.
+
+---
+
+## 12. Milestone 5 – Benchmarks, Auto-Tuning, and Validation
+
+### Goal
+
+Ensure we can measure improvements and keep them over time.
+
+### Success Criteria
+
+- [ ] Reproducible benchmark suite exists.
+- [ ] CI runs benchmarks against golden datasets.
+- [ ] Auto-tuning selects optimal mode per drive type.
+
+---
+
+### 12.1 Benchmarking Tool
+
+**Tasks**
+1. Add a small benchmarking binary that:
+   - Accepts a volume letter or raw MFT file.
+   - Accepts read mode and options.
+   - Measures end-to-end time and phase timings.
+   - Outputs JSON for scripting (`--json` flag).
+2. Add separate "read only", "parse only", "df build only" toggles if feasible.
+3. Document how to run benchmarks on typical SSD/HDD setups.
+
+---
+
+### 12.2 CI Integration
+
+**Tasks**
+1. Store benchmark baselines in CI artifacts.
+2. Run against raw MFT dumps (CI can't access live volumes).
+3. Fail CI if performance regresses beyond threshold (e.g., >5%).
+
+---
+
+### 12.3 Auto-Tuning
+
+**Tasks**
+1. Use benchmark data to tune `DriveType::optimal_chunk_size`.
+2. Choose default `MftReadMode` per drive type based on measurements.
+3. Document tuning decisions and rationale.
+
+---
+
+## 13. PR-Sized Implementation Order
+
+For a junior engineer, here's the recommended order of PRs:
+
+### Phase 1: Foundation (M0)
+1. **PR1**: Add phase timing instrumentation (read/parse/merge/df_build).
+2. **PR2**: Add structured metrics output (JSON).
+3. **PR3**: Establish and document baselines.
+
+### Phase 2: Quick Wins (M1)
+4. **PR4**: Replace per-record atomics with fold/reduce.
+5. **PR5**: Pre-size all hot vectors.
+6. **PR6**: Fuse stats with DataFrame building.
+7. **PR7**: Reuse aligned buffer (no mutex).
+8. **PR8**: Chunk planner merge adjacent ranges.
+9. **PR9**: Raw chunk size tuning.
+
+### Phase 3: I/O Overlap (M2)
+10. **PR10**: Add `MftReadMode` enum and CLI flag.
+11. **PR11**: Wire up `StreamingMftReader`.
+12. **PR12**: Wire up `PrefetchMftReader`.
+13. **PR13**: Implement mode auto-selection heuristics.
+
+### Phase 4: Advanced (M3/M4)
+14. **PR14**: Overlapped I/O prototype (feature-flagged).
+15. **PR15**: `ParsedColumns` + conversion.
+16. **PR16**: Direct-to-columns for easy fields.
+
+### Phase 5: Polish (M5)
+17. **PR17**: Benchmarking tool.
+18. **PR18**: CI benchmark integration.
+
+---
+
+## 14. How to Work Through This
+
+1. **Start with M0** (instrumentation). Without measurements, you're guessing.
+2. For each change:
+   - State your hypothesis ("I expect X% improvement in Y phase").
+   - Make minimal edits.
+   - Run `cargo test -p uffs-mft`.
+   - Measure before/after on a real volume.
+   - Accept or reject based on data.
+3. **Keep PRs small** (one optimization per PR).
+4. **Document results** in commit messages and BENCHMARKS.md.
+5. **Only proceed to M3/M4** after M1/M2 are stable and measured.
+
+This plan is intended to guide us from solid performance today to **best-in-class MFT processing** over several iterations, without sacrificing correctness or maintainability.
+
+---
+
+_End of plan._

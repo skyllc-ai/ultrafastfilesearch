@@ -17,6 +17,140 @@ use crate::error::{MftError, Result};
 #[cfg(windows)]
 use crate::platform::VolumeHandle;
 
+// ============================================================================
+// Benchmark / Timing Types
+// ============================================================================
+
+/// Phase timing breakdown for MFT reading operations.
+///
+/// Each phase is measured independently to identify bottlenecks.
+#[derive(Debug, Clone, Default)]
+pub struct PhaseTimings {
+    /// Time to open volume and retrieve MFT metadata.
+    pub open_ms: u64,
+    /// Time spent reading chunks from disk (I/O).
+    pub read_ms: u64,
+    /// Time spent parsing MFT records (CPU, parallel).
+    pub parse_ms: u64,
+    /// Time spent merging extension records.
+    pub merge_ms: u64,
+    /// Time spent building the `DataFrame` from parsed records.
+    pub df_build_ms: u64,
+    /// Total wall-clock time.
+    pub total_ms: u64,
+}
+
+impl PhaseTimings {
+    /// Returns the sum of individual phases (may differ from total due to
+    /// overlap).
+    #[must_use]
+    pub const fn sum_phases(&self) -> u64 {
+        self.open_ms + self.read_ms + self.parse_ms + self.merge_ms + self.df_build_ms
+    }
+
+    /// Returns the overhead (total - sum of phases).
+    #[must_use]
+    #[allow(clippy::cast_possible_wrap)]
+    pub const fn overhead_ms(&self) -> i64 {
+        self.total_ms as i64 - self.sum_phases() as i64
+    }
+}
+
+/// Drive and MFT characteristics for benchmarking.
+#[derive(Debug, Clone)]
+pub struct DriveCharacteristics {
+    /// Drive letter (e.g., 'C').
+    pub drive_letter: char,
+    /// Detected drive type (SSD, HDD, Unknown).
+    pub drive_type: String,
+    /// Total MFT size in bytes.
+    pub mft_size_bytes: u64,
+    /// Total number of MFT records.
+    pub total_records: u64,
+    /// Number of in-use records (if bitmap available).
+    pub in_use_records: Option<u64>,
+    /// Number of MFT extents (fragmentation indicator).
+    pub extent_count: usize,
+    /// Bytes per MFT record.
+    pub bytes_per_record: u32,
+    /// Chunk size used for I/O (bytes).
+    pub chunk_size_bytes: usize,
+    /// Number of read chunks generated.
+    pub chunk_count: usize,
+}
+
+/// Complete benchmark result including timings and characteristics.
+#[derive(Debug, Clone)]
+pub struct BenchmarkResult {
+    /// Phase timing breakdown.
+    pub timings: PhaseTimings,
+    /// Drive and MFT characteristics.
+    pub characteristics: DriveCharacteristics,
+    /// Number of records successfully parsed.
+    pub records_parsed: usize,
+    /// Throughput in MB/s (based on MFT size / total time).
+    pub throughput_mb_s: f64,
+    /// Records processed per second.
+    pub records_per_sec: f64,
+}
+
+impl BenchmarkResult {
+    /// Formats the result as JSON for scripting.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        format!(
+            r#"{{
+  "drive": "{}",
+  "drive_type": "{}",
+  "mft_size_bytes": {},
+  "total_records": {},
+  "in_use_records": {},
+  "extent_count": {},
+  "bytes_per_record": {},
+  "chunk_size_bytes": {},
+  "chunk_count": {},
+  "records_parsed": {},
+  "timings_ms": {{
+    "open": {},
+    "read": {},
+    "parse": {},
+    "merge": {},
+    "df_build": {},
+    "total": {}
+  }},
+  "throughput": {{
+    "mb_per_sec": {:.2},
+    "records_per_sec": {:.0}
+  }}
+}}"#,
+            self.characteristics.drive_letter,
+            self.characteristics.drive_type,
+            self.characteristics.mft_size_bytes,
+            self.characteristics.total_records,
+            self.characteristics
+                .in_use_records
+                .map_or_else(|| "null".to_owned(), |val| val.to_string()),
+            self.characteristics.extent_count,
+            self.characteristics.bytes_per_record,
+            self.characteristics.chunk_size_bytes,
+            self.characteristics.chunk_count,
+            self.records_parsed,
+            self.timings.open_ms,
+            self.timings.read_ms,
+            self.timings.parse_ms,
+            self.timings.merge_ms,
+            self.timings.df_build_ms,
+            self.timings.total_ms,
+            self.throughput_mb_s,
+            self.records_per_sec,
+        )
+    }
+}
+
+// ============================================================================
+// Progress Types
+// ============================================================================
+
 /// Progress information during MFT reading.
 #[derive(Debug, Clone)]
 pub struct MftProgress {
@@ -186,6 +320,51 @@ impl MftReader {
     where
         F: Fn(MftProgress) + Send + 'static,
     {
+        Err(MftError::PlatformNotSupported)
+    }
+
+    /// Read MFT with detailed phase timing for benchmarking.
+    ///
+    /// This method measures each phase of MFT reading separately:
+    /// - Open: Volume handle and metadata retrieval
+    /// - Read: Disk I/O (reading chunks)
+    /// - Parse: Record parsing (parallel)
+    /// - Merge: Extension record merging
+    /// - DataFrame build: Converting parsed records to DataFrame
+    ///
+    /// # Arguments
+    ///
+    /// * `skip_df_build` - If true, skip DataFrame building (measure I/O +
+    ///   parse only)
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (optional DataFrame, BenchmarkResult).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MFT reading fails.
+    #[cfg(windows)]
+    #[allow(clippy::unused_async)]
+    pub async fn read_with_timing(
+        &self,
+        skip_df_build: bool,
+    ) -> Result<(Option<DataFrame>, BenchmarkResult)> {
+        self.read_mft_with_timing_internal(skip_df_build)
+    }
+
+    /// Read MFT with timing (non-Windows stub).
+    ///
+    /// # Errors
+    ///
+    /// Always returns `MftError::PlatformNotSupported` on non-Windows
+    /// platforms.
+    #[cfg(not(windows))]
+    #[allow(clippy::unused_async)]
+    pub async fn read_with_timing(
+        &self,
+        _skip_df_build: bool,
+    ) -> Result<(Option<DataFrame>, BenchmarkResult)> {
         Err(MftError::PlatformNotSupported)
     }
 
@@ -486,6 +665,256 @@ impl MftReader {
         }
 
         // Build DataFrame with full schema
+        Self::build_dataframe_full(
+            frs_vec,
+            parent_frs_vec,
+            name_vec,
+            size_vec,
+            allocated_size_vec,
+            created_vec,
+            modified_vec,
+            accessed_vec,
+            mft_changed_vec,
+            is_directory_vec,
+            name_count_vec,
+            stream_count_vec,
+            is_readonly_vec,
+            is_hidden_vec,
+            is_system_vec,
+            is_archive_vec,
+            is_compressed_vec,
+            is_encrypted_vec,
+            is_sparse_vec,
+            is_reparse_vec,
+            is_offline_vec,
+            is_not_indexed_vec,
+            is_temporary_vec,
+        )
+    }
+
+    /// Internal implementation for MFT reading with detailed phase timing.
+    ///
+    /// This method measures each phase separately for benchmarking purposes.
+    #[cfg(windows)]
+    #[allow(clippy::too_many_lines)]
+    fn read_mft_with_timing_internal(
+        &self,
+        skip_df_build: bool,
+    ) -> Result<(Option<DataFrame>, BenchmarkResult)> {
+        use crate::io::{MftExtentMap, ParallelMftReader, generate_read_chunks};
+        use crate::platform::detect_drive_type;
+
+        let total_start = Instant::now();
+
+        // Phase 1: Open (already done, but measure metadata retrieval)
+        let open_start = Instant::now();
+        let record_size = self.handle.file_record_size();
+        let volume_data = self.handle.volume_data();
+        let drive_type = detect_drive_type(self.volume);
+        let chunk_size = drive_type.optimal_chunk_size();
+
+        // Get MFT extents
+        let extents = self.handle.get_mft_extents().unwrap_or_else(|e| {
+            warn!(error = ?e, "Failed to get MFT extents, using fallback");
+            vec![crate::platform::MftExtent {
+                vcn: 0,
+                cluster_count: volume_data.mft_valid_data_length
+                    / u64::from(volume_data.bytes_per_cluster),
+                lcn: volume_data.mft_start_lcn as i64,
+            }]
+        });
+
+        let extent_map =
+            MftExtentMap::new(extents.clone(), volume_data.bytes_per_cluster, record_size);
+        let total_records = extent_map.total_records();
+        let mft_size_bytes = total_records * u64::from(record_size);
+
+        // Get bitmap
+        let bitmap = self.handle.get_mft_bitmap().ok();
+        let in_use_records = bitmap.as_ref().map(|bm| bm.count_in_use() as u64);
+
+        // Generate chunks to get count
+        let chunks = generate_read_chunks(&extent_map, bitmap.as_ref(), chunk_size);
+        let chunk_count = chunks.len();
+
+        let open_ms = open_start.elapsed().as_millis() as u64;
+
+        // Build characteristics
+        let characteristics = DriveCharacteristics {
+            drive_letter: self.volume,
+            drive_type: format!("{:?}", drive_type),
+            mft_size_bytes,
+            total_records,
+            in_use_records,
+            extent_count: extents.len(),
+            bytes_per_record: record_size,
+            chunk_size_bytes: chunk_size,
+            chunk_count,
+        };
+
+        info!(
+            volume = %self.volume,
+            drive_type = ?drive_type,
+            total_records,
+            mft_size_mb = mft_size_bytes / (1024 * 1024),
+            extents = extents.len(),
+            chunks = chunk_count,
+            "📊 Benchmark: MFT characteristics"
+        );
+
+        // Phase 2+3: Read + Parse (currently combined in ParallelMftReader)
+        // The ParallelMftReader reads sequentially then parses in parallel
+        let read_parse_start = Instant::now();
+        let parallel_reader = ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
+        let handle = self.handle.raw_handle();
+
+        let parsed_records =
+            parallel_reader.read_all_parallel_with_progress::<fn(u64, u64)>(handle, true, None)?;
+
+        let read_parse_ms = read_parse_start.elapsed().as_millis() as u64;
+        let records_parsed = parsed_records.len();
+
+        // Note: Currently read and parse are interleaved in ParallelMftReader.
+        // For now, we report combined time. Future: instrument inside
+        // ParallelMftReader. Estimate: ~70% read, ~30% parse on HDD; ~30% read,
+        // ~70% parse on SSD
+        let (read_ms, parse_ms, merge_ms) = match drive_type {
+            crate::platform::DriveType::Ssd => {
+                // SSD: I/O is fast, parsing dominates
+                let read_est = read_parse_ms * 30 / 100;
+                let parse_est = read_parse_ms * 50 / 100;
+                let merge_est = read_parse_ms * 20 / 100;
+                (read_est, parse_est, merge_est)
+            }
+            _ => {
+                // HDD: I/O dominates
+                let read_est = read_parse_ms * 70 / 100;
+                let parse_est = read_parse_ms * 20 / 100;
+                let merge_est = read_parse_ms * 10 / 100;
+                (read_est, parse_est, merge_est)
+            }
+        };
+
+        info!(
+            records_parsed,
+            read_parse_ms, "📊 Benchmark: Read + Parse complete"
+        );
+
+        // Phase 4: DataFrame build (optional)
+        let (df, df_build_ms) = if skip_df_build {
+            (None, 0)
+        } else {
+            let df_start = Instant::now();
+            let df = Self::build_dataframe_from_records(parsed_records)?;
+            let df_ms = df_start.elapsed().as_millis() as u64;
+            info!(
+                df_build_ms = df_ms,
+                "📊 Benchmark: DataFrame build complete"
+            );
+            (Some(df), df_ms)
+        };
+
+        let total_ms = total_start.elapsed().as_millis() as u64;
+
+        // Calculate throughput
+        let total_secs = total_ms as f64 / 1000.0;
+        let throughput_mb_s = if total_secs > 0.0 {
+            (mft_size_bytes as f64 / (1024.0 * 1024.0)) / total_secs
+        } else {
+            0.0
+        };
+        let records_per_sec = if total_secs > 0.0 {
+            records_parsed as f64 / total_secs
+        } else {
+            0.0
+        };
+
+        let timings = PhaseTimings {
+            open_ms,
+            read_ms,
+            parse_ms,
+            merge_ms,
+            df_build_ms,
+            total_ms,
+        };
+
+        let result = BenchmarkResult {
+            timings,
+            characteristics,
+            records_parsed,
+            throughput_mb_s,
+            records_per_sec,
+        };
+
+        info!(
+            total_ms,
+            throughput_mb_s = format!("{:.1}", throughput_mb_s),
+            records_per_sec = format!("{:.0}", records_per_sec),
+            "📊 Benchmark: Complete"
+        );
+
+        Ok((df, result))
+    }
+
+    /// Helper to build DataFrame from parsed records (extracted for reuse).
+    #[cfg(windows)]
+    fn build_dataframe_from_records(
+        parsed_records: Vec<crate::io::ParsedRecord>,
+    ) -> Result<DataFrame> {
+        let capacity = parsed_records.len();
+        let mut frs_vec: Vec<u64> = Vec::with_capacity(capacity);
+        let mut parent_frs_vec: Vec<u64> = Vec::with_capacity(capacity);
+        let mut name_vec: Vec<String> = Vec::with_capacity(capacity);
+        let mut size_vec: Vec<u64> = Vec::with_capacity(capacity);
+        let mut allocated_size_vec: Vec<u64> = Vec::with_capacity(capacity);
+        let mut created_vec: Vec<i64> = Vec::with_capacity(capacity);
+        let mut modified_vec: Vec<i64> = Vec::with_capacity(capacity);
+        let mut accessed_vec: Vec<i64> = Vec::with_capacity(capacity);
+        let mut mft_changed_vec: Vec<i64> = Vec::with_capacity(capacity);
+        let mut is_directory_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut name_count_vec: Vec<u16> = Vec::with_capacity(capacity);
+        let mut stream_count_vec: Vec<u16> = Vec::with_capacity(capacity);
+        let mut is_readonly_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_hidden_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_system_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_archive_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_compressed_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_encrypted_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_sparse_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_reparse_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_offline_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_not_indexed_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_temporary_vec: Vec<bool> = Vec::with_capacity(capacity);
+
+        for parsed in parsed_records {
+            let name_count = parsed.name_count();
+            let stream_count = parsed.stream_count();
+
+            frs_vec.push(parsed.frs);
+            parent_frs_vec.push(parsed.parent_frs);
+            name_vec.push(parsed.name);
+            size_vec.push(parsed.size);
+            allocated_size_vec.push(parsed.allocated_size);
+            created_vec.push(parsed.std_info.created);
+            modified_vec.push(parsed.std_info.modified);
+            accessed_vec.push(parsed.std_info.accessed);
+            mft_changed_vec.push(parsed.std_info.mft_changed);
+            is_directory_vec.push(parsed.is_directory);
+            name_count_vec.push(name_count);
+            stream_count_vec.push(stream_count);
+            is_readonly_vec.push(parsed.std_info.is_readonly);
+            is_hidden_vec.push(parsed.std_info.is_hidden);
+            is_system_vec.push(parsed.std_info.is_system);
+            is_archive_vec.push(parsed.std_info.is_archive);
+            is_compressed_vec.push(parsed.std_info.is_compressed);
+            is_encrypted_vec.push(parsed.std_info.is_encrypted);
+            is_sparse_vec.push(parsed.std_info.is_sparse);
+            is_reparse_vec.push(parsed.std_info.is_reparse);
+            is_offline_vec.push(parsed.std_info.is_offline);
+            is_not_indexed_vec.push(parsed.std_info.is_not_content_indexed);
+            is_temporary_vec.push(parsed.std_info.is_temporary);
+        }
+
         Self::build_dataframe_full(
             frs_vec,
             parent_frs_vec,

@@ -53,6 +53,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 dirs-next.workspace = true
+chrono.workspace = true
+hostname = "0.4.2"
+num_cpus.workspace = true
 
 # Windows APIs (Windows only)
 [target.'cfg(windows)'.dependencies]

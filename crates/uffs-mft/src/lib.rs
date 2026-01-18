@@ -70,8 +70,8 @@ use uffs_polars as _;
 use windows as _;
 // Binary dependencies (used by src/main.rs)
 use {
-    anyhow as _, clap as _, dirs_next as _, indicatif as _, tokio as _, tracing as _,
-    tracing_appender as _, tracing_subscriber as _,
+    anyhow as _, chrono as _, clap as _, dirs_next as _, hostname as _, indicatif as _,
+    num_cpus as _, tokio as _, tracing as _, tracing_appender as _, tracing_subscriber as _,
 };
 
 // ============================================================================
@@ -128,6 +128,9 @@ pub use raw::{
     LoadRawOptions, RawMftData, RawMftHeader, SaveRawOptions, load_raw_mft, load_raw_mft_header,
     save_raw_mft,
 };
-pub use reader::{DriveReadResult, MftProgress, MftReader, MultiDriveMftReader};
+pub use reader::{
+    BenchmarkResult, DriveCharacteristics, DriveReadResult, MftProgress, MftReader,
+    MultiDriveMftReader, PhaseTimings,
+};
 // Re-export Polars types for convenience
 pub use uffs_polars::{DataFrame, IntoLazy, LazyFrame, col, lit};
