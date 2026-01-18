@@ -17,8 +17,13 @@ use std::path::PathBuf;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_NO_BUFFERING, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    FILE_FLAG_OVERLAPPED, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_EXISTING, SYNCHRONIZE,
 };
+
+/// FILE_READ_DATA access right (0x0001) - required to read data from a
+/// file/volume
+const FILE_READ_DATA: u32 = 0x0001;
 use windows::Win32::System::Ioctl::{
     FSCTL_GET_NTFS_VOLUME_DATA, FSCTL_GET_RETRIEVAL_POINTERS, NTFS_VOLUME_DATA_BUFFER,
     STARTING_VCN_INPUT_BUFFER,
@@ -118,16 +123,18 @@ impl VolumeHandle {
             .chain(core::iter::once(0))
             .collect();
 
-        // Open the volume with backup semantics and no buffering
+        // Open the volume with FILE_READ_DATA for raw disk access
+        // Match C++ flags: FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE
+        // This is required to read the MFT bitmap from physical cluster locations
         let handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(volume_path.as_ptr()),
-                FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0, // Access mode
-                FILE_SHARE_READ | FILE_SHARE_WRITE,     // Share mode
-                None,                                   // Security attributes
-                OPEN_EXISTING,                          // Creation disposition
-                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_NO_BUFFERING, // Flags
-                None,                                   // Template file
+                FILE_READ_DATA | FILE_READ_ATTRIBUTES.0 | SYNCHRONIZE.0, // Access mode
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,  // Share mode
+                None,                                                    // Security attributes
+                OPEN_EXISTING,                                           // Creation disposition
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_NO_BUFFERING,     // Flags
+                None,                                                    // Template file
             )
         };
 
@@ -347,20 +354,38 @@ impl VolumeHandle {
     /// Returns an error if the bitmap cannot be read.
     #[allow(unsafe_code)] // Required: Windows FFI for CreateFileW, GetFileSizeEx, ReadFile
     pub fn get_mft_bitmap(&self) -> Result<MftBitmap> {
+        self.get_mft_bitmap_internal(false)
+    }
+
+    /// Gets the MFT bitmap with optional verbose diagnostic output.
+    #[allow(unsafe_code)] // Required: Windows FFI for CreateFileW, GetFileSizeEx, ReadFile
+    pub fn get_mft_bitmap_verbose(&self) -> Result<MftBitmap> {
+        self.get_mft_bitmap_internal(true)
+    }
+
+    #[allow(unsafe_code)] // Required: Windows FFI for CreateFileW, GetFileSizeEx, ReadFile
+    fn get_mft_bitmap_internal(&self, verbose: bool) -> Result<MftBitmap> {
         use windows::Win32::Storage::FileSystem::{
-            FILE_BEGIN, GetFileSizeEx, ReadFile, SetFilePointerEx,
+            FILE_BEGIN, GetFileSizeEx, ReadFile, SYNCHRONIZE, SetFilePointerEx,
         };
 
         // Open the $MFT::$BITMAP stream to get retrieval pointers and size
-        let bitmap_path: Vec<u16> = format!("{}:\\$MFT::$BITMAP", self.volume)
+        // Use same path format as C++: "C:\$MFT::$BITMAP"
+        let bitmap_path_str = format!("{}:\\$MFT::$BITMAP", self.volume);
+        let bitmap_path: Vec<u16> = bitmap_path_str
             .encode_utf16()
             .chain(core::iter::once(0))
             .collect();
 
+        if verbose {
+            eprintln!("[BITMAP] Opening: {}", bitmap_path_str);
+        }
+
+        // Match C++ flags: FILE_READ_ATTRIBUTES | SYNCHRONIZE
         let bitmap_handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(bitmap_path.as_ptr()),
-                FILE_READ_ATTRIBUTES.0,
+                FILE_READ_ATTRIBUTES.0 | SYNCHRONIZE.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 None,
                 OPEN_EXISTING,
@@ -370,10 +395,16 @@ impl VolumeHandle {
         };
 
         let bitmap_handle = match bitmap_handle {
-            Ok(h) => h,
-            Err(_) => {
-                // If we can't open the bitmap, return an empty one
-                // (all records will be checked individually)
+            Ok(h) => {
+                if verbose {
+                    eprintln!("[BITMAP] CreateFileW succeeded: {:?}", h);
+                }
+                h
+            }
+            Err(e) => {
+                if verbose {
+                    eprintln!("[BITMAP] CreateFileW FAILED: {:?}", e);
+                }
                 return Ok(MftBitmap::new_all_valid(
                     self.estimated_record_count() as usize
                 ));
@@ -385,18 +416,49 @@ impl VolumeHandle {
         // Get file size
         let mut file_size: i64 = 0;
         unsafe {
-            if GetFileSizeEx(bitmap_handle, &mut file_size).is_err() {
+            if let Err(e) = GetFileSizeEx(bitmap_handle, &mut file_size) {
+                if verbose {
+                    eprintln!("[BITMAP] GetFileSizeEx FAILED: {:?}", e);
+                }
                 return Ok(MftBitmap::new_all_valid(
                     self.estimated_record_count() as usize
                 ));
             }
         }
 
+        if verbose {
+            eprintln!("[BITMAP] File size: {} bytes", file_size);
+        }
+
         // Get retrieval pointers for the bitmap file
         let extents = match get_retrieval_pointers(bitmap_handle) {
-            Ok(e) if !e.is_empty() => e,
-            _ => {
-                // Can't get extents, fall back to all valid
+            Ok(e) if !e.is_empty() => {
+                if verbose {
+                    eprintln!("[BITMAP] Got {} extents:", e.len());
+                    for (i, ext) in e.iter().enumerate().take(5) {
+                        eprintln!(
+                            "   [{}] VCN={}, clusters={}, LCN={}",
+                            i, ext.vcn, ext.cluster_count, ext.lcn
+                        );
+                    }
+                    if e.len() > 5 {
+                        eprintln!("   ... and {} more", e.len() - 5);
+                    }
+                }
+                e
+            }
+            Ok(_) => {
+                if verbose {
+                    eprintln!("[BITMAP] get_retrieval_pointers returned empty!");
+                }
+                return Ok(MftBitmap::new_all_valid(
+                    self.estimated_record_count() as usize
+                ));
+            }
+            Err(e) => {
+                if verbose {
+                    eprintln!("[BITMAP] get_retrieval_pointers FAILED: {:?}", e);
+                }
                 return Ok(MftBitmap::new_all_valid(
                     self.estimated_record_count() as usize
                 ));
@@ -408,7 +470,14 @@ impl VolumeHandle {
         let mut buffer = vec![0u8; file_size as usize];
         let mut buffer_offset = 0usize;
 
-        for extent in &extents {
+        if verbose {
+            eprintln!(
+                "[BITMAP] Reading from volume, bytes_per_cluster={}",
+                bytes_per_cluster
+            );
+        }
+
+        for (i, extent) in extents.iter().enumerate() {
             let byte_offset = extent.lcn * i64::from(bytes_per_cluster);
             let extent_bytes = (extent.cluster_count * u64::from(bytes_per_cluster)) as usize;
             let bytes_to_read = extent_bytes.min(buffer.len() - buffer_offset);
@@ -417,17 +486,25 @@ impl VolumeHandle {
                 break;
             }
 
+            if verbose && i < 3 {
+                eprintln!(
+                    "[BITMAP] Extent {}: seek to offset {}, read {} bytes",
+                    i, byte_offset, bytes_to_read
+                );
+            }
+
             // Seek to the extent's physical location on the volume
             let mut new_position = 0_i64;
             unsafe {
-                if SetFilePointerEx(
+                if let Err(e) = SetFilePointerEx(
                     self.handle,
                     byte_offset,
                     Some(&mut new_position),
                     FILE_BEGIN,
-                )
-                .is_err()
-                {
+                ) {
+                    if verbose {
+                        eprintln!("[BITMAP] SetFilePointerEx FAILED: {:?}", e);
+                    }
                     return Ok(MftBitmap::new_all_valid(
                         self.estimated_record_count() as usize
                     ));
@@ -437,21 +514,41 @@ impl VolumeHandle {
             // Read the extent data from the volume
             let mut bytes_read: u32 = 0;
             unsafe {
-                if ReadFile(
+                if let Err(e) = ReadFile(
                     self.handle,
                     Some(&mut buffer[buffer_offset..buffer_offset + bytes_to_read]),
                     Some(&mut bytes_read),
                     None,
-                )
-                .is_err()
-                {
+                ) {
+                    if verbose {
+                        eprintln!("[BITMAP] ReadFile FAILED: {:?}", e);
+                    }
                     return Ok(MftBitmap::new_all_valid(
                         self.estimated_record_count() as usize
                     ));
                 }
             }
 
+            if verbose && i < 3 {
+                eprintln!("[BITMAP] Read {} bytes from extent {}", bytes_read, i);
+                if i == 0 && bytes_read > 0 {
+                    let sample: Vec<String> = buffer
+                        [buffer_offset..buffer_offset + 32.min(bytes_read as usize)]
+                        .iter()
+                        .map(|b| format!("{:02X}", b))
+                        .collect();
+                    eprintln!("[BITMAP] First 32 bytes: {}", sample.join(" "));
+                }
+            }
+
             buffer_offset += bytes_read as usize;
+        }
+
+        if verbose {
+            eprintln!("[BITMAP] Total bytes read: {}", buffer_offset);
+            let all_ff = buffer.iter().take(buffer_offset).all(|&b| b == 0xFF);
+            let all_00 = buffer.iter().take(buffer_offset).all(|&b| b == 0x00);
+            eprintln!("[BITMAP] All 0xFF: {}, All 0x00: {}", all_ff, all_00);
         }
 
         buffer.truncate(buffer_offset);

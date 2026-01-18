@@ -1583,11 +1583,10 @@ async fn cmd_bitmap_diag(drive: char, show_samples: bool) -> Result<()> {
     println!("   Total records (from size): {}", total_records_from_size);
     println!();
 
-
-
-    // Try to get bitmap
-    println!("📋 BITMAP RETRIEVAL (via get_mft_bitmap)");
-    match handle.get_mft_bitmap() {
+    // Try to get bitmap with verbose output
+    println!("📋 BITMAP RETRIEVAL (via get_mft_bitmap_verbose)");
+    println!();
+    match handle.get_mft_bitmap_verbose() {
         Ok(bitmap) => {
             let bitmap_bytes = bitmap.as_bytes().len();
             let bitmap_record_count = bitmap.record_count();
