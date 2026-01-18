@@ -12,7 +12,7 @@
 #![cfg(windows)]
 
 use std::mem::size_of;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
