@@ -6,7 +6,7 @@
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 #[cfg(windows)]
@@ -629,19 +629,74 @@ async fn search_multi_drive_filtered(
 /// Supports both single drive (`--drive C`) and multiple drives (`--drives
 /// C,D,E`). When multiple drives are specified, they are read concurrently and
 /// merged into a single `DataFrame` with a `drive` column.
+/// Infer drive letter from a path.
+///
+/// - Absolute path with drive: `C:\foo\bar.parquet` → Some('C')
+/// - Relative path: `bar.parquet` → infer from current directory
+/// - UNC path or no drive: → None
+#[cfg(windows)]
+fn infer_drive_from_path(path: &Path) -> Option<char> {
+    use std::path::Component;
+
+    // Check if path has a drive prefix (e.g., C:)
+    if let Some(Component::Prefix(prefix)) = path.components().next() {
+        use std::path::Prefix;
+        if let Prefix::Disk(drive_byte) | Prefix::VerbatimDisk(drive_byte) = prefix.kind() {
+            return Some((drive_byte as char).to_ascii_uppercase());
+        }
+    }
+
+    // For relative paths, get drive from current directory
+    if let Ok(cwd) = std::env::current_dir() {
+        return infer_drive_from_path(&cwd);
+    }
+
+    None
+}
+
+/// Stub for non-Windows platforms.
+#[cfg(not(windows))]
+const fn infer_drive_from_path(_path: &Path) -> Option<char> {
+    None
+}
+
+/// Ensure path has an extension, defaulting to `.parquet`.
+fn ensure_extension(path: PathBuf) -> PathBuf {
+    if path.extension().is_some() {
+        path
+    } else {
+        path.with_extension("parquet")
+    }
+}
+
+/// Build an index from a drive's MFT.
+///
+/// The drive is inferred from the output path if not explicitly specified.
 // CLI command handler - separate function for testability and maintainability.
 #[allow(clippy::shadow_unrelated, clippy::single_call_fn)]
 pub async fn index(
+    output: PathBuf,
     single_drive: Option<char>,
     multi_drives: Option<Vec<char>>,
-    output: &Path,
 ) -> Result<()> {
+    // Ensure output has an extension (default to .parquet)
+    let output = ensure_extension(output);
+
     // Determine which drives to index
     let drive_list: Vec<char> = match (single_drive, multi_drives) {
         (Some(drv), None) => vec![drv],
         (None, Some(drvs)) => drvs,
         (None, None) => {
-            anyhow::bail!("Either --drive or --drives must be specified");
+            // Infer drive from output path
+            if let Some(drive) = infer_drive_from_path(&output) {
+                info!(drive = %drive, "Inferred drive from output path");
+                vec![drive]
+            } else {
+                anyhow::bail!(
+                    "Could not infer drive from path '{}'. Use --drive or --drives to specify.",
+                    output.display()
+                );
+            }
         }
         (Some(_), Some(_)) => {
             // This shouldn't happen due to clap's conflicts_with, but handle it anyway
@@ -697,7 +752,7 @@ pub async fn index(
 
             info!(records = df.height(), "Read records");
 
-            MftReader::save_parquet(&mut df, output)
+            MftReader::save_parquet(&mut df, &output)
                 .with_context(|| format!("Failed to save index to {}", output.display()))?;
 
             info!(path = %output.display(), "Index saved");
@@ -706,7 +761,7 @@ pub async fn index(
     }
 
     // Multiple drives: use MultiDriveMftReader
-    index_multi_drive(&drive_list, output).await
+    index_multi_drive(&drive_list, &output).await
 }
 
 /// Index multiple drives concurrently.

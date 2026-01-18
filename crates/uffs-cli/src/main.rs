@@ -284,20 +284,31 @@ enum Commands {
     },
 
     /// Build an index from a drive's MFT
+    ///
+    /// The drive to index is inferred from the output path:
+    ///   - `c:\tmp\index.parquet` → indexes drive C:
+    ///   - `index.parquet` → indexes the drive of the current directory
+    ///
+    /// Use --drive or --drives to override the inferred drive.
+    ///
+    /// If no extension is provided, defaults to `.parquet`.
+    ///
+    /// Examples:
+    ///   uffs index index.parquet        # Index current drive
+    ///   uffs index c:\data\files.parquet # Index C: drive
+    ///   uffs index myindex              # Creates myindex.parquet
+    ///   uffs index -d D index.parquet   # Override: index D: drive
     Index {
-        /// Drive letter to index (e.g., C or C:). Use --drives for multiple
-        /// drives.
+        /// Output file path (extension defaults to .parquet)
+        output: PathBuf,
+
+        /// Drive letter to index (overrides path inference)
         #[arg(short, long, conflicts_with = "drives", value_parser = parse_drive_letter)]
         drive: Option<char>,
 
-        /// Multiple drive letters to index concurrently (e.g., C,D,E or
-        /// C:,D:,E:)
+        /// Multiple drive letters to index concurrently (e.g., C,D,E)
         #[arg(long, value_delimiter = ',', conflicts_with = "drive", value_parser = parse_drive_letter)]
         drives: Option<Vec<char>>,
-
-        /// Output file path
-        #[arg(short, long)]
-        output: PathBuf,
     },
 
     /// Show information about an index file
@@ -469,11 +480,11 @@ async fn run() -> Result<()> {
             .await?;
         }
         Some(Commands::Index {
+            output,
             drive,
             drives,
-            output,
         }) => {
-            commands::index(drive, drives, &output).await?;
+            commands::index(output, drive, drives).await?;
         }
         Some(Commands::Info { path }) => {
             commands::info(&path)?;
