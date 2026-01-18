@@ -77,7 +77,44 @@ pub enum OutputColumn {
     TreeAllocated,
     /// Fragmentation metric: `tree_allocated` / `treesize` ratio.
     Bulkiness,
+    /// Integrity stream attribute (`ReFS`).
+    Integrity,
+    /// No scrub data attribute.
+    NoScrub,
+    /// Directory flag (boolean, separate from Type).
+    DirectoryFlag,
 }
+
+/// Default column order matching C++ output exactly.
+///
+/// This is the order used when `--columns all` is specified.
+pub const CPP_COLUMN_ORDER: &[OutputColumn] = &[
+    OutputColumn::Path,
+    OutputColumn::Name,
+    OutputColumn::PathOnly,
+    OutputColumn::Size,
+    OutputColumn::SizeOnDisk,
+    OutputColumn::Created,
+    OutputColumn::Modified,
+    OutputColumn::Accessed,
+    OutputColumn::Descendants,
+    OutputColumn::ReadOnly,
+    OutputColumn::Archive,
+    OutputColumn::System,
+    OutputColumn::Hidden,
+    OutputColumn::Offline,
+    OutputColumn::NotIndexed,
+    OutputColumn::NoScrub,
+    OutputColumn::Integrity,
+    OutputColumn::Pinned,
+    OutputColumn::Unpinned,
+    OutputColumn::DirectoryFlag,
+    OutputColumn::Compressed,
+    OutputColumn::Encrypted,
+    OutputColumn::Sparse,
+    OutputColumn::Reparse,
+    OutputColumn::Attributes,
+];
 
 impl OutputColumn {
     /// Parse column name from string.
@@ -128,6 +165,10 @@ impl OutputColumn {
             "treesize" | "tree_size" => Some(Self::TreeSize),
             "treeallocated" | "tree_allocated" => Some(Self::TreeAllocated),
             "bulkiness" => Some(Self::Bulkiness),
+            // New columns for C++ parity
+            "integrity" => Some(Self::Integrity),
+            "noscrub" => Some(Self::NoScrub),
+            "directoryflag" => Some(Self::DirectoryFlag),
             _ => None,
         }
     }
@@ -159,7 +200,6 @@ impl OutputColumn {
             Self::Offline => "is_offline",
             Self::NotIndexed => "is_not_indexed",
             Self::Temporary => "is_temporary",
-            // These are not yet in MFT reader - will need to be added
             Self::Virtual => "is_virtual",
             Self::Pinned => "is_pinned",
             Self::Unpinned => "is_unpinned",
@@ -168,42 +208,49 @@ impl OutputColumn {
             Self::TreeSize => "treesize",
             Self::TreeAllocated => "tree_allocated",
             Self::Bulkiness => "bulkiness",
+            // New columns for C++ parity
+            Self::Integrity => "is_integrity_stream",
+            Self::NoScrub => "is_no_scrub_data",
+            Self::DirectoryFlag => "is_directory",
         }
     }
 
-    /// Get the display name for headers.
+    /// Get the display name for headers (matches C++ output exactly).
     #[must_use]
     pub const fn display_name(&self) -> &'static str {
         match self {
             Self::Path => "Path",
             Self::Name => "Name",
-            Self::PathOnly => "PathOnly",
+            Self::PathOnly => "Path Only",
             Self::Size => "Size",
-            Self::SizeOnDisk => "SizeOnDisk",
+            Self::SizeOnDisk => "Size on Disk",
             Self::Created => "Created",
-            Self::Modified => "Modified",
-            Self::Accessed => "Accessed",
+            Self::Modified => "Last Written",
+            Self::Accessed => "Last Accessed",
             Self::Type => "Type",
             Self::Attributes => "Attributes",
             Self::AttributeValue => "AttributeValue",
             Self::Hidden => "Hidden",
             Self::System => "System",
             Self::Archive => "Archive",
-            Self::ReadOnly => "ReadOnly",
+            Self::ReadOnly => "Read-only",
             Self::Compressed => "Compressed",
             Self::Encrypted => "Encrypted",
             Self::Sparse => "Sparse",
             Self::Reparse => "Reparse",
             Self::Offline => "Offline",
-            Self::NotIndexed => "NotIndexed",
+            Self::NotIndexed => "Not content indexed file",
             Self::Temporary => "Temporary",
             Self::Virtual => "Virtual",
             Self::Pinned => "Pinned",
             Self::Unpinned => "Unpinned",
-            Self::Descendants => "Descendants",
+            Self::Descendants => "Descendents",
             Self::TreeSize => "TreeSize",
             Self::TreeAllocated => "TreeAllocated",
             Self::Bulkiness => "Bulkiness",
+            Self::Integrity => "Integrity",
+            Self::NoScrub => "No scrub file",
+            Self::DirectoryFlag => "Directory Flag",
         }
     }
 
@@ -594,8 +641,11 @@ mod tests {
     #[test]
     fn test_display_name() {
         assert_eq!(OutputColumn::Path.display_name(), "Path");
-        assert_eq!(OutputColumn::SizeOnDisk.display_name(), "SizeOnDisk");
-        assert_eq!(OutputColumn::NotIndexed.display_name(), "NotIndexed");
+        assert_eq!(OutputColumn::SizeOnDisk.display_name(), "Size on Disk");
+        assert_eq!(
+            OutputColumn::NotIndexed.display_name(),
+            "Not content indexed file"
+        );
     }
 
     #[test]

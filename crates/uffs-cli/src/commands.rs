@@ -288,16 +288,103 @@ fn write_results(
     Ok(())
 }
 
-/// Search multiple drives sequentially with per-drive filtering.
+/// Owned version of `QueryFilters` for parallel tasks.
 ///
-/// This approach processes one drive at a time and applies filters immediately,
-/// keeping only matching results in memory. This prevents OOM errors when
-/// searching many drives with millions of files.
+/// This struct owns all its data so it can be sent across thread boundaries.
+#[derive(Clone)]
+struct OwnedQueryFilters {
+    /// Parsed search pattern (glob, regex, or literal).
+    parsed: ParsedPattern,
+    /// Extension filter string (e.g., "pictures,mp4,pdf").
+    ext_filter: Option<String>,
+    /// Only return files (not directories).
+    files_only: bool,
+    /// Only return directories (not files).
+    dirs_only: bool,
+    /// Minimum file size filter.
+    min_size: Option<u64>,
+    /// Maximum file size filter.
+    max_size: Option<u64>,
+    /// Maximum number of results to return (per drive, not total).
+    limit: u32,
+}
+
+impl OwnedQueryFilters {
+    /// Create owned filters from borrowed filters.
+    fn from_borrowed(filters: &QueryFilters<'_>) -> Self {
+        Self {
+            parsed: filters.parsed.clone(),
+            ext_filter: filters.ext_filter.map(String::from),
+            files_only: filters.files_only,
+            dirs_only: filters.dirs_only,
+            min_size: filters.min_size,
+            max_size: filters.max_size,
+            limit: filters.limit,
+        }
+    }
+
+    /// Execute query with these filters.
+    fn execute(&self, df: uffs_mft::DataFrame) -> Result<uffs_mft::DataFrame> {
+        let mut query = MftQuery::new(df);
+
+        // Apply pattern filter
+        query = query.pattern(&self.parsed)?;
+
+        // Apply extension filter if specified
+        if let Some(ext_str) = &self.ext_filter {
+            let parsed_ext_filter = ExtensionFilter::parse(ext_str)
+                .map_err(|err| anyhow::anyhow!("Invalid extension filter: {err}"))?;
+            query = query.extension_filter(&parsed_ext_filter);
+        }
+
+        // Apply type filters
+        if self.files_only {
+            query = query.files_only();
+        } else if self.dirs_only {
+            query = query.directories_only();
+        }
+
+        // Apply size filters
+        if let Some(min) = self.min_size {
+            query = query.min_size(min);
+        }
+        if let Some(max) = self.max_size {
+            query = query.max_size(max);
+        }
+
+        // Apply limit and execute
+        Ok(query.limit(self.limit).collect()?)
+    }
+}
+
+/// Result from a single drive read operation.
+struct DriveResult {
+    /// Drive letter that was read.
+    drive: char,
+    /// Filtered `DataFrame` with matching results (None if no matches or
+    /// error).
+    df: Option<uffs_mft::DataFrame>,
+    /// Total records read from the MFT.
+    records_read: usize,
+    /// Number of records matching the filters.
+    matches: usize,
+    /// Error message if the drive read failed.
+    error: Option<String>,
+}
+
+/// Search multiple drives in parallel with per-drive filtering.
+///
+/// This approach spawns all drive reads concurrently using tokio tasks,
+/// then collects and merges results as they complete. This maximizes I/O
+/// parallelism across multiple drives.
 #[cfg(windows)]
 async fn search_multi_drive_filtered(
     drives: &[char],
     filters: &QueryFilters<'_>,
 ) -> Result<uffs_mft::DataFrame> {
+    use std::sync::Arc;
+
+    use tokio::sync::mpsc;
     use uffs_mft::{IntoLazy, col, lit};
 
     if drives.is_empty() {
@@ -306,95 +393,199 @@ async fn search_multi_drive_filtered(
 
     info!(
         count = drives.len(),
-        "Searching drives sequentially (memory-efficient mode)"
+        "Searching drives in PARALLEL (blazing fast mode)"
     );
 
+    // Create owned filters that can be sent to tasks
+    let owned_filters = Arc::new(OwnedQueryFilters::from_borrowed(filters));
+
+    // Create multi-progress bar container
     let multi_progress = create_multi_progress();
+
+    // Create progress bars for all drives upfront (wrapped in Arc for sharing)
+    let progress_bars: Option<Arc<std::collections::HashMap<char, ProgressBar>>> =
+        multi_progress.as_ref().map(|mp| {
+            let mut pbs = std::collections::HashMap::new();
+            for &drive_char in drives {
+                pbs.insert(drive_char, add_drive_progress(mp, drive_char));
+            }
+            Arc::new(pbs)
+        });
+
+    // Channel for receiving results from drive tasks
+    let (tx, mut rx) = mpsc::channel::<DriveResult>(drives.len());
+
+    // Spawn all drive reads concurrently
+    for &drive_char in drives {
+        let tx = tx.clone();
+        let filters = Arc::clone(&owned_filters);
+        let pbs = progress_bars.clone();
+
+        tokio::spawn(async move {
+            let pb = pbs.as_ref().and_then(|p| p.get(&drive_char));
+
+            // Open the drive
+            let reader = match MftReader::open(drive_char).await {
+                Ok(r) => r,
+                Err(e) => {
+                    if let Some(p) = pb {
+                        p.finish_with_message(format!("Error: {e}"));
+                    }
+                    let _ = tx
+                        .send(DriveResult {
+                            drive: drive_char,
+                            df: None,
+                            records_read: 0,
+                            matches: 0,
+                            error: Some(e.to_string()),
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            // Read with progress callback
+            let pb_clone = pbs.clone();
+            let df = reader
+                .read_with_progress(move |progress| {
+                    if let Some(ref pbs) = pb_clone {
+                        if let Some(p) = pbs.get(&drive_char) {
+                            if let Some(total) = progress.total_records {
+                                p.set_length(progress.bytes_read.max(total));
+                            }
+                            p.set_position(progress.bytes_read);
+                        }
+                    }
+                })
+                .await;
+
+            let df = match df {
+                Ok(df) => df,
+                Err(e) => {
+                    if let Some(p) = pb {
+                        p.finish_with_message(format!("Error: {e}"));
+                    }
+                    let _ = tx
+                        .send(DriveResult {
+                            drive: drive_char,
+                            df: None,
+                            records_read: 0,
+                            matches: 0,
+                            error: Some(e.to_string()),
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            let records_read = df.height();
+            if let Some(p) = pb {
+                p.finish();
+            }
+
+            // Apply filters
+            let filtered = match filters.execute(df) {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = tx
+                        .send(DriveResult {
+                            drive: drive_char,
+                            df: None,
+                            records_read,
+                            matches: 0,
+                            error: Some(e.to_string()),
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            let matches = filtered.height();
+
+            // Add drive column
+            let df_with_drive = if matches > 0 {
+                match filtered
+                    .lazy()
+                    .with_column(lit(format!("{drive_char}:")).alias("drive"))
+                    .collect()
+                {
+                    Ok(df) => Some(df),
+                    Err(e) => {
+                        let _ = tx
+                            .send(DriveResult {
+                                drive: drive_char,
+                                df: None,
+                                records_read,
+                                matches,
+                                error: Some(e.to_string()),
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+
+            let _ = tx
+                .send(DriveResult {
+                    drive: drive_char,
+                    df: df_with_drive,
+                    records_read,
+                    matches,
+                    error: None,
+                })
+                .await;
+        });
+    }
+
+    // Drop our sender so the channel closes when all tasks complete
+    drop(tx);
+
+    // Collect results as they arrive
     let mut filtered_results: Vec<uffs_mft::DataFrame> = Vec::new();
     let mut total_matches = 0usize;
+    let mut drives_processed = 0usize;
 
-    // Process drives sequentially to limit memory usage
-    for &drive_char in drives {
-        // Create progress bar for this drive (wrapped in Arc for closure sharing)
-        let pb: Option<std::sync::Arc<ProgressBar>> = multi_progress
-            .as_ref()
-            .map(|mp| std::sync::Arc::new(add_drive_progress(mp, drive_char)));
+    while let Some(result) = rx.recv().await {
+        drives_processed += 1;
 
-        // Read this drive
-        let reader = match MftReader::open(drive_char).await {
-            Ok(r) => r,
-            Err(e) => {
-                if let Some(ref p) = pb {
-                    p.finish_with_message(format!("Error: {e}"));
-                }
-                info!(drive = %drive_char, error = %e, "Skipping drive due to error");
-                continue;
-            }
-        };
-
-        let pb_clone = pb.clone();
-        let df = match reader
-            .read_with_progress(move |progress| {
-                if let Some(ref p) = pb_clone {
-                    if let Some(total) = progress.total_records {
-                        p.set_length(progress.bytes_read.max(total));
-                    }
-                    p.set_position(progress.bytes_read);
-                }
-            })
-            .await
-        {
-            Ok(df) => df,
-            Err(e) => {
-                if let Some(ref p) = pb {
-                    p.finish_with_message(format!("Error: {e}"));
-                }
-                info!(drive = %drive_char, error = %e, "Skipping drive due to read error");
-                continue;
-            }
-        };
-
-        let records_read = df.height();
-        if let Some(ref p) = pb {
-            p.finish();
+        if let Some(error) = result.error {
+            info!(
+                drive = %result.drive,
+                error = %error,
+                "Drive failed"
+            );
+            continue;
         }
 
-        // Apply filters immediately to reduce memory
-        let filtered = execute_query(df, filters)?;
-        let matches = filtered.height();
-        total_matches += matches;
+        total_matches += result.matches;
 
         info!(
-            drive = %drive_char,
-            records = records_read,
-            matches = matches,
-            "Drive processed"
+            drive = %result.drive,
+            records = result.records_read,
+            matches = result.matches,
+            progress = format!("{}/{}", drives_processed, drives.len()),
+            "Drive completed"
         );
 
-        if matches > 0 {
-            // Add drive column and store filtered results
-            let df_with_drive = filtered
-                .lazy()
-                .with_column(lit(format!("{drive_char}:")).alias("drive"))
-                .collect()
-                .context("Failed to add drive column")?;
-            filtered_results.push(df_with_drive);
+        if let Some(df) = result.df {
+            filtered_results.push(df);
         }
     }
 
     if filtered_results.is_empty() {
-        // Return empty DataFrame with correct schema
         bail!("No matching files found across {} drives", drives.len());
     }
 
-    // Concatenate filtered results (much smaller than full data)
-    let mut result = filtered_results.remove(0);
+    // Merge all results
+    let mut merged = filtered_results.remove(0);
     for df in filtered_results {
-        result = result.vstack(&df).context("Failed to merge results")?;
+        merged = merged.vstack(&df).context("Failed to merge results")?;
     }
 
     // Reorder columns to put "drive" first
-    let column_names: Vec<String> = result
+    let column_names: Vec<String> = merged
         .get_column_names()
         .into_iter()
         .filter(|c| c.as_str() != "drive")
@@ -405,7 +596,7 @@ async fn search_multi_drive_filtered(
         .map(|s| col(&s))
         .collect();
 
-    let result = result
+    let result = merged
         .lazy()
         .select(columns)
         .collect()
@@ -414,7 +605,7 @@ async fn search_multi_drive_filtered(
     info!(
         total_matches = total_matches,
         drives = drives.len(),
-        "Multi-drive search complete"
+        "Parallel multi-drive search complete"
     );
 
     Ok(result)

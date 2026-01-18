@@ -99,7 +99,7 @@ ratatui = "0.30.0"
 crossterm = "0.29.0"
 
 # ───── Error Handling ─────
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 anyhow = "1.0.100"
 miette = { version = "7.6.0", features = ["fancy"] }
 

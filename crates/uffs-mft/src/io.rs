@@ -709,7 +709,7 @@ pub struct ParsedColumns {
     /// Number of data streams per record.
     pub stream_count: Vec<u16>,
 
-    // Attribute flags (18 boolean columns for C++ parity)
+    // Attribute flags (all boolean columns for C++ parity)
     /// Read-only flag.
     pub is_readonly: Vec<bool>,
     /// Hidden flag.
@@ -732,6 +732,16 @@ pub struct ParsedColumns {
     pub is_not_indexed: Vec<bool>,
     /// Temporary flag.
     pub is_temporary: Vec<bool>,
+    /// Integrity stream flag (ReFS).
+    pub is_integrity_stream: Vec<bool>,
+    /// No scrub data flag.
+    pub is_no_scrub_data: Vec<bool>,
+    /// Pinned flag (OneDrive).
+    pub is_pinned: Vec<bool>,
+    /// Unpinned flag (OneDrive).
+    pub is_unpinned: Vec<bool>,
+    /// Virtual flag.
+    pub is_virtual: Vec<bool>,
 }
 
 impl ParsedColumns {
@@ -771,6 +781,11 @@ impl ParsedColumns {
             is_offline: Vec::with_capacity(capacity),
             is_not_indexed: Vec::with_capacity(capacity),
             is_temporary: Vec::with_capacity(capacity),
+            is_integrity_stream: Vec::with_capacity(capacity),
+            is_no_scrub_data: Vec::with_capacity(capacity),
+            is_pinned: Vec::with_capacity(capacity),
+            is_unpinned: Vec::with_capacity(capacity),
+            is_virtual: Vec::with_capacity(capacity),
         }
     }
 
@@ -815,6 +830,12 @@ impl ParsedColumns {
         self.is_not_indexed
             .push(record.std_info.is_not_content_indexed);
         self.is_temporary.push(record.std_info.is_temporary);
+        self.is_integrity_stream
+            .push(record.std_info.is_integrity_stream);
+        self.is_no_scrub_data.push(record.std_info.is_no_scrub_data);
+        self.is_pinned.push(record.std_info.is_pinned);
+        self.is_unpinned.push(record.std_info.is_unpinned);
+        self.is_virtual.push(record.std_info.is_virtual);
     }
 
     /// Extends this `ParsedColumns` with all records from another.
@@ -844,6 +865,11 @@ impl ParsedColumns {
         self.is_offline.extend(other.is_offline);
         self.is_not_indexed.extend(other.is_not_indexed);
         self.is_temporary.extend(other.is_temporary);
+        self.is_integrity_stream.extend(other.is_integrity_stream);
+        self.is_no_scrub_data.extend(other.is_no_scrub_data);
+        self.is_pinned.extend(other.is_pinned);
+        self.is_unpinned.extend(other.is_unpinned);
+        self.is_virtual.extend(other.is_virtual);
     }
 
     /// Reserves capacity for additional records.
@@ -871,6 +897,11 @@ impl ParsedColumns {
         self.is_offline.reserve(additional);
         self.is_not_indexed.reserve(additional);
         self.is_temporary.reserve(additional);
+        self.is_integrity_stream.reserve(additional);
+        self.is_no_scrub_data.reserve(additional);
+        self.is_pinned.reserve(additional);
+        self.is_unpinned.reserve(additional);
+        self.is_virtual.reserve(additional);
     }
 }
 

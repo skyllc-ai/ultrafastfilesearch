@@ -1333,6 +1333,11 @@ impl MftReader {
             Series::new("is_offline".into(), columns.is_offline).into_column(),
             Series::new("is_not_indexed".into(), columns.is_not_indexed).into_column(),
             Series::new("is_temporary".into(), columns.is_temporary).into_column(),
+            Series::new("is_integrity_stream".into(), columns.is_integrity_stream).into_column(),
+            Series::new("is_no_scrub_data".into(), columns.is_no_scrub_data).into_column(),
+            Series::new("is_pinned".into(), columns.is_pinned).into_column(),
+            Series::new("is_unpinned".into(), columns.is_unpinned).into_column(),
+            Series::new("is_virtual".into(), columns.is_virtual).into_column(),
         ];
 
         DataFrame::new_infer_height(polars_columns).map_err(MftError::from)
