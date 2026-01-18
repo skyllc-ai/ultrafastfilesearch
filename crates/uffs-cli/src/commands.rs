@@ -291,6 +291,7 @@ fn write_results(
 /// Owned version of `QueryFilters` for parallel tasks.
 ///
 /// This struct owns all its data so it can be sent across thread boundaries.
+#[cfg(windows)]
 #[derive(Clone)]
 struct OwnedQueryFilters {
     /// Parsed search pattern (glob, regex, or literal).
@@ -309,6 +310,7 @@ struct OwnedQueryFilters {
     limit: u32,
 }
 
+#[cfg(windows)]
 impl OwnedQueryFilters {
     /// Create owned filters from borrowed filters.
     fn from_borrowed(filters: &QueryFilters<'_>) -> Self {
@@ -358,6 +360,7 @@ impl OwnedQueryFilters {
 }
 
 /// Result from a single drive read operation.
+#[cfg(windows)]
 struct DriveResult {
     /// Drive letter that was read.
     drive: char,
