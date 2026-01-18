@@ -76,5 +76,6 @@ harness = false
 workspace = true
 
 [features]
+default = ["zstd"]
 zstd = ["dep:zstd"]
 
