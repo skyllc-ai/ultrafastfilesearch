@@ -18,6 +18,131 @@ use crate::error::{MftError, Result};
 use crate::platform::VolumeHandle;
 
 // ============================================================================
+// MFT Read Mode Selection
+// ============================================================================
+
+/// Read mode for MFT operations.
+///
+/// Different modes optimize for different drive types and workloads:
+/// - `Parallel`: Best for SSDs - reads all chunks then parses in parallel
+/// - `Streaming`: Best for HDDs - sequential reads with immediate parsing
+/// - `Prefetch`: Best for HDDs - double-buffered prefetch for I/O overlap
+/// - `Auto`: Automatically selects based on detected drive type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MftReadMode {
+    /// Automatic mode selection based on drive type (default).
+    /// - SSD → Parallel
+    /// - HDD → Prefetch
+    /// - Unknown → Parallel
+    #[default]
+    Auto,
+    /// Parallel mode: Read all chunks into memory, then parse in parallel.
+    /// Best for SSDs where random I/O is fast.
+    Parallel,
+    /// Streaming mode: Sequential reads with immediate parsing.
+    /// Lower memory usage, good for HDDs.
+    Streaming,
+    /// Prefetch mode: Double-buffered reads for I/O overlap.
+    /// Best for HDDs - overlaps next read with current parse.
+    Prefetch,
+}
+
+impl MftReadMode {
+    /// Returns the mode name as a string.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Parallel => "parallel",
+            Self::Streaming => "streaming",
+            Self::Prefetch => "prefetch",
+        }
+    }
+}
+
+impl core::fmt::Display for MftReadMode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl core::str::FromStr for MftReadMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "parallel" => Ok(Self::Parallel),
+            "streaming" => Ok(Self::Streaming),
+            "prefetch" => Ok(Self::Prefetch),
+            _ => Err(format!(
+                "Invalid read mode '{s}'. Valid options: auto, parallel, streaming, prefetch"
+            )),
+        }
+    }
+}
+
+// ============================================================================
+// MFT Statistics (computed during DF build - M1 8.3 optimization)
+// ============================================================================
+
+/// Statistics computed during MFT parsing and `DataFrame` building.
+///
+/// This struct is populated during the single-pass DF build loop,
+/// eliminating the need for a separate statistics pass (M1 8.3 optimization).
+#[derive(Debug, Clone, Default)]
+pub struct MftStats {
+    /// Number of directory records.
+    pub dir_count: u64,
+    /// Number of file records.
+    pub file_count: u64,
+    /// Number of hidden files/directories.
+    pub hidden_count: u64,
+    /// Number of system files/directories.
+    pub system_count: u64,
+    /// Number of compressed files.
+    pub compressed_count: u64,
+    /// Number of encrypted files.
+    pub encrypted_count: u64,
+    /// Number of sparse files.
+    pub sparse_count: u64,
+    /// Number of reparse points.
+    pub reparse_count: u64,
+    /// Number of files with multiple data streams (ADS).
+    pub multi_stream_count: u64,
+    /// Number of files with multiple names (hard links).
+    pub multi_name_count: u64,
+    /// Total logical file size in bytes.
+    pub total_file_size: u64,
+    /// Total allocated size in bytes.
+    pub total_allocated_size: u64,
+}
+
+impl MftStats {
+    /// Returns the slack space (allocated - logical size).
+    #[must_use]
+    pub const fn slack_space(&self) -> u64 {
+        self.total_allocated_size
+            .saturating_sub(self.total_file_size)
+    }
+
+    /// Returns the slack percentage (0.0 to 100.0).
+    ///
+    /// This is a display/presentation function that computes a human-readable
+    /// percentage. Float arithmetic is unavoidable here since percentages are
+    /// inherently fractional values (e.g., 45.67%).
+    #[must_use]
+    #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+    pub fn slack_percentage(&self) -> f64 {
+        if self.total_allocated_size > 0 {
+            (self.slack_space() as f64 / self.total_allocated_size as f64) * 100.0
+        } else {
+            0.0
+        }
+    }
+}
+
+// ============================================================================
 // Benchmark / Timing Types
 // ============================================================================
 
@@ -221,6 +346,8 @@ pub struct MftReader {
     /// The volume handle (Windows only).
     #[cfg(windows)]
     handle: VolumeHandle,
+    /// Read mode selection.
+    mode: MftReadMode,
 }
 
 impl MftReader {
@@ -249,6 +376,7 @@ impl MftReader {
         Ok(Self {
             volume: volume.to_ascii_uppercase(),
             handle,
+            mode: MftReadMode::Auto,
         })
     }
 
@@ -262,6 +390,23 @@ impl MftReader {
     #[allow(clippy::unused_async)]
     pub async fn open(_volume: char) -> Result<Self> {
         Err(MftError::PlatformNotSupported)
+    }
+
+    /// Sets the read mode for this reader.
+    ///
+    /// # Arguments
+    ///
+    /// * `mode` - The read mode to use (Auto, Parallel, Streaming, Prefetch)
+    #[must_use]
+    pub const fn with_mode(mut self, mode: MftReadMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Returns the current read mode.
+    #[must_use]
+    pub const fn mode(&self) -> MftReadMode {
+        self.mode
     }
 
     /// Read the entire MFT and return as a `DataFrame`.
@@ -449,38 +594,117 @@ impl MftReader {
             });
         }
 
-        // Use the high-performance parallel reader with drive-type optimization
-        let parallel_reader = ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
+        // M2 9.1-9.3: Select reader based on mode
+        let effective_mode = match self.mode {
+            MftReadMode::Auto => {
+                // Auto-select based on drive type
+                match drive_type {
+                    crate::platform::DriveType::Ssd => MftReadMode::Parallel,
+                    crate::platform::DriveType::Hdd => MftReadMode::Prefetch,
+                    crate::platform::DriveType::Unknown => MftReadMode::Parallel,
+                }
+            }
+            mode => mode,
+        };
+
+        info!(
+            mode = %effective_mode,
+            "🚀 Using read mode"
+        );
+
         let handle = self.handle.raw_handle();
-
-        // Read all records in parallel with extension merging for full C++ parity
-        debug!("Starting parallel read with extension merging");
-
-        // Create a progress callback wrapper that converts bytes to records
         let total_bytes = total_records * u64::from(record_size);
-        let parsed_records = if let Some(ref cb) = callback {
-            let cb_ref = cb;
-            let start = start_time;
-            parallel_reader.read_all_parallel_with_progress(
-                handle,
-                true,
-                Some(move |bytes_read: u64, total_bytes_expected: u64| {
-                    // Convert bytes to approximate record count
-                    let records_approx = if total_bytes_expected > 0 {
-                        (bytes_read * total_records) / total_bytes_expected
-                    } else {
-                        0
-                    };
-                    cb_ref(MftProgress {
-                        records_read: records_approx,
-                        total_records: Some(total_records),
-                        bytes_read,
-                        elapsed: start.elapsed(),
-                    });
-                }),
-            )?
-        } else {
-            parallel_reader.read_all_parallel_with_progress::<fn(u64, u64)>(handle, true, None)?
+
+        // Read using the selected mode
+        let parsed_records = match effective_mode {
+            MftReadMode::Parallel | MftReadMode::Auto => {
+                // Parallel mode: read all chunks then parse in parallel (best for SSD)
+                let parallel_reader =
+                    ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
+
+                if let Some(ref cb) = callback {
+                    let cb_ref = cb;
+                    let start = start_time;
+                    parallel_reader.read_all_parallel_with_progress(
+                        handle,
+                        true,
+                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                            let records_approx = if total_bytes_expected > 0 {
+                                (bytes_read * total_records) / total_bytes_expected
+                            } else {
+                                0
+                            };
+                            cb_ref(MftProgress {
+                                records_read: records_approx,
+                                total_records: Some(total_records),
+                                bytes_read,
+                                elapsed: start.elapsed(),
+                            });
+                        }),
+                    )?
+                } else {
+                    parallel_reader
+                        .read_all_parallel_with_progress::<fn(u64, u64)>(handle, true, None)?
+                }
+            }
+            MftReadMode::Streaming => {
+                // Streaming mode: sequential reads with immediate parsing (lower memory)
+                let mut streaming_reader =
+                    crate::io::StreamingMftReader::new(extent_map, bitmap, drive_type);
+
+                if let Some(ref cb) = callback {
+                    let cb_ref = cb;
+                    let start = start_time;
+                    streaming_reader.read_all_streaming(
+                        handle,
+                        true,
+                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                            let records_approx = if total_bytes_expected > 0 {
+                                (bytes_read * total_records) / total_bytes_expected
+                            } else {
+                                0
+                            };
+                            cb_ref(MftProgress {
+                                records_read: records_approx,
+                                total_records: Some(total_records),
+                                bytes_read,
+                                elapsed: start.elapsed(),
+                            });
+                        }),
+                    )?
+                } else {
+                    streaming_reader.read_all_streaming::<fn(u64, u64)>(handle, true, None)?
+                }
+            }
+            MftReadMode::Prefetch => {
+                // Prefetch mode: double-buffered reads for I/O overlap (best for HDD)
+                let prefetch_reader =
+                    crate::io::PrefetchMftReader::new(extent_map, bitmap, drive_type);
+
+                if let Some(ref cb) = callback {
+                    let cb_ref = cb;
+                    let start = start_time;
+                    prefetch_reader.read_all_prefetch(
+                        handle,
+                        true,
+                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                            let records_approx = if total_bytes_expected > 0 {
+                                (bytes_read * total_records) / total_bytes_expected
+                            } else {
+                                0
+                            };
+                            cb_ref(MftProgress {
+                                records_read: records_approx,
+                                total_records: Some(total_records),
+                                bytes_read,
+                                elapsed: start.elapsed(),
+                            });
+                        }),
+                    )?
+                } else {
+                    prefetch_reader.read_all_prefetch::<fn(u64, u64)>(handle, true, None)?
+                }
+            }
         };
 
         let read_elapsed = start_time.elapsed();
@@ -505,97 +729,6 @@ impl MftReader {
             "✅ Parallel read complete"
         );
 
-        // Calculate and log MFT statistics
-        let mut dir_count = 0u64;
-        let mut file_count = 0u64;
-        let mut hidden_count = 0u64;
-        let mut system_count = 0u64;
-        let mut compressed_count = 0u64;
-        let mut encrypted_count = 0u64;
-        let mut sparse_count = 0u64;
-        let mut reparse_count = 0u64;
-        let mut multi_stream_count = 0u64;
-        let mut multi_name_count = 0u64;
-        let mut total_file_size: u64 = 0;
-        let mut total_allocated_size: u64 = 0;
-
-        for rec in &parsed_records {
-            if rec.is_directory {
-                dir_count += 1;
-            } else {
-                file_count += 1;
-                total_file_size = total_file_size.saturating_add(rec.size);
-                total_allocated_size = total_allocated_size.saturating_add(rec.allocated_size);
-            }
-            if rec.std_info.is_hidden {
-                hidden_count += 1;
-            }
-            if rec.std_info.is_system {
-                system_count += 1;
-            }
-            if rec.std_info.is_compressed {
-                compressed_count += 1;
-            }
-            if rec.std_info.is_encrypted {
-                encrypted_count += 1;
-            }
-            if rec.std_info.is_sparse {
-                sparse_count += 1;
-            }
-            if rec.std_info.is_reparse {
-                reparse_count += 1;
-            }
-            if rec.stream_count() > 1 {
-                multi_stream_count += 1;
-            }
-            if rec.name_count() > 1 {
-                multi_name_count += 1;
-            }
-        }
-
-        let slack_space = total_allocated_size.saturating_sub(total_file_size);
-        let slack_percentage = if total_allocated_size > 0 {
-            (slack_space as f64 / total_allocated_size as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        info!(
-            directories = dir_count,
-            files = file_count,
-            "📊 Record type breakdown"
-        );
-
-        info!(
-            hidden = hidden_count,
-            system = system_count,
-            compressed = compressed_count,
-            encrypted = encrypted_count,
-            sparse = sparse_count,
-            reparse_points = reparse_count,
-            "🏷️  Attribute flags summary"
-        );
-
-        if multi_stream_count > 0 || multi_name_count > 0 {
-            info!(
-                files_with_ads = multi_stream_count,
-                files_with_hardlinks = multi_name_count,
-                "🔗 Extended attributes"
-            );
-        }
-
-        debug!(
-            total_file_size_gb =
-                format!("{:.2}", total_file_size as f64 / (1024.0 * 1024.0 * 1024.0)),
-            total_allocated_gb = format!(
-                "{:.2}",
-                total_allocated_size as f64 / (1024.0 * 1024.0 * 1024.0)
-            ),
-            slack_space_mb = format!("{:.2}", slack_space as f64 / (1024.0 * 1024.0)),
-            slack_percentage = format!("{:.1}%", slack_percentage),
-            "💾 Storage analysis"
-        );
-
         // Report final progress
         if let Some(ref cb) = callback {
             cb(MftProgress {
@@ -606,8 +739,12 @@ impl MftReader {
             });
         }
 
-        // Convert parsed records to DataFrame columns (full C++ parity schema)
+        // M1 8.3 OPTIMIZATION: Fuse stats computation with DataFrame building
+        // This eliminates one full pass over all records (was ~5-10% of DF build time)
         let capacity = parsed_records.len();
+        let mut stats = MftStats::default();
+
+        // Pre-allocate all column vectors
         let mut frs_vec: Vec<u64> = Vec::with_capacity(capacity);
         let mut parent_frs_vec: Vec<u64> = Vec::with_capacity(capacity);
         let mut name_vec: Vec<String> = Vec::with_capacity(capacity);
@@ -620,7 +757,6 @@ impl MftReader {
         let mut is_directory_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut name_count_vec: Vec<u16> = Vec::with_capacity(capacity);
         let mut stream_count_vec: Vec<u16> = Vec::with_capacity(capacity);
-        // Extended flags
         let mut is_readonly_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut is_hidden_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut is_system_vec: Vec<bool> = Vec::with_capacity(capacity);
@@ -633,11 +769,31 @@ impl MftReader {
         let mut is_not_indexed_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut is_temporary_vec: Vec<bool> = Vec::with_capacity(capacity);
 
+        // Single pass: build columns AND compute stats simultaneously
         for parsed in parsed_records {
-            // Compute counts before moving any fields
             let name_count = parsed.name_count();
             let stream_count = parsed.stream_count();
 
+            // Accumulate stats inline (no separate loop!)
+            if parsed.is_directory {
+                stats.dir_count += 1;
+            } else {
+                stats.file_count += 1;
+                stats.total_file_size = stats.total_file_size.saturating_add(parsed.size);
+                stats.total_allocated_size = stats
+                    .total_allocated_size
+                    .saturating_add(parsed.allocated_size);
+            }
+            stats.hidden_count += u64::from(parsed.std_info.is_hidden);
+            stats.system_count += u64::from(parsed.std_info.is_system);
+            stats.compressed_count += u64::from(parsed.std_info.is_compressed);
+            stats.encrypted_count += u64::from(parsed.std_info.is_encrypted);
+            stats.sparse_count += u64::from(parsed.std_info.is_sparse);
+            stats.reparse_count += u64::from(parsed.std_info.is_reparse);
+            stats.multi_stream_count += u64::from(stream_count > 1);
+            stats.multi_name_count += u64::from(name_count > 1);
+
+            // Build column vectors
             frs_vec.push(parsed.frs);
             parent_frs_vec.push(parsed.parent_frs);
             name_vec.push(parsed.name);
@@ -650,7 +806,6 @@ impl MftReader {
             is_directory_vec.push(parsed.is_directory);
             name_count_vec.push(name_count);
             stream_count_vec.push(stream_count);
-            // Extended flags
             is_readonly_vec.push(parsed.std_info.is_readonly);
             is_hidden_vec.push(parsed.std_info.is_hidden);
             is_system_vec.push(parsed.std_info.is_system);
@@ -663,6 +818,45 @@ impl MftReader {
             is_not_indexed_vec.push(parsed.std_info.is_not_content_indexed);
             is_temporary_vec.push(parsed.std_info.is_temporary);
         }
+
+        // Log stats (computed during the loop above)
+        info!(
+            directories = stats.dir_count,
+            files = stats.file_count,
+            "📊 Record type breakdown"
+        );
+
+        info!(
+            hidden = stats.hidden_count,
+            system = stats.system_count,
+            compressed = stats.compressed_count,
+            encrypted = stats.encrypted_count,
+            sparse = stats.sparse_count,
+            reparse_points = stats.reparse_count,
+            "🏷️  Attribute flags summary"
+        );
+
+        if stats.multi_stream_count > 0 || stats.multi_name_count > 0 {
+            info!(
+                files_with_ads = stats.multi_stream_count,
+                files_with_hardlinks = stats.multi_name_count,
+                "🔗 Extended attributes"
+            );
+        }
+
+        debug!(
+            total_file_size_gb = format!(
+                "{:.2}",
+                stats.total_file_size as f64 / (1024.0 * 1024.0 * 1024.0)
+            ),
+            total_allocated_gb = format!(
+                "{:.2}",
+                stats.total_allocated_size as f64 / (1024.0 * 1024.0 * 1024.0)
+            ),
+            slack_space_mb = format!("{:.2}", stats.slack_space() as f64 / (1024.0 * 1024.0)),
+            slack_percentage = format!("{:.1}%", stats.slack_percentage()),
+            "💾 Storage analysis"
+        );
 
         // Build DataFrame with full schema
         Self::build_dataframe_full(

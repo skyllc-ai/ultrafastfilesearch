@@ -1405,6 +1405,23 @@ pub fn generate_read_chunks(
         debug!(sparse_extents, "Skipped sparse extents");
     }
 
+    // M1 8.6: Merge adjacent chunks with small gaps
+    // If two chunks are close together (gap < merge_threshold records),
+    // it's more efficient to read them as one chunk than to do two I/O ops.
+    let merge_threshold = 64u64; // Records - about 64KB at 1024 bytes/record
+    let chunks_before_merge = chunks.len();
+    let chunks = merge_adjacent_chunks(chunks, record_size, merge_threshold);
+    let chunks_after_merge = chunks.len();
+
+    if chunks_before_merge != chunks_after_merge {
+        debug!(
+            before = chunks_before_merge,
+            after = chunks_after_merge,
+            merged = chunks_before_merge - chunks_after_merge,
+            "🔗 Merged adjacent chunks"
+        );
+    }
+
     info!(
         chunks = chunks.len(),
         records_to_read = total_records_to_read,
@@ -1423,6 +1440,51 @@ pub fn generate_read_chunks(
     );
 
     chunks
+}
+
+/// M1 8.6: Merge adjacent chunks with small gaps.
+///
+/// When two chunks are close together (gap < threshold), reading them as one
+/// chunk is more efficient than two separate I/O operations. The overhead of
+/// reading a few extra unused records is less than the syscall overhead.
+fn merge_adjacent_chunks(
+    mut chunks: Vec<ReadChunk>,
+    record_size: u32,
+    threshold: u64,
+) -> Vec<ReadChunk> {
+    if chunks.len() < 2 {
+        return chunks;
+    }
+
+    let mut merged = Vec::with_capacity(chunks.len());
+    let mut current = chunks.remove(0);
+
+    for next in chunks {
+        // Check if chunks are adjacent or have a small gap
+        let current_end_offset =
+            current.disk_offset + current.record_count * u64::from(record_size);
+        let gap_bytes = next.disk_offset.saturating_sub(current_end_offset);
+        let gap_records = gap_bytes / u64::from(record_size);
+
+        // Also check if they're in the same extent (contiguous FRS range)
+        let current_end_frs = current.start_frs + current.record_count;
+        let frs_gap = next.start_frs.saturating_sub(current_end_frs);
+
+        if gap_records <= threshold && frs_gap <= threshold {
+            // Merge: extend current chunk to include next
+            let new_record_count = (next.start_frs + next.record_count) - current.start_frs;
+            current.record_count = new_record_count;
+            // Update skip_end to be from the merged chunk
+            current.skip_end = next.skip_end;
+        } else {
+            // Gap too large, push current and start new
+            merged.push(current);
+            current = next;
+        }
+    }
+    merged.push(current);
+
+    merged
 }
 
 /// High-performance parallel MFT reader.
@@ -1448,6 +1510,9 @@ pub struct ParallelMftReader {
     fixup_failures: Arc<AtomicU64>,
     /// Skipped records counter (not in use or invalid).
     skipped_records: Arc<AtomicU64>,
+    /// M1 8.4: Reusable aligned buffer for sequential I/O.
+    /// Wrapped in RefCell for interior mutability since read_chunk needs &mut.
+    buffer: RefCell<AlignedBuffer>,
 }
 
 impl ParallelMftReader {
@@ -1464,13 +1529,17 @@ impl ParallelMftReader {
     /// Creates a new parallel reader with default (legacy) chunk size.
     #[must_use]
     pub fn new(extent_map: MftExtentMap, bitmap: Option<crate::platform::MftBitmap>) -> Self {
+        let chunk_size = Self::DEFAULT_CHUNK_SIZE_HDD;
+        // M1 8.4: Pre-allocate reusable buffer for chunk_size + sector alignment
+        let buffer = AlignedBuffer::new(chunk_size + SECTOR_SIZE);
         Self {
             extent_map,
             bitmap,
-            chunk_size: Self::DEFAULT_CHUNK_SIZE_HDD, // Use 4MB as new default
+            chunk_size,
             records_processed: Arc::new(AtomicU64::new(0)),
             fixup_failures: Arc::new(AtomicU64::new(0)),
             skipped_records: Arc::new(AtomicU64::new(0)),
+            buffer: RefCell::new(buffer),
         }
     }
 
@@ -1482,6 +1551,8 @@ impl ParallelMftReader {
         drive_type: crate::platform::DriveType,
     ) -> Self {
         let chunk_size = drive_type.optimal_chunk_size();
+        // M1 8.4: Pre-allocate reusable buffer for chunk_size + sector alignment
+        let buffer = AlignedBuffer::new(chunk_size + SECTOR_SIZE);
         info!(
             drive_type = ?drive_type,
             chunk_size_mb = chunk_size / (1024 * 1024),
@@ -1494,6 +1565,7 @@ impl ParallelMftReader {
             records_processed: Arc::new(AtomicU64::new(0)),
             fixup_failures: Arc::new(AtomicU64::new(0)),
             skipped_records: Arc::new(AtomicU64::new(0)),
+            buffer: RefCell::new(buffer),
         }
     }
 
@@ -1501,6 +1573,8 @@ impl ParallelMftReader {
     #[must_use]
     pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
         self.chunk_size = chunk_size;
+        // M1 8.4: Resize buffer to match new chunk size
+        self.buffer = RefCell::new(AlignedBuffer::new(chunk_size + SECTOR_SIZE));
         self
     }
 
@@ -1650,21 +1724,29 @@ impl ParallelMftReader {
             "All chunks read into memory"
         );
 
-        // Clone atomic counters for parallel access
-        let fixup_failures = Arc::clone(&self.fixup_failures);
-        let skipped_records = Arc::clone(&self.skipped_records);
+        // M1 8.1 OPTIMIZATION: Use fold/reduce pattern instead of per-record atomics
+        // This eliminates cache-line ping-pong across threads by accumulating
+        // per-thread stats, then reducing at the end.
 
         if merge_extensions {
-            // Full parsing with extension merging
-            let skipped_records_clone = Arc::clone(&skipped_records);
+            // Per-thread accumulator for fold/reduce pattern
+            #[derive(Default)]
+            struct ChunkStats {
+                results: Vec<ParseResult>,
+                skipped: u64,
+                processed: u64,
+            }
 
-            let parse_results: Vec<ParseResult> = chunk_data
+            // Full parsing with extension merging using fold/reduce
+            let combined = chunk_data
                 .par_iter()
-                .flat_map(|(chunk, data)| {
-                    let mut results = Vec::new();
+                .fold(ChunkStats::default, |mut acc, (chunk, data)| {
                     let record_size = record_size as usize;
                     let skip_begin = chunk.skip_begin as usize;
                     let effective_count = chunk.effective_record_count() as usize;
+
+                    // Pre-allocate for this chunk's results
+                    acc.results.reserve(effective_count);
 
                     for i in 0..effective_count {
                         let offset = (skip_begin + i) * record_size;
@@ -1678,21 +1760,31 @@ impl ParallelMftReader {
                         // Use zero-allocation parsing with thread-local buffer
                         let result = parse_record_zero_alloc(record_data, frs);
                         if matches!(result, ParseResult::Skip) {
-                            skipped_records_clone.fetch_add(1, Ordering::Relaxed);
+                            acc.skipped += 1;
                         } else {
-                            results.push(result);
+                            acc.results.push(result);
                         }
-
-                        records_processed.fetch_add(1, Ordering::Relaxed);
+                        acc.processed += 1;
                     }
-
-                    results
+                    acc
                 })
-                .collect();
+                .reduce(ChunkStats::default, |mut a, b| {
+                    a.results.extend(b.results);
+                    a.skipped += b.skipped;
+                    a.processed += b.processed;
+                    a
+                });
 
-            // Log corruption statistics
-            let fixup_fail_count = fixup_failures.load(Ordering::Relaxed);
-            let skipped_count = skipped_records.load(Ordering::Relaxed);
+            // Update atomics once at the end (not per-record!)
+            records_processed.fetch_add(combined.processed, Ordering::Relaxed);
+            self.skipped_records
+                .fetch_add(combined.skipped, Ordering::Relaxed);
+
+            let parse_results = combined.results;
+            let skipped_count = combined.skipped;
+
+            // Log statistics
+            let fixup_fail_count = self.fixup_failures.load(Ordering::Relaxed);
 
             if fixup_fail_count > 0 {
                 warn!(
@@ -1716,16 +1808,22 @@ impl ParallelMftReader {
 
             Ok(merger.merge())
         } else {
-            // Legacy parsing (skips extension records) - uses zero-allocation parsing
-            let skipped_records_clone = Arc::clone(&skipped_records);
+            // Legacy parsing (skips extension records) - also uses fold/reduce
+            #[derive(Default)]
+            struct LegacyStats {
+                records: Vec<ParsedRecord>,
+                skipped: u64,
+                processed: u64,
+            }
 
-            let results: Vec<ParsedRecord> = chunk_data
+            let combined = chunk_data
                 .par_iter()
-                .flat_map(|(chunk, data)| {
-                    let mut records = Vec::new();
+                .fold(LegacyStats::default, |mut acc, (chunk, data)| {
                     let record_size = record_size as usize;
                     let skip_begin = chunk.skip_begin as usize;
                     let effective_count = chunk.effective_record_count() as usize;
+
+                    acc.records.reserve(effective_count);
 
                     for i in 0..effective_count {
                         let offset = (skip_begin + i) * record_size;
@@ -1736,24 +1834,28 @@ impl ParallelMftReader {
                         let record_data = &data[offset..offset + record_size];
                         let frs = chunk.start_frs + skip_begin as u64 + i as u64;
 
-                        // Use zero-allocation parsing with thread-local buffer
                         match parse_record_zero_alloc(record_data, frs) {
-                            ParseResult::Base(parsed) => records.push(parsed),
-                            _ => {
-                                skipped_records_clone.fetch_add(1, Ordering::Relaxed);
-                            }
+                            ParseResult::Base(parsed) => acc.records.push(parsed),
+                            _ => acc.skipped += 1,
                         }
-
-                        records_processed.fetch_add(1, Ordering::Relaxed);
+                        acc.processed += 1;
                     }
-
-                    records
+                    acc
                 })
-                .collect();
+                .reduce(LegacyStats::default, |mut a, b| {
+                    a.records.extend(b.records);
+                    a.skipped += b.skipped;
+                    a.processed += b.processed;
+                    a
+                });
 
-            // Log corruption statistics
-            let fixup_fail_count = fixup_failures.load(Ordering::Relaxed);
-            let skipped_count = skipped_records.load(Ordering::Relaxed);
+            // Update atomics once at the end
+            records_processed.fetch_add(combined.processed, Ordering::Relaxed);
+            self.skipped_records
+                .fetch_add(combined.skipped, Ordering::Relaxed);
+
+            // Log statistics
+            let fixup_fail_count = self.fixup_failures.load(Ordering::Relaxed);
 
             if fixup_fail_count > 0 {
                 warn!(
@@ -1762,18 +1864,22 @@ impl ParallelMftReader {
                 );
             }
 
-            if skipped_count > 0 {
+            if combined.skipped > 0 {
                 debug!(
-                    skipped_records = skipped_count,
+                    skipped_records = combined.skipped,
                     "📋 Records skipped (not in use or invalid)"
                 );
             }
 
-            Ok(results)
+            Ok(combined.records)
         }
     }
 
     /// Reads a single chunk from disk.
+    ///
+    /// M1 8.4: Uses reusable aligned buffer to minimize allocations.
+    /// The buffer is resized only if the chunk is larger than the current
+    /// buffer.
     #[allow(unsafe_code)] // Required: Windows FFI (SetFilePointerEx, ReadFile)
     fn read_chunk(&self, handle: HANDLE, chunk: &ReadChunk, record_size: u32) -> Result<Vec<u8>> {
         let read_size = chunk.record_count * u64::from(record_size);
@@ -1785,8 +1891,11 @@ impl ParallelMftReader {
             / SECTOR_SIZE)
             * SECTOR_SIZE;
 
-        // Allocate aligned buffer
-        let mut buffer = AlignedBuffer::new(aligned_size);
+        // M1 8.4: Reuse buffer, only reallocate if needed
+        let mut buffer = self.buffer.borrow_mut();
+        if buffer.len() < aligned_size {
+            *buffer = AlignedBuffer::new(aligned_size);
+        }
 
         // Seek and read
         let mut new_position = 0_i64;
@@ -1803,7 +1912,7 @@ impl ParallelMftReader {
         unsafe {
             ReadFile(
                 handle,
-                Some(buffer.as_mut_slice()),
+                Some(&mut buffer.as_mut_slice()[..aligned_size]),
                 Some(&mut bytes_read),
                 None,
             )?;

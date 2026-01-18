@@ -129,8 +129,8 @@ pub use raw::{
     save_raw_mft,
 };
 pub use reader::{
-    BenchmarkResult, DriveCharacteristics, DriveReadResult, MftProgress, MftReader,
-    MultiDriveMftReader, PhaseTimings,
+    BenchmarkResult, DriveCharacteristics, DriveReadResult, MftProgress, MftReadMode, MftReader,
+    MftStats, MultiDriveMftReader, PhaseTimings,
 };
 // Re-export Polars types for convenience
 pub use uffs_polars::{DataFrame, IntoLazy, LazyFrame, col, lit};

@@ -181,6 +181,14 @@ enum Commands {
         /// Output file path (Parquet format)
         #[arg(short, long)]
         output: PathBuf,
+
+        /// Read mode: auto, parallel, streaming, prefetch
+        /// - auto: Select based on drive type (SSD→parallel, HDD→prefetch)
+        /// - parallel: Read all chunks then parse in parallel (best for SSD)
+        /// - streaming: Sequential reads with immediate parsing (lower memory)
+        /// - prefetch: Double-buffered reads for I/O overlap (best for HDD)
+        #[arg(short, long, default_value = "auto")]
+        mode: String,
     },
 
     /// Show MFT information for a drive
@@ -214,6 +222,10 @@ enum Commands {
         /// Number of runs for averaging (default: 1)
         #[arg(long, default_value = "1")]
         runs: u32,
+
+        /// Read mode: auto, parallel, streaming, prefetch
+        #[arg(short, long, default_value = "auto")]
+        mode: String,
     },
 
     /// Benchmark ALL NTFS drives and save results to a file
@@ -364,7 +376,11 @@ async fn main() -> Result<()> {
     #[cfg(windows)]
     {
         match cli.command {
-            Commands::Read { drive, output } => cmd_read(drive, output).await,
+            Commands::Read {
+                drive,
+                output,
+                mode,
+            } => cmd_read(drive, output, &mode).await,
             Commands::Info { drive, deep } => cmd_info(drive, deep).await,
             Commands::Drives => cmd_drives().await,
             Commands::Bench {
@@ -372,7 +388,8 @@ async fn main() -> Result<()> {
                 json,
                 no_df,
                 runs,
-            } => cmd_bench(drive, json, no_df, runs).await,
+                mode,
+            } => cmd_bench(drive, json, no_df, runs, &mode).await,
             Commands::BenchAll {
                 output,
                 no_df,
@@ -384,17 +401,22 @@ async fn main() -> Result<()> {
 }
 
 #[cfg(windows)]
-async fn cmd_read(drive: char, output: PathBuf) -> Result<()> {
+async fn cmd_read(drive: char, output: PathBuf, mode_str: &str) -> Result<()> {
     use std::time::Instant;
 
     use tracing::debug;
+    use uffs_mft::MftReadMode;
 
     let start_time = Instant::now();
     let drive_upper = drive.to_ascii_uppercase();
 
+    // Parse read mode
+    let mode: MftReadMode = mode_str.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+
     info!(
         drive = %drive_upper,
         output = %output.display(),
+        mode = %mode,
         "📂 Starting MFT read operation"
     );
 
@@ -411,7 +433,8 @@ async fn cmd_read(drive: char, output: PathBuf) -> Result<()> {
 
     let reader = MftReader::open(drive)
         .await
-        .with_context(|| format!("Failed to open drive {}:", drive))?;
+        .with_context(|| format!("Failed to open drive {}:", drive))?
+        .with_mode(mode);
 
     info!(
         drive = %drive_upper,
@@ -1136,16 +1159,20 @@ fn truncate_string(text: &str, max_len: usize) -> String {
 // ============================================================================
 
 #[cfg(windows)]
-async fn cmd_bench(drive: char, json: bool, no_df: bool, runs: u32) -> Result<()> {
-    use uffs_mft::{BenchmarkResult, MftReader};
+async fn cmd_bench(drive: char, json: bool, no_df: bool, runs: u32, mode_str: &str) -> Result<()> {
+    use uffs_mft::{BenchmarkResult, MftReadMode, MftReader};
 
     let drive_upper = drive.to_ascii_uppercase();
     let runs = runs.max(1);
+
+    // Parse read mode
+    let mode: MftReadMode = mode_str.parse().map_err(|e: String| anyhow::anyhow!(e))?;
 
     if !json {
         println!("🔬 Benchmarking MFT read on drive {}:", drive_upper);
         println!("   Runs: {}", runs);
         println!("   Skip DataFrame: {}", no_df);
+        println!("   Mode: {}", mode);
         println!();
     }
 
@@ -1153,13 +1180,15 @@ async fn cmd_bench(drive: char, json: bool, no_df: bool, runs: u32) -> Result<()
         drive = %drive_upper,
         runs,
         skip_df = no_df,
+        mode = %mode,
         "📊 Starting benchmark"
     );
 
     // Open the reader once (opening is fast, we don't need to re-open for each run)
     let reader = MftReader::open(drive)
         .await
-        .with_context(|| format!("Failed to open drive {}:", drive))?;
+        .with_context(|| format!("Failed to open drive {}:", drive))?
+        .with_mode(mode);
 
     let mut results: Vec<BenchmarkResult> = Vec::with_capacity(runs as usize);
 
