@@ -2039,8 +2039,6 @@ async fn cmd_save(
     Ok(())
 }
 
-
-
 /// Load MFT from a saved file and optionally export.
 #[cfg(windows)]
 async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Result<()> {
@@ -2223,7 +2221,9 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
     // Get absolute path and file size after creation
     let output_abs = std::fs::canonicalize(output).unwrap_or_else(|_| output.to_path_buf());
     let output_abs = clean_path_for_display(&output_abs);
-    let output_size = std::fs::metadata(output).map(|meta| meta.len()).unwrap_or(0);
+    let output_size = std::fs::metadata(output)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
 
     println!();
     println!("📁 OUTPUT FILE");
@@ -2241,5 +2241,3 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
 
     Ok(())
 }
-
-
