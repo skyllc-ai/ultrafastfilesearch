@@ -45,7 +45,7 @@ use std::path::PathBuf;
 #[cfg(windows)]
 use anyhow::Context;
 use anyhow::Result;
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 // Dev-dependencies (used in benchmarks only)
 #[cfg(test)]
 use criterion as _;
@@ -290,13 +290,20 @@ enum Commands {
     },
 
     /// Save MFT bytes to a file for offline analysis
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft save --drive C --output mft_c.mft
+    /// uffs_mft save -d C -o mft_c.mft --no-compress
+    /// ```
     Save {
         /// Drive letter to read MFT from (e.g., C, D, E)
-        #[arg(short, long)]
+        #[arg(short, long, value_name = "LETTER")]
         drive: char,
 
         /// Output file path for raw MFT data
-        #[arg(short, long)]
+        #[arg(short, long, value_name = "FILE")]
         output: PathBuf,
 
         /// Disable compression (default: compressed with zstd)
@@ -309,15 +316,24 @@ enum Commands {
     },
 
     /// Load MFT from a saved file and export to parquet/csv
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft load mft_c.mft --info-only
+    /// uffs_mft load mft_c.mft --output index.parquet
+    /// uffs_mft load mft_c.mft -o index.csv
+    /// ```
     Load {
-        /// Input raw MFT file path
+        /// Input raw MFT file path (created with 'save' command)
+        #[arg(value_name = "FILE")]
         input: PathBuf,
 
-        /// Output file path (parquet or csv based on extension)
-        #[arg(short, long)]
+        /// Output file path (.parquet or .csv based on extension)
+        #[arg(short, long, value_name = "FILE")]
         output: Option<PathBuf>,
 
-        /// Show info about the raw MFT file only (don't parse)
+        /// Show info about the raw MFT file only (don't export)
         #[arg(long)]
         info_only: bool,
     },
@@ -419,28 +435,9 @@ async fn main() {
 /// Main application logic, separated from `main()` for clean error handling.
 #[allow(clippy::exit, clippy::unused_async, clippy::single_call_fn)]
 async fn run() -> Result<()> {
-    // Parse CLI with custom error handling to show help on errors
-    let cli = match Cli::try_parse() {
-        Ok(cli) => cli,
-        Err(err) => {
-            // For help/version requests, just print and exit normally
-            if err.kind() == clap::error::ErrorKind::DisplayHelp
-                || err.kind() == clap::error::ErrorKind::DisplayVersion
-            {
-                err.exit();
-            }
-            // For actual errors, print the error AND the help using clap's
-            // built-in mechanisms (writes to stderr via std::io::Write)
-            if err.print().is_err() {
-                // If printing fails, we still want to exit with error
-            }
-            let mut cmd = Cli::command();
-            if cmd.print_help().is_err() {
-                // If printing fails, we still want to exit with error
-            }
-            std::process::exit(1);
-        }
-    };
+    // Parse CLI - let clap handle its own error formatting
+    // Clap already provides excellent error messages with usage hints
+    let cli = Cli::parse();
 
     // Platform check - this tool only works on Windows
     #[cfg(not(windows))]
