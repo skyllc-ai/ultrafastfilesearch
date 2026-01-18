@@ -599,18 +599,121 @@ pub fn info(path: &Path) -> Result<()> {
     let df = MftReader::load_parquet(path)
         .with_context(|| format!("Failed to load index: {}", path.display()))?;
 
-    let mut stdout = std::io::stdout().lock();
-    writeln!(stdout, "Index: {}", path.display())?;
-    writeln!(stdout, "Records: {}", df.height())?;
-    writeln!(stdout, "Columns: {}", df.width())?;
-    writeln!(stdout)?;
-    writeln!(stdout, "Schema:")?;
+    // Get absolute path and file size
+    let abs_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+
+    let total_records = df.height();
+
+    // Extract statistics from the DataFrame
+    let dir_count = df
+        .column("is_directory")
+        .ok()
+        .and_then(|c| c.bool().ok())
+        .map(|b| b.sum().unwrap_or(0) as u64)
+        .unwrap_or(0);
+    let file_count = (total_records as u64).saturating_sub(dir_count);
+
+    // Helper closure to count bool columns
+    let count_bool = |name: &str| -> u64 {
+        df.column(name)
+            .ok()
+            .and_then(|c| c.bool().ok())
+            .map(|b| b.sum().unwrap_or(0) as u64)
+            .unwrap_or(0)
+    };
+
+    let hidden_count = count_bool("is_hidden");
+    let system_count = count_bool("is_system");
+    let compressed_count = count_bool("is_compressed");
+    let encrypted_count = count_bool("is_encrypted");
+    let sparse_count = count_bool("is_sparse");
+    let reparse_count = count_bool("is_reparse");
+    let readonly_count = count_bool("is_readonly");
+    let archive_count = count_bool("is_archive");
+
+    // Total size calculation
+    let total_size: u64 = df
+        .column("size")
+        .ok()
+        .and_then(|c| c.u64().ok())
+        .map(|s| s.iter().flatten().sum())
+        .unwrap_or(0);
+
+    // Allocated size calculation
+    let total_allocated: u64 = df
+        .column("allocated_size")
+        .ok()
+        .and_then(|c| c.u64().ok())
+        .map(|s| s.iter().flatten().sum())
+        .unwrap_or(0);
+
+    // Count multi-stream and multi-name files
+    let multi_stream_count = df
+        .column("stream_count")
+        .ok()
+        .and_then(|c| c.u16().ok())
+        .map(|s| s.iter().filter(|v| v.is_some_and(|x| x > 1)).count() as u64)
+        .unwrap_or(0);
+    let multi_name_count = df
+        .column("name_count")
+        .ok()
+        .and_then(|c| c.u16().ok())
+        .map(|s| s.iter().filter(|v| v.is_some_and(|x| x > 1)).count() as u64)
+        .unwrap_or(0);
+
+    println!("═══════════════════════════════════════════════════════════════");
+    println!("                       INDEX FILE INFO");
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+    println!("📁 FILE DETAILS");
+    println!("  Path:                 {}", abs_path.display());
+    println!("  File size:            {}", format_size(file_size));
+    println!("  Columns:              {}", df.width());
+    println!();
+    println!("📊 RECORD STATISTICS");
+    println!("  Total records:        {}", format_number(total_records as u64));
+    println!("  Directories:          {}", format_number(dir_count));
+    println!("  Files:                {}", format_number(file_count));
+    println!();
+    println!("💾 SIZE METRICS");
+    println!("  Total file size:      {}", format_size(total_size));
+    println!("  Total allocated:      {}", format_size(total_allocated));
+    println!();
+    println!("🏷️  ATTRIBUTES");
+    println!("  Hidden:               {}", format_number(hidden_count));
+    println!("  System:               {}", format_number(system_count));
+    println!("  Read-only:            {}", format_number(readonly_count));
+    println!("  Archive:              {}", format_number(archive_count));
+    println!("  Compressed:           {}", format_number(compressed_count));
+    println!("  Encrypted:            {}", format_number(encrypted_count));
+    println!("  Sparse:               {}", format_number(sparse_count));
+    println!("  Reparse points:       {}", format_number(reparse_count));
+    println!();
+    println!("🔗 ADVANCED");
+    println!("  Multi-stream files:   {}", format_number(multi_stream_count));
+    println!("  Multi-name files:     {}", format_number(multi_name_count));
+    println!();
+    println!("📋 SCHEMA");
     let schema = df.schema();
     for (name, dtype) in schema.iter() {
-        writeln!(stdout, "  {name}: {dtype}")?;
+        println!("  {name}: {dtype}");
     }
 
     Ok(())
+}
+
+/// Format a number with comma separators.
+fn format_number(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.chars().rev().collect()
 }
 
 /// Format file size in human-readable format.

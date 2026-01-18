@@ -2116,7 +2116,7 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
             .column("size")
             .ok()
             .and_then(|c| c.u64().ok())
-            .map(|s| s.sum().unwrap_or(0))
+            .map(|s| s.iter().flatten().sum())
             .unwrap_or(0);
 
         println!();
@@ -2178,13 +2178,13 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
 
     match ext {
         "csv" => {
+            use polars::prelude::CsvWriter;
+            use polars::prelude::SerWriter;
             use std::fs::File;
-            use std::io::Write;
 
-            let mut file = File::create(output)?;
+            let file = File::create(output)?;
             let mut df = df;
-            let csv_str = uffs_polars::write_csv_to_string(&mut df)?;
-            file.write_all(csv_str.as_bytes())?;
+            CsvWriter::new(file).finish(&mut df)?;
         }
         _ => {
             let mut df = df;
