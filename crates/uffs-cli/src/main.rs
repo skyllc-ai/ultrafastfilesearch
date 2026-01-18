@@ -439,9 +439,13 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     guard
 }
 
-#[tokio::main]
-#[allow(clippy::too_many_lines)]
-async fn main() -> Result<()> {
+/// Run the CLI and return a result.
+///
+/// This is separated from `main()` to allow custom error handling that
+/// doesn't show backtraces for user-facing errors like "file not found".
+// Intentional separation for error handling - not a candidate for inlining.
+#[allow(clippy::too_many_lines, clippy::single_call_fn)]
+async fn run() -> Result<()> {
     // Check for -v/--verbose flag early to set log level before initializing
     // logging This allows `uffs -v search ...` to show info-level logs without
     // RUST_LOG=info
@@ -560,4 +564,22 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[tokio::main]
+#[allow(clippy::print_stderr)] // Intentional: user-facing error output
+async fn main() {
+    if let Err(err) = run().await {
+        // Print error without backtrace for clean user-facing output
+        // Use anyhow's chain() to iterate through the error chain
+        for (idx, cause) in err.chain().enumerate() {
+            if idx == 0 {
+                eprintln!("Error: {cause}");
+            } else {
+                eprintln!("  Caused by: {cause}");
+            }
+        }
+
+        std::process::exit(1);
+    }
 }
