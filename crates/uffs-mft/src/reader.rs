@@ -1482,7 +1482,7 @@ impl MftReader {
             ParallelMftReader::new_optimized(extent_map.clone(), None, drive_type);
 
         // Generate read chunks (without bitmap - we want ALL records for raw dump)
-        let chunks = generate_read_chunks(&extent_map, None, parallel_reader.chunk_size());
+        let chunks = generate_read_chunks(&extent_map, None, parallel_reader.chunk_size);
 
         let handle = self.handle.raw_handle();
 
