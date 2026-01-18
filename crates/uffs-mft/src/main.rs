@@ -35,11 +35,10 @@
 // These dependencies are used by the uffs-mft library, not this binary.
 // Cargo doesn't support per-binary dependencies, so we suppress the warnings
 // here.
-use std::io::stdout;
-use std::path::PathBuf;
-
 #[cfg(not(windows))]
 use core::future::Future;
+use std::io::stdout;
+use std::path::PathBuf;
 
 #[cfg(windows)]
 use anyhow::Context;
@@ -1584,8 +1583,10 @@ async fn cmd_bitmap_diag(drive: char, show_samples: bool) -> Result<()> {
     println!("   Total records (from size): {}", total_records_from_size);
     println!();
 
+
+
     // Try to get bitmap
-    println!("📋 BITMAP RETRIEVAL");
+    println!("📋 BITMAP RETRIEVAL (via get_mft_bitmap)");
     match handle.get_mft_bitmap() {
         Ok(bitmap) => {
             let bitmap_bytes = bitmap.as_bytes().len();

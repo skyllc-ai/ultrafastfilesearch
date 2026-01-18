@@ -347,7 +347,11 @@ impl VolumeHandle {
     /// Returns an error if the bitmap cannot be read.
     #[allow(unsafe_code)] // Required: Windows FFI for CreateFileW, GetFileSizeEx, ReadFile
     pub fn get_mft_bitmap(&self) -> Result<MftBitmap> {
-        // Open the $MFT::$BITMAP stream
+        use windows::Win32::Storage::FileSystem::{
+            FILE_BEGIN, GetFileSizeEx, ReadFile, SetFilePointerEx,
+        };
+
+        // Open the $MFT::$BITMAP stream to get retrieval pointers and size
         let bitmap_path: Vec<u16> = format!("{}:\\$MFT::$BITMAP", self.volume)
             .encode_utf16()
             .chain(core::iter::once(0))
@@ -356,11 +360,11 @@ impl VolumeHandle {
         let bitmap_handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(bitmap_path.as_ptr()),
-                FILE_READ_ATTRIBUTES.0 | 0x0001, // FILE_READ_DATA
+                FILE_READ_ATTRIBUTES.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 None,
                 OPEN_EXISTING,
-                FILE_FLAG_OPEN_REPARSE_POINT,
+                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_NO_BUFFERING,
                 None,
             )
         };
@@ -381,7 +385,6 @@ impl VolumeHandle {
         // Get file size
         let mut file_size: i64 = 0;
         unsafe {
-            use windows::Win32::Storage::FileSystem::GetFileSizeEx;
             if GetFileSizeEx(bitmap_handle, &mut file_size).is_err() {
                 return Ok(MftBitmap::new_all_valid(
                     self.estimated_record_count() as usize
@@ -389,27 +392,69 @@ impl VolumeHandle {
             }
         }
 
-        // Read the bitmap
-        let mut buffer = vec![0u8; file_size as usize];
-        let mut bytes_read: u32 = 0;
-
-        unsafe {
-            use windows::Win32::Storage::FileSystem::ReadFile;
-            if ReadFile(
-                bitmap_handle,
-                Some(&mut buffer),
-                Some(&mut bytes_read),
-                None,
-            )
-            .is_err()
-            {
+        // Get retrieval pointers for the bitmap file
+        let extents = match get_retrieval_pointers(bitmap_handle) {
+            Ok(e) if !e.is_empty() => e,
+            _ => {
+                // Can't get extents, fall back to all valid
                 return Ok(MftBitmap::new_all_valid(
                     self.estimated_record_count() as usize
                 ));
             }
+        };
+
+        // Read the bitmap data from the volume at the physical cluster locations
+        let bytes_per_cluster = self.volume_data.bytes_per_cluster;
+        let mut buffer = vec![0u8; file_size as usize];
+        let mut buffer_offset = 0usize;
+
+        for extent in &extents {
+            let byte_offset = extent.lcn * i64::from(bytes_per_cluster);
+            let extent_bytes = (extent.cluster_count * u64::from(bytes_per_cluster)) as usize;
+            let bytes_to_read = extent_bytes.min(buffer.len() - buffer_offset);
+
+            if bytes_to_read == 0 {
+                break;
+            }
+
+            // Seek to the extent's physical location on the volume
+            let mut new_position = 0_i64;
+            unsafe {
+                if SetFilePointerEx(
+                    self.handle,
+                    byte_offset,
+                    Some(&mut new_position),
+                    FILE_BEGIN,
+                )
+                .is_err()
+                {
+                    return Ok(MftBitmap::new_all_valid(
+                        self.estimated_record_count() as usize
+                    ));
+                }
+            }
+
+            // Read the extent data from the volume
+            let mut bytes_read: u32 = 0;
+            unsafe {
+                if ReadFile(
+                    self.handle,
+                    Some(&mut buffer[buffer_offset..buffer_offset + bytes_to_read]),
+                    Some(&mut bytes_read),
+                    None,
+                )
+                .is_err()
+                {
+                    return Ok(MftBitmap::new_all_valid(
+                        self.estimated_record_count() as usize
+                    ));
+                }
+            }
+
+            buffer_offset += bytes_read as usize;
         }
 
-        buffer.truncate(bytes_read as usize);
+        buffer.truncate(buffer_offset);
         Ok(MftBitmap::from_bytes(buffer))
     }
 }
