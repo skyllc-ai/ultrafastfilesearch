@@ -273,8 +273,8 @@ enum Commands {
         samples: bool,
     },
 
-    /// Save raw MFT bytes to a file for offline analysis
-    SaveRaw {
+    /// Save MFT bytes to a file for offline analysis
+    Save {
         /// Drive letter to read MFT from (e.g., C, D, E)
         #[arg(short, long)]
         drive: char,
@@ -292,8 +292,8 @@ enum Commands {
         compression_level: i32,
     },
 
-    /// Load raw MFT from a saved file and export to parquet/csv
-    LoadRaw {
+    /// Load MFT from a saved file and export to parquet/csv
+    Load {
         /// Input raw MFT file path
         input: PathBuf,
 
@@ -450,17 +450,17 @@ async fn main() -> Result<()> {
                 full,
             } => cmd_bench_all(output, no_df, runs, full).await,
             Commands::BitmapDiag { drive, samples } => cmd_bitmap_diag(drive, samples).await,
-            Commands::SaveRaw {
+            Commands::Save {
                 drive,
                 output,
                 no_compress,
                 compression_level,
-            } => cmd_save_raw(drive, &output, !no_compress, compression_level).await,
-            Commands::LoadRaw {
+            } => cmd_save(drive, &output, !no_compress, compression_level).await,
+            Commands::Load {
                 input,
                 output,
                 info_only,
-            } => cmd_load_raw(&input, output.as_deref(), info_only).await,
+            } => cmd_load(&input, output.as_deref(), info_only).await,
         }
     }
 }
@@ -1880,9 +1880,9 @@ fn cmd_bitmap_diag(_drive: char, _show_samples: bool) -> impl Future<Output = Re
 // Save/Load Raw MFT Commands
 // ============================================================================
 
-/// Save raw MFT bytes to a file for offline analysis.
+/// Save MFT bytes to a file for offline analysis.
 #[cfg(windows)]
-async fn cmd_save_raw(
+async fn cmd_save(
     drive: char,
     output: &Path,
     compress: bool,
@@ -1924,10 +1924,10 @@ async fn cmd_save_raw(
     Ok(())
 }
 
-/// Save raw MFT - non-Windows stub.
+/// Save MFT - non-Windows stub.
 #[cfg(not(windows))]
 #[allow(clippy::unused_async)]
-async fn cmd_save_raw(
+async fn cmd_save(
     _drive: char,
     _output: &Path,
     _compress: bool,
@@ -1936,9 +1936,9 @@ async fn cmd_save_raw(
     anyhow::bail!("Raw MFT saving is only supported on Windows");
 }
 
-/// Load raw MFT from a saved file and optionally export.
+/// Load MFT from a saved file and optionally export.
 #[cfg(windows)]
-async fn cmd_load_raw(input: &Path, output: Option<&Path>, info_only: bool) -> Result<()> {
+async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Result<()> {
     use uffs_mft::{MftReader, load_raw_mft_header};
 
     // Load header first
@@ -2002,9 +2002,9 @@ async fn cmd_load_raw(input: &Path, output: Option<&Path>, info_only: bool) -> R
     Ok(())
 }
 
-/// Load raw MFT - non-Windows stub.
+/// Load MFT - non-Windows stub.
 #[cfg(not(windows))]
 #[allow(clippy::unused_async)]
-async fn cmd_load_raw(_input: &Path, _output: Option<&Path>, _info_only: bool) -> Result<()> {
+async fn cmd_load(_input: &Path, _output: Option<&Path>, _info_only: bool) -> Result<()> {
     anyhow::bail!("Raw MFT loading is only supported on Windows");
 }
