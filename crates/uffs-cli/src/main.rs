@@ -316,39 +316,6 @@ enum Commands {
         #[arg(long, default_value = "10")]
         top: u32,
     },
-
-    /// Save raw MFT bytes to a file for offline analysis
-    SaveRaw {
-        /// Drive letter to read MFT from (e.g., C or C:)
-        #[arg(short, long, value_parser = parse_drive_letter)]
-        drive: char,
-
-        /// Output file path for raw MFT data
-        #[arg(short, long)]
-        output: PathBuf,
-
-        /// Compress the output using zstd
-        #[arg(short, long, default_value = "true")]
-        compress: bool,
-
-        /// Compression level (1-22, default 3)
-        #[arg(long, default_value = "3")]
-        compression_level: i32,
-    },
-
-    /// Load raw MFT from a saved file and export to parquet/csv
-    LoadRaw {
-        /// Input raw MFT file path
-        input: PathBuf,
-
-        /// Output file path (parquet or csv based on extension)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        /// Show info about the raw MFT file only (don't parse)
-        #[arg(long)]
-        info_only: bool,
-    },
 }
 
 /// Initialize logging with terminal + file support.
@@ -514,21 +481,6 @@ async fn run() -> Result<()> {
         }
         Some(Commands::Stats { index, top }) => {
             commands::stats(&index, top)?;
-        }
-        Some(Commands::SaveRaw {
-            drive,
-            output,
-            compress,
-            compression_level,
-        }) => {
-            commands::save_raw(drive, &output, compress, compression_level).await?;
-        }
-        Some(Commands::LoadRaw {
-            input,
-            output,
-            info_only,
-        }) => {
-            commands::load_raw(&input, output.as_deref(), info_only)?;
         }
         None => {
             // Default action: search with top-level arguments

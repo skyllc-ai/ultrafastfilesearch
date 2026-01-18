@@ -52,31 +52,11 @@ fn add_drive_progress(multi_progress: &MultiProgress, drive: char) -> ProgressBa
     progress_bar
 }
 
-/// Create a progress bar for saving raw MFT bytes.
-/// Returns `None` if progress is disabled via `UFFS_NO_PROGRESS=1`.
-#[cfg(windows)]
-fn create_save_raw_progress() -> Option<ProgressBar> {
-    if is_progress_disabled() {
-        return None;
-    }
-
-    let progress_bar = ProgressBar::new(0);
-    progress_bar.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.cyan} [{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} 💾 saving...")
-            .unwrap_or_else(|_| ProgressStyle::default_bar())
-            .progress_chars("━━╸"),
-    );
-    Some(progress_bar)
-}
-
 use uffs_core::output::OutputConfig;
 use uffs_core::pattern::ParsedPattern;
 use uffs_core::tree::add_tree_columns;
 use uffs_core::{MftQuery, export_csv, export_json, export_table};
-#[cfg(windows)]
-use uffs_mft::SaveRawOptions;
-use uffs_mft::{MftProgress, MftReader, load_raw_mft_header};
+use uffs_mft::{MftProgress, MftReader};
 
 /// Search for files matching a pattern.
 ///
@@ -633,6 +613,27 @@ pub fn info(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Format file size in human-readable format.
+#[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    const TB: u64 = GB * 1024;
+
+    if bytes >= TB {
+        format!("{:.2} TB", bytes as f64 / TB as f64)
+    } else if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 /// Show statistics about files in an index.
 ///
 /// # Errors
@@ -689,183 +690,4 @@ pub fn stats(path: &Path, top: u32) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Format file size in human-readable format.
-#[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
-fn format_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-    const TB: u64 = GB * 1024;
-
-    if bytes >= TB {
-        format!("{:.2} TB", bytes as f64 / TB as f64)
-    } else if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
-/// Save raw MFT bytes to a file for offline analysis.
-#[cfg(windows)]
-pub async fn save_raw(
-    drive: char,
-    output: &Path,
-    compress: bool,
-    compression_level: i32,
-) -> Result<()> {
-    info!(drive = %drive, "Reading raw MFT from drive");
-
-    let reader = MftReader::open(drive)
-        .await
-        .with_context(|| format!("Failed to open drive {drive}:"))?;
-
-    // Create progress bar (None if disabled)
-    let pb = create_save_raw_progress();
-
-    let options = SaveRawOptions {
-        compress,
-        compression_level,
-    };
-
-    let header = reader
-        .save_raw_to_file(output, &options)
-        .await
-        .with_context(|| format!("Failed to save raw MFT to {}", output.display()))?;
-
-    if let Some(ref p) = pb {
-        p.finish_and_clear();
-    }
-
-    let mut stdout = std::io::stdout().lock();
-    writeln!(stdout)?;
-    writeln!(stdout, "=== Raw MFT Saved ===")?;
-    writeln!(stdout, "Output:          {}", output.display())?;
-    writeln!(stdout, "Records:         {}", header.record_count)?;
-    writeln!(stdout, "Record size:     {} bytes", header.record_size)?;
-    writeln!(
-        stdout,
-        "Original size:   {}",
-        format_size(header.original_size)
-    )?;
-    if header.is_compressed() {
-        writeln!(
-            stdout,
-            "Compressed size: {}",
-            format_size(header.compressed_size)
-        )?;
-        #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
-        let ratio = header.compressed_size as f64 / header.original_size as f64 * 100.0_f64;
-        writeln!(stdout, "Compression:     {ratio:.1}%")?;
-    } else {
-        writeln!(stdout, "Compression:     none")?;
-    }
-
-    Ok(())
-}
-
-/// Save raw MFT bytes - non-Windows stub.
-#[cfg(not(windows))]
-// Platform-specific stub must match Windows signature; called once per platform is expected.
-#[allow(clippy::unused_async, clippy::single_call_fn)]
-pub async fn save_raw(
-    _drive: char,
-    _output: &Path,
-    _compress: bool,
-    _compression_level: i32,
-) -> Result<()> {
-    anyhow::bail!("Raw MFT saving is only supported on Windows");
-}
-
-/// Load raw MFT from a saved file.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The raw MFT file cannot be loaded
-/// - Writing to stdout fails
-/// - On non-Windows: always fails (NTFS parsing not supported)
-// CLI command handler - separate function for testability and maintainability.
-#[allow(clippy::single_call_fn)]
-pub fn load_raw(input: &Path, output: Option<&Path>, info_only: bool) -> Result<()> {
-    // Load header first
-    let header = load_raw_mft_header(input)
-        .with_context(|| format!("Failed to load raw MFT header from {}", input.display()))?;
-
-    let mut stdout = std::io::stdout().lock();
-    writeln!(stdout, "=== Raw MFT File Info ===")?;
-    writeln!(stdout, "File:            {}", input.display())?;
-    writeln!(stdout, "Version:         {}", header.version)?;
-    writeln!(stdout, "Records:         {}", header.record_count)?;
-    writeln!(stdout, "Record size:     {} bytes", header.record_size)?;
-    writeln!(
-        stdout,
-        "Original size:   {}",
-        format_size(header.original_size)
-    )?;
-    if header.is_compressed() {
-        writeln!(
-            stdout,
-            "Compressed size: {}",
-            format_size(header.compressed_size)
-        )?;
-        #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
-        let ratio = header.compressed_size as f64 / header.original_size as f64 * 100.0_f64;
-        writeln!(stdout, "Compression:     {ratio:.1}%")?;
-    } else {
-        writeln!(stdout, "Compression:     none")?;
-    }
-    // Drop stdout lock before potentially long operations
-    drop(stdout);
-
-    if info_only {
-        return Ok(());
-    }
-
-    // Parse and export
-    #[cfg(windows)]
-    {
-        let output = output.context("--output is required when not using --info-only")?;
-
-        info!("Parsing MFT records");
-
-        let df = MftReader::load_raw_to_dataframe(input)
-            .with_context(|| format!("Failed to parse raw MFT from {}", input.display()))?;
-
-        info!(records = df.height(), "Parsed records");
-
-        // Determine output format from extension
-        let ext = output
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("parquet");
-
-        match ext {
-            "csv" => {
-                let mut file = File::create(output)?;
-                export_csv(&df, &mut file)?;
-                info!(path = %output.display(), "Exported to CSV");
-            }
-            _ => {
-                let mut df = df;
-                MftReader::save_parquet(&mut df, output)?;
-                info!(path = %output.display(), "Exported to Parquet");
-            }
-        }
-
-        Ok(())
-    }
-
-    #[cfg(not(windows))]
-    {
-        // Silence unused variable warning on non-Windows
-        let _: Option<&Path> = output;
-        anyhow::bail!("Raw MFT parsing is only supported on Windows (requires NTFS parsing)");
-    }
 }

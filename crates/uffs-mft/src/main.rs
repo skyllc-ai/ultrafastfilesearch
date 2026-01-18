@@ -38,7 +38,7 @@
 #[cfg(not(windows))]
 use core::future::Future;
 use std::io::stdout;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
 use anyhow::Context;
@@ -272,6 +272,39 @@ enum Commands {
         #[arg(long)]
         samples: bool,
     },
+
+    /// Save raw MFT bytes to a file for offline analysis
+    SaveRaw {
+        /// Drive letter to read MFT from (e.g., C, D, E)
+        #[arg(short, long)]
+        drive: char,
+
+        /// Output file path for raw MFT data
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Disable compression (default: compressed with zstd)
+        #[arg(long)]
+        no_compress: bool,
+
+        /// Compression level (1-22, default 3)
+        #[arg(long, default_value = "3")]
+        compression_level: i32,
+    },
+
+    /// Load raw MFT from a saved file and export to parquet/csv
+    LoadRaw {
+        /// Input raw MFT file path
+        input: PathBuf,
+
+        /// Output file path (parquet or csv based on extension)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Show info about the raw MFT file only (don't parse)
+        #[arg(long)]
+        info_only: bool,
+    },
 }
 
 /// Initialize logging with terminal + file support.
@@ -417,6 +450,17 @@ async fn main() -> Result<()> {
                 full,
             } => cmd_bench_all(output, no_df, runs, full).await,
             Commands::BitmapDiag { drive, samples } => cmd_bitmap_diag(drive, samples).await,
+            Commands::SaveRaw {
+                drive,
+                output,
+                no_compress,
+                compression_level,
+            } => cmd_save_raw(drive, &output, !no_compress, compression_level).await,
+            Commands::LoadRaw {
+                input,
+                output,
+                info_only,
+            } => cmd_load_raw(&input, output.as_deref(), info_only).await,
         }
     }
 }
@@ -1830,4 +1874,137 @@ fn cmd_bitmap_diag(_drive: char, _show_samples: bool) -> impl Future<Output = Re
     core::future::ready(Err(anyhow::anyhow!(
         "Bitmap diagnostic is only available on Windows"
     )))
+}
+
+// ============================================================================
+// Save/Load Raw MFT Commands
+// ============================================================================
+
+/// Save raw MFT bytes to a file for offline analysis.
+#[cfg(windows)]
+async fn cmd_save_raw(
+    drive: char,
+    output: &Path,
+    compress: bool,
+    compression_level: i32,
+) -> Result<()> {
+    use uffs_mft::{MftReader, SaveRawOptions};
+
+    info!(drive = %drive, "Reading raw MFT from drive");
+
+    let reader = MftReader::open(drive)
+        .await
+        .with_context(|| format!("Failed to open drive {drive}:"))?;
+
+    let options = SaveRawOptions {
+        compress,
+        compression_level,
+    };
+
+    let header = reader
+        .save_raw_to_file(output, &options)
+        .await
+        .with_context(|| format!("Failed to save raw MFT to {}", output.display()))?;
+
+    println!();
+    println!("=== Raw MFT Saved ===");
+    println!("Output:          {}", output.display());
+    println!("Records:         {}", header.record_count);
+    println!("Record size:     {} bytes", header.record_size);
+    println!("Original size:   {}", format_bytes(header.original_size));
+    if header.is_compressed() {
+        println!("Compressed size: {}", format_bytes(header.compressed_size));
+        #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+        let ratio = header.compressed_size as f64 / header.original_size as f64 * 100.0_f64;
+        println!("Compression:     {ratio:.1}%");
+    } else {
+        println!("Compression:     none");
+    }
+
+    Ok(())
+}
+
+/// Save raw MFT - non-Windows stub.
+#[cfg(not(windows))]
+#[allow(clippy::unused_async)]
+async fn cmd_save_raw(
+    _drive: char,
+    _output: &Path,
+    _compress: bool,
+    _compression_level: i32,
+) -> Result<()> {
+    anyhow::bail!("Raw MFT saving is only supported on Windows");
+}
+
+/// Load raw MFT from a saved file and optionally export.
+#[cfg(windows)]
+async fn cmd_load_raw(input: &Path, output: Option<&Path>, info_only: bool) -> Result<()> {
+    use uffs_mft::{MftReader, load_raw_mft_header};
+
+    // Load header first
+    let header = load_raw_mft_header(input)
+        .with_context(|| format!("Failed to load raw MFT header from {}", input.display()))?;
+
+    println!("=== Raw MFT File Info ===");
+    println!("File:            {}", input.display());
+    println!("Version:         {}", header.version);
+    println!("Records:         {}", header.record_count);
+    println!("Record size:     {} bytes", header.record_size);
+    println!("Original size:   {}", format_bytes(header.original_size));
+    if header.is_compressed() {
+        println!("Compressed size: {}", format_bytes(header.compressed_size));
+        #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+        let ratio = header.compressed_size as f64 / header.original_size as f64 * 100.0_f64;
+        println!("Compression:     {ratio:.1}%");
+    } else {
+        println!("Compression:     none");
+    }
+
+    if info_only {
+        return Ok(());
+    }
+
+    // Parse and export
+    let output = output.context("--output is required when not using --info-only")?;
+
+    info!("Parsing MFT records");
+
+    let df = MftReader::load_raw_to_dataframe(input)
+        .with_context(|| format!("Failed to parse raw MFT from {}", input.display()))?;
+
+    info!(records = df.height(), "Parsed records");
+
+    // Determine output format from extension
+    let ext = output
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("parquet");
+
+    match ext {
+        "csv" => {
+            use std::fs::File;
+            use std::io::Write;
+
+            let mut file = File::create(output)?;
+            // Simple CSV export
+            let mut df = df;
+            let csv_str = uffs_polars::write_csv_to_string(&mut df)?;
+            file.write_all(csv_str.as_bytes())?;
+            info!(path = %output.display(), "Exported to CSV");
+        }
+        _ => {
+            let mut df = df;
+            MftReader::save_parquet(&mut df, output)?;
+            info!(path = %output.display(), "Exported to Parquet");
+        }
+    }
+
+    Ok(())
+}
+
+/// Load raw MFT - non-Windows stub.
+#[cfg(not(windows))]
+#[allow(clippy::unused_async)]
+async fn cmd_load_raw(_input: &Path, _output: Option<&Path>, _info_only: bool) -> Result<()> {
+    anyhow::bail!("Raw MFT loading is only supported on Windows");
 }
