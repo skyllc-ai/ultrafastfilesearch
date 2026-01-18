@@ -55,7 +55,9 @@ pub struct VolumeHandle {
 // to a kernel object that the OS manages. Multiple threads can safely read
 // from the same handle (though we don't do that - each task has its own
 // handle). This is required for tokio::spawn to work with MftReader.
+#[allow(unsafe_code)]
 unsafe impl Send for VolumeHandle {}
+#[allow(unsafe_code)]
 unsafe impl Sync for VolumeHandle {}
 
 /// NTFS volume data retrieved from `FSCTL_GET_NTFS_VOLUME_DATA`.

@@ -74,7 +74,7 @@ pub async fn search(
     pattern: &str,
     single_drive: Option<char>,
     multi_drives: Option<Vec<char>>,
-    index: Option<std::path::PathBuf>,
+    index: Option<PathBuf>,
     files_only: bool,
     dirs_only: bool,
     min_size: Option<u64>,
@@ -141,7 +141,7 @@ pub async fn search(
 /// This prevents OOM errors when searching many drives with millions of files.
 #[allow(clippy::single_call_fn)] // Extracted to reduce search() line count below clippy::too_many_lines limit
 async fn load_and_filter_data(
-    index: Option<std::path::PathBuf>,
+    index: Option<PathBuf>,
     multi_drives: Option<Vec<char>>,
     single_drive: Option<char>,
     filters: &QueryFilters<'_>,
@@ -856,7 +856,7 @@ pub fn info(path: &Path) -> Result<()> {
 /// Statistics extracted from an index file.
 struct IndexStats {
     /// Absolute path to the index file.
-    abs_path: std::path::PathBuf,
+    abs_path: PathBuf,
     /// Size of the index file on disk in bytes.
     file_size: u64,
     /// Total number of records in the index.
