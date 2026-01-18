@@ -39,25 +39,104 @@ This document describes an **experiment-driven roadmap** to make `uffs-mft` the 
 
 ## 2. Bottleneck Analysis by Drive Type
 
-Before optimizing, we must understand **where time is spent** on each drive type:
+Before optimizing, we must understand **where time is spent** on each drive type.
 
-| Phase | SSD (C:, F:) | HDD (D:, E:, M:, S:) |
-|-------|--------------|----------------------|
-| **I/O Read** | Fast (~1-2 GB/s) | Slow (~100-200 MB/s), seek-bound |
-| **Parse** | Often the bottleneck | Usually idle waiting for I/O |
-| **Merge** | Can be significant with many extensions | Same |
-| **DataFrame Build** | Can dominate on fast I/O | Usually negligible vs I/O |
+### 2.1 Actual Benchmark Data (January 2026)
 
-**Key insight**: Optimizations that help SSD (CPU-bound) may not help HDD (I/O-bound), and vice versa. We must measure both.
+Benchmark run on MASTER-PC (24 CPU cores, v0.1.30):
 
-**Phase breakdown we need to track**:
-- `read_time_ms`: Time spent in `ReadFile` calls
-- `parse_time_ms`: Time spent in `parse_record_zero_alloc`
-- `merge_time_ms`: Time spent in `MftRecordMerger`
-- `df_build_time_ms`: Time spent building DataFrame columns
-- `peak_rss_mb`: Peak resident set size
-- `bytes_read`: Total bytes read from disk
-- `records_parsed`: Total records successfully parsed
+| Drive | Type | MFT Size | Records | Total Time | Throughput | Primary Bottleneck |
+|-------|------|----------|---------|------------|------------|-------------------|
+| **C:** | SSD | 4.5 GB | 3.0M | 11.3s | 402 MB/s | DF Build (40%) |
+| **D:** | HDD | 4.8 GB | 4.8M | 46.7s | 103 MB/s | Read (51%) |
+| **E:** | HDD | 2.9 GB | 2.9M | 54.7s | 53 MB/s | Read (64%) |
+| **F:** | SSD | 4.5 GB | 2.2M | 8.3s | 547 MB/s | DF Build (35%) |
+| **G:** | ??? | 44 MB | 45K | 0.3s | 152 MB/s | (trivial) |
+| **M:** | HDD | 2.4 GB | 1.9M | 33.2s | 74 MB/s | Read (65%) |
+| **S:** | HDD | 11.5 GB | 8.3M | 160.6s | 71 MB/s | Read (59%) |
+
+**Total benchmark time**: 315 seconds across all 7 drives.
+
+### 2.2 Phase Breakdown by Drive Type
+
+**SSD Drives (C:, F:) - CPU Bound**
+```
+Phase         | C: (ms) | C: (%) | F: (ms) | F: (%)
+--------------|---------|--------|---------|--------
+Read          |   2,048 |   18%  |   1,616 |   19%
+Parse         |   3,413 |   30%  |   2,693 |   32%
+Merge         |   1,365 |   12%  |   1,077 |   13%
+DF Build      |   4,492 |   40%  |   2,927 |   35%
+--------------|---------|--------|---------|--------
+Total         |  11,320 |  100%  |   8,316 |  100%
+```
+
+**HDD Drives (D:, E:, M:, S:) - I/O Bound**
+```
+Phase         | D: (ms) | D: (%) | E: (ms) | E: (%) | S: (ms) | S: (%)
+--------------|---------|--------|---------|--------|---------|--------
+Read          |  23,683 |   51%  |  35,163 |   64%  |  94,040 |   59%
+Parse         |   6,766 |   14%  |  10,046 |   18%  |  26,868 |   17%
+Merge         |   3,383 |    7%  |   5,023 |    9%  |  13,434 |    8%
+DF Build      |  12,854 |   28%  |   4,467 |    8%  |  26,297 |   16%
+--------------|---------|--------|---------|--------|---------|--------
+Total         |  46,688 |  100%  |  54,702 |  100%  | 160,642 |  100%
+```
+
+### 2.3 Key Insights from Benchmark
+
+1. **SSD vs HDD Bottleneck Confirmed**:
+   - SSD: DF Build (35-40%) + Parse (30-32%) dominate → CPU optimization priority
+   - HDD: Read (51-65%) dominates → I/O optimization priority
+
+2. **~4x Throughput Difference**: SSD (400-550 MB/s) vs HDD (50-100 MB/s)
+
+3. **Anomaly: Drive E is 2x slower than Drive D**:
+   - Both HDDs, similar sizes, but E: 53 MB/s vs D: 103 MB/s
+   - Possible causes: older drive, different spindle speed, more fragmentation
+
+4. **🚨 Bitmap Not Skipping Records**:
+   - All drives show `in_use_records == total_records`
+   - This means **zero records are being skipped**
+   - Either MFTs are 100% utilized (unlikely) or bitmap logic has a bug
+   - **Investigation required** (see Section 6.1)
+
+5. **24 CPU Cores Available**: Massive parallelism potential not fully utilized
+
+### 2.4 Optimization Priority Matrix
+
+Based on actual data:
+
+**For SSDs (C:, F:) - Focus on CPU**
+| Priority | Target | Expected Gain |
+|----------|--------|---------------|
+| **P0** | DF Build optimization (SoA layout, fold/reduce) | 20-30% |
+| **P1** | Parse optimization (zero-alloc, SIMD) | 10-15% |
+| **P2** | Rayon tuning (utilize 24 cores) | 5-10% |
+
+**For HDDs (D:, E:, M:, S:) - Focus on I/O**
+| Priority | Target | Expected Gain |
+|----------|--------|---------------|
+| **P0** | Prefetch / overlapped I/O | 30-50% |
+| **P1** | Larger chunk size for HDD (4MB → 8-16MB?) | 10-20% |
+| **P2** | Read-ahead buffer | 10-15% |
+
+**Cross-Drive**
+| Priority | Target | Expected Gain |
+|----------|--------|---------------|
+| **P0** | Fix/investigate bitmap skip logic | Unknown (potentially significant) |
+| **P1** | Parallel drive scanning | Linear speedup |
+
+### 2.5 Realistic Target Performance
+
+Based on benchmark data and optimization potential:
+
+| Drive | Current | Target | Speedup |
+|-------|---------|--------|---------|
+| C: (SSD) | 11.3s | **6-7s** | 1.6x |
+| D: (HDD) | 46.7s | **25-30s** | 1.7x |
+| S: (HDD, 11.5GB) | 160.6s | **80-100s** | 1.8x |
+| **Total (all drives)** | 315s | **~180s** | **1.75x** |
 
 ---
 
@@ -127,25 +206,68 @@ Before comparing outputs:
 
 Each milestone has explicit **success criteria** and **measurement methods**.
 
-| Milestone | Focus | Success Criteria |
-|-----------|-------|------------------|
-| **M0** | Instrumentation Foundation | Phase timings logged, baseline established |
-| **M1** | Quick Wins | ≥10% reduction in parse_time on SSD baseline |
-| **M2** | Streaming & Prefetch | ≥15% reduction in wall-clock on HDD baseline |
-| **M3** | Overlapped I/O | ≥10% additional reduction on HDD |
-| **M4** | Data Layout Overhaul | ≥20% reduction in df_build_time |
-| **M5** | Benchmarks & Auto-Tuning | Reproducible benchmark suite, CI integration |
+| Milestone | Focus | Success Criteria | Priority |
+|-----------|-------|------------------|----------|
+| **M0** | Instrumentation Foundation | Phase timings logged, baseline established | ✅ DONE |
+| **M0.5** | Bitmap Investigation | Understand why no records are skipped | **P0** |
+| **M1** | Quick Wins (CPU) | ≥10% reduction in parse_time on SSD | **P0** |
+| **M1.5** | DF Build Optimization | ≥20% reduction in df_build_time on SSD | **P0** |
+| **M2** | Streaming & Prefetch | ≥15% reduction in wall-clock on HDD | **P1** |
+| **M3** | Overlapped I/O | ≥10% additional reduction on HDD | **P2** |
+| **M4** | Data Layout Overhaul | SoA layout, direct-to-columns | **P1** |
+| **M5** | Benchmarks & Auto-Tuning | Reproducible benchmark suite, CI integration | **P2** |
 
 **Benchmark Matrix** (required for validation):
-- One SSD run (CPU-limited baseline)
-- One big HDD run (I/O-limited baseline)
-- One fragmented/many-extents run (worst-case chunk planning)
+- SSD baseline: Drive C: (3.0M records, 11.3s, 402 MB/s)
+- HDD baseline: Drive D: (4.8M records, 46.7s, 103 MB/s)
+- Large HDD: Drive S: (8.3M records, 160.6s, 71 MB/s)
+
+---
+
+## 6.1 Milestone 0.5 – Bitmap Investigation (NEW - P0)
+
+**Status**: 🚨 INVESTIGATION REQUIRED
+
+### Problem
+
+Benchmark data shows `in_use_records == total_records` for ALL drives:
+```
+Drive C: in_use=4,656,384, total=4,656,384 (100%)
+Drive D: in_use=4,917,248, total=4,917,248 (100%)
+Drive S: in_use=11,758,592, total=11,758,592 (100%)
+```
+
+This is suspicious—real MFTs typically have 10-30% free records.
+
+### Possible Causes
+
+1. **Bitmap logic bug**: `MftBitmap::count_in_use()` may be counting wrong
+2. **Bitmap not being used**: Records may not be filtered by bitmap during read
+3. **Bitmap retrieval failing silently**: `get_mft_bitmap().ok()` may return `None`
+4. **Bitmap interpretation wrong**: Bit order or byte order may be inverted
+
+### Investigation Tasks
+
+1. [ ] Add logging to `get_mft_bitmap()` to confirm it succeeds
+2. [ ] Log `bitmap.count_in_use()` vs `bitmap.len()` to verify counts
+3. [ ] Manually inspect a few bitmap bytes to verify interpretation
+4. [ ] Check if `generate_read_chunks` actually uses the bitmap to skip ranges
+5. [ ] Compare parsed record count vs in_use count
+
+### Expected Impact
+
+If bitmap is working correctly and we can skip 20% of records:
+- **Read time**: 20% reduction (fewer bytes to read)
+- **Parse time**: 20% reduction (fewer records to parse)
+- **Overall**: 15-20% improvement across all drives
 
 ---
 
 ## 7. Milestone 0 – Instrumentation Foundation
 
-**This milestone must be completed before any optimization work begins.**
+**Status**: ✅ COMPLETE (v0.1.30)
+
+The `bench` and `bench-all` commands now provide phase-level timing.
 
 ### Goal
 
@@ -195,21 +317,40 @@ Establish phase-level timing instrumentation so we can measure the impact of eve
 
 ---
 
-## 8. Milestone 1 – Quick Wins
+## 8. Milestone 1 – Quick Wins (CPU Optimization)
+
+**Status**: 🎯 HIGH PRIORITY (P0 for SSD optimization)
 
 ### Goal
 
 Reduce CPU overhead in the hot path without changing I/O strategy.
 
+### Baseline (from benchmark)
+```
+Drive C: (SSD)
+  Parse:    3,413 ms (30%)
+  DF Build: 4,492 ms (40%)  ← BIGGEST TARGET
+  Total:   11,320 ms
+```
+
 ### Success Criteria
 
-- [ ] ≥10% reduction in `parse_time` on SSD baseline.
-- [ ] No regression in `read_time` or correctness.
-- [ ] All parity tests pass.
+- [ ] ≥10% reduction in `parse_time` on SSD baseline (3,413ms → <3,100ms)
+- [ ] ≥20% reduction in `df_build_time` on SSD baseline (4,492ms → <3,600ms)
+- [ ] No regression in `read_time` or correctness
+- [ ] All parity tests pass
+
+### Target Performance
+
+| Metric | Before | After | Improvement |
+|--------|--------|-------|-------------|
+| Parse time | 3,413 ms | <3,100 ms | 10%+ |
+| DF Build time | 4,492 ms | <3,600 ms | 20%+ |
+| Total (C:) | 11,320 ms | <9,000 ms | 20%+ |
 
 ### Measurement Method
 
-Compare phase timings before/after on the same SSD volume. Run 3x and take median.
+Compare phase timings before/after on Drive C:. Run 3x and take median.
 
 ---
 
@@ -380,21 +521,43 @@ Compare phase timings before/after on the same SSD volume. Run 3x and take media
 
 ---
 
-## 9. Milestone 2 – Streaming & Prefetch Integration
+## 9. Milestone 2 – Streaming & Prefetch Integration (HDD Optimization)
+
+**Status**: 🎯 HIGH PRIORITY (P0 for HDD optimization)
 
 ### Goal
 
 Overlap I/O and parsing to reduce wall-clock time on HDD volumes.
 
+### Baseline (from benchmark)
+```
+Drive D: (HDD)
+  Read:     23,683 ms (51%)  ← BIGGEST TARGET
+  Parse:     6,766 ms (14%)
+  Total:    46,688 ms
+
+Drive S: (HDD, large)
+  Read:     94,040 ms (59%)  ← BIGGEST TARGET
+  Total:   160,642 ms
+```
+
 ### Success Criteria
 
-- [ ] ≥15% reduction in wall-clock time on HDD baseline.
-- [ ] Consistent progress reporting across all modes.
-- [ ] No correctness regressions.
+- [ ] ≥15% reduction in wall-clock time on HDD baseline (D: 46.7s → <40s)
+- [ ] ≥20% reduction on large HDD (S: 160.6s → <130s)
+- [ ] Consistent progress reporting across all modes
+- [ ] No correctness regressions
+
+### Target Performance
+
+| Drive | Before | After | Improvement |
+|-------|--------|-------|-------------|
+| D: (HDD) | 46.7s | <40s | 15%+ |
+| S: (HDD, large) | 160.6s | <130s | 20%+ |
 
 ### Measurement Method
 
-Compare wall-clock time before/after on the same HDD volume. Run 3x and take median.
+Compare wall-clock time before/after on Drive D: and S:. Run 3x and take median.
 
 ---
 
@@ -645,50 +808,88 @@ Ensure we can measure improvements and keep them over time.
 
 ## 13. PR-Sized Implementation Order
 
-For a junior engineer, here's the recommended order of PRs:
+Based on actual benchmark data, here's the prioritized order of PRs:
 
-### Phase 1: Foundation (M0)
-1. **PR1**: Add phase timing instrumentation (read/parse/merge/df_build).
-2. **PR2**: Add structured metrics output (JSON).
-3. **PR3**: Establish and document baselines.
+### Phase 0: Investigation (M0.5) - 🚨 DO FIRST
+1. **PR1**: Investigate bitmap skip logic (why in_use == total for all drives?)
+2. **PR2**: Add bitmap diagnostic logging
 
-### Phase 2: Quick Wins (M1)
-4. **PR4**: Replace per-record atomics with fold/reduce.
-5. **PR5**: Pre-size all hot vectors.
-6. **PR6**: Fuse stats with DataFrame building.
-7. **PR7**: Reuse aligned buffer (no mutex).
-8. **PR8**: Chunk planner merge adjacent ranges.
-9. **PR9**: Raw chunk size tuning.
+### Phase 1: Foundation (M0) - ✅ COMPLETE
+~~3. **PR3**: Add phase timing instrumentation~~ (Done in v0.1.30)
+~~4. **PR4**: Add structured metrics output (JSON)~~ (Done: `bench` and `bench-all` commands)
+~~5. **PR5**: Establish and document baselines~~ (Done: my_benchmark.json)
 
-### Phase 3: I/O Overlap (M2)
-10. **PR10**: Add `MftReadMode` enum and CLI flag.
-11. **PR11**: Wire up `StreamingMftReader`.
-12. **PR12**: Wire up `PrefetchMftReader`.
-13. **PR13**: Implement mode auto-selection heuristics.
+### Phase 2: SSD Optimization (M1) - 🎯 HIGH PRIORITY
+Target: Drive C: 11.3s → <9s (20% improvement)
 
-### Phase 4: Advanced (M3/M4)
-14. **PR14**: Overlapped I/O prototype (feature-flagged).
-15. **PR15**: `ParsedColumns` + conversion.
-16. **PR16**: Direct-to-columns for easy fields.
+6. **PR6**: Replace per-record atomics with fold/reduce (parse: -10%)
+7. **PR7**: Pre-size all hot vectors (df_build: -5%)
+8. **PR8**: Fuse stats with DataFrame building (df_build: -15%)
+9. **PR9**: Reuse aligned buffer (read: -2%)
 
-### Phase 5: Polish (M5)
-17. **PR17**: Benchmarking tool.
-18. **PR18**: CI benchmark integration.
+### Phase 3: HDD Optimization (M2) - 🎯 HIGH PRIORITY
+Target: Drive D: 46.7s → <40s (15% improvement)
+
+10. **PR10**: Add `MftReadMode` enum and CLI flag
+11. **PR11**: Wire up `PrefetchMftReader` (read: -20% on HDD)
+12. **PR12**: Tune HDD chunk size (4MB → 8-16MB?)
+13. **PR13**: Implement mode auto-selection heuristics
+
+### Phase 4: Data Layout (M4) - MEDIUM PRIORITY
+Target: df_build_time -20% additional
+
+14. **PR14**: `ParsedColumns` + conversion (SoA layout)
+15. **PR15**: Direct-to-columns for easy fields
+16. **PR16**: Hot/cold column grouping
+
+### Phase 5: Advanced I/O (M3) - LOWER PRIORITY
+Only if M2 shows promise
+
+17. **PR17**: Overlapped I/O prototype (feature-flagged)
+18. **PR18**: IOCP integration (if needed)
+
+### Phase 6: Polish (M5)
+19. **PR19**: CI benchmark integration
+20. **PR20**: Auto-tuning based on drive characteristics
 
 ---
 
 ## 14. How to Work Through This
 
-1. **Start with M0** (instrumentation). Without measurements, you're guessing.
-2. For each change:
+1. **Start with M0.5** (bitmap investigation). This could be a quick 15-20% win.
+2. **M0 is complete** - we have baseline measurements.
+3. For each change:
    - State your hypothesis ("I expect X% improvement in Y phase").
    - Make minimal edits.
    - Run `cargo test -p uffs-mft`.
-   - Measure before/after on a real volume.
+   - Run `uffs_mft bench --drive C --runs 3` (SSD) or `--drive D` (HDD).
    - Accept or reject based on data.
-3. **Keep PRs small** (one optimization per PR).
-4. **Document results** in commit messages and BENCHMARKS.md.
-5. **Only proceed to M3/M4** after M1/M2 are stable and measured.
+4. **Keep PRs small** (one optimization per PR).
+5. **Document results** in commit messages.
+6. **Re-run `bench-all`** after each milestone to track cumulative progress.
+
+### Validation Commands
+
+```powershell
+# Quick SSD benchmark (Drive C:)
+uffs_mft bench --drive C --runs 3
+
+# Quick HDD benchmark (Drive D:)
+uffs_mft bench --drive D --runs 3
+
+# Full benchmark (all drives, save to file)
+uffs_mft bench-all --output benchmark_after_PR6.json --runs 3
+```
+
+### Success Tracking
+
+| Milestone | Target | Baseline | Current | Status |
+|-----------|--------|----------|---------|--------|
+| M0.5 (Bitmap) | Understand issue | N/A | N/A | 🔴 TODO |
+| M1 (SSD) | C: <9s | 11.3s | - | 🔴 TODO |
+| M2 (HDD) | D: <40s | 46.7s | - | 🔴 TODO |
+| M4 (SoA) | df_build -20% | 4.5s | - | 🔴 TODO |
+| **Total** | **<180s** | **315s** | - | 🔴 TODO |
 
 This plan is intended to guide us from solid performance today to **best-in-class MFT processing** over several iterations, without sacrificing correctness or maintainability.
 

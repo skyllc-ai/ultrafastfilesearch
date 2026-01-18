@@ -38,6 +38,9 @@
 use std::io::stdout;
 use std::path::PathBuf;
 
+#[cfg(not(windows))]
+use core::future::Future;
+
 #[cfg(windows)]
 use anyhow::Context;
 use anyhow::Result;
@@ -229,6 +232,17 @@ enum Commands {
         #[arg(long, default_value = "1")]
         runs: u32,
     },
+
+    /// Diagnose MFT bitmap to investigate record skipping
+    BitmapDiag {
+        /// Drive letter (e.g., C, D, E)
+        #[arg(short, long)]
+        drive: char,
+
+        /// Show sample of individual record states
+        #[arg(long)]
+        samples: bool,
+    },
 }
 
 /// Initialize logging with terminal + file support.
@@ -365,6 +379,7 @@ async fn main() -> Result<()> {
                 no_df,
                 runs,
             } => cmd_bench_all(output, no_df, runs).await,
+            Commands::BitmapDiag { drive, samples } => cmd_bitmap_diag(drive, samples).await,
         }
     }
 }
@@ -1529,4 +1544,224 @@ async fn benchmark_single_drive(
     } else {
         average_results(&results)
     })
+}
+
+// ============================================================================
+// Bitmap Diagnostic Command
+// ============================================================================
+
+/// Diagnose MFT bitmap to investigate why records aren't being skipped.
+#[cfg(windows)]
+async fn cmd_bitmap_diag(drive: char, show_samples: bool) -> Result<()> {
+    use uffs_mft::VolumeHandle;
+
+    let drive_upper = drive.to_ascii_uppercase();
+
+    println!("═══════════════════════════════════════════════════════════════");
+    println!(
+        "              MFT BITMAP DIAGNOSTIC - Drive {}:",
+        drive_upper
+    );
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+
+    // Open volume
+    let handle = VolumeHandle::open(drive_upper)
+        .with_context(|| format!("Failed to open volume {}:", drive_upper))?;
+
+    let volume_data = handle.volume_data();
+    let record_size = volume_data.bytes_per_file_record_segment as u32;
+    let mft_size = volume_data.mft_valid_data_length as u64;
+    let total_records_from_size = mft_size / u64::from(record_size);
+
+    println!("📊 VOLUME DATA");
+    println!(
+        "   MFT valid data length: {} bytes ({:.2} MB)",
+        mft_size,
+        mft_size as f64 / 1024.0 / 1024.0
+    );
+    println!("   Bytes per record: {}", record_size);
+    println!("   Total records (from size): {}", total_records_from_size);
+    println!();
+
+    // Try to get bitmap
+    println!("📋 BITMAP RETRIEVAL");
+    match handle.get_mft_bitmap() {
+        Ok(bitmap) => {
+            let bitmap_bytes = bitmap.as_bytes().len();
+            let bitmap_record_count = bitmap.record_count();
+            let in_use_count = bitmap.count_in_use();
+            let free_count = bitmap_record_count.saturating_sub(in_use_count);
+            let utilization = (in_use_count as f64 / bitmap_record_count as f64) * 100.0;
+
+            println!("   ✅ Bitmap retrieved successfully");
+            println!("   Bitmap size: {} bytes", bitmap_bytes);
+            println!("   Records covered: {}", bitmap_record_count);
+            println!("   In-use records: {}", in_use_count);
+            println!("   Free records: {}", free_count);
+            println!("   Utilization: {:.2}%", utilization);
+            println!();
+
+            // Check for anomalies
+            println!("🔍 ANOMALY DETECTION");
+
+            // Check if all bits are set (0xFF bytes)
+            let all_ff_bytes = bitmap.as_bytes().iter().filter(|&&b| b == 0xFF).count();
+            let all_00_bytes = bitmap.as_bytes().iter().filter(|&&b| b == 0x00).count();
+            let mixed_bytes = bitmap_bytes - all_ff_bytes - all_00_bytes;
+
+            println!(
+                "   Bytes with all bits set (0xFF): {} ({:.1}%)",
+                all_ff_bytes,
+                (all_ff_bytes as f64 / bitmap_bytes as f64) * 100.0
+            );
+            println!(
+                "   Bytes with no bits set (0x00): {} ({:.1}%)",
+                all_00_bytes,
+                (all_00_bytes as f64 / bitmap_bytes as f64) * 100.0
+            );
+            println!(
+                "   Mixed bytes: {} ({:.1}%)",
+                mixed_bytes,
+                (mixed_bytes as f64 / bitmap_bytes as f64) * 100.0
+            );
+            println!();
+
+            if all_ff_bytes == bitmap_bytes {
+                println!("   ⚠️  WARNING: ALL bytes are 0xFF!");
+                println!("      This suggests the bitmap is a fallback (new_all_valid)");
+                println!("      or the $MFT::$BITMAP read failed silently.");
+            } else if in_use_count == bitmap_record_count {
+                println!("   ⚠️  WARNING: in_use == record_count but not all 0xFF");
+                println!("      This is unexpected - investigating...");
+            } else if free_count > 0 {
+                println!(
+                    "   ✅ Bitmap shows {} free records ({:.1}% free)",
+                    free_count,
+                    (free_count as f64 / bitmap_record_count as f64) * 100.0
+                );
+            }
+            println!();
+
+            // Sample first few bytes
+            println!("📝 BITMAP SAMPLE (first 32 bytes)");
+            let sample_bytes: Vec<_> = bitmap.as_bytes().iter().take(32).collect();
+            print!("   ");
+            for (i, &byte) in sample_bytes.iter().enumerate() {
+                print!("{:02X} ", byte);
+                if (i + 1) % 16 == 0 {
+                    println!();
+                    if i < 31 {
+                        print!("   ");
+                    }
+                }
+            }
+            if sample_bytes.len() % 16 != 0 {
+                println!();
+            }
+            println!();
+
+            // Sample last few bytes (often where free records are)
+            if bitmap_bytes > 32 {
+                println!("📝 BITMAP SAMPLE (last 32 bytes)");
+                let last_bytes: Vec<_> = bitmap.as_bytes().iter().rev().take(32).collect();
+                print!("   ");
+                for (i, &byte) in last_bytes.iter().rev().enumerate() {
+                    print!("{:02X} ", byte);
+                    if (i + 1) % 16 == 0 {
+                        println!();
+                        if i < 31 {
+                            print!("   ");
+                        }
+                    }
+                }
+                if last_bytes.len() % 16 != 0 {
+                    println!();
+                }
+                println!();
+            }
+
+            // Check individual record samples
+            if show_samples {
+                println!("📝 INDIVIDUAL RECORD SAMPLES");
+                println!("   Checking records 0-15:");
+                print!("   ");
+                for frs in 0..16u64 {
+                    let in_use = bitmap.is_record_in_use(frs);
+                    print!("{}: {} ", frs, if in_use { "✓" } else { "✗" });
+                }
+                println!();
+
+                // Check some records in the middle
+                let mid = bitmap_record_count / 2;
+                println!("   Checking records {}-{}:", mid, mid + 15);
+                print!("   ");
+                for frs in mid..(mid + 16).min(bitmap_record_count) {
+                    let in_use = bitmap.is_record_in_use(frs as u64);
+                    print!("{}: {} ", frs, if in_use { "✓" } else { "✗" });
+                }
+                println!();
+
+                // Check last records
+                let last_start = bitmap_record_count.saturating_sub(16);
+                println!(
+                    "   Checking records {}-{}:",
+                    last_start,
+                    bitmap_record_count - 1
+                );
+                print!("   ");
+                for frs in last_start..bitmap_record_count {
+                    let in_use = bitmap.is_record_in_use(frs as u64);
+                    print!("{}: {} ", frs, if in_use { "✓" } else { "✗" });
+                }
+                println!();
+                println!();
+            }
+
+            // Test calculate_skip_range
+            println!("📝 SKIP RANGE CALCULATION TEST");
+            let test_ranges = [
+                (0u64, 1000u64),
+                (1000, 2000),
+                (
+                    total_records_from_size.saturating_sub(1000),
+                    total_records_from_size,
+                ),
+            ];
+            for (start, end) in test_ranges {
+                let (skip_begin, skip_end) = bitmap.calculate_skip_range(start, end);
+                let range_size = end - start;
+                let skipped = skip_begin + skip_end;
+                println!(
+                    "   Range [{}, {}): skip_begin={}, skip_end={}, skipped={}/{} ({:.1}%)",
+                    start,
+                    end,
+                    skip_begin,
+                    skip_end,
+                    skipped,
+                    range_size,
+                    (skipped as f64 / range_size as f64) * 100.0
+                );
+            }
+            println!();
+        }
+        Err(e) => {
+            println!("   ❌ Failed to retrieve bitmap: {}", e);
+            println!("   This means the fallback (all records valid) would be used.");
+            println!();
+        }
+    }
+
+    println!("═══════════════════════════════════════════════════════════════");
+
+    Ok(())
+}
+
+/// Bitmap diagnostic stub for non-Windows platforms.
+#[cfg(not(windows))]
+#[allow(dead_code)]
+fn cmd_bitmap_diag(_drive: char, _show_samples: bool) -> impl Future<Output = Result<()>> {
+    core::future::ready(Err(anyhow::anyhow!(
+        "Bitmap diagnostic is only available on Windows"
+    )))
 }
