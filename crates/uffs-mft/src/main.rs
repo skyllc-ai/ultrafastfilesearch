@@ -155,6 +155,20 @@ fn format_number_commas(num: u64) -> String {
     result.chars().rev().collect()
 }
 
+/// Cleans up a path for user-friendly display.
+///
+/// On Windows, `std::fs::canonicalize` returns extended-length paths with
+/// the `\\?\` prefix. This function strips that prefix for cleaner output.
+#[cfg(windows)]
+fn clean_path_for_display(path: &Path) -> PathBuf {
+    let path_str = path.to_string_lossy();
+    if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// `uffs_mft`: Low-level NTFS MFT reading tool.
 #[derive(Parser)]
 #[command(name = "uffs_mft")]
@@ -1899,8 +1913,7 @@ async fn cmd_save(
     info!(drive = %drive_upper, "Reading raw MFT from drive");
 
     // Get volume info for display
-    let handle =
-        VolumeHandle::open(drive).with_context(|| format!("Failed to open {}:", drive))?;
+    let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {}:", drive))?;
     let vol_data = handle.volume_data();
 
     let drive_type = detect_drive_type(drive_upper);
@@ -1952,6 +1965,7 @@ async fn cmd_save(
 
     // Get absolute path for display
     let abs_path = std::fs::canonicalize(output).unwrap_or_else(|_| output.to_path_buf());
+    let abs_path = clean_path_for_display(&abs_path);
 
     // Print formatted output
     println!("═══════════════════════════════════════════════════════════════");
@@ -2035,7 +2049,8 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
 
     // Get absolute path and file size for display
     let abs_path = std::fs::canonicalize(input).unwrap_or_else(|_| input.to_path_buf());
-    let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+    let abs_path = clean_path_for_display(&abs_path);
+    let file_size = std::fs::metadata(input).map(|meta| meta.len()).unwrap_or(0);
 
     // Print formatted output
     println!("═══════════════════════════════════════════════════════════════");
@@ -2129,7 +2144,10 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
             "  Directories:          {}",
             format_number_commas(dir_count)
         );
-        println!("  Files:                {}", format_number_commas(file_count));
+        println!(
+            "  Files:                {}",
+            format_number_commas(file_count)
+        );
         println!("  Total file size:     {}", format_bytes(total_size));
         println!();
         println!("🏷️  ATTRIBUTES");
@@ -2149,7 +2167,10 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
             "  Encrypted:            {}",
             format_number_commas(encrypted_count)
         );
-        println!("  Sparse:               {}", format_number_commas(sparse_count));
+        println!(
+            "  Sparse:               {}",
+            format_number_commas(sparse_count)
+        );
 
         println!();
         let elapsed = start_time.elapsed();
@@ -2178,9 +2199,9 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
 
     match ext {
         "csv" => {
-            use uffs_polars::CsvWriter;
-            use uffs_polars::SerWriter;
             use std::fs::File;
+
+            use uffs_polars::{CsvWriter, SerWriter};
 
             let file = File::create(output)?;
             let mut df = df;
@@ -2194,7 +2215,8 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
 
     // Get absolute path and file size after creation
     let output_abs = std::fs::canonicalize(output).unwrap_or_else(|_| output.to_path_buf());
-    let output_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
+    let output_abs = clean_path_for_display(&output_abs);
+    let output_size = std::fs::metadata(output).map(|meta| meta.len()).unwrap_or(0);
 
     println!();
     println!("📁 OUTPUT FILE");

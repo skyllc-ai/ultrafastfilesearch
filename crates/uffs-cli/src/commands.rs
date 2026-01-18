@@ -672,7 +672,10 @@ pub fn info(path: &Path) -> Result<()> {
     println!("  Columns:              {}", df.width());
     println!();
     println!("📊 RECORD STATISTICS");
-    println!("  Total records:        {}", format_number(total_records as u64));
+    println!(
+        "  Total records:        {}",
+        format_number(total_records as u64)
+    );
     println!("  Directories:          {}", format_number(dir_count));
     println!("  Files:                {}", format_number(file_count));
     println!();
@@ -685,14 +688,23 @@ pub fn info(path: &Path) -> Result<()> {
     println!("  System:               {}", format_number(system_count));
     println!("  Read-only:            {}", format_number(readonly_count));
     println!("  Archive:              {}", format_number(archive_count));
-    println!("  Compressed:           {}", format_number(compressed_count));
+    println!(
+        "  Compressed:           {}",
+        format_number(compressed_count)
+    );
     println!("  Encrypted:            {}", format_number(encrypted_count));
     println!("  Sparse:               {}", format_number(sparse_count));
     println!("  Reparse points:       {}", format_number(reparse_count));
     println!();
     println!("🔗 ADVANCED");
-    println!("  Multi-stream files:   {}", format_number(multi_stream_count));
-    println!("  Multi-name files:     {}", format_number(multi_name_count));
+    println!(
+        "  Multi-stream files:   {}",
+        format_number(multi_stream_count)
+    );
+    println!(
+        "  Multi-name files:     {}",
+        format_number(multi_name_count)
+    );
     println!();
     println!("📋 SCHEMA");
     let schema = df.schema();
