@@ -624,17 +624,15 @@ async fn search_multi_drive_filtered(
     bail!("Multi-drive search is only supported on Windows")
 }
 
-/// Build an index from a drive's MFT.
+/// Build an index from drive MFT(s).
 ///
 /// Supports both single drive (`--drive C`) and multiple drives (`--drives
 /// C,D,E`). When multiple drives are specified, they are read concurrently and
 /// merged into a single `DataFrame` with a `drive` column.
-
-/// Build an index from a drive's MFT.
 ///
-/// The drive is inferred from the output path if not explicitly specified:
-/// - Absolute path with drive: `C:\foo\bar.parquet` → indexes C:
-/// - Relative path: `bar.parquet` → indexes drive of current directory
+/// If no drives are specified, indexes ALL available NTFS drives.
+// Public API entry point - called from main.rs command dispatch
+#[allow(clippy::single_call_fn)]
 pub async fn index(
     output_path: PathBuf,
     single_drive: Option<char>,
