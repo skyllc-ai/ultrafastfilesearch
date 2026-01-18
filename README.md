@@ -232,6 +232,75 @@ See [uffs-mft README](crates/uffs-mft/README.md) for detailed documentation.
 
 ---
 
+## 🔥 What Makes UFFS Blazing Fast
+
+UFFS employs multiple layers of optimization to achieve maximum performance when reading the NTFS Master File Table:
+
+### 1. Direct MFT Access with `FILE_FLAG_NO_BUFFERING`
+
+Instead of using Windows file enumeration APIs, UFFS opens the raw volume and reads the MFT directly using unbuffered I/O. This bypasses the Windows file system cache and gives us full control over read patterns.
+
+### 2. SSD/HDD-Aware I/O Tuning
+
+UFFS automatically detects whether a drive is an SSD or HDD using Windows storage APIs (`IOCTL_STORAGE_QUERY_PROPERTY`) and tunes I/O parameters accordingly:
+
+| Drive Type | Chunk Size | Rationale |
+|------------|------------|-----------|
+| **SSD** | 8 MB | Large sequential reads, no seek penalty |
+| **HDD** | 4 MB | Balance between syscall overhead and seek time |
+
+### 3. Minimal System Calls
+
+By using large chunk sizes (4-8 MB instead of the typical 1 MB), UFFS reduces the number of `ReadFile` system calls by 4-8x. For a 4.5 GB MFT, this means ~500-1000 syscalls instead of ~4,500.
+
+### 4. Zero-Allocation Record Parsing
+
+Each thread uses a thread-local buffer for record parsing, eliminating per-record heap allocations. This is critical when processing millions of MFT records:
+
+```rust
+// Instead of allocating per record:
+let mut record_buf = record_data.to_vec();  // ❌ Allocates
+
+// We use thread-local buffers:
+parse_record_zero_alloc(record_data, frs);  // ✅ Reuses buffer
+```
+
+### 5. Double-Buffered Prefetch
+
+The `PrefetchMftReader` uses two alternating buffers to overlap I/O with processing:
+- Read into buffer A while processing buffer B
+- Swap buffers and repeat
+- CPU never waits for disk I/O
+
+### 6. Parallel Record Processing with Rayon
+
+After reading chunks from disk, UFFS uses Rayon's parallel iterators to parse records across all CPU cores. Each core processes a portion of the chunk simultaneously.
+
+### 7. Fragmented MFT Support
+
+The MFT can be scattered across multiple non-contiguous extents on disk. UFFS handles this by:
+1. Getting the extent map via `FSCTL_GET_RETRIEVAL_POINTERS`
+2. Mapping Virtual Cluster Numbers (VCN) to Logical Cluster Numbers (LCN)
+3. Reading from the correct physical locations
+
+### 8. Polars Lazy Evaluation
+
+Query operations use Polars' lazy API, which optimizes the query plan before execution. Filters are pushed down, columns are pruned, and operations are parallelized automatically.
+
+### Performance Summary
+
+| Optimization | Impact |
+|--------------|--------|
+| Direct MFT access | Bypasses slow Windows APIs |
+| Large chunk sizes | 4-8x fewer syscalls |
+| SSD/HDD detection | Optimal I/O parameters per drive |
+| Thread-local buffers | ~0 allocations during parsing |
+| Double-buffering | Overlapped I/O with processing |
+| Rayon parallelism | All CPU cores utilized |
+| Polars lazy eval | Optimized query execution |
+
+---
+
 ## ⚠️ Requirements
 
 ### Platform

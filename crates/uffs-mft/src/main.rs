@@ -41,7 +41,7 @@ use std::path::PathBuf;
 #[cfg(windows)]
 use anyhow::Context;
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 // Dev-dependencies (used in benchmarks only)
 #[cfg(test)]
 use criterion as _;
@@ -68,6 +68,87 @@ use uffs_mft::MftReader;
 #[cfg(feature = "zstd")]
 use zstd as _;
 use {bitflags as _, rayon as _, thiserror as _, uffs_polars as _};
+
+/// Formats a duration intelligently based on magnitude.
+///
+/// Output format varies by duration:
+/// - Days+: `2d 3h 5m 10s`
+/// - Hours+: `3h 5m 10s`
+/// - Minutes+: `5 m 10 s`
+/// - Seconds+: `10 s 500 ms`
+/// - Milliseconds+: `500 ms 250 μs`
+/// - Microseconds+: `250 μs 100 ns`
+/// - Nanoseconds only: `100 ns`
+#[cfg(windows)]
+fn format_duration(duration: core::time::Duration) -> String {
+    let total_seconds = duration.as_secs();
+    let seconds = total_seconds % 60;
+    let minutes = (total_seconds / 60) % 60;
+    let hours = (total_seconds / 3600) % 24;
+    let days = total_seconds / 86400;
+
+    let milliseconds = duration.subsec_millis();
+    let microseconds = duration.subsec_micros() % 1_000;
+    let nanoseconds = duration.subsec_nanos() % 1_000;
+
+    if days > 0 {
+        format!("{days:>2}d {hours:>2}h {minutes:>2}m {seconds:>2}s")
+    } else if hours > 0 {
+        format!("{hours:>2}h {minutes:>2}m {seconds:>2}s")
+    } else if minutes > 0 {
+        format!("{minutes:>3} m  {seconds:>3} s ")
+    } else if seconds > 0 {
+        format!("{seconds:>3} s  {milliseconds:>3} ms")
+    } else if milliseconds > 0 {
+        format!("{milliseconds:>3} ms {microseconds:>3} μs")
+    } else if microseconds > 0 {
+        format!("{microseconds:>3} μs {nanoseconds:>3} ns")
+    } else {
+        format!("{nanoseconds:>3} ns")
+    }
+}
+
+/// Formats a byte count intelligently based on magnitude.
+///
+/// Output format varies by size:
+/// - < 1 KB: `1234 B`
+/// - < 1 MB: `123.45 KB`
+/// - < 1 GB: `123.45 MB`
+/// - < 1 TB: `123.45 GB`
+/// - >= 1 TB: `123.45 TB`
+#[cfg(windows)]
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes:>4} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:>7.2} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:>7.2} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes < 1024 * 1024 * 1024 * 1024 {
+        format!("{:>7.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else {
+        format!(
+            "{:>7.2} TB",
+            bytes as f64 / (1024.0 * 1024.0 * 1024.0 * 1024.0)
+        )
+    }
+}
+
+/// Formats a number with comma separators for readability.
+///
+/// Examples: 1234567 → "1,234,567", 1000 → "1,000"
+#[cfg(windows)]
+fn format_number_commas(num: u64) -> String {
+    let num_str = num.to_string();
+    let mut result = String::with_capacity(num_str.len() + num_str.len() / 3);
+    for (idx, char) in num_str.chars().rev().enumerate() {
+        if idx > 0 && idx % 3 == 0 {
+            result.push(',');
+        }
+        result.push(char);
+    }
+    result.chars().rev().collect()
+}
 
 /// `uffs_mft`: Low-level NTFS MFT reading tool.
 #[derive(Parser)]
@@ -104,7 +185,7 @@ enum Commands {
         drive: char,
 
         /// Perform deep scan (reads all MFT records for detailed statistics)
-        #[arg(long, default_value = "false")]
+        #[arg(long)]
         deep: bool,
     },
 
@@ -193,19 +274,41 @@ async fn main() -> Result<()> {
     // Initialize logging with terminal + file support
     let _guard = init_logging(verbose);
 
+    // Parse CLI with custom error handling to show help on errors
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            // For help/version requests, just print and exit normally
+            if err.kind() == clap::error::ErrorKind::DisplayHelp
+                || err.kind() == clap::error::ErrorKind::DisplayVersion
+            {
+                err.exit();
+            }
+            // For actual errors, print the error AND the help using clap's
+            // built-in mechanisms (writes to stderr via std::io::Write)
+            if err.print().is_err() {
+                // If printing fails, we still want to exit with error
+            }
+            let mut cmd = Cli::command();
+            if cmd.print_help().is_err() {
+                // If printing fails, we still want to exit with error
+            }
+            std::process::exit(1);
+        }
+    };
+
     // Platform check - this tool only works on Windows
     #[cfg(not(windows))]
     {
-        // Parse CLI to show help/version even on non-Windows
-        let _cli = Cli::parse();
+        // Reference cli.verbose to avoid unused variable warning
+        if cli.verbose {
+            // Verbose mode requested but not available on non-Windows
+        }
         anyhow::bail!(
             "uffs_mft only works on Windows.\n\
              It requires direct access to the NTFS Master File Table via Windows APIs."
         );
     }
-
-    #[cfg(windows)]
-    let cli = Cli::parse();
 
     #[cfg(windows)]
     {
@@ -304,11 +407,11 @@ async fn cmd_read(drive: char, output: PathBuf) -> Result<()> {
     );
 
     pb.finish_with_message(format!(
-        "✅ Exported {} records to {} ({:.2} MB) in {:.1}s",
-        record_count,
+        "✅ Exported {} records to {} ({}) in {}",
+        format_number_commas(record_count as u64),
         output.display(),
-        file_size_mb,
-        total_elapsed.as_secs_f64()
+        format_bytes(file_size),
+        format_duration(total_elapsed)
     ));
 
     Ok(())
@@ -319,7 +422,7 @@ async fn cmd_info(drive: char, deep: bool) -> Result<()> {
     use std::time::Instant;
 
     use tracing::debug;
-    use uffs_mft::platform::VolumeHandle;
+    use uffs_mft::platform::{VolumeHandle, detect_drive_type};
 
     let start_time = Instant::now();
     let drive_upper = drive.to_ascii_uppercase();
@@ -333,14 +436,30 @@ async fn cmd_info(drive: char, deep: bool) -> Result<()> {
     debug!(drive = %drive_upper, "🔓 Opening volume handle");
     let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {}:", drive))?;
 
+    // Detect drive type for display
+    let drive_type = detect_drive_type(drive_upper);
+    let drive_type_str = match drive_type {
+        uffs_mft::DriveType::Ssd => "SSD",
+        uffs_mft::DriveType::Hdd => "HDD",
+        uffs_mft::DriveType::Unknown => "Unknown",
+    };
+    debug!(drive = %drive_upper, drive_type = drive_type_str, "🚀 Drive type detected");
+
     let vol_data = handle.volume_data();
 
     // Calculate derived metrics
     let record_count =
         vol_data.mft_valid_data_length / vol_data.bytes_per_file_record_segment as u64;
     let mft_size_mb = vol_data.mft_valid_data_length as f64 / (1024.0 * 1024.0);
-    let volume_size_bytes = vol_data.total_clusters as u64 * vol_data.bytes_per_cluster as u64;
+    let volume_size_bytes = vol_data.total_clusters * vol_data.bytes_per_cluster as u64;
     let volume_size_gb = volume_size_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    let free_space_bytes = vol_data.free_clusters * vol_data.bytes_per_cluster as u64;
+    let used_space_bytes = volume_size_bytes.saturating_sub(free_space_bytes);
+    let free_percentage = if volume_size_bytes > 0 {
+        (free_space_bytes as f64 / volume_size_bytes as f64) * 100.0
+    } else {
+        0.0
+    };
     let mft_percentage = (vol_data.mft_valid_data_length as f64 / volume_size_bytes as f64) * 100.0;
 
     // Log detailed metrics
@@ -446,26 +565,60 @@ async fn cmd_info(drive: char, deep: bool) -> Result<()> {
     } else {
         println!("                    MFT INFO (Lightweight)");
     }
-    println!("                    Drive: {}:", drive_upper);
+    println!(
+        "                    Drive: {}: ({})",
+        drive_upper, drive_type_str
+    );
     println!("═══════════════════════════════════════════════════════════════");
     println!();
     println!("📐 VOLUME GEOMETRY");
-    println!("  Bytes per sector:     {}", vol_data.bytes_per_sector);
-    println!("  Bytes per cluster:    {}", vol_data.bytes_per_cluster);
+    println!("  Drive type:           {}", drive_type_str);
+    println!(
+        "  Bytes per sector:     {}",
+        format_number_commas(vol_data.bytes_per_sector.into())
+    );
+    println!(
+        "  Bytes per cluster:    {}",
+        format_number_commas(vol_data.bytes_per_cluster.into())
+    );
     println!(
         "  Bytes per MFT record: {}",
-        vol_data.bytes_per_file_record_segment
+        format_number_commas(vol_data.bytes_per_file_record_segment.into())
     );
-    println!("  Total clusters:       {}", vol_data.total_clusters);
-    println!("  Volume size:          {:.2} GB", volume_size_gb);
+    println!(
+        "  Total clusters:       {}",
+        format_number_commas(vol_data.total_clusters)
+    );
+    println!("  Volume size:         {}", format_bytes(volume_size_bytes));
+    println!("  Used space:          {}", format_bytes(used_space_bytes));
+    println!(
+        "  Free space:          {} ({:.1}%)",
+        format_bytes(free_space_bytes),
+        free_percentage
+    );
     println!();
     println!("📁 MFT STRUCTURE");
-    println!("  MFT start LCN:        {}", vol_data.mft_start_lcn);
-    println!("  MFT size:             {:.2} MB", mft_size_mb);
+    println!(
+        "  MFT start LCN:        {}",
+        format_number_commas(vol_data.mft_start_lcn)
+    );
+    println!(
+        "  MFT size:            {}",
+        format_bytes(vol_data.mft_valid_data_length)
+    );
     println!("  MFT % of volume:      {:.3}%", mft_percentage);
-    println!("  Total records:        {}", record_count);
-    println!("  In-use records:       {}", in_use_records);
-    println!("  Free records:         {}", free_records);
+    println!(
+        "  Total records:        {}",
+        format_number_commas(record_count)
+    );
+    println!(
+        "  In-use records:       {}",
+        format_number_commas(in_use_records)
+    );
+    println!(
+        "  Free records:         {}",
+        format_number_commas(free_records)
+    );
     println!("  Utilization:          {:.1}%", utilization);
     println!(
         "  Fragmentation:        {} extent(s) {}",
@@ -564,52 +717,140 @@ async fn cmd_info(drive: char, deep: bool) -> Result<()> {
         };
 
         println!("📊 FILE SYSTEM STATISTICS");
-        println!("  Parsed records:       {}", total_parsed);
-        println!("  Directories:          {}", dir_count);
-        println!("  Files:                {}", file_count);
+        println!(
+            "  Parsed records:       {}",
+            format_number_commas(total_parsed as u64)
+        );
+        println!(
+            "  Directories:          {}",
+            format_number_commas(dir_count)
+        );
+        println!(
+            "  Files:                {}",
+            format_number_commas(file_count)
+        );
         println!();
         println!("🏷️  ATTRIBUTE FLAGS");
-        println!("  Hidden:               {}", hidden_count);
-        println!("  System:               {}", system_count);
-        println!("  Read-only:            {}", readonly_count);
-        println!("  Archive:              {}", archive_count);
-        println!("  Compressed:           {}", compressed_count);
-        println!("  Encrypted:            {}", encrypted_count);
-        println!("  Sparse:               {}", sparse_count);
-        println!("  Reparse points:       {}", reparse_count);
+        println!(
+            "  Hidden:               {}",
+            format_number_commas(hidden_count)
+        );
+        println!(
+            "  System:               {}",
+            format_number_commas(system_count)
+        );
+        println!(
+            "  Read-only:            {}",
+            format_number_commas(readonly_count)
+        );
+        println!(
+            "  Archive:              {}",
+            format_number_commas(archive_count)
+        );
+        println!(
+            "  Compressed:           {}",
+            format_number_commas(compressed_count)
+        );
+        println!(
+            "  Encrypted:            {}",
+            format_number_commas(encrypted_count)
+        );
+        println!(
+            "  Sparse:               {}",
+            format_number_commas(sparse_count)
+        );
+        println!(
+            "  Reparse points:       {}",
+            format_number_commas(reparse_count)
+        );
         println!();
         println!("🔗 EXTENDED ATTRIBUTES");
         println!(
             "  Files with ADS:       {} (Alternate Data Streams)",
-            multi_stream_count
+            format_number_commas(multi_stream_count)
         );
-        println!("  Files with hardlinks: {}", multi_name_count);
+        println!(
+            "  Files with hardlinks: {}",
+            format_number_commas(multi_name_count)
+        );
         println!();
         println!("💾 STORAGE ANALYSIS");
+        println!("  Total file size:     {}", format_bytes(total_file_size));
         println!(
-            "  Total file size:      {:.2} GB",
-            total_file_size as f64 / (1024.0 * 1024.0 * 1024.0)
+            "  Total allocated:     {}",
+            format_bytes(total_allocated_size)
         );
         println!(
-            "  Total allocated:      {:.2} GB",
-            total_allocated_size as f64 / (1024.0 * 1024.0 * 1024.0)
-        );
-        println!(
-            "  Slack space:          {:.2} MB ({:.1}%)",
-            slack_space as f64 / (1024.0 * 1024.0),
+            "  Slack space:         {} ({:.1}%)",
+            format_bytes(slack_space),
             slack_percentage
         );
         println!();
 
+        // =====================================================================
+        // WINDOWS COMPARISON SECTION
+        // Count files/folders the way Windows defrag does:
+        // - Exclude hidden files
+        // - Exclude system files
+        // - Exclude NTFS metadata (names starting with $)
+        // =====================================================================
+
+        // Get column references for filtering
+        let is_hidden_col = df.column("is_hidden").ok().and_then(|c| c.bool().ok());
+        let is_system_col = df.column("is_system").ok().and_then(|c| c.bool().ok());
+        let name_col = df.column("name").ok().and_then(|c| c.str().ok());
+        let is_dir_col = df.column("is_directory").ok().and_then(|c| c.bool().ok());
+
+        if let (Some(hidden), Some(system), Some(names), Some(is_dir)) =
+            (is_hidden_col, is_system_col, name_col, is_dir_col)
+        {
+            // Count user-visible entries (not hidden, not system, not $ metadata)
+            let mut win_dirs: u64 = 0;
+            let mut win_files: u64 = 0;
+
+            for i in 0..df.height() {
+                let is_hidden = hidden.get(i).unwrap_or(false);
+                let is_system = system.get(i).unwrap_or(false);
+                let name = names.get(i).unwrap_or("");
+                let is_directory = is_dir.get(i).unwrap_or(false);
+
+                // Skip hidden, system, and NTFS metadata files
+                if is_hidden || is_system || name.starts_with('$') {
+                    continue;
+                }
+
+                if is_directory {
+                    win_dirs += 1;
+                } else {
+                    win_files += 1;
+                }
+            }
+
+            let win_total = win_dirs + win_files;
+
+            println!("🪟 WINDOWS COMPARISON");
+            println!("  (Excludes hidden, system, and NTFS metadata files)");
+            println!("  Folders:              {}", format_number_commas(win_dirs));
+            println!(
+                "  Files:                {}",
+                format_number_commas(win_files)
+            );
+            println!(
+                "  Total movable:        {}",
+                format_number_commas(win_total)
+            );
+            println!();
+        }
+
         let deep_elapsed = start_time.elapsed();
         println!(
-            "⏱️  Deep scan completed in {:.2}s",
-            deep_elapsed.as_secs_f64()
+            "⏱️  Deep scan completed in {}",
+            format_duration(deep_elapsed)
         );
     } else {
         println!("💡 TIP: Use --deep for detailed file statistics (dirs, files, attributes).");
         println!();
-        println!("⏱️  Completed in {:.1}ms", elapsed.as_secs_f64() * 1000.0);
+        println!("⏱️  Completed in {}", format_duration(elapsed));
     }
 
     println!("═══════════════════════════════════════════════════════════════");
@@ -620,7 +861,7 @@ async fn cmd_info(drive: char, deep: bool) -> Result<()> {
 #[cfg(windows)]
 async fn cmd_drives() -> Result<()> {
     use tracing::debug;
-    use uffs_mft::platform::{VolumeHandle, detect_ntfs_drives};
+    use uffs_mft::platform::{VolumeHandle, detect_drive_type, detect_ntfs_drives};
 
     info!("🔍 Detecting NTFS drives...");
 
@@ -636,33 +877,193 @@ async fn cmd_drives() -> Result<()> {
             drives.len()
         );
 
-        println!("NTFS drives:");
+        // Collect drive info
+        struct DriveInfo {
+            letter: char,
+            label: String,
+            drive_type: String,
+            total_size: u64,
+            free_space: u64,
+            used_space: u64,
+            used_pct: f64,
+            mft_size: u64,
+            mft_records: u64,
+        }
+
+        let mut drive_infos: Vec<DriveInfo> = Vec::new();
+
         for drive in &drives {
+            // Detect drive type
+            let drive_type = detect_drive_type(*drive);
+            let drive_type_str = match drive_type {
+                uffs_mft::DriveType::Ssd => "SSD",
+                uffs_mft::DriveType::Hdd => "HDD",
+                uffs_mft::DriveType::Unknown => "???",
+            };
+
+            // Get volume label
+            let label = get_volume_label(*drive).unwrap_or_default();
+
             // Try to get volume info for each drive
             if let Ok(handle) = VolumeHandle::open(*drive) {
                 let vol_data = handle.volume_data();
-                let volume_size_gb =
-                    (vol_data.total_clusters as u64 * vol_data.bytes_per_cluster as u64) as f64
-                        / (1024.0 * 1024.0 * 1024.0);
-                let record_count =
-                    vol_data.mft_valid_data_length / vol_data.bytes_per_file_record_segment as u64;
+                let total_size = vol_data.total_clusters as u64 * vol_data.bytes_per_cluster as u64;
+                let free_space = vol_data.free_clusters as u64 * vol_data.bytes_per_cluster as u64;
+                let used_space = total_size.saturating_sub(free_space);
+                let used_pct = if total_size > 0 {
+                    (used_space as f64 / total_size as f64) * 100.0
+                } else {
+                    0.0
+                };
+                let mft_size = vol_data.mft_valid_data_length;
+                let mft_records = mft_size / vol_data.bytes_per_file_record_segment as u64;
 
                 debug!(
                     drive = %drive,
-                    volume_size_gb = format!("{:.2}", volume_size_gb),
-                    mft_records = record_count,
+                    label = %label,
+                    drive_type = drive_type_str,
+                    total_size,
+                    free_space,
+                    mft_records,
                     "📁 Drive details"
                 );
 
-                println!(
-                    "  {}: ({:.1} GB, ~{} MFT records)",
-                    drive, volume_size_gb, record_count
-                );
-            } else {
-                println!("  {}:", drive);
+                drive_infos.push(DriveInfo {
+                    letter: *drive,
+                    label,
+                    drive_type: drive_type_str.to_string(),
+                    total_size,
+                    free_space,
+                    used_space,
+                    used_pct,
+                    mft_size,
+                    mft_records,
+                });
             }
         }
+
+        // Print table header
+        println!();
+        println!(
+            "═══════════════════════════════════════════════════════════════════════════════════════════════════"
+        );
+        println!("                                    NTFS DRIVES SUMMARY");
+        println!(
+            "═══════════════════════════════════════════════════════════════════════════════════════════════════"
+        );
+        println!();
+        println!(
+            "{:<6} {:<16} {:<5} {:>10} {:>10} {:>10} {:>7} {:>10} {:>12}",
+            "Drive", "Label", "Type", "Size", "Used", "Free", "Used%", "MFT Size", "MFT Records"
+        );
+        println!(
+            "{:-<6} {:-<16} {:-<5} {:->10} {:->10} {:->10} {:->7} {:->10} {:->12}",
+            "", "", "", "", "", "", "", "", ""
+        );
+
+        // Print each drive
+        for info in &drive_infos {
+            println!(
+                "{:<6} {:<16} {:<5} {:>10} {:>10} {:>10} {:>6.1}% {:>10} {:>12}",
+                format!("{}:", info.letter),
+                truncate_string(&info.label, 16),
+                info.drive_type,
+                format_bytes(info.total_size),
+                format_bytes(info.used_space),
+                format_bytes(info.free_space),
+                info.used_pct,
+                format_bytes(info.mft_size),
+                format_number_commas(info.mft_records),
+            );
+        }
+
+        // Print totals
+        let total_size: u64 = drive_infos.iter().map(|d| d.total_size).sum();
+        let total_used: u64 = drive_infos.iter().map(|d| d.used_space).sum();
+        let total_free: u64 = drive_infos.iter().map(|d| d.free_space).sum();
+        let total_mft: u64 = drive_infos.iter().map(|d| d.mft_size).sum();
+        let total_records: u64 = drive_infos.iter().map(|d| d.mft_records).sum();
+        let total_used_pct = if total_size > 0 {
+            (total_used as f64 / total_size as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        println!(
+            "{:-<6} {:-<16} {:-<5} {:->10} {:->10} {:->10} {:->7} {:->10} {:->12}",
+            "", "", "", "", "", "", "", "", ""
+        );
+        println!(
+            "{:<6} {:<16} {:<5} {:>10} {:>10} {:>10} {:>6.1}% {:>10} {:>12}",
+            "TOTAL",
+            format!("({} drives)", drive_infos.len()),
+            "",
+            format_bytes(total_size),
+            format_bytes(total_used),
+            format_bytes(total_free),
+            total_used_pct,
+            format_bytes(total_mft),
+            format_number_commas(total_records),
+        );
+        println!();
     }
 
     Ok(())
+}
+
+/// Gets the volume label for a drive letter.
+#[cfg(windows)]
+#[allow(unsafe_code)] // Required: Windows FFI (GetVolumeInformationW)
+fn get_volume_label(drive: char) -> Option<String> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    use windows::Win32::Storage::FileSystem::GetVolumeInformationW;
+    use windows::core::PCWSTR;
+
+    let root_path: Vec<u16> = format!("{}:\\", drive)
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let mut volume_name_buf = [0u16; 261];
+
+    let result = unsafe {
+        GetVolumeInformationW(
+            PCWSTR::from_raw(root_path.as_ptr()),
+            Some(&mut volume_name_buf),
+            None,
+            None,
+            None,
+            None,
+        )
+    };
+
+    if result.is_ok() {
+        let len = volume_name_buf.iter().position(|&c| c == 0).unwrap_or(0);
+        let label = OsString::from_wide(&volume_name_buf[..len]);
+        Some(label.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
+/// Truncates a string to a maximum length, adding "..." if truncated.
+#[cfg(windows)]
+fn truncate_string(text: &str, max_len: usize) -> String {
+    if text.len() <= max_len {
+        text.to_owned()
+    } else if max_len <= 3 {
+        text.chars().take(max_len).collect()
+    } else {
+        // Use char boundary-safe truncation
+        let truncate_at = max_len - 3;
+        let safe_end = text
+            .char_indices()
+            .take_while(|(idx, _)| *idx < truncate_at)
+            .last()
+            .map(|(idx, ch)| idx + ch.len_utf8())
+            .unwrap_or(0);
+        format!("{}...", &text[..safe_end])
+    }
 }

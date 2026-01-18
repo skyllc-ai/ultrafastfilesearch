@@ -195,19 +195,30 @@ impl MftReader {
     /// 1. Extent-aware reading for fragmented MFTs
     /// 2. Bitmap-based cluster skipping (like C++ implementation)
     /// 3. Parallel record processing using Rayon
-    /// 4. Batch I/O for reduced syscall overhead
+    /// 4. Large batch I/O (4-8 MB) for reduced syscall overhead
+    /// 5. Drive-type aware tuning (SSD vs HDD)
     #[cfg(windows)]
     fn read_mft_internal<F>(&self, callback: Option<F>) -> Result<DataFrame>
     where
         F: Fn(MftProgress),
     {
         use crate::io::{MftExtentMap, ParallelMftReader};
+        use crate::platform::detect_drive_type;
 
         info!(volume = %self.volume, "Starting MFT read");
 
         let start_time = Instant::now();
         let record_size = self.handle.file_record_size();
         let volume_data = self.handle.volume_data();
+
+        // Detect drive type for optimal I/O tuning
+        let drive_type = detect_drive_type(self.volume);
+        info!(
+            volume = %self.volume,
+            drive_type = ?drive_type,
+            chunk_size_mb = drive_type.optimal_chunk_size() / (1024 * 1024),
+            "🚀 Drive type detected for I/O optimization"
+        );
 
         debug!(
             record_size,
@@ -259,8 +270,8 @@ impl MftReader {
             });
         }
 
-        // Use the high-performance parallel reader
-        let parallel_reader = ParallelMftReader::new(extent_map, bitmap);
+        // Use the high-performance parallel reader with drive-type optimization
+        let parallel_reader = ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
         let handle = self.handle.raw_handle();
 
         // Read all records in parallel with extension merging for full C++ parity

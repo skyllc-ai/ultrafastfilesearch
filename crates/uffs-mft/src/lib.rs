@@ -103,8 +103,9 @@ pub use flags::FileFlags;
 #[cfg(windows)]
 pub use io::{
     AlignedBuffer, BatchMftReader, ExtensionAttributes, MftExtentMap, MftRecordMerger,
-    MftRecordReader, ParallelMftReader, ParseResult, ParsedRecord, ReadChunk, apply_fixup,
-    generate_read_chunks, parse_record_full,
+    MftRecordReader, ParallelMftReader, ParseResult, ParsedRecord, PrefetchMftReader, ReadChunk,
+    StreamingMftReader, apply_fixup, generate_read_chunks, parse_record_full,
+    parse_record_zero_alloc,
 };
 // Re-export NTFS constants
 #[cfg(windows)]
@@ -120,7 +121,8 @@ pub use ntfs::{
 // Re-export platform types
 #[cfg(windows)]
 pub use platform::{
-    MftBitmap, MftExtent, NtfsVolumeData, VolumeHandle, detect_ntfs_drives, is_elevated,
+    DriveType, MftBitmap, MftExtent, NtfsVolumeData, VolumeHandle, detect_drive_type,
+    detect_ntfs_drives, is_elevated,
 };
 pub use raw::{
     LoadRawOptions, RawMftData, RawMftHeader, SaveRawOptions, load_raw_mft, load_raw_mft_header,

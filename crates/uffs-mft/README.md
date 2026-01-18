@@ -161,6 +161,44 @@ async fn main() -> anyhow::Result<()> {
 | **$MFT Bitmap** | In-use record flags | ~64 KB | <10ms |
 | **Full MFT** | All file records | 500 MB - 5 GB | 5-30s |
 
+## Comparison with Windows Tools
+
+You can verify `uffs_mft` output against built-in Windows tools:
+
+```powershell
+# Volume geometry and MFT metadata
+fsutil fsinfo ntfsinfo C:
+
+# Fragmentation analysis
+defrag C: /A /V
+```
+
+### Count Differences Explained
+
+| Metric | uffs_mft | Windows defrag |
+|--------|----------|----------------|
+| Directories | Higher | Lower |
+| Files | Higher | Lower |
+
+**Why?** `uffs_mft` parses **all** MFT records including:
+- Deleted file entries (not yet overwritten)
+- System metadata files ($MFT, $Bitmap, $LogFile, $Secure, etc.)
+- NTFS internal structures
+
+Windows `defrag` counts only **active, movable** user files and folders.
+
+### MFT Fragmentation Note
+
+Windows `defrag /A /V` may report "0 MFT fragments" while `uffs_mft` shows multiple extents. Why the difference? Look at defrag's note:
+
+> *"File fragments larger than 64MB are not included in the fragmentation statistics."* — Windows defrag
+
+Example: Your MFT is 4.44 GB across 28 extents = **~162 MB per extent average**. Since each extent is >64MB, Windows defrag doesn't count them as fragments!
+
+`uffs_mft` uses `FSCTL_GET_RETRIEVAL_POINTERS` which returns the actual physical extent map — it's technically correct that the MFT is spread across 28 non-contiguous disk regions.
+
+**Bottom line:** Both are correct. `uffs_mft` shows the true physical layout, while `defrag` focuses on performance-impacting fragmentation (small fragments that cause excessive disk seeks). Large extents like these don't significantly impact read performance.
+
 ## Requirements
 
 - **Windows only** - Uses Windows APIs for raw disk access

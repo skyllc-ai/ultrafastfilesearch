@@ -1019,6 +1019,249 @@ fn is_ntfs_volume(drive_letter: char) -> bool {
     fs_name == "NTFS"
 }
 
+// ============================================================================
+// Drive Type Detection (SSD vs HDD)
+// ============================================================================
+
+/// Represents the type of storage device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriveType {
+    /// Solid State Drive (no seek time, high IOPS).
+    Ssd,
+    /// Hard Disk Drive (rotational, seek time matters).
+    Hdd,
+    /// Unknown drive type (assume HDD for safety).
+    Unknown,
+}
+
+impl DriveType {
+    /// Returns the optimal chunk size for this drive type.
+    ///
+    /// - SSD: 8 MB (high IOPS, large sequential reads are efficient)
+    /// - HDD: 4 MB (balance between seek overhead and throughput)
+    /// - Unknown: 4 MB (conservative default)
+    #[must_use]
+    pub const fn optimal_chunk_size(&self) -> usize {
+        match self {
+            Self::Ssd => 8 * 1024 * 1024,     // 8 MB for SSD
+            Self::Hdd => 4 * 1024 * 1024,     // 4 MB for HDD
+            Self::Unknown => 4 * 1024 * 1024, // 4 MB default
+        }
+    }
+
+    /// Returns the optimal number of prefetch buffers.
+    ///
+    /// - SSD: 4 buffers (can handle high parallelism)
+    /// - HDD: 2 buffers (double-buffering is sufficient)
+    #[must_use]
+    pub const fn prefetch_buffers(&self) -> usize {
+        match self {
+            Self::Ssd => 4,
+            Self::Hdd => 2,
+            Self::Unknown => 2,
+        }
+    }
+}
+
+/// Detects whether a drive is SSD or HDD.
+///
+/// Uses `IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceSeekPenaltyProperty`
+/// to determine if the drive has seek penalty (HDD) or not (SSD).
+///
+/// # Arguments
+///
+/// * `drive_letter` - The drive letter to check (e.g., 'C')
+///
+/// # Returns
+///
+/// The detected drive type, or `DriveType::Unknown` if detection fails.
+#[must_use]
+#[allow(unsafe_code)] // Required: Windows FFI (DeviceIoControl)
+pub fn detect_drive_type(drive_letter: char) -> DriveType {
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows::Win32::System::IO::DeviceIoControl;
+
+    // IOCTL_STORAGE_QUERY_PROPERTY = 0x002D1400
+    const IOCTL_STORAGE_QUERY_PROPERTY: u32 = 0x002D_1400;
+
+    // PropertyId for seek penalty
+    const STORAGE_DEVICE_SEEK_PENALTY_PROPERTY: u32 = 7;
+
+    // QueryType: PropertyStandardQuery = 0
+    const PROPERTY_STANDARD_QUERY: u32 = 0;
+
+    // STORAGE_PROPERTY_QUERY structure
+    #[repr(C)]
+    struct StoragePropertyQuery {
+        property_id: u32,
+        query_type: u32,
+        additional_parameters: [u8; 1],
+    }
+
+    // DEVICE_SEEK_PENALTY_DESCRIPTOR structure
+    #[repr(C)]
+    struct DeviceSeekPenaltyDescriptor {
+        version: u32,
+        size: u32,
+        incurs_seek_penalty: u8, // BOOLEAN
+    }
+
+    // Open the physical drive
+    let drive_path: Vec<u16> = format!("\\\\.\\{}:", drive_letter.to_ascii_uppercase())
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(drive_path.as_ptr()),
+            0, // No access needed for query
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES(0),
+            None,
+        )
+    };
+
+    let handle = match handle {
+        Ok(h) => h,
+        Err(_) => return DriveType::Unknown,
+    };
+
+    // Prepare query
+    let query = StoragePropertyQuery {
+        property_id: STORAGE_DEVICE_SEEK_PENALTY_PROPERTY,
+        query_type: PROPERTY_STANDARD_QUERY,
+        additional_parameters: [0],
+    };
+
+    let mut descriptor = DeviceSeekPenaltyDescriptor {
+        version: 0,
+        size: 0,
+        incurs_seek_penalty: 0,
+    };
+
+    let mut bytes_returned: u32 = 0;
+
+    let result = unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            Some(&query as *const _ as *const std::ffi::c_void),
+            size_of::<StoragePropertyQuery>() as u32,
+            Some(&mut descriptor as *mut _ as *mut std::ffi::c_void),
+            size_of::<DeviceSeekPenaltyDescriptor>() as u32,
+            Some(&mut bytes_returned),
+            None,
+        )
+    };
+
+    // Close handle
+    let _ = unsafe { CloseHandle(handle) };
+
+    if result.is_ok() && bytes_returned >= size_of::<DeviceSeekPenaltyDescriptor>() as u32 {
+        if descriptor.incurs_seek_penalty == 0 {
+            DriveType::Ssd
+        } else {
+            DriveType::Hdd
+        }
+    } else {
+        // Fallback: try to detect via trim support
+        detect_drive_type_via_trim(drive_letter)
+    }
+}
+
+/// Fallback detection using TRIM support (SSDs support TRIM).
+#[allow(unsafe_code)]
+fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows::Win32::System::IO::DeviceIoControl;
+
+    const IOCTL_STORAGE_QUERY_PROPERTY: u32 = 0x002D_1400;
+    const STORAGE_DEVICE_TRIM_PROPERTY: u32 = 8;
+    const PROPERTY_STANDARD_QUERY: u32 = 0;
+
+    #[repr(C)]
+    struct StoragePropertyQuery {
+        property_id: u32,
+        query_type: u32,
+        additional_parameters: [u8; 1],
+    }
+
+    #[repr(C)]
+    struct DeviceTrimDescriptor {
+        version: u32,
+        size: u32,
+        trim_enabled: u8,
+    }
+
+    let drive_path: Vec<u16> = format!("\\\\.\\{}:", drive_letter.to_ascii_uppercase())
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(drive_path.as_ptr()),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES(0),
+            None,
+        )
+    };
+
+    let handle = match handle {
+        Ok(h) => h,
+        Err(_) => return DriveType::Unknown,
+    };
+
+    let query = StoragePropertyQuery {
+        property_id: STORAGE_DEVICE_TRIM_PROPERTY,
+        query_type: PROPERTY_STANDARD_QUERY,
+        additional_parameters: [0],
+    };
+
+    let mut descriptor = DeviceTrimDescriptor {
+        version: 0,
+        size: 0,
+        trim_enabled: 0,
+    };
+
+    let mut bytes_returned: u32 = 0;
+
+    let result = unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            Some(&query as *const _ as *const std::ffi::c_void),
+            size_of::<StoragePropertyQuery>() as u32,
+            Some(&mut descriptor as *mut _ as *mut std::ffi::c_void),
+            size_of::<DeviceTrimDescriptor>() as u32,
+            Some(&mut bytes_returned),
+            None,
+        )
+    };
+
+    let _ = unsafe { CloseHandle(handle) };
+
+    if result.is_ok() && bytes_returned >= size_of::<DeviceTrimDescriptor>() as u32 {
+        if descriptor.trim_enabled != 0 {
+            DriveType::Ssd
+        } else {
+            DriveType::Hdd
+        }
+    } else {
+        DriveType::Unknown
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
