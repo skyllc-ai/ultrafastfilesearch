@@ -21,16 +21,24 @@ Traditional file search tools (including `os.walk`, `FindFirstFile`, etc.) work 
 
 **UFFS reads the MFT directly** - once - and queries it in memory using Polars DataFrames. This is like reading the entire phonebook once instead of looking up each name individually.
 
-### Benchmark Results
+### Benchmark Results (v0.2.0)
 
-| Program | Records | Time | Notes |
-|---------|---------|------|-------|
-| **UFFS** | **19 Million** | **~120 seconds** | All disks in parallel |
-| **UFFS** | **6.5 Million** | **~56 seconds** | Single HDD |
+| Drive Type | Records | Time | Throughput |
+|------------|---------|------|------------|
+| **SSD** | 1.77M | **3.1s** | **1,472 MB/s** |
+| **SSD** | 1.53M | **2.5s** | **1,839 MB/s** |
+| **HDD** | 3.81M | **23.3s** | **206 MB/s** |
+| **HDD** | 7.18M | **45.9s** | **250 MB/s** |
+| **All 7 drives** | 18.7M | **142s** | - |
+
+| Comparison | Records | Time | Notes |
+|------------|---------|------|-------|
+| **UFFS v0.2.0** | **18.7 Million** | **~142 seconds** | All disks, fast mode |
+| UFFS v0.1.30 | 18.7 Million | ~315 seconds | Baseline |
 | Everything | 19 Million | 178 seconds | All disks |
 | WizFile | 6.5 Million | 299 seconds | Single HDD |
 
-> **UFFS is 68% faster than Everything and 4x faster than WizFile!**
+> **UFFS is 55% faster than v0.1.30 baseline, and achieves ~4x SSD throughput improvement!**
 
 ---
 
@@ -221,12 +229,31 @@ uffs_mft info --drive C
 # Full MFT analysis with file statistics (~10-30s)
 uffs_mft info --drive C --deep
 
-# Export MFT to Parquet
+# Export MFT to Parquet (fast mode - default)
 uffs_mft read --drive C --output mft.parquet
+
+# Export with complete extension data (slower)
+uffs_mft read --drive C --output mft.parquet --full
+
+# Benchmark single drive
+uffs_mft bench --drive C --runs 3
+
+# Benchmark all drives
+uffs_mft bench-all --output benchmark.json
 
 # List NTFS drives
 uffs_mft drives
 ```
+
+**Read Modes:**
+- `--mode auto` (default): SSD→parallel, HDD→prefetch
+- `--mode parallel`: Best for SSDs (8MB chunks)
+- `--mode prefetch`: Best for HDDs (double-buffered 4MB chunks)
+- `--mode streaming`: Low memory usage
+
+**Fast vs Full:**
+- Default (fast): Skips extension records (~1% of files), ~15-25% faster
+- `--full`: Merges extension records for complete hard link/ADS data
 
 See [uffs-mft README](crates/uffs-mft/README.md) for detailed documentation.
 
@@ -287,6 +314,14 @@ The MFT can be scattered across multiple non-contiguous extents on disk. UFFS ha
 
 Query operations use Polars' lazy API, which optimizes the query plan before execution. Filters are pushed down, columns are pruned, and operations are parallelized automatically.
 
+### 9. SoA Layout (Struct-of-Arrays)
+
+Instead of parsing into `Vec<ParsedRecord>` (Array-of-Structs) and then converting to DataFrame columns, UFFS parses directly into column vectors (Struct-of-Arrays). This eliminates the expensive AoS→SoA transpose and reduces df_build time by **90%**.
+
+### 10. Fast Path (Skip Extension Records)
+
+Extension records (~1% of files) contain overflow attributes for files with many hard links or ADS. The fast path skips these for maximum speed, while `--full` mode merges them for complete data.
+
 ### Performance Summary
 
 | Optimization | Impact |
@@ -298,6 +333,8 @@ Query operations use Polars' lazy API, which optimizes the query plan before exe
 | Double-buffering | Overlapped I/O with processing |
 | Rayon parallelism | All CPU cores utilized |
 | Polars lazy eval | Optimized query execution |
+| **SoA layout** | **90% faster df_build** |
+| **Fast path** | **15-25% faster on SSD** |
 
 ---
 

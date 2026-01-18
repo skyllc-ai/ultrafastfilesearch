@@ -1446,13 +1446,13 @@ impl MftReader {
     }
 
     /// Internal raw MFT reading implementation.
+    ///
+    /// Uses the shared `ParallelMftReader` infrastructure for proper chunk
+    /// handling, sector alignment, and dynamic buffer sizing.
     #[cfg(windows)]
-    #[allow(unsafe_code)] // Required: Windows FFI (SetFilePointerEx, ReadFile)
     fn read_raw_internal(&self) -> Result<(Vec<u8>, u32)> {
-        use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
-
-        use crate::io::{AlignedBuffer, MftExtentMap, generate_read_chunks};
-        use crate::ntfs::SECTOR_SIZE;
+        use crate::io::{MftExtentMap, ParallelMftReader, generate_read_chunks};
+        use crate::platform::detect_drive_type;
 
         let record_size = self.handle.file_record_size();
         let volume_data = self.handle.volume_data();
@@ -1471,52 +1471,29 @@ impl MftReader {
         let extent_map = MftExtentMap::new(extents, volume_data.bytes_per_cluster, record_size);
         let total_records = extent_map.total_records();
 
-        // Allocate output buffer
+        // Allocate output buffer for all records
         let total_size = total_records as usize * record_size as usize;
         let mut output = vec![0u8; total_size];
 
-        // Generate read chunks (without bitmap - we want ALL records)
-        let chunks = generate_read_chunks(&extent_map, None, 1024 * 1024);
+        // Use ParallelMftReader for proper chunk reading (handles sector alignment,
+        // dynamic buffer sizing, etc.)
+        let drive_type = detect_drive_type(self.volume);
+        let parallel_reader =
+            ParallelMftReader::new_optimized(extent_map.clone(), None, drive_type);
 
-        // Read buffer (aligned for direct I/O)
-        let chunk_size = 1024 * 1024usize;
-        let aligned_size = ((chunk_size + SECTOR_SIZE - 1) / SECTOR_SIZE) * SECTOR_SIZE;
-        let mut buffer = AlignedBuffer::new(aligned_size);
+        // Generate read chunks (without bitmap - we want ALL records for raw dump)
+        let chunks = generate_read_chunks(&extent_map, None, parallel_reader.chunk_size());
 
         let handle = self.handle.raw_handle();
 
-        // Read each chunk
+        // Read each chunk using the shared read_chunk function
         for chunk in chunks {
-            let read_size = chunk.record_count as usize * record_size as usize;
-            let aligned_read = ((read_size + SECTOR_SIZE - 1) / SECTOR_SIZE) * SECTOR_SIZE;
-
-            // Seek to chunk position
-            let mut new_pos = 0i64;
-            unsafe {
-                SetFilePointerEx(
-                    handle,
-                    chunk.disk_offset as i64,
-                    Some(&mut new_pos),
-                    FILE_BEGIN,
-                )?;
-            }
-
-            // Read chunk
-            let mut bytes_read = 0u32;
-            unsafe {
-                ReadFile(
-                    handle,
-                    Some(&mut buffer.as_mut_slice()[..aligned_read]),
-                    Some(&mut bytes_read),
-                    None,
-                )?;
-            }
+            let data = parallel_reader.read_chunk(handle, &chunk, record_size)?;
 
             // Copy to output at correct position
             let output_offset = chunk.start_frs as usize * record_size as usize;
-            let copy_size = read_size.min(bytes_read as usize);
-            output[output_offset..output_offset + copy_size]
-                .copy_from_slice(&buffer.as_slice()[..copy_size]);
+            let copy_size = data.len().min(total_size - output_offset);
+            output[output_offset..output_offset + copy_size].copy_from_slice(&data[..copy_size]);
         }
 
         Ok((output, record_size))

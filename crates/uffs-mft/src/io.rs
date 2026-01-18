@@ -1763,7 +1763,7 @@ pub struct ParallelMftReader {
     /// Optional bitmap for skip optimization.
     bitmap: Option<crate::platform::MftBitmap>,
     /// Read chunk size in bytes.
-    chunk_size: usize,
+    pub chunk_size: usize,
     /// Progress counter (atomic for thread-safe updates).
     records_processed: Arc<AtomicU64>,
     /// Fixup failure counter (potential corruption).
@@ -2400,7 +2400,12 @@ impl ParallelMftReader {
     /// The buffer is resized only if the chunk is larger than the current
     /// buffer.
     #[allow(unsafe_code)] // Required: Windows FFI (SetFilePointerEx, ReadFile)
-    fn read_chunk(&self, handle: HANDLE, chunk: &ReadChunk, record_size: u32) -> Result<Vec<u8>> {
+    pub fn read_chunk(
+        &self,
+        handle: HANDLE,
+        chunk: &ReadChunk,
+        record_size: u32,
+    ) -> Result<Vec<u8>> {
         let read_size = chunk.record_count * u64::from(record_size);
 
         // Align to sector boundary
