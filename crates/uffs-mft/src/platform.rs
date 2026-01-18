@@ -51,6 +51,13 @@ pub struct VolumeHandle {
     volume_data: NtfsVolumeData,
 }
 
+// SAFETY: Windows file handles are thread-safe. The HANDLE is just a pointer
+// to a kernel object that the OS manages. Multiple threads can safely read
+// from the same handle (though we don't do that - each task has its own
+// handle). This is required for tokio::spawn to work with MftReader.
+unsafe impl Send for VolumeHandle {}
+unsafe impl Sync for VolumeHandle {}
+
 /// NTFS volume data retrieved from `FSCTL_GET_NTFS_VOLUME_DATA`.
 #[derive(Debug, Clone, Copy)]
 pub struct NtfsVolumeData {
