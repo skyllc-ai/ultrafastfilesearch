@@ -629,58 +629,23 @@ async fn search_multi_drive_filtered(
 /// Supports both single drive (`--drive C`) and multiple drives (`--drives
 /// C,D,E`). When multiple drives are specified, they are read concurrently and
 /// merged into a single `DataFrame` with a `drive` column.
-/// Infer drive letter from a path.
-///
-/// - Absolute path with drive: `C:\foo\bar.parquet` → Some('C')
-/// - Relative path: `bar.parquet` → infer from current directory
-/// - UNC path or no drive: → None
-#[cfg(windows)]
-fn infer_drive_from_path(path: &Path) -> Option<char> {
-    use std::path::Component;
-
-    // Check if path has a drive prefix (e.g., C:)
-    if let Some(Component::Prefix(prefix)) = path.components().next() {
-        use std::path::Prefix;
-        if let Prefix::Disk(drive_byte) | Prefix::VerbatimDisk(drive_byte) = prefix.kind() {
-            return Some((drive_byte as char).to_ascii_uppercase());
-        }
-    }
-
-    // For relative paths, get drive from current directory
-    if let Ok(cwd) = std::env::current_dir() {
-        return infer_drive_from_path(&cwd);
-    }
-
-    None
-}
-
-/// Stub for non-Windows platforms.
-#[cfg(not(windows))]
-const fn infer_drive_from_path(_path: &Path) -> Option<char> {
-    None
-}
-
-/// Ensure path has an extension, defaulting to `.parquet`.
-fn ensure_extension(path: PathBuf) -> PathBuf {
-    if path.extension().is_some() {
-        path
-    } else {
-        path.with_extension("parquet")
-    }
-}
 
 /// Build an index from a drive's MFT.
 ///
-/// The drive is inferred from the output path if not explicitly specified.
-// CLI command handler - separate function for testability and maintainability.
-#[allow(clippy::shadow_unrelated, clippy::single_call_fn)]
+/// The drive is inferred from the output path if not explicitly specified:
+/// - Absolute path with drive: `C:\foo\bar.parquet` → indexes C:
+/// - Relative path: `bar.parquet` → indexes drive of current directory
 pub async fn index(
-    output: PathBuf,
+    output_path: PathBuf,
     single_drive: Option<char>,
     multi_drives: Option<Vec<char>>,
 ) -> Result<()> {
     // Ensure output has an extension (default to .parquet)
-    let output = ensure_extension(output);
+    let output = if output_path.extension().is_some() {
+        output_path
+    } else {
+        output_path.with_extension("parquet")
+    };
 
     // Determine which drives to index
     let drive_list: Vec<char> = match (single_drive, multi_drives) {
@@ -688,7 +653,12 @@ pub async fn index(
         (None, Some(drvs)) => drvs,
         (None, None) => {
             // Infer drive from output path
-            if let Some(drive) = infer_drive_from_path(&output) {
+            #[cfg(windows)]
+            let inferred = uffs_mft::infer_drive_from_path(&output);
+            #[cfg(not(windows))]
+            let inferred: Option<char> = None;
+
+            if let Some(drive) = inferred {
                 info!(drive = %drive, "Inferred drive from output path");
                 vec![drive]
             } else {

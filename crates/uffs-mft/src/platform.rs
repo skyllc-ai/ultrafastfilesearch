@@ -1086,6 +1086,64 @@ pub fn volume_root_path(volume: char) -> PathBuf {
     PathBuf::from(format!("{}:\\", volume.to_ascii_uppercase()))
 }
 
+/// Infer drive letter from a file path.
+///
+/// Extracts the drive letter from absolute paths (e.g., `C:\foo\bar.parquet` →
+/// `'C'`). For relative paths, falls back to the current working directory's
+/// drive.
+///
+/// # Arguments
+///
+/// * `path` - Any file path (absolute or relative)
+///
+/// # Returns
+///
+/// - `Some(char)` - Uppercase drive letter if found
+/// - `None` - If path has no drive prefix and current directory cannot be
+///   determined
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use std::path::Path;
+/// use uffs_mft::infer_drive_from_path;
+///
+/// // Absolute path
+/// assert_eq!(infer_drive_from_path(Path::new("C:\\data\\index.parquet")), Some('C'));
+///
+/// // Relative path (uses current directory's drive)
+/// // If cwd is D:\work, returns Some('D')
+/// let drive = infer_drive_from_path(Path::new("index.parquet"));
+/// ```
+#[must_use]
+pub fn infer_drive_from_path(path: &Path) -> Option<char> {
+    use std::path::{Component, Prefix};
+
+    // Try to get drive from the path itself (absolute paths like C:\foo)
+    if let Some(Component::Prefix(prefix)) = path.components().next() {
+        match prefix.kind() {
+            Prefix::Disk(drive_byte) | Prefix::VerbatimDisk(drive_byte) => {
+                return Some((drive_byte as char).to_ascii_uppercase());
+            }
+            _ => {} // UNC paths, device paths, etc. - no drive letter
+        }
+    }
+
+    // For relative paths, get drive from current working directory
+    std::env::current_dir().ok().and_then(|cwd| {
+        if let Some(Component::Prefix(prefix)) = cwd.components().next() {
+            match prefix.kind() {
+                Prefix::Disk(drive_byte) | Prefix::VerbatimDisk(drive_byte) => {
+                    Some((drive_byte as char).to_ascii_uppercase())
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
+    })
+}
+
 /// Detects all available NTFS drives on the system.
 ///
 /// This function iterates through all possible drive letters (A-Z) and
