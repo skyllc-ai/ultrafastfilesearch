@@ -395,13 +395,26 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     // Check for -v/--verbose flag early
     let verbose = std::env::args().any(|arg| arg == "-v" || arg == "--verbose");
 
     // Initialize logging with terminal + file support
     let _guard = init_logging(verbose);
 
+    if let Err(err) = run().await {
+        // Print clean error without stack trace
+        eprintln!("Error: {err}");
+        // Print cause chain if available
+        for cause in err.chain().skip(1) {
+            eprintln!("  Caused by: {cause}");
+        }
+        std::process::exit(1);
+    }
+}
+
+/// Main application logic, separated from `main()` for clean error handling.
+async fn run() -> Result<()> {
     // Parse CLI with custom error handling to show help on errors
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
