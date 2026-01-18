@@ -38,7 +38,9 @@
 #[cfg(not(windows))]
 use core::future::Future;
 use std::io::stdout;
-use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::path::Path;
+use std::path::PathBuf;
 
 #[cfg(windows)]
 use anyhow::Context;
@@ -395,6 +397,7 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
 }
 
 #[tokio::main]
+#[allow(clippy::print_stderr, clippy::exit)] // Intentional: user-facing error output
 async fn main() {
     // Check for -v/--verbose flag early
     let verbose = std::env::args().any(|arg| arg == "-v" || arg == "--verbose");
@@ -414,6 +417,7 @@ async fn main() {
 }
 
 /// Main application logic, separated from `main()` for clean error handling.
+#[allow(clippy::exit, clippy::unused_async, clippy::single_call_fn)]
 async fn run() -> Result<()> {
     // Parse CLI with custom error handling to show help on errors
     let cli = match Cli::try_parse() {
@@ -2035,17 +2039,7 @@ async fn cmd_save(
     Ok(())
 }
 
-/// Save MFT - non-Windows stub.
-#[cfg(not(windows))]
-#[allow(clippy::unused_async)]
-async fn cmd_save(
-    _drive: char,
-    _output: &Path,
-    _compress: bool,
-    _compression_level: i32,
-) -> Result<()> {
-    anyhow::bail!("Raw MFT saving is only supported on Windows");
-}
+
 
 /// Load MFT from a saved file and optionally export.
 #[cfg(windows)]
@@ -2248,9 +2242,4 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
     Ok(())
 }
 
-/// Load MFT - non-Windows stub.
-#[cfg(not(windows))]
-#[allow(clippy::unused_async)]
-async fn cmd_load(_input: &Path, _output: Option<&Path>, _info_only: bool) -> Result<()> {
-    anyhow::bail!("Raw MFT loading is only supported on Windows");
-}
+
