@@ -2160,21 +2160,21 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
     // Parse and export
     let output = output.context("--output is required when not using --info-only")?;
 
-    println!();
-    println!("📤 EXPORTING...");
-
-    let df = MftReader::load_raw_to_dataframe(input)
-        .with_context(|| format!("Failed to parse raw MFT from {}", input.display()))?;
-
-    let parsed_count = df.height();
-
     // Determine output format from extension
     let ext = output
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("parquet");
 
-    let output_abs = std::fs::canonicalize(output).unwrap_or_else(|_| output.to_path_buf());
+    let format_name = if ext == "csv" { "CSV" } else { "Parquet" };
+
+    println!();
+    println!("📤 EXPORTING TO {}...", format_name);
+
+    let df = MftReader::load_raw_to_dataframe(input)
+        .with_context(|| format!("Failed to parse raw MFT from {}", input.display()))?;
+
+    let parsed_count = df.height();
 
     match ext {
         "csv" => {
@@ -2185,16 +2185,22 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
             let mut df = df;
             let csv_str = uffs_polars::write_csv_to_string(&mut df)?;
             file.write_all(csv_str.as_bytes())?;
-            println!("  Format:               CSV");
         }
         _ => {
             let mut df = df;
             MftReader::save_parquet(&mut df, output)?;
-            println!("  Format:               Parquet");
         }
     }
 
-    println!("  Output path:          {}", output_abs.display());
+    // Get absolute path and file size after creation
+    let output_abs = std::fs::canonicalize(output).unwrap_or_else(|_| output.to_path_buf());
+    let output_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
+
+    println!();
+    println!("📁 OUTPUT FILE");
+    println!("  Path:                 {}", output_abs.display());
+    println!("  Format:               {}", format_name);
+    println!("  File size:           {}", format_bytes(output_size));
     println!(
         "  Records exported:     {}",
         format_number_commas(parsed_count as u64)
