@@ -2046,6 +2046,11 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
 
     use uffs_mft::{MftReader, load_raw_mft_header};
 
+    // Validate arguments upfront - don't print anything if we're going to fail
+    if !info_only && output.is_none() {
+        anyhow::bail!("--output is required when not using --info-only");
+    }
+
     let start_time = Instant::now();
 
     // Load header first
@@ -2183,8 +2188,8 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
         return Ok(());
     }
 
-    // Parse and export
-    let output = output.context("--output is required when not using --info-only")?;
+    // Parse and export (output is guaranteed to be Some by upfront validation)
+    let output = output.expect("output validated at function start");
 
     // Determine output format from extension
     let ext = output
