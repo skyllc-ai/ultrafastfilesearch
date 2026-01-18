@@ -2178,8 +2178,8 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
 
     match ext {
         "csv" => {
-            use polars::prelude::CsvWriter;
-            use polars::prelude::SerWriter;
+            use uffs_polars::CsvWriter;
+            use uffs_polars::SerWriter;
             use std::fs::File;
 
             let file = File::create(output)?;
