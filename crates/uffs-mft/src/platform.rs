@@ -466,30 +466,37 @@ impl VolumeHandle {
         };
 
         // Read the bitmap data from the volume at the physical cluster locations
+        // With FILE_FLAG_NO_BUFFERING, reads must be sector-aligned.
+        // The C++ code reads full clusters (cluster_count × cluster_size), then
+        // truncates.
         let bytes_per_cluster = self.volume_data.bytes_per_cluster;
-        let mut buffer = vec![0u8; file_size as usize];
+
+        // Calculate total cluster-aligned size to read
+        let total_clusters: u64 = extents.iter().map(|e| e.cluster_count).sum();
+        let aligned_size = (total_clusters * u64::from(bytes_per_cluster)) as usize;
+        let mut buffer = vec![0u8; aligned_size];
         let mut buffer_offset = 0usize;
 
         if verbose {
             eprintln!(
-                "[BITMAP] Reading from volume, bytes_per_cluster={}",
-                bytes_per_cluster
+                "[BITMAP] Reading from volume, bytes_per_cluster={}, file_size={}, aligned_size={}",
+                bytes_per_cluster, file_size, aligned_size
             );
         }
 
         for (i, extent) in extents.iter().enumerate() {
             let byte_offset = extent.lcn * i64::from(bytes_per_cluster);
+            // Read full clusters (always aligned)
             let extent_bytes = (extent.cluster_count * u64::from(bytes_per_cluster)) as usize;
-            let bytes_to_read = extent_bytes.min(buffer.len() - buffer_offset);
 
-            if bytes_to_read == 0 {
-                break;
+            if extent_bytes == 0 {
+                continue;
             }
 
             if verbose && i < 3 {
                 eprintln!(
-                    "[BITMAP] Extent {}: seek to offset {}, read {} bytes",
-                    i, byte_offset, bytes_to_read
+                    "[BITMAP] Extent {}: seek to offset {}, read {} bytes (full clusters)",
+                    i, byte_offset, extent_bytes
                 );
             }
 
@@ -511,12 +518,12 @@ impl VolumeHandle {
                 }
             }
 
-            // Read the extent data from the volume
+            // Read the extent data from the volume (full clusters)
             let mut bytes_read: u32 = 0;
             unsafe {
                 if let Err(e) = ReadFile(
                     self.handle,
-                    Some(&mut buffer[buffer_offset..buffer_offset + bytes_to_read]),
+                    Some(&mut buffer[buffer_offset..buffer_offset + extent_bytes]),
                     Some(&mut bytes_read),
                     None,
                 ) {
@@ -545,13 +552,17 @@ impl VolumeHandle {
         }
 
         if verbose {
-            eprintln!("[BITMAP] Total bytes read: {}", buffer_offset);
-            let all_ff = buffer.iter().take(buffer_offset).all(|&b| b == 0xFF);
-            let all_00 = buffer.iter().take(buffer_offset).all(|&b| b == 0x00);
+            eprintln!(
+                "[BITMAP] Total bytes read: {}, truncating to file_size: {}",
+                buffer_offset, file_size
+            );
+            let all_ff = buffer.iter().take(file_size as usize).all(|&b| b == 0xFF);
+            let all_00 = buffer.iter().take(file_size as usize).all(|&b| b == 0x00);
             eprintln!("[BITMAP] All 0xFF: {}, All 0x00: {}", all_ff, all_00);
         }
 
-        buffer.truncate(buffer_offset);
+        // Truncate to actual file size (discard padding from cluster alignment)
+        buffer.truncate(file_size as usize);
         Ok(MftBitmap::from_bytes(buffer))
     }
 }
