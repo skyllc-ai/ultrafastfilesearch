@@ -2033,8 +2033,9 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
     let header = load_raw_mft_header(input)
         .with_context(|| format!("Failed to load raw MFT header from {}", input.display()))?;
 
-    // Get absolute path for display
+    // Get absolute path and file size for display
     let abs_path = std::fs::canonicalize(input).unwrap_or_else(|_| input.to_path_buf());
+    let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
 
     // Print formatted output
     println!("═══════════════════════════════════════════════════════════════");
@@ -2043,21 +2044,24 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
     println!();
     println!("📁 FILE DETAILS");
     println!("  Path:                 {}", abs_path.display());
+    println!("  File size:           {}", format_bytes(file_size));
     println!("  Format version:       {}", header.version);
     println!();
-    println!("📊 MFT CONTENTS");
+    println!("📊 MFT STRUCTURE");
     println!(
         "  Total records:        {}",
         format_number_commas(header.record_count.into())
     );
     println!(
-        "  Record size:          {} bytes",
+        "  Bytes per record:     {}",
         format_number_commas(header.record_size.into())
     );
     println!(
-        "  Original size:       {}",
+        "  Original MFT size:   {}",
         format_bytes(header.original_size)
     );
+    println!();
+    println!("💾 COMPRESSION");
     if header.is_compressed() {
         println!(
             "  Compressed size:     {}",
@@ -2066,11 +2070,87 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
         #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
         let ratio = header.compressed_size as f64 / header.original_size as f64 * 100.0_f64;
         println!("  Compression ratio:    {ratio:.1}%");
+        #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+        let savings = 100.0_f64 - ratio;
+        println!("  Space saved:          {savings:.1}%");
     } else {
-        println!("  Compression:          none");
+        println!("  Status:               uncompressed");
     }
 
     if info_only {
+        // Parse the MFT to get detailed statistics
+        println!();
+        println!("📈 PARSING MFT FOR STATISTICS...");
+
+        let df = MftReader::load_raw_to_dataframe(input)
+            .with_context(|| format!("Failed to parse raw MFT from {}", input.display()))?;
+
+        let total_parsed = df.height();
+
+        // Extract statistics from the DataFrame
+        let dir_count = df
+            .column("is_directory")
+            .ok()
+            .and_then(|c| c.bool().ok())
+            .map(|b| b.sum().unwrap_or(0) as u64)
+            .unwrap_or(0);
+        let file_count = (total_parsed as u64).saturating_sub(dir_count);
+
+        // Helper closure to count bool columns
+        let count_bool = |name: &str| -> u64 {
+            df.column(name)
+                .ok()
+                .and_then(|c| c.bool().ok())
+                .map(|b| b.sum().unwrap_or(0) as u64)
+                .unwrap_or(0)
+        };
+
+        let hidden_count = count_bool("is_hidden");
+        let system_count = count_bool("is_system");
+        let compressed_count = count_bool("is_compressed");
+        let encrypted_count = count_bool("is_encrypted");
+        let sparse_count = count_bool("is_sparse");
+
+        // Total size calculation
+        let total_size: u64 = df
+            .column("size")
+            .ok()
+            .and_then(|c| c.u64().ok())
+            .map(|s| s.sum().unwrap_or(0))
+            .unwrap_or(0);
+
+        println!();
+        println!("📊 FILE STATISTICS");
+        println!(
+            "  Records parsed:       {}",
+            format_number_commas(total_parsed as u64)
+        );
+        println!(
+            "  Directories:          {}",
+            format_number_commas(dir_count)
+        );
+        println!("  Files:                {}", format_number_commas(file_count));
+        println!("  Total file size:     {}", format_bytes(total_size));
+        println!();
+        println!("🏷️  ATTRIBUTES");
+        println!(
+            "  Hidden:               {}",
+            format_number_commas(hidden_count)
+        );
+        println!(
+            "  System:               {}",
+            format_number_commas(system_count)
+        );
+        println!(
+            "  Compressed:           {}",
+            format_number_commas(compressed_count)
+        );
+        println!(
+            "  Encrypted:            {}",
+            format_number_commas(encrypted_count)
+        );
+        println!("  Sparse:               {}", format_number_commas(sparse_count));
+
         println!();
         let elapsed = start_time.elapsed();
         println!("⏱️  Completed in {}", format_duration(elapsed));
