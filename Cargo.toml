@@ -32,7 +32,7 @@ members = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.2.9"
+version = "0.2.10"
 edition = "2024"
 rust-version = "1.85"
 license = "MPL-2.0 OR LicenseRef-UFFS-Commercial"
@@ -116,7 +116,7 @@ chrono = { version = "0.4.41", features = ["serde"] }
 time = { version = "0.3.45", features = ["macros", "formatting"] }
 
 # ───── Configuration ─────
-toml = "0.1.30"
+toml = "0.9.8"
 dirs-next = "2.0.0"
 
 # ───── Testing & Benchmarking ─────

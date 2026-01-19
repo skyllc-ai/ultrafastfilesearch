@@ -617,8 +617,6 @@ struct OwnedQueryFilters {
     min_size: Option<u64>,
     /// Maximum file size filter.
     max_size: Option<u64>,
-    /// Maximum number of results to return (per drive, not total).
-    limit: u32,
 }
 
 #[cfg(windows)]
@@ -632,7 +630,6 @@ impl OwnedQueryFilters {
             dirs_only: filters.dirs_only,
             min_size: filters.min_size,
             max_size: filters.max_size,
-            limit: filters.limit,
         }
     }
 
@@ -1271,13 +1268,13 @@ async fn index_multi_drive(drives: &[char], output: &Path) -> Result<()> {
 
     // Create a multi-progress bar for each drive (if not disabled)
     let mp = create_multi_progress();
-    let progress_bars: Option<std::sync::Arc<std::collections::HashMap<char, ProgressBar>>> =
+    let progress_bars: Option<Arc<std::collections::HashMap<char, ProgressBar>>> =
         mp.as_ref().map(|m| {
             let mut pbs = std::collections::HashMap::new();
             for &drive_char in drives {
                 pbs.insert(drive_char, add_drive_progress(m, drive_char));
             }
-            std::sync::Arc::new(pbs)
+            Arc::new(pbs)
         });
 
     let pbs = progress_bars.clone();
