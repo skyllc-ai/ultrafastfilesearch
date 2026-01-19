@@ -21,7 +21,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use uffs_polars::DataFrame;
+use uffs_polars::{DataFrame, Expr, IntoLazy, col, lit};
 
 use crate::error::Result;
 
@@ -162,6 +162,74 @@ impl Default for ExtensionFilter {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Extension Column Helpers
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Create a Polars expression that extracts the file extension from a name
+/// column.
+///
+/// The extension is extracted as lowercase, without the leading dot.
+/// Files without extensions (or hidden files like `.gitignore`) return null.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use uffs_core::extensions::ext_expr;
+///
+/// // Add extension column to `DataFrame`
+/// let df = df.lazy()
+///     .with_column(ext_expr("name").alias("ext"))
+///     .collect()?;
+/// ```
+pub fn ext_expr(name_column: &str) -> Expr {
+    // Extract extension: everything after the last dot, lowercased
+    // Returns null for files without extensions or hidden files (starting with dot)
+    let name_col = col(name_column);
+
+    // Find the last dot position
+    // Use str().extract() with regex to get extension
+    // Pattern: match a dot followed by non-dot characters at the end
+    // But only if there's something before the dot (not hidden files)
+    name_col
+        .str()
+        .to_lowercase()
+        .str()
+        .extract(lit(r"[^.]\.([^.]+)$"), 1)
+}
+
+/// Add an `ext` column to a `DataFrame` for optimized extension queries.
+///
+/// The extension column contains lowercase extensions without the leading dot.
+/// Files without extensions have null values.
+///
+/// # Errors
+///
+/// Returns an error if the `DataFrame` operation fails.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use uffs_core::extensions::add_ext_column;
+///
+/// let df = add_ext_column(df)?;
+/// // Now df has an "ext" column for fast extension queries
+/// ```
+pub fn add_ext_column(df: DataFrame) -> Result<DataFrame> {
+    df.lazy()
+        .with_column(ext_expr("name").alias("ext"))
+        .collect()
+        .map_err(crate::error::CoreError::from)
+}
+
+/// Check if a `DataFrame` has an `ext` column.
+#[must_use]
+pub fn has_ext_column(df: &DataFrame) -> bool {
+    df.get_column_names()
+        .iter()
+        .any(|name| name.as_str() == "ext")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -475,6 +543,74 @@ mod tests {
         assert!(index.get("gitignore").is_none());
         assert!(index.get("bashrc").is_none());
         assert!(index.get("txt").is_some());
+        Ok(())
+    }
+
+    // =========================================================================
+    // Extension Column Tests
+    // =========================================================================
+
+    #[test]
+    fn test_add_ext_column() -> TestResult {
+        let df = DataFrame::new_infer_height(vec![
+            Column::new("frs".into(), &[1_u64, 2, 3, 4, 5]),
+            Column::new(
+                "name".into(),
+                &[
+                    "photo.jpg",
+                    "document.txt",
+                    "README",
+                    ".gitignore",
+                    "archive.tar.gz",
+                ],
+            ),
+        ])?;
+
+        let result = add_ext_column(df)?;
+
+        // Check that ext column was added
+        assert!(has_ext_column(&result));
+
+        // Verify the ext column values
+        let ext_col = result.column("ext")?.str()?;
+        assert_eq!(ext_col.get(0), Some("jpg"));
+        assert_eq!(ext_col.get(1), Some("txt"));
+        assert!(ext_col.get(2).is_none()); // README has no extension
+        assert!(ext_col.get(3).is_none()); // .gitignore is hidden file
+        assert_eq!(ext_col.get(4), Some("gz")); // tar.gz -> gz
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_has_ext_column() -> TestResult {
+        let df_without = DataFrame::new_infer_height(vec![
+            Column::new("frs".into(), &[1_u64]),
+            Column::new("name".into(), &["file.txt"]),
+        ])?;
+
+        assert!(!has_ext_column(&df_without));
+
+        let df_with = add_ext_column(df_without)?;
+        assert!(has_ext_column(&df_with));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ext_expr_lowercase() -> TestResult {
+        let df = DataFrame::new_infer_height(vec![
+            Column::new("frs".into(), &[1_u64, 2]),
+            Column::new("name".into(), &["Photo.JPG", "Document.TXT"]),
+        ])?;
+
+        let result = add_ext_column(df)?;
+        let ext_col = result.column("ext")?.str()?;
+
+        // Extensions should be lowercase
+        assert_eq!(ext_col.get(0), Some("jpg"));
+        assert_eq!(ext_col.get(1), Some("txt"));
+
         Ok(())
     }
 }

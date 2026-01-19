@@ -52,6 +52,7 @@ use tokio as _;
 // Module declarations
 // ============================================================================
 
+pub mod compiled_pattern;
 mod error;
 mod export;
 pub mod extensions;
@@ -66,9 +67,12 @@ pub mod tree;
 // Public API re-exports
 // ============================================================================
 
+pub use compiled_pattern::{CompiledPattern, GlobKind, classify_glob, compile_pattern};
 pub use error::{CoreError, Result};
 pub use export::{export_csv, export_json, export_table};
-pub use extensions::{ExtensionFilter, ExtensionIndex, ExtensionIndexStats};
+pub use extensions::{
+    ExtensionFilter, ExtensionIndex, ExtensionIndexStats, add_ext_column, ext_expr, has_ext_column,
+};
 #[allow(deprecated)]
 pub use path_resolver::add_path_column_multi_drive;
 pub use path_resolver::{

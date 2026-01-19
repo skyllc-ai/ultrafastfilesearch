@@ -60,9 +60,7 @@ use bitflags as _;
 // Dev-dependencies (used in benchmarks only)
 #[cfg(test)]
 use criterion as _;
-// Pipelining dependencies (used in io.rs PipelinedMftReader)
-#[cfg(not(windows))]
-use crossbeam_channel as _;
+// Pipelining dependencies (used in io.rs PipelinedMftReader on Windows)
 #[cfg(not(windows))]
 use rayon as _;
 #[cfg(not(windows))]

@@ -13,7 +13,6 @@
 // Copyright (c) 2025-2026 Robert Nio
 //
 // UFFS - UltraFastFileSearch: High-Performance File Search Tool
-//
 //! Cross-compile UFFS binaries for Windows
 //!
 //! **IMPORTANT**: UFFS is a Windows-only tool. It reads the NTFS Master File
@@ -64,36 +63,50 @@ fn is_release_build() -> bool {
 
 /// Get the build profile name for display purposes
 fn build_profile() -> &'static str {
-    if is_release_build() { "release" } else { "xwin-dev" }
+    if is_release_build() {
+        "release"
+    } else {
+        "xwin-dev"
+    }
 }
 
 /// Get the cargo output directory name (where binaries are placed)
 /// Note: Custom profiles like "xwin-dev" output to their own directory
 fn build_output_dir() -> &'static str {
-    if is_release_build() { "release" } else { "xwin-dev" }
+    if is_release_build() {
+        "release"
+    } else {
+        "xwin-dev"
+    }
 }
 
 /// UFFS only runs on Windows (requires NTFS MFT access via Windows APIs).
-/// We only build Windows binaries - macOS/Linux are just cross-compilation hosts.
-const TARGETS: &[Target] = &[
-    Target {
-        triple: "x86_64-pc-windows-msvc",
-        platform_name: "windows-x64",
-        use_xwin: true,
-        requires_linker: None,
-    },
-];
+/// We only build Windows binaries - macOS/Linux are just cross-compilation
+/// hosts.
+const TARGETS: &[Target] = &[Target {
+    triple: "x86_64-pc-windows-msvc",
+    platform_name: "windows-x64",
+    use_xwin: true,
+    requires_linker: None,
+}];
 
 fn main() {
     println!("🚀 UFFS Cross-Platform Build (Windows Only)");
     println!("ℹ️  UFFS is Windows-only (requires NTFS MFT access)");
 
     // Show build mode (DEV is default, set UFFS_RELEASE_BUILD=1 for release)
-    let build_mode = if is_release_build() { "RELEASE (optimized)" } else { "DEV (fast, default)" };
+    let build_mode = if is_release_build() {
+        "RELEASE (optimized)"
+    } else {
+        "DEV (fast, default)"
+    };
     println!("🔧 Build mode: {}", build_mode);
 
     let (host_os, host_arch) = (env::consts::OS, env::consts::ARCH);
-    println!("🖥️  Host: {} {} (cross-compilation host)", host_os, host_arch);
+    println!(
+        "🖥️  Host: {} {} (cross-compilation host)",
+        host_os, host_arch
+    );
 
     // On Windows, just build natively
     if host_os == "windows" {
@@ -104,7 +117,10 @@ fn main() {
 
     // On macOS/Linux, cross-compile for Windows
     if host_os != "macos" && host_os != "linux" {
-        eprintln!("⚠️  Unsupported host OS: {}. Use Windows, macOS, or Linux.", host_os);
+        eprintln!(
+            "⚠️  Unsupported host OS: {}. Use Windows, macOS, or Linux.",
+            host_os
+        );
         exit(1);
     }
 
@@ -139,7 +155,15 @@ fn main() {
             eprintln!("\n❌ Build failed for {} - aborting!", target.triple);
             exit(1);
         }
-        copy_binaries_to_dist(&version, target, &target_dir);
+        if !copy_binaries_to_dist(&version, target, &target_dir) {
+            eprintln!("\n❌ Binary copy failed for {} - aborting!", target.triple);
+            eprintln!("   This usually means the build succeeded but binaries were not placed in the expected location.");
+            eprintln!(
+                "   Check the target directory: {:?}",
+                target_dir.join(target.triple)
+            );
+            exit(1);
+        }
     }
 
     update_all_checksums(&version, &available);
@@ -148,7 +172,10 @@ fn main() {
     // Add binaries to git for sharing
     add_binaries_to_git(&version);
 
-    println!("\n✅ Windows build complete!\n📦 Binaries in dist/{}/*/", version);
+    println!(
+        "\n✅ Windows build complete!\n📦 Binaries in dist/{}/*/",
+        version
+    );
     println!("ℹ️  Note: UFFS only runs on Windows (requires NTFS MFT access)");
 }
 
@@ -163,9 +190,7 @@ fn add_binaries_to_git(version: &str) {
     }
 
     // Add the dist directory to git
-    let status = Command::new("git")
-        .args(["add", &dist_path])
-        .status();
+    let status = Command::new("git").args(["add", &dist_path]).status();
 
     match status {
         Ok(s) if s.success() => {
@@ -313,14 +338,9 @@ fn build_for_target(target: &Target, _target_dir: &Path) -> bool {
 
     for (binary, package) in BINARIES {
         let mut args: Vec<&str> = if target.use_xwin {
-            vec![
-                "xwin",
-                "build",
-            ]
+            vec!["xwin", "build"]
         } else {
-            vec![
-                "build",
-            ]
+            vec!["build"]
         };
 
         // Add profile: --release for release, --profile xwin-dev for xwin dev builds
@@ -333,17 +353,16 @@ fn build_for_target(target: &Target, _target_dir: &Path) -> bool {
         }
 
         // Add target and package args
-        args.extend_from_slice(&[
-            "--target",
-            target.triple,
-            "--bin",
-            binary,
-            "-p",
-            package,
-        ]);
+        args.extend_from_slice(&["--target", target.triple, "--bin", binary, "-p", package]);
 
         // Print verbose command info (similar to CI pipeline format)
-        println!("  → {} ({}) → cargo {} (target: {})", binary, profile, args.join(" "), target.triple);
+        println!(
+            "  → {} ({}) → cargo {} (target: {})",
+            binary,
+            profile,
+            args.join(" "),
+            target.triple
+        );
 
         let mut cmd = Command::new("cargo");
         cmd.args(&args);
@@ -390,10 +409,17 @@ fn build_for_target(target: &Target, _target_dir: &Path) -> bool {
     true
 }
 
-fn copy_binaries_to_dist(version: &str, target: &Target, target_dir: &Path) {
+/// Copy built binaries to dist directory.
+/// Returns true if ALL binaries were copied successfully, false if any are
+/// missing or failed.
+fn copy_binaries_to_dist(version: &str, target: &Target, target_dir: &Path) -> bool {
     let profile = build_profile();
     let output_dir = build_output_dir();
     println!("  📁 Copying {} binaries to dist/{}...", profile, version);
+
+    let mut all_success = true;
+    let mut missing_binaries: Vec<String> = Vec::new();
+    let mut failed_copies: Vec<String> = Vec::new();
 
     for (binary, _) in BINARIES {
         let bin_name = if target.triple.contains("windows") {
@@ -414,12 +440,16 @@ fn copy_binaries_to_dist(version: &str, target: &Target, target_dir: &Path) {
         let dest = format!("{}/{}", dest_dir, dest_name);
 
         if let Err(e) = fs::create_dir_all(&dest_dir) {
-            eprintln!("  ⚠️  Failed to create {}: {}", dest_dir, e);
+            eprintln!("  ❌ Failed to create {}: {}", dest_dir, e);
+            all_success = false;
+            failed_copies.push(format!("{} (dir creation failed: {})", binary, e));
             continue;
         }
         if source.exists() {
             if let Err(e) = fs::copy(&source, &dest) {
-                eprintln!("  ⚠️  Failed to copy {}: {}", binary, e);
+                eprintln!("  ❌ Failed to copy {}: {}", binary, e);
+                all_success = false;
+                failed_copies.push(format!("{} (copy failed: {})", binary, e));
             } else {
                 #[cfg(unix)]
                 {
@@ -433,9 +463,31 @@ fn copy_binaries_to_dist(version: &str, target: &Target, target_dir: &Path) {
                 println!("  ✅ {}", dest_name);
             }
         } else {
-            eprintln!("  ⚠️  Not found: {:?}", source);
+            eprintln!("  ❌ Binary not found: {:?}", source);
+            all_success = false;
+            missing_binaries.push(bin_name);
         }
     }
+
+    // Report summary of failures
+    if !missing_binaries.is_empty() {
+        eprintln!(
+            "\n❌ FATAL: {} binaries missing for {}: {:?}",
+            missing_binaries.len(),
+            target.triple,
+            missing_binaries
+        );
+    }
+    if !failed_copies.is_empty() {
+        eprintln!(
+            "\n❌ FATAL: {} binaries failed to copy for {}: {:?}",
+            failed_copies.len(),
+            target.triple,
+            failed_copies
+        );
+    }
+
+    all_success
 }
 
 fn update_latest_symlink(version: &str) {

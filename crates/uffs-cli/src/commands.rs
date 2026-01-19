@@ -977,6 +977,7 @@ async fn search_multi_drive_filtered(
             drive = %result.drive,
             records = result.records_read,
             matches = result.matches,
+            paths_resolved = result.paths_resolved,
             progress = format!("{}/{}", drives_processed, drives.len()),
             "Drive completed"
         );

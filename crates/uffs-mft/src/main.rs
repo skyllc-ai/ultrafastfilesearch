@@ -29,8 +29,6 @@
 //!
 //! **Note**: This tool requires Administrator privileges on Windows.
 
-// Suppress unused crate warning for crossbeam-channel (used in io.rs on
-// Windows)
 // ============================================================================
 // Suppress unused crate warnings
 // ============================================================================
@@ -51,8 +49,6 @@ use clap::{Parser, Subcommand};
 // Dev-dependencies (used in benchmarks only)
 #[cfg(test)]
 use criterion as _;
-#[cfg(not(windows))]
-use crossbeam_channel as _;
 // Platform-gated dependencies (used on Windows only)
 #[cfg(not(windows))]
 use indicatif as _;
