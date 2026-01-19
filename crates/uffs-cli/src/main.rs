@@ -129,12 +129,12 @@ struct Cli {
     #[arg(long)]
     max_size: Option<u64>,
 
-    /// Maximum number of results
-    #[arg(short = 'n', long, default_value = "100")]
+    /// Maximum number of results (0 = unlimited)
+    #[arg(short = 'n', long, default_value = "0")]
     limit: u32,
 
-    /// Output format: table, json, csv
-    #[arg(short, long, default_value = "table")]
+    /// Output format: table, json, csv, custom
+    #[arg(short, long, default_value = "custom")]
     format: String,
 
     /// Case-sensitive matching (default: off)
@@ -150,19 +150,20 @@ struct Cli {
     out: String,
 
     /// Columns to output (comma-separated or "all")
-    #[arg(long, default_value = "all")]
+    /// Default: path only (CPP compatible)
+    #[arg(long, default_value = "path")]
     columns: String,
 
     /// Column separator (default: comma)
     #[arg(long, default_value = ",")]
     sep: String,
 
-    /// Quote character for string values
-    #[arg(long, default_value = "\"")]
+    /// Quote character for string values (empty = no quotes)
+    #[arg(long, default_value = "")]
     quotes: String,
 
     /// Include header row in output
-    #[arg(long, default_value = "true")]
+    #[arg(long, default_value = "false")]
     header: bool,
 
     /// Representation for active/true boolean attributes
@@ -228,8 +229,8 @@ enum Commands {
         #[arg(short = 'n', long, default_value = "0")]
         limit: u32,
 
-        /// Output format: table, json, csv
-        #[arg(short, long, default_value = "table")]
+        /// Output format: table, json, csv, custom
+        #[arg(short, long, default_value = "custom")]
         format: String,
 
         /// Case-sensitive matching (default: off)
@@ -260,7 +261,8 @@ enum Commands {
         /// hidden, system, archive, readonly, compressed, encrypted,
         /// sparse, reparse, offline, notindexed, temporary, virtual,
         /// pinned, unpinned, descendants
-        #[arg(long, default_value = "all")]
+        /// Default: path only (CPP compatible)
+        #[arg(long, default_value = "path")]
         columns: String,
 
         /// Column separator (default: comma)
@@ -269,12 +271,12 @@ enum Commands {
         #[arg(long, default_value = ",")]
         sep: String,
 
-        /// Quote character for string values
-        #[arg(long, default_value = "\"")]
+        /// Quote character for string values (empty = no quotes)
+        #[arg(long, default_value = "")]
         quotes: String,
 
         /// Include header row in output
-        #[arg(long, default_value = "true")]
+        #[arg(long, default_value = "false")]
         header: bool,
 
         /// Representation for active/true boolean attributes
