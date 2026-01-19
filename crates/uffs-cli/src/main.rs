@@ -125,6 +125,10 @@ struct Cli {
     #[arg(long)]
     hide_system: bool,
 
+    /// Show detailed timing breakdown for performance profiling
+    #[arg(long)]
+    profile: bool,
+
     /// Minimum file size in bytes
     #[arg(long)]
     min_size: Option<u64>,
@@ -225,6 +229,10 @@ enum Commands {
         /// Hide system files (files starting with $)
         #[arg(long)]
         hide_system: bool,
+
+        /// Show detailed timing breakdown for performance profiling
+        #[arg(long)]
+        profile: bool,
 
         /// Minimum file size in bytes
         #[arg(long)]
@@ -455,6 +463,7 @@ async fn run() -> Result<()> {
             files_only,
             dirs_only,
             hide_system,
+            profile,
             min_size,
             max_size,
             limit,
@@ -477,6 +486,7 @@ async fn run() -> Result<()> {
                 files_only,
                 dirs_only,
                 hide_system,
+                profile,
                 min_size,
                 max_size,
                 limit,
@@ -517,6 +527,7 @@ async fn run() -> Result<()> {
                     cli.files_only,
                     cli.dirs_only,
                     cli.hide_system,
+                    cli.profile,
                     cli.min_size,
                     cli.max_size,
                     cli.limit,

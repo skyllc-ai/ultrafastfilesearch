@@ -317,6 +317,7 @@ pub async fn search(
     files_only: bool,
     dirs_only: bool,
     hide_system: bool,
+    profile: bool,
     min_size: Option<u64>,
     max_size: Option<u64>,
     limit: u32,
@@ -389,23 +390,45 @@ pub async fn search(
     // Pass needs_paths so path resolution happens BEFORE filtering loses parent
     // directories
     let needs_paths = output_config.needs_path_column();
-    let mut results =
-        load_and_filter_data(index, multi_drives, single_drive, &filters, needs_paths).await?;
+    let mut results = load_and_filter_data(
+        index,
+        multi_drives,
+        single_drive,
+        &filters,
+        needs_paths,
+        profile,
+    )
+    .await?;
 
     // Compute tree columns only if specifically requested
+    let t_tree = std::time::Instant::now();
     if output_config.needs_tree_columns() {
         let tree_cols = output_config.get_tree_columns();
         info!(columns = tree_cols.len(), "Computing tree metrics");
         results =
             add_tree_columns(&results, &tree_cols).context("Failed to compute tree columns")?;
     }
+    let tree_ms = t_tree.elapsed().as_millis();
 
     // Output results
+    let t_output = std::time::Instant::now();
     write_results(&results, format, out, &output_config)?;
+    let output_ms = t_output.elapsed().as_millis();
 
     // Print timing (C++ compatibility: "Finished in X s")
     let elapsed = start_time.elapsed();
-    eprintln!("Finished in {} s", elapsed.as_secs());
+
+    if profile {
+        let row_count = results.height();
+        let total_ms = elapsed.as_millis();
+        eprintln!("=== PROFILE: Output ===");
+        eprintln!("  Tree columns:    {tree_ms:>6} ms");
+        eprintln!("  Output/write:    {output_ms:>6} ms  ({row_count} rows)");
+        eprintln!("=== TOTAL: {total_ms} ms ===");
+    }
+
+    let secs = elapsed.as_secs();
+    eprintln!("Finished in {secs} s");
 
     info!(count = results.height(), "Search complete");
     Ok(())
@@ -478,13 +501,15 @@ async fn search_streaming(
 /// * `needs_paths` - If true, resolves full paths using `FastPathResolver`
 ///   built from FULL MFT data BEFORE filtering. This ensures parent directories
 ///   are available for path resolution.
-#[allow(clippy::single_call_fn)] // Extracted to reduce search() line count below clippy::too_many_lines limit
+/// * `profile` - If true, prints detailed timing breakdown to stderr.
+#[allow(clippy::single_call_fn, clippy::print_stderr)]
 async fn load_and_filter_data(
     index: Option<PathBuf>,
     multi_drives: Option<Vec<char>>,
     single_drive: Option<char>,
     filters: &QueryFilters<'_>,
     needs_paths: bool,
+    profile: bool,
 ) -> Result<uffs_mft::DataFrame> {
     if let Some(index_path) = index {
         // Load from pre-built index and filter
@@ -504,12 +529,19 @@ async fn load_and_filter_data(
     let effective_drive = single_drive.or_else(|| filters.parsed.drive());
     if let Some(drive_letter) = effective_drive {
         // Single drive search with proper path resolution
+        let t_open = std::time::Instant::now();
         let reader = MftReader::open(drive_letter)
             .await
             .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
+        let open_ms = t_open.elapsed().as_millis();
+
+        let t_read = std::time::Instant::now();
         let full_df = reader.read_all().await?;
+        let read_ms = t_read.elapsed().as_millis();
+        let total_records = full_df.height();
 
         // Build path resolver from FULL data BEFORE filtering
+        let t_resolver = std::time::Instant::now();
         let mut path_resolver = if needs_paths {
             Some(
                 uffs_core::FastPathResolver::build(&full_df, drive_letter)
@@ -518,12 +550,17 @@ async fn load_and_filter_data(
         } else {
             None
         };
+        let resolver_ms = t_resolver.elapsed().as_millis();
 
         // Apply filters
+        let t_filter = std::time::Instant::now();
         let mut filtered = execute_query(full_df, filters)?;
+        let filter_ms = t_filter.elapsed().as_millis();
+        let filtered_count = filtered.height();
 
         // Add paths using the pre-built resolver (auto-selects parallel for large
         // DataFrames)
+        let t_paths = std::time::Instant::now();
         if let Some(ref mut resolver) = path_resolver {
             filtered = resolver
                 .add_path_column_auto(&filtered)
@@ -531,6 +568,18 @@ async fn load_and_filter_data(
             // Add path_only column (directory portion of path)
             filtered = uffs_core::add_path_only_column(&filtered)
                 .context("Failed to add path_only column")?;
+        }
+        let paths_ms = t_paths.elapsed().as_millis();
+
+        if profile {
+            let total_ms = open_ms + read_ms + resolver_ms + filter_ms + paths_ms;
+            eprintln!("=== PROFILE: Drive {drive_letter}: ===");
+            eprintln!("  MFT open:        {open_ms:>6} ms");
+            eprintln!("  MFT read:        {read_ms:>6} ms  ({total_records} records)");
+            eprintln!("  Path resolver:   {resolver_ms:>6} ms");
+            eprintln!("  Query/filter:    {filter_ms:>6} ms  ({filtered_count} matches)");
+            eprintln!("  Path resolution: {paths_ms:>6} ms");
+            eprintln!("  TOTAL:           {total_ms:>6} ms");
         }
 
         return Ok(filtered);
@@ -679,6 +728,8 @@ struct OwnedQueryFilters {
     files_only: bool,
     /// Only return directories (not files).
     dirs_only: bool,
+    /// Hide system files (files starting with $).
+    hide_system: bool,
     /// Minimum file size filter.
     min_size: Option<u64>,
     /// Maximum file size filter.
@@ -694,6 +745,7 @@ impl OwnedQueryFilters {
             ext_filter: filters.ext_filter.map(String::from),
             files_only: filters.files_only,
             dirs_only: filters.dirs_only,
+            hide_system: filters.hide_system,
             min_size: filters.min_size,
             max_size: filters.max_size,
         }
@@ -718,6 +770,11 @@ impl OwnedQueryFilters {
             query = query.files_only();
         } else if self.dirs_only {
             query = query.directories_only();
+        }
+
+        // Apply hide_system filter (exclude files starting with $)
+        if self.hide_system {
+            query = query.hide_system_files();
         }
 
         // Apply size filters

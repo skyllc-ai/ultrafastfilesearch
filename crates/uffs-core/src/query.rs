@@ -270,9 +270,9 @@ impl MftQuery {
 
     /// Hide system files (files starting with `$`).
     ///
-    /// This filters out NTFS system files like `$MFT`, `$Bitmap`, `$Recycle.Bin`, etc.
-    /// These files have names starting with `$` which is not a valid character
-    /// for user-created files on Windows.
+    /// This filters out NTFS system files like `$MFT`, `$Bitmap`,
+    /// `$Recycle.Bin`, etc. These files have names starting with `$` which
+    /// is not a valid character for user-created files on Windows.
     #[must_use]
     pub fn hide_system_files(self) -> Self {
         Self {
