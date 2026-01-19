@@ -304,7 +304,11 @@ use uffs_mft::{MftProgress, MftReader};
 /// - Extension filtering: `--ext pictures,mp4,pdf`
 /// - Output customization: `--out`, `--columns`, `--sep`, `--quotes`,
 ///   `--header`, `--pos`, `--neg`
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools,
+    clippy::print_stderr
+)]
 pub async fn search(
     pattern: &str,
     single_drive: Option<char>,
@@ -312,6 +316,7 @@ pub async fn search(
     index: Option<PathBuf>,
     files_only: bool,
     dirs_only: bool,
+    hide_system: bool,
     min_size: Option<u64>,
     max_size: Option<u64>,
     limit: u32,
@@ -326,6 +331,9 @@ pub async fn search(
     pos: &str,
     neg: &str,
 ) -> Result<()> {
+    // Start timing for "Finished in X s" output (C++ compatibility)
+    let start_time = std::time::Instant::now();
+
     // Parse the pattern to extract drive prefix and pattern type
     let parsed = ParsedPattern::parse(pattern)
         .with_context(|| format!("Invalid pattern: {pattern}"))?
@@ -337,6 +345,7 @@ pub async fn search(
         ext_filter,
         files_only,
         dirs_only,
+        hide_system,
         min_size,
         max_size,
         limit,
@@ -360,7 +369,7 @@ pub async fn search(
 
         if needs_streaming {
             // Streaming mode: output results as each drive completes
-            return search_streaming(
+            let result = search_streaming(
                 multi_drives,
                 single_drive,
                 &filters,
@@ -369,6 +378,10 @@ pub async fn search(
                 &output_config,
             )
             .await;
+            // Print timing after streaming completes
+            let elapsed = start_time.elapsed();
+            eprintln!("Finished in {} s", elapsed.as_secs());
+            return result;
         }
     }
 
@@ -389,6 +402,10 @@ pub async fn search(
 
     // Output results
     write_results(&results, format, out, &output_config)?;
+
+    // Print timing (C++ compatibility: "Finished in X s")
+    let elapsed = start_time.elapsed();
+    eprintln!("Finished in {} s", elapsed.as_secs());
 
     info!(count = results.height(), "Search complete");
     Ok(())
@@ -511,6 +528,9 @@ async fn load_and_filter_data(
             filtered = resolver
                 .add_path_column_auto(&filtered)
                 .context("Failed to add path column")?;
+            // Add path_only column (directory portion of path)
+            filtered = uffs_core::add_path_only_column(&filtered)
+                .context("Failed to add path_only column")?;
         }
 
         return Ok(filtered);
@@ -553,6 +573,8 @@ struct QueryFilters<'a> {
     files_only: bool,
     /// Only return directories (not files).
     dirs_only: bool,
+    /// Hide system files (files starting with $).
+    hide_system: bool,
     /// Minimum file size filter.
     min_size: Option<u64>,
     /// Maximum file size filter.
@@ -584,6 +606,11 @@ fn execute_query(
         query = query.files_only();
     } else if filters.dirs_only {
         query = query.directories_only();
+    }
+
+    // Apply hide_system filter (exclude files starting with $)
+    if filters.hide_system {
+        query = query.hide_system_files();
     }
 
     // Apply size filters
@@ -893,7 +920,25 @@ async fn search_multi_drive_filtered(
             // DataFrames)
             let with_paths = if let Some(ref mut resolver) = path_resolver {
                 match resolver.add_path_column_auto(&filtered) {
-                    Ok(df) => df,
+                    Ok(df) => {
+                        // Add path_only column (directory portion of path)
+                        match uffs_core::add_path_only_column(&df) {
+                            Ok(df_with_path_only) => df_with_path_only,
+                            Err(e) => {
+                                let _ = tx
+                                    .send(DriveResult {
+                                        drive: drive_char,
+                                        df: None,
+                                        records_read,
+                                        matches,
+                                        error: Some(format!("Failed to add path_only: {e}")),
+                                        paths_resolved: false,
+                                    })
+                                    .await;
+                                return;
+                            }
+                        }
+                    }
                     Err(e) => {
                         let _ = tx
                             .send(DriveResult {

@@ -121,6 +121,10 @@ struct Cli {
     #[arg(long)]
     dirs_only: bool,
 
+    /// Hide system files (files starting with $)
+    #[arg(long)]
+    hide_system: bool,
+
     /// Minimum file size in bytes
     #[arg(long)]
     min_size: Option<u64>,
@@ -150,20 +154,21 @@ struct Cli {
     out: String,
 
     /// Columns to output (comma-separated or "all")
-    /// Default: path only (CPP compatible)
-    #[arg(long, default_value = "path")]
+    /// Default: all columns (CPP compatible)
+    #[arg(long, default_value = "all")]
     columns: String,
 
     /// Column separator (default: comma)
     #[arg(long, default_value = ",")]
     sep: String,
 
-    /// Quote character for string values (empty = no quotes)
-    #[arg(long, default_value = "")]
+    /// Quote character for string values (default: double-quote for CPP
+    /// compatibility)
+    #[arg(long, default_value = "\"")]
     quotes: String,
 
-    /// Include header row in output
-    #[arg(long, default_value = "false")]
+    /// Include header row in output (default: true for CPP compatibility)
+    #[arg(long, default_value = "true")]
     header: bool,
 
     /// Representation for active/true boolean attributes
@@ -217,6 +222,10 @@ enum Commands {
         #[arg(long)]
         dirs_only: bool,
 
+        /// Hide system files (files starting with $)
+        #[arg(long)]
+        hide_system: bool,
+
         /// Minimum file size in bytes
         #[arg(long)]
         min_size: Option<u64>,
@@ -261,8 +270,8 @@ enum Commands {
         /// hidden, system, archive, readonly, compressed, encrypted,
         /// sparse, reparse, offline, notindexed, temporary, virtual,
         /// pinned, unpinned, descendants
-        /// Default: path only (CPP compatible)
-        #[arg(long, default_value = "path")]
+        /// Default: all columns (CPP compatible)
+        #[arg(long, default_value = "all")]
         columns: String,
 
         /// Column separator (default: comma)
@@ -271,12 +280,13 @@ enum Commands {
         #[arg(long, default_value = ",")]
         sep: String,
 
-        /// Quote character for string values (empty = no quotes)
-        #[arg(long, default_value = "")]
+        /// Quote character for string values (default: double-quote for CPP
+        /// compatibility)
+        #[arg(long, default_value = "\"")]
         quotes: String,
 
-        /// Include header row in output
-        #[arg(long, default_value = "false")]
+        /// Include header row in output (default: true for CPP compatibility)
+        #[arg(long, default_value = "true")]
         header: bool,
 
         /// Representation for active/true boolean attributes
@@ -444,6 +454,7 @@ async fn run() -> Result<()> {
             index,
             files_only,
             dirs_only,
+            hide_system,
             min_size,
             max_size,
             limit,
@@ -465,6 +476,7 @@ async fn run() -> Result<()> {
                 index,
                 files_only,
                 dirs_only,
+                hide_system,
                 min_size,
                 max_size,
                 limit,
@@ -504,6 +516,7 @@ async fn run() -> Result<()> {
                     cli.index,
                     cli.files_only,
                     cli.dirs_only,
+                    cli.hide_system,
                     cli.min_size,
                     cli.max_size,
                     cli.limit,

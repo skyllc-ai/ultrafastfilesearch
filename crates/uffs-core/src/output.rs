@@ -410,14 +410,18 @@ impl OutputConfig {
     /// Check if the path column is requested.
     ///
     /// The path column requires resolution from FRS + `parent_frs`.
+    /// Returns true when columns is None (meaning "all") since "all" includes
+    /// Path.
     #[must_use]
     pub fn needs_path_column(&self) -> bool {
-        self.columns.as_ref().is_some_and(|cols| {
+        self.columns.as_ref().is_none_or(|cols| {
             cols.contains(&OutputColumn::Path) || cols.contains(&OutputColumn::PathOnly)
         })
     }
 
     /// Check if any tree-derived columns are requested.
+    /// Note: "all" columns does NOT include tree columns by default (they're
+    /// expensive to compute).
     #[must_use]
     pub fn needs_tree_columns(&self) -> bool {
         self.columns
@@ -445,39 +449,34 @@ impl OutputConfig {
     /// Returns an error if writing fails.
     #[allow(clippy::option_if_let_else)]
     pub fn write<W: Write>(&self, df: &DataFrame, mut writer: W) -> Result<()> {
-        // Determine columns to output
-        let columns: Vec<String> = if let Some(cols) = &self.columns {
-            cols.iter().map(|col| col.df_column().to_owned()).collect()
+        // Determine columns to output - use CPP_COLUMN_ORDER when "all" is specified
+        let output_cols: &[OutputColumn] = if let Some(cols) = &self.columns {
+            cols.as_slice()
         } else {
-            df.get_column_names()
-                .into_iter()
-                .map(uffs_polars::PlSmallStr::to_string)
-                .collect()
+            CPP_COLUMN_ORDER
         };
 
         // Write header if enabled
         if self.header {
-            let header_names: Vec<String> = if let Some(cols) = &self.columns {
-                cols.iter()
-                    .map(|col| format!("{}{}{}", self.quote, col.display_name(), self.quote))
-                    .collect()
-            } else {
-                columns
-                    .iter()
-                    .map(|col| format!("{}{}{}", self.quote, col, self.quote))
-                    .collect()
-            };
+            let header_names: Vec<String> = output_cols
+                .iter()
+                .map(|col| format!("{}{}{}", self.quote, col.display_name(), self.quote))
+                .collect();
             writeln!(writer, "{}", header_names.join(&self.separator))?;
         }
 
         // Write data rows
         for row_idx in 0..df.height() {
-            let mut row_values = Vec::with_capacity(columns.len());
+            let mut row_values = Vec::with_capacity(output_cols.len());
 
-            for col_name in &columns {
+            for col in output_cols {
+                let col_name = col.df_column();
                 if let Ok(series) = df.column(col_name) {
                     let value = self.format_value(series, row_idx);
                     row_values.push(value);
+                } else {
+                    // Column not in DataFrame - output empty value
+                    row_values.push(String::new());
                 }
             }
 

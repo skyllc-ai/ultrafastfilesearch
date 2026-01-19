@@ -405,6 +405,43 @@ impl FastPathResolver {
     }
 }
 
+/// Add a `path_only` column to a `DataFrame` that has a "path" column.
+///
+/// The `path_only` column contains the directory portion of the path
+/// (everything except the filename), with a trailing backslash.
+///
+/// # Example
+///
+/// - `C:\Users\john\file.txt` → `C:\Users\john\`
+/// - `C:\file.txt` → `C:\`
+///
+/// # Errors
+///
+/// Returns an error if the "path" column is missing.
+pub fn add_path_only_column(df: &DataFrame) -> Result<DataFrame> {
+    let path_col = df.column("path")?.str()?;
+
+    let path_only: Vec<String> = path_col
+        .into_iter()
+        .map(|path_opt| {
+            path_opt.map_or_else(String::new, |path| {
+                // Find the last backslash - use get() for safe UTF-8 slicing
+                path.rfind('\\').map_or_else(String::new, |last_sep| {
+                    // Use get() to safely slice, avoiding panic on UTF-8 boundary
+                    path.get(..=last_sep)
+                        .map_or_else(String::new, str::to_owned)
+                })
+            })
+        })
+        .collect();
+
+    let path_only_series = Column::new("path_only".into(), path_only);
+    let mut result = df.clone();
+    result.with_column(path_only_series)?;
+
+    Ok(result)
+}
+
 /// Statistics about a `FastPathResolver` instance.
 #[derive(Debug, Clone)]
 pub struct FastPathResolverStats {

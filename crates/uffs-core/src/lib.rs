@@ -77,7 +77,7 @@ pub use extensions::{
 pub use path_resolver::add_path_column_multi_drive;
 pub use path_resolver::{
     FastPathResolver, FastPathResolverMultiDrive, FastPathResolverStats, NameArena, PathResolver,
-    add_paths_from_full_data,
+    add_path_only_column, add_paths_from_full_data,
 };
 pub use query::MftQuery;
 // Re-export commonly used types

@@ -158,7 +158,9 @@ impl CompiledPattern {
                     col_expr.str().starts_with(lit(prefix.clone()))
                 } else {
                     let escaped = regex_escape(prefix);
-                    col_expr.str().contains(lit(format!("(?i)^{escaped}")), true)
+                    col_expr
+                        .str()
+                        .contains(lit(format!("(?i)^{escaped}")), true)
                 }
             }
 
@@ -168,7 +170,9 @@ impl CompiledPattern {
                     col_expr.str().ends_with(lit(suffix.clone()))
                 } else {
                     let escaped = regex_escape(suffix);
-                    col_expr.str().contains(lit(format!("(?i){escaped}$")), true)
+                    col_expr
+                        .str()
+                        .contains(lit(format!("(?i){escaped}$")), true)
                 }
             }
 
@@ -873,8 +877,10 @@ mod tests {
             "$I07QSZ8.TXT",
             "test.TXT",
         ];
-        let df =
-            DataFrame::new(input_names.len(), vec![Column::new("name".into(), &input_names)])?;
+        let df = DataFrame::new(
+            input_names.len(),
+            vec![Column::new("name".into(), &input_names)],
+        )?;
 
         // Test case-sensitive suffix matching
         let pattern = CompiledPattern::Suffix(".txt".to_owned());
@@ -903,8 +909,10 @@ mod tests {
             "normal.txt",
             "$BITMAP",
         ];
-        let df =
-            DataFrame::new(input_names.len(), vec![Column::new("name".into(), &input_names)])?;
+        let df = DataFrame::new(
+            input_names.len(),
+            vec![Column::new("name".into(), &input_names)],
+        )?;
 
         // Test that files starting with $ are matched by *.txt pattern
         let pattern = CompiledPattern::Suffix(".txt".to_owned());
@@ -920,7 +928,12 @@ mod tests {
         );
 
         // Verify $I07QSZ8.txt is in the results
-        let matched_names: Vec<&str> = result.column("name")?.str()?.into_iter().flatten().collect();
+        let matched_names: Vec<&str> = result
+            .column("name")?
+            .str()?
+            .into_iter()
+            .flatten()
+            .collect();
         assert!(
             matched_names.contains(&"$I07QSZ8.txt") || matched_names.contains(&"$i07qsz8.txt"),
             "Should include $I07QSZ8.txt: {matched_names:?}"

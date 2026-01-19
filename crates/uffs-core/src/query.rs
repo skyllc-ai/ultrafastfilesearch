@@ -260,11 +260,25 @@ impl MftQuery {
         }
     }
 
-    /// Exclude system files.
+    /// Exclude system files (by `is_system` attribute flag).
     #[must_use]
     pub fn exclude_system(self) -> Self {
         Self {
             lazy: self.lazy.filter(col("is_system").eq(lit(false))),
+        }
+    }
+
+    /// Hide system files (files starting with `$`).
+    ///
+    /// This filters out NTFS system files like `$MFT`, `$Bitmap`, `$Recycle.Bin`, etc.
+    /// These files have names starting with `$` which is not a valid character
+    /// for user-created files on Windows.
+    #[must_use]
+    pub fn hide_system_files(self) -> Self {
+        Self {
+            lazy: self
+                .lazy
+                .filter(col("name").str().starts_with(lit("$")).not()),
         }
     }
 
