@@ -138,3 +138,7 @@ build/.ttapi-workflow-state.json
 
 # Cargo metadata output (machine-specific, auto-generated)
 metadata.json
+
+# Large trial run output files (too big for GitHub)
+docs/trial_runs/UltraFastFileSearch/cpp.txt
+docs/trial_runs/UltraFastFileSearch/rust.txt

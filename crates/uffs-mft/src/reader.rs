@@ -833,6 +833,12 @@ impl MftReader {
         let mut is_offline_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut is_not_indexed_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut is_temporary_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_integrity_stream_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_no_scrub_data_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_pinned_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_unpinned_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_virtual_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut flags_vec: Vec<u32> = Vec::with_capacity(capacity);
 
         // Single pass: build columns AND compute stats simultaneously
         for parsed in parsed_records {
@@ -882,6 +888,12 @@ impl MftReader {
             is_offline_vec.push(parsed.std_info.is_offline);
             is_not_indexed_vec.push(parsed.std_info.is_not_content_indexed);
             is_temporary_vec.push(parsed.std_info.is_temporary);
+            is_integrity_stream_vec.push(parsed.std_info.is_integrity_stream);
+            is_no_scrub_data_vec.push(parsed.std_info.is_no_scrub_data);
+            is_pinned_vec.push(parsed.std_info.is_pinned);
+            is_unpinned_vec.push(parsed.std_info.is_unpinned);
+            is_virtual_vec.push(parsed.std_info.is_virtual);
+            flags_vec.push(parsed.std_info.to_raw_flags());
         }
 
         // Log stats (computed during the loop above)
@@ -948,6 +960,12 @@ impl MftReader {
             is_offline_vec,
             is_not_indexed_vec,
             is_temporary_vec,
+            is_integrity_stream_vec,
+            is_no_scrub_data_vec,
+            is_pinned_vec,
+            is_unpinned_vec,
+            is_virtual_vec,
+            flags_vec,
         )
     }
 
@@ -1158,6 +1176,12 @@ impl MftReader {
         let mut is_offline_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut is_not_indexed_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut is_temporary_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_integrity_stream_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_no_scrub_data_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_pinned_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_unpinned_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_virtual_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut flags_vec: Vec<u32> = Vec::with_capacity(capacity);
 
         for parsed in parsed_records {
             let name_count = parsed.name_count();
@@ -1186,6 +1210,12 @@ impl MftReader {
             is_offline_vec.push(parsed.std_info.is_offline);
             is_not_indexed_vec.push(parsed.std_info.is_not_content_indexed);
             is_temporary_vec.push(parsed.std_info.is_temporary);
+            is_integrity_stream_vec.push(parsed.std_info.is_integrity_stream);
+            is_no_scrub_data_vec.push(parsed.std_info.is_no_scrub_data);
+            is_pinned_vec.push(parsed.std_info.is_pinned);
+            is_unpinned_vec.push(parsed.std_info.is_unpinned);
+            is_virtual_vec.push(parsed.std_info.is_virtual);
+            flags_vec.push(parsed.std_info.to_raw_flags());
         }
 
         Self::build_dataframe_full(
@@ -1212,6 +1242,12 @@ impl MftReader {
             is_offline_vec,
             is_not_indexed_vec,
             is_temporary_vec,
+            is_integrity_stream_vec,
+            is_no_scrub_data_vec,
+            is_pinned_vec,
+            is_unpinned_vec,
+            is_virtual_vec,
+            flags_vec,
         )
     }
 
@@ -1278,6 +1314,12 @@ impl MftReader {
         is_offline_vec: Vec<bool>,
         is_not_indexed_vec: Vec<bool>,
         is_temporary_vec: Vec<bool>,
+        is_integrity_stream_vec: Vec<bool>,
+        is_no_scrub_data_vec: Vec<bool>,
+        is_pinned_vec: Vec<bool>,
+        is_unpinned_vec: Vec<bool>,
+        is_virtual_vec: Vec<bool>,
+        flags_vec: Vec<u32>,
     ) -> Result<DataFrame> {
         use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
 
@@ -1318,6 +1360,14 @@ impl MftReader {
             Series::new("is_offline".into(), is_offline_vec).into_column(),
             Series::new("is_not_indexed".into(), is_not_indexed_vec).into_column(),
             Series::new("is_temporary".into(), is_temporary_vec).into_column(),
+            // Additional flags for C++ parity
+            Series::new("is_integrity_stream".into(), is_integrity_stream_vec).into_column(),
+            Series::new("is_no_scrub_data".into(), is_no_scrub_data_vec).into_column(),
+            Series::new("is_pinned".into(), is_pinned_vec).into_column(),
+            Series::new("is_unpinned".into(), is_unpinned_vec).into_column(),
+            Series::new("is_virtual".into(), is_virtual_vec).into_column(),
+            // Raw attribute flags (combined value for C++ parity)
+            Series::new("flags".into(), flags_vec).into_column(),
         ];
 
         DataFrame::new_infer_height(columns).map_err(MftError::from)
@@ -1374,6 +1424,8 @@ impl MftReader {
             Series::new("is_pinned".into(), columns.is_pinned).into_column(),
             Series::new("is_unpinned".into(), columns.is_unpinned).into_column(),
             Series::new("is_virtual".into(), columns.is_virtual).into_column(),
+            // Raw attribute flags (combined value for C++ parity)
+            Series::new("flags".into(), columns.flags).into_column(),
         ];
 
         DataFrame::new_infer_height(polars_columns).map_err(MftError::from)
@@ -1670,6 +1722,12 @@ impl MftReader {
         let mut is_offline_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut is_not_indexed_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut is_temporary_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_integrity_stream_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_no_scrub_data_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_pinned_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_unpinned_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut is_virtual_vec: Vec<bool> = Vec::with_capacity(capacity);
+        let mut flags_vec: Vec<u32> = Vec::with_capacity(capacity);
 
         for parsed in parsed_records {
             // Compute counts before moving any fields
@@ -1699,6 +1757,12 @@ impl MftReader {
             is_offline_vec.push(parsed.std_info.is_offline);
             is_not_indexed_vec.push(parsed.std_info.is_not_content_indexed);
             is_temporary_vec.push(parsed.std_info.is_temporary);
+            is_integrity_stream_vec.push(parsed.std_info.is_integrity_stream);
+            is_no_scrub_data_vec.push(parsed.std_info.is_no_scrub_data);
+            is_pinned_vec.push(parsed.std_info.is_pinned);
+            is_unpinned_vec.push(parsed.std_info.is_unpinned);
+            is_virtual_vec.push(parsed.std_info.is_virtual);
+            flags_vec.push(parsed.std_info.to_raw_flags());
         }
 
         Self::build_dataframe_full(
@@ -1725,6 +1789,12 @@ impl MftReader {
             is_offline_vec,
             is_not_indexed_vec,
             is_temporary_vec,
+            is_integrity_stream_vec,
+            is_no_scrub_data_vec,
+            is_pinned_vec,
+            is_unpinned_vec,
+            is_virtual_vec,
+            flags_vec,
         )
     }
 }

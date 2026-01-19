@@ -186,8 +186,9 @@ impl OutputColumn {
             Self::Modified => "modified",
             Self::Accessed => "accessed",
             Self::Type => "type",
-            Self::Attributes => "attributes",
-            Self::AttributeValue => "flags",
+            // Both Attributes and AttributeValue map to the raw flags column
+            // C++ outputs the numeric value in the "Attributes" column
+            Self::Attributes | Self::AttributeValue => "flags",
             // MFT reader uses is_ prefix for boolean flags
             Self::Hidden => "is_hidden",
             Self::System => "is_system",
@@ -489,6 +490,9 @@ impl OutputConfig {
     /// Format a single value from a series.
     #[allow(clippy::option_if_let_else, clippy::wildcard_enum_match_arm)]
     fn format_value(&self, series: &Column, row_idx: usize) -> String {
+        use chrono::{Local, TimeZone};
+        use uffs_polars::{AnyValue, TimeUnit};
+
         let dtype = series.dtype();
 
         match dtype {
@@ -515,6 +519,27 @@ impl OutputConfig {
             DataType::UInt64 | DataType::Int64 | DataType::UInt32 | DataType::Int32 => series
                 .get(row_idx)
                 .map_or(String::new(), |val| val.to_string()),
+            DataType::Datetime(TimeUnit::Microseconds, _) => {
+                // Convert UTC timestamp to local time (matching C++ output)
+                if let Ok(AnyValue::Datetime(ts, TimeUnit::Microseconds, _)) = series.get(row_idx) {
+                    // Use div_euclid/rem_euclid for correct handling of negative timestamps.
+                    // rem_euclid(1_000_000) always returns [0, 999_999] for any i64 input.
+                    let secs = ts.div_euclid(1_000_000);
+                    let micros_i64 = ts.rem_euclid(1_000_000);
+                    // Safe: rem_euclid(1_000_000) is always in [0, 999_999], fits in u32
+                    let micros = u32::try_from(micros_i64).unwrap_or(0);
+                    if let Some(utc_dt) = chrono::DateTime::from_timestamp(secs, micros * 1000) {
+                        // Convert to local time
+                        let local_dt = Local.from_utc_datetime(&utc_dt.naive_utc());
+                        // Format with microseconds (keeping millisecond precision as requested)
+                        local_dt.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            }
             _ => series
                 .get(row_idx)
                 .map_or(String::new(), |val| val.to_string()),

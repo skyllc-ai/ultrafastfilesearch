@@ -742,6 +742,8 @@ pub struct ParsedColumns {
     pub is_unpinned: Vec<bool>,
     /// Virtual flag.
     pub is_virtual: Vec<bool>,
+    /// Raw attribute flags (combined value for C++ parity).
+    pub flags: Vec<u32>,
 }
 
 impl ParsedColumns {
@@ -786,6 +788,7 @@ impl ParsedColumns {
             is_pinned: Vec::with_capacity(capacity),
             is_unpinned: Vec::with_capacity(capacity),
             is_virtual: Vec::with_capacity(capacity),
+            flags: Vec::with_capacity(capacity),
         }
     }
 
@@ -836,6 +839,7 @@ impl ParsedColumns {
         self.is_pinned.push(record.std_info.is_pinned);
         self.is_unpinned.push(record.std_info.is_unpinned);
         self.is_virtual.push(record.std_info.is_virtual);
+        self.flags.push(record.std_info.to_raw_flags());
     }
 
     /// Extends this `ParsedColumns` with all records from another.
@@ -870,6 +874,7 @@ impl ParsedColumns {
         self.is_pinned.extend(other.is_pinned);
         self.is_unpinned.extend(other.is_unpinned);
         self.is_virtual.extend(other.is_virtual);
+        self.flags.extend(other.flags);
     }
 
     /// Reserves capacity for additional records.
@@ -902,6 +907,7 @@ impl ParsedColumns {
         self.is_pinned.reserve(additional);
         self.is_unpinned.reserve(additional);
         self.is_virtual.reserve(additional);
+        self.flags.reserve(additional);
     }
 }
 

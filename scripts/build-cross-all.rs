@@ -332,7 +332,7 @@ fn cmd_exists(c: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn build_for_target(target: &Target, _target_dir: &Path) -> bool {
+fn build_for_target(target: &Target, target_dir: &Path) -> bool {
     let release_build = is_release_build();
     let profile = build_profile();
 
@@ -366,6 +366,9 @@ fn build_for_target(target: &Target, _target_dir: &Path) -> bool {
 
         let mut cmd = Command::new("cargo");
         cmd.args(&args);
+
+        // Set CARGO_TARGET_DIR to the expanded path (cargo xwin doesn't expand ~ in config)
+        cmd.env("CARGO_TARGET_DIR", target_dir);
 
         // For Windows cross-compilation, add LLVM to PATH for clang-cl
         if target.use_xwin {
