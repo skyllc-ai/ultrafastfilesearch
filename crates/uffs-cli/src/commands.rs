@@ -119,27 +119,28 @@ impl<W: Write> StreamingWriter<W> {
     }
 
     fn write_csv_batch(&self, writer: &mut W, df: &uffs_mft::DataFrame) -> Result<usize> {
-        let columns: Vec<_> = df
-            .get_column_names()
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let col_names: Vec<_> = df.get_column_names();
 
         // Write header only once
         if !self.header_written.swap(true, Ordering::SeqCst) {
-            writeln!(
-                writer,
-                "{}",
-                columns
-                    .iter()
-                    .map(|c| format!("\"{c}\""))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )?;
+            for (i, name) in col_names.iter().enumerate() {
+                if i > 0 {
+                    write!(writer, ",")?;
+                }
+                write!(writer, "\"{name}\"")?;
+            }
+            writeln!(writer)?;
         }
+
+        // Cache column references to avoid repeated lookups
+        let columns: Vec<_> = col_names
+            .iter()
+            .filter_map(|name| df.column(name).ok())
+            .collect();
 
         let mut rows_written = 0;
         let height = df.height();
+        let mut line_buf = String::with_capacity(256);
 
         for row_idx in 0..height {
             // Check limit
@@ -152,15 +153,15 @@ impl<W: Write> StreamingWriter<W> {
                 self.rows_written.fetch_add(1, Ordering::Relaxed);
             }
 
-            let mut values = Vec::with_capacity(columns.len());
-            for col_name in &columns {
-                let col = df
-                    .column(col_name)
-                    .map_err(|e| anyhow::anyhow!("Column error: {e}"))?;
-                let val = format_cell_value(col, row_idx);
-                values.push(val);
+            // Reuse buffer for each line
+            line_buf.clear();
+            for (i, col) in columns.iter().enumerate() {
+                if i > 0 {
+                    line_buf.push(',');
+                }
+                line_buf.push_str(&format_cell_value(col, row_idx));
             }
-            writeln!(writer, "{}", values.join(","))?;
+            writeln!(writer, "{line_buf}")?;
             rows_written += 1;
         }
 
@@ -169,14 +170,17 @@ impl<W: Write> StreamingWriter<W> {
     }
 
     fn write_json_batch(&self, writer: &mut W, df: &uffs_mft::DataFrame) -> Result<usize> {
-        let columns: Vec<_> = df
-            .get_column_names()
+        let col_names: Vec<_> = df.get_column_names();
+
+        // Cache column references to avoid repeated lookups
+        let columns: Vec<_> = col_names
             .iter()
-            .map(|s| s.to_string())
+            .filter_map(|name| df.column(name).ok().map(|col| (*name, col)))
             .collect();
 
         let mut rows_written = 0;
         let height = df.height();
+        let mut obj = String::with_capacity(512);
 
         for row_idx in 0..height {
             // Check limit
@@ -189,17 +193,17 @@ impl<W: Write> StreamingWriter<W> {
                 self.rows_written.fetch_add(1, Ordering::Relaxed);
             }
 
-            // Build JSON object for this row
-            let mut obj = String::from("{");
-            for (i, col_name) in columns.iter().enumerate() {
+            // Reuse buffer for each JSON object
+            obj.clear();
+            obj.push('{');
+            for (i, (col_name, col)) in columns.iter().enumerate() {
                 if i > 0 {
                     obj.push_str(", ");
                 }
-                let col = df
-                    .column(col_name)
-                    .map_err(|e| anyhow::anyhow!("Column error: {e}"))?;
-                let val = format_json_value(col, row_idx);
-                obj.push_str(&format!("\"{col_name}\": {val}"));
+                obj.push('"');
+                obj.push_str(col_name);
+                obj.push_str("\": ");
+                obj.push_str(&format_json_value(col, row_idx));
             }
             obj.push('}');
             writeln!(writer, "{obj}")?;
@@ -369,7 +373,11 @@ pub async fn search(
     }
 
     // Non-streaming mode: load all data, then output
-    let mut results = load_and_filter_data(index, multi_drives, single_drive, &filters).await?;
+    // Pass needs_paths so path resolution happens BEFORE filtering loses parent
+    // directories
+    let needs_paths = output_config.needs_path_column();
+    let mut results =
+        load_and_filter_data(index, multi_drives, single_drive, &filters, needs_paths).await?;
 
     // Compute tree columns only if specifically requested
     if output_config.needs_tree_columns() {
@@ -447,15 +455,24 @@ async fn search_streaming(
 ///
 /// For multi-drive searches, applies filters per-drive to reduce memory usage.
 /// This prevents OOM errors when searching many drives with millions of files.
+///
+/// # Arguments
+///
+/// * `needs_paths` - If true, resolves full paths using `FastPathResolver`
+///   built from FULL MFT data BEFORE filtering. This ensures parent directories
+///   are available for path resolution.
 #[allow(clippy::single_call_fn)] // Extracted to reduce search() line count below clippy::too_many_lines limit
 async fn load_and_filter_data(
     index: Option<PathBuf>,
     multi_drives: Option<Vec<char>>,
     single_drive: Option<char>,
     filters: &QueryFilters<'_>,
+    needs_paths: bool,
 ) -> Result<uffs_mft::DataFrame> {
     if let Some(index_path) = index {
         // Load from pre-built index and filter
+        // Note: For index files, path resolution uses the filtered data
+        // which may have incomplete paths if the index was built from filtered data
         let df = MftReader::load_parquet(&index_path)
             .with_context(|| format!("Failed to load index: {}", index_path.display()))?;
         return execute_query(df, filters);
@@ -463,18 +480,40 @@ async fn load_and_filter_data(
 
     if let Some(drives) = multi_drives {
         // Multi-drive search with per-drive filtering (memory efficient)
-        return search_multi_drive_filtered(&drives, filters).await;
+        return search_multi_drive_filtered(&drives, filters, needs_paths).await;
     }
 
     // Check for single drive: CLI flag overrides pattern-embedded drive
     let effective_drive = single_drive.or_else(|| filters.parsed.drive());
     if let Some(drive_letter) = effective_drive {
-        // Single drive search
+        // Single drive search with proper path resolution
         let reader = MftReader::open(drive_letter)
             .await
             .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
-        let df = reader.read_all().await?;
-        return execute_query(df, filters);
+        let full_df = reader.read_all().await?;
+
+        // Build path resolver from FULL data BEFORE filtering
+        let mut path_resolver = if needs_paths {
+            Some(
+                uffs_core::FastPathResolver::build(&full_df, drive_letter)
+                    .context("Failed to build path resolver")?,
+            )
+        } else {
+            None
+        };
+
+        // Apply filters
+        let mut filtered = execute_query(full_df, filters)?;
+
+        // Add paths using the pre-built resolver (auto-selects parallel for large
+        // DataFrames)
+        if let Some(ref mut resolver) = path_resolver {
+            filtered = resolver
+                .add_path_column_auto(&filtered)
+                .context("Failed to add path column")?;
+        }
+
+        return Ok(filtered);
     }
 
     // No drive specified - search ALL available NTFS drives
@@ -494,7 +533,7 @@ async fn load_and_filter_data(
             bail!("No NTFS drives found on this system");
         }
         info!(drives = ?all_drives, count = all_drives.len(), "No drive specified - searching all NTFS drives");
-        search_multi_drive_filtered(&all_drives, filters).await
+        search_multi_drive_filtered(&all_drives, filters, needs_paths).await
     }
     #[cfg(not(windows))]
     {
@@ -674,6 +713,7 @@ struct DriveResult {
     drive: char,
     /// Filtered `DataFrame` with matching results (None if no matches or
     /// error).
+    /// **Note:** Paths are already resolved using the full MFT data.
     df: Option<uffs_mft::DataFrame>,
     /// Total records read from the MFT.
     records_read: usize,
@@ -681,6 +721,8 @@ struct DriveResult {
     matches: usize,
     /// Error message if the drive read failed.
     error: Option<String>,
+    /// Whether paths were resolved (for logging).
+    paths_resolved: bool,
 }
 
 /// Search multiple drives in parallel with per-drive filtering.
@@ -688,10 +730,17 @@ struct DriveResult {
 /// This approach spawns all drive reads concurrently using tokio tasks,
 /// then collects and merges results as they complete. This maximizes I/O
 /// parallelism across multiple drives.
+///
+/// # Path Resolution
+///
+/// When `needs_paths` is true, builds a FastPathResolver from the FULL MFT data
+/// BEFORE filtering. This ensures parent directories are available for path
+/// resolution, fixing the `<unknown>` path bug.
 #[cfg(windows)]
 async fn search_multi_drive_filtered(
     drives: &[char],
     filters: &QueryFilters<'_>,
+    needs_paths: bool,
 ) -> Result<uffs_mft::DataFrame> {
     use std::sync::Arc;
 
@@ -704,6 +753,7 @@ async fn search_multi_drive_filtered(
 
     info!(
         count = drives.len(),
+        needs_paths = needs_paths,
         "Searching drives in PARALLEL (blazing fast mode)"
     );
 
@@ -749,6 +799,7 @@ async fn search_multi_drive_filtered(
                             records_read: 0,
                             matches: 0,
                             error: Some(e.to_string()),
+                            paths_resolved: false,
                         })
                         .await;
                     return;
@@ -757,7 +808,7 @@ async fn search_multi_drive_filtered(
 
             // Read with progress callback
             let pb_clone = pbs.clone();
-            let df = reader
+            let full_df = reader
                 .read_with_progress(move |progress| {
                     if let Some(ref pbs) = pb_clone {
                         if let Some(p) = pbs.get(&drive_char) {
@@ -770,7 +821,7 @@ async fn search_multi_drive_filtered(
                 })
                 .await;
 
-            let df = match df {
+            let full_df = match full_df {
                 Ok(df) => df,
                 Err(e) => {
                     if let Some(p) = pb {
@@ -783,19 +834,43 @@ async fn search_multi_drive_filtered(
                             records_read: 0,
                             matches: 0,
                             error: Some(e.to_string()),
+                            paths_resolved: false,
                         })
                         .await;
                     return;
                 }
             };
 
-            let records_read = df.height();
+            let records_read = full_df.height();
             if let Some(p) = pb {
                 p.finish();
             }
 
+            // Build path resolver from FULL data BEFORE filtering
+            // This is the key fix for the <unknown> path bug!
+            let mut path_resolver = if needs_paths {
+                match uffs_core::FastPathResolver::build(&full_df, drive_char) {
+                    Ok(resolver) => Some(resolver),
+                    Err(e) => {
+                        let _ = tx
+                            .send(DriveResult {
+                                drive: drive_char,
+                                df: None,
+                                records_read,
+                                matches: 0,
+                                error: Some(format!("Failed to build path resolver: {e}")),
+                                paths_resolved: false,
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+
             // Apply filters
-            let filtered = match filters.execute(df) {
+            let filtered = match filters.execute(full_df) {
                 Ok(f) => f,
                 Err(e) => {
                     let _ = tx
@@ -805,6 +880,7 @@ async fn search_multi_drive_filtered(
                             records_read,
                             matches: 0,
                             error: Some(e.to_string()),
+                            paths_resolved: false,
                         })
                         .await;
                     return;
@@ -813,9 +889,32 @@ async fn search_multi_drive_filtered(
 
             let matches = filtered.height();
 
+            // Add paths using the pre-built resolver (auto-selects parallel for large
+            // DataFrames)
+            let with_paths = if let Some(ref mut resolver) = path_resolver {
+                match resolver.add_path_column_auto(&filtered) {
+                    Ok(df) => df,
+                    Err(e) => {
+                        let _ = tx
+                            .send(DriveResult {
+                                drive: drive_char,
+                                df: None,
+                                records_read,
+                                matches,
+                                error: Some(format!("Failed to add paths: {e}")),
+                                paths_resolved: false,
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            } else {
+                filtered
+            };
+
             // Add drive column
             let df_with_drive = if matches > 0 {
-                match filtered
+                match with_paths
                     .lazy()
                     .with_column(lit(format!("{drive_char}:")).alias("drive"))
                     .collect()
@@ -829,6 +928,7 @@ async fn search_multi_drive_filtered(
                                 records_read,
                                 matches,
                                 error: Some(e.to_string()),
+                                paths_resolved: path_resolver.is_some(),
                             })
                             .await;
                         return;
@@ -845,6 +945,7 @@ async fn search_multi_drive_filtered(
                     records_read,
                     matches,
                     error: None,
+                    paths_resolved: path_resolver.is_some(),
                 })
                 .await;
         });
@@ -931,6 +1032,7 @@ async fn search_multi_drive_filtered(
 async fn search_multi_drive_filtered(
     _drives: &[char],
     _filters: &QueryFilters<'_>,
+    _needs_paths: bool,
 ) -> Result<uffs_mft::DataFrame> {
     bail!("Multi-drive search is only supported on Windows")
 }
@@ -984,6 +1086,7 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
                             records_read: 0,
                             matches: 0,
                             error: Some(e.to_string()),
+                            paths_resolved: false,
                         })
                         .await;
                     return;
@@ -1003,6 +1106,7 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
                             records_read: 0,
                             matches: 0,
                             error: Some(e.to_string()),
+                            paths_resolved: false,
                         })
                         .await;
                     return;
@@ -1022,6 +1126,7 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
                             records_read,
                             matches: 0,
                             error: Some(e.to_string()),
+                            paths_resolved: false,
                         })
                         .await;
                     return;
@@ -1046,6 +1151,7 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
                                 records_read,
                                 matches,
                                 error: Some(e.to_string()),
+                                paths_resolved: false,
                             })
                             .await;
                         return;
@@ -1062,6 +1168,7 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
                     records_read,
                     matches,
                     error: None,
+                    paths_resolved: false,
                 })
                 .await;
         });

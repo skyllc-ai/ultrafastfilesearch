@@ -68,7 +68,13 @@ pub mod tree;
 
 pub use error::{CoreError, Result};
 pub use export::{export_csv, export_json, export_table};
-pub use path_resolver::PathResolver;
+pub use extensions::{ExtensionFilter, ExtensionIndex, ExtensionIndexStats};
+#[allow(deprecated)]
+pub use path_resolver::add_path_column_multi_drive;
+pub use path_resolver::{
+    FastPathResolver, FastPathResolverMultiDrive, FastPathResolverStats, NameArena, PathResolver,
+    add_paths_from_full_data,
+};
 pub use query::MftQuery;
 // Re-export commonly used types
 pub use uffs_mft::{DataFrame, FileFlags, LazyFrame};

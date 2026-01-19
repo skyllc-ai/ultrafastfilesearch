@@ -32,7 +32,7 @@ use crate::platform::VolumeHandle;
 pub enum MftReadMode {
     /// Automatic mode selection based on drive type (default).
     /// - SSD → Parallel
-    /// - HDD → Prefetch
+    /// - HDD → Pipelined
     /// - Unknown → Parallel
     #[default]
     Auto,
@@ -43,8 +43,11 @@ pub enum MftReadMode {
     /// Lower memory usage, good for HDDs.
     Streaming,
     /// Prefetch mode: Double-buffered reads for I/O overlap.
-    /// Best for HDDs - overlaps next read with current parse.
+    /// Good for HDDs - overlaps next read with current parse.
     Prefetch,
+    /// Pipelined mode: True I/O and CPU overlap with separate threads.
+    /// Best for HDDs - reader thread queues chunks while parser processes.
+    Pipelined,
 }
 
 impl MftReadMode {
@@ -56,6 +59,7 @@ impl MftReadMode {
             Self::Parallel => "parallel",
             Self::Streaming => "streaming",
             Self::Prefetch => "prefetch",
+            Self::Pipelined => "pipelined",
         }
     }
 }
@@ -75,8 +79,9 @@ impl core::str::FromStr for MftReadMode {
             "parallel" => Ok(Self::Parallel),
             "streaming" => Ok(Self::Streaming),
             "prefetch" => Ok(Self::Prefetch),
+            "pipelined" | "pipeline" => Ok(Self::Pipelined),
             _ => Err(format!(
-                "Invalid read mode '{s}'. Valid options: auto, parallel, streaming, prefetch"
+                "Invalid read mode '{s}'. Valid options: auto, parallel, streaming, prefetch, pipelined"
             )),
         }
     }
@@ -627,9 +632,11 @@ impl MftReader {
         let effective_mode = match self.mode {
             MftReadMode::Auto => {
                 // Auto-select based on drive type
+                // - SSD: Parallel (read all, parse in parallel)
+                // - HDD: Pipelined (true I/O+CPU overlap)
                 match drive_type {
                     crate::platform::DriveType::Ssd => MftReadMode::Parallel,
-                    crate::platform::DriveType::Hdd => MftReadMode::Prefetch,
+                    crate::platform::DriveType::Hdd => MftReadMode::Pipelined,
                     crate::platform::DriveType::Unknown => MftReadMode::Parallel,
                 }
             }
@@ -706,7 +713,7 @@ impl MftReader {
                 }
             }
             MftReadMode::Prefetch => {
-                // Prefetch mode: double-buffered reads for I/O overlap (best for HDD)
+                // Prefetch mode: double-buffered reads for I/O overlap (good for HDD)
                 let prefetch_reader =
                     crate::io::PrefetchMftReader::new(extent_map, bitmap, drive_type);
 
@@ -732,6 +739,35 @@ impl MftReader {
                     )?
                 } else {
                     prefetch_reader.read_all_prefetch::<fn(u64, u64)>(handle, true, None)?
+                }
+            }
+            MftReadMode::Pipelined => {
+                // Pipelined mode: true I/O+CPU overlap with separate threads (best for HDD)
+                let pipelined_reader =
+                    crate::io::PipelinedMftReader::new(extent_map, bitmap, drive_type);
+
+                if let Some(ref cb) = callback {
+                    let cb_ref = cb;
+                    let start = start_time;
+                    pipelined_reader.read_all_pipelined(
+                        handle,
+                        true,
+                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                            let records_approx = if total_bytes_expected > 0 {
+                                (bytes_read * total_records) / total_bytes_expected
+                            } else {
+                                0
+                            };
+                            cb_ref(MftProgress {
+                                records_read: records_approx,
+                                total_records: Some(total_records),
+                                bytes_read,
+                                elapsed: start.elapsed(),
+                            });
+                        }),
+                    )?
+                } else {
+                    pipelined_reader.read_all_pipelined::<fn(u64, u64)>(handle, true, None)?
                 }
             }
         };

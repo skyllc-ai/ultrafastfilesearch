@@ -46,7 +46,7 @@
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use uffs_core::pattern::ParsedPattern;
 use uffs_core::tree::{TreeColumn, TreeIndex};
-use uffs_core::{MftQuery, PathResolver};
+use uffs_core::{FastPathResolver, MftQuery, PathResolver};
 use uffs_polars::{Column, DataFrame};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -354,6 +354,158 @@ fn bench_path_resolution(c: &mut Criterion) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// FastPathResolver Benchmarks (Vec-based O(1) lookup)
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn bench_fast_path_resolution(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fast_path_resolution");
+
+    for size in [1_000, 10_000, 100_000] {
+        let df = create_test_dataframe(size);
+
+        group.throughput(Throughput::Elements(size as u64));
+
+        // Benchmark building the fast resolver
+        group.bench_with_input(BenchmarkId::new("build", size), &df, |b, df| {
+            b.iter(|| FastPathResolver::build(std::hint::black_box(df), 'C'))
+        });
+
+        // Benchmark resolving paths (with caching)
+        group.bench_with_input(BenchmarkId::new("resolve_cached", size), &df, |b, df| {
+            b.iter_batched(
+                || {
+                    let resolver = FastPathResolver::build(df, 'C').expect("valid resolver");
+                    // Get some FRS values to resolve
+                    let frs_col = df.column("frs").unwrap().u64().unwrap();
+                    let frs_values: Vec<u64> = (0..std::cmp::min(100, df.height()))
+                        .filter_map(|i| frs_col.get(i))
+                        .collect();
+                    (resolver, frs_values)
+                },
+                |(resolver, frs_values): (FastPathResolver, Vec<u64>)| {
+                    for frs in frs_values {
+                        let _ = resolver.resolve(frs);
+                    }
+                },
+                BatchSize::SmallInput,
+            )
+        });
+
+        // Benchmark adding path column to filtered results
+        group.bench_with_input(BenchmarkId::new("add_path_column", size), &df, |b, df| {
+            // Simulate filtered results (10% of original)
+            let filtered_size = size / 10;
+            let filtered_df = create_test_dataframe(filtered_size);
+
+            b.iter_batched(
+                || {
+                    let resolver = FastPathResolver::build(df, 'C').expect("valid resolver");
+                    (resolver, filtered_df.clone())
+                },
+                |(mut resolver, filtered): (FastPathResolver, DataFrame)| {
+                    let _ = resolver.add_path_column(&filtered);
+                },
+                BatchSize::SmallInput,
+            )
+        });
+    }
+
+    group.finish();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HashMap vs Vec Resolver Comparison
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn bench_resolver_comparison(c: &mut Criterion) {
+    let mut group = c.benchmark_group("resolver_comparison");
+    group.sample_size(50);
+
+    // Use 100K rows for meaningful comparison
+    let size = 100_000;
+    let df = create_test_dataframe(size);
+
+    group.throughput(Throughput::Elements(size as u64));
+
+    // Compare build times
+    group.bench_function("hashmap_build", |b| {
+        b.iter(|| PathResolver::build(std::hint::black_box(&df), 'C'))
+    });
+
+    group.bench_function("vec_build", |b| {
+        b.iter(|| FastPathResolver::build(std::hint::black_box(&df), 'C'))
+    });
+
+    // Compare resolve times (100 paths each)
+    let frs_col = df.column("frs").unwrap().u64().unwrap();
+    let frs_values: Vec<u64> = (0..100).filter_map(|i| frs_col.get(i)).collect();
+
+    group.bench_function("hashmap_resolve_100", |b| {
+        b.iter_batched(
+            || PathResolver::build(&df, 'C').expect("valid resolver"),
+            |mut resolver| {
+                for &frs in &frs_values {
+                    let _ = resolver.resolve(frs);
+                }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    group.bench_function("vec_resolve_100", |b| {
+        b.iter_batched(
+            || FastPathResolver::build(&df, 'C').expect("valid resolver"),
+            |resolver| {
+                for &frs in &frs_values {
+                    let _ = resolver.resolve(frs);
+                }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    group.finish();
+}
+
+/// Benchmark parallel vs sequential path resolution.
+fn bench_parallel_path_resolution(c: &mut Criterion) {
+    let mut group = c.benchmark_group("parallel_path_resolution");
+    group.sample_size(20);
+
+    // Use 50K rows - above the parallel threshold
+    let size = 50_000;
+    let df = create_test_dataframe(size);
+
+    group.throughput(Throughput::Elements(size as u64));
+
+    // Sequential resolution
+    group.bench_function("sequential_50k", |b| {
+        b.iter_batched(
+            || {
+                let resolver = FastPathResolver::build(&df, 'C').expect("valid resolver");
+                (resolver, df.clone())
+            },
+            |(mut resolver, df)| resolver.add_path_column(&df),
+            BatchSize::LargeInput,
+        )
+    });
+
+    // Parallel resolution
+    group.bench_function("parallel_50k", |b| {
+        b.iter_batched(
+            || {
+                let resolver = FastPathResolver::build(&df, 'C').expect("valid resolver");
+                (resolver, df.clone())
+            },
+            |(resolver, df)| resolver.add_path_column_parallel(&df),
+            BatchSize::LargeInput,
+        )
+    });
+
+    group.finish();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Criterion Groups
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -371,6 +523,12 @@ criterion_group!(
     bench_tree_column_computation
 );
 
-criterion_group!(path_benches, bench_path_resolution);
+criterion_group!(
+    path_benches,
+    bench_path_resolution,
+    bench_fast_path_resolution,
+    bench_resolver_comparison,
+    bench_parallel_path_resolution
+);
 
 criterion_main!(pattern_benches, query_benches, tree_benches, path_benches);

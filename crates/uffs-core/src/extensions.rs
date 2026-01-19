@@ -1,8 +1,9 @@
-//! Extension filtering and collection aliases.
+//! Extension filtering, collection aliases, and extension indexing.
 //!
 //! Provides extension-based file filtering with support for:
 //! - Individual extensions: `jpg`, `png`, `txt`
 //! - Collection aliases: `pictures`, `documents`, `videos`, `music`
+//! - Extension index for fast `*.ext` queries
 //!
 //! # Examples
 //!
@@ -18,7 +19,11 @@
 
 #![allow(clippy::single_call_fn)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+use uffs_polars::DataFrame;
+
+use crate::error::Result;
 
 /// Predefined extension collections.
 pub mod collections {
@@ -78,7 +83,7 @@ impl ExtensionFilter {
     ///
     /// Returns an error if the input is empty.
     #[allow(clippy::shadow_reuse)]
-    pub fn parse(input: &str) -> Result<Self, &'static str> {
+    pub fn parse(input: &str) -> core::result::Result<Self, &'static str> {
         let trimmed_input = input.trim();
         if trimmed_input.is_empty() {
             return Err("Extension filter cannot be empty");
@@ -159,10 +164,153 @@ impl Default for ExtensionFilter {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ExtensionIndex - Pre-built extension → FRS mapping
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Pre-built index mapping file extensions to FRS values.
+///
+/// This enables O(1) lookup for `*.ext` queries instead of scanning all files.
+///
+/// # Example
+///
+/// ```ignore
+/// let index = ExtensionIndex::build(&df)?;
+/// let txt_files = index.get("txt"); // Returns &[u64] of FRS values
+/// ```
+#[derive(Debug, Clone)]
+pub struct ExtensionIndex {
+    /// Extension (lowercase, no dot) → list of FRS values
+    index: HashMap<String, Vec<u64>>,
+    /// Total number of files indexed
+    total_files: usize,
+}
+
+impl ExtensionIndex {
+    /// Build an extension index from a `DataFrame`.
+    ///
+    /// Requires `frs` and `name` columns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if required columns are missing.
+    pub fn build(df: &DataFrame) -> Result<Self> {
+        let frs_col = df.column("frs")?.u64()?;
+        let name_col = df.column("name")?.str()?;
+
+        let mut index: HashMap<String, Vec<u64>> = HashMap::new();
+        let mut total_files = 0;
+
+        for (frs_opt, name_opt) in frs_col.into_iter().zip(name_col.into_iter()) {
+            let Some(frs) = frs_opt else { continue };
+            let Some(name) = name_opt else { continue };
+
+            total_files += 1;
+
+            // Extract extension
+            if let Some(ext) = Self::extract_extension(name) {
+                index.entry(ext).or_default().push(frs);
+            }
+        }
+
+        Ok(Self { index, total_files })
+    }
+
+    /// Extract lowercase extension from a filename.
+    fn extract_extension(name: &str) -> Option<String> {
+        // Find the last dot
+        let dot_pos = name.rfind('.')?;
+
+        // Must have something after the dot
+        if dot_pos + 1 >= name.len() {
+            return None;
+        }
+
+        // Must not be at the start (hidden files like .gitignore)
+        if dot_pos == 0 {
+            return None;
+        }
+
+        // Use get() for safe slicing - avoids panic on UTF-8 boundary issues
+        // dot_pos is a valid char boundary since rfind returns char positions
+        name.get(dot_pos + 1..).map(str::to_lowercase)
+    }
+
+    /// Get FRS values for a specific extension.
+    ///
+    /// Extension should be lowercase without the leading dot.
+    #[must_use]
+    pub fn get(&self, ext: &str) -> Option<&[u64]> {
+        self.index.get(&ext.to_lowercase()).map(Vec::as_slice)
+    }
+
+    /// Get the number of files with a specific extension.
+    #[must_use]
+    pub fn count(&self, ext: &str) -> usize {
+        self.get(ext).map_or(0, <[u64]>::len)
+    }
+
+    /// Get all indexed extensions.
+    #[must_use]
+    pub fn extensions(&self) -> Vec<&str> {
+        self.index.keys().map(String::as_str).collect()
+    }
+
+    /// Get the total number of files indexed.
+    #[must_use]
+    pub const fn total_files(&self) -> usize {
+        self.total_files
+    }
+
+    /// Get the number of unique extensions.
+    #[must_use]
+    pub fn unique_extensions(&self) -> usize {
+        self.index.len()
+    }
+
+    /// Check if an extension exists in the index.
+    #[must_use]
+    pub fn has_extension(&self, ext: &str) -> bool {
+        self.index.contains_key(&ext.to_lowercase())
+    }
+
+    /// Get statistics about the index.
+    #[must_use]
+    pub fn stats(&self) -> ExtensionIndexStats {
+        let total_indexed: usize = self.index.values().map(Vec::len).sum();
+        let max_count = self.index.values().map(Vec::len).max().unwrap_or(0);
+
+        ExtensionIndexStats {
+            total_files: self.total_files,
+            files_with_extension: total_indexed,
+            unique_extensions: self.index.len(),
+            max_extension_count: max_count,
+        }
+    }
+}
+
+/// Statistics about an extension index.
+#[derive(Debug, Clone)]
+pub struct ExtensionIndexStats {
+    /// Total files scanned.
+    pub total_files: usize,
+    /// Files that have an extension.
+    pub files_with_extension: usize,
+    /// Number of unique extensions.
+    pub unique_extensions: usize,
+    /// Maximum files for any single extension.
+    pub max_extension_count: usize,
+}
+
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::std_instead_of_core)]
 mod tests {
+    use uffs_polars::Column;
+
     use super::*;
+
+    // Use a test-specific Result type that works with CoreError
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
     #[test]
     fn test_parse_single_extension() {
@@ -236,5 +384,97 @@ mod tests {
         let filter = ExtensionFilter::parse("txt").unwrap();
         assert!(!filter.matches("README"));
         assert!(!filter.matches("Makefile"));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ExtensionIndex tests
+    // ═══════════════════════════════════════════════════════════════════════
+
+    fn create_ext_test_df() -> DataFrame {
+        DataFrame::new_infer_height(vec![
+            Column::new("frs".into(), &[1_u64, 2, 3, 4, 5, 6]),
+            Column::new(
+                "name".into(),
+                &[
+                    "photo.jpg",
+                    "document.txt",
+                    "image.jpg",
+                    "README",
+                    "script.py",
+                    "data.txt",
+                ],
+            ),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn test_extension_index_build() -> TestResult {
+        let df = create_ext_test_df();
+        let index = ExtensionIndex::build(&df)?;
+
+        assert_eq!(index.total_files(), 6);
+        assert_eq!(index.unique_extensions(), 3); // jpg, txt, py
+        Ok(())
+    }
+
+    #[test]
+    fn test_extension_index_get() -> TestResult {
+        let df = create_ext_test_df();
+        let index = ExtensionIndex::build(&df)?;
+
+        let jpg_files = index.get("jpg").unwrap();
+        assert_eq!(jpg_files.len(), 2);
+        assert!(jpg_files.contains(&1));
+        assert!(jpg_files.contains(&3));
+
+        let txt_files = index.get("txt").unwrap();
+        assert_eq!(txt_files.len(), 2);
+        assert!(txt_files.contains(&2));
+        assert!(txt_files.contains(&6));
+
+        assert!(index.get("pdf").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_extension_index_case_insensitive() -> TestResult {
+        let df = create_ext_test_df();
+        let index = ExtensionIndex::build(&df)?;
+
+        // Should work with any case
+        assert!(index.get("JPG").is_some());
+        assert!(index.get("Jpg").is_some());
+        assert!(index.get("jpg").is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_extension_index_stats() -> TestResult {
+        let df = create_ext_test_df();
+        let index = ExtensionIndex::build(&df)?;
+
+        let stats = index.stats();
+        assert_eq!(stats.total_files, 6);
+        assert_eq!(stats.files_with_extension, 5); // README has no extension
+        assert_eq!(stats.unique_extensions, 3);
+        assert_eq!(stats.max_extension_count, 2); // jpg and txt both have 2
+        Ok(())
+    }
+
+    #[test]
+    fn test_extension_index_hidden_files() -> TestResult {
+        let df = DataFrame::new_infer_height(vec![
+            Column::new("frs".into(), &[1_u64, 2, 3]),
+            Column::new("name".into(), &[".gitignore", ".bashrc", "file.txt"]),
+        ])?;
+
+        let index = ExtensionIndex::build(&df)?;
+
+        // Hidden files should not be indexed as extensions
+        assert!(index.get("gitignore").is_none());
+        assert!(index.get("bashrc").is_none());
+        assert!(index.get("txt").is_some());
+        Ok(())
     }
 }

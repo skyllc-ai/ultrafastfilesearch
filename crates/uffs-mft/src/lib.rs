@@ -60,6 +60,9 @@ use bitflags as _;
 // Dev-dependencies (used in benchmarks only)
 #[cfg(test)]
 use criterion as _;
+// Pipelining dependencies (used in io.rs PipelinedMftReader)
+#[cfg(not(windows))]
+use crossbeam_channel as _;
 #[cfg(not(windows))]
 use rayon as _;
 #[cfg(not(windows))]
@@ -103,9 +106,9 @@ pub use flags::FileFlags;
 #[cfg(windows)]
 pub use io::{
     AlignedBuffer, BatchMftReader, ExtensionAttributes, MftExtentMap, MftRecordMerger,
-    MftRecordReader, ParallelMftReader, ParseResult, ParsedRecord, PrefetchMftReader, ReadChunk,
-    StreamingMftReader, apply_fixup, generate_read_chunks, parse_record_full,
-    parse_record_zero_alloc,
+    MftRecordReader, ParallelMftReader, ParseResult, ParsedColumns, ParsedRecord,
+    PipelinedMftReader, PrefetchMftReader, ReadChunk, StreamingMftReader, apply_fixup,
+    generate_read_chunks, parse_record_full, parse_record_zero_alloc,
 };
 // Re-export NTFS constants
 #[cfg(windows)]

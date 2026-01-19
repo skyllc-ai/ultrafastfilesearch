@@ -39,6 +39,10 @@ pub enum CoreError {
     #[error("Failed to resolve path for FRS {0}")]
     PathResolution(u64),
 
+    /// Missing required column.
+    #[error("Missing required column: {0}")]
+    MissingColumn(String),
+
     /// Circular reference detected during path resolution.
     #[error("Circular reference detected at FRS {0}")]
     CircularReference(u64),

@@ -407,6 +407,16 @@ impl OutputConfig {
             .is_some_and(|cols| cols.contains(&OutputColumn::Descendants))
     }
 
+    /// Check if the path column is requested.
+    ///
+    /// The path column requires resolution from FRS + `parent_frs`.
+    #[must_use]
+    pub fn needs_path_column(&self) -> bool {
+        self.columns.as_ref().is_some_and(|cols| {
+            cols.contains(&OutputColumn::Path) || cols.contains(&OutputColumn::PathOnly)
+        })
+    }
+
     /// Check if any tree-derived columns are requested.
     #[must_use]
     pub fn needs_tree_columns(&self) -> bool {

@@ -56,6 +56,7 @@ dirs-next.workspace = true
 chrono.workspace = true
 hostname = "0.4.2"
 num_cpus.workspace = true
+crossbeam-channel = "0.5.15"
 
 # Windows APIs (Windows only)
 [target.'cfg(windows)'.dependencies]

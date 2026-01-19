@@ -37,8 +37,25 @@ crates/
 | 3.5 | **Directory Tree Structure** | uffs-core | - | 🟢 Complete | 100% |
 | 4 | CLI & Performance | uffs-cli | Week 16 | 🟢 Complete | 100% |
 | 5 | TUI & Polish | uffs-tui | Week 21 | 🟢 Complete | 95% |
+| **6** | **Performance Optimization** | uffs-mft, uffs-core | Week 31 | ⬜ Not Started | 0% |
 
 **Legend**: ⬜ Not Started | 🟡 In Progress | 🟢 Complete | 🔴 Blocked
+
+### Phase 6 Goal: "Faster Than C++"
+
+Phase 6 focuses on making the Rust implementation **2-5x faster than C++** through:
+- **Pipelined I/O** ⭐ (2x speedup, 250x memory reduction) - overlap I/O and CPU work
+- Arena-based name storage (eliminate allocations)
+- Vector-based FRS lookup (O(1) direct indexing)
+- In-place path building (append-reverse strategy)
+- Direct-to-column parsing (skip intermediate structs)
+- SIMD pattern matching (AVX2/AVX-512)
+
+**Key Insight**: The C++ code uses Windows IOCP to pipeline I/O and parsing. When a read
+completes, it immediately queues the next read BEFORE processing the current buffer.
+This ensures disk and CPU are never idle, achieving near-perfect overlap.
+
+See [MFT Architecture Deep Dive](architecture/MFT_ARCHITECTURE_DEEP_DIVE.md) for detailed analysis.
 
 ### Architecture Separation
 
@@ -418,6 +435,239 @@ The implementation matches the C++ reference for performance with these key comp
 
 ---
 
+## Phase 6: Performance Optimization - "Faster Than C++" (Weeks 22-31)
+
+**Goal**: Make Rust implementation 2-5x faster than C++ through architectural optimizations
+**Crates**: `uffs-mft`, `uffs-core`
+**Target Date**: Week 31
+**Status**: 🟡 In Progress
+**Reference**: [MFT Architecture Deep Dive](architecture/MFT_ARCHITECTURE_DEEP_DIVE.md)
+
+### 🎉 IMPORTANT: MFT Reader is Already Highly Optimized!
+
+Before diving into optimizations, note that **`uffs-mft` is already 55% faster** than v0.1.30:
+
+| Drive | v0.1.30 (Before) | v0.1.39 (Current) | Improvement |
+|-------|------------------|-------------------|-------------|
+| SSD C: | 11.3s | **3.1s** | **73% faster** |
+| HDD S: | 160.6s | **45.9s** | **71% faster** |
+| Total (7 drives) | 315s | **142s** | **55% faster** |
+
+**What's Already Done in `uffs-mft`:**
+- ✅ Bitmap-based cluster skipping (skip free records)
+- ✅ Rayon fold/reduce parallel parsing
+- ✅ SoA layout (`ParsedColumns`)
+- ✅ `PrefetchMftReader` for HDDs (double-buffered I/O)
+- ✅ `ParallelMftReader` for SSDs (8MB chunks)
+- ✅ Drive-type auto-detection
+
+**The Real Bottleneck is in `uffs-core`:**
+- ✅ Path resolution FIXED (FastPathResolver with Vec-based O(1) lookup)
+- ❌ No SIMD pattern matching
+- ❌ No early termination for `--limit`
+
+### Background
+
+Analysis of the C++ implementation revealed key architectural differences that explain its speed:
+- **Contiguous memory**: All data in vectors, not scattered heap allocations
+- **Direct indexing**: `vector[frs]` instead of HashMap lookups
+- **Packed structures**: Minimal memory footprint, cache-friendly
+- **In-place operations**: Reuse buffers, avoid allocations
+- **Single-pass processing**: Parse during read, not after
+
+### Current Performance Gap
+
+| Metric | C++ | Rust (Current) | Target |
+|--------|-----|----------------|--------|
+| `*.txt` search time | ~43.6s | ~56.1s | <20s |
+| Files found | 735K | ~200K (bug) | 735K+ |
+| Memory per file | ~64 bytes | ~200+ bytes | <50 bytes |
+| Path resolution | O(1) array | O(1) HashMap* | O(1) array |
+
+*HashMap has significant constant factor overhead vs direct array indexing.
+
+### Phase 6.0: Benchmark Infrastructure (Week 21) 📊 NEW
+**Goal**: Establish baseline measurements and automated comparison tools.
+**Status**: 🟡 In Progress
+
+| ID | Deliverable | Owner | Status | Notes |
+|----|-------------|-------|--------|-------|
+| 6.0.1 | `just bench-vs-cpp` command | - | 🟢 | Compare Rust vs C++ (`~/bin/uffs.com`) |
+| 6.0.2 | `just bench-micro` command | - | 🟢 | Run criterion micro-benchmarks |
+| 6.0.3 | `just bench-search` command | - | 🟢 | End-to-end search benchmark |
+| 6.0.4 | Fill in MFT reading benchmarks | - | ⬜ | Replace placeholder in `mft_read.rs` |
+| 6.0.5 | Fill in query benchmarks | - | ⬜ | Replace placeholder in `query.rs` |
+| 6.0.6 | Add `resolve_path()` benchmark | - | ⬜ | Measure path resolution performance |
+| 6.0.7 | Baseline tracking | - | 🟢 | `benchmarks/baseline.json` |
+
+### Phase 6.1: Foundation (Week 22-23) ⭐ CRITICAL ✅ COMPLETE
+**Goal**: Fix correctness issues and establish baseline.
+**Status**: 🟢 Complete
+
+| ID | Deliverable | Owner | Status | Notes |
+|----|-------------|-------|--------|-------|
+| 6.1.1 | Fix PathResolver bug | - | 🟢 | Build from FULL MFT data before filtering |
+| 6.1.2 | Add benchmark suite | - | 🟢 | criterion benchmarks for key operations |
+| 6.1.3 | Profile current code | - | ⬜ | flamegraph, heaptrack analysis |
+| 6.1.4 | Establish baseline metrics | - | 🟢 | `just bench-vs-cpp` provides this |
+
+**Completed:**
+- `FastPathResolver` with Vec-based O(1) lookup (replaces HashMap)
+- `NameArena` for contiguous name storage
+- Search pipeline builds resolver from FULL MFT before filtering
+- 10 unit tests for path resolution
+- Benchmark comparison: HashMap vs Vec resolver
+
+### Phase 6.2: Memory Architecture (Week 24-25) ✅ COMPLETE
+**Goal**: Eliminate allocation overhead.
+**Status**: 🟢 Complete (merged with Phase 6.1)
+
+| ID | Deliverable | Owner | Status | Notes |
+|----|-------------|-------|--------|-------|
+| 6.2.1 | Implement `NameArena` | - | 🟢 | Single buffer for all names |
+| 6.2.2 | Implement `NameRef` | - | 🟢 | offset + length via FastEntry |
+| 6.2.3 | Replace HashMap with Vec | - | 🟢 | Direct FRS indexing in FastPathResolver |
+| 6.2.4 | In-place path building | - | 🟢 | Append-reverse strategy (like C++) |
+| 6.2.5 | Add NameRef to ParsedColumns | - | ⬜ | Future: Reference instead of String clone |
+
+**Expected Impact**: 2-3x speedup from reduced allocations.
+
+### Phase 6.3: Parsing Optimization (Week 26-27)
+**Goal**: Reduce parsing overhead.
+
+| ID | Deliverable | Owner | Status | Notes |
+|----|-------------|-------|--------|-------|
+| 6.3.1 | Direct-to-column parsing | - | ⬜ | Skip intermediate ParsedRecord |
+| 6.3.2 | Lazy attribute parsing | - | ⬜ | Only parse what's needed for query |
+| 6.3.3 | Bit-packed attributes | - | ⬜ | Single u32 for all 18 flags |
+| 6.3.4 | Compact record format | - | ⬜ | ~56 bytes vs ~200+ bytes |
+
+**Expected Impact**: 1.3-1.5x speedup from reduced overhead.
+
+### Phase 6.4: True Pipelining (Week 28-29) ✅ COMPLETE
+**Goal**: Overlap I/O and CPU work for additional HDD speedup.
+**Status**: 🟢 Complete
+
+> **Implementation:** `PipelinedMftReader` uses `crossbeam-channel` bounded channels
+> to overlap I/O and CPU work. Reader thread queues chunks while parser thread processes.
+> Auto mode now selects `Pipelined` for HDDs instead of `Prefetch`.
+
+**Architecture:**
+```
+Reader Thread ──▶ [Bounded Channel] ──▶ Parser Thread
+     │                                        │
+     ▼                                        ▼
+ Read chunks                            Parse records
+ as fast as                             as they arrive
+ possible                               (with Rayon)
+```
+
+| ID | Deliverable | Owner | Status | Notes |
+|----|-------------|-------|--------|-------|
+| 6.4.1 | Channel-based pipeline | - | 🟢 | `crossbeam-channel` bounded channels |
+| 6.4.2 | Reader thread(s) | - | 🟢 | Dedicated thread queues reads |
+| 6.4.3 | Parser thread(s) | - | 🟢 | Main thread parses with MftRecordMerger |
+| 6.4.4 | Backpressure handling | - | 🟢 | Bounded channel (depth=3) prevents memory explosion |
+| 6.4.5 | Multi-extent parallelism | - | ⬜ | Future: One reader per MFT extent |
+
+**Expected Impact (HDDs only)**:
+- **20-35% additional speedup** on HDDs where I/O time ≈ CPU time
+- **True overlap**: `Time = max(I/O, CPU)` instead of `Time = I/O + CPU`
+
+### Phase 6.5: I/O Tuning (Week 30-31) ✅ MOSTLY DONE
+**Goal**: Maximize disk throughput.
+**Status**: 🟢 Mostly Complete (via `PrefetchMftReader` and `ParallelMftReader`)
+
+| ID | Deliverable | Owner | Status | Notes |
+|----|-------------|-------|--------|-------|
+| 6.5.1 | Adaptive read sizing | - | 🟢 | `MftReadMode::Auto` detects SSD vs HDD |
+| 6.5.2 | MFT bitmap optimization | - | 🟢 | Bitmap-based cluster skipping implemented |
+| 6.5.3 | Prefetch optimization | - | 🟢 | `PrefetchMftReader` with double-buffering |
+| 6.5.4 | Memory-mapped I/O option | - | ⬜ | Optional: For SSDs with sufficient RAM |
+
+**Already Achieved**: 55% faster than v0.1.30, 1,839 MB/s on SSDs.
+
+### Phase 6.6: Query Optimization (Week 32-33) ✅ COMPLETE
+**Goal**: Accelerate pattern matching.
+**Status**: 🟢 Complete (except SIMD which is deferred)
+
+| ID | Deliverable | Owner | Status | Notes |
+|----|-------------|-------|--------|-------|
+| 6.6.1 | SIMD pattern matching | - | ⬜ | AVX2/AVX-512 for wildcards (deferred) |
+| 6.6.2 | Early termination | - | 🟢 | Streaming mode has early termination |
+| 6.6.3 | Parallel path resolution | - | 🟢 | `add_path_column_parallel()` with Rayon |
+| 6.6.4 | Extension index | - | 🟢 | `ExtensionIndex` for fast `*.ext` queries |
+
+**Expected Impact**: 1.2-1.5x speedup for pattern matching.
+
+### Acceptance Criteria
+
+- [x] PathResolver correctly resolves ALL files (matches C++ output)
+- [x] Benchmark suite covers all critical paths
+- [ ] `*.txt` search completes in <20s (vs C++ ~43.6s)
+- [ ] Memory usage <50 bytes per file (vs current ~200+)
+- [x] All existing tests continue to pass (77 tests)
+- [ ] Performance regression tests in CI
+
+### Performance Targets
+
+| Optimization | Expected Speedup | Cumulative |
+|--------------|------------------|------------|
+| Fix PathResolver | 1.0x (correctness) | 1.0x |
+| NameArena | 2-3x | 2-3x |
+| Vec-based lookup | 1.5-2x | 3-6x |
+| In-place path building | 1.5-2x | 4.5-12x |
+| Direct parsing | 1.3-1.5x | 6-18x |
+| **Pipelined I/O** ⭐ | **2x** | **12-36x** |
+| SIMD matching | 1.2-1.5x | 14-54x |
+
+**Conservative estimate**: 10-15x faster than current Rust
+**Optimistic estimate**: 25-50x faster than current Rust
+**Target**: 2-5x faster than C++
+
+### Memory Targets
+
+| Approach | Memory for 1M files |
+|----------|---------------------|
+| Current Rust | ~1GB (entire MFT) |
+| Pipelined Rust | ~4MB (4 × 1MB buffers) |
+| **Reduction** | **250x** |
+
+### Key Data Structures
+
+```rust
+// Arena-based name storage (like C++ std::tvstring)
+pub struct NameArena {
+    buffer: String,  // All names concatenated
+}
+
+pub struct NameRef {
+    offset: u32,     // Offset into arena
+    length: u16,     // Name length
+    is_ascii: bool,  // ASCII compression flag
+}
+
+// Fast path resolver (like C++ RecordsLookup)
+pub struct FastPathResolver {
+    entries: Vec<Option<(u32, NameRef)>>,  // Index = FRS
+    names: NameArena,
+    volume: char,
+}
+
+// Compact record (like C++ Record)
+pub struct CompactRecord {
+    pub frs: u64,
+    pub parent_frs: u32,      // u32 sufficient (like C++)
+    pub name_ref: NameRef,    // 8 bytes
+    pub size: u64,
+    pub attributes: u32,      // Bit-packed flags
+    pub timestamps: [i64; 4], // Inline array
+}
+// Total: ~56 bytes vs current ~200+ bytes
+```
+
+---
+
 ## Risk Register
 
 | ID | Risk | Impact | Probability | Mitigation | Status |
@@ -458,6 +708,8 @@ Phase 3 (uffs-core Processing with Polars)
 Phase 4 (uffs-cli & Performance)
     ↓
 Phase 5 (uffs-tui & Polish)
+    ↓
+Phase 6 (Performance Optimization - "Faster Than C++")
 ```
 
 ---
@@ -496,6 +748,7 @@ Phase 5 (uffs-tui & Polish)
 | 2026-01-16 | **Implementation complete** | All core crates implemented |
 | 2026-01-16 | **High-performance MFT reading** | Parallel processing (Rayon), batch I/O, cluster-level bitmap skipping, fragmented MFT support |
 | 2026-01-16 | **Phase 3.5: Directory Tree Structure** | `TreeIndex` with memoized metrics: descendants, treesize, tree_allocated, bulkiness |
+| 2026-01-19 | **Phase 6: Performance Optimization** | Deep dive analysis of C++ vs Rust architecture; roadmap to make Rust 2-5x faster than C++ |
 
 ---
 
