@@ -4396,9 +4396,10 @@ checksum = "2896d95c02a80c6d6a5d6e953d479f5ddf2dfdb6a244441010e373ac0fb88971"
 
 [[package]]
 name = "uffs-cli"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "dirs-next",
  "indicatif",
@@ -4409,11 +4410,12 @@ dependencies = [
  "tracing-subscriber",
  "uffs-core",
  "uffs-mft",
+ "uffs-polars",
 ]
 
 [[package]]
 name = "uffs-core"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "criterion",
  "rayon",
@@ -4426,7 +4428,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-gui"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "clap",
@@ -4442,7 +4444,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-legacy"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "bitflags 2.10.0",
@@ -4471,7 +4473,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-mft"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "bitflags 2.10.0",
@@ -4495,14 +4497,14 @@ dependencies = [
 
 [[package]]
 name = "uffs-polars"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "polars",
 ]
 
 [[package]]
 name = "uffs-tui"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "clap",

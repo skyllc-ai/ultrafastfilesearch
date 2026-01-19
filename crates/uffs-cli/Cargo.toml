@@ -46,6 +46,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 dirs-next.workspace = true
+uffs-polars = { version = "0.2.9", path = "../uffs-polars" }
+chrono.workspace = true
 
 # Memory allocator (Windows only - reduces fragmentation)
 [target.'cfg(windows)'.dependencies]

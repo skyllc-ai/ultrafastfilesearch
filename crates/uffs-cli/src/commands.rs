@@ -13,9 +13,48 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
+#[cfg(windows)]
+use indicatif::MultiProgress;
 use indicatif::{ProgressBar, ProgressStyle};
 use tracing::info;
 use uffs_core::extensions::ExtensionFilter;
+
+/// Check if progress bars are disabled via `UFFS_NO_PROGRESS=1` environment
+/// variable.
+#[cfg(windows)]
+#[inline]
+fn is_progress_disabled() -> bool {
+    std::env::var("UFFS_NO_PROGRESS")
+        .map(|val| val == "1" || val.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Create a multi-progress container for multiple drives.
+/// Returns `None` if progress is disabled via `UFFS_NO_PROGRESS=1`.
+#[cfg(windows)]
+fn create_multi_progress() -> Option<MultiProgress> {
+    if is_progress_disabled() {
+        None
+    } else {
+        Some(MultiProgress::new())
+    }
+}
+
+/// Add a drive progress bar to a multi-progress container.
+#[cfg(windows)]
+fn add_drive_progress(multi_progress: &MultiProgress, drive: char) -> ProgressBar {
+    let progress_bar = multi_progress.add(ProgressBar::new(0));
+    let template = format!(
+        "{{spinner:.cyan}} [{drive}:] [{{elapsed_precise}}] {{bar:30.cyan/blue}} {{bytes}}/{{total_bytes}} ({{eta}})"
+    );
+    progress_bar.set_style(
+        ProgressStyle::default_bar()
+            .template(&template)
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("━━╸"),
+    );
+    progress_bar
+}
 
 /// Streaming output writer for multi-drive search.
 ///
@@ -187,8 +226,8 @@ impl<W: Write> StreamingWriter<W> {
 
 /// Format a cell value for CSV output.
 #[cfg(windows)]
-fn format_cell_value(col: &uffs_mft::polars::prelude::Column, row_idx: usize) -> String {
-    use uffs_mft::polars::prelude::*;
+fn format_cell_value(col: &uffs_polars::Column, row_idx: usize) -> String {
+    use uffs_polars::{AnyValue, TimeUnit};
 
     let val = col.get(row_idx);
     match val {
@@ -212,8 +251,8 @@ fn format_cell_value(col: &uffs_mft::polars::prelude::Column, row_idx: usize) ->
 
 /// Format a cell value for JSON output.
 #[cfg(windows)]
-fn format_json_value(col: &uffs_mft::polars::prelude::Column, row_idx: usize) -> String {
-    use uffs_mft::polars::prelude::*;
+fn format_json_value(col: &uffs_polars::Column, row_idx: usize) -> String {
+    use uffs_polars::{AnyValue, TimeUnit};
 
     let val = col.get(row_idx);
     match val {
@@ -911,7 +950,7 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
     writer: W,
 ) -> Result<()> {
     use tokio::sync::mpsc;
-    use uffs_mft::lit;
+    use uffs_mft::{IntoLazy, col, lit};
 
     if drives.is_empty() {
         bail!("No drives specified for multi-drive search");
@@ -1060,7 +1099,7 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
                 .collect();
             let columns: Vec<_> = std::iter::once("drive".to_string())
                 .chain(column_names)
-                .map(|s| uffs_mft::col(&s))
+                .map(|s| col(&s))
                 .collect();
 
             if let Ok(reordered) = df.clone().lazy().select(columns).collect() {

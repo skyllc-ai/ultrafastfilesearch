@@ -23,6 +23,8 @@
 //! RUST_LOG=trace RUST_LOG_FILE=trace uffs search *.txt
 //! ```
 
+// Dependencies used in commands.rs for streaming output (Windows-only code
+// paths)
 use std::io::stdout;
 use std::path::PathBuf;
 
@@ -35,6 +37,7 @@ use mimalloc::MiMalloc;
 use tracing_subscriber::fmt::time::UtcTime;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Layer};
+use {chrono as _, uffs_polars as _};
 
 #[cfg(target_os = "windows")]
 #[global_allocator]
