@@ -49,6 +49,9 @@ use clap::{Parser, Subcommand};
 // Dev-dependencies (used in benchmarks only)
 #[cfg(test)]
 use criterion as _;
+// Pipelining dependencies (used in io.rs PipelinedMftReader on Windows)
+#[cfg(windows)]
+use crossbeam_channel as _;
 // Platform-gated dependencies (used on Windows only)
 #[cfg(not(windows))]
 use indicatif as _;
@@ -72,9 +75,6 @@ use uffs_mft::MftReader;
 #[cfg(feature = "zstd")]
 use zstd as _;
 use {bitflags as _, rayon as _, thiserror as _, uffs_polars as _};
-// Pipelining dependencies (used in io.rs PipelinedMftReader on Windows)
-#[cfg(windows)]
-use crossbeam_channel as _;
 // Benchmark dependencies (used by bench/bench-all commands on Windows)
 #[cfg(not(windows))]
 use {chrono as _, hostname as _, num_cpus as _};

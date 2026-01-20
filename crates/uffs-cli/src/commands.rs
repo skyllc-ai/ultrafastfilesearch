@@ -129,6 +129,8 @@ impl<W: Write> StreamingWriter<W> {
                 }
                 write!(writer, "\"{name}\"")?;
             }
+            // C++ outputs header followed by empty line
+            writeln!(writer)?;
             writeln!(writer)?;
         }
 
@@ -231,13 +233,27 @@ impl<W: Write> StreamingWriter<W> {
 /// Format a cell value for CSV output.
 #[cfg(windows)]
 fn format_cell_value(col: &uffs_polars::Column, row_idx: usize) -> String {
-    use uffs_polars::{AnyValue, TimeUnit};
+    use uffs_polars::{AnyValue, DataType, TimeUnit};
 
     let val = col.get(row_idx);
     match val {
-        Ok(AnyValue::Null) => String::new(),
+        Ok(AnyValue::Null) => {
+            // C++ outputs "0" for null numeric/boolean values, empty for strings
+            match col.dtype() {
+                DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::Boolean => "0".to_owned(),
+                _ => String::new(),
+            }
+        }
         Ok(AnyValue::String(s)) => format!("\"{}\"", s.replace('"', "\"\"")),
-        Ok(AnyValue::Boolean(b)) => if b { "1" } else { "0" }.to_string(),
+        Ok(AnyValue::Boolean(b)) => if b { "1" } else { "0" }.to_owned(),
         Ok(AnyValue::Datetime(ts, TimeUnit::Microseconds, _)) => {
             // Convert microseconds to datetime string
             let secs = ts / 1_000_000;

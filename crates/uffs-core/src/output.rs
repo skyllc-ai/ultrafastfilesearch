@@ -276,6 +276,52 @@ impl OutputColumn {
             _ => None,
         }
     }
+
+    /// Get the default value for this column when it's missing from the
+    /// `DataFrame`.
+    ///
+    /// Numeric and boolean columns return "0" to match C++ output behavior.
+    /// String and timestamp columns return empty string.
+    #[must_use]
+    pub const fn default_value(&self) -> &'static str {
+        match self {
+            // Numeric columns default to "0"
+            // Boolean columns default to "0" (false)
+            Self::Size
+            | Self::SizeOnDisk
+            | Self::Descendants
+            | Self::TreeSize
+            | Self::TreeAllocated
+            | Self::Bulkiness
+            | Self::Attributes
+            | Self::Hidden
+            | Self::System
+            | Self::Archive
+            | Self::ReadOnly
+            | Self::Compressed
+            | Self::Encrypted
+            | Self::Sparse
+            | Self::Reparse
+            | Self::Offline
+            | Self::NotIndexed
+            | Self::DirectoryFlag
+            | Self::Temporary
+            | Self::Virtual
+            | Self::Pinned
+            | Self::Unpinned
+            | Self::Integrity
+            | Self::NoScrub => "0",
+            // String and timestamp columns default to empty
+            Self::Path
+            | Self::Name
+            | Self::PathOnly
+            | Self::Type
+            | Self::AttributeValue
+            | Self::Created
+            | Self::Modified
+            | Self::Accessed => "",
+        }
+    }
 }
 
 /// Output configuration for customizable formatting.
@@ -463,7 +509,9 @@ impl OutputConfig {
                 .iter()
                 .map(|col| format!("{}{}{}", self.quote, col.display_name(), self.quote))
                 .collect();
+            // C++ outputs header followed by empty line
             writeln!(writer, "{}", header_names.join(&self.separator))?;
+            writeln!(writer)?;
         }
 
         // Write data rows
@@ -476,8 +524,9 @@ impl OutputConfig {
                     let value = self.format_value(series, row_idx);
                     row_values.push(value);
                 } else {
-                    // Column not in DataFrame - output empty value
-                    row_values.push(String::new());
+                    // Column not in DataFrame - use appropriate default
+                    // Numeric columns (like Descendants) should show "0" to match C++
+                    row_values.push(col.default_value().to_owned());
                 }
             }
 
@@ -516,9 +565,13 @@ impl OutputConfig {
                     String::new()
                 }
             }
-            DataType::UInt64 | DataType::Int64 | DataType::UInt32 | DataType::Int32 => series
-                .get(row_idx)
-                .map_or(String::new(), |val| val.to_string()),
+            DataType::UInt64 | DataType::Int64 | DataType::UInt32 | DataType::Int32 => {
+                // C++ outputs "0" for null numeric values, not empty string
+                match series.get(row_idx) {
+                    Ok(AnyValue::Null) | Err(_) => "0".to_owned(),
+                    Ok(val) => val.to_string(),
+                }
+            }
             DataType::Datetime(TimeUnit::Microseconds, _) => {
                 // Convert UTC timestamp to local time (matching C++ output)
                 if let Ok(AnyValue::Datetime(ts, TimeUnit::Microseconds, _)) = series.get(row_idx) {
@@ -531,8 +584,8 @@ impl OutputConfig {
                     if let Some(utc_dt) = chrono::DateTime::from_timestamp(secs, micros * 1000) {
                         // Convert to local time
                         let local_dt = Local.from_utc_datetime(&utc_dt.naive_utc());
-                        // Format with microseconds (keeping millisecond precision as requested)
-                        local_dt.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
+                        // Format WITHOUT subseconds to match C++ output exactly
+                        local_dt.format("%Y-%m-%d %H:%M:%S").to_string()
                     } else {
                         String::new()
                     }
