@@ -214,6 +214,13 @@ enum Commands {
         /// links/ADS) are skipped for ~15-25% faster reads.
         #[arg(long)]
         full: bool,
+
+        /// Output one row per unique FRS instead of expanding hard links.
+        /// By default, hard links are expanded to separate rows (matching
+        /// C++/Explorer). Use this flag for power users who want to
+        /// count unique files, not paths.
+        #[arg(long)]
+        unique: bool,
     },
 
     /// Show MFT information for a drive
@@ -225,6 +232,19 @@ enum Commands {
         /// Perform deep scan (reads all MFT records for detailed statistics)
         #[arg(long)]
         deep: bool,
+
+        /// Disable bitmap optimization (read ALL records, not just in-use
+        /// ones). Use this to debug if bitmap is causing records to be
+        /// skipped incorrectly.
+        #[arg(long)]
+        no_bitmap: bool,
+
+        /// Output one row per unique FRS instead of expanding hard links.
+        /// By default, hard links are expanded to separate rows (matching
+        /// C++/Explorer). Use this flag for power users who want to
+        /// count unique files, not paths.
+        #[arg(long)]
+        unique: bool,
     },
 
     /// List all available NTFS drives
@@ -463,8 +483,14 @@ async fn run() -> Result<()> {
                 output,
                 mode,
                 full,
-            } => cmd_read(drive, output, &mode, full).await,
-            Commands::Info { drive, deep } => cmd_info(drive, deep).await,
+                unique,
+            } => cmd_read(drive, output, &mode, full, unique).await,
+            Commands::Info {
+                drive,
+                deep,
+                no_bitmap,
+                unique,
+            } => cmd_info(drive, deep, no_bitmap, unique).await,
             Commands::Drives => cmd_drives().await,
             Commands::Bench {
                 drive,
@@ -497,7 +523,13 @@ async fn run() -> Result<()> {
 }
 
 #[cfg(windows)]
-async fn cmd_read(drive: char, output: PathBuf, mode_str: &str, full: bool) -> Result<()> {
+async fn cmd_read(
+    drive: char,
+    output: PathBuf,
+    mode_str: &str,
+    full: bool,
+    unique: bool,
+) -> Result<()> {
     use std::time::Instant;
 
     use tracing::debug;
@@ -514,7 +546,9 @@ async fn cmd_read(drive: char, output: PathBuf, mode_str: &str, full: bool) -> R
         output = %output.display(),
         mode = %mode,
         full,
-        "📂 Starting MFT read operation"
+        unique,
+        "📂 Starting MFT read operation{}",
+        if unique { " (unique FRS mode)" } else { " (expanding hard links)" }
     );
 
     let pb = ProgressBar::new_spinner();
@@ -532,7 +566,8 @@ async fn cmd_read(drive: char, output: PathBuf, mode_str: &str, full: bool) -> R
         .await
         .with_context(|| format!("Failed to open drive {}:", drive))?
         .with_mode(mode)
-        .with_merge_extensions(full);
+        .with_merge_extensions(full)
+        .with_expand_links(!unique); // unique=true means don't expand
 
     info!(
         drive = %drive_upper,
@@ -602,7 +637,7 @@ async fn cmd_read(drive: char, output: PathBuf, mode_str: &str, full: bool) -> R
 }
 
 #[cfg(windows)]
-async fn cmd_info(drive: char, deep: bool) -> Result<()> {
+async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: bool) -> Result<()> {
     use std::time::Instant;
 
     use tracing::debug;
@@ -613,8 +648,12 @@ async fn cmd_info(drive: char, deep: bool) -> Result<()> {
     info!(
         drive = %drive_upper,
         deep,
-        "📊 Retrieving MFT information{}",
-        if deep { " (deep scan)" } else { "" }
+        no_bitmap,
+        unique,
+        "📊 Retrieving MFT information{}{}{}",
+        if deep { " (deep scan)" } else { "" },
+        if no_bitmap { " (bitmap disabled)" } else { "" },
+        if unique { " (unique FRS mode)" } else { "" }
     );
 
     debug!(drive = %drive_upper, "🔓 Opening volume handle");
@@ -824,12 +863,22 @@ async fn cmd_info(drive: char, deep: bool) -> Result<()> {
 
     // Deep scan: read all MFT records for detailed statistics
     if deep {
-        println!("📊 DEEP SCAN: Reading all MFT records...");
+        println!(
+            "📊 DEEP SCAN: Reading all MFT records{}{}...",
+            if no_bitmap { " (bitmap disabled)" } else { "" },
+            if unique {
+                " (unique FRS mode)"
+            } else {
+                " (expanding hard links)"
+            }
+        );
         println!();
 
         let reader = MftReader::open(drive)
             .await
-            .with_context(|| format!("Failed to open drive {}:", drive))?;
+            .with_context(|| format!("Failed to open drive {}:", drive))?
+            .with_use_bitmap(!no_bitmap)
+            .with_expand_links(!unique); // unique=true means don't expand
 
         let df = reader
             .read_all()
@@ -865,18 +914,61 @@ async fn cmd_info(drive: char, deep: bool) -> Result<()> {
         let readonly_count = count_bool("is_readonly");
         let archive_count = count_bool("is_archive");
 
-        // Count multi-stream and multi-name files
-        let multi_stream_count = df
+        // Count multi-stream and multi-name files, and total names/streams
+        let (multi_stream_count, total_stream_count) = df
             .column("stream_count")
             .ok()
             .and_then(|c| c.u16().ok())
-            .map(|s| s.iter().filter(|v| v.is_some_and(|x| x > 1)).count() as u64)
-            .unwrap_or(0);
-        let multi_name_count = df
+            .map(|s| {
+                let mut multi = 0u64;
+                let mut total = 0u64;
+                for v in s.iter().flatten() {
+                    total += v as u64;
+                    if v > 1 {
+                        multi += 1;
+                    }
+                }
+                (multi, total)
+            })
+            .unwrap_or((0, 0));
+        let (multi_name_count, total_name_count) = df
             .column("name_count")
             .ok()
             .and_then(|c| c.u16().ok())
-            .map(|s| s.iter().filter(|v| v.is_some_and(|x| x > 1)).count() as u64)
+            .map(|s| {
+                let mut multi = 0u64;
+                let mut total = 0u64;
+                for v in s.iter().flatten() {
+                    total += v as u64;
+                    if v > 1 {
+                        multi += 1;
+                    }
+                }
+                (multi, total)
+            })
+            .unwrap_or((0, 0));
+
+        // Calculate C++ equivalent count (names × streams per record)
+        // This is what C++ outputs: one row per (name, stream) combination
+        let cpp_equivalent_count = df
+            .column("name_count")
+            .ok()
+            .and_then(|c| c.u16().ok())
+            .and_then(|names| {
+                df.column("stream_count")
+                    .ok()
+                    .and_then(|c| c.u16().ok())
+                    .map(|streams| {
+                        names
+                            .iter()
+                            .zip(streams.iter())
+                            .filter_map(|(n, s)| match (n, s) {
+                                (Some(n), Some(s)) => Some(n as u64 * s as u64),
+                                _ => None,
+                            })
+                            .sum::<u64>()
+                    })
+            })
             .unwrap_or(0);
 
         // Calculate total sizes
@@ -956,6 +1048,18 @@ async fn cmd_info(drive: char, deep: bool) -> Result<()> {
         println!(
             "  Files with hardlinks: {}",
             format_number_commas(multi_name_count)
+        );
+        println!(
+            "  Total names (links):  {}",
+            format_number_commas(total_name_count)
+        );
+        println!(
+            "  Total streams:        {}",
+            format_number_commas(total_stream_count)
+        );
+        println!(
+            "  C++ equivalent:       {} (names × streams)",
+            format_number_commas(cpp_equivalent_count)
         );
         println!();
         println!("💾 STORAGE ANALYSIS");

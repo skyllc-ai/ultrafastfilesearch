@@ -946,6 +946,59 @@ impl ParsedColumns {
         self.flags.push(record.std_info.to_raw_flags());
     }
 
+    /// Pushes a record with hard link expansion.
+    ///
+    /// This matches C++ behavior: one row per hard link (name).
+    /// If a file has 3 hard links, this creates 3 rows with different
+    /// name/parent_frs but the same FRS and other attributes.
+    ///
+    /// This is the default behavior for user-facing output, as users
+    /// expect to see each hard link as a separate entry (matching Explorer).
+    #[inline]
+    pub fn push_record_expanded(&mut self, record: &ParsedRecord) {
+        if record.names.is_empty() {
+            // No names - use the primary name (fallback)
+            self.push_record(record);
+            return;
+        }
+
+        // Create one row per hard link
+        for name_info in &record.names {
+            self.frs.push(record.frs);
+            self.parent_frs.push(name_info.parent_frs);
+            self.name.push(name_info.name.clone());
+            self.size.push(record.size);
+            self.allocated_size.push(record.allocated_size);
+            self.created.push(record.std_info.created);
+            self.modified.push(record.std_info.modified);
+            self.accessed.push(record.std_info.accessed);
+            self.mft_changed.push(record.std_info.mft_changed);
+            self.is_directory.push(record.is_directory);
+            // For expanded records, name_count is always 1 (this row represents one link)
+            self.name_count.push(1);
+            self.stream_count.push(record.stream_count());
+            self.is_readonly.push(record.std_info.is_readonly);
+            self.is_hidden.push(record.std_info.is_hidden);
+            self.is_system.push(record.std_info.is_system);
+            self.is_archive.push(record.std_info.is_archive);
+            self.is_compressed.push(record.std_info.is_compressed);
+            self.is_encrypted.push(record.std_info.is_encrypted);
+            self.is_sparse.push(record.std_info.is_sparse);
+            self.is_reparse.push(record.std_info.is_reparse);
+            self.is_offline.push(record.std_info.is_offline);
+            self.is_not_indexed
+                .push(record.std_info.is_not_content_indexed);
+            self.is_temporary.push(record.std_info.is_temporary);
+            self.is_integrity_stream
+                .push(record.std_info.is_integrity_stream);
+            self.is_no_scrub_data.push(record.std_info.is_no_scrub_data);
+            self.is_pinned.push(record.std_info.is_pinned);
+            self.is_unpinned.push(record.std_info.is_unpinned);
+            self.is_virtual.push(record.std_info.is_virtual);
+            self.flags.push(record.std_info.to_raw_flags());
+        }
+    }
+
     /// Extends this `ParsedColumns` with all records from another.
     ///
     /// Used in Rayon reduce phase to merge per-thread results.
@@ -1012,6 +1065,34 @@ impl ParsedColumns {
         self.is_unpinned.reserve(additional);
         self.is_virtual.reserve(additional);
         self.flags.reserve(additional);
+    }
+
+    /// Creates `ParsedColumns` from a vector of `ParsedRecord`.
+    ///
+    /// # Arguments
+    ///
+    /// * `records` - The parsed records to convert
+    /// * `expand_links` - If `true`, expand hard links to separate rows
+    ///   (matching C++ behavior). If `false`, one row per FRS.
+    #[must_use]
+    pub fn from_records(records: Vec<ParsedRecord>, expand_links: bool) -> Self {
+        // Estimate capacity
+        let estimated_capacity = if expand_links {
+            // Rough estimate: assume average of 1.2 links per file
+            (records.len() as f64 * 1.2) as usize
+        } else {
+            records.len()
+        };
+
+        let mut columns = Self::with_capacity(estimated_capacity);
+        for record in records {
+            if expand_links {
+                columns.push_record_expanded(&record);
+            } else {
+                columns.push_record(&record);
+            }
+        }
+        columns
     }
 
     /// Adds placeholder records for parent directories that are referenced
@@ -1516,8 +1597,19 @@ impl MftRecordMerger {
     ///
     /// This is more efficient than `merge()` followed by conversion because it
     /// avoids creating an intermediate `Vec<ParsedRecord>`.
+    ///
+    /// # Arguments
+    ///
+    /// * `expand_links` - If `true` (default), expand hard links to separate
+    ///   rows (matching C++ behavior and user expectations). If `false`, output
+    ///   one row per unique FRS (power user mode).
     #[must_use]
-    pub fn merge_into_columns(mut self) -> ParsedColumns {
+    pub fn merge_into_columns(self, expand_links: bool) -> ParsedColumns {
+        self.merge_into_columns_internal(expand_links)
+    }
+
+    /// Internal implementation for merge_into_columns.
+    fn merge_into_columns_internal(mut self, expand_links: bool) -> ParsedColumns {
         // Merge all extensions into their base records
         for ext in self.extensions {
             if let Some(base) = self.base_records.get_mut(&ext.base_frs) {
@@ -1548,10 +1640,22 @@ impl MftRecordMerger {
             }
         }
 
+        // Estimate capacity: if expanding links, we need more space
+        let estimated_capacity = if expand_links {
+            // Rough estimate: assume average of 1.2 links per file
+            (self.base_records.len() as f64 * 1.2) as usize
+        } else {
+            self.base_records.len()
+        };
+
         // Convert directly to ParsedColumns (single pass, no intermediate Vec)
-        let mut columns = ParsedColumns::with_capacity(self.base_records.len());
+        let mut columns = ParsedColumns::with_capacity(estimated_capacity);
         for record in self.base_records.into_values() {
-            columns.push_record(&record);
+            if expand_links {
+                columns.push_record_expanded(&record);
+            } else {
+                columns.push_record(&record);
+            }
         }
         columns
     }
@@ -2405,6 +2509,7 @@ impl ParallelMftReader {
         &self,
         handle: HANDLE,
         merge_extensions: bool,
+        expand_links: bool,
         progress_callback: Option<F>,
     ) -> Result<ParsedColumns>
     where
@@ -2542,7 +2647,7 @@ impl ParallelMftReader {
                 merger.add_result(result);
             }
 
-            Ok(merger.merge_into_columns())
+            Ok(merger.merge_into_columns(expand_links))
         } else {
             // FAST PATH: Parse directly to ParsedColumns (no HashMap, no merge)
             // Skips extension records (~1% of files with many hard links/ADS).
@@ -2583,7 +2688,11 @@ impl ParallelMftReader {
 
                             match parse_record_zero_alloc(record_data, frs) {
                                 ParseResult::Base(record) => {
-                                    acc.columns.push_record(&record);
+                                    if expand_links {
+                                        acc.columns.push_record_expanded(&record);
+                                    } else {
+                                        acc.columns.push_record(&record);
+                                    }
                                 }
                                 ParseResult::Extension(_) => {
                                     acc.extensions_skipped += 1;

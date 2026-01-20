@@ -364,6 +364,12 @@ pub struct MftReader {
     /// - `true` (default): Use bitmap to skip unused records (faster).
     /// - `false`: Read all records regardless of bitmap (for debugging).
     use_bitmap: bool,
+    /// Whether to expand hard links to separate rows.
+    ///
+    /// - `true` (default): Each hard link becomes a separate row, matching C++
+    ///   behavior and user expectations (what they see in Explorer).
+    /// - `false`: One row per unique FRS (power user mode, smaller output).
+    expand_links: bool,
 }
 
 impl MftReader {
@@ -400,7 +406,8 @@ impl MftReader {
             // The performance impact is ~10-15% slower, but correctness is
             // more important for file search accuracy.
             merge_extensions: true,
-            use_bitmap: true, // Use bitmap optimization by default
+            use_bitmap: true,   // Use bitmap optimization by default
+            expand_links: true, // Expand hard links by default (C++ parity)
         })
     }
 
@@ -476,6 +483,33 @@ impl MftReader {
     #[must_use]
     pub const fn use_bitmap(&self) -> bool {
         self.use_bitmap
+    }
+
+    /// Sets whether to expand hard links to separate rows.
+    ///
+    /// When enabled (default), each hard link becomes a separate row in the
+    /// output. This matches C++ behavior and user expectations - if a file
+    /// has 3 hard links, users see 3 entries in Explorer, so they expect
+    /// 3 entries in search results.
+    ///
+    /// When disabled (`--unique` mode), only one row per unique FRS is output.
+    /// This is useful for power users who want to count unique files, not
+    /// paths.
+    ///
+    /// # Arguments
+    ///
+    /// * `expand` - If `true` (default), expand hard links. If `false`, output
+    ///   one row per unique FRS.
+    #[must_use]
+    pub const fn with_expand_links(mut self, expand: bool) -> Self {
+        self.expand_links = expand;
+        self
+    }
+
+    /// Returns whether hard link expansion is enabled.
+    #[must_use]
+    pub const fn expand_links(&self) -> bool {
+        self.expand_links
     }
 
     /// Read the entire MFT and return as a `DataFrame`.
@@ -860,7 +894,17 @@ impl MftReader {
 
         // M1 8.3 OPTIMIZATION: Fuse stats computation with DataFrame building
         // This eliminates one full pass over all records (was ~5-10% of DF build time)
-        let capacity = parsed_records.len();
+        //
+        // With expand_links=true (default), we expand hard links to separate rows.
+        // Stats are computed per unique FRS (before expansion).
+        let expand_links = self.expand_links;
+        let base_capacity = parsed_records.len();
+        // If expanding links, estimate ~20% more rows for hard links
+        let capacity = if expand_links {
+            (base_capacity as f64 * 1.2) as usize
+        } else {
+            base_capacity
+        };
         let mut stats = MftStats::default();
 
         // Pre-allocate all column vectors
@@ -900,6 +944,7 @@ impl MftReader {
             let stream_count = parsed.stream_count();
 
             // Accumulate stats inline (no separate loop!)
+            // Stats are per unique FRS, not per expanded link
             if parsed.is_directory {
                 stats.dir_count += 1;
             } else {
@@ -918,36 +963,73 @@ impl MftReader {
             stats.multi_stream_count += u64::from(stream_count > 1);
             stats.multi_name_count += u64::from(name_count > 1);
 
-            // Build column vectors
-            frs_vec.push(parsed.frs);
-            parent_frs_vec.push(parsed.parent_frs);
-            name_vec.push(parsed.name);
-            size_vec.push(parsed.size);
-            allocated_size_vec.push(parsed.allocated_size);
-            created_vec.push(parsed.std_info.created);
-            modified_vec.push(parsed.std_info.modified);
-            accessed_vec.push(parsed.std_info.accessed);
-            mft_changed_vec.push(parsed.std_info.mft_changed);
-            is_directory_vec.push(parsed.is_directory);
-            name_count_vec.push(name_count);
-            stream_count_vec.push(stream_count);
-            is_readonly_vec.push(parsed.std_info.is_readonly);
-            is_hidden_vec.push(parsed.std_info.is_hidden);
-            is_system_vec.push(parsed.std_info.is_system);
-            is_archive_vec.push(parsed.std_info.is_archive);
-            is_compressed_vec.push(parsed.std_info.is_compressed);
-            is_encrypted_vec.push(parsed.std_info.is_encrypted);
-            is_sparse_vec.push(parsed.std_info.is_sparse);
-            is_reparse_vec.push(parsed.std_info.is_reparse);
-            is_offline_vec.push(parsed.std_info.is_offline);
-            is_not_indexed_vec.push(parsed.std_info.is_not_content_indexed);
-            is_temporary_vec.push(parsed.std_info.is_temporary);
-            is_integrity_stream_vec.push(parsed.std_info.is_integrity_stream);
-            is_no_scrub_data_vec.push(parsed.std_info.is_no_scrub_data);
-            is_pinned_vec.push(parsed.std_info.is_pinned);
-            is_unpinned_vec.push(parsed.std_info.is_unpinned);
-            is_virtual_vec.push(parsed.std_info.is_virtual);
-            flags_vec.push(parsed.std_info.to_raw_flags());
+            // Build column vectors - expand hard links if enabled
+            if expand_links && !parsed.names.is_empty() {
+                // Expand: one row per hard link
+                for name_info in &parsed.names {
+                    frs_vec.push(parsed.frs);
+                    parent_frs_vec.push(name_info.parent_frs);
+                    name_vec.push(name_info.name.clone());
+                    size_vec.push(parsed.size);
+                    allocated_size_vec.push(parsed.allocated_size);
+                    created_vec.push(parsed.std_info.created);
+                    modified_vec.push(parsed.std_info.modified);
+                    accessed_vec.push(parsed.std_info.accessed);
+                    mft_changed_vec.push(parsed.std_info.mft_changed);
+                    is_directory_vec.push(parsed.is_directory);
+                    // For expanded rows, name_count is 1 (this row = one link)
+                    name_count_vec.push(1);
+                    stream_count_vec.push(stream_count);
+                    is_readonly_vec.push(parsed.std_info.is_readonly);
+                    is_hidden_vec.push(parsed.std_info.is_hidden);
+                    is_system_vec.push(parsed.std_info.is_system);
+                    is_archive_vec.push(parsed.std_info.is_archive);
+                    is_compressed_vec.push(parsed.std_info.is_compressed);
+                    is_encrypted_vec.push(parsed.std_info.is_encrypted);
+                    is_sparse_vec.push(parsed.std_info.is_sparse);
+                    is_reparse_vec.push(parsed.std_info.is_reparse);
+                    is_offline_vec.push(parsed.std_info.is_offline);
+                    is_not_indexed_vec.push(parsed.std_info.is_not_content_indexed);
+                    is_temporary_vec.push(parsed.std_info.is_temporary);
+                    is_integrity_stream_vec.push(parsed.std_info.is_integrity_stream);
+                    is_no_scrub_data_vec.push(parsed.std_info.is_no_scrub_data);
+                    is_pinned_vec.push(parsed.std_info.is_pinned);
+                    is_unpinned_vec.push(parsed.std_info.is_unpinned);
+                    is_virtual_vec.push(parsed.std_info.is_virtual);
+                    flags_vec.push(parsed.std_info.to_raw_flags());
+                }
+            } else {
+                // No expansion: one row per FRS (use primary name)
+                frs_vec.push(parsed.frs);
+                parent_frs_vec.push(parsed.parent_frs);
+                name_vec.push(parsed.name);
+                size_vec.push(parsed.size);
+                allocated_size_vec.push(parsed.allocated_size);
+                created_vec.push(parsed.std_info.created);
+                modified_vec.push(parsed.std_info.modified);
+                accessed_vec.push(parsed.std_info.accessed);
+                mft_changed_vec.push(parsed.std_info.mft_changed);
+                is_directory_vec.push(parsed.is_directory);
+                name_count_vec.push(name_count);
+                stream_count_vec.push(stream_count);
+                is_readonly_vec.push(parsed.std_info.is_readonly);
+                is_hidden_vec.push(parsed.std_info.is_hidden);
+                is_system_vec.push(parsed.std_info.is_system);
+                is_archive_vec.push(parsed.std_info.is_archive);
+                is_compressed_vec.push(parsed.std_info.is_compressed);
+                is_encrypted_vec.push(parsed.std_info.is_encrypted);
+                is_sparse_vec.push(parsed.std_info.is_sparse);
+                is_reparse_vec.push(parsed.std_info.is_reparse);
+                is_offline_vec.push(parsed.std_info.is_offline);
+                is_not_indexed_vec.push(parsed.std_info.is_not_content_indexed);
+                is_temporary_vec.push(parsed.std_info.is_temporary);
+                is_integrity_stream_vec.push(parsed.std_info.is_integrity_stream);
+                is_no_scrub_data_vec.push(parsed.std_info.is_no_scrub_data);
+                is_pinned_vec.push(parsed.std_info.is_pinned);
+                is_unpinned_vec.push(parsed.std_info.is_unpinned);
+                is_virtual_vec.push(parsed.std_info.is_virtual);
+                flags_vec.push(parsed.std_info.to_raw_flags());
+            }
         }
 
         // Log stats (computed during the loop above)
@@ -1107,6 +1189,7 @@ impl MftReader {
         let mut parsed_columns = parallel_reader.read_all_parallel_to_columns::<fn(u64, u64)>(
             handle,
             self.merge_extensions,
+            self.expand_links,
             None,
         )?;
 
@@ -1736,7 +1819,9 @@ impl MftReader {
         }
 
         // Merge extensions and convert directly to ParsedColumns (SoA path)
-        let parsed_columns = merger.merge_into_columns();
+        // Note: load_raw_to_dataframe doesn't have access to expand_links setting,
+        // so we default to true (C++ parity)
+        let parsed_columns = merger.merge_into_columns(true);
 
         // Convert to DataFrame using SoA path (no transpose needed!)
         Self::build_dataframe_from_columns(parsed_columns)
