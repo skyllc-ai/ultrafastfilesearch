@@ -145,3 +145,6 @@ docs/trial_runs/UltraFastFileSearch/rust.txt
 
 # Profiling bundles (contain large binaries and profile data)
 bundles/
+
+# Profile data (temporary, not for git)
+docs/profiles/

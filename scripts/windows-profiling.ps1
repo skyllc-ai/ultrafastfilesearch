@@ -1,10 +1,25 @@
 # UFFS Windows Profiling Script
 # Run this from the USB drive: G:\uffs_profiling\run-profiling.ps1
+#
+# PROFILING BEST PRACTICES:
+# - Uses samply with ETW (Event Tracing for Windows) for low-overhead sampling
+# - Captures both on-CPU and off-CPU (context switch) samples
+# - Uses Microsoft Symbol Server for Windows library symbols
+#
+# SYMBOLICATION WORKFLOW:
+# - PDB file is already on USB (built on Mac, copied by `just profile-usb`)
+# - Raw profile is saved with --save-only (captures addresses, no symbols)
+# - Profile JSON is copied back to USB alongside the existing PDB
+# - On Mac: `samply load` symbolicates using the PDB in the same directory
+# - Firefox Profiler fetches symbols from samply's local server
+#
+# NOTE: PDB is NOT copied to C:\profiling - it stays on USB and is only
+#       used on Mac during `samply load` for symbolication.
 
 $ErrorActionPreference = "Stop"
 
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-Write-Host "  UFFS Windows Profiling Script" -ForegroundColor Cyan
+Write-Host "  UFFS Windows Profiling Script (v2)" -ForegroundColor Cyan
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 Write-Host ""
 
@@ -18,6 +33,11 @@ $ProfilingDir = "C:\profiling"
 $Timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 $ProfileOutput = "profile_$Timestamp.json"
 $SummaryOutput = "profile_summary_$Timestamp.txt"
+
+# Samply options for best profiling:
+# --rate 1000       : 1000 Hz sampling (1ms interval) - good balance of detail vs overhead
+# --save-only       : Save profile without opening browser (for offline analysis)
+# Note: Context switches are captured automatically on Windows via ETW
 
 # Step 1: Check if samply is installed
 Write-Host ""
@@ -44,37 +64,55 @@ if (-not (Test-Path $ProfilingDir)) {
     Write-Host "✓ $ProfilingDir already exists" -ForegroundColor Green
 }
 
-# Step 3: Copy files from USB
+# Step 3: Copy uffs.exe from USB (PDB stays on USB for Mac symbolication)
 Write-Host ""
-Write-Host "Step 3: Copying files from USB..." -ForegroundColor Yellow
-$SourceFiles = @("uffs.exe", "uffs.pdb")
-foreach ($file in $SourceFiles) {
-    $src = Join-Path $ScriptDir $file
-    $dst = Join-Path $ProfilingDir $file
-    if (Test-Path $src) {
-        Write-Host "   Copying $file..." -ForegroundColor Gray
-        Copy-Item $src $dst -Force
-        Write-Host "   ✓ $file" -ForegroundColor Green
-    } else {
-        Write-Host "   ⚠ $file not found on USB" -ForegroundColor Yellow
-    }
+Write-Host "Step 3: Copying uffs.exe from USB..." -ForegroundColor Yellow
+$exeSrc = Join-Path $ScriptDir "uffs.exe"
+$exeDst = Join-Path $ProfilingDir "uffs.exe"
+if (Test-Path $exeSrc) {
+    Write-Host "   Copying uffs.exe..." -ForegroundColor Gray
+    Copy-Item $exeSrc $exeDst -Force
+    Write-Host "   ✓ uffs.exe" -ForegroundColor Green
+} else {
+    Write-Host "   ❌ uffs.exe not found on USB!" -ForegroundColor Red
+    exit 1
+}
+
+# Check if PDB exists on USB (for info only - it's used on Mac, not here)
+$pdbOnUsb = Test-Path (Join-Path $ScriptDir "uffs.pdb")
+if ($pdbOnUsb) {
+    Write-Host "   ✓ uffs.pdb found on USB (will be used for symbolication on Mac)" -ForegroundColor Green
+} else {
+    Write-Host "   ⚠ uffs.pdb not on USB - profile will lack uffs.exe symbols" -ForegroundColor Yellow
 }
 
 # Step 4: Run profiling
 Write-Host ""
-Write-Host "Step 4: Running profiling..." -ForegroundColor Yellow
-Write-Host "   Command: samply record --save-only -o $ProfileOutput -- .\uffs.exe `"*`" >null" -ForegroundColor Gray
+Write-Host "Step 4: Running profiling (all NTFS drives)..." -ForegroundColor Yellow
+Write-Host "   Command: samply record --rate 1000 --save-only -o $ProfileOutput -- .\uffs.exe `"*`" >`$null" -ForegroundColor Gray
 Write-Host ""
 
 Set-Location $ProfilingDir
 $profilePath = Join-Path $ProfilingDir $ProfileOutput
 
-# Run samply
-samply record --save-only -o $profilePath -- .\uffs.exe "*" >null
+# Measure execution time
+$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+# Run samply with optimized settings
+# --rate 1000: 1000 Hz sampling rate (1ms interval)
+# --save-only: Don't open browser, just save the profile
+samply record --rate 1000 --save-only -o $profilePath -- .\uffs.exe "*" >$null
+
+$stopwatch.Stop()
+$elapsedSeconds = [math]::Round($stopwatch.Elapsed.TotalSeconds, 1)
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
-    Write-Host "✓ Profiling complete!" -ForegroundColor Green
+    Write-Host "✓ Profiling complete! (${elapsedSeconds}s)" -ForegroundColor Green
+
+    # Get profile file size
+    $profileSize = [math]::Round((Get-Item $profilePath).Length / 1MB, 1)
+    Write-Host "   Profile size: ${profileSize} MB" -ForegroundColor Gray
 
     # Step 5: Generate profile summary
     Write-Host ""
@@ -92,8 +130,11 @@ UFFS PROFILING SUMMARY
 ================================================================================
 Timestamp: $Timestamp
 Profile File: $ProfileOutput
+Profile Size: ${profileSize} MB
+Execution Time: ${elapsedSeconds} seconds
 Machine: $env:COMPUTERNAME
 OS: $([System.Environment]::OSVersion.VersionString)
+PDB on USB: $pdbOnUsb
 
 --------------------------------------------------------------------------------
 PROFILE METADATA
@@ -105,58 +146,49 @@ PROFILE METADATA
             $threadCount = $profileJson.threads.Count
             $summary += "`nThreads captured: $threadCount`n"
 
+            # Count total samples
+            $totalSamples = 0
             foreach ($thread in $profileJson.threads) {
                 $threadName = $thread.name
-                $sampleCount = if ($thread.samples.length) { $thread.samples.length.Count } else { 0 }
-                $summary += "  - $threadName : $sampleCount samples`n"
+                $sampleCount = 0
+                if ($thread.samples -and $thread.samples.stack) {
+                    $sampleCount = $thread.samples.stack.Count
+                }
+                $totalSamples += $sampleCount
+                if ($sampleCount -gt 0) {
+                    $summary += "  - $threadName : $sampleCount samples`n"
+                }
             }
+            $summary += "`nTotal samples: $totalSamples`n"
         }
 
         # Extract timing info
         if ($profileJson.meta) {
-            $startTime = $profileJson.meta.startTime
             $interval = $profileJson.meta.interval
-            $summary += "`nSampling interval: ${interval}ms`n"
-        }
-
-        # Extract string table size (indicates complexity)
-        if ($profileJson.threads[0].stringTable) {
-            $stringCount = $profileJson.threads[0].stringTable.Count
-            $summary += "Unique symbols: $stringCount`n"
-        }
-
-        # Top functions (from first thread's frame table)
-        $summary += @"
-
---------------------------------------------------------------------------------
-TOP FUNCTIONS (by sample count - approximate)
---------------------------------------------------------------------------------
-Note: For detailed flame graph analysis, use 'just profile-load' on Mac
-      or open the JSON in Firefox Profiler (https://profiler.firefox.com)
-
-"@
-
-        # Try to extract function names from string table
-        if ($profileJson.threads[0].stringTable) {
-            $strings = $profileJson.threads[0].stringTable
-            # Look for uffs-related functions
-            $uffsStrings = $strings | Where-Object { $_ -match "uffs|mft|polars|arrow" } | Select-Object -First 20
-            if ($uffsStrings) {
-                $summary += "Key functions found in profile:`n"
-                foreach ($fn in $uffsStrings) {
-                    $summary += "  • $fn`n"
-                }
-            }
+            $summary += "Sampling interval: ${interval}ms`n"
         }
 
         $summary += @"
+
+--------------------------------------------------------------------------------
+SYMBOLICATION INFO
+--------------------------------------------------------------------------------
+This profile contains raw addresses that need symbolication on Mac.
+
+For uffs.exe symbols:
+  - PDB file (uffs.pdb) is already on USB (built on Mac)
+  - samply load will use it automatically when in same directory
+
+For Windows library symbols:
+  - samply fetches from Microsoft Symbol Server
+  - Requires internet connection when viewing
 
 --------------------------------------------------------------------------------
 NEXT STEPS
 --------------------------------------------------------------------------------
-1. Copy USB back to Mac
+1. Eject USB and bring back to Mac
 2. Run: just profile-load
-3. Ask Augment to analyze: docs/profiles/$SummaryOutput
+3. Firefox Profiler will open with symbolicated profile
 
 ================================================================================
 "@
@@ -173,6 +205,7 @@ UFFS PROFILING SUMMARY
 ================================================================================
 Timestamp: $Timestamp
 Profile File: $ProfileOutput
+Execution Time: ${elapsedSeconds} seconds
 Machine: $env:COMPUTERNAME
 
 Note: Detailed parsing failed. Use Firefox Profiler for analysis.
@@ -181,13 +214,17 @@ Note: Detailed parsing failed. Use Firefox Profiler for analysis.
         $basicSummary | Out-File -FilePath $summaryPath -Encoding UTF8
     }
 
-    # Step 6: Copy profile and summary back to USB
+    # Step 6: Copy profile and summary back to USB (PDB is already there)
     Write-Host ""
-    Write-Host "Step 6: Copying files back to USB..." -ForegroundColor Yellow
+    Write-Host "Step 6: Copying results back to USB..." -ForegroundColor Yellow
+
+    # Copy profile
     $usbProfileDest = Join-Path $ScriptDir $ProfileOutput
-    $usbSummaryDest = Join-Path $ScriptDir $SummaryOutput
     Copy-Item $profilePath $usbProfileDest -Force
     Write-Host "✓ Copied $ProfileOutput to USB" -ForegroundColor Green
+
+    # Copy summary
+    $usbSummaryDest = Join-Path $ScriptDir $SummaryOutput
     Copy-Item $summaryPath $usbSummaryDest -Force
     Write-Host "✓ Copied $SummaryOutput to USB" -ForegroundColor Green
 
@@ -196,11 +233,17 @@ Note: Detailed parsing failed. Use Firefox Profiler for analysis.
     Write-Host "  ✅ DONE! Profile and summary saved to USB" -ForegroundColor Green
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Green
     Write-Host ""
+    Write-Host "  Files on USB:" -ForegroundColor Cyan
+    Write-Host "    • $ProfileOutput (profile data - NEW)" -ForegroundColor White
+    Write-Host "    • uffs.pdb (symbols - already on USB)" -ForegroundColor Gray
+    Write-Host "    • $SummaryOutput (summary - NEW)" -ForegroundColor White
+    Write-Host ""
     Write-Host "  On Mac, run:" -ForegroundColor Cyan
-    Write-Host "  just profile-load" -ForegroundColor White
+    Write-Host "    just profile-load" -ForegroundColor White
     Write-Host ""
 } else {
     Write-Host ""
     Write-Host "❌ Profiling failed with exit code $LASTEXITCODE" -ForegroundColor Red
+    Write-Host "   Check that uffs.exe runs correctly: .\uffs.exe `"*`"" -ForegroundColor Yellow
 }
 
