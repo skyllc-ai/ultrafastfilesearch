@@ -1030,9 +1030,12 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
         });
     }
 
-    // For base records, require at least one name
+    // For base records without a name, use a placeholder
+    // This ensures all in-use records are included in the DataFrame for path
+    // resolution (matching C++ behavior which does NOT skip records without
+    // $FILE_NAME)
     if primary_name.is_empty() {
-        return ParseResult::Skip;
+        primary_name = format!("<unnamed:{frs}>");
     }
 
     // Calculate primary size from default stream

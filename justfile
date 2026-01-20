@@ -433,6 +433,10 @@ default:
     @echo "  just benchmark-flows-debug - Debug version with visible output"
     @echo "  just benchmark-advanced - Advanced performance profiling"
     @echo "  just ci-analyze - Comprehensive CI pipeline analysis"
+    @echo ""
+    @printf "\033[0;32m🔬 Windows Profiling:\033[0m\n"
+    @echo "  just profile-usb  - Build profiling binaries and copy to USB"
+    @echo "  just profile-load - Load profile.json from USB and open in Firefox Profiler"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 🔧 HELPER FUNCTIONS - Reusable Installation & Setup Logic
@@ -2297,6 +2301,204 @@ legal-setup: install-legal-tools legal-headers legal-check
 # • Default recipe shows comprehensive help
 # • Educational documentation is clear and helpful
 #
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🔬 PROFILING - Windows Performance Analysis
+# ═══════════════════════════════════════════════════════════════════════════════
+# WHY: Profile UFFS on Windows to identify performance bottlenecks
+# WORKFLOW:
+#   1. Build profiling binaries on Mac (with debug symbols, no LTO)
+#   2. Copy to USB drive
+#   3. Run samply on Windows to capture profile
+#   4. Analyze profile.json on Mac with Firefox Profiler
+
+# Build profiling binaries and copy to USB for Windows profiling
+# USAGE: just profile-usb
+# REQUIRES: USB drive mounted at /Volumes/UFFSPRO
+profile-usb:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
+    printf "\033[0;34m  🔬 UFFS Profiling → USB Workflow\033[0m\n"
+    printf "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
+    echo ""
+
+    # Step 1: Build profiling binaries
+    printf "\033[0;34mStep 1: Building profiling binaries...\033[0m\n"
+    printf "\033[0;36m  → UFFS_PROFILING_BUILD=1 rust-script scripts/build-cross-all.rs\033[0m\n"
+    UFFS_PROFILING_BUILD=1 rust-script scripts/build-cross-all.rs
+    printf "\033[0;32m✅ Profiling binaries built\033[0m\n"
+    echo ""
+
+    # Step 2: Check for USB drive
+    printf "\033[0;34mStep 2: Checking for USB drive...\033[0m\n"
+    USB_PATHS=("/Volumes/UFFSPRO" "/Volumes/USB" "/Volumes/UNTITLED")
+    USB_PATH=""
+    for path in "${USB_PATHS[@]}"; do
+        if [ -d "$path" ]; then
+            USB_PATH="$path"
+            break
+        fi
+    done
+
+    if [ -z "$USB_PATH" ]; then
+        printf "\033[1;33m⚠️  No USB drive found at common mount points.\033[0m\n"
+        printf "\033[0;34m   Looking for mounted volumes...\033[0m\n"
+        echo ""
+        ls -la /Volumes/ 2>/dev/null || true
+        echo ""
+        printf "\033[1;33m   Please enter the USB mount path (e.g., /Volumes/UFFSPRO): \033[0m"
+        read -r USB_PATH
+        if [ ! -d "$USB_PATH" ]; then
+            printf "\033[0;31m❌ USB path not found: $USB_PATH\033[0m\n"
+            exit 1
+        fi
+    fi
+    printf "\033[0;32m✅ USB found at: $USB_PATH\033[0m\n"
+    echo ""
+
+    # Step 3: Copy files to USB
+    printf "\033[0;34mStep 3: Copying files to USB...\033[0m\n"
+    printf "\033[0;36m  → ./scripts/copy-profiling-to-usb.sh\033[0m\n"
+
+    # Update the script's USB path temporarily
+    export USB_OVERRIDE="$USB_PATH"
+    DEST_DIR="$USB_PATH/uffs_profiling"
+    SOURCE_DIR="$HOME/Library/Caches/uffs/target/x86_64-pc-windows-msvc/profiling"
+
+    mkdir -p "$DEST_DIR"
+
+    echo "   Copying uffs.exe..."
+    cp "$SOURCE_DIR/uffs.exe" "$DEST_DIR/"
+    printf "\033[0;32m   ✓ uffs.exe\033[0m\n"
+
+    echo "   Copying uffs.pdb (2+ GB, please wait)..."
+    cp "$SOURCE_DIR/uffs.pdb" "$DEST_DIR/"
+    printf "\033[0;32m   ✓ uffs.pdb\033[0m\n"
+
+    # Copy PowerShell script
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ -f "scripts/windows-profiling.ps1" ]; then
+        cp "scripts/windows-profiling.ps1" "$DEST_DIR/run-profiling.ps1"
+        printf "\033[0;32m   ✓ run-profiling.ps1\033[0m\n"
+    fi
+
+    echo ""
+    printf "\033[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
+    printf "\033[0;32m  ✅ DONE! USB is ready for Windows profiling\033[0m\n"
+    printf "\033[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
+    echo ""
+    printf "\033[0;34m  Contents of $DEST_DIR:\033[0m\n"
+    ls -lh "$DEST_DIR"
+    echo ""
+    printf "\033[1;33m  📋 ON WINDOWS:\033[0m\n"
+    printf "\033[0;36m     Option 1: Right-click run-profiling.ps1 → 'Run with PowerShell'\033[0m\n"
+    printf "\033[0;36m     Option 2: In PowerShell: G:\\uffs_profiling\\run-profiling.ps1\033[0m\n"
+    echo ""
+    printf "\033[1;33m  📋 BACK ON MAC:\033[0m\n"
+    printf "\033[0;36m     samply load $USB_PATH/uffs_profiling/profile.json\033[0m\n"
+    echo ""
+
+# Load and analyze a profile from USB
+# USAGE: just profile-load
+# Copies all profile_*.json files from USB to docs/profiles/ and opens the latest
+profile-load:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf "\033[0;34m🔬 Loading profiles from USB...\033[0m\n"
+
+    # Find USB with profile files
+    USB_DIR=""
+    for dir in /Volumes/*/uffs_profiling; do
+        if [ -d "$dir" ]; then
+            USB_DIR="$dir"
+            break
+        fi
+    done
+
+    if [ -z "$USB_DIR" ]; then
+        printf "\033[0;31m❌ No uffs_profiling folder found on USB\033[0m\n"
+        printf "\033[0;34m   Looking for USB drives...\033[0m\n"
+        ls -la /Volumes/ 2>/dev/null || true
+        exit 1
+    fi
+
+    printf "\033[0;32m✅ Found USB at: $USB_DIR\033[0m\n"
+
+    # Create docs/profiles directory if needed
+    PROFILES_DIR="docs/profiles"
+    mkdir -p "$PROFILES_DIR"
+
+    # Copy all profile_*.json files from USB to docs/profiles/
+    COPIED=0
+    for profile in "$USB_DIR"/profile_*.json; do
+        if [ -f "$profile" ]; then
+            BASENAME=$(basename "$profile")
+            DEST="$PROFILES_DIR/$BASENAME"
+            if [ ! -f "$DEST" ]; then
+                printf "\033[0;34m   Copying $BASENAME...\033[0m\n"
+                cp "$profile" "$DEST"
+                COPIED=$((COPIED + 1))
+            else
+                printf "\033[0;33m   Skipping $BASENAME (already exists)\033[0m\n"
+            fi
+        fi
+    done
+
+    # Copy all profile_summary_*.txt files from USB to docs/profiles/
+    for summary in "$USB_DIR"/profile_summary_*.txt; do
+        if [ -f "$summary" ]; then
+            BASENAME=$(basename "$summary")
+            DEST="$PROFILES_DIR/$BASENAME"
+            if [ ! -f "$DEST" ]; then
+                printf "\033[0;34m   Copying $BASENAME...\033[0m\n"
+                cp "$summary" "$DEST"
+                COPIED=$((COPIED + 1))
+            else
+                printf "\033[0;33m   Skipping $BASENAME (already exists)\033[0m\n"
+            fi
+        fi
+    done
+
+    # Also check for old-format profile.json
+    if [ -f "$USB_DIR/profile.json" ]; then
+        TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+        DEST="$PROFILES_DIR/profile_imported_$TIMESTAMP.json"
+        printf "\033[0;34m   Copying profile.json as profile_imported_$TIMESTAMP.json...\033[0m\n"
+        cp "$USB_DIR/profile.json" "$DEST"
+        COPIED=$((COPIED + 1))
+    fi
+
+    printf "\033[0;32m✅ Copied $COPIED file(s) to $PROFILES_DIR/\033[0m\n"
+
+    # Find the most recent profile
+    LATEST=$(ls -t "$PROFILES_DIR"/profile_*.json 2>/dev/null | head -1)
+    if [ -z "$LATEST" ]; then
+        printf "\033[0;31m❌ No profiles found in $PROFILES_DIR\033[0m\n"
+        exit 1
+    fi
+
+    printf "\033[0;32m✅ Latest profile: $LATEST\033[0m\n"
+    echo ""
+    printf "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
+    printf "\033[0;34m  📁 Profiles saved to: docs/profiles/\033[0m\n"
+    printf "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
+    echo ""
+    ls -lh "$PROFILES_DIR"/profile_*.json "$PROFILES_DIR"/profile_summary_*.txt 2>/dev/null || true
+    echo ""
+
+    # Show latest summary if exists
+    LATEST_SUMMARY=$(ls -t "$PROFILES_DIR"/profile_summary_*.txt 2>/dev/null | head -1)
+    if [ -n "$LATEST_SUMMARY" ] && [ -f "$LATEST_SUMMARY" ]; then
+        printf "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
+        printf "\033[0;34m  📋 Latest Summary: $(basename "$LATEST_SUMMARY")\033[0m\n"
+        printf "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
+        cat "$LATEST_SUMMARY"
+        echo ""
+    fi
+
+    printf "\033[0;34m   Opening latest profile in Firefox Profiler...\033[0m\n"
+    samply load "$LATEST"
+
 # 🚨 CRITICAL FAILURE MODES TO AVOID:
 # ─────────────────────────────────────────────────────────────────────────────
 # • PowerShell syntax errors: Use bash shebangs on all complex recipes

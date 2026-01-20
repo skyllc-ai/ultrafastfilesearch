@@ -49,35 +49,52 @@ echo -e "   Copying uffs.pdb ($(du -h "$SOURCE_DIR/uffs.pdb" | cut -f1))... (thi
 cp "$SOURCE_DIR/uffs.pdb" "$DEST_DIR/"
 echo -e "${GREEN}   ✓ uffs.pdb${NC}"
 
+# Copy PowerShell script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/windows-profiling.ps1" ]; then
+    cp "$SCRIPT_DIR/windows-profiling.ps1" "$DEST_DIR/run-profiling.ps1"
+    echo -e "${GREEN}   ✓ run-profiling.ps1${NC}"
+fi
+
 # Create Windows instructions file
 cat > "$DEST_DIR/README_WINDOWS.txt" << 'EOF'
 UFFS Profiling Instructions for Windows
 ========================================
 
+EASY WAY: Run the PowerShell script
+------------------------------------
+Right-click run-profiling.ps1 → "Run with PowerShell"
+
+This will:
+  - Install samply (if needed)
+  - Copy files to C:\profiling
+  - Run profiling
+  - Copy profile.json back to USB
+
+MANUAL WAY:
+-----------
+
 1. ONE-TIME SETUP: Install samply
    Open PowerShell and run:
-   
+
    cargo install --locked samply
 
 2. COPY FILES: Copy this folder to a local drive
-   
+
    mkdir C:\profiling
-   copy D:\support\uffs_profiling\* C:\profiling\
+   copy G:\uffs_profiling\* C:\profiling\
 
 3. RUN PROFILING: Record a profile
-   
+
    cd C:\profiling
    samply record --save-only -o profile.json -- .\uffs.exe "*" --drives=C
 
-   For a specific scenario:
-   samply record --save-only -o profile_win.json -- .\uffs.exe "C:\Windows\*" --ext=dll
-
 4. COPY BACK: Copy profile.json back to this USB folder
-   
-   copy C:\profiling\profile.json D:\support\uffs_profiling\
+
+   copy C:\profiling\profile.json G:\uffs_profiling\
 
 5. ON MAC: Analyze with
-   
+
    samply load /Volumes/UFFSPRO/uffs_profiling/profile.json
 EOF
 echo -e "${GREEN}   ✓ README_WINDOWS.txt${NC}"
