@@ -359,6 +359,11 @@ pub struct MftReader {
     ///   with many hard links/ADS). ~15-25% faster, ideal for file search.
     /// - `true`: Full path - merges extension attributes for complete data.
     merge_extensions: bool,
+    /// Whether to use the MFT bitmap for optimization.
+    ///
+    /// - `true` (default): Use bitmap to skip unused records (faster).
+    /// - `false`: Read all records regardless of bitmap (for debugging).
+    use_bitmap: bool,
 }
 
 impl MftReader {
@@ -389,6 +394,7 @@ impl MftReader {
             handle,
             mode: MftReadMode::Auto,
             merge_extensions: false, // Fast path by default
+            use_bitmap: true,        // Use bitmap optimization by default
         })
     }
 
@@ -441,6 +447,29 @@ impl MftReader {
     #[must_use]
     pub const fn merge_extensions(&self) -> bool {
         self.merge_extensions
+    }
+
+    /// Sets whether to use the MFT bitmap for optimization.
+    ///
+    /// The bitmap indicates which MFT records are "in use" vs "free".
+    /// When enabled (default), unused records are skipped for faster reads.
+    /// Disable this for debugging if you suspect the bitmap is causing
+    /// records to be incorrectly skipped.
+    ///
+    /// # Arguments
+    ///
+    /// * `use_bitmap` - If `true` (default), use bitmap optimization. If
+    ///   `false`, read all records regardless of bitmap.
+    #[must_use]
+    pub const fn with_use_bitmap(mut self, use_bitmap: bool) -> Self {
+        self.use_bitmap = use_bitmap;
+        self
+    }
+
+    /// Returns whether bitmap optimization is enabled.
+    #[must_use]
+    pub const fn use_bitmap(&self) -> bool {
+        self.use_bitmap
     }
 
     /// Read the entire MFT and return as a `DataFrame`.
@@ -605,18 +634,24 @@ impl MftReader {
         let total_records = extent_map.total_records();
         info!(total_records, "Total MFT records to read");
 
-        // Try to get the MFT bitmap for optimization
-        let bitmap = self.handle.get_mft_bitmap().ok();
-        if let Some(ref bm) = bitmap {
-            let in_use = bm.count_in_use();
-            info!(
-                in_use_records = in_use,
-                skip_percentage = 100.0 - (in_use as f64 / total_records as f64 * 100.0),
-                "MFT bitmap loaded - will skip unused records"
-            );
+        // Try to get the MFT bitmap for optimization (if enabled)
+        let bitmap = if self.use_bitmap {
+            let bm = self.handle.get_mft_bitmap().ok();
+            if let Some(ref b) = bm {
+                let in_use = b.count_in_use();
+                info!(
+                    in_use_records = in_use,
+                    skip_percentage = 100.0 - (in_use as f64 / total_records as f64 * 100.0),
+                    "MFT bitmap loaded - will skip unused records"
+                );
+            } else {
+                debug!("No MFT bitmap available - reading all records");
+            }
+            bm
         } else {
-            debug!("No MFT bitmap available - reading all records");
-        }
+            info!("Bitmap optimization DISABLED (--no-bitmap) - reading ALL records");
+            None
+        };
 
         // Report initial progress
         if let Some(ref cb) = callback {

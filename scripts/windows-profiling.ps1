@@ -88,8 +88,8 @@ if ($pdbOnUsb) {
 
 # Step 4: Run profiling
 Write-Host ""
-Write-Host "Step 4: Running profiling (all NTFS drives)..." -ForegroundColor Yellow
-Write-Host "   Command: samply record --rate 1000 --save-only -o $ProfileOutput -- .\uffs.exe `"*`" >`$null" -ForegroundColor Gray
+Write-Host "Step 4: Running profiling (drive F, benchmark mode)..." -ForegroundColor Yellow
+Write-Host "   Command: samply record --rate 1000 --save-only -o $ProfileOutput -- .\uffs.exe `"*`" --drive F --benchmark" -ForegroundColor Gray
 Write-Host ""
 
 Set-Location $ProfilingDir
@@ -101,7 +101,9 @@ $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 # Run samply with optimized settings
 # --rate 1000: 1000 Hz sampling rate (1ms interval)
 # --save-only: Don't open browser, just save the profile
-samply record --rate 1000 --save-only -o $profilePath -- .\uffs.exe "*" >$null
+# --benchmark: Skip output (measure MFT reading only, not stdout I/O)
+# --drive F: Single drive for focused profiling
+samply record --rate 1000 --save-only -o $profilePath -- .\uffs.exe "*" --drive F --benchmark
 
 $stopwatch.Stop()
 $elapsedSeconds = [math]::Round($stopwatch.Elapsed.TotalSeconds, 1)

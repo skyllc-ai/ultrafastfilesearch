@@ -291,6 +291,8 @@ pub async fn search(
     dirs_only: bool,
     hide_system: bool,
     profile: bool,
+    benchmark: bool,
+    no_bitmap: bool,
     min_size: Option<u64>,
     max_size: Option<u64>,
     limit: u32,
@@ -335,8 +337,9 @@ pub async fn search(
         .with_neg(neg);
 
     // Streaming mode for multi-drive searches (Windows only)
+    // Skip streaming in benchmark mode - we want to measure without output overhead
     #[cfg(windows)]
-    {
+    if !benchmark {
         let needs_streaming = index.is_none()
             && (multi_drives.is_some()
                 || (single_drive.is_none() && filters.parsed.drive().is_none()));
@@ -350,6 +353,7 @@ pub async fn search(
                 format,
                 out,
                 &output_config,
+                no_bitmap,
             )
             .await;
             // Print timing after streaming completes
@@ -361,8 +365,8 @@ pub async fn search(
 
     // Non-streaming mode: load all data, then output
     // Pass needs_paths so path resolution happens BEFORE filtering loses parent
-    // directories
-    let needs_paths = output_config.needs_path_column();
+    // directories (skip path resolution in benchmark mode for speed)
+    let needs_paths = !benchmark && output_config.needs_path_column();
     let mut results = load_and_filter_data(
         index,
         multi_drives,
@@ -370,12 +374,13 @@ pub async fn search(
         &filters,
         needs_paths,
         profile,
+        no_bitmap,
     )
     .await?;
 
-    // Compute tree columns only if specifically requested
+    // Compute tree columns only if specifically requested (skip in benchmark mode)
     let t_tree = std::time::Instant::now();
-    if output_config.needs_tree_columns() {
+    if !benchmark && output_config.needs_tree_columns() {
         let tree_cols = output_config.get_tree_columns();
         info!(columns = tree_cols.len(), "Computing tree metrics");
         results =
@@ -383,15 +388,29 @@ pub async fn search(
     }
     let tree_ms = t_tree.elapsed().as_millis();
 
-    // Output results
+    // Output results (skip in benchmark mode)
     let t_output = std::time::Instant::now();
-    write_results(&results, format, out, &output_config)?;
+    if !benchmark {
+        write_results(&results, format, out, &output_config)?;
+    }
     let output_ms = t_output.elapsed().as_millis();
 
     // Print timing (C++ compatibility: "Finished in X s")
     let elapsed = start_time.elapsed();
 
-    if profile {
+    if benchmark {
+        // Benchmark mode: print summary without output overhead
+        let row_count = results.height();
+        let total_ms = elapsed.as_millis();
+        let secs = elapsed.as_secs_f64();
+        eprintln!("=== BENCHMARK MODE (no output) ===");
+        eprintln!("  Records found:   {row_count:>10}");
+        eprintln!("  Total time:      {total_ms:>10} ms ({secs:.2} s)");
+        // Throughput calculation intentionally uses floating-point
+        #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+        let throughput = row_count as f64 / secs;
+        eprintln!("  Throughput:      {throughput:>10.0} records/sec");
+    } else if profile {
         let row_count = results.height();
         let total_ms = elapsed.as_millis();
         eprintln!("=== PROFILE: Output ===");
@@ -419,6 +438,7 @@ async fn search_streaming(
     format: &str,
     out: &str,
     output_config: &OutputConfig,
+    no_bitmap: bool,
 ) -> Result<()> {
     // Determine drives to search
     let drives: Vec<char> = if let Some(drives) = multi_drives {
@@ -452,12 +472,14 @@ async fn search_streaming(
 
     if is_console {
         let stdout = std::io::stdout();
-        search_multi_drive_streaming(&drives, filters, format, stdout, output_config).await
+        search_multi_drive_streaming(&drives, filters, format, stdout, output_config, no_bitmap)
+            .await
     } else {
         let file =
             File::create(out).with_context(|| format!("Failed to create output file: {out}"))?;
         let writer = BufWriter::new(file);
-        search_multi_drive_streaming(&drives, filters, format, writer, output_config).await?;
+        search_multi_drive_streaming(&drives, filters, format, writer, output_config, no_bitmap)
+            .await?;
         info!(file = out, "Results written to file");
         Ok(())
     }
@@ -475,6 +497,8 @@ async fn search_streaming(
 ///   built from FULL MFT data BEFORE filtering. This ensures parent directories
 ///   are available for path resolution.
 /// * `profile` - If true, prints detailed timing breakdown to stderr.
+/// * `no_bitmap` - If true, disables MFT bitmap optimization (reads all
+///   records).
 #[allow(clippy::single_call_fn, clippy::print_stderr)]
 async fn load_and_filter_data(
     index: Option<PathBuf>,
@@ -483,6 +507,7 @@ async fn load_and_filter_data(
     filters: &QueryFilters<'_>,
     needs_paths: bool,
     profile: bool,
+    no_bitmap: bool,
 ) -> Result<uffs_mft::DataFrame> {
     if let Some(index_path) = index {
         // Load from pre-built index and filter
@@ -495,7 +520,7 @@ async fn load_and_filter_data(
 
     if let Some(drives) = multi_drives {
         // Multi-drive search with per-drive filtering (memory efficient)
-        return search_multi_drive_filtered(&drives, filters, needs_paths).await;
+        return search_multi_drive_filtered(&drives, filters, needs_paths, no_bitmap).await;
     }
 
     // Check for single drive: CLI flag overrides pattern-embedded drive
@@ -505,7 +530,8 @@ async fn load_and_filter_data(
         let t_open = std::time::Instant::now();
         let reader = MftReader::open(drive_letter)
             .await
-            .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
+            .with_context(|| format!("Failed to open drive {drive_letter}:"))?
+            .with_use_bitmap(!no_bitmap);
         let open_ms = t_open.elapsed().as_millis();
 
         let t_read = std::time::Instant::now();
@@ -575,7 +601,7 @@ async fn load_and_filter_data(
             bail!("No NTFS drives found on this system");
         }
         info!(drives = ?all_drives, count = all_drives.len(), "No drive specified - searching all NTFS drives");
-        search_multi_drive_filtered(&all_drives, filters, needs_paths).await
+        search_multi_drive_filtered(&all_drives, filters, needs_paths, no_bitmap).await
     }
     #[cfg(not(windows))]
     {
@@ -793,11 +819,17 @@ struct DriveResult {
 /// When `needs_paths` is true, builds a FastPathResolver from the FULL MFT data
 /// BEFORE filtering. This ensures parent directories are available for path
 /// resolution, fixing the `<unknown>` path bug.
+///
+/// # Arguments
+///
+/// * `no_bitmap` - If true, disables MFT bitmap optimization (reads all
+///   records).
 #[cfg(windows)]
 async fn search_multi_drive_filtered(
     drives: &[char],
     filters: &QueryFilters<'_>,
     needs_paths: bool,
+    no_bitmap: bool,
 ) -> Result<uffs_mft::DataFrame> {
     use std::sync::Arc;
 
@@ -838,13 +870,14 @@ async fn search_multi_drive_filtered(
         let tx = tx.clone();
         let filters = Arc::clone(&owned_filters);
         let pbs = progress_bars.clone();
+        let use_bitmap = !no_bitmap; // Capture for the spawned task
 
         tokio::spawn(async move {
             let pb = pbs.as_ref().and_then(|p| p.get(&drive_char));
 
             // Open the drive
             let reader = match MftReader::open(drive_char).await {
-                Ok(r) => r,
+                Ok(r) => r.with_use_bitmap(use_bitmap),
                 Err(e) => {
                     if let Some(p) = pb {
                         p.finish_with_message(format!("Error: {e}"));
@@ -1109,6 +1142,7 @@ async fn search_multi_drive_filtered(
     _drives: &[char],
     _filters: &QueryFilters<'_>,
     _needs_paths: bool,
+    _no_bitmap: bool,
 ) -> Result<uffs_mft::DataFrame> {
     bail!("Multi-drive search is only supported on Windows")
 }
@@ -1124,6 +1158,7 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
     format: &str,
     writer: W,
     output_config: &OutputConfig,
+    no_bitmap: bool,
 ) -> Result<()> {
     use tokio::sync::mpsc;
     use uffs_mft::{IntoLazy, col, lit};
@@ -1155,11 +1190,12 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
     for &drive_char in drives {
         let tx = tx.clone();
         let filters = Arc::clone(&owned_filters);
+        let use_bitmap = !no_bitmap; // Capture for the spawned task
 
         tokio::spawn(async move {
             // Open the drive
             let reader = match MftReader::open(drive_char).await {
-                Ok(r) => r,
+                Ok(r) => r.with_use_bitmap(use_bitmap),
                 Err(e) => {
                     let _ = tx
                         .send(DriveResult {

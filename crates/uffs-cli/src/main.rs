@@ -129,6 +129,16 @@ struct Cli {
     #[arg(long)]
     profile: bool,
 
+    /// Benchmark mode: skip output, only measure MFT reading and filtering
+    /// Use this for profiling without stdout I/O overhead
+    #[arg(long)]
+    benchmark: bool,
+
+    /// Disable MFT bitmap optimization (read ALL records)
+    /// Use this for debugging if records appear to be missing
+    #[arg(long)]
+    no_bitmap: bool,
+
     /// Minimum file size in bytes
     #[arg(long)]
     min_size: Option<u64>,
@@ -233,6 +243,16 @@ enum Commands {
         /// Show detailed timing breakdown for performance profiling
         #[arg(long)]
         profile: bool,
+
+        /// Benchmark mode: skip output, only measure MFT reading and filtering
+        /// Use this for profiling without stdout I/O overhead
+        #[arg(long)]
+        benchmark: bool,
+
+        /// Disable MFT bitmap optimization (read ALL records)
+        /// Use this for debugging if records appear to be missing
+        #[arg(long)]
+        no_bitmap: bool,
 
         /// Minimum file size in bytes
         #[arg(long)]
@@ -464,6 +484,8 @@ async fn run() -> Result<()> {
             dirs_only,
             hide_system,
             profile,
+            benchmark,
+            no_bitmap,
             min_size,
             max_size,
             limit,
@@ -487,6 +509,8 @@ async fn run() -> Result<()> {
                 dirs_only,
                 hide_system,
                 profile,
+                benchmark,
+                no_bitmap,
                 min_size,
                 max_size,
                 limit,
@@ -528,6 +552,8 @@ async fn run() -> Result<()> {
                     cli.dirs_only,
                     cli.hide_system,
                     cli.profile,
+                    cli.benchmark,
+                    cli.no_bitmap,
                     cli.min_size,
                     cli.max_size,
                     cli.limit,
