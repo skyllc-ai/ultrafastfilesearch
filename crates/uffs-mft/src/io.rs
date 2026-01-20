@@ -1747,11 +1747,18 @@ pub fn generate_read_chunks(
 /// When two chunks are close together (gap < threshold), reading them as one
 /// chunk is more efficient than two separate I/O operations. The overhead of
 /// reading a few extra unused records is less than the syscall overhead.
+///
+/// **Important**: Merged chunks are capped at `MAX_CHUNK_BYTES` (1GB) to avoid
+/// exceeding the Windows `ReadFile` API's 4GB buffer limit (u32::MAX).
 fn merge_adjacent_chunks(
     mut chunks: Vec<ReadChunk>,
     record_size: u32,
     threshold: u64,
 ) -> Vec<ReadChunk> {
+    // Maximum merged chunk size: 1GB (well below u32::MAX to be safe)
+    // Windows ReadFile API takes buffer length as u32, so >4GB would panic.
+    const MAX_CHUNK_BYTES: u64 = 1024 * 1024 * 1024; // 1 GB
+
     if chunks.len() < 2 {
         return chunks;
     }
@@ -1770,14 +1777,17 @@ fn merge_adjacent_chunks(
         let current_end_frs = current.start_frs + current.record_count;
         let frs_gap = next.start_frs.saturating_sub(current_end_frs);
 
-        if gap_records <= threshold && frs_gap <= threshold {
+        // Calculate merged size to check against limit
+        let new_record_count = (next.start_frs + next.record_count) - current.start_frs;
+        let merged_bytes = new_record_count * u64::from(record_size);
+
+        if gap_records <= threshold && frs_gap <= threshold && merged_bytes <= MAX_CHUNK_BYTES {
             // Merge: extend current chunk to include next
-            let new_record_count = (next.start_frs + next.record_count) - current.start_frs;
             current.record_count = new_record_count;
             // Update skip_end to be from the merged chunk
             current.skip_end = next.skip_end;
         } else {
-            // Gap too large, push current and start new
+            // Gap too large or merged chunk would exceed size limit
             merged.push(current);
             current = next;
         }
