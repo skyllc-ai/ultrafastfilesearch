@@ -64,6 +64,7 @@ fn add_drive_progress(multi_progress: &MultiProgress, drive: char) -> ProgressBa
 struct StreamingWriter<W: Write> {
     writer: Mutex<W>,
     format: StreamingFormat,
+    output_config: OutputConfig,
     header_written: AtomicBool,
     rows_written: AtomicUsize,
     limit: u32,
@@ -79,7 +80,7 @@ enum StreamingFormat {
 
 #[cfg(windows)]
 impl<W: Write> StreamingWriter<W> {
-    fn new(writer: W, format: &str, limit: u32) -> Self {
+    fn new(writer: W, format: &str, limit: u32, output_config: OutputConfig) -> Self {
         let fmt = match format.to_lowercase().as_str() {
             "json" => StreamingFormat::Json,
             _ => StreamingFormat::Csv,
@@ -87,6 +88,7 @@ impl<W: Write> StreamingWriter<W> {
         Self {
             writer: Mutex::new(writer),
             format: fmt,
+            output_config,
             header_written: AtomicBool::new(false),
             rows_written: AtomicUsize::new(0),
             limit,
@@ -119,56 +121,49 @@ impl<W: Write> StreamingWriter<W> {
     }
 
     fn write_csv_batch(&self, writer: &mut W, df: &uffs_mft::DataFrame) -> Result<usize> {
-        let col_names: Vec<_> = df.get_column_names();
-
-        // Write header only once
-        if !self.header_written.swap(true, Ordering::SeqCst) {
-            for (i, name) in col_names.iter().enumerate() {
-                if i > 0 {
-                    write!(writer, ",")?;
-                }
-                write!(writer, "\"{name}\"")?;
-            }
-            // C++ outputs header followed by empty line
-            writeln!(writer)?;
-            writeln!(writer)?;
-        }
-
-        // Cache column references to avoid repeated lookups
-        let columns: Vec<_> = col_names
-            .iter()
-            .filter_map(|name| df.column(name).ok())
-            .collect();
-
-        let mut rows_written = 0;
         let height = df.height();
-        let mut line_buf = String::with_capacity(256);
-
-        for row_idx in 0..height {
-            // Check limit
-            if self.limit > 0 {
-                let current = self.rows_written.fetch_add(1, Ordering::Relaxed);
-                if current >= self.limit as usize {
-                    break;
-                }
-            } else {
-                self.rows_written.fetch_add(1, Ordering::Relaxed);
-            }
-
-            // Reuse buffer for each line
-            line_buf.clear();
-            for (i, col) in columns.iter().enumerate() {
-                if i > 0 {
-                    line_buf.push(',');
-                }
-                line_buf.push_str(&format_cell_value(col, row_idx));
-            }
-            writeln!(writer, "{line_buf}")?;
-            rows_written += 1;
+        if height == 0 {
+            return Ok(0);
         }
+
+        // Determine if we should write header (only first batch)
+        let write_header = !self.header_written.swap(true, Ordering::SeqCst);
+
+        // Apply limit if set
+        let rows_to_write = if self.limit > 0 {
+            let current = self.rows_written.load(Ordering::Relaxed);
+            let remaining = (self.limit as usize).saturating_sub(current);
+            if remaining == 0 {
+                return Ok(0);
+            }
+            remaining.min(height)
+        } else {
+            height
+        };
+
+        // Slice DataFrame if we need fewer rows
+        let df_slice = if rows_to_write < height {
+            df.slice(0, rows_to_write)
+        } else {
+            df.clone()
+        };
+
+        // Use OutputConfig for proper formatting with C++ column names
+        let mut config = self.output_config.clone();
+        config.header = write_header;
+
+        // Write using OutputConfig (handles column names, formatting, etc.)
+        // Use &mut *writer to create a fresh reborrow so we can still use writer for flush()
+        config
+            .write(&df_slice, &mut *writer)
+            .map_err(|e| anyhow::anyhow!("Write error: {e}"))?;
+
+        // Update rows written count
+        self.rows_written
+            .fetch_add(rows_to_write, Ordering::Relaxed);
 
         writer.flush()?;
-        Ok(rows_written)
+        Ok(rows_to_write)
     }
 
     fn write_json_batch(&self, writer: &mut W, df: &uffs_mft::DataFrame) -> Result<usize> {
@@ -227,45 +222,6 @@ impl<W: Write> StreamingWriter<W> {
     /// Get total rows written.
     fn total_rows(&self) -> usize {
         self.rows_written.load(Ordering::Relaxed)
-    }
-}
-
-/// Format a cell value for CSV output.
-#[cfg(windows)]
-fn format_cell_value(col: &uffs_polars::Column, row_idx: usize) -> String {
-    use uffs_polars::{AnyValue, DataType, TimeUnit};
-
-    let val = col.get(row_idx);
-    match val {
-        Ok(AnyValue::Null) => {
-            // C++ outputs "0" for null numeric/boolean values, empty for strings
-            match col.dtype() {
-                DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::Boolean => "0".to_owned(),
-                _ => String::new(),
-            }
-        }
-        Ok(AnyValue::String(s)) => format!("\"{}\"", s.replace('"', "\"\"")),
-        Ok(AnyValue::Boolean(b)) => if b { "1" } else { "0" }.to_owned(),
-        Ok(AnyValue::Datetime(ts, TimeUnit::Microseconds, _)) => {
-            // Convert microseconds to datetime string
-            let secs = ts / 1_000_000;
-            let micros = (ts % 1_000_000) as u32;
-            if let Some(dt) = chrono::DateTime::from_timestamp(secs, micros * 1000) {
-                format!("\"{}\"", dt.format("%Y-%m-%d %H:%M:%S"))
-            } else {
-                String::new()
-            }
-        }
-        Ok(v) => v.to_string(),
-        Err(_) => String::new(),
     }
 }
 
@@ -461,7 +417,7 @@ async fn search_streaming(
     filters: &QueryFilters<'_>,
     format: &str,
     out: &str,
-    _output_config: &OutputConfig,
+    output_config: &OutputConfig,
 ) -> Result<()> {
     // Determine drives to search
     let drives: Vec<char> = if let Some(drives) = multi_drives {
@@ -495,12 +451,12 @@ async fn search_streaming(
 
     if is_console {
         let stdout = std::io::stdout();
-        search_multi_drive_streaming(&drives, filters, format, stdout).await
+        search_multi_drive_streaming(&drives, filters, format, stdout, output_config).await
     } else {
         let file =
             File::create(out).with_context(|| format!("Failed to create output file: {out}"))?;
         let writer = BufWriter::new(file);
-        search_multi_drive_streaming(&drives, filters, format, writer).await?;
+        search_multi_drive_streaming(&drives, filters, format, writer, output_config).await?;
         info!(file = out, "Results written to file");
         Ok(())
     }
@@ -1166,6 +1122,7 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
     filters: &QueryFilters<'_>,
     format: &str,
     writer: W,
+    output_config: &OutputConfig,
 ) -> Result<()> {
     use tokio::sync::mpsc;
     use uffs_mft::{IntoLazy, col, lit};
@@ -1183,7 +1140,12 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
     let owned_filters = Arc::new(OwnedQueryFilters::from_borrowed(filters));
 
     // Create streaming writer (shared across all results)
-    let streaming_writer = Arc::new(StreamingWriter::new(writer, format, filters.limit));
+    let streaming_writer = Arc::new(StreamingWriter::new(
+        writer,
+        format,
+        filters.limit,
+        output_config.clone(),
+    ));
 
     // Channel for receiving results from drive tasks
     let (tx, mut rx) = mpsc::channel::<DriveResult>(drives.len());
