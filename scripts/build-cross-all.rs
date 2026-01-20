@@ -194,27 +194,42 @@ fn main() {
             eprintln!("\n❌ Build failed for {} - aborting!", target.triple);
             exit(1);
         }
-        if !copy_binaries_to_dist(&version, target, &target_dir) {
-            eprintln!("\n❌ Binary copy failed for {} - aborting!", target.triple);
-            eprintln!("   This usually means the build succeeded but binaries were not placed in the expected location.");
-            eprintln!(
-                "   Check the target directory: {:?}",
-                target_dir.join(target.triple)
-            );
-            exit(1);
+
+        // Only copy to dist/ for release builds (not profiling or dev)
+        if build_mode == BuildMode::Release {
+            if !copy_binaries_to_dist(&version, target, &target_dir) {
+                eprintln!("\n❌ Binary copy failed for {} - aborting!", target.triple);
+                eprintln!("   This usually means the build succeeded but binaries were not placed in the expected location.");
+                eprintln!(
+                    "   Check the target directory: {:?}",
+                    target_dir.join(target.triple)
+                );
+                exit(1);
+            }
         }
     }
 
-    update_all_checksums(&version, &available);
-    update_latest_symlink(&version);
+    // Only update checksums/symlinks/git for release builds
+    if build_mode == BuildMode::Release {
+        update_all_checksums(&version, &available);
+        update_latest_symlink(&version);
 
-    // Add binaries to git for sharing
-    add_binaries_to_git(&version);
+        // Add binaries to git for sharing
+        add_binaries_to_git(&version);
 
-    println!(
-        "\n✅ Windows build complete!\n📦 Binaries in dist/{}/*/",
-        version
-    );
+        println!(
+            "\n✅ Windows build complete!\n📦 Binaries in dist/{}/*/",
+            version
+        );
+    } else if build_mode == BuildMode::Profiling {
+        println!(
+            "\n✅ Profiling build complete!\n📦 Binaries in {:?}/{}/profiling/",
+            target_dir, TARGETS[0].triple
+        );
+        println!("📋 Run 'just profile-usb' to copy to USB for Windows profiling");
+    } else {
+        println!("\n✅ Dev build complete!");
+    }
     println!("ℹ️  Note: UFFS only runs on Windows (requires NTFS MFT access)");
 }
 

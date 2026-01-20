@@ -1,11 +1,7 @@
 #!/bin/bash
 # Copy UFFS profiling binaries to USB drive for Windows profiling
+# Profiling binaries are built with debug symbols and live in the profiling cache directory
 set -e
-
-# Configuration
-USB_PATH="/Volumes/UFFSPRO"
-DEST_DIR="$USB_PATH/uffs_profiling"
-SOURCE_DIR="$HOME/Library/Caches/uffs/target/x86_64-pc-windows-msvc/profiling"
 
 # Colors
 RED='\033[0;31m'
@@ -13,6 +9,15 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+# Configuration
+USB_PATH="/Volumes/UFFSPRO"
+DEST_DIR="$USB_PATH/uffs_profiling"
+
+# Profiling binaries are in the cargo target cache (not dist/)
+# This matches the CARGO_TARGET_DIR used by build-cross-all.rs
+SOURCE_DIR="$HOME/Library/Caches/uffs/target-xwin-release/x86_64-pc-windows-msvc/profiling"
+SOURCE_EXE="$SOURCE_DIR/uffs.exe"
 
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${BLUE}  UFFS Profiling → USB Copy Script${NC}"
@@ -27,12 +32,13 @@ fi
 echo -e "${GREEN}✓ USB found at: $USB_PATH${NC}"
 
 # Check if profiling binaries exist
-if [ ! -f "$SOURCE_DIR/uffs.exe" ]; then
-    echo -e "${RED}❌ Profiling binaries not found at: $SOURCE_DIR${NC}"
+if [ ! -f "$SOURCE_EXE" ]; then
+    echo -e "${RED}❌ Profiling binary not found: $SOURCE_EXE${NC}"
     echo -e "${YELLOW}   Run this first: UFFS_PROFILING_BUILD=1 rust-script scripts/build-cross-all.rs${NC}"
+    echo -e "${YELLOW}   Or: just profile-usb${NC}"
     exit 1
 fi
-echo -e "${GREEN}✓ Profiling binaries found${NC}"
+echo -e "${GREEN}✓ Found profiling binaries${NC}"
 
 # Create destination directory
 echo -e "${BLUE}📁 Creating destination: $DEST_DIR${NC}"
@@ -41,13 +47,11 @@ mkdir -p "$DEST_DIR"
 # Copy files with progress
 echo -e "${BLUE}📦 Copying files...${NC}"
 
-echo -e "   Copying uffs.exe ($(du -h "$SOURCE_DIR/uffs.exe" | cut -f1))..."
-cp "$SOURCE_DIR/uffs.exe" "$DEST_DIR/"
+echo -e "   Copying uffs.exe ($(du -h "$SOURCE_EXE" | cut -f1))..."
+cp "$SOURCE_EXE" "$DEST_DIR/uffs.exe"
 echo -e "${GREEN}   ✓ uffs.exe${NC}"
 
-echo -e "   Copying uffs.pdb ($(du -h "$SOURCE_DIR/uffs.pdb" | cut -f1))... (this may take a while)"
-cp "$SOURCE_DIR/uffs.pdb" "$DEST_DIR/"
-echo -e "${GREEN}   ✓ uffs.pdb${NC}"
+# Note: Skipping PDB - not needed for samply profiling (debug info embedded in binary)
 
 # Copy PowerShell script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

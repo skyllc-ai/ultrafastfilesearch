@@ -7,14 +7,12 @@
 # - Uses Microsoft Symbol Server for Windows library symbols
 #
 # SYMBOLICATION WORKFLOW:
-# - PDB file is already on USB (built on Mac, copied by `just profile-usb`)
 # - Raw profile is saved with --save-only (captures addresses, no symbols)
-# - Profile JSON is copied back to USB alongside the existing PDB
-# - On Mac: `samply load` symbolicates using the PDB in the same directory
+# - Profile JSON is copied back to USB
+# - On Mac: `samply load` symbolicates using debug info embedded in the binary
 # - Firefox Profiler fetches symbols from samply's local server
 #
-# NOTE: PDB is NOT copied to C:\profiling - it stays on USB and is only
-#       used on Mac during `samply load` for symbolication.
+# NOTE: PDB files are NOT needed - the profiling binary has embedded debug info.
 
 $ErrorActionPreference = "Stop"
 
@@ -64,7 +62,7 @@ if (-not (Test-Path $ProfilingDir)) {
     Write-Host "✓ $ProfilingDir already exists" -ForegroundColor Green
 }
 
-# Step 3: Copy uffs.exe from USB (PDB stays on USB for Mac symbolication)
+# Step 3: Copy uffs.exe from USB
 Write-Host ""
 Write-Host "Step 3: Copying uffs.exe from USB..." -ForegroundColor Yellow
 $exeSrc = Join-Path $ScriptDir "uffs.exe"
@@ -76,14 +74,6 @@ if (Test-Path $exeSrc) {
 } else {
     Write-Host "   ❌ uffs.exe not found on USB!" -ForegroundColor Red
     exit 1
-}
-
-# Check if PDB exists on USB (for info only - it's used on Mac, not here)
-$pdbOnUsb = Test-Path (Join-Path $ScriptDir "uffs.pdb")
-if ($pdbOnUsb) {
-    Write-Host "   ✓ uffs.pdb found on USB (will be used for symbolication on Mac)" -ForegroundColor Green
-} else {
-    Write-Host "   ⚠ uffs.pdb not on USB - profile will lack uffs.exe symbols" -ForegroundColor Yellow
 }
 
 # Step 4: Run profiling
@@ -101,8 +91,8 @@ $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 # Run samply with optimized settings
 # --rate 1000: 1000 Hz sampling rate (1ms interval)
 # --save-only: Don't open browser, just save the profile
-# --benchmark: Skip output (measure MFT reading only, not stdout I/O)
 # --drive F: Single drive for focused profiling
+# --benchmark: Skip output to measure MFT reading only (no stdout I/O overhead)
 samply record --rate 1000 --save-only -o $profilePath -- .\uffs.exe "*" --drive F --benchmark
 
 $stopwatch.Stop()
@@ -136,7 +126,6 @@ Profile Size: ${profileSize} MB
 Execution Time: ${elapsedSeconds} seconds
 Machine: $env:COMPUTERNAME
 OS: $([System.Environment]::OSVersion.VersionString)
-PDB on USB: $pdbOnUsb
 
 --------------------------------------------------------------------------------
 PROFILE METADATA
@@ -178,8 +167,8 @@ SYMBOLICATION INFO
 This profile contains raw addresses that need symbolication on Mac.
 
 For uffs.exe symbols:
-  - PDB file (uffs.pdb) is already on USB (built on Mac)
-  - samply load will use it automatically when in same directory
+  - Debug info is embedded in the binary (profiling build)
+  - samply load will symbolicate automatically
 
 For Windows library symbols:
   - samply fetches from Microsoft Symbol Server
@@ -216,7 +205,7 @@ Note: Detailed parsing failed. Use Firefox Profiler for analysis.
         $basicSummary | Out-File -FilePath $summaryPath -Encoding UTF8
     }
 
-    # Step 6: Copy profile and summary back to USB (PDB is already there)
+    # Step 6: Copy profile and summary back to USB
     Write-Host ""
     Write-Host "Step 6: Copying results back to USB..." -ForegroundColor Yellow
 
@@ -237,7 +226,6 @@ Note: Detailed parsing failed. Use Firefox Profiler for analysis.
     Write-Host ""
     Write-Host "  Files on USB:" -ForegroundColor Cyan
     Write-Host "    • $ProfileOutput (profile data - NEW)" -ForegroundColor White
-    Write-Host "    • uffs.pdb (symbols - already on USB)" -ForegroundColor Gray
     Write-Host "    • $SummaryOutput (summary - NEW)" -ForegroundColor White
     Write-Host ""
     Write-Host "  On Mac, run:" -ForegroundColor Cyan

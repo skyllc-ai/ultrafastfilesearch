@@ -140,8 +140,7 @@ build/.ttapi-workflow-state.json
 metadata.json
 
 # Large trial run output files (too big for GitHub)
-docs/trial_runs/UltraFastFileSearch/cpp.txt
-docs/trial_runs/UltraFastFileSearch/rust.txt
+docs/trial_runs/UltraFastFileSearch/*.txt
 
 # Profiling bundles (contain large binaries and profile data)
 bundles/

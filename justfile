@@ -2358,25 +2358,30 @@ profile-usb:
 
     # Step 3: Copy files to USB
     printf "\033[0;34mStep 3: Copying files to USB...\033[0m\n"
-    printf "\033[0;36m  → ./scripts/copy-profiling-to-usb.sh\033[0m\n"
 
-    # Update the script's USB path temporarily
-    export USB_OVERRIDE="$USB_PATH"
     DEST_DIR="$USB_PATH/uffs_profiling"
-    SOURCE_DIR="$HOME/Library/Caches/uffs/target/x86_64-pc-windows-msvc/profiling"
-
     mkdir -p "$DEST_DIR"
 
-    echo "   Copying uffs.exe..."
-    cp "$SOURCE_DIR/uffs.exe" "$DEST_DIR/"
+    # Profiling binaries are in the cargo target cache (not dist/)
+    # This matches the CARGO_TARGET_DIR used by build-cross-all.rs
+    SOURCE_DIR="$HOME/Library/Caches/uffs/target-xwin-release/x86_64-pc-windows-msvc/profiling"
+    SOURCE_EXE="$SOURCE_DIR/uffs.exe"
+
+    if [ ! -f "$SOURCE_EXE" ]; then
+        printf "\033[0;31m   ❌ Profiling binary not found: $SOURCE_EXE\033[0m\n"
+        printf "\033[0;33m   The build may have failed - check output above\033[0m\n"
+        exit 1
+    fi
+
+    printf "\033[0;36m   Source: $SOURCE_DIR\033[0m\n"
+
+    echo "   Copying uffs.exe ($(du -h "$SOURCE_EXE" | cut -f1))..."
+    cp "$SOURCE_EXE" "$DEST_DIR/uffs.exe"
     printf "\033[0;32m   ✓ uffs.exe\033[0m\n"
 
-    echo "   Copying uffs.pdb (2+ GB, please wait)..."
-    cp "$SOURCE_DIR/uffs.pdb" "$DEST_DIR/"
-    printf "\033[0;32m   ✓ uffs.pdb\033[0m\n"
+    # Note: Skipping PDB - not needed for samply profiling (debug info embedded in binary)
 
     # Copy PowerShell script
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     if [ -f "scripts/windows-profiling.ps1" ]; then
         cp "scripts/windows-profiling.ps1" "$DEST_DIR/run-profiling.ps1"
         printf "\033[0;32m   ✓ run-profiling.ps1\033[0m\n"
