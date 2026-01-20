@@ -393,8 +393,14 @@ impl MftReader {
             volume: volume.to_ascii_uppercase(),
             handle,
             mode: MftReadMode::Auto,
-            merge_extensions: false, // Fast path by default
-            use_bitmap: true,        // Use bitmap optimization by default
+            // Enable extension merging by default for C++ parity.
+            // Extension records contain additional attributes for files with
+            // many hard links or alternate data streams. Without merging,
+            // ~1% of files may have incomplete attribute information.
+            // The performance impact is ~10-15% slower, but correctness is
+            // more important for file search accuracy.
+            merge_extensions: true,
+            use_bitmap: true, // Use bitmap optimization by default
         })
     }
 
@@ -807,6 +813,19 @@ impl MftReader {
             }
         };
 
+        // Add placeholder records for missing parent directories.
+        // This matches C++ behavior where `at()` creates placeholder records
+        // for any referenced FRS that hasn't been seen yet.
+        let mut parsed_records = parsed_records;
+        let placeholders_added =
+            crate::io::add_missing_parent_placeholders_to_vec(&mut parsed_records);
+        if placeholders_added > 0 {
+            debug!(
+                placeholders_added,
+                "Added placeholder records for path resolution"
+            );
+        }
+
         let read_elapsed = start_time.elapsed();
         let records_parsed_count = parsed_records.len();
         let throughput_mb_s = if read_elapsed.as_secs_f64() > 0.0 {
@@ -1085,11 +1104,22 @@ impl MftReader {
         let parallel_reader = ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
         let handle = self.handle.raw_handle();
 
-        let parsed_columns = parallel_reader.read_all_parallel_to_columns::<fn(u64, u64)>(
+        let mut parsed_columns = parallel_reader.read_all_parallel_to_columns::<fn(u64, u64)>(
             handle,
             self.merge_extensions,
             None,
         )?;
+
+        // Add placeholder records for missing parent directories.
+        // This matches C++ behavior where `at()` creates placeholder records
+        // for any referenced FRS that hasn't been seen yet.
+        let placeholders_added = parsed_columns.add_missing_parent_placeholders();
+        if placeholders_added > 0 {
+            debug!(
+                placeholders_added,
+                "Added placeholder records for path resolution"
+            );
+        }
 
         let read_parse_ms = read_parse_start.elapsed().as_millis() as u64;
         let records_parsed = parsed_columns.len();

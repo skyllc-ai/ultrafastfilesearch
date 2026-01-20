@@ -632,6 +632,110 @@ impl ParsedRecord {
     }
 }
 
+/// Creates a placeholder record for a missing parent directory.
+///
+/// This matches C++ behavior where the `at()` method creates placeholder
+/// records for any referenced FRS that hasn't been seen yet. When a file
+/// references a parent directory that wasn't parsed (e.g., marked as not-in-use
+/// in bitmap but still referenced), we create a placeholder to ensure path
+/// resolution can complete.
+///
+/// # Arguments
+///
+/// * `frs` - The FRS number for the placeholder record
+///
+/// # Returns
+///
+/// A `ParsedRecord` with minimal information suitable for path resolution.
+#[must_use]
+pub fn create_placeholder_record(frs: u64) -> ParsedRecord {
+    ParsedRecord {
+        frs,
+        parent_frs: 5, // Assume root as parent (FRS 5 is root directory)
+        name: format!("<dir:{frs}>"),
+        names: Vec::new(),
+        streams: Vec::new(),
+        size: 0,
+        allocated_size: 0,
+        std_info: ExtendedStandardInfo::default(),
+        in_use: true,       // Mark as in-use so it's included in output
+        is_directory: true, // Assume directory since it's referenced as parent
+    }
+}
+
+/// Adds placeholder records for parent directories that are referenced
+/// but not present in the parsed records.
+///
+/// This is the `Vec<ParsedRecord>` version of
+/// `ParsedColumns::add_missing_parent_placeholders`.
+///
+/// # Arguments
+///
+/// * `records` - Mutable reference to the vector of parsed records
+///
+/// # Returns
+///
+/// The number of placeholder records added.
+pub fn add_missing_parent_placeholders_to_vec(records: &mut Vec<ParsedRecord>) -> usize {
+    use std::collections::HashSet;
+
+    // Iterate until no new placeholders are needed (handles recursive missing
+    // parents)
+    let mut total_added = 0;
+    let mut iterations = 0;
+    const MAX_ITERATIONS: usize = 10; // Prevent infinite loops
+
+    loop {
+        iterations += 1;
+        if iterations > MAX_ITERATIONS {
+            warn!(
+                iterations,
+                "Max iterations reached in placeholder creation - possible cycle"
+            );
+            break;
+        }
+
+        // Collect all FRS values we have
+        let known_frs: HashSet<u64> = records.iter().map(|r| r.frs).collect();
+
+        // Collect all parent_frs values that are referenced
+        let referenced_parents: HashSet<u64> = records.iter().map(|r| r.parent_frs).collect();
+
+        // Find missing parents (exclude 0 and 5 which are special root markers)
+        let missing_parents: Vec<u64> = referenced_parents
+            .difference(&known_frs)
+            .filter(|&&frs| frs != 0 && frs != 5)
+            .copied()
+            .collect();
+
+        if missing_parents.is_empty() {
+            break; // No more missing parents
+        }
+
+        debug!(
+            iteration = iterations,
+            missing_count = missing_parents.len(),
+            "Creating placeholder records for missing parent directories (Vec path)"
+        );
+
+        // Create placeholder records
+        for frs in missing_parents {
+            let placeholder = create_placeholder_record(frs);
+            records.push(placeholder);
+            total_added += 1;
+        }
+    }
+
+    if total_added > 0 {
+        info!(
+            total_added,
+            iterations, "Added placeholder records for missing parent directories (Vec path)"
+        );
+    }
+
+    total_added
+}
+
 /// Attributes extracted from an extension record.
 ///
 /// Extension records contain additional attributes for files that don't
@@ -908,6 +1012,77 @@ impl ParsedColumns {
         self.is_unpinned.reserve(additional);
         self.is_virtual.reserve(additional);
         self.flags.reserve(additional);
+    }
+
+    /// Adds placeholder records for parent directories that are referenced
+    /// but not present in the parsed records.
+    ///
+    /// This matches C++ behavior where `at()` creates placeholder records
+    /// for any referenced FRS that hasn't been seen yet. Without this,
+    /// path resolution fails with `<unknown:XXXXXX>` for files whose parent
+    /// directories weren't parsed (e.g., marked as not-in-use in bitmap).
+    ///
+    /// # Returns
+    ///
+    /// The number of placeholder records added.
+    pub fn add_missing_parent_placeholders(&mut self) -> usize {
+        use std::collections::HashSet;
+
+        // Iterate until no new placeholders are needed (handles recursive missing
+        // parents)
+        let mut total_added = 0;
+        let mut iterations = 0;
+        const MAX_ITERATIONS: usize = 10; // Prevent infinite loops
+
+        loop {
+            iterations += 1;
+            if iterations > MAX_ITERATIONS {
+                warn!(
+                    iterations,
+                    "Max iterations reached in placeholder creation - possible cycle"
+                );
+                break;
+            }
+
+            // Collect all FRS values we have
+            let known_frs: HashSet<u64> = self.frs.iter().copied().collect();
+
+            // Collect all parent_frs values that are referenced
+            let referenced_parents: HashSet<u64> = self.parent_frs.iter().copied().collect();
+
+            // Find missing parents (exclude 0 and 5 which are special root markers)
+            let missing_parents: Vec<u64> = referenced_parents
+                .difference(&known_frs)
+                .filter(|&&frs| frs != 0 && frs != 5)
+                .copied()
+                .collect();
+
+            if missing_parents.is_empty() {
+                break; // No more missing parents
+            }
+
+            debug!(
+                iteration = iterations,
+                missing_count = missing_parents.len(),
+                "Creating placeholder records for missing parent directories"
+            );
+
+            // Create placeholder records
+            for frs in missing_parents {
+                let placeholder = create_placeholder_record(frs);
+                self.push_record(&placeholder);
+                total_added += 1;
+            }
+        }
+
+        if total_added > 0 {
+            info!(
+                total_added,
+                iterations, "Added placeholder records for missing parent directories"
+            );
+        }
+
+        total_added
     }
 }
 
@@ -1673,29 +1848,42 @@ pub fn generate_read_chunks(
             let chunk_frs_start = extent_start_frs + chunk_start;
             let chunk_frs_end = chunk_frs_start + chunk_records;
 
-            // Calculate skip ranges using bitmap
+            // Calculate skip ranges using bitmap (for I/O optimization only).
+            //
+            // IMPORTANT: We ALWAYS add chunks regardless of bitmap status.
+            // The bitmap is used for I/O optimization (skip_begin/skip_end) to reduce
+            // disk reads, but we still parse all records and check the IN_USE flag
+            // in each record header. This matches C++ behavior where bitmap is
+            // advisory, not authoritative.
+            //
+            // The C++ implementation (line 7489) defaults to reading all records:
+            //   this->mft_bitmap.resize(..., ~Bitmap::value_type() /*default should be to
+            // read unused slots too */);
+            //
+            // Previously, Rust skipped entire chunks if all records were marked as
+            // not-in-use in the bitmap. This caused ~5-6M files to be missed because:
+            // 1. Bitmap may be stale or inconsistent with record headers
+            // 2. Parent directories marked not-in-use are still referenced by children
+            // 3. Extension records may be in different chunks than their base records
             let (skip_begin, skip_end) = if let Some(bm) = bitmap {
                 bm.calculate_skip_range(chunk_frs_start, chunk_frs_end)
             } else {
                 (0, 0)
             };
 
-            // Only add chunk if it has any in-use records
-            if skip_begin + skip_end < chunk_records {
-                let effective_records = chunk_records - skip_begin - skip_end;
-                total_records_to_read += effective_records;
-                total_records_skipped += skip_begin + skip_end;
+            // ALWAYS add chunk - bitmap is for I/O optimization, not filtering
+            // The IN_USE flag in each record header is the authoritative source
+            let effective_records = chunk_records - skip_begin - skip_end;
+            total_records_to_read += effective_records;
+            total_records_skipped += skip_begin + skip_end;
 
-                chunks.push(ReadChunk {
-                    disk_offset: extent_disk_offset + chunk_start * u64::from(record_size),
-                    start_frs: chunk_frs_start,
-                    record_count: chunk_records,
-                    skip_begin,
-                    skip_end,
-                });
-            } else {
-                total_records_skipped += chunk_records;
-            }
+            chunks.push(ReadChunk {
+                disk_offset: extent_disk_offset + chunk_start * u64::from(record_size),
+                start_frs: chunk_frs_start,
+                record_count: chunk_records,
+                skip_begin,
+                skip_end,
+            });
 
             chunk_start += chunk_records;
         }
