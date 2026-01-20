@@ -32,7 +32,7 @@ members = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.2.21"
+version = "0.2.22"
 edition = "2024"
 rust-version = "1.85"
 license = "MPL-2.0 OR LicenseRef-UFFS-Commercial"
@@ -401,6 +401,8 @@ rpath = false
 inherits = "release"
 debug = true                            # Enable debug symbols for flamegraph
 strip = false                           # Don't strip symbols (needed for profiling)
+lto = false                             # Disable LTO for cleaner call stacks in profiles
+codegen-units = 16                      # Balance between compile time and consistent stacks
 
 [profile.bench]
 inherits = "release"

@@ -153,7 +153,8 @@ impl<W: Write> StreamingWriter<W> {
         config.header = write_header;
 
         // Write using OutputConfig (handles column names, formatting, etc.)
-        // Use &mut *writer to create a fresh reborrow so we can still use writer for flush()
+        // Use &mut *writer to create a fresh reborrow so we can still use writer for
+        // flush()
         config
             .write(&df_slice, &mut *writer)
             .map_err(|e| anyhow::anyhow!("Write error: {e}"))?;
@@ -1196,6 +1197,25 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
 
             let records_read = df.height();
 
+            // Build path resolver from FULL data BEFORE filtering
+            // This is critical for resolving paths correctly!
+            let mut path_resolver = match uffs_core::FastPathResolver::build(&df, drive_char) {
+                Ok(resolver) => Some(resolver),
+                Err(e) => {
+                    let _ = tx
+                        .send(DriveResult {
+                            drive: drive_char,
+                            df: None,
+                            records_read,
+                            matches: 0,
+                            error: Some(format!("Failed to build path resolver: {e}")),
+                            paths_resolved: false,
+                        })
+                        .await;
+                    return;
+                }
+            };
+
             // Apply filters
             let filtered = match filters.execute(df) {
                 Ok(f) => f,
@@ -1216,9 +1236,49 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
 
             let matches = filtered.height();
 
+            // Add paths using the pre-built resolver
+            let with_paths = if let Some(ref mut resolver) = path_resolver {
+                match resolver.add_path_column_auto(&filtered) {
+                    Ok(df) => {
+                        // Add path_only column (directory portion of path)
+                        match uffs_core::add_path_only_column(&df) {
+                            Ok(df_with_path_only) => df_with_path_only,
+                            Err(e) => {
+                                let _ = tx
+                                    .send(DriveResult {
+                                        drive: drive_char,
+                                        df: None,
+                                        records_read,
+                                        matches,
+                                        error: Some(format!("Failed to add path_only: {e}")),
+                                        paths_resolved: false,
+                                    })
+                                    .await;
+                                return;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx
+                            .send(DriveResult {
+                                drive: drive_char,
+                                df: None,
+                                records_read,
+                                matches,
+                                error: Some(format!("Failed to add paths: {e}")),
+                                paths_resolved: false,
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            } else {
+                filtered
+            };
+
             // Add drive column
             let df_with_drive = if matches > 0 {
-                match filtered
+                match with_paths
                     .lazy()
                     .with_column(lit(format!("{drive_char}:")).alias("drive"))
                     .collect()
@@ -1249,7 +1309,7 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
                     records_read,
                     matches,
                     error: None,
-                    paths_resolved: false,
+                    paths_resolved: path_resolver.is_some(),
                 })
                 .await;
         });

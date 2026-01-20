@@ -1,0 +1,100 @@
+#!/bin/bash
+# Copy UFFS profiling binaries to USB drive for Windows profiling
+set -e
+
+# Configuration
+USB_PATH="/Volumes/UFFSPRO"
+DEST_DIR="$USB_PATH/uffs_profiling"
+SOURCE_DIR="$HOME/Library/Caches/uffs/target/x86_64-pc-windows-msvc/profiling"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}  UFFS Profiling → USB Copy Script${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+# Check if USB is mounted
+if [ ! -d "$USB_PATH" ]; then
+    echo -e "${RED}❌ USB not found at: $USB_PATH${NC}"
+    echo -e "${YELLOW}   Please insert the USB drive and try again.${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ USB found at: $USB_PATH${NC}"
+
+# Check if profiling binaries exist
+if [ ! -f "$SOURCE_DIR/uffs.exe" ]; then
+    echo -e "${RED}❌ Profiling binaries not found at: $SOURCE_DIR${NC}"
+    echo -e "${YELLOW}   Run this first: UFFS_PROFILING_BUILD=1 rust-script scripts/build-cross-all.rs${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ Profiling binaries found${NC}"
+
+# Create destination directory
+echo -e "${BLUE}📁 Creating destination: $DEST_DIR${NC}"
+mkdir -p "$DEST_DIR"
+
+# Copy files with progress
+echo -e "${BLUE}📦 Copying files...${NC}"
+
+echo -e "   Copying uffs.exe ($(du -h "$SOURCE_DIR/uffs.exe" | cut -f1))..."
+cp "$SOURCE_DIR/uffs.exe" "$DEST_DIR/"
+echo -e "${GREEN}   ✓ uffs.exe${NC}"
+
+echo -e "   Copying uffs.pdb ($(du -h "$SOURCE_DIR/uffs.pdb" | cut -f1))... (this may take a while)"
+cp "$SOURCE_DIR/uffs.pdb" "$DEST_DIR/"
+echo -e "${GREEN}   ✓ uffs.pdb${NC}"
+
+# Create Windows instructions file
+cat > "$DEST_DIR/README_WINDOWS.txt" << 'EOF'
+UFFS Profiling Instructions for Windows
+========================================
+
+1. ONE-TIME SETUP: Install samply
+   Open PowerShell and run:
+   
+   cargo install --locked samply
+
+2. COPY FILES: Copy this folder to a local drive
+   
+   mkdir C:\profiling
+   copy D:\support\uffs_profiling\* C:\profiling\
+
+3. RUN PROFILING: Record a profile
+   
+   cd C:\profiling
+   samply record --save-only -o profile.json -- .\uffs.exe "*" --drives=C
+
+   For a specific scenario:
+   samply record --save-only -o profile_win.json -- .\uffs.exe "C:\Windows\*" --ext=dll
+
+4. COPY BACK: Copy profile.json back to this USB folder
+   
+   copy C:\profiling\profile.json D:\support\uffs_profiling\
+
+5. ON MAC: Analyze with
+   
+   samply load /Volumes/UFFSPRO/uffs_profiling/profile.json
+EOF
+echo -e "${GREEN}   ✓ README_WINDOWS.txt${NC}"
+
+# Show summary
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}  ✅ DONE! Files copied to USB${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e "  ${BLUE}Contents:${NC}"
+ls -lh "$DEST_DIR"
+echo ""
+echo -e "  ${YELLOW}Next steps:${NC}"
+echo -e "  1. Eject USB safely"
+echo -e "  2. On Windows: Follow instructions in README_WINDOWS.txt"
+echo -e "  3. Bring back: profile.json"
+echo -e "  4. On Mac: samply load <path>/profile.json"
+echo ""
+

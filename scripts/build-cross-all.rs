@@ -53,30 +53,65 @@ struct Target {
     requires_linker: Option<&'static str>,
 }
 
+/// Build mode enum for clearer logic
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum BuildMode {
+    Release,
+    Dev,
+    Profiling,
+}
+
+/// Determine build mode from environment variables.
+/// Priority: UFFS_PROFILING_BUILD > UFFS_RELEASE_BUILD > default (release)
+fn get_build_mode() -> BuildMode {
+    // Check for profiling mode first (highest priority)
+    if env::var("UFFS_PROFILING_BUILD")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return BuildMode::Profiling;
+    }
+
+    // Check for release mode (default is true)
+    if env::var("UFFS_RELEASE_BUILD")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(true)
+    {
+        BuildMode::Release
+    } else {
+        BuildMode::Dev
+    }
+}
+
 /// Check if release build mode is enabled via UFFS_RELEASE_BUILD env var.
 /// Default is DEV mode for faster iteration during development.
+#[allow(dead_code)]
 fn is_release_build() -> bool {
-    env::var("UFFS_RELEASE_BUILD")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(true) // Default to release builds
+    get_build_mode() == BuildMode::Release
+}
+
+/// Check if profiling build mode is enabled via UFFS_PROFILING_BUILD env var.
+#[allow(dead_code)]
+fn is_profiling_build() -> bool {
+    get_build_mode() == BuildMode::Profiling
 }
 
 /// Get the build profile name for display purposes
 fn build_profile() -> &'static str {
-    if is_release_build() {
-        "release"
-    } else {
-        "xwin-dev"
+    match get_build_mode() {
+        BuildMode::Release => "release",
+        BuildMode::Dev => "xwin-dev",
+        BuildMode::Profiling => "profiling",
     }
 }
 
 /// Get the cargo output directory name (where binaries are placed)
-/// Note: Custom profiles like "xwin-dev" output to their own directory
+/// Note: Custom profiles like "xwin-dev" and "profiling" output to their own directory
 fn build_output_dir() -> &'static str {
-    if is_release_build() {
-        "release"
-    } else {
-        "xwin-dev"
+    match get_build_mode() {
+        BuildMode::Release => "release",
+        BuildMode::Dev => "xwin-dev",
+        BuildMode::Profiling => "profiling",
     }
 }
 
@@ -94,13 +129,17 @@ fn main() {
     println!("🚀 UFFS Cross-Platform Build (Windows Only)");
     println!("ℹ️  UFFS is Windows-only (requires NTFS MFT access)");
 
-    // Show build mode (DEV is default, set UFFS_RELEASE_BUILD=1 for release)
-    let build_mode = if is_release_build() {
-        "RELEASE (optimized)"
-    } else {
-        "DEV (fast, default)"
+    // Show build mode
+    let build_mode = get_build_mode();
+    let build_mode_str = match build_mode {
+        BuildMode::Release => "RELEASE (optimized)",
+        BuildMode::Dev => "DEV (fast, default)",
+        BuildMode::Profiling => "PROFILING (optimized + debug symbols for samply/PerfView)",
     };
-    println!("🔧 Build mode: {}", build_mode);
+    println!("🔧 Build mode: {}", build_mode_str);
+    if build_mode == BuildMode::Profiling {
+        println!("📊 Profiling build: binaries will include PDB symbols for analysis");
+    }
 
     let (host_os, host_arch) = (env::consts::OS, env::consts::ARCH);
     println!(
@@ -333,7 +372,7 @@ fn cmd_exists(c: &str) -> bool {
 }
 
 fn build_for_target(target: &Target, target_dir: &Path) -> bool {
-    let release_build = is_release_build();
+    let build_mode = get_build_mode();
     let profile = build_profile();
 
     for (binary, package) in BINARIES {
@@ -343,13 +382,22 @@ fn build_for_target(target: &Target, target_dir: &Path) -> bool {
             vec!["build"]
         };
 
-        // Add profile: --release for release, --profile xwin-dev for xwin dev builds
-        if release_build {
-            args.push("--release");
-        } else if target.use_xwin {
-            // Use xwin-dev profile for xwin dev builds to avoid COFF archive size limits
-            // See: docs/xwin-msvc-rlib-size-root-cause-and-workarounds.md
-            args.extend_from_slice(&["--profile", "xwin-dev"]);
+        // Add profile based on build mode
+        match build_mode {
+            BuildMode::Release => {
+                args.push("--release");
+            }
+            BuildMode::Profiling => {
+                // Use profiling profile for performance analysis with debug symbols
+                args.extend_from_slice(&["--profile", "profiling"]);
+            }
+            BuildMode::Dev => {
+                if target.use_xwin {
+                    // Use xwin-dev profile for xwin dev builds to avoid COFF archive size limits
+                    // See: docs/xwin-msvc-rlib-size-root-cause-and-workarounds.md
+                    args.extend_from_slice(&["--profile", "xwin-dev"]);
+                }
+            }
         }
 
         // Add target and package args
