@@ -655,9 +655,9 @@ fn execute_query(
         query = query.directories_only();
     }
 
-    // Apply hide_system filter (exclude files starting with $)
+    // Apply hide_system filter (exclude $-prefixed files AND FRS < 16 metadata)
     if filters.hide_system {
-        query = query.hide_system_files();
+        query = query.hide_system();
     }
 
     // Apply size filters
@@ -770,9 +770,9 @@ impl OwnedQueryFilters {
             query = query.directories_only();
         }
 
-        // Apply hide_system filter (exclude files starting with $)
+        // Apply hide_system filter (exclude $-prefixed files AND FRS < 16 metadata)
         if self.hide_system {
-            query = query.hide_system_files();
+            query = query.hide_system();
         }
 
         // Apply size filters

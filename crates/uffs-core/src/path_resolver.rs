@@ -422,7 +422,11 @@ impl FastPathResolver {
 
                 // Build full path: parent + backslash + name
                 let file_name = name.unwrap_or("<unnamed>");
-                let mut path = if parent_path.ends_with('\\') {
+
+                // Special case: root directory has name "." - just use parent path
+                let mut path = if file_name == "." {
+                    parent_path
+                } else if parent_path.ends_with('\\') {
                     format!("{parent_path}{file_name}")
                 } else {
                     format!("{parent_path}\\{file_name}")
