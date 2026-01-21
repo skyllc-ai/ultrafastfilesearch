@@ -541,7 +541,7 @@ async fn load_and_filter_data(
 
         // Build path resolver from FULL data BEFORE filtering
         let t_resolver = std::time::Instant::now();
-        let mut path_resolver = if needs_paths {
+        let path_resolver = if needs_paths {
             Some(
                 uffs_core::FastPathResolver::build(&full_df, drive_letter)
                     .context("Failed to build path resolver")?,
@@ -557,12 +557,11 @@ async fn load_and_filter_data(
         let filter_ms = t_filter.elapsed().as_millis();
         let filtered_count = filtered.height();
 
-        // Add paths using the pre-built resolver (auto-selects parallel for large
-        // DataFrames)
+        // Add paths using the pre-built resolver with directory suffix (C++ parity)
         let t_paths = std::time::Instant::now();
-        if let Some(ref mut resolver) = path_resolver {
+        if let Some(resolver) = &path_resolver {
             filtered = resolver
-                .add_path_column_auto(&filtered)
+                .add_path_column_with_dir_suffix(&filtered)
                 .context("Failed to add path column")?;
             // Add path_only column (directory portion of path)
             filtered = uffs_core::add_path_only_column(&filtered)
@@ -979,10 +978,9 @@ async fn search_multi_drive_filtered(
 
             let matches = filtered.height();
 
-            // Add paths using the pre-built resolver (auto-selects parallel for large
-            // DataFrames)
-            let with_paths = if let Some(ref mut resolver) = path_resolver {
-                match resolver.add_path_column_auto(&filtered) {
+            // Add paths using the pre-built resolver with directory suffix (C++ parity)
+            let with_paths = if let Some(resolver) = &path_resolver {
+                match resolver.add_path_column_with_dir_suffix(&filtered) {
                     Ok(df) => {
                         // Add path_only column (directory portion of path)
                         match uffs_core::add_path_only_column(&df) {
@@ -1272,9 +1270,9 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
 
             let matches = filtered.height();
 
-            // Add paths using the pre-built resolver
-            let with_paths = if let Some(ref mut resolver) = path_resolver {
-                match resolver.add_path_column_auto(&filtered) {
+            // Add paths using the pre-built resolver with directory suffix (C++ parity)
+            let with_paths = if let Some(resolver) = &path_resolver {
+                match resolver.add_path_column_with_dir_suffix(&filtered) {
                     Ok(df) => {
                         // Add path_only column (directory portion of path)
                         match uffs_core::add_path_only_column(&df) {

@@ -15,6 +15,8 @@ use uffs_polars::{DataFrame, ParquetReader, ParquetWriter, SerReader};
 
 use crate::error::{MftError, Result};
 #[cfg(windows)]
+use crate::ntfs::StreamInfo;
+#[cfg(windows)]
 use crate::platform::VolumeHandle;
 
 // ============================================================================
@@ -920,6 +922,7 @@ impl MftReader {
         let mut is_directory_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut name_count_vec: Vec<u16> = Vec::with_capacity(capacity);
         let mut stream_count_vec: Vec<u16> = Vec::with_capacity(capacity);
+        let mut stream_name_vec: Vec<String> = Vec::with_capacity(capacity);
         let mut is_readonly_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut is_hidden_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut is_system_vec: Vec<bool> = Vec::with_capacity(capacity);
@@ -963,40 +966,72 @@ impl MftReader {
             stats.multi_stream_count += u64::from(stream_count > 1);
             stats.multi_name_count += u64::from(name_count > 1);
 
-            // Build column vectors - expand hard links if enabled
-            if expand_links && !parsed.names.is_empty() {
-                // Expand: one row per hard link
-                for name_info in &parsed.names {
-                    frs_vec.push(parsed.frs);
-                    parent_frs_vec.push(name_info.parent_frs);
-                    name_vec.push(name_info.name.clone());
-                    size_vec.push(parsed.size);
-                    allocated_size_vec.push(parsed.allocated_size);
-                    created_vec.push(parsed.std_info.created);
-                    modified_vec.push(parsed.std_info.modified);
-                    accessed_vec.push(parsed.std_info.accessed);
-                    mft_changed_vec.push(parsed.std_info.mft_changed);
-                    is_directory_vec.push(parsed.is_directory);
-                    // For expanded rows, name_count is 1 (this row = one link)
-                    name_count_vec.push(1);
-                    stream_count_vec.push(stream_count);
-                    is_readonly_vec.push(parsed.std_info.is_readonly);
-                    is_hidden_vec.push(parsed.std_info.is_hidden);
-                    is_system_vec.push(parsed.std_info.is_system);
-                    is_archive_vec.push(parsed.std_info.is_archive);
-                    is_compressed_vec.push(parsed.std_info.is_compressed);
-                    is_encrypted_vec.push(parsed.std_info.is_encrypted);
-                    is_sparse_vec.push(parsed.std_info.is_sparse);
-                    is_reparse_vec.push(parsed.std_info.is_reparse);
-                    is_offline_vec.push(parsed.std_info.is_offline);
-                    is_not_indexed_vec.push(parsed.std_info.is_not_content_indexed);
-                    is_temporary_vec.push(parsed.std_info.is_temporary);
-                    is_integrity_stream_vec.push(parsed.std_info.is_integrity_stream);
-                    is_no_scrub_data_vec.push(parsed.std_info.is_no_scrub_data);
-                    is_pinned_vec.push(parsed.std_info.is_pinned);
-                    is_unpinned_vec.push(parsed.std_info.is_unpinned);
-                    is_virtual_vec.push(parsed.std_info.is_virtual);
-                    flags_vec.push(parsed.std_info.to_raw_flags());
+            // Build column vectors - expand (names × streams) if enabled
+            if expand_links {
+                // Get names to iterate over
+                let names: Vec<_> = if parsed.names.is_empty() {
+                    vec![crate::ntfs::NameInfo {
+                        name: parsed.name.clone(),
+                        parent_frs: parsed.parent_frs,
+                        namespace: 3,
+                    }]
+                } else {
+                    parsed.names.clone()
+                };
+
+                // Get streams to iterate over
+                let streams: Vec<_> = if parsed.streams.is_empty() {
+                    vec![StreamInfo {
+                        name: String::new(),
+                        size: parsed.size,
+                        allocated_size: parsed.allocated_size,
+                        is_sparse: false,
+                        is_compressed: false,
+                    }]
+                } else {
+                    parsed.streams.clone()
+                };
+
+                // Expand: one row per (name × stream) combination
+                for name_info in &names {
+                    for stream_info in &streams {
+                        frs_vec.push(parsed.frs);
+                        parent_frs_vec.push(name_info.parent_frs);
+                        name_vec.push(name_info.name.clone());
+                        // Use stream-specific size for ADS
+                        let (size, alloc) = if stream_info.name.is_empty() {
+                            (parsed.size, parsed.allocated_size)
+                        } else {
+                            (stream_info.size, stream_info.allocated_size)
+                        };
+                        size_vec.push(size);
+                        allocated_size_vec.push(alloc);
+                        created_vec.push(parsed.std_info.created);
+                        modified_vec.push(parsed.std_info.modified);
+                        accessed_vec.push(parsed.std_info.accessed);
+                        mft_changed_vec.push(parsed.std_info.mft_changed);
+                        is_directory_vec.push(parsed.is_directory);
+                        name_count_vec.push(1);
+                        stream_count_vec.push(1);
+                        stream_name_vec.push(stream_info.name.clone());
+                        is_readonly_vec.push(parsed.std_info.is_readonly);
+                        is_hidden_vec.push(parsed.std_info.is_hidden);
+                        is_system_vec.push(parsed.std_info.is_system);
+                        is_archive_vec.push(parsed.std_info.is_archive);
+                        is_compressed_vec.push(parsed.std_info.is_compressed);
+                        is_encrypted_vec.push(parsed.std_info.is_encrypted);
+                        is_sparse_vec.push(parsed.std_info.is_sparse);
+                        is_reparse_vec.push(parsed.std_info.is_reparse);
+                        is_offline_vec.push(parsed.std_info.is_offline);
+                        is_not_indexed_vec.push(parsed.std_info.is_not_content_indexed);
+                        is_temporary_vec.push(parsed.std_info.is_temporary);
+                        is_integrity_stream_vec.push(parsed.std_info.is_integrity_stream);
+                        is_no_scrub_data_vec.push(parsed.std_info.is_no_scrub_data);
+                        is_pinned_vec.push(parsed.std_info.is_pinned);
+                        is_unpinned_vec.push(parsed.std_info.is_unpinned);
+                        is_virtual_vec.push(parsed.std_info.is_virtual);
+                        flags_vec.push(parsed.std_info.to_raw_flags());
+                    }
                 }
             } else {
                 // No expansion: one row per FRS (use primary name)
@@ -1012,6 +1047,7 @@ impl MftReader {
                 is_directory_vec.push(parsed.is_directory);
                 name_count_vec.push(name_count);
                 stream_count_vec.push(stream_count);
+                stream_name_vec.push(String::new()); // Default stream
                 is_readonly_vec.push(parsed.std_info.is_readonly);
                 is_hidden_vec.push(parsed.std_info.is_hidden);
                 is_system_vec.push(parsed.std_info.is_system);
@@ -1085,6 +1121,7 @@ impl MftReader {
             is_directory_vec,
             name_count_vec,
             stream_count_vec,
+            stream_name_vec,
             is_readonly_vec,
             is_hidden_vec,
             is_system_vec,
@@ -1330,6 +1367,7 @@ impl MftReader {
         let mut is_unpinned_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut is_virtual_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut flags_vec: Vec<u32> = Vec::with_capacity(capacity);
+        let mut stream_name_vec: Vec<String> = Vec::with_capacity(capacity);
 
         for parsed in parsed_records {
             let name_count = parsed.name_count();
@@ -1347,6 +1385,7 @@ impl MftReader {
             is_directory_vec.push(parsed.is_directory);
             name_count_vec.push(name_count);
             stream_count_vec.push(stream_count);
+            stream_name_vec.push(String::new()); // No expansion, use empty stream name
             is_readonly_vec.push(parsed.std_info.is_readonly);
             is_hidden_vec.push(parsed.std_info.is_hidden);
             is_system_vec.push(parsed.std_info.is_system);
@@ -1379,6 +1418,7 @@ impl MftReader {
             is_directory_vec,
             name_count_vec,
             stream_count_vec,
+            stream_name_vec,
             is_readonly_vec,
             is_hidden_vec,
             is_system_vec,
@@ -1451,6 +1491,7 @@ impl MftReader {
         is_directory_vec: Vec<bool>,
         name_count_vec: Vec<u16>,
         stream_count_vec: Vec<u16>,
+        stream_name_vec: Vec<String>,
         is_readonly_vec: Vec<bool>,
         is_hidden_vec: Vec<bool>,
         is_system_vec: Vec<bool>,
@@ -1496,6 +1537,7 @@ impl MftReader {
             Series::new("is_directory".into(), is_directory_vec).into_column(),
             Series::new("name_count".into(), name_count_vec).into_column(),
             Series::new("stream_count".into(), stream_count_vec).into_column(),
+            Series::new("stream_name".into(), stream_name_vec).into_column(),
             // Extended attribute flags (matching C++ StandardInfo)
             Series::new("is_readonly".into(), is_readonly_vec).into_column(),
             Series::new("is_hidden".into(), is_hidden_vec).into_column(),
@@ -1555,6 +1597,7 @@ impl MftReader {
             Series::new("is_directory".into(), columns.is_directory).into_column(),
             Series::new("name_count".into(), columns.name_count).into_column(),
             Series::new("stream_count".into(), columns.stream_count).into_column(),
+            Series::new("stream_name".into(), columns.stream_name).into_column(),
             // Extended attribute flags (matching C++ StandardInfo)
             Series::new("is_readonly".into(), columns.is_readonly).into_column(),
             Series::new("is_hidden".into(), columns.is_hidden).into_column(),
@@ -1878,6 +1921,7 @@ impl MftReader {
         let mut is_unpinned_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut is_virtual_vec: Vec<bool> = Vec::with_capacity(capacity);
         let mut flags_vec: Vec<u32> = Vec::with_capacity(capacity);
+        let mut stream_name_vec: Vec<String> = Vec::with_capacity(capacity);
 
         for parsed in parsed_records {
             // Compute counts before moving any fields
@@ -1896,6 +1940,7 @@ impl MftReader {
             is_directory_vec.push(parsed.is_directory);
             name_count_vec.push(name_count);
             stream_count_vec.push(stream_count);
+            stream_name_vec.push(String::new()); // No expansion, use empty stream name
             is_readonly_vec.push(parsed.std_info.is_readonly);
             is_hidden_vec.push(parsed.std_info.is_hidden);
             is_system_vec.push(parsed.std_info.is_system);
@@ -1928,6 +1973,7 @@ impl MftReader {
             is_directory_vec,
             name_count_vec,
             stream_count_vec,
+            stream_name_vec,
             is_readonly_vec,
             is_hidden_vec,
             is_system_vec,

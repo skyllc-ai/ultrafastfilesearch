@@ -385,6 +385,57 @@ impl FastPathResolver {
         }
     }
 
+    /// Add a "path" column with trailing slashes for directories (C++ parity).
+    ///
+    /// This method adds a trailing backslash to directory paths to match
+    /// the C++ `UltraFastFileSearch` output format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the frs or `is_directory` columns are missing.
+    pub fn add_path_column_with_dir_suffix(&self, df: &DataFrame) -> Result<DataFrame> {
+        let frs_col = df.column("frs")?.u64()?;
+        let is_dir_col = df.column("is_directory")?.bool()?;
+        let stream_name_col = df.column("stream_name").ok().and_then(|col| col.str().ok());
+
+        // Collect values for parallel iteration
+        let frs_values: Vec<Option<u64>> = frs_col.into_iter().collect();
+        let is_dir_values: Vec<Option<bool>> = is_dir_col.into_iter().collect();
+        let stream_names: Vec<Option<&str>> = stream_name_col.map_or_else(
+            || vec![None; frs_values.len()],
+            |col| col.into_iter().collect(),
+        );
+
+        // Resolve paths in parallel with directory suffix
+        let paths: Vec<String> = frs_values
+            .par_iter()
+            .zip(is_dir_values.par_iter())
+            .zip(stream_names.par_iter())
+            .map(|((frs, is_dir), stream_name)| {
+                let mut path =
+                    frs.map_or_else(|| "<null>".to_owned(), |frs_val| self.resolve(frs_val));
+                // Add trailing backslash for directories
+                if is_dir.unwrap_or(false) && !path.ends_with('\\') {
+                    path.push('\\');
+                }
+                // Append stream name for ADS (e.g., "file.txt:Zone.Identifier")
+                if let Some(stream) = stream_name {
+                    if !stream.is_empty() {
+                        path.push(':');
+                        path.push_str(stream);
+                    }
+                }
+                path
+            })
+            .collect();
+
+        let path_series = Column::new("path".into(), paths);
+        let mut result = df.clone();
+        result.with_column(path_series)?;
+
+        Ok(result)
+    }
+
     /// Get statistics about the resolver.
     #[must_use]
     pub fn stats(&self) -> FastPathResolverStats {

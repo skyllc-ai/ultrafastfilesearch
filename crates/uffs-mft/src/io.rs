@@ -812,6 +812,8 @@ pub struct ParsedColumns {
     pub name_count: Vec<u16>,
     /// Number of data streams per record.
     pub stream_count: Vec<u16>,
+    /// Stream name (empty for default stream, non-empty for ADS).
+    pub stream_name: Vec<String>,
 
     // Attribute flags (all boolean columns for C++ parity)
     /// Read-only flag.
@@ -876,6 +878,7 @@ impl ParsedColumns {
             is_directory: Vec::with_capacity(capacity),
             name_count: Vec::with_capacity(capacity),
             stream_count: Vec::with_capacity(capacity),
+            stream_name: Vec::with_capacity(capacity),
             is_readonly: Vec::with_capacity(capacity),
             is_hidden: Vec::with_capacity(capacity),
             is_system: Vec::with_capacity(capacity),
@@ -925,6 +928,7 @@ impl ParsedColumns {
         self.is_directory.push(record.is_directory);
         self.name_count.push(record.name_count());
         self.stream_count.push(record.stream_count());
+        self.stream_name.push(String::new()); // Default stream (no ADS)
         self.is_readonly.push(record.std_info.is_readonly);
         self.is_hidden.push(record.std_info.is_hidden);
         self.is_system.push(record.std_info.is_system);
@@ -946,56 +950,82 @@ impl ParsedColumns {
         self.flags.push(record.std_info.to_raw_flags());
     }
 
-    /// Pushes a record with hard link expansion.
+    /// Pushes a record with full expansion (names × streams).
     ///
-    /// This matches C++ behavior: one row per hard link (name).
-    /// If a file has 3 hard links, this creates 3 rows with different
-    /// name/parent_frs but the same FRS and other attributes.
+    /// This matches C++ behavior: one row per (hard link × stream) combination.
+    /// If a file has 2 hard links and 3 streams, this creates 6 rows.
     ///
     /// This is the default behavior for user-facing output, as users
-    /// expect to see each hard link as a separate entry (matching Explorer).
+    /// expect to see each hard link and ADS as separate entries.
     #[inline]
     pub fn push_record_expanded(&mut self, record: &ParsedRecord) {
-        if record.names.is_empty() {
-            // No names - use the primary name (fallback)
-            self.push_record(record);
-            return;
-        }
+        // Get names to iterate over (use primary name if names is empty)
+        let names: Vec<_> = if record.names.is_empty() {
+            vec![NameInfo {
+                name: record.name.clone(),
+                parent_frs: record.parent_frs,
+                namespace: 3, // Win32+DOS
+            }]
+        } else {
+            record.names.clone()
+        };
 
-        // Create one row per hard link
-        for name_info in &record.names {
-            self.frs.push(record.frs);
-            self.parent_frs.push(name_info.parent_frs);
-            self.name.push(name_info.name.clone());
-            self.size.push(record.size);
-            self.allocated_size.push(record.allocated_size);
-            self.created.push(record.std_info.created);
-            self.modified.push(record.std_info.modified);
-            self.accessed.push(record.std_info.accessed);
-            self.mft_changed.push(record.std_info.mft_changed);
-            self.is_directory.push(record.is_directory);
-            // For expanded records, name_count is always 1 (this row represents one link)
-            self.name_count.push(1);
-            self.stream_count.push(record.stream_count());
-            self.is_readonly.push(record.std_info.is_readonly);
-            self.is_hidden.push(record.std_info.is_hidden);
-            self.is_system.push(record.std_info.is_system);
-            self.is_archive.push(record.std_info.is_archive);
-            self.is_compressed.push(record.std_info.is_compressed);
-            self.is_encrypted.push(record.std_info.is_encrypted);
-            self.is_sparse.push(record.std_info.is_sparse);
-            self.is_reparse.push(record.std_info.is_reparse);
-            self.is_offline.push(record.std_info.is_offline);
-            self.is_not_indexed
-                .push(record.std_info.is_not_content_indexed);
-            self.is_temporary.push(record.std_info.is_temporary);
-            self.is_integrity_stream
-                .push(record.std_info.is_integrity_stream);
-            self.is_no_scrub_data.push(record.std_info.is_no_scrub_data);
-            self.is_pinned.push(record.std_info.is_pinned);
-            self.is_unpinned.push(record.std_info.is_unpinned);
-            self.is_virtual.push(record.std_info.is_virtual);
-            self.flags.push(record.std_info.to_raw_flags());
+        // Get streams to iterate over (use empty stream if streams is empty)
+        let streams: Vec<_> = if record.streams.is_empty() {
+            vec![StreamInfo {
+                name: String::new(),
+                size: record.size,
+                allocated_size: record.allocated_size,
+                is_sparse: false,
+                is_compressed: false,
+            }]
+        } else {
+            record.streams.clone()
+        };
+
+        // Create one row per (name × stream) combination
+        for name_info in &names {
+            for stream_info in &streams {
+                self.frs.push(record.frs);
+                self.parent_frs.push(name_info.parent_frs);
+                self.name.push(name_info.name.clone());
+                // Use stream-specific size for ADS, file size for default stream
+                let (size, alloc) = if stream_info.name.is_empty() {
+                    (record.size, record.allocated_size)
+                } else {
+                    (stream_info.size, stream_info.allocated_size)
+                };
+                self.size.push(size);
+                self.allocated_size.push(alloc);
+                self.created.push(record.std_info.created);
+                self.modified.push(record.std_info.modified);
+                self.accessed.push(record.std_info.accessed);
+                self.mft_changed.push(record.std_info.mft_changed);
+                self.is_directory.push(record.is_directory);
+                // For expanded records, counts are 1 (this row = one link + one stream)
+                self.name_count.push(1);
+                self.stream_count.push(1);
+                self.stream_name.push(stream_info.name.clone());
+                self.is_readonly.push(record.std_info.is_readonly);
+                self.is_hidden.push(record.std_info.is_hidden);
+                self.is_system.push(record.std_info.is_system);
+                self.is_archive.push(record.std_info.is_archive);
+                self.is_compressed.push(record.std_info.is_compressed);
+                self.is_encrypted.push(record.std_info.is_encrypted);
+                self.is_sparse.push(record.std_info.is_sparse);
+                self.is_reparse.push(record.std_info.is_reparse);
+                self.is_offline.push(record.std_info.is_offline);
+                self.is_not_indexed
+                    .push(record.std_info.is_not_content_indexed);
+                self.is_temporary.push(record.std_info.is_temporary);
+                self.is_integrity_stream
+                    .push(record.std_info.is_integrity_stream);
+                self.is_no_scrub_data.push(record.std_info.is_no_scrub_data);
+                self.is_pinned.push(record.std_info.is_pinned);
+                self.is_unpinned.push(record.std_info.is_unpinned);
+                self.is_virtual.push(record.std_info.is_virtual);
+                self.flags.push(record.std_info.to_raw_flags());
+            }
         }
     }
 
@@ -1015,6 +1045,7 @@ impl ParsedColumns {
         self.is_directory.extend(other.is_directory);
         self.name_count.extend(other.name_count);
         self.stream_count.extend(other.stream_count);
+        self.stream_name.extend(other.stream_name);
         self.is_readonly.extend(other.is_readonly);
         self.is_hidden.extend(other.is_hidden);
         self.is_system.extend(other.is_system);
@@ -1048,6 +1079,7 @@ impl ParsedColumns {
         self.is_directory.reserve(additional);
         self.name_count.reserve(additional);
         self.stream_count.reserve(additional);
+        self.stream_name.reserve(additional);
         self.is_readonly.reserve(additional);
         self.is_hidden.reserve(additional);
         self.is_system.reserve(additional);
