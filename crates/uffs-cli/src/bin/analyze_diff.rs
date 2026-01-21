@@ -65,6 +65,8 @@ fn load_csv(path: &Path, name: &str) -> Result<DataFrame> {
     let df = CsvReadOptions::default()
         .with_has_header(true)
         .with_infer_schema_length(Some(10000))
+        .with_ignore_errors(true) // Skip malformed rows
+        .map_parse_options(|opts| opts.with_truncate_ragged_lines(true))
         .try_into_reader_with_file_path(Some(path.into()))?
         .finish()
         .with_context(|| format!("Failed to read CSV: {}", path.display()))?;
