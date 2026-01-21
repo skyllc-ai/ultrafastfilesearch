@@ -937,7 +937,7 @@ async fn search_multi_drive_filtered(
 
             // Build path resolver from FULL data BEFORE filtering
             // This is the key fix for the <unknown> path bug!
-            let mut path_resolver = if needs_paths {
+            let path_resolver = if needs_paths {
                 match uffs_core::FastPathResolver::build(&full_df, drive_char) {
                     Ok(resolver) => Some(resolver),
                     Err(e) => {
@@ -1233,7 +1233,7 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
 
             // Build path resolver from FULL data BEFORE filtering
             // This is critical for resolving paths correctly!
-            let mut path_resolver = match uffs_core::FastPathResolver::build(&df, drive_char) {
+            let path_resolver = match uffs_core::FastPathResolver::build(&df, drive_char) {
                 Ok(resolver) => Some(resolver),
                 Err(e) => {
                     let _ = tx

@@ -387,37 +387,52 @@ impl FastPathResolver {
 
     /// Add a "path" column with trailing slashes for directories (C++ parity).
     ///
-    /// This method adds a trailing backslash to directory paths to match
-    /// the C++ `UltraFastFileSearch` output format.
+    /// Builds paths correctly for hard links by using `parent_frs` + `name`
+    /// instead of just resolving `frs`. Each hard link gets its correct
+    /// path based on its parent.
     ///
     /// # Errors
     ///
-    /// Returns an error if the frs or `is_directory` columns are missing.
+    /// Returns an error if required columns are missing.
     pub fn add_path_column_with_dir_suffix(&self, df: &DataFrame) -> Result<DataFrame> {
-        let frs_col = df.column("frs")?.u64()?;
+        let parent_frs_col = df.column("parent_frs")?.u64()?;
+        let name_col = df.column("name")?.str()?;
         let is_dir_col = df.column("is_directory")?.bool()?;
         let stream_name_col = df.column("stream_name").ok().and_then(|col| col.str().ok());
 
         // Collect values for parallel iteration
-        let frs_values: Vec<Option<u64>> = frs_col.into_iter().collect();
+        let parent_frs_values: Vec<Option<u64>> = parent_frs_col.into_iter().collect();
+        let name_values: Vec<Option<&str>> = name_col.into_iter().collect();
         let is_dir_values: Vec<Option<bool>> = is_dir_col.into_iter().collect();
         let stream_names: Vec<Option<&str>> = stream_name_col.map_or_else(
-            || vec![None; frs_values.len()],
+            || vec![None; parent_frs_values.len()],
             |col| col.into_iter().collect(),
         );
 
-        // Resolve paths in parallel with directory suffix
-        let paths: Vec<String> = frs_values
+        // Resolve paths in parallel: parent_path + name + optional stream
+        let paths: Vec<String> = parent_frs_values
             .par_iter()
+            .zip(name_values.par_iter())
             .zip(is_dir_values.par_iter())
             .zip(stream_names.par_iter())
-            .map(|((frs, is_dir), stream_name)| {
-                let mut path =
-                    frs.map_or_else(|| "<null>".to_owned(), |frs_val| self.resolve(frs_val));
+            .map(|(((parent_frs, name), is_dir), stream_name)| {
+                // Resolve parent directory path
+                let parent_path =
+                    parent_frs.map_or_else(|| "<null>".to_owned(), |frs_val| self.resolve(frs_val));
+
+                // Build full path: parent + backslash + name
+                let file_name = name.unwrap_or("<unnamed>");
+                let mut path = if parent_path.ends_with('\\') {
+                    format!("{parent_path}{file_name}")
+                } else {
+                    format!("{parent_path}\\{file_name}")
+                };
+
                 // Add trailing backslash for directories
                 if is_dir.unwrap_or(false) && !path.ends_with('\\') {
                     path.push('\\');
                 }
+
                 // Append stream name for ADS (e.g., "file.txt:Zone.Identifier")
                 if let Some(stream) = stream_name {
                     if !stream.is_empty() {
