@@ -1,0 +1,172 @@
+//! Dump $MFT extents (VCN, `cluster_count`, LCN) for a given NTFS volume.
+//!
+//! Windows-only diagnostic helper that uses the same
+//! `VolumeHandle::get_mft_extents` pipeline as the main uffs-mft reader. This
+//! lets us compare our view of the $MFT layout against tools like `ntfsinfo` or
+//! `fsutil file queryextents`.
+//!
+//! # Usage
+//!
+//! ```powershell
+//! dump_mft_extents F
+//! ```
+//!
+//! (Pass the drive letter without a colon.)
+
+#![allow(clippy::print_stdout, clippy::print_stderr, clippy::too_many_lines)]
+
+// This binary is Windows-only in terms of real functionality, but is compiled
+// on all targets so the workspace stays consistent. We cfg-gate Windows-only
+// types and imports to keep non-Windows builds happy.
+
+#[cfg(windows)]
+use std::env;
+
+#[cfg(windows)]
+use anyhow::{Context, Result};
+#[cfg(windows)]
+use uffs_mft::{MftExtent, VolumeHandle};
+// On non-Windows targets we still want to exercise the uffs-diag dependency
+// set and keep versions in lockstep with the core crates, even though this
+// particular binary is effectively a no-op there.
+#[cfg(not(windows))]
+use {anyhow as _, uffs_mft as _, uffs_polars as _};
+
+fn main() {
+    #[cfg(windows)]
+    {
+        if let Err(error) = real_main() {
+            eprintln!("dump_mft_extents failed: {error:?}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    #[cfg(not(windows))]
+    {
+        eprintln!("dump_mft_extents is only supported on Windows targets.");
+    }
+}
+
+#[cfg(windows)]
+fn real_main() -> Result<()> {
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 2 {
+        eprintln!("Usage: dump_mft_extents <drive_letter>");
+        eprintln!("Example: dump_mft_extents F");
+        std::process::exit(1);
+    }
+
+    let drive_arg = &args[1];
+    let mut chars = drive_arg.chars();
+    let drive = chars
+        .next()
+        .context("Drive letter argument must not be empty")?;
+
+    if !drive.is_ascii_alphabetic() {
+        anyhow::bail!("Drive letter must be A-Z, got: {}", drive);
+    }
+
+    let drive = drive.to_ascii_uppercase();
+
+    println!("===============================================");
+    println!("Dumping $MFT extents for volume {}:", drive);
+    println!("===============================================");
+
+    let handle = VolumeHandle::open(drive)
+        .with_context(|| format!("Failed to open NTFS volume {}:", drive))?;
+
+    let volume_data = handle.volume_data();
+    println!("Volume data:");
+    println!(
+        "  bytes_per_sector            = {}",
+        volume_data.bytes_per_sector
+    );
+    println!(
+        "  bytes_per_cluster           = {}",
+        volume_data.bytes_per_cluster
+    );
+    println!(
+        "  bytes_per_file_record_seg   = {}",
+        volume_data.bytes_per_file_record_segment
+    );
+    println!(
+        "  clusters_per_file_record    = {}",
+        volume_data.clusters_per_file_record_segment
+    );
+    println!(
+        "  mft_valid_data_length (B)   = {}",
+        volume_data.mft_valid_data_length
+    );
+    println!(
+        "  mft_start_lcn               = {}",
+        volume_data.mft_start_lcn
+    );
+    println!(
+        "  mft2_start_lcn              = {}",
+        volume_data.mft2_start_lcn
+    );
+    println!(
+        "  mft_zone_start              = {}",
+        volume_data.mft_zone_start
+    );
+    println!(
+        "  mft_zone_end                = {}",
+        volume_data.mft_zone_end
+    );
+
+    let extents = handle
+        .get_mft_extents()
+        .with_context(|| format!("Failed to get $MFT extents for drive {}", drive))?;
+
+    if extents.is_empty() {
+        println!("No extents returned (fallback to single-run extent may have occurred).");
+        return Ok(());
+    }
+
+    println!("\nMFT extents (VCN, clusters, LCN):");
+    println!(" idx      VCN      clusters           LCN         byte_offset        byte_size");
+
+    let bytes_per_cluster = volume_data.bytes_per_cluster;
+    let mut total_clusters: u64 = 0;
+
+    for (idx, extent) in extents.iter().enumerate() {
+        print_extent(idx, extent, bytes_per_cluster);
+        total_clusters = total_clusters.saturating_add(extent.cluster_count);
+    }
+
+    let total_bytes = total_clusters.saturating_mul(u64::from(bytes_per_cluster));
+    let record_size = u64::from(volume_data.bytes_per_file_record_segment);
+    let approx_records = if record_size > 0 {
+        total_bytes / record_size
+    } else {
+        0
+    };
+
+    println!("\nSummary:");
+    println!("  extent_count      = {}", extents.len());
+    println!("  total_clusters    = {}", total_clusters);
+    println!("  total_bytes       = {}", total_bytes);
+    println!(
+        "  approx_records    = {} (total_bytes / record_size)",
+        approx_records
+    );
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn print_extent(idx: usize, extent: &MftExtent, bytes_per_cluster: u32) {
+    let byte_offset = extent.byte_offset(bytes_per_cluster);
+    let byte_size = extent.byte_size(bytes_per_cluster);
+
+    println!(
+        "{idx:4} {vcn:10} {clusters:10} {lcn:14} {byte_offset:14} {byte_size:14}",
+        idx = idx,
+        vcn = extent.vcn,
+        clusters = extent.cluster_count,
+        lcn = extent.lcn,
+        byte_offset = byte_offset,
+        byte_size = byte_size,
+    );
+}

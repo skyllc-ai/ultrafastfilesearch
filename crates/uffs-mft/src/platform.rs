@@ -660,35 +660,30 @@ fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
 
         match result {
             Ok(()) => {
-                // Parse the buffer
+                // Parse the buffer for this VCN window.
                 parse_retrieval_pointers(&buffer, bytes_returned as usize, &mut extents);
                 break;
             }
             Err(err) => {
                 let error_code = err.code().0 as u32;
 
-                // ERROR_MORE_DATA (234) - buffer too small, need to grow and retry
+                // ERROR_MORE_DATA (234) - buffer too small, but the data for the
+                // requested StartingVcn range is valid and complete. We must NOT
+                // advance StartingVcn here; simply grow the buffer and retry so we
+                // get the full RETRIEVAL_POINTERS_BUFFER for this window.
                 if error_code == 234 {
-                    // Parse what we have so far
-                    parse_retrieval_pointers(&buffer, bytes_returned as usize, &mut extents);
-
-                    // Update starting VCN for next call
-                    if let Some(last) = extents.last() {
-                        starting_vcn.StartingVcn = (last.vcn + last.cluster_count) as i64;
-                    }
-
-                    // Grow buffer
+                    // Grow buffer and retry without modifying StartingVcn.
                     buffer_size *= 2;
                     buffer.resize(buffer_size, 0);
                     continue;
                 }
 
-                // ERROR_HANDLE_EOF (38) - no more extents
+                // ERROR_HANDLE_EOF (38) - no more extents beyond this VCN.
                 if error_code == 38 {
                     break;
                 }
 
-                // Other error - return what we have or error
+                // Other error - return what we have or error.
                 if extents.is_empty() {
                     return Err(MftError::RetrievalPointers(format!(
                         "FSCTL_GET_RETRIEVAL_POINTERS failed: 0x{:08X}",

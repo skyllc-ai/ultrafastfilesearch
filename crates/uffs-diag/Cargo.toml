@@ -1,0 +1,65 @@
+# ============================================================================
+# uffs-diag: Diagnostic Tools for MFT Analysis
+# ============================================================================
+# Offline, cross-platform diagnostic tools for analyzing MFT snapshots.
+# These tools operate on raw MFT files (.raw) and Parquet exports (.parquet)
+# without requiring live NTFS access.
+#
+# Binaries:
+#   - analyze_mft_parents: Analyze parent/child coverage in Parquet files
+#   - dump_mft_records: Dump raw MFT record headers for specific FRS values
+#   - scan_mft_magic: Scan magic values across all records in a raw MFT
+#   - dump_mft_extents: (Windows-only) Dump $MFT extent list for a drive
+# ============================================================================
+
+[package]
+name = "uffs-diag"
+description = "Diagnostic tools for UFFS MFT analysis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Binaries
+# ─────────────────────────────────────────────────────────────────────────────
+[[bin]]
+name = "analyze_mft_parents"
+path = "src/bin/analyze_mft_parents.rs"
+
+[[bin]]
+name = "dump_mft_records"
+path = "src/bin/dump_mft_records.rs"
+
+[[bin]]
+name = "scan_mft_magic"
+path = "src/bin/scan_mft_magic.rs"
+
+[[bin]]
+name = "dump_mft_extents"
+path = "src/bin/dump_mft_extents.rs"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dependencies (minimal set for diagnostic tools)
+# ─────────────────────────────────────────────────────────────────────────────
+[dependencies]
+# Error handling (used by all binaries)
+anyhow.workspace = true
+
+# MFT reading (for raw file parsing and Windows extent diagnostics)
+uffs-mft.workspace = true
+
+# Polars (for Parquet analysis)
+uffs-polars = { version = "0.2.9", path = "../uffs-polars" }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lints (inherit from workspace)
+# ─────────────────────────────────────────────────────────────────────────────
+[lints]
+workspace = true
+

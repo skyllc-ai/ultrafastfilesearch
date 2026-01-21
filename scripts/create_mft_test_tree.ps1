@@ -15,8 +15,18 @@
 #>
 
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$TargetDrive
+	[Parameter(Mandatory=$true)]
+	[string]$TargetDrive,
+
+	# Optional: how aggressively to try to fragment the MFT before creating the tree.
+	# 0 = disabled (default, keeps previous behavior)
+	[int]$FragmentationRounds = 0,
+
+	# Number of small files to create per fragmentation round.
+	[int]$SmallFileCountPerRound = 2000,
+
+	# Size of the large filler file (in MB) per round used to perturb allocation.
+	[int]$LargeFileSizeMB = 256
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,6 +41,45 @@ Write-Host "══════════════════════�
 if (Test-Path $root) {
     Write-Host "`n[CLEANUP] Removing existing test tree..." -ForegroundColor Yellow
     Remove-Item -Path $root -Recurse -Force
+}
+
+# Optional pre-fragmentation phase
+if ($FragmentationRounds -gt 0) {
+	Write-Host "`n[0/8] Pre-fragmenting MFT (rounds=$FragmentationRounds, small-files=$SmallFileCountPerRound, large-file=${LargeFileSizeMB}MB)..." -ForegroundColor Green
+
+	for ($round = 1; $round -le $FragmentationRounds; $round++) {
+		$fragDir = "$root\_FRAG_PRE_$round"
+		New-Item -ItemType Directory -Path $fragDir -Force | Out-Null
+		Write-Host "  [Round $round] Creating small files in $fragDir" -ForegroundColor DarkGray
+
+		for ($i = 1; $i -le $SmallFileCountPerRound; $i++) {
+			$fname = "sfile_{0:D6}.tmp" -f $i
+			$path = Join-Path $fragDir $fname
+			Set-Content -Path $path -Value "FRAG_ROUND=$round FILE=$i" -NoNewline
+		}
+
+		$largePath = Join-Path $fragDir ("large_$round.bin")
+		$bytes = $LargeFileSizeMB * 1MB
+		Write-Host "  [Round $round] Creating large file $largePath (${LargeFileSizeMB}MB)" -ForegroundColor DarkGray
+		fsutil file createnew $largePath $bytes | Out-Null
+
+		# Delete every second small file to create holes in the MFT and data space
+		Write-Host "  [Round $round] Deleting every 2nd small file to create holes" -ForegroundColor DarkGray
+		Get-ChildItem -Path $fragDir -Filter "sfile_*.tmp" |
+		    Where-Object {
+		        $n = [int]($_.BaseName.Split('_')[-1])
+		        $n % 2 -eq 0
+		    } |
+		    Remove-Item -Force
+
+		# On odd rounds, delete the large file to free a big extent; on even rounds keep it
+		if ($round % 2 -eq 1) {
+			Write-Host "  [Round $round] Deleting large file to free a big extent" -ForegroundColor DarkGray
+			Remove-Item -Path $largePath -Force -ErrorAction SilentlyContinue
+		}
+	}
+
+	Write-Host "  Pre-fragmentation phase complete. Proceeding with main test tree..." -ForegroundColor Yellow
 }
 
 # 1. Create directory structure
