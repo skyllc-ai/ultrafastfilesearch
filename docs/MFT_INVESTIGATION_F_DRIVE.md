@@ -487,13 +487,8 @@ Taken together with the earlier raw/MFT analysis, this diff confirms that **Rust
 
 3. **Re-run offline diagnostics on the new artifacts**:
    - `cargo run -p uffs-diag --bin scan_mft_magic -- docs/trial_runs/f_mft.raw 100000`
-     - Expect `FILE` to remain dominant across all FRS ranges where `$MFT` is valid.
    - `cargo run -p uffs-diag --bin dump_mft_records -- docs/trial_runs/f_mft.raw <a few high FRS>`
-     - Expect valid `FILE` headers instead of zeros/random bytes.
    - `cargo run -p uffs-diag --bin analyze_mft_parents -- docs/trial_runs/f_mft.parquet`
-     - Expect:
-       - Far fewer (ideally near zero) missing parents.
-       - Bucket distributions of missing parents to be flat/low.
 
 4. **Compare Rust vs C++ path coverage again**:
    - Re-run equivalent queries on Rust and C++ implementations using the newly indexed F:.
@@ -505,11 +500,147 @@ Taken together with the earlier raw/MFT analysis, this diff confirms that **Rust
      - `dump_mft_extents` to confirm local runlist layout.
      - Targeted diffs against C++ behavior.
 
+## 10. Post-fix diagnostics on latest F: artifacts
+
+### 10.1 Updated `analyze_mft_parents` results
+
+After regenerating `f_mft.raw` / `f_mft.parquet` with the corrected `$MFT` extent mapping and re-running the comparison scans on F:, we ran the parent/child analyzer on the **latest** Parquet snapshot:
+
+- Command:
+  - `cargo run -p uffs-diag --release --bin analyze_mft_parents -- docs/trial_runs/UltraFastFileSearch/f_mft.parquet`
+
+Key metrics (rounded):
+
+- Total rows in `f_mft.parquet`: ~**1.57M**.
+- Distinct `frs`: ~**1.51M**.
+- Distinct non-zero `parent_frs`: ~**238k**.
+- Directory FRS (`is_directory = true`): ~**268k**.
+- **Missing parents**: **8,500–8,600** distinct `parent_frs` values that are referenced by children but have **no directory row** in the table.
+
+The analyzer also reports the **top missing parents by child count**. On the current F: snapshot, the most extreme examples are:
+
+- `parent_frs = 2,640,657` → ~11.8k children.
+- `parent_frs = 2,631,176` → ~10.5k children.
+- `parent_frs = 2,628,892` → ~4.3k children.
+- `parent_frs = 2,628,924` → ~3.0k children.
+- `parent_frs = 2,627,024` → ~2.9k children.
+
+Bucketed by FRS ranges (e.g. 100k-sized buckets), these missing parents are **heavily concentrated in high-FRS regions** (around the 2.6M range and above), not uniformly spread across the MFT.
+
+### 10.2 Updated `scan_mft_magic` results
+
+We re-ran the magic-distribution scanner on the latest raw snapshot to correlate missing parents with the on-disk record types:
+
+- Command:
+  - `cargo run -p uffs-diag --release --bin scan_mft_magic -- docs/trial_runs/UltraFastFileSearch/f_mft.raw 100000`
+
+Findings (abridged):
+
+- The **lower FRS ranges** still show the expected dominance of `FILE` magic – i.e. contiguous, healthy MFT regions.
+- In the **high-FRS buckets** where `analyze_mft_parents` reports many missing parents, `scan_mft_magic` shows a very different distribution:
+  - `FILE` counts drop sharply.
+  - `RCRD`, `ZERO`, and other non-`FILE` magic values dominate.
+
+This confirms that, for many of the problematic parent FRS values, the corresponding raw records in `f_mft.raw` are **not base `FILE` records** at all; they are either zeroed, log (`RCRD`), or other non-FILE structures.
+
+### 10.3 Targeted `dump_mft_records` on top missing parents
+
+To understand these high-impact missing parents, we inspected specific FRS directly from the latest raw snapshot:
+
+- Command:
+  - `cargo run -p uffs-diag --release --bin dump_mft_records -- docs/trial_runs/UltraFastFileSearch/f_mft.raw 2640657 2631176 2628892 2628924 2627024`
+
+Representative findings:
+
+- **FRS 2,640,657**:
+  - `magic = 0x00000000` (`ZERO`), `usa_offset = 0`, `usa_count = 0`.
+  - Header fields (e.g. `bytes_in_use`, `base_file_record_segment`) contain nonsensical values for a 1 KiB record.
+  - Interpreting this as a `FILE` record would be incorrect; it is effectively garbage from an MFT perspective.
+
+- **FRS 2,631,176; 2,628,892; 2,628,924; 2,627,024**:
+  - `magic = 0x44524352` (`RCRD` – log-file style records), not `FILE`.
+  - Some are `is_in_use = true`, others `false`.
+  - All have **non-zero `base_file_record_segment`**, i.e. they are *extension* records tied to some base file-record segment, not standalone base records.
+
+Across these samples we see a consistent pattern:
+
+- Many of the highest-impact **missing parents** are **not valid base directory FILE records** in the latest `f_mft.raw`.
+- From the raw MFT’s point of view, it is therefore reasonable (and correct) that `uffs-mft` does not emit a directory row for those FRS in `f_mft.parquet`.
+
+However, the C++ implementation is still able to resolve real directory paths for children that name these FRS as `parent_frs`, while the current Rust path resolver falls back to placeholders like `<dir:2640657>`.
+
+### 10.4 Working hypothesis
+
+Given the above, the remaining discrepancy between C++ and Rust on F: is now believed to be **semantic**, not I/O-related:
+
+- The earlier `$MFT` extent mapping bug (wrong clusters at high FRS) has been fixed, and the new raw snapshot behaves consistently with Windows’ reported geometry.
+- The new diagnostics show that high-FRS parents with many children often correspond to **extension or log records**, not base directory FILE records.
+- The C++ pipeline likely has richer logic around:
+  - Following `base_file_record_segment` from extensions back to their base records.
+  - Interpreting stale or recycled parent references using sequence numbers.
+  - Handling directory detection when the “obvious” base record is missing or non-directory.
+
+The Rust pipeline currently treats `parent_frs` more literally and only considers base `FILE` records marked as directories when building the directory table. This explains:
+
+- Why `analyze_mft_parents` reports thousands of missing parents clustered in specific FRS regions.
+- Why path reconstruction ends up with `<dir:FRS>` components for children whose `parent_frs` does not correspond to a directory row in `f_mft.parquet`.
+
+## 11. Reference MFT reader (`mft-reader-rs`) and planned cross-checks
+
+To better understand the C++ semantics around these tricky high-FRS parents, the C++ team provided a **Rust reference MFT reader** that is intended to be a **1:1 port of the C++ MFT-reading logic** (but without full path reconstruction):
+
+- Location in this repo (vendored copy):
+  - `vendor/mft-reader-rs/`
+
+### 11.1 What the reference reader does
+
+- Opens the NTFS volume (e.g. `\\.\\F:`) and reads `$MFT` using:
+  - `FSCTL_GET_NTFS_VOLUME_DATA` for geometry.
+  - `FSCTL_GET_RETRIEVAL_POINTERS` for MFT extents (with correct `ERROR_MORE_DATA` semantics).
+- Reads every MFT record using the resulting runlist, including USA unfixup.
+- Parses key attributes (`$FILE_NAME`, `$STANDARD_INFORMATION`, `$DATA`).
+- Exports one CSV row per record, with fields like:
+  - `RecordNumber`, `SequenceNumber`, `IsInUse`, `IsDirectory`, `IsBaseRecord`.
+  - `ParentRecordNumber`, `ParentSequenceNumber` (from `$FILE_NAME`).
+  - File name, timestamps, file sizes, attribute flags, etc.
+
+This gives us a **direct, C++-equivalent view** of the raw MFT records, separate from `uffs-mft`.
+
+### 11.2 Planned Windows-side run
+
+On the Windows machine that has the F: drive attached, the next concrete step is to run the reference reader and capture its view of `$MFT`:
+
+1. Build and run the reference reader against F::
+   - From the `UltraFastFileSearch` repo root on Windows:
+     - `cd vendor\\mft-reader-rs`
+     - `cargo run --release -- -d F -o f_mft_reference.csv -v`
+
+2. Copy the resulting CSV back into this repo on macOS, under:
+   - `docs/trial_runs/UltraFastFileSearch/f_mft_reference.csv`
+
+### 11.3 Planned offline cross-checks (macOS)
+
+Once `f_mft_reference.csv` is available alongside `f_mft.parquet`, we will:
+
+1. Load both datasets (via a small `uffs-diag` helper or an ad-hoc Polars script) and correlate on **record number**:
+   - For each FRS, compare:
+     - `IsInUse` / `IsDirectory` flags.
+     - Base vs extension classification (`IsBaseRecord` vs `base_file_record_segment`).
+   - Verify that the reference reader and `uffs-mft` agree on which FRS are considered **directory base records**.
+
+2. Focus specifically on the high-impact **missing parents**:
+   - Check whether FRS like `2,640,657`, `2,631,176`, etc. appear as directories in the reference CSV.
+   - If they do not, that would confirm that **C++ also does not treat these FRS as directory records**, and the discrepancy must be in higher-level path resolution logic.
+   - If they do, we will diff the attribute-level view to understand what cues C++ is using that Rust currently ignores.
+
+3. Use the reference CSV to drive targeted fixes in `uffs-mft` and the Rust path resolver, with the goal of:
+   - Eliminating `<dir:FRS>` placeholders for cases where C++ resolves a concrete path.
+   - Ensuring that any unavoidable differences (e.g. genuinely stale or corrupt records) are **well-understood and documented**.
+
 ---
 
-This document is intended to be a **living log**. As we continue the investigation (especially once new F: artifacts are available after the extent fix), we can append new sections covering:
+This document is intended to be a **living log**. As we continue the investigation (especially once `f_mft_reference.csv` and any follow-up artifacts are available), we will append:
 
-- Updated results from the fresh `f_mft.raw` / `f_mft.parquet`.
+- Correlated findings between `f_mft.parquet` and the reference CSV.
 - Any remaining mismatches and their root causes.
-- Final validation steps confirming Rust == C++ behavior on real‑world F: workloads.
-
+- Final validation steps confirming Rust == C++ behavior on real-world F: workloads.

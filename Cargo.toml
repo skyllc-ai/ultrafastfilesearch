@@ -28,6 +28,10 @@ members = [
     "crates/uffs-gui",      # 🪟 Graphical UI (future)
     "crates/uffs-legacy",   # 📜 Legacy code (reference only)
 ]
+exclude = [
+    # Vendored reference tools / external code (kept out of the main workspace)
+    "vendor/mft-reader-rs",
+]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Workspace Package Metadata (inherited by all crates)
