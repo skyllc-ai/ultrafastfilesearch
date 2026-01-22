@@ -10,7 +10,9 @@
 #   - dump_mft_records: Dump raw MFT record headers for specific FRS values
 #   - scan_mft_magic: Scan magic values across all records in a raw MFT
 #   - dump_mft_extents: (Windows-only) Dump $MFT extent list for a drive
+#   - cross_check_mft_reference: Cross-check MFT records against reference CSV
 #   - compare_raw_mft: Compare two raw MFT files record-by-record
+#   - inspect_mft_record_flow: Inspect raw->fixup->parse pipeline for FRS
 # ============================================================================
 
 [package]
@@ -52,6 +54,10 @@ path = "src/bin/cross_check_mft_reference.rs"
 [[bin]]
 name = "compare_raw_mft"
 path = "src/bin/compare_raw_mft.rs"
+
+[[bin]]
+name = "inspect_mft_record_flow"
+path = "src/bin/inspect_mft_record_flow.rs"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Dependencies (minimal set for diagnostic tools)
