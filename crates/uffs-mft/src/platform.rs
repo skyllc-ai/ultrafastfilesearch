@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_NO_BUFFERING, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
-    SYNCHRONIZE,
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_NO_BUFFERING,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_EXISTING, SYNCHRONIZE,
 };
 
 /// FILE_READ_DATA access right (0x0001) - required to read data from a
@@ -311,7 +311,8 @@ impl VolumeHandle {
     #[allow(unsafe_code)] // Required: Windows FFI (CreateFileW, DeviceIoControl, CloseHandle)
     pub fn get_mft_extents(&self) -> Result<Vec<MftExtent>> {
         // Open the $MFT file
-        let mft_path: Vec<u16> = format!("\\\\.\\{}:\\$MFT", self.volume)
+        // Use path format "F:\$MFT" (not "\\.\F:\$MFT") to match C++ behavior
+        let mft_path: Vec<u16> = format!("{}:\\$MFT", self.volume)
             .encode_utf16()
             .chain(core::iter::once(0))
             .collect();
@@ -319,11 +320,11 @@ impl VolumeHandle {
         let mft_handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(mft_path.as_ptr()),
-                FILE_READ_ATTRIBUTES.0,
+                0, // No access needed, just getting extents (matches C++)
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 None,
                 OPEN_EXISTING,
-                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_NO_BUFFERING,
+                FILE_FLAGS_AND_ATTRIBUTES(0), // No flags (matches C++)
                 None,
             )
         };
@@ -665,13 +666,23 @@ fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
                 break;
             }
             Err(err) => {
-                let error_code = err.code().0 as u32;
+                // Extract Win32 error code from HRESULT
+                // HRESULT format: 0x8007XXXX where XXXX is the Win32 error code
+                // For FACILITY_WIN32 errors, the low 16 bits contain the Win32 error
+                let hresult = err.code().0 as u32;
+                let win32_error = if (hresult & 0xFFFF0000) == 0x80070000 {
+                    // FACILITY_WIN32 HRESULT - extract low 16 bits
+                    hresult & 0xFFFF
+                } else {
+                    // Not a Win32 HRESULT, use as-is (might be raw Win32 error)
+                    hresult
+                };
 
                 // ERROR_MORE_DATA (234) - buffer too small, but the data for the
                 // requested StartingVcn range is valid and complete. We must NOT
                 // advance StartingVcn here; simply grow the buffer and retry so we
                 // get the full RETRIEVAL_POINTERS_BUFFER for this window.
-                if error_code == 234 {
+                if win32_error == 234 {
                     // Grow buffer and retry without modifying StartingVcn.
                     buffer_size *= 2;
                     buffer.resize(buffer_size, 0);
@@ -679,15 +690,15 @@ fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
                 }
 
                 // ERROR_HANDLE_EOF (38) - no more extents beyond this VCN.
-                if error_code == 38 {
+                if win32_error == 38 {
                     break;
                 }
 
                 // Other error - return what we have or error.
                 if extents.is_empty() {
                     return Err(MftError::RetrievalPointers(format!(
-                        "FSCTL_GET_RETRIEVAL_POINTERS failed: 0x{:08X}",
-                        error_code
+                        "FSCTL_GET_RETRIEVAL_POINTERS failed: HRESULT=0x{:08X}, Win32={}",
+                        hresult, win32_error
                     )));
                 }
                 break;
