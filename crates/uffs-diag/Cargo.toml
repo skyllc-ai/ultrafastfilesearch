@@ -44,6 +44,10 @@ path = "src/bin/scan_mft_magic.rs"
 name = "dump_mft_extents"
 path = "src/bin/dump_mft_extents.rs"
 
+[[bin]]
+name = "cross_check_mft_reference"
+path = "src/bin/cross_check_mft_reference.rs"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Dependencies (minimal set for diagnostic tools)
 # ─────────────────────────────────────────────────────────────────────────────
