@@ -201,13 +201,45 @@ The C++ tool successfully retrieved all 28 extents. Key observations:
 
 **Critical finding**: Rust stops at FRS 1,071,679 (end of extent 4). Extent 5 starts at FRS 1,071,680.
 
-### Suspected Rust Bugs
+### Rust Bugs Identified and Fixed (2026-01-22)
 
-1. **Path format**: Rust uses `\\.\F:\$MFT` but C++ uses `F:\$MFT`
-2. **File flags**: Rust uses `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_NO_BUFFERING`, C++ uses `0`
-3. **HRESULT vs Win32 error**: Rust compares `err.code().0 as u32` against `234`, but `err.code().0` returns HRESULT (0x800700EA), not Win32 error code (234)
+| Bug | Before | After | Status |
+|-----|--------|-------|--------|
+| Path format | `\\.\F:\$MFT` | `F:\$MFT` | ✅ Fixed |
+| File access | `FILE_READ_ATTRIBUTES.0` | `0` (no access needed) | ✅ Fixed |
+| File flags | `FILE_FLAG_OPEN_REPARSE_POINT \| FILE_FLAG_NO_BUFFERING` | `FILE_FLAGS_AND_ATTRIBUTES(0)` | ✅ Fixed |
+| HRESULT extraction | `err.code().0 as u32 == 234` (never matches) | Extract Win32 from HRESULT: `(hresult & 0xFFFF)` | ✅ Fixed |
+
+### Fix Details
+
+**Commit**: `f3f356dff` on `main`
+
+**Root cause**: `CreateFileW` was failing silently due to incorrect path format and flags, triggering the single-extent fallback. This fallback created one extent covering the full MFT size but using only the first LCN, causing reads beyond the first physical extent to return zeros.
+
+**HRESULT issue**: Windows returns HRESULT `0x800700EA` for ERROR_MORE_DATA, not raw Win32 error `234`. The comparison `error_code == 234` never matched because `0x800700EA as u32 = 2147942634 ≠ 234`.
 
 ### Rust Code Location
 
-`crates/uffs-mft/src/platform.rs` lines 312-350 (`get_mft_extents`) and 633-699 (`get_retrieval_pointers`)
+`crates/uffs-mft/src/platform.rs`:
+- Lines 312-350: `get_mft_extents()` - path format and file flags fix
+- Lines 668-705: `get_retrieval_pointers()` - HRESULT to Win32 extraction fix
+
+---
+
+## Verification Steps
+
+After pulling the fix, run on Windows:
+
+```powershell
+# 1. Verify Rust now sees all 28 extents
+dump_mft_extents F
+
+# 2. Re-dump MFT with fixed code
+uffs_mft save --drive F --output f_mft_rust_fixed.raw --no-compress
+
+# 3. Compare against C++ dump
+compare_raw_mft f_mft_cpp.raw f_mft_rust_fixed.raw
+```
+
+Expected result: **100% match** (0 differing records)
 
