@@ -1,4 +1,5 @@
-# C++ Raw MFT Dump Tool Specification
+
+
 
 > Goal: produce a **canonical raw $MFT snapshot** from Windows (C++ tooling) that we can compare 1:1 against the Rust implementation.
 >

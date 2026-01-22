@@ -9,16 +9,29 @@
 //! compare_raw_mft <file_a> <file_b>
 //! ```
 
+// CLI diagnostic tool - these lints are appropriate to allow
+#![allow(clippy::print_stdout)]
+#![allow(clippy::print_stderr)]
+#![allow(clippy::float_arithmetic)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::single_call_fn)]
+// Standalone binary doesn't use all crate dependencies
+#![allow(unused_crate_dependencies)]
+
 use std::env;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
 use std::time::Instant;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
-/// Header size in bytes (matches uffs-mft::raw).
+/// Header size in bytes (matches `uffs-mft::raw`).
 const HEADER_SIZE: usize = 64;
+
+/// Maximum number of sample diffs to collect for display.
+const MAX_SAMPLES: usize = 20;
 
 /// Magic bytes for raw MFT file format.
 const MAGIC: &[u8; 8] = b"UFFS-MFT";
@@ -29,16 +42,23 @@ const FLAG_COMPRESSED: u32 = 0x0001;
 /// Parsed header from a raw MFT file.
 #[derive(Debug)]
 struct RawMftHeader {
+    /// Format version number.
     version: u32,
+    /// Flags (e.g., compression).
     flags: u32,
+    /// Size of each MFT record in bytes.
     record_size: u32,
+    /// Total number of records in the file.
     record_count: u64,
+    /// Original uncompressed size in bytes.
     original_size: u64,
+    /// Compressed size in bytes (if compressed).
     #[allow(dead_code)]
     compressed_size: u64,
 }
 
 impl RawMftHeader {
+    /// Parse header from raw bytes.
     fn from_bytes(buf: &[u8; HEADER_SIZE]) -> Result<Self> {
         if &buf[0..8] != MAGIC {
             bail!("Invalid magic bytes");
@@ -65,16 +85,18 @@ impl RawMftHeader {
         })
     }
 
-    fn is_compressed(&self) -> bool {
+    /// Check if the file is compressed.
+    const fn is_compressed(&self) -> bool {
         self.flags & FLAG_COMPRESSED != 0
     }
 }
 
+/// Read and parse the header from a raw MFT file.
 fn read_header<P: AsRef<Path>>(path: P) -> Result<(RawMftHeader, BufReader<File>)> {
     let file = File::open(path.as_ref())
         .with_context(|| format!("Failed to open {}", path.as_ref().display()))?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file); // 1MB buffer
-    let mut header_buf = [0u8; HEADER_SIZE];
+    let mut header_buf = [0_u8; HEADER_SIZE];
     reader.read_exact(&mut header_buf)?;
     let header = RawMftHeader::from_bytes(&header_buf)?;
     Ok((header, reader))
@@ -87,8 +109,12 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    let path_a = &args[1];
-    let path_b = &args[2];
+    let Some(path_a) = args.get(1) else {
+        bail!("Missing first file argument");
+    };
+    let Some(path_b) = args.get(2) else {
+        bail!("Missing second file argument");
+    };
 
     println!("=== Raw MFT Comparison ===");
     println!("File A: {path_a}");
@@ -99,18 +125,38 @@ fn main() -> Result<()> {
     let (header_a, mut reader_a) = read_header(path_a)?;
     let (header_b, mut reader_b) = read_header(path_b)?;
 
-    println!("Header A: version={}, flags={}, record_size={}, record_count={}, original_size={}",
-        header_a.version, header_a.flags, header_a.record_size, header_a.record_count, header_a.original_size);
-    println!("Header B: version={}, flags={}, record_size={}, record_count={}, original_size={}",
-        header_b.version, header_b.flags, header_b.record_size, header_b.record_count, header_b.original_size);
+    println!(
+        "Header A: version={}, flags={}, record_size={}, record_count={}, original_size={}",
+        header_a.version,
+        header_a.flags,
+        header_a.record_size,
+        header_a.record_count,
+        header_a.original_size
+    );
+    println!(
+        "Header B: version={}, flags={}, record_size={}, record_count={}, original_size={}",
+        header_b.version,
+        header_b.flags,
+        header_b.record_size,
+        header_b.record_count,
+        header_b.original_size
+    );
     println!();
 
     // Validate geometry matches
     if header_a.record_size != header_b.record_size {
-        bail!("Record size mismatch: {} vs {}", header_a.record_size, header_b.record_size);
+        bail!(
+            "Record size mismatch: {} vs {}",
+            header_a.record_size,
+            header_b.record_size
+        );
     }
     if header_a.record_count != header_b.record_count {
-        bail!("Record count mismatch: {} vs {}", header_a.record_count, header_b.record_count);
+        bail!(
+            "Record count mismatch: {} vs {}",
+            header_a.record_count,
+            header_b.record_count
+        );
     }
 
     // Check for compression (not supported in streaming mode)
@@ -122,19 +168,20 @@ fn main() -> Result<()> {
     let record_count = header_a.record_count;
     let total_bytes = record_count * record_size as u64;
 
-    println!("Comparing {} records of {} bytes each ({:.2} GiB)...",
-        record_count, record_size, total_bytes as f64 / 1024.0 / 1024.0 / 1024.0);
+    println!(
+        "Comparing {record_count} records of {record_size} bytes each ({:.2} GiB)...",
+        total_bytes as f64 / 1_024.0_f64 / 1_024.0_f64 / 1_024.0_f64
+    );
     println!();
 
     // Allocate buffers for one record each
-    let mut buf_a = vec![0u8; record_size];
-    let mut buf_b = vec![0u8; record_size];
+    let mut buf_a = vec![0_u8; record_size];
+    let mut buf_b = vec![0_u8; record_size];
 
     let mut same_records: u64 = 0;
     let mut diff_records: u64 = 0;
     let mut diff_bytes_total: u64 = 0;
     let mut sample_diffs: Vec<(u64, usize)> = Vec::new(); // (frs, diff_byte_count)
-    const MAX_SAMPLES: usize = 20;
 
     let start = Instant::now();
     let progress_interval = 1_000_000_u64; // Report every 1M records
@@ -145,20 +192,30 @@ fn main() -> Result<()> {
             let elapsed = start.elapsed().as_secs_f64();
             let rate = frs as f64 / elapsed;
             let eta = (record_count - frs) as f64 / rate;
-            println!("  Progress: {} / {} records ({:.1}%), {:.0} rec/s, ETA {:.0}s",
-                frs, record_count, frs as f64 / record_count as f64 * 100.0, rate, eta);
+            println!(
+                "  Progress: {frs} / {record_count} records ({:.1}%), {rate:.0} rec/s, ETA {eta:.0}s",
+                frs as f64 / record_count as f64 * 100.0_f64,
+            );
         }
 
         // Read records
-        reader_a.read_exact(&mut buf_a).with_context(|| format!("EOF reading record {frs} from A"))?;
-        reader_b.read_exact(&mut buf_b).with_context(|| format!("EOF reading record {frs} from B"))?;
+        reader_a
+            .read_exact(&mut buf_a)
+            .with_context(|| format!("EOF reading record {frs} from A"))?;
+        reader_b
+            .read_exact(&mut buf_b)
+            .with_context(|| format!("EOF reading record {frs} from B"))?;
 
         if buf_a == buf_b {
             same_records += 1;
         } else {
             diff_records += 1;
             // Count differing bytes
-            let diff_bytes: usize = buf_a.iter().zip(buf_b.iter()).filter(|(a, b)| a != b).count();
+            let diff_bytes: usize = buf_a
+                .iter()
+                .zip(buf_b.iter())
+                .filter(|(byte_a, byte_b)| byte_a != byte_b)
+                .count();
             diff_bytes_total += diff_bytes as u64;
             if sample_diffs.len() < MAX_SAMPLES {
                 sample_diffs.push((frs, diff_bytes));
@@ -171,22 +228,31 @@ fn main() -> Result<()> {
     println!("=== Comparison Complete ===");
     println!("Time: {:.2}s", elapsed.as_secs_f64());
     println!();
-    println!("Total records:  {}", record_count);
-    println!("Same records:   {}", same_records);
-    println!("Diff records:   {} ({:.6}%)", diff_records, diff_records as f64 / record_count as f64 * 100.0);
-    println!("Total differing bytes: {}", diff_bytes_total);
+    println!("Total records:  {record_count}");
+    println!("Same records:   {same_records}");
+    println!(
+        "Diff records:   {diff_records} ({:.6}%)",
+        diff_records as f64 / record_count as f64 * 100.0_f64
+    );
+    println!("Total differing bytes: {diff_bytes_total}");
     if total_bytes > 0 {
-        println!("Fraction of differing bytes: {:.9}", diff_bytes_total as f64 / total_bytes as f64);
+        println!(
+            "Fraction of differing bytes: {:.9}",
+            diff_bytes_total as f64 / total_bytes as f64
+        );
     }
     println!();
 
-    if !sample_diffs.is_empty() {
-        println!("First {} differing records (FRS, differing_bytes_in_record):", sample_diffs.len());
-        for (frs, diff_bytes) in &sample_diffs {
-            println!("  FRS {}: {} bytes differ", frs, diff_bytes);
-        }
-    } else {
+    if sample_diffs.is_empty() {
         println!("Files are IDENTICAL!");
+    } else {
+        println!(
+            "First {} differing records (FRS, differing_bytes_in_record):",
+            sample_diffs.len()
+        );
+        for (frs, diff_bytes) in &sample_diffs {
+            println!("  FRS {frs}: {diff_bytes} bytes differ");
+        }
     }
 
     Ok(())

@@ -438,6 +438,7 @@ As of this document’s creation:
   - `dump_mft_extents` exposes `$MFT` extents on Windows.
 - `uffs-diag` builds cleanly under the workspace’s strict lint regime.
 - `uffs-cli` no longer carries the heavy offline diagnostics in its own bin directory; only stubs remain.
+- The full CI pipeline (`./scripts/ci-pipeline.rs go --coverage-report`) currently passes with the latest workspace state (last successful run reported version `0.2.38`).
 
 In addition, we have performed a **full end-to-end comparison** on F: using the production C++ binary and the Rust CLI, then analyzed the differences with the `analyze_diff` tool:
 
@@ -585,7 +586,7 @@ The Rust pipeline currently treats `parent_frs` more literally and only consider
 - Why `analyze_mft_parents` reports thousands of missing parents clustered in specific FRS regions.
 - Why path reconstruction ends up with `<dir:FRS>` components for children whose `parent_frs` does not correspond to a directory row in `f_mft.parquet`.
 
-## 11. Reference MFT reader (`mft-reader-rs`) and planned cross-checks
+## 11. Reference MFT reader (`mft-reader-rs`) and cross-checks
 
 To better understand the C++ semantics around these tricky high-FRS parents, the C++ team provided a **Rust reference MFT reader** that is intended to be a **1:1 port of the C++ MFT-reading logic** (but without full path reconstruction):
 
@@ -606,9 +607,9 @@ To better understand the C++ semantics around these tricky high-FRS parents, the
 
 This gives us a **direct, C++-equivalent view** of the raw MFT records, separate from `uffs-mft`.
 
-### 11.2 Planned Windows-side run
+### 11.2 Windows-side run
 
-On the Windows machine that has the F: drive attached, the next concrete step is to run the reference reader and capture its view of `$MFT`:
+On the Windows machine that has the F: drive attached, we built and ran the reference reader and captured its view of `$MFT`:
 
 1. Build and run the reference reader against F::
    - From the `UltraFastFileSearch` repo root on Windows:
@@ -618,29 +619,113 @@ On the Windows machine that has the F: drive attached, the next concrete step is
 2. Copy the resulting CSV back into this repo on macOS, under:
    - `docs/trial_runs/UltraFastFileSearch/f_mft_reference.csv`
 
-### 11.3 Planned offline cross-checks (macOS)
+The resulting `f_mft_reference.csv` contains ~4.65M rows (matching the `MFT record count` reported by `defrag` / `uffs_mft info --deep`) and serves as the C++-semantics baseline for our offline checks.
 
-Once `f_mft_reference.csv` is available alongside `f_mft.parquet`, we will:
+### 11.3 Offline cross-checks (macOS, current status)
 
-1. Load both datasets (via a small `uffs-diag` helper or an ad-hoc Polars script) and correlate on **record number**:
-   - For each FRS, compare:
-     - `IsInUse` / `IsDirectory` flags.
-     - Base vs extension classification (`IsBaseRecord` vs `base_file_record_segment`).
-   - Verify that the reference reader and `uffs-mft` agree on which FRS are considered **directory base records**.
+With `f_mft_reference.csv` and `f_mft.parquet` side-by-side, we implemented a dedicated diagnostic binary in `crates/uffs-diag` to perform the cross-check:
 
-2. Focus specifically on the high-impact **missing parents**:
-   - Check whether FRS like `2,640,657`, `2,631,176`, etc. appear as directories in the reference CSV.
-   - If they do not, that would confirm that **C++ also does not treat these FRS as directory records**, and the discrepancy must be in higher-level path resolution logic.
-   - If they do, we will diff the attribute-level view to understand what cues C++ is using that Rust currently ignores.
+- Tool: `cross_check_mft_reference` (`crates/uffs-diag/src/bin/cross_check_mft_reference.rs`).
+- Command:
+  - `cargo run -p uffs-diag --release --bin cross_check_mft_reference -- docs/trial_runs/UltraFastFileSearch/f_mft_reference.csv docs/trial_runs/UltraFastFileSearch/f_mft.parquet`
 
-3. Use the reference CSV to drive targeted fixes in `uffs-mft` and the Rust path resolver, with the goal of:
-   - Eliminating `<dir:FRS>` placeholders for cases where C++ resolves a concrete path.
-   - Ensuring that any unavoidable differences (e.g. genuinely stale or corrupt records) are **well-understood and documented**.
+High-level metrics from this cross-check:
+
+- Reference CSV rows: **4,656,383**.
+- Parquet rows: **1,572,041**.
+- Joined rows on FRS: **1,572,041** (i.e. every Parquet FRS has a corresponding reference row).
+- Directory flag agreement:
+  - For all joined rows, the reference `IsDirectory` flag and the Rust `is_directory` column **agree 100%** (0 mismatches).
+
+We also approximate base-record status on the Parquet side (based on `base_file_record_segment` being zero) and confirm that this agrees with the reference `IsBaseRecord` flag wherever that information is available. In other words, for all FRS that **both** systems emit, `uffs-mft`’s classification of directories and base records matches the reference reader.
+
+The remaining discrepancies are therefore entirely about **FRS that appear only in the reference CSV**. To analyze those, `cross_check_mft_reference` also prints, for a small fixed set of high-impact parent FRS (e.g. `2640657`, `2631176`, `2628892`, `2628924`, `2627024`):
+
+- The reference row for that FRS (including `IsInUse`, `IsDirectory`, `IsBaseRecord`, and parent information).
+- All children in `f_mft.parquet` whose `parent_frs` equals that FRS.
+
+For these high-impact parents we observe the following pattern:
+
+- In the **reference CSV**, the FRS is marked as an *in-use directory base record* and is the parent of thousands of children.
+- In `f_mft.parquet`, there is **no row at all** with that FRS; we only see many children referencing it via `parent_frs`.
+- In the **raw snapshot** (`f_mft.raw`), tools like `dump_mft_records` and the newer `inspect_mft_record_flow` (see below) show that the corresponding records are **not valid base `FILE` records**:
+  - Many have `magic = 0x00000000` (`ZERO`) and obviously bogus header fields.
+  - Others have `magic = 'RCRD'` and behave like log/extension records, often with non-zero `base_file_record_segment`.
+
+This strongly suggests that the reference reader/C++ pipeline is willing to treat some **historical or log-derived information** as the effective parent directory for these children, whereas `uffs-mft` currently restricts itself to what appears as a valid base `FILE` record in the offline snapshot. To keep the Rust behavior explicit and debuggable, we:
+
+- Continue to avoid fabricating real directory rows for FRS whose on-disk snapshot is clearly not a valid base `FILE` record.
+- Instead, ensure that any such `parent_frs` get a **synthetic placeholder directory row** in the DataFrame (e.g. `name = "<dir:2640657>"`, `is_directory = true`), so that path resolution has a stable node to attach children to.
+
+To support this investigation we added another diagnostic binary, `inspect_mft_record_flow` (`crates/uffs-diag/src/bin/inspect_mft_record_flow.rs`):
+
+- It loads `f_mft.raw` via `uffs-mft::raw::load_raw_mft` and, for selected FRS values, interprets the header using a local `FileRecordSegmentHeader` layout (cross-platform).
+- It prints header fields (magic, flags, bytes-in-use, base-file-record segment, USA offset/count, etc.) and, on Windows, calls a small helper (`run_fixup_and_parse_for_frs` in `crates/uffs-diag/src/uffs_mft_helpers_windows.rs`) that runs `apply_fixup` + `parse_record_full` on the same bytes.
+- When run against the high-impact parent FRS listed above, this tool confirms the same story seen in §10:
+  - Either the record fails multi-sector fixup entirely, or
+  - It parses as an extension/log-style record rather than a base `FILE` directory record.
+
+Together, these cross-checks establish that **where `uffs-mft` produces a row, it matches the reference semantics**, and that the remaining differences are tied to FRS where the offline raw snapshot and the reference CSV genuinely disagree about what lives at that record number.
 
 ---
 
-This document is intended to be a **living log**. As we continue the investigation (especially once `f_mft_reference.csv` and any follow-up artifacts are available), we will append:
+This document is intended to be a **living log**. As we continue the investigation (especially if we capture newer F: snapshots or additional reference-reader runs), we will append:
 
 - Correlated findings between `f_mft.parquet` and the reference CSV.
 - Any remaining mismatches and their root causes.
 - Final validation steps confirming Rust == C++ behavior on real-world F: workloads.
+
+## 12. Planned C++ Raw MFT Dump Tool
+
+### 12.1 Motivation
+
+We now have high confidence that, for every FRS where both the reference CSV and `f_mft.parquet` contain a row, the Rust MFT reader (`uffs-mft`) agrees with the C++ semantics (directory flags, base-record vs extension). The remaining discrepancies are driven by FRS where:
+
+- The **reference reader** reports an in-use directory base record with many children, but
+- Our **offline raw snapshot** (`f_mft.raw`) contains either zeroed or `RCRD`/log-style records at the same location.
+
+To completely rule out any residual differences in **how we read the raw bytes from disk** (extent mapping, VCN/LCN translation, etc.), we will ask the C++ team to build an independent, very low-level `$MFT` dump tool in C++.
+
+The goal of this tool is to generate a second raw snapshot ("C++ view of `$MFT`") using the same Windows APIs and patterns the C++ implementation trusts in production. We can then compare that file bit-for-bit against the raw snapshot produced by `uffs-mft`.
+
+### 12.2 C++ raw dump tool design
+
+We have documented the full specification for this tool in:
+
+- `docs/CPP_RAW_MFT_DUMP_TOOL_SPEC.md`
+
+Key points for the C++ tool (no access to the Rust repo required on their side):
+
+- Platform: Windows, run from PowerShell with administrator rights.
+- Inputs:
+  - Drive letter, e.g. `F`.
+  - Output path for the raw snapshot, e.g. `C:\\...\\f_mft_cpp.raw`.
+- Behavior:
+  1. Open the NTFS volume (`\\.\\F:`) and `$MFT` stream.
+  2. Use `FSCTL_GET_NTFS_VOLUME_DATA` to obtain:
+     - `BytesPerCluster`, `BytesPerFileRecordSegment`, `MftValidDataLength`, `MftStartLcn`.
+  3. Use `FSCTL_GET_RETRIEVAL_POINTERS` on `$MFT` with **correct `ERROR_MORE_DATA` handling** to obtain the full runlist of MFT extents.
+  4. Read all clusters belonging to `$MFT` in VCN order into a contiguous buffer using `SetFilePointerEx` + `ReadFile`.
+  5. Interpret this buffer as `record_count = total_bytes / BytesPerFileRecordSegment` consecutive records (FRS 0..record_count-1), *without* applying multi-sector fixup or parsing.
+  6. Write the result using our existing `UFFS-MFT` file format:
+     - 64-byte header (magic `"UFFS-MFT"`, version 1, flags 0, record size, record count, original size, compressed size = 0).
+     - Followed by the raw bytes (`record_size * record_count`).
+
+The spec file includes explicit C++-style header-writing pseudocode and the exact layout we expect.
+
+### 12.3 How we will use the C++ snapshot
+
+Once the C++ tool is available and has produced a snapshot (for example:
+
+- `docs/trial_runs/UltraFastFileSearch/f_mft_cpp.raw`
+
+we will:
+
+1. Load both `f_mft_cpp.raw` and `f_mft.raw` via `uffs-mft::raw::load_raw_mft`.
+2. Verify that their headers (`record_size`, `record_count`, `original_size`) are consistent with each other and with `FSCTL_GET_NTFS_VOLUME_DATA`.
+3. Compare the data regions:
+   - Compute hashes or checksums over the entire data region.
+   - If needed, compare record-by-record to locate any FRS ranges where the bytes differ.
+4. Reuse existing diagnostics (`scan_mft_magic`, `dump_mft_records`, `inspect_mft_record_flow`) on both snapshots to understand whether magic distributions and header fields match across tools.
+
+If the two snapshots match bit-for-bit for the vast majority of the MFT (especially in the high-FRS ranges where we currently see discrepancies), we can assert that Rust and C++ are reading the same raw bytes, and that any remaining behavioral differences arise from higher-level interpretation. If they do not match, the per-FRS diff will pinpoint exactly where the two stacks diverge at the raw I/O level, guiding further fixes in `uffs-mft`'s Windows reader.
