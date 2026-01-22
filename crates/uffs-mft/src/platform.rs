@@ -637,7 +637,7 @@ fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
     let mut extents = Vec::new();
     // SAFETY: STARTING_VCN_INPUT_BUFFER is a simple struct with a single i64 field.
     // Zeroing it sets StartingVcn to 0, which is what we want.
-    let mut starting_vcn: STARTING_VCN_INPUT_BUFFER = unsafe { std::mem::zeroed() };
+    let starting_vcn: STARTING_VCN_INPUT_BUFFER = unsafe { std::mem::zeroed() };
 
     // Initial buffer size - will grow if needed
     let mut buffer_size = 64 * 1024; // 64KB initial
@@ -1347,7 +1347,7 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             None,
             OPEN_EXISTING,
-            windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES(0),
+            FILE_FLAGS_AND_ATTRIBUTES(0),
             None,
         )
     };
@@ -1438,7 +1438,7 @@ fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             None,
             OPEN_EXISTING,
-            windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES(0),
+            FILE_FLAGS_AND_ATTRIBUTES(0),
             None,
         )
     };
