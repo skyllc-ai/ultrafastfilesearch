@@ -7,9 +7,8 @@
 //! - Reading and parsing MFT records
 
 use crate::ntfs::*;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use std::mem;
-use std::ptr;
 
 #[cfg(windows)]
 use windows::{
@@ -157,8 +156,8 @@ impl MftReader {
 
         self.cluster_size = volume_data.BytesPerCluster;
         self.mft_record_size = volume_data.BytesPerFileRecordSegment;
-        self.mft_start_lcn = volume_data.MftStartLcn.QuadPart;
-        self.mft_valid_data_length = volume_data.MftValidDataLength.QuadPart as u64;
+        self.mft_start_lcn = volume_data.MftStartLcn;
+        self.mft_valid_data_length = volume_data.MftValidDataLength as u64;
 
         Ok(())
     }
