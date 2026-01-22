@@ -675,7 +675,7 @@ This document is intended to be a **living log**. As we continue the investigati
 - Any remaining mismatches and their root causes.
 - Final validation steps confirming Rust == C++ behavior on real-world F: workloads.
 
-## 12. Planned C++ Raw MFT Dump Tool
+## 12. C++ Raw MFT Dump Tool and Byte-Level Comparison
 
 ### 12.1 Motivation
 
@@ -729,3 +729,128 @@ we will:
 4. Reuse existing diagnostics (`scan_mft_magic`, `dump_mft_records`, `inspect_mft_record_flow`) on both snapshots to understand whether magic distributions and header fields match across tools.
 
 If the two snapshots match bit-for-bit for the vast majority of the MFT (especially in the high-FRS ranges where we currently see discrepancies), we can assert that Rust and C++ are reading the same raw bytes, and that any remaining behavioral differences arise from higher-level interpretation. If they do not match, the per-FRS diff will pinpoint exactly where the two stacks diverge at the raw I/O level, guiding further fixes in `uffs-mft`'s Windows reader.
+
+### 12.4 C++ Raw Dump Tool Implementation
+
+The C++ team implemented the raw MFT dump tool as specified. The tool:
+
+- Uses `FSCTL_GET_NTFS_VOLUME_DATA` for geometry
+- Uses `FSCTL_GET_RETRIEVAL_POINTERS` for extent mapping
+- Writes the same 64-byte header format as Rust (`UFFS-MFT` magic, version 1, flags 0)
+- Outputs raw MFT bytes without compression
+
+### 12.5 Extent Retrieval Bug Fix (Phase 1)
+
+Before comparing raw dumps, we first fixed a critical bug in Rust's extent retrieval:
+
+**Bugs identified and fixed in `crates/uffs-mft/src/platform.rs`:**
+
+| Bug | Before | After |
+|-----|--------|-------|
+| Path format | `\\.\F:\$MFT` | `F:\$MFT` |
+| File access flags | `FILE_READ_ATTRIBUTES.0` | `0` |
+| File flags | `FILE_FLAG_OPEN_REPARSE_POINT \| FILE_FLAG_NO_BUFFERING` | `FILE_FLAGS_AND_ATTRIBUTES(0)` |
+| HRESULT extraction | Compared full HRESULT (`0x800700EA`) against Win32 code (`234`) | Extract Win32 error: `hresult & 0xFFFF` for FACILITY_WIN32 |
+
+**Commit:** `f3f356dff` - "fix: correct MFT extent retrieval on Windows"
+
+After this fix, `dump_mft_extents F` correctly shows all 28 extents, matching the C++ output exactly:
+
+```
+MFT extents (VCN, clusters, LCN):
+ idx      VCN      clusters           LCN         byte_offset        byte_size
+   0          0       3202        7949042   520948416512      209846272
+   1       3202       3345        8378124   549068734464      219217920
+   ...
+  27      70496       2260       12474645   817538334720      148111360
+
+Summary:
+  extent_count      = 28
+  total_clusters    = 72756
+  total_bytes       = 4768137216
+  approx_records    = 4656384
+```
+
+### 12.6 Raw Dump Comparison Results (Phase 2 - Current)
+
+With extent retrieval fixed, we captured fresh raw dumps from both C++ and Rust on the same read-only F: drive:
+
+**Capture commands:**
+```powershell
+# C++ dump (using production uffs.com)
+uffs.com --dump-mft=F --output=f_mft_cpp.raw
+
+# Rust dump (with extent fix)
+uffs_mft.exe save --drive F --output f_mft_rust_fixed.raw --no-compress
+```
+
+**Rust output confirmed all 28 extents:**
+```
+⚠️  MFT is fragmented extents=28 sparse_extents=0 total_clusters=72756 total_records=4656384
+📊 Read plan generated chunks=12 records_to_read=4656384 records_skipped=0
+```
+
+**Comparison results:**
+```
+=== Raw MFT Comparison ===
+Header A: version=1, flags=0, record_size=1024, record_count=4656384
+Header B: version=1, flags=0, record_size=1024, record_count=4656384
+
+Total records:  4656384
+Same records:   2307904  (49.6%)
+Diff records:   2348480  (50.4%)
+Total differing bytes: 1347964739
+Fraction of differing bytes: 0.283
+
+First 20 differing records (FRS, differing_bytes_in_record):
+  FRS 1071680: 227 bytes differ
+  FRS 1071681: 217 bytes differ
+  FRS 1071682: 272 bytes differ
+  ...
+```
+
+### 12.7 Analysis: Extent Reading Bug
+
+**Critical observation:** The first differing record is **FRS 1,071,680**, which is exactly the first record of **extent 5**.
+
+**Extent boundary calculation:**
+- Records per cluster = 65,536 / 1,024 = 64
+- Extents 0-4 total clusters = 3,202 + 3,345 + 1,865 + 4,683 + 3,650 = 16,745
+- Extents 0-4 total records = 16,745 × 64 = **1,071,680**
+
+This means:
+- **Extents 0-4**: All 1,071,680 records match perfectly ✓
+- **Extents 5-27**: All 2,348,480 records differ ✗
+
+**Key insight:** The differences are **partial** (227-465 bytes per record), not complete zeros or garbage. This indicates Rust is reading **valid MFT data from wrong disk locations**, not failing to read at all.
+
+**Root cause hypothesis:**
+
+The extent retrieval is now correct (all 28 extents with correct VCN/LCN/cluster values). However, the **read path** that translates these extents into disk I/O is buggy. Specifically, the code in `generate_read_chunks()` or `read_chunk()` in `crates/uffs-mft/src/io.rs` is likely:
+
+1. Miscalculating `disk_offset` from extent LCN for extents 5+, OR
+2. Using wrong extent indexing when transitioning between extents, OR
+3. Not correctly handling the VCN→LCN mapping during chunk generation
+
+**Evidence supporting this:**
+- Extent 5 has LCN=3,367,678 (byte_offset=220,704,145,408)
+- Extent 4 has LCN=9,469,388 (byte_offset=620,585,811,968)
+- The MFT "jumps backwards" on disk at extent 5 (LCN decreases)
+- If the read code assumes monotonically increasing LCNs, it would read from wrong locations
+
+### 12.8 Current Status and Next Steps
+
+**Phase 1 (Extent Retrieval): COMPLETE ✓**
+- Rust now correctly retrieves all 28 MFT extents
+- Extent data matches C++ exactly
+
+**Phase 2 (Extent Reading): IN PROGRESS**
+- Bug identified: Read path produces wrong data starting at extent 5
+- Location: `crates/uffs-mft/src/io.rs` - `generate_read_chunks()` and/or `read_chunk()`
+- Next: Examine how `disk_offset` is calculated from extent LCN values
+
+**Planned investigation:**
+1. Review `generate_read_chunks()` logic for VCN→LCN→disk_offset translation
+2. Add diagnostic logging to show which extent/LCN is used for each FRS range
+3. Compare with C++ read logic to identify the discrepancy
+4. Fix the bug and re-run comparison to achieve 100% match
