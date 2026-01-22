@@ -745,7 +745,7 @@ use:
     if (-not $distDir) { $versions = Get-ChildItem -Path "dist" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^v\d' } | Sort-Object Name -Descending; if ($versions) { $distDir = $versions[0].FullName } }; \
     if (-not $distDir) { Write-Host "❌ No binaries found in dist/. Run 'just go' first." -ForegroundColor Red; exit 1 }; \
     Write-Host "  → Using: $distDir" -ForegroundColor Cyan; \
-    $binaries = @("uffs", "uffs_mft", "uffs_tui", "uffs_gui"); \
+    $binaries = @("uffs", "uffs_mft", "uffs_tui", "uffs_gui", "analyze_mft_parents", "dump_mft_records", "scan_mft_magic", "dump_mft_extents", "cross_check_mft_reference", "compare_raw_mft", "inspect_mft_record_flow"); \
     $installed = 0; $skipped = 0; \
     foreach ($bin in $binaries) { $src = "$distDir\$bin\$bin-windows-x64.exe"; $dest = "$binDir\$bin.exe"; if (Test-Path $src) { Copy-Item $src $dest -Force; Write-Host "  ✅ $bin.exe" -ForegroundColor Green; $installed++ } else { Write-Host "  ⚠️  $bin (not found)" -ForegroundColor Yellow; $skipped++ } }; \
     Write-Host "✅ Installed $installed binaries to ~/bin" -ForegroundColor Green; \
