@@ -170,7 +170,7 @@ fn inspect_record_flow(raw: &RawMftData, frs: u64) {
     // helpers live in the uffs-mft crate behind cfg(windows).
     #[cfg(windows)]
     {
-        use crate::uffs_mft_helpers_windows::run_fixup_and_parse_for_frs;
+        use uffs_diag::uffs_mft_helpers_windows::run_fixup_and_parse_for_frs;
 
         run_fixup_and_parse_for_frs(raw, frs);
     }
