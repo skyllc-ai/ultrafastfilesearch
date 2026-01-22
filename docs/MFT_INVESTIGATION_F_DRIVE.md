@@ -854,3 +854,92 @@ The extent retrieval is now correct (all 28 extents with correct VCN/LCN/cluster
 2. Add diagnostic logging to show which extent/LCN is used for each FRS range
 3. Compare with C++ read logic to identify the discrepancy
 4. Fix the bug and re-run comparison to achieve 100% match
+
+## 13. Root Cause Analysis and Fix
+
+### 13.1 Root Cause: `merge_adjacent_chunks()` Bug
+
+After detailed analysis of the code, the root cause was identified in the `merge_adjacent_chunks()` function in `crates/uffs-mft/src/io.rs`.
+
+**The Bug:**
+
+The function was designed to merge adjacent read chunks to reduce I/O syscall overhead. However, it incorrectly merged chunks from **different MFT extents** when:
+1. The FRS numbers were contiguous (e.g., extent 4 ends at FRS 1,071,679, extent 5 starts at FRS 1,071,680)
+2. But the disk locations were **NOT** contiguous (extent 4 at LCN 9,469,388, extent 5 at LCN 3,367,678)
+
+The problematic code:
+
+```rust
+let current_end_offset = current.disk_offset + current.record_count * u64::from(record_size);
+let gap_bytes = next.disk_offset.saturating_sub(current_end_offset);  // BUG HERE!
+let gap_records = gap_bytes / u64::from(record_size);
+```
+
+**Why `saturating_sub` caused the bug:**
+
+When `next.disk_offset < current_end_offset` (i.e., the next extent is BEFORE the current extent on disk), `saturating_sub` returns **0** instead of a large negative number. This made the gap appear to be zero, causing the merge condition to pass:
+
+```rust
+if gap_records <= threshold && frs_gap <= threshold && merged_bytes <= MAX_CHUNK_BYTES {
+    // Incorrectly merges chunks from different extents!
+    current.record_count = new_record_count;
+}
+```
+
+**The Result:**
+
+When reading the merged chunk:
+- The code would seek to `current.disk_offset` (correct for extent 4)
+- But read `new_record_count` records (spanning both extent 4 AND extent 5)
+- This read past the end of extent 4 into whatever data happened to be on disk
+- That data was NOT the MFT records for extent 5 (which are at a completely different LCN)
+
+This explains why:
+- Extents 0-4 matched perfectly (no merging across extent boundaries in that range)
+- Extents 5-27 all differed (merged chunks read wrong disk locations)
+- The differences were partial (227-465 bytes per record) - valid MFT data, just from wrong locations
+
+### 13.2 The Fix
+
+The fix ensures chunks are only merged when they are **physically contiguous on disk**, not just when FRS numbers are contiguous:
+
+```rust
+// Check for physical contiguity: next chunk must start at or very close to
+// where current chunk ends. We check BOTH directions to catch non-contiguous
+// extents regardless of their relative disk positions.
+let is_physically_contiguous = if next.disk_offset >= current_end_offset {
+    // Normal case: next chunk is after current on disk
+    let gap_bytes = next.disk_offset - current_end_offset;
+    gap_bytes <= threshold * u64::from(record_size)
+} else {
+    // Next chunk is BEFORE current on disk - NOT contiguous!
+    // This happens with fragmented MFTs where extents are scattered.
+    false
+};
+
+// Only merge if BOTH physically contiguous AND FRS contiguous
+if is_physically_contiguous && is_frs_contiguous && merged_bytes <= MAX_CHUNK_BYTES {
+    // Safe to merge
+}
+```
+
+**Key changes:**
+1. Explicitly check if `next.disk_offset >= current_end_offset` before calculating gap
+2. If next chunk is before current on disk, immediately mark as NOT contiguous
+3. Require BOTH physical AND FRS contiguity for merging
+
+### 13.3 Expected Impact
+
+With this fix:
+- Each MFT extent will be read from its correct LCN
+- No cross-extent merging will occur for fragmented MFTs
+- The raw dump should now match C++ bit-for-bit for all 4.6M records
+- Path resolution should work correctly for all files on F:
+
+### 13.4 Next Steps
+
+1. **Rebuild binaries** with the fix on Windows
+2. **Regenerate raw dumps** from both C++ and Rust on F:
+3. **Compare dumps** to verify 100% match
+4. **Re-run full comparison** of search results between C++ and Rust
+5. **Validate path resolution** - no more `<dir:XXXXXX>` placeholders

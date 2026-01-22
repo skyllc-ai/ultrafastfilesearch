@@ -17,6 +17,8 @@
 //! analyze_mft_parents docs/trial_runs/f_mft.parquet
 //! ```
 
+// Standalone binary doesn't use all crate dependencies
+#![allow(unused_crate_dependencies)]
 #![allow(
     clippy::print_stdout,
     clippy::print_stderr,

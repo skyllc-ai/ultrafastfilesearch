@@ -4,6 +4,8 @@
 //! (`*.raw` produced by `uffs_mft save`). This lets us inspect header flags
 //! and basic structure for selected records to compare against C++ behavior.
 
+// Standalone binary doesn't use all crate dependencies
+#![allow(unused_crate_dependencies)]
 #![allow(clippy::print_stdout, clippy::print_stderr, clippy::too_many_lines)]
 
 use std::env;

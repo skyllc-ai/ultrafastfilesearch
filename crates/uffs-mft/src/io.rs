@@ -2091,27 +2091,47 @@ fn merge_adjacent_chunks(
     let mut current = chunks.remove(0);
 
     for next in chunks {
-        // Check if chunks are adjacent or have a small gap
+        // Check if chunks are PHYSICALLY adjacent on disk.
+        // This is critical for fragmented MFTs where FRS numbers may be contiguous
+        // but disk locations are NOT (e.g., extent 4 at LCN 9M, extent 5 at LCN 3M).
+        //
+        // BUG FIX: Previously we only checked if gap_bytes (using saturating_sub) was
+        // small, but saturating_sub returns 0 when next.disk_offset <
+        // current_end_offset, causing chunks from different extents to be
+        // incorrectly merged.
         let current_end_offset =
             current.disk_offset + current.record_count * u64::from(record_size);
-        let gap_bytes = next.disk_offset.saturating_sub(current_end_offset);
-        let gap_records = gap_bytes / u64::from(record_size);
+
+        // Check for physical contiguity: next chunk must start at or very close to
+        // where current chunk ends. We check BOTH directions to catch non-contiguous
+        // extents regardless of their relative disk positions.
+        let is_physically_contiguous = if next.disk_offset >= current_end_offset {
+            // Normal case: next chunk is after current on disk
+            let gap_bytes = next.disk_offset - current_end_offset;
+            gap_bytes <= threshold * u64::from(record_size)
+        } else {
+            // Next chunk is BEFORE current on disk - NOT contiguous!
+            // This happens with fragmented MFTs where extents are scattered.
+            false
+        };
 
         // Also check if they're in the same extent (contiguous FRS range)
         let current_end_frs = current.start_frs + current.record_count;
         let frs_gap = next.start_frs.saturating_sub(current_end_frs);
+        let is_frs_contiguous = frs_gap <= threshold;
 
         // Calculate merged size to check against limit
         let new_record_count = (next.start_frs + next.record_count) - current.start_frs;
         let merged_bytes = new_record_count * u64::from(record_size);
 
-        if gap_records <= threshold && frs_gap <= threshold && merged_bytes <= MAX_CHUNK_BYTES {
+        // Only merge if BOTH physically contiguous AND FRS contiguous
+        if is_physically_contiguous && is_frs_contiguous && merged_bytes <= MAX_CHUNK_BYTES {
             // Merge: extend current chunk to include next
             current.record_count = new_record_count;
             // Update skip_end to be from the merged chunk
             current.skip_end = next.skip_end;
         } else {
-            // Gap too large or merged chunk would exceed size limit
+            // Not contiguous or merged chunk would exceed size limit
             merged.push(current);
             current = next;
         }
@@ -3627,5 +3647,94 @@ mod tests {
         // Test with Unknown
         let reader = PipelinedMftReader::new(extent_map, None, crate::platform::DriveType::Unknown);
         assert_eq!(reader.chunk_size, 4 * 1024 * 1024); // 4 MB for Unknown
+    }
+
+    #[test]
+    fn test_merge_adjacent_chunks_contiguous() {
+        // Test that truly contiguous chunks ARE merged
+        let chunks = vec![
+            ReadChunk {
+                disk_offset: 0,
+                start_frs: 0,
+                record_count: 100,
+                skip_begin: 0,
+                skip_end: 0,
+            },
+            ReadChunk {
+                disk_offset: 100 * 1024, // Contiguous: 100 records * 1024 bytes
+                start_frs: 100,
+                record_count: 100,
+                skip_begin: 0,
+                skip_end: 0,
+            },
+        ];
+
+        let merged = merge_adjacent_chunks(chunks, 1024, 64);
+        assert_eq!(merged.len(), 1, "Contiguous chunks should be merged");
+        assert_eq!(merged[0].start_frs, 0);
+        assert_eq!(merged[0].record_count, 200);
+        assert_eq!(merged[0].disk_offset, 0);
+    }
+
+    #[test]
+    fn test_merge_adjacent_chunks_non_contiguous_disk() {
+        // Test the bug fix: chunks with contiguous FRS but non-contiguous disk offsets
+        // should NOT be merged. This simulates a fragmented MFT where extent 4 is at
+        // a higher LCN than extent 5.
+        let chunks = vec![
+            ReadChunk {
+                disk_offset: 1_000_000_000, // Extent 4 at high disk offset
+                start_frs: 0,
+                record_count: 100,
+                skip_begin: 0,
+                skip_end: 0,
+            },
+            ReadChunk {
+                disk_offset: 500_000_000, // Extent 5 at LOWER disk offset (fragmented!)
+                start_frs: 100,           // FRS is contiguous
+                record_count: 100,
+                skip_begin: 0,
+                skip_end: 0,
+            },
+        ];
+
+        let merged = merge_adjacent_chunks(chunks, 1024, 64);
+        assert_eq!(
+            merged.len(),
+            2,
+            "Non-contiguous disk chunks should NOT be merged"
+        );
+        assert_eq!(merged[0].disk_offset, 1_000_000_000);
+        assert_eq!(merged[0].record_count, 100);
+        assert_eq!(merged[1].disk_offset, 500_000_000);
+        assert_eq!(merged[1].record_count, 100);
+    }
+
+    #[test]
+    fn test_merge_adjacent_chunks_gap_too_large() {
+        // Test that chunks with large gaps are not merged
+        let chunks = vec![
+            ReadChunk {
+                disk_offset: 0,
+                start_frs: 0,
+                record_count: 100,
+                skip_begin: 0,
+                skip_end: 0,
+            },
+            ReadChunk {
+                disk_offset: 200 * 1024, // Gap of 100 records (> threshold of 64)
+                start_frs: 200,
+                record_count: 100,
+                skip_begin: 0,
+                skip_end: 0,
+            },
+        ];
+
+        let merged = merge_adjacent_chunks(chunks, 1024, 64);
+        assert_eq!(
+            merged.len(),
+            2,
+            "Chunks with large gaps should NOT be merged"
+        );
     }
 }

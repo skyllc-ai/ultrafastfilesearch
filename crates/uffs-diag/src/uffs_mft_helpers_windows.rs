@@ -10,8 +10,8 @@
 
 use std::fmt::Write as _;
 
-use uffs_mft::io::{apply_fixup, parse_record_full};
 use uffs_mft::RawMftData;
+use uffs_mft::io::{apply_fixup, parse_record_full};
 
 /// Run `apply_fixup` + `parse_record_full` for a single FRS from a
 /// `RawMftData`, printing a compact diagnostic line.
@@ -28,9 +28,7 @@ pub fn run_fixup_and_parse_for_frs(raw: &RawMftData, frs: u64) {
 
     // Apply multi-sector fixup.
     if !apply_fixup(&mut buf) {
-        println!(
-            "[WIN] FRS {frs}: apply_fixup() failed (non-FILE magic or USA mismatch)"
-        );
+        println!("[WIN] FRS {frs}: apply_fixup() failed (non-FILE magic or USA mismatch)");
         return;
     }
 
@@ -44,4 +42,3 @@ pub fn run_fixup_and_parse_for_frs(raw: &RawMftData, frs: u64) {
     );
     print!("{out}");
 }
-

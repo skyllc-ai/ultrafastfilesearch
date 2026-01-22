@@ -13,6 +13,8 @@
 //!
 //! (Pass the drive letter without a colon.)
 
+// Standalone binary doesn't use all crate dependencies
+#![allow(unused_crate_dependencies)]
 #![allow(clippy::print_stdout, clippy::print_stderr, clippy::too_many_lines)]
 
 // This binary is Windows-only in terms of real functionality, but is compiled

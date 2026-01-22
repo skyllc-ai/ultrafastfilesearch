@@ -6,6 +6,8 @@
 //! We then aggregate counts by FRS bucket to locate where valid FILE records
 //! stop and other data (e.g. RCRD/zeros) begin.
 
+// Standalone binary doesn't use all crate dependencies
+#![allow(unused_crate_dependencies)]
 #![allow(
     clippy::print_stdout,
     clippy::print_stderr,
