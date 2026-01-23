@@ -430,6 +430,12 @@ enum Commands {
         ///   for HDD)
         #[arg(short, long, default_value = "auto")]
         mode: String,
+
+        /// Disable MFT bitmap optimization (read entire MFT sequentially).
+        /// C++ team insight: Sequential reads may be faster than seeking to
+        /// skip unused records on HDD.
+        #[arg(long)]
+        no_bitmap: bool,
     },
 }
 
@@ -591,9 +597,11 @@ async fn run() -> Result<()> {
             } => cmd_load(&input, output.as_deref(), info_only).await,
             Commands::BenchmarkMft { drive } => cmd_benchmark_mft(drive).await,
             Commands::BenchmarkIndex { drive } => cmd_benchmark_index(drive).await,
-            Commands::BenchmarkIndexLean { drive, mode } => {
-                cmd_benchmark_index_lean(drive, &mode).await
-            }
+            Commands::BenchmarkIndexLean {
+                drive,
+                mode,
+                no_bitmap,
+            } => cmd_benchmark_index_lean(drive, &mode, no_bitmap).await,
         }
     }
 }
@@ -2827,7 +2835,7 @@ async fn cmd_benchmark_index(drive: char) -> Result<()> {
 /// This measures the UFFS indexing pipeline without DataFrame building
 /// overhead. Should be ~2x faster than `benchmark-index` on large drives.
 #[cfg(windows)]
-async fn cmd_benchmark_index_lean(drive: char, mode_str: &str) -> Result<()> {
+async fn cmd_benchmark_index_lean(drive: char, mode_str: &str, no_bitmap: bool) -> Result<()> {
     use std::time::Instant;
 
     use uffs_mft::platform::VolumeHandle;
@@ -2841,6 +2849,7 @@ async fn cmd_benchmark_index_lean(drive: char, mode_str: &str) -> Result<()> {
     println!("=== Lean Index Build Benchmark Tool ===");
     println!("Drive: {}:", drive_upper);
     println!("Mode: {}", mode);
+    println!("Bitmap: {}", if no_bitmap { "disabled" } else { "enabled" });
     println!("This measures the UFFS indexing pipeline with lean MftIndex (no DataFrame overhead)");
     println!();
 
@@ -2873,10 +2882,13 @@ async fn cmd_benchmark_index_lean(drive: char, mode_str: &str) -> Result<()> {
     let start_time = Instant::now();
 
     // Open reader and read MFT into lean index
+    // If no_bitmap is set, disable bitmap optimization to read entire MFT
+    // sequentially
     let reader = MftReader::open(drive_upper)
         .await
         .with_context(|| format!("Failed to open drive {}:", drive_upper))?
-        .with_mode(mode);
+        .with_mode(mode)
+        .with_use_bitmap(!no_bitmap);
 
     let index = reader
         .read_all_index()
