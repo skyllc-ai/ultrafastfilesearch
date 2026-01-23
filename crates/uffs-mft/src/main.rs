@@ -396,6 +396,24 @@ enum Commands {
         #[arg(short, long)]
         drive: char,
     },
+
+    /// Lean index build benchmark (no `DataFrame` overhead)
+    ///
+    /// Measures the UFFS indexing pipeline with lean `MftIndex` instead of
+    /// Polars `DataFrame`. This should be significantly faster (~2x) because
+    /// it avoids `DataFrame` building overhead.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft benchmark-index-lean --drive C
+    /// uffs_mft benchmark-index-lean -d S
+    /// ```
+    BenchmarkIndexLean {
+        /// Drive letter (e.g., C, D, E)
+        #[arg(short, long)]
+        drive: char,
+    },
 }
 
 /// Initialize logging with terminal + file support.
@@ -556,6 +574,7 @@ async fn run() -> Result<()> {
             } => cmd_load(&input, output.as_deref(), info_only).await,
             Commands::BenchmarkMft { drive } => cmd_benchmark_mft(drive).await,
             Commands::BenchmarkIndex { drive } => cmd_benchmark_index(drive).await,
+            Commands::BenchmarkIndexLean { drive } => cmd_benchmark_index_lean(drive).await,
         }
     }
 }
@@ -2716,10 +2735,7 @@ async fn cmd_benchmark_index(drive: char) -> Result<()> {
     let total_entries = df.height() as u64;
 
     // Count files vs directories using the is_directory column
-    let is_dir_col = df
-        .column("is_directory")
-        .ok()
-        .and_then(|c| c.bool().ok());
+    let is_dir_col = df.column("is_directory").ok().and_then(|c| c.bool().ok());
 
     let (files_count, dirs_count) = if let Some(col) = is_dir_col {
         let dirs: u64 = col.into_iter().filter(|v| v.unwrap_or(false)).count() as u64;
@@ -2777,6 +2793,134 @@ async fn cmd_benchmark_index(drive: char) -> Result<()> {
     println!("=== Summary ===");
     println!(
         "Indexed {} items in {:.3} seconds",
+        total_entries, elapsed_secs
+    );
+
+    Ok(())
+}
+
+// ============================================================================
+// Lean Index Build Benchmark Command (no DataFrame overhead)
+// ============================================================================
+
+/// Lean index build benchmark - uses `MftIndex` instead of DataFrame.
+///
+/// This measures the UFFS indexing pipeline without DataFrame building
+/// overhead. Should be ~2x faster than `benchmark-index` on large drives.
+#[cfg(windows)]
+async fn cmd_benchmark_index_lean(drive: char) -> Result<()> {
+    use std::time::Instant;
+
+    use uffs_mft::platform::VolumeHandle;
+    use uffs_mft::{MftReadMode, MftReader};
+
+    let drive_upper = drive.to_ascii_uppercase();
+
+    println!("=== Lean Index Build Benchmark Tool ===");
+    println!("Drive: {}:", drive_upper);
+    println!("This measures the UFFS indexing pipeline with lean MftIndex (no DataFrame overhead)");
+    println!();
+
+    // Get volume info via VolumeHandle
+    let handle = VolumeHandle::open(drive_upper)
+        .with_context(|| format!("Failed to open volume {}:", drive_upper))?;
+    let vol_data = handle.volume_data();
+    let mft_size = vol_data.mft_valid_data_length;
+    let record_size = vol_data.bytes_per_file_record_segment;
+    let mft_capacity = mft_size / u64::from(record_size);
+    let mft_size_mb = mft_size / (1024 * 1024);
+    drop(handle); // Release handle before opening reader
+
+    // =========================================================================
+    // Print Volume Information
+    // =========================================================================
+    println!("=== Volume Information ===");
+    println!("MFT Capacity: {} records", mft_capacity);
+    println!("MFT Record Size: {} bytes", record_size);
+    println!("MFT Total Size: {} bytes ({} MB)", mft_size, mft_size_mb);
+    println!();
+
+    println!("Creating lean index for {}:\\ ...", drive_upper);
+    println!("Indexing in progress...");
+    println!();
+
+    // =========================================================================
+    // Run the lean indexing pipeline with timing
+    // =========================================================================
+    let start_time = Instant::now();
+
+    // Open reader and read MFT into lean index
+    let reader = MftReader::open(drive_upper)
+        .await
+        .with_context(|| format!("Failed to open drive {}:", drive_upper))?
+        .with_mode(MftReadMode::Auto);
+
+    let index = reader
+        .read_all_index()
+        .await
+        .with_context(|| format!("Failed to read MFT from {}:", drive_upper))?;
+
+    let elapsed = start_time.elapsed();
+    let elapsed_ms = elapsed.as_millis() as u64;
+    let elapsed_secs = elapsed.as_secs_f64();
+
+    // =========================================================================
+    // Calculate statistics from MftIndex
+    // =========================================================================
+    let total_entries = index.records.len() as u64;
+
+    // Count files vs directories
+    let dirs_count = index.records.iter().filter(|r| r.is_directory()).count() as u64;
+    let files_count = total_entries.saturating_sub(dirs_count);
+
+    // =========================================================================
+    // Print Index Statistics
+    // =========================================================================
+    println!("=== Index Statistics ===");
+    println!("Records Processed: {}", mft_capacity);
+    println!("Files: {}", files_count);
+    println!("Directories: {}", dirs_count);
+    println!("Total Entries: {}", total_entries);
+    println!("Names Buffer: {} KB", index.names.len() / 1024);
+    println!();
+
+    // =========================================================================
+    // Print Benchmark Results
+    // =========================================================================
+    let mft_read_speed = if elapsed_secs > 0.0 {
+        (mft_size as f64 / (1024.0 * 1024.0)) / elapsed_secs
+    } else {
+        0.0
+    };
+
+    let records_per_sec = if elapsed_secs > 0.0 {
+        (mft_capacity as f64 / elapsed_secs) as u64
+    } else {
+        0
+    };
+
+    let entries_per_sec = if elapsed_secs > 0.0 {
+        (total_entries as f64 / elapsed_secs) as u64
+    } else {
+        0
+    };
+
+    println!("=== Benchmark Results ===");
+    println!(
+        "Time Elapsed: {} ms ({:.3} seconds)",
+        elapsed_ms, elapsed_secs
+    );
+    println!("MFT Read Speed: {:.2} MB/s", mft_read_speed);
+    println!("Record Processing: {} records/sec", records_per_sec);
+    println!("File Indexing: {} files+dirs/sec", entries_per_sec);
+    println!();
+
+    // =========================================================================
+    // Print Summary
+    // =========================================================================
+    println!("=== Summary ===");
+    println!(
+        "Indexed {} items in {:.3} seconds (lean index)",
         total_entries, elapsed_secs
     );
 

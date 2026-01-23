@@ -81,6 +81,7 @@ use {
 
 pub mod error;
 pub mod flags;
+pub mod index;
 pub mod raw;
 
 #[cfg(windows)]
@@ -100,6 +101,11 @@ mod reader;
 
 pub use error::{MftError, Result};
 pub use flags::FileFlags;
+// Re-export lean index types
+pub use index::{
+    ChildInfo, FileRecord, IndexNameRef, IndexStreamInfo, LinkInfo, MftIndex, NO_ENTRY, ROOT_FRS,
+    SizeInfo, StandardInfo,
+};
 // Re-export I/O types for advanced usage
 #[cfg(windows)]
 pub use io::{

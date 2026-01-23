@@ -573,6 +573,69 @@ impl MftReader {
         Err(MftError::PlatformNotSupported)
     }
 
+    /// Read the entire MFT into a lean `MftIndex` (fast path).
+    ///
+    /// This method builds a compact `MftIndex` structure instead of a Polars
+    /// DataFrame. It's significantly faster because it avoids the DataFrame
+    /// building overhead (~15-20s on large drives).
+    ///
+    /// Use this when you need fast indexing and searching. Convert to DataFrame
+    /// later with `MftIndex::to_dataframe()` if you need Polars analytics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MFT reading fails.
+    #[cfg(windows)]
+    #[allow(clippy::unused_async)]
+    pub async fn read_all_index(&self) -> Result<crate::index::MftIndex> {
+        self.read_mft_index_internal(None::<fn(MftProgress)>)
+    }
+
+    /// Read MFT into lean index (non-Windows stub).
+    ///
+    /// # Errors
+    ///
+    /// Always returns `MftError::PlatformNotSupported` on non-Windows
+    /// platforms.
+    #[cfg(not(windows))]
+    #[allow(clippy::unused_async)]
+    pub async fn read_all_index(&self) -> Result<crate::index::MftIndex> {
+        Err(MftError::PlatformNotSupported)
+    }
+
+    /// Read MFT into lean index with progress callback.
+    ///
+    /// # Arguments
+    ///
+    /// * `callback` - Function called periodically with progress updates
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MFT reading fails.
+    #[cfg(windows)]
+    #[allow(clippy::unused_async)]
+    pub async fn read_index_with_progress<F>(&self, callback: F) -> Result<crate::index::MftIndex>
+    where
+        F: Fn(MftProgress) + Send + 'static,
+    {
+        self.read_mft_index_internal(Some(callback))
+    }
+
+    /// Read MFT into lean index with progress (non-Windows stub).
+    ///
+    /// # Errors
+    ///
+    /// Always returns `MftError::PlatformNotSupported` on non-Windows
+    /// platforms.
+    #[cfg(not(windows))]
+    #[allow(clippy::unused_async)]
+    pub async fn read_index_with_progress<F>(&self, _callback: F) -> Result<crate::index::MftIndex>
+    where
+        F: Fn(MftProgress) + Send + 'static,
+    {
+        Err(MftError::PlatformNotSupported)
+    }
+
     /// Read MFT with detailed phase timing for benchmarking.
     ///
     /// This method measures each phase of MFT reading separately:
@@ -1140,6 +1203,214 @@ impl MftReader {
             is_virtual_vec,
             flags_vec,
         )
+    }
+
+    /// Internal implementation for building lean `MftIndex`.
+    ///
+    /// This is the fast path that avoids DataFrame building overhead.
+    /// Uses the same I/O and parsing as `read_mft_internal`, but builds
+    /// a compact `MftIndex` instead of a Polars DataFrame.
+    #[cfg(windows)]
+    #[allow(clippy::too_many_lines)]
+    fn read_mft_index_internal<F>(&self, callback: Option<F>) -> Result<crate::index::MftIndex>
+    where
+        F: Fn(MftProgress),
+    {
+        use crate::index::MftIndex;
+        use crate::io::{MftExtentMap, ParallelMftReader};
+        use crate::platform::detect_drive_type;
+
+        info!(volume = %self.volume, "Starting MFT read (lean index)");
+
+        let start_time = Instant::now();
+        let record_size = self.handle.file_record_size();
+        let volume_data = self.handle.volume_data();
+
+        // Detect drive type for optimal I/O tuning
+        let drive_type = detect_drive_type(self.volume);
+        info!(
+            volume = %self.volume,
+            drive_type = ?drive_type,
+            "🚀 Drive type detected for I/O optimization (lean index)"
+        );
+
+        // Get MFT extents for fragmented MFT support
+        let extents = self.handle.get_mft_extents().unwrap_or_else(|e| {
+            warn!(error = ?e, "Failed to get MFT extents, using fallback");
+            vec![crate::platform::MftExtent {
+                vcn: 0,
+                cluster_count: volume_data.mft_valid_data_length
+                    / u64::from(volume_data.bytes_per_cluster),
+                lcn: volume_data.mft_start_lcn as i64,
+            }]
+        });
+
+        info!(num_extents = extents.len(), "MFT extents retrieved");
+
+        // Create extent map
+        let extent_map = MftExtentMap::new(extents, volume_data.bytes_per_cluster, record_size);
+        let total_records = extent_map.total_records();
+        info!(total_records, "Total MFT records to read");
+
+        // Try to get the MFT bitmap for optimization
+        let bitmap = if self.use_bitmap {
+            let bm = self.handle.get_mft_bitmap().ok();
+            if let Some(ref b) = bm {
+                let in_use = b.count_in_use();
+                info!(
+                    in_use_records = in_use,
+                    skip_percentage = 100.0 - (in_use as f64 / total_records as f64 * 100.0),
+                    "MFT bitmap loaded - will skip unused records"
+                );
+            }
+            bm
+        } else {
+            info!("Bitmap optimization DISABLED - reading ALL records");
+            None
+        };
+
+        // Report initial progress
+        if let Some(ref cb) = callback {
+            cb(MftProgress {
+                records_read: 0,
+                total_records: Some(total_records),
+                bytes_read: 0,
+                elapsed: start_time.elapsed(),
+            });
+        }
+
+        // Select reader based on mode
+        let effective_mode = match self.mode {
+            MftReadMode::Auto => match drive_type {
+                crate::platform::DriveType::Ssd => MftReadMode::Parallel,
+                crate::platform::DriveType::Hdd => MftReadMode::Pipelined,
+                crate::platform::DriveType::Unknown => MftReadMode::Parallel,
+            },
+            mode => mode,
+        };
+
+        info!(mode = %effective_mode, "🚀 Using read mode (lean index)");
+
+        let handle = self.handle.raw_handle();
+        let total_bytes = total_records * u64::from(record_size);
+
+        // Read using the selected mode (same as read_mft_internal)
+        let parsed_records = match effective_mode {
+            MftReadMode::Parallel | MftReadMode::Auto => {
+                let parallel_reader =
+                    ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
+
+                if let Some(ref cb) = callback {
+                    let cb_ref = cb;
+                    let start = start_time;
+                    parallel_reader.read_all_parallel_with_progress(
+                        handle,
+                        true,
+                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                            let records_approx = if total_bytes_expected > 0 {
+                                (bytes_read * total_records) / total_bytes_expected
+                            } else {
+                                0
+                            };
+                            cb_ref(MftProgress {
+                                records_read: records_approx,
+                                total_records: Some(total_records),
+                                bytes_read,
+                                elapsed: start.elapsed(),
+                            });
+                        }),
+                    )?
+                } else {
+                    parallel_reader
+                        .read_all_parallel_with_progress::<fn(u64, u64)>(handle, true, None)?
+                }
+            }
+            MftReadMode::Pipelined => {
+                let pipelined_reader =
+                    crate::io::PipelinedMftReader::new(extent_map, bitmap, drive_type);
+
+                if let Some(ref cb) = callback {
+                    let cb_ref = cb;
+                    let start = start_time;
+                    pipelined_reader.read_all_pipelined(
+                        handle,
+                        true,
+                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                            let records_approx = if total_bytes_expected > 0 {
+                                (bytes_read * total_records) / total_bytes_expected
+                            } else {
+                                0
+                            };
+                            cb_ref(MftProgress {
+                                records_read: records_approx,
+                                total_records: Some(total_records),
+                                bytes_read,
+                                elapsed: start.elapsed(),
+                            });
+                        }),
+                    )?
+                } else {
+                    pipelined_reader.read_all_pipelined::<fn(u64, u64)>(handle, true, None)?
+                }
+            }
+            _ => {
+                // Fallback to parallel for other modes
+                let parallel_reader =
+                    ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
+                parallel_reader
+                    .read_all_parallel_with_progress::<fn(u64, u64)>(handle, true, None)?
+            }
+        };
+
+        // Add placeholder records for missing parent directories
+        let mut parsed_records = parsed_records;
+        let placeholders_added =
+            crate::io::add_missing_parent_placeholders_to_vec(&mut parsed_records);
+        if placeholders_added > 0 {
+            debug!(
+                placeholders_added,
+                "Added placeholder records for path resolution"
+            );
+        }
+
+        let read_elapsed = start_time.elapsed();
+        let records_parsed_count = parsed_records.len();
+        let throughput_mb_s = if read_elapsed.as_secs_f64() > 0.0 {
+            (total_bytes as f64 / (1024.0 * 1024.0)) / read_elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
+
+        info!(
+            records_parsed = records_parsed_count,
+            elapsed_ms = read_elapsed.as_millis(),
+            throughput_mb_s = format!("{:.1}", throughput_mb_s),
+            "✅ MFT read complete, building lean index"
+        );
+
+        // Build lean MftIndex (fast path - no DataFrame overhead)
+        let index_start = Instant::now();
+        let index = MftIndex::from_parsed_records(self.volume, parsed_records);
+        let index_elapsed = index_start.elapsed();
+
+        info!(
+            records = index.records.len(),
+            names_buffer_kb = index.names.len() / 1024,
+            index_build_ms = index_elapsed.as_millis(),
+            "✅ Lean index built"
+        );
+
+        // Report final progress
+        if let Some(ref cb) = callback {
+            cb(MftProgress {
+                records_read: total_records,
+                total_records: Some(total_records),
+                bytes_read: total_bytes,
+                elapsed: start_time.elapsed(),
+            });
+        }
+
+        Ok(index)
     }
 
     /// Internal implementation for MFT reading with detailed phase timing.
