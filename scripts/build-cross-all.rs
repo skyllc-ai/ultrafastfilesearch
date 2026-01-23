@@ -39,21 +39,21 @@ use sha2::{Digest, Sha256};
 /// - uffs_mft: Low-level MFT reading tool
 /// - uffs_tui: Terminal UI (placeholder)
 /// - uffs_gui: Graphical UI (placeholder)
-/// - uffs-diag binaries: Diagnostic tools for MFT analysis
+/// - uffs-diag binaries: Excluded from workspace - build manually when needed
 const BINARIES: &[(&str, &str)] = &[
     ("uffs", "uffs-cli"),
     ("uffs_mft", "uffs-mft"),
     ("uffs_tui", "uffs-tui"),
     ("uffs_gui", "uffs-gui"),
-    // uffs-diag diagnostic binaries
-    ("analyze_mft_parents", "uffs-diag"),
-    ("dump_mft_records", "uffs-diag"),
-    ("scan_mft_magic", "uffs-diag"),
-    ("dump_mft_extents", "uffs-diag"),
-    ("cross_check_mft_reference", "uffs-diag"),
-    ("compare_raw_mft", "uffs-diag"),
-    ("inspect_mft_record_flow", "uffs-diag"),
-    ("analyze_diff", "uffs-diag"),
+    // uffs-diag excluded from workspace - uncomment when needed:
+    // ("analyze_mft_parents", "uffs-diag"),
+    // ("dump_mft_records", "uffs-diag"),
+    // ("scan_mft_magic", "uffs-diag"),
+    // ("dump_mft_extents", "uffs-diag"),
+    // ("cross_check_mft_reference", "uffs-diag"),
+    // ("compare_raw_mft", "uffs-diag"),
+    // ("inspect_mft_record_flow", "uffs-diag"),
+    // ("analyze_diff", "uffs-diag"),
 ];
 
 struct Target {

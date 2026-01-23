@@ -63,6 +63,9 @@ use criterion as _;
 // Pipelining dependencies (used in io.rs PipelinedMftReader on Windows)
 #[cfg(not(windows))]
 use rayon as _;
+// FxHash for fast hashing (used in io.rs on Windows)
+#[cfg(not(windows))]
+use rustc_hash as _;
 #[cfg(not(windows))]
 use thiserror as _;
 #[cfg(not(windows))]

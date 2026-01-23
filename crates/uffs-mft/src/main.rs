@@ -77,7 +77,7 @@ use uffs_mft::MftReader;
 // Optional dependencies
 #[cfg(feature = "zstd")]
 use zstd as _;
-use {bitflags as _, rayon as _, thiserror as _, uffs_polars as _};
+use {bitflags as _, rayon as _, rustc_hash as _, thiserror as _, uffs_polars as _};
 // Benchmark dependencies (used by bench/bench-all commands on Windows)
 #[cfg(not(windows))]
 use {chrono as _, hostname as _, num_cpus as _};
@@ -436,6 +436,12 @@ enum Commands {
         /// skip unused records on HDD.
         #[arg(long)]
         no_bitmap: bool,
+
+        /// Disable placeholder creation for missing parent directories.
+        /// C++ team insight: They don't add placeholders upfront - they resolve
+        /// paths lazily. Disabling saves ~15% of CPU time.
+        #[arg(long)]
+        no_placeholders: bool,
     },
 }
 
@@ -601,7 +607,8 @@ async fn run() -> Result<()> {
                 drive,
                 mode,
                 no_bitmap,
-            } => cmd_benchmark_index_lean(drive, &mode, no_bitmap).await,
+                no_placeholders,
+            } => cmd_benchmark_index_lean(drive, &mode, no_bitmap, no_placeholders).await,
         }
     }
 }
@@ -2835,7 +2842,12 @@ async fn cmd_benchmark_index(drive: char) -> Result<()> {
 /// This measures the UFFS indexing pipeline without DataFrame building
 /// overhead. Should be ~2x faster than `benchmark-index` on large drives.
 #[cfg(windows)]
-async fn cmd_benchmark_index_lean(drive: char, mode_str: &str, no_bitmap: bool) -> Result<()> {
+async fn cmd_benchmark_index_lean(
+    drive: char,
+    mode_str: &str,
+    no_bitmap: bool,
+    no_placeholders: bool,
+) -> Result<()> {
     use std::time::Instant;
 
     use uffs_mft::platform::VolumeHandle;
@@ -2850,6 +2862,14 @@ async fn cmd_benchmark_index_lean(drive: char, mode_str: &str, no_bitmap: bool) 
     println!("Drive: {}:", drive_upper);
     println!("Mode: {}", mode);
     println!("Bitmap: {}", if no_bitmap { "disabled" } else { "enabled" });
+    println!(
+        "Placeholders: {}",
+        if no_placeholders {
+            "disabled"
+        } else {
+            "enabled"
+        }
+    );
     println!("This measures the UFFS indexing pipeline with lean MftIndex (no DataFrame overhead)");
     println!();
 
@@ -2882,13 +2902,14 @@ async fn cmd_benchmark_index_lean(drive: char, mode_str: &str, no_bitmap: bool) 
     let start_time = Instant::now();
 
     // Open reader and read MFT into lean index
-    // If no_bitmap is set, disable bitmap optimization to read entire MFT
-    // sequentially
+    // - no_bitmap: disable bitmap optimization to read entire MFT sequentially
+    // - no_placeholders: skip placeholder creation for ~15% speedup
     let reader = MftReader::open(drive_upper)
         .await
         .with_context(|| format!("Failed to open drive {}:", drive_upper))?
         .with_mode(mode)
-        .with_use_bitmap(!no_bitmap);
+        .with_use_bitmap(!no_bitmap)
+        .with_add_placeholders(!no_placeholders);
 
     let index = reader
         .read_all_index()

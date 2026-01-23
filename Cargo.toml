@@ -23,7 +23,6 @@ members = [
     "crates/uffs-mft",      # 📦 MFT reading → Polars DataFrame
     "crates/uffs-core",     # 🎯 Query engine using Polars lazy API
     "crates/uffs-cli",      # 🖥️  Command-line interface
-    "crates/uffs-diag",     # 🔬 Diagnostic / forensic tools (offline)
     "crates/uffs-tui",      # 📟 Terminal UI
     "crates/uffs-gui",      # 🪟 Graphical UI (future)
     "crates/uffs-legacy",   # 📜 Legacy code (reference only)
@@ -31,13 +30,15 @@ members = [
 exclude = [
     # Vendored reference tools / external code (kept out of the main workspace)
     "vendor/mft-reader-rs",
+    # Diagnostic/forensic tools - rarely needed, move to members when required
+    "crates/uffs-diag",
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.2.50"
+version = "0.2.51"
 edition = "2024"
 rust-version = "1.85"
 license = "MPL-2.0 OR LicenseRef-UFFS-Commercial"
@@ -58,8 +59,8 @@ uffs-polars = { path = "crates/uffs-polars" }
 uffs-mft = { path = "crates/uffs-mft", features = ["zstd"] }
 uffs-core = { path = "crates/uffs-core" }
 uffs-cli = { path = "crates/uffs-cli" }
-uffs-diag = { path = "crates/uffs-diag" }
 uffs-tui = { path = "crates/uffs-tui" }
+# uffs-diag = { path = "crates/uffs-diag" }  # Excluded - uncomment when needed
 
 # ───── Polars (via facade crate for compilation isolation) ─────
 # NOTE: Polars is pulled from git main branch in uffs-polars crate
