@@ -1312,20 +1312,20 @@ pub enum DriveType {
 impl DriveType {
     /// Returns the optimal chunk size for this drive type.
     ///
-    /// - SSD: 8 MB (high IOPS, large sequential reads are efficient)
-    /// - HDD: 64 KB (let OS read-ahead handle prefetching)
-    /// - Unknown: 64 KB (conservative default matching HDD)
+    /// - SSD: 1 MB (high IOPS, large sequential reads are efficient)
+    /// - HDD: 1 MB (matches C++ actual behavior - profiler shows 1024KB reads)
+    /// - Unknown: 1 MB (conservative default)
     ///
-    /// C++ team insight: With FILE_FLAG_SEQUENTIAL_SCAN, Windows does
-    /// aggressive read-ahead automatically. Smaller buffers (64KB) mean we
-    /// return to user-mode faster, keeping the I/O pipeline fed. The OS
-    /// read-ahead does the large sequential prefetching for us.
+    /// Note: C++ team initially said 64KB, but profiler shows they actually use
+    /// 1MB (1024KB) reads. With 1MB reads, C++ does 8,141 reads for 11.5GB MFT.
+    /// With 64KB reads, Rust would need ~180,000 reads - the syscall overhead
+    /// alone adds ~20 seconds. Using 1MB matches C++ actual behavior.
     #[must_use]
     pub const fn optimal_chunk_size(&self) -> usize {
         match self {
-            Self::Ssd => 64 * 1024,     // 64 KB - let OS read-ahead work
-            Self::Hdd => 64 * 1024,     // 64 KB - C++ team tested, fastest with sequential scan
-            Self::Unknown => 64 * 1024, // 64 KB default
+            Self::Ssd => 1024 * 1024,     // 1 MB - matches C++ profiler data
+            Self::Hdd => 1024 * 1024,     // 1 MB - C++ profiler shows 1024KB reads
+            Self::Unknown => 1024 * 1024, // 1 MB default
         }
     }
 
