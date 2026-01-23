@@ -21,7 +21,7 @@ Traditional file search tools (including `os.walk`, `FindFirstFile`, etc.) work 
 
 **UFFS reads the MFT directly** - once - and queries it in memory using Polars DataFrames. This is like reading the entire phonebook once instead of looking up each name individually.
 
-### Benchmark Results (v0.2.54)
+### Benchmark Results (v0.2.55)
 
 | Drive Type | Records | Time | Throughput |
 |------------|---------|------|------------|
@@ -33,7 +33,7 @@ Traditional file search tools (including `os.walk`, `FindFirstFile`, etc.) work 
 
 | Comparison | Records | Time | Notes |
 |------------|---------|------|-------|
-| **UFFS v0.2.54** | **18.7 Million** | **~142 seconds** | All disks, fast mode |
+| **UFFS v0.2.55** | **18.7 Million** | **~142 seconds** | All disks, fast mode |
 | UFFS v0.1.30 | 18.7 Million | ~315 seconds | Baseline |
 | Everything | 19 Million | 178 seconds | All disks |
 | WizFile | 6.5 Million | 299 seconds | Single HDD |

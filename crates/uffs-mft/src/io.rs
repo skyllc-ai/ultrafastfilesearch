@@ -2976,6 +2976,9 @@ impl ParallelMftReader {
         );
 
         // Phase 3: Create IOCP and queue ALL reads at once
+        // C++ uses ~1MB per I/O operation for optimal disk scheduling
+        const IO_CHUNK_SIZE: usize = 1024 * 1024; // 1MB per read operation
+
         let read_start = std::time::Instant::now();
         let iocp = IoCompletionPort::new(0)?;
         iocp.associate(overlapped_handle, 0)?;
@@ -2986,13 +2989,15 @@ impl ParallelMftReader {
             overlapped: windows::Win32::System::IO::OVERLAPPED,
         }
 
+        // Estimate number of I/O operations: total bytes / 1MB
+        let estimated_ops = (bytes_to_read as usize / IO_CHUNK_SIZE) + sorted_chunks.len();
+
         // Pin all overlapped structs for pointer stability
-        let mut operations: Vec<Pin<Box<BulkOverlappedRead>>> =
-            Vec::with_capacity(sorted_chunks.len());
+        let mut operations: Vec<Pin<Box<BulkOverlappedRead>>> = Vec::with_capacity(estimated_ops);
         let mut pending_count = 0usize;
 
-        // Queue ALL reads at once
-        for (_chunk_idx, chunk) in sorted_chunks.iter().enumerate() {
+        // Queue ALL reads at once, breaking large chunks into 1MB I/O operations
+        for chunk in sorted_chunks.iter() {
             let skip_begin_bytes = chunk.skip_begin as usize * record_size;
             let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
 
@@ -3001,60 +3006,71 @@ impl ParallelMftReader {
             }
 
             let effective_bytes = effective_records as usize * record_size;
-            let disk_offset = chunk.disk_offset + skip_begin_bytes as u64;
-            let buffer_offset = chunk.start_frs as usize * record_size + skip_begin_bytes;
+            let chunk_disk_offset = chunk.disk_offset + skip_begin_bytes as u64;
+            let chunk_buffer_offset = chunk.start_frs as usize * record_size + skip_begin_bytes;
 
-            // Align disk offset to sector boundary
-            let aligned_offset = (disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
-            let _offset_adjustment = (disk_offset - aligned_offset) as usize;
+            // Break this chunk into 1MB I/O operations
+            let mut offset_within_chunk = 0usize;
+            while offset_within_chunk < effective_bytes {
+                let remaining = effective_bytes - offset_within_chunk;
+                let io_size = remaining.min(IO_CHUNK_SIZE);
 
-            let mut op = Box::pin(BulkOverlappedRead {
-                overlapped: unsafe { std::mem::zeroed() },
-            });
+                let disk_offset = chunk_disk_offset + offset_within_chunk as u64;
+                let buffer_offset = chunk_buffer_offset + offset_within_chunk;
 
-            // Set offset in OVERLAPPED
-            op.overlapped.Anonymous.Anonymous.Offset = (aligned_offset & 0xFFFF_FFFF) as u32;
-            op.overlapped.Anonymous.Anonymous.OffsetHigh = (aligned_offset >> 32) as u32;
+                let mut op = Box::pin(BulkOverlappedRead {
+                    overlapped: unsafe { std::mem::zeroed() },
+                });
 
-            // Issue async read
-            let target_slice = unsafe {
-                std::slice::from_raw_parts_mut(
-                    mft_buffer.as_mut_slice().as_mut_ptr().add(buffer_offset),
-                    effective_bytes,
-                )
-            };
+                // Set offset in OVERLAPPED
+                op.overlapped.Anonymous.Anonymous.Offset = (disk_offset & 0xFFFF_FFFF) as u32;
+                op.overlapped.Anonymous.Anonymous.OffsetHigh = (disk_offset >> 32) as u32;
 
-            let result = unsafe {
-                ReadFile(
-                    overlapped_handle,
-                    Some(target_slice),
-                    None, // Don't wait for completion
-                    Some(&mut op.overlapped as *mut _),
-                )
-            };
+                // Issue async read
+                let target_slice = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        mft_buffer.as_mut_slice().as_mut_ptr().add(buffer_offset),
+                        io_size,
+                    )
+                };
 
-            match result {
-                Ok(_) => {
-                    // Completed synchronously
-                    pending_count += 1;
-                }
-                Err(_) => {
-                    let last_error = unsafe { GetLastError() };
-                    if last_error == ERROR_IO_PENDING {
-                        // Queued successfully - this is expected for async I/O
+                let result = unsafe {
+                    ReadFile(
+                        overlapped_handle,
+                        Some(target_slice),
+                        None, // Don't wait for completion
+                        Some(&mut op.overlapped as *mut _),
+                    )
+                };
+
+                match result {
+                    Ok(_) => {
+                        // Completed synchronously
                         pending_count += 1;
-                    } else {
-                        return Err(MftError::Io(std::io::Error::from_raw_os_error(
-                            last_error.0 as i32,
-                        )));
+                    }
+                    Err(_) => {
+                        let last_error = unsafe { GetLastError() };
+                        if last_error == ERROR_IO_PENDING {
+                            // Queued successfully - this is expected for async I/O
+                            pending_count += 1;
+                        } else {
+                            return Err(MftError::Io(std::io::Error::from_raw_os_error(
+                                last_error.0 as i32,
+                            )));
+                        }
                     }
                 }
-            }
 
-            operations.push(op);
+                operations.push(op);
+                offset_within_chunk += io_size;
+            }
         }
 
-        info!(queued = pending_count, "📤 Queued all reads to IOCP");
+        info!(
+            queued = pending_count,
+            io_size_mb = IO_CHUNK_SIZE / (1024 * 1024),
+            "📤 Queued all reads to IOCP (C++ style: many small reads)"
+        );
 
         // Wait for all completions
         let mut bytes_read_total: u64 = 0;
