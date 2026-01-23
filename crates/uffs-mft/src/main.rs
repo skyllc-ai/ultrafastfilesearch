@@ -52,6 +52,9 @@ use criterion as _;
 // Pipelining dependencies (used in io.rs PipelinedMftReader on Windows)
 #[cfg(windows)]
 use crossbeam_channel as _;
+// SmallVec for zero-copy parsing (used in io.rs on Windows)
+#[cfg(windows)]
+use smallvec as _;
 // Platform-gated dependencies (used on Windows only)
 #[cfg(not(windows))]
 use indicatif as _;

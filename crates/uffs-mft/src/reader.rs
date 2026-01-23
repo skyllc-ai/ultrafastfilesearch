@@ -58,6 +58,11 @@ pub enum MftReadMode {
     /// Best for HDDs with multi-core CPUs - combines I/O overlap with Rayon
     /// parallel parsing for maximum throughput.
     PipelinedParallel,
+    /// IOCP parallel mode: Windows I/O Completion Ports with multiple
+    /// concurrent reads in flight. Mirrors the C++ implementation for
+    /// maximum I/O overlap. Best for HDDs where multiple outstanding reads
+    /// can hide latency.
+    IocpParallel,
 }
 
 impl MftReadMode {
@@ -71,6 +76,7 @@ impl MftReadMode {
             Self::Prefetch => "prefetch",
             Self::Pipelined => "pipelined",
             Self::PipelinedParallel => "pipelined-parallel",
+            Self::IocpParallel => "iocp-parallel",
         }
     }
 }
@@ -92,8 +98,9 @@ impl core::str::FromStr for MftReadMode {
             "prefetch" => Ok(Self::Prefetch),
             "pipelined" | "pipeline" => Ok(Self::Pipelined),
             "pipelined-parallel" | "pipelinedparallel" => Ok(Self::PipelinedParallel),
+            "iocp-parallel" | "iocpparallel" | "iocp" => Ok(Self::IocpParallel),
             _ => Err(format!(
-                "Invalid read mode '{s}'. Valid options: auto, parallel, streaming, prefetch, pipelined, pipelined-parallel"
+                "Invalid read mode '{s}'. Valid options: auto, parallel, streaming, prefetch, pipelined, pipelined-parallel, iocp-parallel"
             )),
         }
     }
@@ -950,6 +957,34 @@ impl MftReader {
                         .read_all_pipelined_parallel::<fn(u64, u64)>(handle, true, None)?
                 }
             }
+            MftReadMode::IocpParallel => {
+                // IOCP parallel mode: Multiple overlapped reads in flight (best for HDD)
+                let iocp_reader = crate::io::IocpMftReader::new(extent_map, bitmap, drive_type);
+
+                if let Some(ref cb) = callback {
+                    let cb_ref = cb;
+                    let start = start_time;
+                    iocp_reader.read_all_iocp(
+                        handle,
+                        true,
+                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                            let records_approx = if total_bytes_expected > 0 {
+                                (bytes_read * total_records) / total_bytes_expected
+                            } else {
+                                0
+                            };
+                            cb_ref(MftProgress {
+                                records_read: records_approx,
+                                total_records: Some(total_records),
+                                bytes_read,
+                                elapsed: start.elapsed(),
+                            });
+                        }),
+                    )?
+                } else {
+                    iocp_reader.read_all_iocp::<fn(u64, u64)>(handle, true, None)?
+                }
+            }
         };
 
         // Add placeholder records for missing parent directories.
@@ -1422,8 +1457,36 @@ impl MftReader {
                         .read_all_pipelined_parallel::<fn(u64, u64)>(handle, true, None)?
                 }
             }
-            _ => {
-                // Fallback to parallel for other modes
+            MftReadMode::IocpParallel => {
+                // IOCP parallel mode: Multiple overlapped reads in flight
+                let iocp_reader = crate::io::IocpMftReader::new(extent_map, bitmap, drive_type);
+
+                if let Some(ref cb) = callback {
+                    let cb_ref = cb;
+                    let start = start_time;
+                    iocp_reader.read_all_iocp(
+                        handle,
+                        true,
+                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                            let records_approx = if total_bytes_expected > 0 {
+                                (bytes_read * total_records) / total_bytes_expected
+                            } else {
+                                0
+                            };
+                            cb_ref(MftProgress {
+                                records_read: records_approx,
+                                total_records: Some(total_records),
+                                bytes_read,
+                                elapsed: start.elapsed(),
+                            });
+                        }),
+                    )?
+                } else {
+                    iocp_reader.read_all_iocp::<fn(u64, u64)>(handle, true, None)?
+                }
+            }
+            MftReadMode::Streaming | MftReadMode::Prefetch => {
+                // Fallback to parallel for streaming/prefetch modes in lean index
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
                 parallel_reader

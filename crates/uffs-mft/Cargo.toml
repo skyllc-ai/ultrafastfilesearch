@@ -61,6 +61,7 @@ num_cpus.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
 crossbeam-channel = "0.5.15"
+smallvec.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

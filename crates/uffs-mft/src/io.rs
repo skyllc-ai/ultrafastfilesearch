@@ -33,6 +33,8 @@
 use std::cell::RefCell;
 use std::mem::size_of;
 
+use smallvec::SmallVec;
+
 // Thread-local buffer for record processing to avoid per-record allocations.
 // Each thread gets its own 4KB buffer (enough for any MFT record).
 thread_local! {
@@ -1452,7 +1454,8 @@ fn parse_file_name_full(data: &[u8], attr_offset: usize) -> Option<NameInfo> {
     }
 
     let name_bytes = &data[name_offset..name_offset + name_len * 2];
-    let name_u16: Vec<u16> = name_bytes
+    // Use SmallVec to avoid heap allocation for typical file names (< 128 chars)
+    let name_u16: SmallVec<[u16; 128]> = name_bytes
         .chunks_exact(2)
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .collect();
@@ -1473,6 +1476,7 @@ fn parse_data_attribute_full(
     header: &AttributeRecordHeader,
 ) -> Option<StreamInfo> {
     // Extract stream name from attribute header
+    // Use SmallVec to avoid heap allocation for typical stream names (< 64 chars)
     let stream_name = if header.name_length > 0 {
         let name_offset = attr_offset + header.name_offset as usize;
         let name_len = header.name_length as usize;
@@ -1480,7 +1484,7 @@ fn parse_data_attribute_full(
             return None;
         }
         let name_bytes = &data[name_offset..name_offset + name_len * 2];
-        let name_u16: Vec<u16> = name_bytes
+        let name_u16: SmallVec<[u16; 64]> = name_bytes
             .chunks_exact(2)
             .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
             .collect();
@@ -2394,8 +2398,9 @@ impl ParallelMftReader {
             }
 
             // Full parsing with extension merging using fold/reduce
+            // Use par_iter_mut for zero-copy in-place fixup
             let combined = chunk_data
-                .par_iter()
+                .par_iter_mut()
                 .fold(ChunkStats::default, |mut acc, (chunk, data)| {
                     let record_size = record_size as usize;
                     let skip_begin = chunk.skip_begin as usize;
@@ -2410,11 +2415,18 @@ impl ParallelMftReader {
                             break;
                         }
 
-                        let record_data = &data[offset..offset + record_size];
                         let frs = chunk.start_frs + skip_begin as u64 + i as u64;
 
-                        // Use zero-allocation parsing with thread-local buffer
-                        let result = parse_record_zero_alloc(record_data, frs);
+                        // Zero-copy: apply fixup in-place on the shared buffer
+                        let record_slice = &mut data[offset..offset + record_size];
+                        if !apply_fixup(record_slice) {
+                            acc.skipped += 1;
+                            acc.processed += 1;
+                            continue;
+                        }
+
+                        // Parse from the fixed-up slice (no copy needed)
+                        let result = parse_record_full(record_slice, frs);
                         if matches!(result, ParseResult::Skip) {
                             acc.skipped += 1;
                         } else {
@@ -2465,6 +2477,7 @@ impl ParallelMftReader {
             Ok(merger.merge())
         } else {
             // Legacy parsing (skips extension records) - also uses fold/reduce
+            // Use par_iter_mut for zero-copy in-place fixup
             #[derive(Default)]
             struct LegacyStats {
                 records: Vec<ParsedRecord>,
@@ -2473,7 +2486,7 @@ impl ParallelMftReader {
             }
 
             let combined = chunk_data
-                .par_iter()
+                .par_iter_mut()
                 .fold(LegacyStats::default, |mut acc, (chunk, data)| {
                     let record_size = record_size as usize;
                     let skip_begin = chunk.skip_begin as usize;
@@ -2487,10 +2500,18 @@ impl ParallelMftReader {
                             break;
                         }
 
-                        let record_data = &data[offset..offset + record_size];
                         let frs = chunk.start_frs + skip_begin as u64 + i as u64;
 
-                        match parse_record_zero_alloc(record_data, frs) {
+                        // Zero-copy: apply fixup in-place on the shared buffer
+                        let record_slice = &mut data[offset..offset + record_size];
+                        if !apply_fixup(record_slice) {
+                            acc.skipped += 1;
+                            acc.processed += 1;
+                            continue;
+                        }
+
+                        // Parse from the fixed-up slice (no copy needed)
+                        match parse_record_full(record_slice, frs) {
                             ParseResult::Base(parsed) => acc.records.push(parsed),
                             _ => acc.skipped += 1,
                         }
@@ -2943,10 +2964,11 @@ impl StreamingMftReader {
             let bytes_read = self.read_chunk_into_buffer(handle, &chunk, record_size)?;
             bytes_read_total += bytes_read as u64;
 
-            // Process records from buffer
+            // Process records from buffer using zero-copy in-place fixup
             let skip_begin = chunk.skip_begin as usize;
             let effective_count = chunk.effective_record_count() as usize;
             let record_size_usize = record_size as usize;
+            let buffer_slice = self.buffer.as_mut_slice();
 
             for i in 0..effective_count {
                 let offset = (skip_begin + i) * record_size_usize;
@@ -2954,19 +2976,18 @@ impl StreamingMftReader {
                     break;
                 }
 
-                let record_data = &self.buffer.as_slice()[offset..offset + record_size_usize];
-                let mut record_buf = record_data.to_vec();
                 let frs = chunk.start_frs + skip_begin as u64 + i as u64;
 
-                // Apply fixup
-                if !apply_fixup(&mut record_buf) {
+                // Apply fixup in-place on the shared buffer (zero-copy)
+                let record_slice = &mut buffer_slice[offset..offset + record_size_usize];
+                if !apply_fixup(record_slice) {
                     continue;
                 }
 
-                // Parse record
+                // Parse record from the fixed-up slice (no copy needed)
                 if merge_extensions {
-                    merger.add_result(parse_record_full(&record_buf, frs));
-                } else if let Some(rec) = parse_record(&record_buf, frs) {
+                    merger.add_result(parse_record_full(record_slice, frs));
+                } else if let Some(rec) = parse_record(record_slice, frs) {
                     merger.add_result(ParseResult::Base(rec));
                 }
             }
@@ -3153,10 +3174,11 @@ impl PrefetchMftReader {
             let bytes_read = self.read_chunk_into_buffer(handle, &chunk, record_size, buffer)?;
             bytes_read_total += bytes_read as u64;
 
-            // Process records from buffer
+            // Process records from buffer using zero-copy in-place fixup
             let skip_begin = chunk.skip_begin as usize;
             let effective_count = chunk.effective_record_count() as usize;
             let record_size_usize = record_size as usize;
+            let buffer_slice = buffer.as_mut_slice();
 
             for i in 0..effective_count {
                 let offset = (skip_begin + i) * record_size_usize;
@@ -3164,19 +3186,18 @@ impl PrefetchMftReader {
                     break;
                 }
 
-                let record_data = &buffer.as_slice()[offset..offset + record_size_usize];
-                let mut record_buf = record_data.to_vec();
                 let frs = chunk.start_frs + skip_begin as u64 + i as u64;
 
-                // Apply fixup
-                if !apply_fixup(&mut record_buf) {
+                // Apply fixup in-place on the shared buffer (zero-copy)
+                let record_slice = &mut buffer_slice[offset..offset + record_size_usize];
+                if !apply_fixup(record_slice) {
                     continue;
                 }
 
-                // Parse record
+                // Parse record from the fixed-up slice (no copy needed)
                 if merge_extensions {
-                    merger.add_result(parse_record_full(&record_buf, frs));
-                } else if let Some(rec) = parse_record(&record_buf, frs) {
+                    merger.add_result(parse_record_full(record_slice, frs));
+                } else if let Some(rec) = parse_record(record_slice, frs) {
                     merger.add_result(ParseResult::Base(rec));
                 }
             }
@@ -3446,7 +3467,7 @@ impl PipelinedMftReader {
         // Receive and parse buffers
         while let Ok(read_buffer) = rx.recv() {
             let ReadBuffer {
-                buffer,
+                mut buffer,
                 bytes_read,
                 chunk,
                 record_size,
@@ -3454,10 +3475,11 @@ impl PipelinedMftReader {
 
             bytes_read_total += bytes_read as u64;
 
-            // Parse records from buffer
+            // Parse records from buffer using zero-copy in-place fixup
             let skip_begin = chunk.skip_begin as usize;
             let effective_count = chunk.effective_record_count() as usize;
             let record_size_usize = record_size as usize;
+            let buffer_slice = buffer.as_mut_slice();
 
             for i in 0..effective_count {
                 let offset = (skip_begin + i) * record_size_usize;
@@ -3465,19 +3487,18 @@ impl PipelinedMftReader {
                     break;
                 }
 
-                let record_data = &buffer.as_slice()[offset..offset + record_size_usize];
-                let mut record_buf = record_data.to_vec();
                 let frs = chunk.start_frs + skip_begin as u64 + i as u64;
 
-                // Apply fixup
-                if !apply_fixup(&mut record_buf) {
+                // Apply fixup in-place on the shared buffer (zero-copy)
+                let record_slice = &mut buffer_slice[offset..offset + record_size_usize];
+                if !apply_fixup(record_slice) {
                     continue;
                 }
 
-                // Parse record
+                // Parse record from the fixed-up slice (no copy needed)
                 if merge_extensions {
-                    merger.add_result(parse_record_full(&record_buf, frs));
-                } else if let Some(rec) = parse_record(&record_buf, frs) {
+                    merger.add_result(parse_record_full(record_slice, frs));
+                } else if let Some(rec) = parse_record(record_slice, frs) {
                     merger.add_result(ParseResult::Base(rec));
                 }
             }
@@ -3651,10 +3672,12 @@ impl PipelinedMftReader {
             "📦 All buffers collected, starting parallel parsing"
         );
 
-        // Parse all buffers in parallel using Rayon
+        // Parse all buffers in parallel using Rayon with zero-copy in-place fixup
         let parse_results: Vec<ParseResult> = all_buffers
-            .par_iter()
-            .flat_map(|read_buffer| parse_buffer_to_results(read_buffer, merge_extensions))
+            .par_iter_mut()
+            .flat_map(|read_buffer| {
+                parse_buffer_to_results_zero_copy(read_buffer, merge_extensions)
+            })
             .collect();
 
         info!(
@@ -3680,44 +3703,64 @@ impl PipelinedMftReader {
     }
 }
 
-/// Parses all records in a buffer and returns the results.
+/// Parses all records in a buffer using zero-copy in-place fixup.
 ///
-/// This is a helper function used by both serial and parallel parsing paths.
-/// It handles skip_begin, effective record count, bounds checking, fixup, and
-/// parsing.
-fn parse_buffer_to_results(read_buffer: &ReadBuffer, merge_extensions: bool) -> Vec<ParseResult> {
-    let ReadBuffer {
-        buffer,
-        bytes_read,
-        chunk,
-        record_size,
-    } = read_buffer;
+/// This is an optimized version of `parse_buffer_to_results` that applies
+/// USA fixup directly on the shared buffer instead of copying each record.
+/// This eliminates per-record heap allocations in the hot path.
+///
+/// # Safety
+///
+/// This function mutates the buffer in-place. The buffer should not be
+/// reused after this call without re-reading the data from disk.
+fn parse_buffer_to_results_zero_copy(
+    read_buffer: &mut ReadBuffer,
+    merge_extensions: bool,
+) -> Vec<ParseResult> {
+    parse_buffer_zero_copy_inner(
+        read_buffer.buffer.as_mut_slice(),
+        read_buffer.bytes_read,
+        &read_buffer.chunk,
+        read_buffer.record_size,
+        merge_extensions,
+    )
+}
 
+/// Inner zero-copy parsing function that works with raw parameters.
+///
+/// This is used by both `ReadBuffer` and `OverlappedRead` parsing paths.
+fn parse_buffer_zero_copy_inner(
+    buffer_slice: &mut [u8],
+    bytes_read: usize,
+    chunk: &ReadChunk,
+    record_size: u32,
+    merge_extensions: bool,
+) -> Vec<ParseResult> {
     let skip_begin = chunk.skip_begin as usize;
     let effective_count = chunk.effective_record_count() as usize;
-    let record_size_usize = *record_size as usize;
+    let record_size_usize = record_size as usize;
+    let start_frs = chunk.start_frs;
 
     let mut results = Vec::with_capacity(effective_count);
 
     for i in 0..effective_count {
         let offset = (skip_begin + i) * record_size_usize;
-        if offset + record_size_usize > *bytes_read {
+        if offset + record_size_usize > bytes_read {
             break;
         }
 
-        let record_data = &buffer.as_slice()[offset..offset + record_size_usize];
-        let mut record_buf = record_data.to_vec();
-        let frs = chunk.start_frs + skip_begin as u64 + i as u64;
+        let frs = start_frs + skip_begin as u64 + i as u64;
 
-        // Apply fixup
-        if !apply_fixup(&mut record_buf) {
+        // Apply fixup in-place on the shared buffer (zero-copy)
+        let record_slice = &mut buffer_slice[offset..offset + record_size_usize];
+        if !apply_fixup(record_slice) {
             continue;
         }
 
-        // Parse record
+        // Parse record from the fixed-up slice (no copy needed)
         if merge_extensions {
-            results.push(parse_record_full(&record_buf, frs));
-        } else if let Some(rec) = parse_record(&record_buf, frs) {
+            results.push(parse_record_full(record_slice, frs));
+        } else if let Some(rec) = parse_record(record_slice, frs) {
             results.push(ParseResult::Base(rec));
         }
     }
@@ -3777,6 +3820,466 @@ fn read_chunk_into_buffer_static(
     }
 
     Ok(bytes_read as usize)
+}
+
+// ============================================================================
+// IOCP-based MFT Reader (Phase B - Advanced I/O Overlap)
+// ============================================================================
+
+/// I/O Completion Port wrapper for Windows async I/O.
+///
+/// This provides IOCP-based overlapped I/O for maximum I/O parallelism,
+/// mirroring the C++ implementation's approach of having multiple reads
+/// in flight simultaneously.
+pub struct IoCompletionPort {
+    /// The IOCP handle.
+    handle: HANDLE,
+}
+
+impl IoCompletionPort {
+    /// Creates a new I/O Completion Port.
+    ///
+    /// # Errors
+    /// Returns an error if IOCP creation fails.
+    #[allow(unsafe_code)]
+    pub fn new(concurrency: u32) -> Result<Self> {
+        use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows::Win32::System::IO::CreateIoCompletionPort;
+
+        let handle = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, None, 0, concurrency) };
+
+        match handle {
+            Ok(h) => Ok(Self { handle: h }),
+            Err(e) => Err(MftError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to create IOCP: {e}"),
+            ))),
+        }
+    }
+
+    /// Associates a file handle with this IOCP.
+    ///
+    /// # Errors
+    /// Returns an error if association fails.
+    #[allow(unsafe_code)]
+    pub fn associate(&self, file_handle: HANDLE, key: usize) -> Result<()> {
+        use windows::Win32::System::IO::CreateIoCompletionPort;
+
+        let result = unsafe { CreateIoCompletionPort(file_handle, Some(self.handle), key, 0) };
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => Err(MftError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to associate handle with IOCP: {e}"),
+            ))),
+        }
+    }
+
+    /// Gets the raw IOCP handle.
+    #[must_use]
+    pub fn raw_handle(&self) -> HANDLE {
+        self.handle
+    }
+}
+
+impl Drop for IoCompletionPort {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        use windows::Win32::Foundation::CloseHandle;
+        if !self.handle.is_invalid() {
+            // SAFETY: CloseHandle is safe to call on a valid handle.
+            // We check is_invalid() first to ensure the handle is valid.
+            let _ = unsafe { CloseHandle(self.handle) };
+        }
+    }
+}
+
+/// Represents an in-flight overlapped read operation.
+///
+/// This structure is pinned in memory because the OVERLAPPED pointer
+/// is passed to Windows and must remain valid until completion.
+#[repr(C)]
+pub struct OverlappedRead {
+    /// The Windows OVERLAPPED structure (must be first field for pointer
+    /// casting).
+    overlapped: windows::Win32::System::IO::OVERLAPPED,
+    /// The aligned buffer for read data.
+    pub buffer: AlignedBuffer,
+    /// The chunk being read.
+    pub chunk: ReadChunk,
+    /// Record size for parsing.
+    pub record_size: u32,
+    /// Bytes actually read (set on completion).
+    pub bytes_read: usize,
+    /// Index in the buffer pool (for returning).
+    pub pool_index: usize,
+}
+
+impl OverlappedRead {
+    /// Creates a new overlapped read operation.
+    #[must_use]
+    pub fn new(
+        buffer: AlignedBuffer,
+        chunk: ReadChunk,
+        record_size: u32,
+        pool_index: usize,
+    ) -> Self {
+        Self {
+            overlapped: windows::Win32::System::IO::OVERLAPPED::default(),
+            buffer,
+            chunk,
+            record_size,
+            bytes_read: 0,
+            pool_index,
+        }
+    }
+
+    /// Sets the file offset for the overlapped read.
+    pub fn set_offset(&mut self, offset: u64) {
+        self.overlapped.Anonymous.Anonymous.Offset = offset as u32;
+        self.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
+    }
+
+    /// Gets a mutable pointer to the OVERLAPPED structure.
+    ///
+    /// # Safety
+    /// The returned pointer is valid as long as self is pinned and alive.
+    #[allow(unsafe_code)]
+    pub fn as_overlapped_ptr(&mut self) -> *mut windows::Win32::System::IO::OVERLAPPED {
+        &mut self.overlapped as *mut _
+    }
+}
+
+/// IOCP-based MFT reader with multiple concurrent reads in flight.
+///
+/// This reader uses Windows I/O Completion Ports to issue multiple
+/// overlapped reads simultaneously, maximizing I/O parallelism and
+/// hiding disk latency. This mirrors the C++ implementation's approach.
+///
+/// Architecture:
+/// ```text
+/// ┌─────────────────────────────────────────────────────────────────┐
+/// │                    IOCP Event Loop                              │
+/// │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐            │
+/// │  │ Read 1  │  │ Read 2  │  │ Read 3  │  │ Read N  │  In-flight │
+/// │  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘            │
+/// │       │            │            │            │                  │
+/// │       ▼            ▼            ▼            ▼                  │
+/// │  ┌──────────────────────────────────────────────────┐          │
+/// │  │           GetQueuedCompletionStatus              │          │
+/// │  └──────────────────────────────────────────────────┘          │
+/// │                          │                                      │
+/// │                          ▼                                      │
+/// │  ┌──────────────────────────────────────────────────┐          │
+/// │  │    Parse completed buffer → Issue next read      │          │
+/// │  └──────────────────────────────────────────────────┘          │
+/// └─────────────────────────────────────────────────────────────────┘
+/// ```
+pub struct IocpMftReader {
+    /// Extent map for the MFT.
+    extent_map: MftExtentMap,
+    /// Optional bitmap for filtering in-use records.
+    bitmap: Option<crate::platform::MftBitmap>,
+    /// Chunk size for reads.
+    chunk_size: usize,
+    /// Number of concurrent reads to keep in flight.
+    concurrency: usize,
+}
+
+impl IocpMftReader {
+    /// Default concurrency (number of reads in flight).
+    /// Higher values hide more latency but use more memory.
+    pub const DEFAULT_CONCURRENCY: usize = 8;
+
+    /// Creates a new IOCP reader.
+    #[must_use]
+    pub fn new(
+        extent_map: MftExtentMap,
+        bitmap: Option<crate::platform::MftBitmap>,
+        drive_type: crate::platform::DriveType,
+    ) -> Self {
+        let chunk_size = drive_type.optimal_chunk_size();
+        info!(
+            drive_type = ?drive_type,
+            chunk_size_mb = chunk_size / (1024 * 1024),
+            concurrency = Self::DEFAULT_CONCURRENCY,
+            "🚀 Created IOCP reader with overlapped I/O"
+        );
+        Self {
+            extent_map,
+            bitmap,
+            chunk_size,
+            concurrency: Self::DEFAULT_CONCURRENCY,
+        }
+    }
+
+    /// Sets the concurrency level (number of reads in flight).
+    #[must_use]
+    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
+        self.concurrency = concurrency.max(1);
+        self
+    }
+
+    /// Reads all MFT records using IOCP overlapped I/O.
+    ///
+    /// This method issues multiple overlapped reads simultaneously,
+    /// processing completions as they arrive and issuing new reads
+    /// to maintain the target concurrency level.
+    #[allow(unsafe_code)]
+    pub fn read_all_iocp<F>(
+        &self,
+        handle: HANDLE,
+        merge_extensions: bool,
+        mut progress_callback: Option<F>,
+    ) -> Result<Vec<ParsedRecord>>
+    where
+        F: FnMut(u64, u64),
+    {
+        use std::collections::VecDeque;
+        use std::pin::Pin;
+
+        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
+        use windows::Win32::Storage::FileSystem::ReadFile;
+        use windows::Win32::System::IO::GetQueuedCompletionStatus;
+
+        let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
+        let record_size = self.extent_map.bytes_per_record;
+        let num_chunks = chunks.len();
+
+        if num_chunks == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Calculate total bytes for progress
+        let total_bytes: u64 = chunks
+            .iter()
+            .map(|c| c.record_count * u64::from(record_size))
+            .sum();
+
+        // Estimate capacity
+        let estimated_records = if let Some(ref bm) = self.bitmap {
+            bm.count_in_use()
+        } else {
+            self.extent_map.total_records() as usize
+        };
+
+        info!(
+            chunks = num_chunks,
+            estimated_records,
+            chunk_size_mb = self.chunk_size / (1024 * 1024),
+            concurrency = self.concurrency,
+            "🚀 Starting IOCP read with {} concurrent reads in flight",
+            self.concurrency
+        );
+
+        // Create IOCP
+        let iocp = IoCompletionPort::new(0)?; // 0 = use number of processors
+        iocp.associate(handle, 0)?;
+
+        // Pre-allocate results - use ParseResult for merger compatibility
+        let mut all_results: Vec<ParseResult> = Vec::with_capacity(estimated_records);
+        let mut bytes_read_total: u64 = 0;
+
+        // Create buffer pool and in-flight operations
+        let max_chunk_size = chunks
+            .iter()
+            .map(|c| c.record_count * u64::from(record_size))
+            .max()
+            .unwrap_or(self.chunk_size as u64) as usize;
+
+        // Use a VecDeque for chunks to process
+        let mut pending_chunks: VecDeque<ReadChunk> = chunks.into_iter().collect();
+
+        // In-flight operations (pinned for OVERLAPPED pointer stability)
+        let mut in_flight: Vec<Option<Pin<Box<OverlappedRead>>>> =
+            (0..self.concurrency).map(|_| None).collect();
+
+        // Issue initial reads up to concurrency limit
+        for (slot_idx, slot) in in_flight.iter_mut().enumerate() {
+            if let Some(chunk) = pending_chunks.pop_front() {
+                let buffer = AlignedBuffer::new(max_chunk_size + SECTOR_SIZE);
+                let mut op = Box::pin(OverlappedRead::new(buffer, chunk, record_size, slot_idx));
+
+                // Calculate aligned offset
+                let aligned_offset =
+                    (op.chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
+                op.set_offset(aligned_offset);
+
+                // Calculate read size
+                let read_size = op.chunk.record_count * u64::from(record_size);
+                let offset_adjustment = (op.chunk.disk_offset - aligned_offset) as usize;
+                let aligned_size = ((read_size as usize + offset_adjustment + SECTOR_SIZE - 1)
+                    / SECTOR_SIZE)
+                    * SECTOR_SIZE;
+
+                // Issue overlapped read
+                // SAFETY: We need get_unchecked_mut to get a mutable reference to the
+                // pinned data for the OVERLAPPED pointer and buffer. The pin is maintained
+                // throughout the operation lifetime.
+                let overlapped_ptr =
+                    unsafe { op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
+                let read_result = unsafe {
+                    ReadFile(
+                        handle,
+                        Some(
+                            &mut op.as_mut().get_unchecked_mut().buffer.as_mut_slice()
+                                [..aligned_size],
+                        ),
+                        None, // Don't need bytes read for overlapped
+                        Some(overlapped_ptr),
+                    )
+                };
+
+                // Check for errors (ERROR_IO_PENDING is expected for async)
+                if read_result.is_err() {
+                    let err = unsafe { GetLastError() };
+                    if err != ERROR_IO_PENDING {
+                        warn!(error = ?err, "Failed to issue overlapped read");
+                        continue;
+                    }
+                }
+
+                *slot = Some(op);
+            }
+        }
+
+        // Process completions until all chunks are done
+        let mut completed_count = 0;
+        let total_to_complete = num_chunks;
+
+        while completed_count < total_to_complete {
+            // Wait for a completion
+            let mut bytes_transferred: u32 = 0;
+            let mut completion_key: usize = 0;
+            let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
+                std::ptr::null_mut();
+
+            let wait_result = unsafe {
+                GetQueuedCompletionStatus(
+                    iocp.raw_handle(),
+                    &mut bytes_transferred,
+                    &mut completion_key,
+                    &mut overlapped_ptr,
+                    u32::MAX, // INFINITE
+                )
+            };
+
+            if wait_result.is_err() {
+                let err = std::io::Error::last_os_error();
+                warn!(error = %err, "GetQueuedCompletionStatus failed");
+                continue;
+            }
+
+            // Find which slot completed by matching the overlapped pointer
+            let mut completed_slot: Option<usize> = None;
+            for (idx, slot) in in_flight.iter().enumerate() {
+                if let Some(op) = slot {
+                    let op_ptr = &op.overlapped as *const _ as *mut _;
+                    if op_ptr == overlapped_ptr {
+                        completed_slot = Some(idx);
+                        break;
+                    }
+                }
+            }
+
+            if let Some(slot_idx) = completed_slot {
+                // Take the completed operation
+                if let Some(mut op) = in_flight[slot_idx].take() {
+                    let op_mut = unsafe { op.as_mut().get_unchecked_mut() };
+                    op_mut.bytes_read = bytes_transferred as usize;
+
+                    // Parse the buffer using zero-copy in-place fixup
+                    let results = parse_buffer_zero_copy_inner(
+                        op_mut.buffer.as_mut_slice(),
+                        op_mut.bytes_read,
+                        &op_mut.chunk,
+                        op_mut.record_size,
+                        merge_extensions,
+                    );
+                    all_results.extend(results);
+
+                    bytes_read_total += bytes_transferred as u64;
+                    completed_count += 1;
+
+                    // Report progress
+                    if let Some(ref mut cb) = progress_callback {
+                        cb(bytes_read_total, total_bytes);
+                    }
+
+                    // Issue next read if there are more chunks
+                    if let Some(next_chunk) = pending_chunks.pop_front() {
+                        // Reuse the buffer
+                        let mut buffer =
+                            std::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
+
+                        // Resize if needed
+                        let next_read_size = next_chunk.record_count * u64::from(record_size);
+                        let next_aligned_offset =
+                            (next_chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
+                        let next_offset_adjustment =
+                            (next_chunk.disk_offset - next_aligned_offset) as usize;
+                        let next_aligned_size =
+                            ((next_read_size as usize + next_offset_adjustment + SECTOR_SIZE - 1)
+                                / SECTOR_SIZE)
+                                * SECTOR_SIZE;
+
+                        if buffer.len() < next_aligned_size {
+                            buffer = AlignedBuffer::new(next_aligned_size);
+                        }
+
+                        let mut new_op = Box::pin(OverlappedRead::new(
+                            buffer,
+                            next_chunk,
+                            record_size,
+                            slot_idx,
+                        ));
+                        new_op.set_offset(next_aligned_offset);
+
+                        // Issue overlapped read
+                        // SAFETY: We need get_unchecked_mut to get a mutable reference to the
+                        // pinned data for the OVERLAPPED pointer and buffer.
+                        let overlapped_ptr =
+                            unsafe { new_op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
+                        let read_result = unsafe {
+                            ReadFile(
+                                handle,
+                                Some(
+                                    &mut new_op.as_mut().get_unchecked_mut().buffer.as_mut_slice()
+                                        [..next_aligned_size],
+                                ),
+                                None,
+                                Some(overlapped_ptr),
+                            )
+                        };
+
+                        if read_result.is_err() {
+                            let err = unsafe { GetLastError() };
+                            if err != ERROR_IO_PENDING {
+                                warn!(error = ?err, "Failed to issue next overlapped read");
+                                continue;
+                            }
+                        }
+
+                        in_flight[slot_idx] = Some(new_op);
+                    }
+                }
+            }
+        }
+
+        info!(
+            records = all_results.len(),
+            bytes = bytes_read_total,
+            "✅ IOCP read complete"
+        );
+
+        // Always use merger to convert ParseResult to ParsedRecord
+        let mut merger = MftRecordMerger::with_capacity(all_results.len());
+        for result in all_results {
+            merger.add_result(result);
+        }
+        Ok(merger.merge())
+    }
 }
 
 #[cfg(test)]
