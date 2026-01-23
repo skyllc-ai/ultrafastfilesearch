@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_NO_BUFFERING, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_FLAGS_AND_ATTRIBUTES, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, OPEN_EXISTING, SYNCHRONIZE,
+    FILE_FLAG_OVERLAPPED, FILE_FLAGS_AND_ATTRIBUTES, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, SYNCHRONIZE,
 };
 
 /// FILE_READ_DATA access right (0x0001) - required to read data from a
@@ -236,6 +236,45 @@ impl VolumeHandle {
     #[must_use]
     pub const fn raw_handle(&self) -> HANDLE {
         self.handle
+    }
+
+    /// Opens a new handle to the same volume with `FILE_FLAG_OVERLAPPED`.
+    ///
+    /// This is required for IOCP (I/O Completion Port) operations which need
+    /// overlapped I/O support. The returned handle is separate from the main
+    /// handle and must be closed by the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the volume cannot be opened.
+    #[allow(unsafe_code)] // Required: Windows FFI (CreateFileW)
+    pub fn open_overlapped_handle(&self) -> Result<HANDLE> {
+        use windows::core::PCWSTR;
+
+        let volume_path: Vec<u16> = format!("\\\\.\\{}:", self.volume)
+            .encode_utf16()
+            .chain(core::iter::once(0))
+            .collect();
+
+        let handle = unsafe {
+            CreateFileW(
+                PCWSTR::from_raw(volume_path.as_ptr()),
+                FILE_READ_DATA | FILE_READ_ATTRIBUTES.0 | SYNCHRONIZE.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED,
+                None,
+            )
+        };
+
+        match handle {
+            Ok(h) => Ok(h),
+            Err(err) => Err(MftError::VolumeOpen {
+                volume: self.volume,
+                source: std::io::Error::from_raw_os_error(err.code().0 as i32),
+            }),
+        }
     }
 
     /// Returns the byte offset of the MFT on the volume.

@@ -4117,8 +4117,7 @@ impl IocpMftReader {
                 // SAFETY: We need get_unchecked_mut to get a mutable reference to the
                 // pinned data for the OVERLAPPED pointer and buffer. The pin is maintained
                 // throughout the operation lifetime.
-                let overlapped_ptr =
-                    unsafe { op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
+                let overlapped_ptr = unsafe { op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
                 let read_result = unsafe {
                     ReadFile(
                         handle,

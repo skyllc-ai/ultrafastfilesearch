@@ -959,13 +959,15 @@ impl MftReader {
             }
             MftReadMode::IocpParallel => {
                 // IOCP parallel mode: Multiple overlapped reads in flight (best for HDD)
+                // IOCP requires FILE_FLAG_OVERLAPPED, so we open a separate handle
+                let overlapped_handle = self.handle.open_overlapped_handle()?;
                 let iocp_reader = crate::io::IocpMftReader::new(extent_map, bitmap, drive_type);
 
-                if let Some(ref cb) = callback {
+                let result = if let Some(ref cb) = callback {
                     let cb_ref = cb;
                     let start = start_time;
                     iocp_reader.read_all_iocp(
-                        handle,
+                        overlapped_handle,
                         true,
                         Some(move |bytes_read: u64, total_bytes_expected: u64| {
                             let records_approx = if total_bytes_expected > 0 {
@@ -980,10 +982,19 @@ impl MftReader {
                                 elapsed: start.elapsed(),
                             });
                         }),
-                    )?
+                    )
                 } else {
-                    iocp_reader.read_all_iocp::<fn(u64, u64)>(handle, true, None)?
+                    iocp_reader.read_all_iocp::<fn(u64, u64)>(overlapped_handle, true, None)
+                };
+
+                // Close the overlapped handle
+                // SAFETY: overlapped_handle is a valid handle opened by open_overlapped_handle
+                #[allow(unsafe_code)]
+                {
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 }
+
+                result?
             }
         };
 
@@ -1459,13 +1470,15 @@ impl MftReader {
             }
             MftReadMode::IocpParallel => {
                 // IOCP parallel mode: Multiple overlapped reads in flight
+                // IOCP requires FILE_FLAG_OVERLAPPED, so we open a separate handle
+                let overlapped_handle = self.handle.open_overlapped_handle()?;
                 let iocp_reader = crate::io::IocpMftReader::new(extent_map, bitmap, drive_type);
 
-                if let Some(ref cb) = callback {
+                let result = if let Some(ref cb) = callback {
                     let cb_ref = cb;
                     let start = start_time;
                     iocp_reader.read_all_iocp(
-                        handle,
+                        overlapped_handle,
                         true,
                         Some(move |bytes_read: u64, total_bytes_expected: u64| {
                             let records_approx = if total_bytes_expected > 0 {
@@ -1480,10 +1493,19 @@ impl MftReader {
                                 elapsed: start.elapsed(),
                             });
                         }),
-                    )?
+                    )
                 } else {
-                    iocp_reader.read_all_iocp::<fn(u64, u64)>(handle, true, None)?
+                    iocp_reader.read_all_iocp::<fn(u64, u64)>(overlapped_handle, true, None)
+                };
+
+                // Close the overlapped handle
+                // SAFETY: overlapped_handle is a valid handle opened by open_overlapped_handle
+                #[allow(unsafe_code)]
+                {
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 }
+
+                result?
             }
             MftReadMode::Streaming | MftReadMode::Prefetch => {
                 // Fallback to parallel for streaming/prefetch modes in lean index
