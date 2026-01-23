@@ -1783,10 +1783,11 @@ impl MftReader {
         Ok((output, record_size))
     }
 
-    /// Read raw MFT and save to file.
+    /// Read raw MFT and save to file using streaming I/O.
     ///
-    /// This is a convenience method that reads the MFT and saves it in one
-    /// step.
+    /// This method uses streaming I/O to avoid buffering the entire MFT in
+    /// memory. Each chunk is read from disk and immediately written to the
+    /// output file, enabling efficient saves of large MFTs (10+ GB).
     ///
     /// # Arguments
     ///
@@ -1803,8 +1804,177 @@ impl MftReader {
         path: P,
         options: &crate::raw::SaveRawOptions,
     ) -> Result<crate::raw::RawMftHeader> {
-        let (data, record_size) = self.read_raw_internal()?;
-        crate::raw::save_raw_mft(path, &data, record_size, options)
+        self.save_raw_streaming(path, options)
+    }
+
+    /// Internal streaming save implementation.
+    ///
+    /// Uses double-buffering with a dedicated reader thread to overlap
+    /// disk reads with file writes for maximum throughput.
+    #[cfg(windows)]
+    #[allow(unsafe_code)] // Required: Windows FFI (ReadFile, SetFilePointerEx)
+    fn save_raw_streaming<P: AsRef<Path>>(
+        &self,
+        path: P,
+        options: &crate::raw::SaveRawOptions,
+    ) -> Result<crate::raw::RawMftHeader> {
+        use std::thread;
+
+        use crossbeam_channel::{Receiver, Sender, bounded};
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
+
+        use crate::io::{AlignedBuffer, MftExtentMap, SECTOR_SIZE, generate_read_chunks};
+        use crate::platform::detect_drive_type;
+        use crate::raw::StreamingRawMftWriter;
+
+        let record_size = self.handle.file_record_size();
+        let volume_data = self.handle.volume_data();
+
+        // Get MFT extents for fragmented MFT support
+        let extents = self.handle.get_mft_extents().unwrap_or_else(|_| {
+            vec![crate::platform::MftExtent {
+                vcn: 0,
+                cluster_count: volume_data.mft_valid_data_length
+                    / u64::from(volume_data.bytes_per_cluster),
+                lcn: volume_data.mft_start_lcn as i64,
+            }]
+        });
+
+        // Create extent map
+        let extent_map = MftExtentMap::new(extents, volume_data.bytes_per_cluster, record_size);
+
+        // Determine chunk size based on drive type
+        // Use larger chunks (4-8 MB) for streaming to reduce syscall overhead
+        let drive_type = detect_drive_type(self.volume);
+        let chunk_size = match drive_type {
+            crate::platform::DriveType::Ssd => 8 * 1024 * 1024, // 8 MB for SSD
+            crate::platform::DriveType::Hdd => 4 * 1024 * 1024, // 4 MB for HDD
+            crate::platform::DriveType::Unknown => 4 * 1024 * 1024,
+        };
+
+        // Generate read chunks
+        let chunks = generate_read_chunks(&extent_map, None, chunk_size);
+        let total_chunks = chunks.len();
+
+        info!(
+            "Streaming save: {} chunks, {} MB each, drive type: {:?}",
+            total_chunks,
+            chunk_size / (1024 * 1024),
+            drive_type
+        );
+
+        // Create streaming writer
+        let mut writer = StreamingRawMftWriter::new(path, record_size, options)?;
+
+        // Use double-buffering with a reader thread for I/O overlap
+        // Channel capacity of 2 gives us double-buffering
+        let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = bounded(2);
+
+        // Convert HANDLE to usize for thread transfer (HANDLE is just a pointer)
+        // SAFETY: Windows file handles are thread-safe kernel objects. We convert
+        // to usize to avoid Send issues with the raw pointer inside HANDLE.
+        let handle_ptr = self.handle.raw_handle().0 as usize;
+        let record_size_copy = record_size;
+
+        // Spawn reader thread
+        let reader_handle = thread::spawn(move || -> Result<()> {
+            // Reconstruct HANDLE from usize
+            let handle = HANDLE(handle_ptr as *mut std::ffi::c_void);
+            let mut buffer = AlignedBuffer::new(chunk_size + SECTOR_SIZE);
+
+            for chunk in chunks {
+                // Read chunk with sector alignment
+                let read_size = chunk.record_count * u64::from(record_size_copy);
+                let aligned_offset = (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
+                let offset_adjustment = (chunk.disk_offset - aligned_offset) as usize;
+                let aligned_size = ((read_size as usize + offset_adjustment + SECTOR_SIZE - 1)
+                    / SECTOR_SIZE)
+                    * SECTOR_SIZE;
+
+                // Resize buffer if needed
+                if buffer.len() < aligned_size {
+                    buffer = AlignedBuffer::new(aligned_size);
+                }
+
+                // Seek to position
+                let mut new_pos: i64 = 0;
+                let seek_result = unsafe {
+                    SetFilePointerEx(
+                        handle,
+                        aligned_offset as i64,
+                        Some(&mut new_pos),
+                        FILE_BEGIN,
+                    )
+                };
+
+                if seek_result.is_err() {
+                    return Err(MftError::Io(std::io::Error::last_os_error()));
+                }
+
+                // Read data
+                let mut bytes_read: u32 = 0;
+                let read_result = unsafe {
+                    ReadFile(
+                        handle,
+                        Some(&mut buffer.as_mut_slice()[..aligned_size]),
+                        Some(&mut bytes_read),
+                        None,
+                    )
+                };
+
+                if read_result.is_err() {
+                    return Err(MftError::Io(std::io::Error::last_os_error()));
+                }
+
+                // Extract the actual data (skip alignment padding)
+                let actual_size = read_size as usize;
+                let data =
+                    buffer.as_slice()[offset_adjustment..offset_adjustment + actual_size].to_vec();
+
+                // Send to writer (blocks if channel is full - double-buffering)
+                if tx.send(data).is_err() {
+                    break; // Writer closed, stop reading
+                }
+            }
+
+            Ok(())
+        });
+
+        // Writer loop - receive chunks and write them
+        let mut chunks_written = 0;
+        for data in rx {
+            writer.write_chunk(&data)?;
+            chunks_written += 1;
+
+            if chunks_written % 100 == 0 {
+                debug!(
+                    "Streaming save progress: {}/{} chunks",
+                    chunks_written, total_chunks
+                );
+            }
+        }
+
+        // Wait for reader thread to finish
+        match reader_handle.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                return Err(MftError::Io(std::io::Error::other(
+                    "Reader thread panicked",
+                )));
+            }
+        }
+
+        // Finish writing and get final header
+        let header = writer.finish()?;
+
+        info!(
+            "Streaming save complete: {} records, {} bytes",
+            header.record_count, header.original_size
+        );
+
+        Ok(header)
     }
 
     /// Save raw MFT to file (non-Windows stub).

@@ -44,9 +44,11 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
 use crate::error::{MftError, Result};
+// Re-export SECTOR_SIZE for use by other modules (e.g., reader.rs streaming save)
+pub use crate::ntfs::SECTOR_SIZE;
 use crate::ntfs::{
     AttributeRecordHeader, AttributeType, FILE_RECORD_MAGIC, FileNameAttribute,
-    FileRecordSegmentHeader, MultiSectorHeader, SECTOR_SIZE, StandardInformation,
+    FileRecordSegmentHeader, MultiSectorHeader, StandardInformation,
 };
 use crate::platform::{MftExtent, VolumeHandle};
 
@@ -1318,12 +1320,12 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
         });
     }
 
-    // For base records without a name, use a placeholder
-    // This ensures all in-use records are included in the DataFrame for path
-    // resolution (matching C++ behavior which does NOT skip records without
-    // $FILE_NAME)
+    // Skip records without a $FILE_NAME attribute (matching C++ behavior).
+    // C++ uses nameinfo() which returns NULL for records without filenames,
+    // causing the traversal loop to skip them entirely.
+    // These are typically extension records, deleted files, or corrupted records.
     if primary_name.is_empty() {
-        primary_name = format!("<unnamed:{frs}>");
+        return ParseResult::Skip;
     }
 
     // Calculate primary size from default stream

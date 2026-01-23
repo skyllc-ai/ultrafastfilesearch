@@ -53,6 +53,7 @@ const BINARIES: &[(&str, &str)] = &[
     ("cross_check_mft_reference", "uffs-diag"),
     ("compare_raw_mft", "uffs-diag"),
     ("inspect_mft_record_flow", "uffs-diag"),
+    ("analyze_diff", "uffs-diag"),
 ];
 
 struct Target {

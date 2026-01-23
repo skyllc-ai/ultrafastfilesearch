@@ -13,6 +13,7 @@
 #   - cross_check_mft_reference: Cross-check MFT records against reference CSV
 #   - compare_raw_mft: Compare two raw MFT files record-by-record
 #   - inspect_mft_record_flow: Inspect raw->fixup->parse pipeline for FRS
+#   - analyze_diff: Deep comparison of C++ vs Rust UFFS outputs
 # ============================================================================
 
 [package]
@@ -58,6 +59,10 @@ path = "src/bin/compare_raw_mft.rs"
 [[bin]]
 name = "inspect_mft_record_flow"
 path = "src/bin/inspect_mft_record_flow.rs"
+
+[[bin]]
+name = "analyze_diff"
+path = "src/bin/analyze_diff.rs"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Dependencies (minimal set for diagnostic tools)

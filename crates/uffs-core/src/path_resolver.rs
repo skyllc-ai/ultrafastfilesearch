@@ -432,8 +432,12 @@ impl FastPathResolver {
                     format!("{parent_path}\\{file_name}")
                 };
 
-                // Add trailing backslash for directories
-                if is_dir.unwrap_or(false) && !path.ends_with('\\') {
+                // Check if this entry has an ADS stream name
+                let has_ads = stream_name.is_some_and(|sn| !sn.is_empty());
+
+                // Add trailing backslash for directories, but NOT if they have an ADS
+                // (ADS paths should be "dir:stream" not "dir\:stream")
+                if is_dir.unwrap_or(false) && !path.ends_with('\\') && !has_ads {
                     path.push('\\');
                 }
 

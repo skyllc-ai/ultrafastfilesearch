@@ -360,6 +360,42 @@ enum Commands {
         #[arg(long)]
         info_only: bool,
     },
+
+    /// Raw MFT read benchmark (matches C++ --benchmark-mft output exactly)
+    ///
+    /// Measures pure disk I/O throughput by reading the entire MFT with
+    /// synchronous 1MB reads. Does NOT parse records or build `DataFrame`s.
+    /// Use this to compare raw read performance between Rust and C++.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft benchmark-mft --drive C
+    /// uffs_mft benchmark-mft -d S
+    /// ```
+    BenchmarkMft {
+        /// Drive letter (e.g., C, D, E)
+        #[arg(short, long)]
+        drive: char,
+    },
+
+    /// Full index build benchmark (matches C++ --benchmark-index output
+    /// exactly)
+    ///
+    /// Measures the complete UFFS indexing pipeline: async I/O + parsing +
+    /// `DataFrame` building. This is what users experience when indexing.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft benchmark-index --drive C
+    /// uffs_mft benchmark-index -d S
+    /// ```
+    BenchmarkIndex {
+        /// Drive letter (e.g., C, D, E)
+        #[arg(short, long)]
+        drive: char,
+    },
 }
 
 /// Initialize logging with terminal + file support.
@@ -518,6 +554,8 @@ async fn run() -> Result<()> {
                 output,
                 info_only,
             } => cmd_load(&input, output.as_deref(), info_only).await,
+            Commands::BenchmarkMft { drive } => cmd_benchmark_mft(drive).await,
+            Commands::BenchmarkIndex { drive } => cmd_benchmark_index(drive).await,
         }
     }
 }
@@ -2347,6 +2385,400 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
     let elapsed = start_time.elapsed();
     println!();
     println!("⏱️  Completed in {}", format_duration(elapsed));
+
+    Ok(())
+}
+
+// ============================================================================
+// Raw MFT Benchmark Command (matches C++ --benchmark-mft exactly)
+// ============================================================================
+
+/// Raw MFT read benchmark matching C++ `--benchmark-mft` output exactly.
+///
+/// This measures pure disk I/O throughput by reading the entire MFT with
+/// synchronous 1MB reads. It does NOT parse records or build `DataFrame`s.
+#[cfg(windows)]
+#[allow(unsafe_code)] // Required: Windows FFI (ReadFile, SetFilePointerEx)
+async fn cmd_benchmark_mft(drive: char) -> Result<()> {
+    use std::time::Instant;
+
+    use uffs_mft::io::AlignedBuffer;
+    use uffs_mft::platform::VolumeHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
+
+    let drive_upper = drive.to_ascii_uppercase();
+
+    // =========================================================================
+    // Open volume and get metadata
+    // =========================================================================
+    let handle = VolumeHandle::open(drive_upper)
+        .with_context(|| format!("Failed to open volume {}:", drive_upper))?;
+
+    let vol_data = handle.volume_data();
+
+    // Get MFT extents
+    let extents = handle
+        .get_mft_extents()
+        .with_context(|| format!("Failed to get MFT extents for {}:", drive_upper))?;
+
+    // Calculate MFT metrics
+    let mft_size = vol_data.mft_valid_data_length;
+    let record_size = vol_data.bytes_per_file_record_segment;
+    let record_count = mft_size / u64::from(record_size);
+    let mft_size_mb = mft_size / (1024 * 1024);
+
+    // =========================================================================
+    // Print Volume Information (matches C++ format exactly)
+    // =========================================================================
+    println!("=== MFT Read Benchmark Tool ===");
+    println!("Drive: {}:", drive_upper);
+    println!();
+    println!("Volume Information:");
+    println!("  BytesPerSector: {}", vol_data.bytes_per_sector);
+    println!("  BytesPerCluster: {}", vol_data.bytes_per_cluster);
+    println!(
+        "  BytesPerFileRecordSegment: {}",
+        vol_data.bytes_per_file_record_segment
+    );
+    println!("  MftValidDataLength: {}", vol_data.mft_valid_data_length);
+    println!("  MftStartLcn: {}", vol_data.mft_start_lcn);
+    println!();
+
+    // =========================================================================
+    // Print MFT Information (matches C++ format exactly)
+    // =========================================================================
+    println!("MFT Information:");
+    println!("  Extents: {}", extents.len());
+    println!("  MFT Size: {} bytes ({} MB)", mft_size, mft_size_mb);
+    println!("  Record Size: {} bytes", record_size);
+    println!("  Record Count: {}", record_count);
+    println!("  Total Bytes to Read: {}", mft_size);
+    println!();
+    println!("Starting MFT read benchmark...");
+    println!();
+
+    // =========================================================================
+    // Benchmark: Read MFT with 1MB synchronous reads
+    // =========================================================================
+    const BUFFER_SIZE: usize = 1024 * 1024; // 1 MB buffer (matches C++)
+    let sector_size = vol_data.bytes_per_sector as usize;
+    let bytes_per_cluster = vol_data.bytes_per_cluster;
+
+    // Allocate sector-aligned buffer (AlignedBuffer uses SECTOR_SIZE internally)
+    let mut buffer = AlignedBuffer::new(BUFFER_SIZE);
+
+    // Storage for first and last 4 bytes (proof of complete read)
+    let mut first_4_bytes: [u8; 4] = [0; 4];
+    let mut last_4_bytes: [u8; 4] = [0; 4];
+    let mut captured_first = false;
+
+    let raw_handle: HANDLE = handle.raw_handle();
+    let mut total_bytes_read: u64 = 0;
+
+    // Start timing (only the read operations, not setup)
+    let start_time = Instant::now();
+
+    // Read each extent
+    for extent in &extents {
+        // Skip sparse extents
+        if extent.lcn < 0 {
+            continue;
+        }
+
+        // Calculate byte offset and size for this extent
+        let extent_byte_offset = (extent.lcn as u64) * u64::from(bytes_per_cluster);
+        let extent_byte_size = extent.cluster_count * u64::from(bytes_per_cluster);
+
+        // Don't read beyond MFT valid data length
+        let bytes_remaining = mft_size.saturating_sub(total_bytes_read);
+        let extent_bytes_to_read = extent_byte_size.min(bytes_remaining);
+
+        if extent_bytes_to_read == 0 {
+            break;
+        }
+
+        // Seek to extent start
+        let seek_result =
+            unsafe { SetFilePointerEx(raw_handle, extent_byte_offset as i64, None, FILE_BEGIN) };
+        if seek_result.is_err() {
+            anyhow::bail!(
+                "Failed to seek to offset {} for extent at LCN {}",
+                extent_byte_offset,
+                extent.lcn
+            );
+        }
+
+        // Read extent in 1MB chunks
+        let mut extent_offset: u64 = 0;
+        while extent_offset < extent_bytes_to_read {
+            let chunk_size = ((extent_bytes_to_read - extent_offset) as usize).min(BUFFER_SIZE);
+            // Round up to sector boundary for FILE_FLAG_NO_BUFFERING
+            let aligned_chunk_size = ((chunk_size + sector_size - 1) / sector_size) * sector_size;
+
+            let buf_slice = buffer.as_mut_slice();
+            let mut bytes_read: u32 = 0;
+
+            let read_result = unsafe {
+                ReadFile(
+                    raw_handle,
+                    Some(&mut buf_slice[..aligned_chunk_size]),
+                    Some(&mut bytes_read),
+                    None,
+                )
+            };
+
+            if read_result.is_err() {
+                anyhow::bail!(
+                    "Failed to read from volume at offset {}",
+                    extent_byte_offset + extent_offset
+                );
+            }
+
+            if bytes_read == 0 {
+                break; // EOF
+            }
+
+            // Capture first 4 bytes
+            if !captured_first && bytes_read >= 4 {
+                first_4_bytes.copy_from_slice(&buf_slice[0..4]);
+                captured_first = true;
+            }
+
+            // Update last 4 bytes (always keep the most recent)
+            let actual_bytes = (bytes_read as usize).min(chunk_size);
+            if actual_bytes >= 4 {
+                last_4_bytes.copy_from_slice(&buf_slice[actual_bytes - 4..actual_bytes]);
+            }
+
+            total_bytes_read += actual_bytes as u64;
+            extent_offset += bytes_read as u64;
+
+            // Stop if we've read enough
+            if total_bytes_read >= mft_size {
+                break;
+            }
+        }
+
+        if total_bytes_read >= mft_size {
+            break;
+        }
+    }
+
+    // Stop timing
+    let elapsed = start_time.elapsed();
+    let elapsed_ms = elapsed.as_millis() as u64;
+    let elapsed_secs = elapsed.as_secs_f64();
+
+    // Calculate throughput
+    let read_speed_mb_s = if elapsed_secs > 0.0 {
+        (total_bytes_read as f64 / (1024.0 * 1024.0)) / elapsed_secs
+    } else {
+        0.0
+    };
+
+    let total_mb = total_bytes_read / (1024 * 1024);
+
+    // =========================================================================
+    // Print Benchmark Results (matches C++ format exactly)
+    // =========================================================================
+    println!("=== Benchmark Results ===");
+    println!("Total bytes read: {} ({} MB)", total_bytes_read, total_mb);
+    println!("Total records: {}", record_count);
+    println!(
+        "Time elapsed: {} ms ({:.3} seconds)",
+        elapsed_ms, elapsed_secs
+    );
+    println!("Read speed: {:.2} MB/s", read_speed_mb_s);
+    println!();
+
+    // =========================================================================
+    // Print Proof of Complete Read (matches C++ format exactly)
+    // =========================================================================
+    println!("=== Proof of Complete Read ===");
+
+    // Format first 4 bytes
+    let first_hex = format!(
+        "{:02X} {:02X} {:02X} {:02X}",
+        first_4_bytes[0], first_4_bytes[1], first_4_bytes[2], first_4_bytes[3]
+    );
+    let first_ascii = format!(
+        "{}{}{}{}",
+        char_or_dot(first_4_bytes[0]),
+        char_or_dot(first_4_bytes[1]),
+        char_or_dot(first_4_bytes[2]),
+        char_or_dot(first_4_bytes[3])
+    );
+    println!(
+        "First 4 bytes (hex): {}  (ASCII: {})",
+        first_hex, first_ascii
+    );
+
+    // Format last 4 bytes
+    let last_hex = format!(
+        "{:02X} {:02X} {:02X} {:02X}",
+        last_4_bytes[0], last_4_bytes[1], last_4_bytes[2], last_4_bytes[3]
+    );
+    let last_ascii = format!(
+        "{}{}{}{}",
+        char_or_dot(last_4_bytes[0]),
+        char_or_dot(last_4_bytes[1]),
+        char_or_dot(last_4_bytes[2]),
+        char_or_dot(last_4_bytes[3])
+    );
+    println!("Last 4 bytes (hex):  {}  (ASCII: {})", last_hex, last_ascii);
+    println!();
+    println!("Note: First 4 bytes should be 'FILE' (46 49 4C 45) - the MFT record signature.");
+
+    Ok(())
+}
+
+/// Converts a byte to a printable ASCII character or '.' for non-printable.
+#[cfg(windows)]
+fn char_or_dot(byte: u8) -> char {
+    if byte.is_ascii_graphic() || byte == b' ' {
+        byte as char
+    } else {
+        '.'
+    }
+}
+
+// ============================================================================
+// Full Index Build Benchmark Command (matches C++ --benchmark-index exactly)
+// ============================================================================
+
+/// Full index build benchmark matching C++ `--benchmark-index` output exactly.
+///
+/// This measures the complete UFFS indexing pipeline: async I/O + parsing +
+/// `DataFrame` building. This is what users experience when indexing.
+#[cfg(windows)]
+async fn cmd_benchmark_index(drive: char) -> Result<()> {
+    use std::time::Instant;
+
+    use uffs_mft::platform::VolumeHandle;
+    use uffs_mft::{MftReadMode, MftReader};
+
+    let drive_upper = drive.to_ascii_uppercase();
+
+    println!("=== Index Build Benchmark Tool ===");
+    println!("Drive: {}:", drive_upper);
+    println!(
+        "This measures the full UFFS indexing pipeline (async I/O + parsing + DataFrame building)"
+    );
+    println!();
+
+    // Get volume info via VolumeHandle
+    let handle = VolumeHandle::open(drive_upper)
+        .with_context(|| format!("Failed to open volume {}:", drive_upper))?;
+    let vol_data = handle.volume_data();
+    let mft_size = vol_data.mft_valid_data_length;
+    let record_size = vol_data.bytes_per_file_record_segment;
+    let mft_capacity = mft_size / u64::from(record_size);
+    let mft_size_mb = mft_size / (1024 * 1024);
+    drop(handle); // Release handle before opening reader
+
+    // =========================================================================
+    // Print Volume Information (matches C++ format exactly)
+    // =========================================================================
+    println!("=== Volume Information ===");
+    println!("MFT Capacity: {} records", mft_capacity);
+    println!("MFT Record Size: {} bytes", record_size);
+    println!("MFT Total Size: {} bytes ({} MB)", mft_size, mft_size_mb);
+    println!();
+
+    println!("Creating index for {}:\\ ...", drive_upper);
+    println!("Indexing in progress...");
+    println!();
+
+    // =========================================================================
+    // Run the full indexing pipeline with timing
+    // =========================================================================
+    let start_time = Instant::now();
+
+    // Open reader and read MFT
+    let reader = MftReader::open(drive_upper)
+        .await
+        .with_context(|| format!("Failed to open drive {}:", drive_upper))?
+        .with_mode(MftReadMode::Auto);
+
+    let df = reader
+        .read_all()
+        .await
+        .with_context(|| format!("Failed to read MFT from {}:", drive_upper))?;
+
+    let elapsed = start_time.elapsed();
+    let elapsed_ms = elapsed.as_millis() as u64;
+    let elapsed_secs = elapsed.as_secs_f64();
+
+    // =========================================================================
+    // Calculate statistics from DataFrame
+    // =========================================================================
+    let total_entries = df.height() as u64;
+
+    // Count files vs directories using the is_directory column
+    let is_dir_col = df
+        .column("is_directory")
+        .ok()
+        .and_then(|c| c.bool().ok());
+
+    let (files_count, dirs_count) = if let Some(col) = is_dir_col {
+        let dirs: u64 = col.into_iter().filter(|v| v.unwrap_or(false)).count() as u64;
+        let files = total_entries.saturating_sub(dirs);
+        (files, dirs)
+    } else {
+        // Fallback: assume all are files
+        (total_entries, 0)
+    };
+
+    // =========================================================================
+    // Print Index Statistics (matches C++ format exactly)
+    // =========================================================================
+    println!("=== Index Statistics ===");
+    println!("Records Processed: {}", mft_capacity);
+    println!("Files: {}", files_count);
+    println!("Directories: {}", dirs_count);
+    println!("Total Entries: {}", total_entries);
+    println!();
+
+    // =========================================================================
+    // Print Benchmark Results (matches C++ format exactly)
+    // =========================================================================
+    let mft_read_speed = if elapsed_secs > 0.0 {
+        (mft_size as f64 / (1024.0 * 1024.0)) / elapsed_secs
+    } else {
+        0.0
+    };
+
+    let records_per_sec = if elapsed_secs > 0.0 {
+        (mft_capacity as f64 / elapsed_secs) as u64
+    } else {
+        0
+    };
+
+    let entries_per_sec = if elapsed_secs > 0.0 {
+        (total_entries as f64 / elapsed_secs) as u64
+    } else {
+        0
+    };
+
+    println!("=== Benchmark Results ===");
+    println!(
+        "Time Elapsed: {} ms ({:.3} seconds)",
+        elapsed_ms, elapsed_secs
+    );
+    println!("MFT Read Speed: {:.2} MB/s", mft_read_speed);
+    println!("Record Processing: {} records/sec", records_per_sec);
+    println!("File Indexing: {} files+dirs/sec", entries_per_sec);
+    println!();
+
+    // =========================================================================
+    // Print Summary (matches C++ format exactly)
+    // =========================================================================
+    println!("=== Summary ===");
+    println!(
+        "Indexed {} items in {:.3} seconds",
+        total_entries, elapsed_secs
+    );
 
     Ok(())
 }
