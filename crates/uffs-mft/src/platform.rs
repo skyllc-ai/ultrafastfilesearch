@@ -136,8 +136,12 @@ impl VolumeHandle {
         // Open the volume with FILE_READ_DATA for raw disk access
         // Match C++ flags: FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE
         // This is required to read the MFT bitmap from physical cluster locations
-        // FILE_FLAG_SEQUENTIAL_SCAN enables aggressive OS read-ahead for sequential
-        // access
+        //
+        // C++ team insight: Do NOT use FILE_FLAG_NO_BUFFERING!
+        // - NO_BUFFERING disables OS cache and read-ahead
+        // - SEQUENTIAL_SCAN optimizes cache for sequential access
+        // - These two flags work against each other
+        // - Let the OS cache + read-ahead do its job
         let handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(volume_path.as_ptr()),
@@ -145,8 +149,8 @@ impl VolumeHandle {
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,  // Share mode
                 None,                                                    // Security attributes
                 OPEN_EXISTING,                                           // Creation disposition
-                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_NO_BUFFERING | FILE_FLAG_SEQUENTIAL_SCAN, /* Flags */
-                None, // Template file
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_SEQUENTIAL_SCAN, // Flags (no NO_BUFFERING!)
+                None,                                                   // Template file
             )
         };
 
@@ -1310,14 +1314,19 @@ impl DriveType {
     /// Returns the optimal chunk size for this drive type.
     ///
     /// - SSD: 8 MB (high IOPS, large sequential reads are efficient)
-    /// - HDD: 8 MB (larger chunks amortize seek overhead better)
-    /// - Unknown: 8 MB (conservative default matching HDD)
+    /// - HDD: 64 KB (let OS read-ahead handle prefetching)
+    /// - Unknown: 64 KB (conservative default matching HDD)
+    ///
+    /// C++ team insight: With FILE_FLAG_SEQUENTIAL_SCAN, Windows does
+    /// aggressive read-ahead automatically. Smaller buffers (64KB) mean we
+    /// return to user-mode faster, keeping the I/O pipeline fed. The OS
+    /// read-ahead does the large sequential prefetching for us.
     #[must_use]
     pub const fn optimal_chunk_size(&self) -> usize {
         match self {
-            Self::Ssd => 8 * 1024 * 1024,     // 8 MB for SSD
-            Self::Hdd => 8 * 1024 * 1024,     // 8 MB for HDD (larger = fewer syscalls)
-            Self::Unknown => 8 * 1024 * 1024, // 8 MB default
+            Self::Ssd => 64 * 1024,     // 64 KB - let OS read-ahead work
+            Self::Hdd => 64 * 1024,     // 64 KB - C++ team tested, fastest with sequential scan
+            Self::Unknown => 64 * 1024, // 64 KB default
         }
     }
 

@@ -2176,12 +2176,17 @@ pub struct ParallelMftReader {
 }
 
 impl ParallelMftReader {
-    /// Default chunk size for SSD (8 MB) - high IOPS, large sequential reads.
-    pub const DEFAULT_CHUNK_SIZE_SSD: usize = 8 * 1024 * 1024;
+    /// Default chunk size for SSD (64 KB) - let OS read-ahead handle
+    /// prefetching. C++ team insight: With FILE_FLAG_SEQUENTIAL_SCAN,
+    /// smaller buffers keep the I/O pipeline fed while OS does aggressive
+    /// read-ahead.
+    pub const DEFAULT_CHUNK_SIZE_SSD: usize = 64 * 1024;
 
-    /// Default chunk size for HDD (8 MB) - larger chunks amortize seek
-    /// overhead better and reduce syscall count.
-    pub const DEFAULT_CHUNK_SIZE_HDD: usize = 8 * 1024 * 1024;
+    /// Default chunk size for HDD (64 KB) - let OS read-ahead handle
+    /// prefetching. C++ team insight: With FILE_FLAG_SEQUENTIAL_SCAN,
+    /// smaller buffers keep the I/O pipeline fed while OS does aggressive
+    /// read-ahead.
+    pub const DEFAULT_CHUNK_SIZE_HDD: usize = 64 * 1024;
 
     /// Legacy default chunk size (1 MB) - kept for compatibility.
     pub const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
@@ -4346,21 +4351,21 @@ mod tests {
         // Test that PipelinedMftReader can be created with various drive types
         let extent_map = MftExtentMap::contiguous(100, 1024 * 1024, 4096, 1024);
 
-        // Test with SSD
+        // Test with SSD - 64KB chunks (let OS read-ahead handle prefetching)
         let reader =
             PipelinedMftReader::new(extent_map.clone(), None, crate::platform::DriveType::Ssd);
-        assert_eq!(reader.chunk_size, 8 * 1024 * 1024); // 8 MB for SSD
+        assert_eq!(reader.chunk_size, 64 * 1024); // 64 KB for SSD
         assert_eq!(reader.pipeline_depth, 3);
 
-        // Test with HDD
+        // Test with HDD - 64KB chunks (C++ team recommendation)
         let reader =
             PipelinedMftReader::new(extent_map.clone(), None, crate::platform::DriveType::Hdd);
-        assert_eq!(reader.chunk_size, 8 * 1024 * 1024); // 8 MB for HDD
+        assert_eq!(reader.chunk_size, 64 * 1024); // 64 KB for HDD
         assert_eq!(reader.pipeline_depth, 3);
 
-        // Test with Unknown
+        // Test with Unknown - 64KB chunks (default)
         let reader = PipelinedMftReader::new(extent_map, None, crate::platform::DriveType::Unknown);
-        assert_eq!(reader.chunk_size, 8 * 1024 * 1024); // 8 MB for Unknown
+        assert_eq!(reader.chunk_size, 64 * 1024); // 64 KB for Unknown
     }
 
     #[test]
