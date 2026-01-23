@@ -3342,12 +3342,12 @@ impl ParallelMftReader {
         let total_bytes = total_records * record_size;
 
         // C++ uses 2 reads in flight with 64KB buffers
-        // Key insight: With FILE_FLAG_SEQUENTIAL_SCAN, Windows does aggressive
-        // read-ahead Smaller buffers mean we return to user-mode faster,
-        // keeping the I/O pipeline fed The OS read-ahead is doing the large
-        // sequential prefetching for us
+        // C++ profiler shows 8,141 reads of 1024KB each for 11.5GB MFT.
+        // That's 1MB per read, NOT 64KB as initially claimed.
+        // With 64KB reads, we'd need 183,484 reads = 22.5x more syscalls!
+        // Each syscall has overhead, so 1MB reads are much faster.
         const CONCURRENCY: usize = 2;
-        const IO_CHUNK_SIZE: usize = 64 * 1024; // 64KB per read (C++ uses this!)
+        const IO_CHUNK_SIZE: usize = 1024 * 1024; // 1MB per read (matches C++ profiler!)
 
         info!(
             total_records,
