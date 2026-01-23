@@ -74,6 +74,12 @@ pub enum MftReadMode {
     /// Windows I/O manager optimizes disk head scheduling across all reads.
     /// Best for HDDs - lets the OS schedule reads optimally.
     BulkIocp,
+    /// Sliding window IOCP mode: C++ style with 2 reads in flight.
+    /// Only 2 reads queued at a time (not thousands!), with per-read buffer
+    /// recycling. This matches the actual C++ implementation which uses a
+    /// sliding window, not bulk queuing.
+    /// Best for HDDs - minimal I/O scheduler overhead, maximum throughput.
+    SlidingIocp,
 }
 
 impl MftReadMode {
@@ -90,6 +96,7 @@ impl MftReadMode {
             Self::IocpParallel => "iocp-parallel",
             Self::Bulk => "bulk",
             Self::BulkIocp => "bulk-iocp",
+            Self::SlidingIocp => "sliding-iocp",
         }
     }
 }
@@ -114,8 +121,9 @@ impl core::str::FromStr for MftReadMode {
             "iocp-parallel" | "iocpparallel" | "iocp" => Ok(Self::IocpParallel),
             "bulk" => Ok(Self::Bulk),
             "bulk-iocp" | "bulkiocp" => Ok(Self::BulkIocp),
+            "sliding-iocp" | "slidingiocp" | "sliding" => Ok(Self::SlidingIocp),
             _ => Err(format!(
-                "Invalid read mode '{s}'. Valid options: auto, parallel, streaming, prefetch, pipelined, pipelined-parallel, iocp-parallel, bulk, bulk-iocp"
+                "Invalid read mode '{s}'. Valid options: auto, parallel, streaming, prefetch, pipelined, pipelined-parallel, iocp-parallel, bulk, bulk-iocp, sliding-iocp"
             )),
         }
     }
@@ -1129,6 +1137,48 @@ impl MftReader {
 
                 result?
             }
+            MftReadMode::SlidingIocp => {
+                // Sliding window IOCP mode: C++ style with 2 reads in flight
+                let overlapped_handle = self.handle.open_overlapped_handle()?;
+                let parallel_reader =
+                    ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
+
+                let result = if let Some(ref cb) = callback {
+                    let cb_ref = cb;
+                    let start = start_time;
+                    parallel_reader.read_all_sliding_window_iocp(
+                        overlapped_handle,
+                        true,
+                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                            let records_approx = if total_bytes_expected > 0 {
+                                (bytes_read * total_records) / total_bytes_expected
+                            } else {
+                                0
+                            };
+                            cb_ref(MftProgress {
+                                records_read: records_approx,
+                                total_records: Some(total_records),
+                                bytes_read,
+                                elapsed: start.elapsed(),
+                            });
+                        }),
+                    )
+                } else {
+                    parallel_reader.read_all_sliding_window_iocp::<fn(u64, u64)>(
+                        overlapped_handle,
+                        true,
+                        None,
+                    )
+                };
+
+                // Close the overlapped handle
+                #[allow(unsafe_code)]
+                {
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
+                }
+
+                result?
+            }
         };
 
         // Add placeholder records for missing parent directories.
@@ -1704,6 +1754,48 @@ impl MftReader {
                     )
                 } else {
                     parallel_reader.read_all_bulk_iocp::<fn(u64, u64)>(
+                        overlapped_handle,
+                        true,
+                        None,
+                    )
+                };
+
+                // Close the overlapped handle
+                #[allow(unsafe_code)]
+                {
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
+                }
+
+                result?
+            }
+            MftReadMode::SlidingIocp => {
+                // Sliding window IOCP mode: C++ style with 2 reads in flight
+                let overlapped_handle = self.handle.open_overlapped_handle()?;
+                let parallel_reader =
+                    ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
+
+                let result = if let Some(ref cb) = callback {
+                    let cb_ref = cb;
+                    let start = start_time;
+                    parallel_reader.read_all_sliding_window_iocp(
+                        overlapped_handle,
+                        true,
+                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                            let records_approx = if total_bytes_expected > 0 {
+                                (bytes_read * total_records) / total_bytes_expected
+                            } else {
+                                0
+                            };
+                            cb_ref(MftProgress {
+                                records_read: records_approx,
+                                total_records: Some(total_records),
+                                bytes_read,
+                                elapsed: start.elapsed(),
+                            });
+                        }),
+                    )
+                } else {
+                    parallel_reader.read_all_sliding_window_iocp::<fn(u64, u64)>(
                         overlapped_handle,
                         true,
                         None,
