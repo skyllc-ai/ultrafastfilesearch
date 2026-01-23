@@ -264,6 +264,8 @@ impl VolumeHandle {
             .collect();
 
         // FILE_FLAG_SEQUENTIAL_SCAN enables aggressive OS read-ahead
+        // Do NOT use FILE_FLAG_NO_BUFFERING - it disables OS cache and read-ahead
+        // which works against SEQUENTIAL_SCAN (C++ team insight)
         let handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(volume_path.as_ptr()),
@@ -271,10 +273,7 @@ impl VolumeHandle {
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 None,
                 OPEN_EXISTING,
-                FILE_FLAG_BACKUP_SEMANTICS
-                    | FILE_FLAG_NO_BUFFERING
-                    | FILE_FLAG_OVERLAPPED
-                    | FILE_FLAG_SEQUENTIAL_SCAN,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED | FILE_FLAG_SEQUENTIAL_SCAN,
                 None,
             )
         };
