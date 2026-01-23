@@ -2620,6 +2620,260 @@ impl ParallelMftReader {
         }
     }
 
+    /// Reads all MFT records using bulk I/O (C++ style: read all, then parse).
+    ///
+    /// This method pre-allocates a single buffer for the entire MFT and reads
+    /// each extent directly into it, eliminating per-chunk allocations and
+    /// copies. This matches the C++ "tsunami" pattern for maximum I/O
+    /// throughput.
+    ///
+    /// # Performance
+    ///
+    /// - Single allocation for entire MFT (~11GB for large drives)
+    /// - Zero intermediate copies during I/O phase
+    /// - Continuous sequential reads without CPU interruption
+    /// - Parallel parsing after all I/O completes
+    ///
+    /// # Arguments
+    ///
+    /// * `handle` - Windows file handle to the MFT
+    /// * `merge_extensions` - If true, merge extension records
+    /// * `progress_callback` - Optional callback for progress reporting
+    ///
+    /// # Returns
+    ///
+    /// Vector of parsed records.
+    #[allow(unsafe_code)]
+    pub fn read_all_bulk<F>(
+        &self,
+        handle: HANDLE,
+        merge_extensions: bool,
+        progress_callback: Option<F>,
+    ) -> Result<Vec<ParsedRecord>>
+    where
+        F: Fn(u64, u64),
+    {
+        use rayon::prelude::*;
+
+        let record_size = self.extent_map.bytes_per_record as usize;
+        let total_records = self.extent_map.total_records() as usize;
+        let total_bytes = total_records * record_size;
+
+        info!(
+            total_records,
+            total_bytes_mb = total_bytes / (1024 * 1024),
+            "🚀 Starting bulk MFT read (C++ style: read all, then parse)"
+        );
+
+        // Phase 1: Allocate single buffer for entire MFT
+        let alloc_start = std::time::Instant::now();
+        let mut mft_buffer = AlignedBuffer::new(total_bytes);
+        info!(
+            alloc_ms = alloc_start.elapsed().as_millis(),
+            "📦 Allocated MFT buffer"
+        );
+
+        // Phase 2: Read all extents directly into buffer (pure I/O, no parsing)
+        let read_start = std::time::Instant::now();
+        let mut bytes_read_total: u64 = 0;
+
+        for extent in self.extent_map.extents() {
+            if extent.lcn < 0 {
+                // Sparse extent - leave as zeros
+                continue;
+            }
+
+            // Calculate where this extent goes in the buffer
+            let records_per_cluster =
+                self.extent_map.bytes_per_cluster / self.extent_map.bytes_per_record;
+            let extent_start_frs = extent.vcn as u64 * records_per_cluster as u64;
+            let extent_records = extent.cluster_count * records_per_cluster as u64;
+            let buffer_offset = extent_start_frs as usize * record_size;
+            let extent_bytes = extent_records as usize * record_size;
+
+            // Calculate disk offset
+            let disk_offset = extent.lcn as u64 * self.extent_map.bytes_per_cluster as u64;
+
+            // Seek to extent
+            let mut new_pos: i64 = 0;
+            unsafe {
+                SetFilePointerEx(handle, disk_offset as i64, Some(&mut new_pos), FILE_BEGIN)?;
+            }
+
+            // Read directly into the correct position in mft_buffer
+            let target_slice =
+                &mut mft_buffer.as_mut_slice()[buffer_offset..buffer_offset + extent_bytes];
+            let mut bytes_read: u32 = 0;
+            unsafe {
+                ReadFile(handle, Some(target_slice), Some(&mut bytes_read), None)?;
+            }
+
+            bytes_read_total += bytes_read as u64;
+
+            // Report progress
+            if let Some(ref cb) = progress_callback {
+                cb(bytes_read_total, total_bytes as u64);
+            }
+        }
+
+        info!(
+            read_ms = read_start.elapsed().as_millis(),
+            bytes_mb = bytes_read_total / (1024 * 1024),
+            "✅ Bulk read complete (pure I/O phase)"
+        );
+
+        // Phase 3: Parse all records in parallel using par_chunks_mut
+        let parse_start = std::time::Instant::now();
+        let buffer_slice = mft_buffer.as_mut_slice();
+
+        // Extract bitmap reference before parallel section (avoids capturing self)
+        let bitmap_ref = self.bitmap.as_ref();
+
+        // Estimate capacity
+        let estimated_records = if let Some(ref bm) = bitmap_ref {
+            bm.count_in_use()
+        } else {
+            total_records
+        };
+
+        // Use par_chunks_mut to give each thread its own mutable slice
+        let records_per_chunk = 4096usize;
+        let bytes_per_chunk = records_per_chunk * record_size;
+
+        if merge_extensions {
+            // Full parsing with extension merging
+            let results: Vec<(Vec<ParseResult>, u64, u64)> = buffer_slice
+                .par_chunks_mut(bytes_per_chunk)
+                .enumerate()
+                .map(|(chunk_idx, chunk)| {
+                    let mut results = Vec::new();
+                    let mut skipped = 0u64;
+                    let mut processed = 0u64;
+
+                    let start_frs = chunk_idx * records_per_chunk;
+                    let records_in_chunk = chunk.len() / record_size;
+
+                    for i in 0..records_in_chunk {
+                        let frs = start_frs + i;
+
+                        // Check bitmap if available
+                        if let Some(bm) = bitmap_ref {
+                            if !bm.is_record_in_use(frs as u64) {
+                                skipped += 1;
+                                processed += 1;
+                                continue;
+                            }
+                        }
+
+                        let offset = i * record_size;
+                        let record_slice = &mut chunk[offset..offset + record_size];
+
+                        // Apply fixup in-place
+                        if !apply_fixup(record_slice) {
+                            skipped += 1;
+                            processed += 1;
+                            continue;
+                        }
+
+                        // Parse record
+                        let result = parse_record_full(record_slice, frs as u64);
+                        if matches!(result, ParseResult::Skip) {
+                            skipped += 1;
+                        } else {
+                            results.push(result);
+                        }
+                        processed += 1;
+                    }
+                    (results, skipped, processed)
+                })
+                .collect();
+
+            // Combine results
+            let mut total_skipped = 0u64;
+            let mut total_processed = 0u64;
+            let mut all_results = Vec::with_capacity(estimated_records);
+            for (chunk_results, skipped, processed) in results {
+                all_results.extend(chunk_results);
+                total_skipped += skipped;
+                total_processed += processed;
+            }
+
+            info!(
+                parse_ms = parse_start.elapsed().as_millis(),
+                records = total_processed,
+                skipped = total_skipped,
+                "✅ Parallel parse complete"
+            );
+
+            // Merge extensions
+            let mut merger = MftRecordMerger::with_capacity(estimated_records);
+            for result in all_results {
+                merger.add_result(result);
+            }
+            Ok(merger.merge())
+        } else {
+            // Fast path: skip extension merging using par_chunks_mut
+            let results: Vec<(Vec<ParsedRecord>, u64, u64)> = buffer_slice
+                .par_chunks_mut(bytes_per_chunk)
+                .enumerate()
+                .map(|(chunk_idx, chunk)| {
+                    let mut records = Vec::new();
+                    let mut skipped = 0u64;
+                    let mut processed = 0u64;
+
+                    let start_frs = chunk_idx * records_per_chunk;
+                    let records_in_chunk = chunk.len() / record_size;
+
+                    for i in 0..records_in_chunk {
+                        let frs = start_frs + i;
+
+                        if let Some(bm) = bitmap_ref {
+                            if !bm.is_record_in_use(frs as u64) {
+                                skipped += 1;
+                                processed += 1;
+                                continue;
+                            }
+                        }
+
+                        let offset = i * record_size;
+                        let record_slice = &mut chunk[offset..offset + record_size];
+
+                        if !apply_fixup(record_slice) {
+                            skipped += 1;
+                            processed += 1;
+                            continue;
+                        }
+
+                        if let Some(record) = parse_record(record_slice, frs as u64) {
+                            records.push(record);
+                        } else {
+                            skipped += 1;
+                        }
+                        processed += 1;
+                    }
+                    (records, skipped, processed)
+                })
+                .collect();
+
+            // Combine results
+            let mut total_skipped = 0u64;
+            let mut all_records = Vec::with_capacity(estimated_records);
+            for (chunk_records, skipped, _processed) in results {
+                all_records.extend(chunk_records);
+                total_skipped += skipped;
+            }
+
+            info!(
+                parse_ms = parse_start.elapsed().as_millis(),
+                records = all_records.len(),
+                skipped = total_skipped,
+                "✅ Parallel parse complete (fast path)"
+            );
+
+            Ok(all_records)
+        }
+    }
+
     /// Reads all MFT records and returns them as `ParsedColumns` (SoA layout).
     ///
     /// This is the optimized path that avoids the AoS→SoA transpose by:
