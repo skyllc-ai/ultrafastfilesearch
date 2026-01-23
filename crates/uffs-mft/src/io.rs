@@ -2179,9 +2179,9 @@ impl ParallelMftReader {
     /// Default chunk size for SSD (8 MB) - high IOPS, large sequential reads.
     pub const DEFAULT_CHUNK_SIZE_SSD: usize = 8 * 1024 * 1024;
 
-    /// Default chunk size for HDD (4 MB) - balance seek overhead and
-    /// throughput.
-    pub const DEFAULT_CHUNK_SIZE_HDD: usize = 4 * 1024 * 1024;
+    /// Default chunk size for HDD (8 MB) - larger chunks amortize seek
+    /// overhead better and reduce syscall count.
+    pub const DEFAULT_CHUNK_SIZE_HDD: usize = 8 * 1024 * 1024;
 
     /// Legacy default chunk size (1 MB) - kept for compatibility.
     pub const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
@@ -3334,14 +3334,8 @@ impl PipelinedMftReader {
         bitmap: Option<crate::platform::MftBitmap>,
         drive_type: crate::platform::DriveType,
     ) -> Self {
-        use crate::platform::DriveType;
-
-        // Chunk size based on drive type
-        let chunk_size = match drive_type {
-            DriveType::Ssd => 8 * 1024 * 1024, // 8 MB for SSDs
-            DriveType::Hdd => 4 * 1024 * 1024, // 4 MB for HDDs
-            DriveType::Unknown => 4 * 1024 * 1024,
-        };
+        // Chunk size based on drive type (use optimal_chunk_size for consistency)
+        let chunk_size = drive_type.optimal_chunk_size();
 
         // Pipeline depth: 2-3 buffers is optimal
         // - 1 being read
@@ -4361,12 +4355,12 @@ mod tests {
         // Test with HDD
         let reader =
             PipelinedMftReader::new(extent_map.clone(), None, crate::platform::DriveType::Hdd);
-        assert_eq!(reader.chunk_size, 4 * 1024 * 1024); // 4 MB for HDD
+        assert_eq!(reader.chunk_size, 8 * 1024 * 1024); // 8 MB for HDD
         assert_eq!(reader.pipeline_depth, 3);
 
         // Test with Unknown
         let reader = PipelinedMftReader::new(extent_map, None, crate::platform::DriveType::Unknown);
-        assert_eq!(reader.chunk_size, 4 * 1024 * 1024); // 4 MB for Unknown
+        assert_eq!(reader.chunk_size, 8 * 1024 * 1024); // 8 MB for Unknown
     }
 
     #[test]

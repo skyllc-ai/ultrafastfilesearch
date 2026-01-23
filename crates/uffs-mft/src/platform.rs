@@ -17,8 +17,9 @@ use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_NO_BUFFERING, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_FLAG_OVERLAPPED, FILE_FLAGS_AND_ATTRIBUTES, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, SYNCHRONIZE,
+    FILE_FLAG_OVERLAPPED, FILE_FLAG_SEQUENTIAL_SCAN, FILE_FLAGS_AND_ATTRIBUTES,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    SYNCHRONIZE,
 };
 
 /// FILE_READ_DATA access right (0x0001) - required to read data from a
@@ -135,6 +136,8 @@ impl VolumeHandle {
         // Open the volume with FILE_READ_DATA for raw disk access
         // Match C++ flags: FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE
         // This is required to read the MFT bitmap from physical cluster locations
+        // FILE_FLAG_SEQUENTIAL_SCAN enables aggressive OS read-ahead for sequential
+        // access
         let handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(volume_path.as_ptr()),
@@ -142,8 +145,8 @@ impl VolumeHandle {
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,  // Share mode
                 None,                                                    // Security attributes
                 OPEN_EXISTING,                                           // Creation disposition
-                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_NO_BUFFERING,     // Flags
-                None,                                                    // Template file
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_NO_BUFFERING | FILE_FLAG_SEQUENTIAL_SCAN, /* Flags */
+                None, // Template file
             )
         };
 
@@ -256,6 +259,7 @@ impl VolumeHandle {
             .chain(core::iter::once(0))
             .collect();
 
+        // FILE_FLAG_SEQUENTIAL_SCAN enables aggressive OS read-ahead
         let handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(volume_path.as_ptr()),
@@ -263,7 +267,10 @@ impl VolumeHandle {
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 None,
                 OPEN_EXISTING,
-                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED,
+                FILE_FLAG_BACKUP_SEMANTICS
+                    | FILE_FLAG_NO_BUFFERING
+                    | FILE_FLAG_OVERLAPPED
+                    | FILE_FLAG_SEQUENTIAL_SCAN,
                 None,
             )
         };
@@ -1303,14 +1310,14 @@ impl DriveType {
     /// Returns the optimal chunk size for this drive type.
     ///
     /// - SSD: 8 MB (high IOPS, large sequential reads are efficient)
-    /// - HDD: 4 MB (balance between seek overhead and throughput)
-    /// - Unknown: 4 MB (conservative default)
+    /// - HDD: 8 MB (larger chunks amortize seek overhead better)
+    /// - Unknown: 8 MB (conservative default matching HDD)
     #[must_use]
     pub const fn optimal_chunk_size(&self) -> usize {
         match self {
             Self::Ssd => 8 * 1024 * 1024,     // 8 MB for SSD
-            Self::Hdd => 4 * 1024 * 1024,     // 4 MB for HDD
-            Self::Unknown => 4 * 1024 * 1024, // 4 MB default
+            Self::Hdd => 8 * 1024 * 1024,     // 8 MB for HDD (larger = fewer syscalls)
+            Self::Unknown => 8 * 1024 * 1024, // 8 MB default
         }
     }
 
