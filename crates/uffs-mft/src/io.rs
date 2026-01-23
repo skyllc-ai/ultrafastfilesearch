@@ -2917,7 +2917,7 @@ impl ParallelMftReader {
         &self,
         overlapped_handle: HANDLE,
         merge_extensions: bool,
-        progress_callback: Option<F>,
+        _progress_callback: Option<F>,
     ) -> Result<Vec<ParsedRecord>>
     where
         F: Fn(u64, u64),
@@ -3066,51 +3066,118 @@ impl ParallelMftReader {
             }
         }
 
+        let num_workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+
         info!(
             queued = pending_count,
             io_size_mb = IO_CHUNK_SIZE / (1024 * 1024),
-            "📤 Queued all reads to IOCP (C++ style: many small reads)"
+            workers = num_workers,
+            "📤 Queued all reads to IOCP (C++ style: many small reads, multi-threaded completions)"
         );
 
-        // Wait for all completions
-        let mut bytes_read_total: u64 = 0;
-        let mut completed = 0usize;
+        // Wait for all completions using multiple worker threads (C++ approach)
+        // This keeps the I/O pipeline full by processing completions in parallel
+        use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+        use std::sync::Arc;
 
-        while completed < pending_count {
-            let mut bytes_transferred: u32 = 0;
-            let mut completion_key: usize = 0;
-            let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
-                std::ptr::null_mut();
+        let bytes_read_total = Arc::new(AtomicU64::new(0));
+        let completed = Arc::new(AtomicUsize::new(0));
+        let error_flag = Arc::new(AtomicUsize::new(0)); // 0 = no error
 
-            let result = unsafe {
-                GetQueuedCompletionStatus(
-                    iocp.handle,
-                    &mut bytes_transferred,
-                    &mut completion_key,
-                    &mut overlapped_ptr,
-                    u32::MAX, // Wait indefinitely
-                )
-            };
+        // Share IOCP handle across threads (IOCP is thread-safe)
+        // We need to wrap the raw pointer in a Send-safe wrapper
+        // SAFETY: Windows IOCP handles are thread-safe by design
+        #[derive(Clone, Copy)]
+        struct SendHandle(isize);
+        unsafe impl Send for SendHandle {}
+        unsafe impl Sync for SendHandle {}
 
-            if result.is_ok() {
-                bytes_read_total += bytes_transferred as u64;
-                completed += 1;
+        let iocp_handle_raw = SendHandle(iocp.handle.0 as isize);
 
-                if let Some(ref cb) = progress_callback {
-                    cb(bytes_read_total, bytes_to_read);
+        // Spawn worker threads
+        let mut workers = Vec::with_capacity(num_workers);
+        for worker_id in 0..num_workers {
+            let bytes_read = Arc::clone(&bytes_read_total);
+            let completed_count = Arc::clone(&completed);
+            let error = Arc::clone(&error_flag);
+            let pending = pending_count;
+            let handle_raw = iocp_handle_raw;
+
+            workers.push(std::thread::spawn(move || {
+                // Reconstruct HANDLE from raw isize
+                let iocp_handle = HANDLE(handle_raw.0 as *mut std::ffi::c_void);
+
+                loop {
+                    // Check if all completions are done
+                    if completed_count.load(Ordering::Acquire) >= pending {
+                        break;
+                    }
+
+                    // Check if another thread hit an error
+                    if error.load(Ordering::Acquire) != 0 {
+                        break;
+                    }
+
+                    let mut bytes_transferred: u32 = 0;
+                    let mut completion_key: usize = 0;
+                    let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
+                        std::ptr::null_mut();
+
+                    // Use short timeout to allow checking completion count
+                    let result = unsafe {
+                        GetQueuedCompletionStatus(
+                            iocp_handle,
+                            &mut bytes_transferred,
+                            &mut completion_key,
+                            &mut overlapped_ptr,
+                            100, // 100ms timeout
+                        )
+                    };
+
+                    if result.is_ok() {
+                        bytes_read.fetch_add(bytes_transferred as u64, Ordering::Relaxed);
+                        let prev = completed_count.fetch_add(1, Ordering::AcqRel);
+                        if prev + 1 >= pending {
+                            // We completed the last one
+                            break;
+                        }
+                    } else {
+                        let last_error = unsafe { GetLastError() };
+                        // WAIT_TIMEOUT (258) is expected when using timeout
+                        if last_error.0 != 258 {
+                            // Real error - signal other threads
+                            error.store(last_error.0 as usize, Ordering::Release);
+                            break;
+                        }
+                        // Timeout - loop and check again
+                    }
                 }
-            } else {
-                let last_error = unsafe { GetLastError() };
-                return Err(MftError::Io(std::io::Error::from_raw_os_error(
-                    last_error.0 as i32,
-                )));
-            }
+                worker_id // Return worker ID for debugging
+            }));
         }
+
+        // Wait for all workers to finish
+        for worker in workers {
+            let _ = worker.join();
+        }
+
+        // Check for errors
+        let error_code = error_flag.load(Ordering::Acquire);
+        if error_code != 0 {
+            return Err(MftError::Io(std::io::Error::from_raw_os_error(
+                error_code as i32,
+            )));
+        }
+
+        let bytes_read_total = bytes_read_total.load(Ordering::Acquire);
 
         info!(
             read_ms = read_start.elapsed().as_millis(),
             bytes_mb = bytes_read_total / (1024 * 1024),
-            "✅ IOCP bulk read complete"
+            workers = num_workers,
+            "✅ IOCP bulk read complete (multi-threaded)"
         );
 
         // Phase 4: Parse all records in parallel (same as read_all_bulk)
