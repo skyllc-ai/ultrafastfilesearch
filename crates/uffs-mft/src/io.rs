@@ -3507,6 +3507,222 @@ impl PipelinedMftReader {
 
         Ok(all_results)
     }
+
+    /// Reads all MFT records with pipelined I/O and parallel parsing.
+    ///
+    /// This method combines the benefits of pipelined I/O (true I/O+CPU
+    /// overlap) with multi-core parallel parsing using Rayon. This is the
+    /// optimal mode for HDDs with multi-core CPUs.
+    ///
+    /// Architecture:
+    /// ```text
+    /// ┌─────────────┐     ┌──────────────────┐     ┌─────────────────────┐
+    /// │ Reader      │────▶│ Bounded Channel  │────▶│ Rayon Thread Pool   │
+    /// │ Thread      │     │ (backpressure)   │     │ (parallel parsing)  │
+    /// └─────────────┘     └──────────────────┘     └─────────────────────┘
+    ///       │                                             │
+    ///       ▼                                             ▼
+    ///   Read chunks                                 Parse records in
+    ///   from disk                                   parallel batches
+    /// ```
+    #[allow(unsafe_code)]
+    pub fn read_all_pipelined_parallel<F>(
+        &self,
+        handle: HANDLE,
+        merge_extensions: bool,
+        mut progress_callback: Option<F>,
+    ) -> Result<Vec<ParsedRecord>>
+    where
+        F: FnMut(u64, u64),
+    {
+        use std::thread;
+
+        use crossbeam_channel::{Receiver, Sender, bounded};
+
+        let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
+        let record_size = self.extent_map.bytes_per_record;
+        let num_chunks = chunks.len();
+
+        if num_chunks == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Calculate total bytes for progress
+        let total_bytes: u64 = chunks
+            .iter()
+            .map(|c| c.record_count * u64::from(record_size))
+            .sum();
+
+        // Estimate capacity
+        let estimated_records = if let Some(ref bm) = self.bitmap {
+            bm.count_in_use()
+        } else {
+            self.extent_map.total_records() as usize
+        };
+
+        info!(
+            chunks = num_chunks,
+            estimated_records,
+            chunk_size_mb = self.chunk_size / (1024 * 1024),
+            pipeline_depth = self.pipeline_depth,
+            rayon_threads = rayon::current_num_threads(),
+            "🚀 Starting pipelined-parallel read with I/O+CPU overlap and multi-core parsing"
+        );
+
+        // Create bounded channel for backpressure
+        // Use larger depth for parallel mode to keep Rayon workers fed
+        let parallel_depth = self.pipeline_depth * 2;
+        let (tx, rx): (Sender<ReadBuffer>, Receiver<ReadBuffer>) = bounded(parallel_depth);
+
+        // Pre-allocate buffer pool for the reader thread
+        let max_chunk_size = chunks
+            .iter()
+            .map(|c| c.record_count * u64::from(record_size))
+            .max()
+            .unwrap_or(self.chunk_size as u64) as usize;
+
+        // Clone data needed by reader thread
+        let chunks_for_reader = chunks;
+        let handle_raw = handle.0 as usize; // Convert to usize for Send
+
+        // Spawn reader thread
+        let reader_handle = thread::spawn(move || {
+            // Reconstruct HANDLE in reader thread
+            let handle = HANDLE(handle_raw as *mut std::ffi::c_void);
+
+            // Create buffer pool
+            let mut buffer_pool: Vec<AlignedBuffer> = Vec::new();
+
+            for chunk in chunks_for_reader {
+                // Get or create a buffer
+                let mut buffer = buffer_pool
+                    .pop()
+                    .unwrap_or_else(|| AlignedBuffer::new(max_chunk_size + SECTOR_SIZE));
+
+                // Read chunk into buffer
+                match read_chunk_into_buffer_static(handle, &chunk, record_size, &mut buffer) {
+                    Ok(bytes_read) => {
+                        let read_buffer = ReadBuffer {
+                            buffer,
+                            bytes_read,
+                            chunk,
+                            record_size,
+                        };
+
+                        // Send to parser (blocks if channel is full - backpressure)
+                        if tx.send(read_buffer).is_err() {
+                            // Receiver dropped, stop reading
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to read chunk, skipping");
+                        // Return buffer to pool
+                        buffer_pool.push(buffer);
+                    }
+                }
+            }
+            // tx is dropped here, signaling end of stream
+        });
+
+        // Collect all buffers first, then parse in parallel with Rayon
+        // This allows Rayon to efficiently distribute work across cores
+        let mut all_buffers: Vec<ReadBuffer> = Vec::with_capacity(num_chunks);
+        let mut bytes_read_total: u64 = 0;
+
+        while let Ok(read_buffer) = rx.recv() {
+            bytes_read_total += read_buffer.bytes_read as u64;
+            all_buffers.push(read_buffer);
+
+            // Report progress during collection phase
+            if let Some(ref mut cb) = progress_callback {
+                cb(bytes_read_total, total_bytes);
+            }
+        }
+
+        // Wait for reader thread to finish
+        if let Err(e) = reader_handle.join() {
+            warn!("Reader thread panicked: {:?}", e);
+        }
+
+        info!(
+            buffers = all_buffers.len(),
+            bytes_mb = bytes_read_total / (1024 * 1024),
+            "📦 All buffers collected, starting parallel parsing"
+        );
+
+        // Parse all buffers in parallel using Rayon
+        let parse_results: Vec<ParseResult> = all_buffers
+            .par_iter()
+            .flat_map(|read_buffer| parse_buffer_to_results(read_buffer, merge_extensions))
+            .collect();
+
+        info!(
+            parse_results = parse_results.len(),
+            "✅ Parallel parsing complete"
+        );
+
+        // Merge results using MftRecordMerger (single-threaded, as designed)
+        let mut merger = MftRecordMerger::with_capacity(estimated_records);
+        for result in parse_results {
+            merger.add_result(result);
+        }
+
+        let all_results = merger.merge();
+
+        info!(
+            records = all_results.len(),
+            bytes_mb = bytes_read_total / (1024 * 1024),
+            "✅ Pipelined-parallel read complete"
+        );
+
+        Ok(all_results)
+    }
+}
+
+/// Parses all records in a buffer and returns the results.
+///
+/// This is a helper function used by both serial and parallel parsing paths.
+/// It handles skip_begin, effective record count, bounds checking, fixup, and
+/// parsing.
+fn parse_buffer_to_results(read_buffer: &ReadBuffer, merge_extensions: bool) -> Vec<ParseResult> {
+    let ReadBuffer {
+        buffer,
+        bytes_read,
+        chunk,
+        record_size,
+    } = read_buffer;
+
+    let skip_begin = chunk.skip_begin as usize;
+    let effective_count = chunk.effective_record_count() as usize;
+    let record_size_usize = *record_size as usize;
+
+    let mut results = Vec::with_capacity(effective_count);
+
+    for i in 0..effective_count {
+        let offset = (skip_begin + i) * record_size_usize;
+        if offset + record_size_usize > *bytes_read {
+            break;
+        }
+
+        let record_data = &buffer.as_slice()[offset..offset + record_size_usize];
+        let mut record_buf = record_data.to_vec();
+        let frs = chunk.start_frs + skip_begin as u64 + i as u64;
+
+        // Apply fixup
+        if !apply_fixup(&mut record_buf) {
+            continue;
+        }
+
+        // Parse record
+        if merge_extensions {
+            results.push(parse_record_full(&record_buf, frs));
+        } else if let Some(rec) = parse_record(&record_buf, frs) {
+            results.push(ParseResult::Base(rec));
+        }
+    }
+
+    results
 }
 
 /// Static helper to read a chunk into a buffer (for use in reader thread).

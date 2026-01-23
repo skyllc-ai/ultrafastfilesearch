@@ -408,11 +408,25 @@ enum Commands {
     /// ```text
     /// uffs_mft benchmark-index-lean --drive C
     /// uffs_mft benchmark-index-lean -d S
+    /// uffs_mft benchmark-index-lean -d S --mode pipelined-parallel
     /// ```
     BenchmarkIndexLean {
         /// Drive letter (e.g., C, D, E)
         #[arg(short, long)]
         drive: char,
+
+        /// Read mode: auto, parallel, streaming, prefetch, pipelined,
+        /// pipelined-parallel
+        /// - auto: Select based on drive type (SSD→parallel,
+        ///   HDD→pipelined-parallel)
+        /// - parallel: Read all chunks then parse in parallel (best for SSD)
+        /// - streaming: Sequential reads with immediate parsing (lower memory)
+        /// - prefetch: Double-buffered reads for I/O overlap
+        /// - pipelined: I/O+CPU overlap with single-threaded parsing
+        /// - pipelined-parallel: I/O+CPU overlap with multi-core parsing (best
+        ///   for HDD)
+        #[arg(short, long, default_value = "auto")]
+        mode: String,
     },
 }
 
@@ -574,7 +588,9 @@ async fn run() -> Result<()> {
             } => cmd_load(&input, output.as_deref(), info_only).await,
             Commands::BenchmarkMft { drive } => cmd_benchmark_mft(drive).await,
             Commands::BenchmarkIndex { drive } => cmd_benchmark_index(drive).await,
-            Commands::BenchmarkIndexLean { drive } => cmd_benchmark_index_lean(drive).await,
+            Commands::BenchmarkIndexLean { drive, mode } => {
+                cmd_benchmark_index_lean(drive, &mode).await
+            }
         }
     }
 }
@@ -2808,7 +2824,7 @@ async fn cmd_benchmark_index(drive: char) -> Result<()> {
 /// This measures the UFFS indexing pipeline without DataFrame building
 /// overhead. Should be ~2x faster than `benchmark-index` on large drives.
 #[cfg(windows)]
-async fn cmd_benchmark_index_lean(drive: char) -> Result<()> {
+async fn cmd_benchmark_index_lean(drive: char, mode_str: &str) -> Result<()> {
     use std::time::Instant;
 
     use uffs_mft::platform::VolumeHandle;
@@ -2816,8 +2832,12 @@ async fn cmd_benchmark_index_lean(drive: char) -> Result<()> {
 
     let drive_upper = drive.to_ascii_uppercase();
 
+    // Parse read mode
+    let mode: MftReadMode = mode_str.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+
     println!("=== Lean Index Build Benchmark Tool ===");
     println!("Drive: {}:", drive_upper);
+    println!("Mode: {}", mode);
     println!("This measures the UFFS indexing pipeline with lean MftIndex (no DataFrame overhead)");
     println!();
 
@@ -2853,7 +2873,7 @@ async fn cmd_benchmark_index_lean(drive: char) -> Result<()> {
     let reader = MftReader::open(drive_upper)
         .await
         .with_context(|| format!("Failed to open drive {}:", drive_upper))?
-        .with_mode(MftReadMode::Auto);
+        .with_mode(mode);
 
     let index = reader
         .read_all_index()
@@ -2920,8 +2940,8 @@ async fn cmd_benchmark_index_lean(drive: char) -> Result<()> {
     // =========================================================================
     println!("=== Summary ===");
     println!(
-        "Indexed {} items in {:.3} seconds (lean index)",
-        total_entries, elapsed_secs
+        "Indexed {} items in {:.3} seconds (lean index, mode: {})",
+        total_entries, elapsed_secs, mode
     );
 
     Ok(())
