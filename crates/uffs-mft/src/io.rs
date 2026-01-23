@@ -3341,16 +3341,22 @@ impl ParallelMftReader {
         let total_records = self.extent_map.total_records() as usize;
         let total_bytes = total_records * record_size;
 
-        // C++ uses 2 reads in flight - minimal overhead, maximum throughput
+        // C++ uses 2 reads in flight with 64KB buffers
+        // Key insight: With FILE_FLAG_SEQUENTIAL_SCAN, Windows does aggressive
+        // read-ahead Smaller buffers mean we return to user-mode faster,
+        // keeping the I/O pipeline fed The OS read-ahead is doing the large
+        // sequential prefetching for us
         const CONCURRENCY: usize = 2;
-        const IO_CHUNK_SIZE: usize = 1024 * 1024; // 1MB per read
+        const IO_CHUNK_SIZE: usize = 64 * 1024; // 64KB per read (C++ uses this!)
 
         info!(
             total_records,
             total_bytes_mb = total_bytes / (1024 * 1024),
             concurrency = CONCURRENCY,
-            io_size_mb = IO_CHUNK_SIZE / (1024 * 1024),
-            "🚀 Starting sliding window IOCP read (C++ style: 2 reads in flight)"
+            io_size_kb = IO_CHUNK_SIZE / 1024,
+            "🚀 Starting sliding window IOCP read (C++ style: {} reads in flight, {}KB buffers)",
+            CONCURRENCY,
+            IO_CHUNK_SIZE / 1024
         );
 
         // Generate read chunks with bitmap skip optimization
@@ -3550,7 +3556,8 @@ impl ParallelMftReader {
                         let offset = new_in_flight.op.disk_offset;
                         let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
                         new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                        new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
+                        new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
+                            (offset >> 32) as u32;
 
                         let overlapped_ptr = &mut new_op_mut.overlapped as *mut _;
                         let read_size = new_op_mut.op.size;

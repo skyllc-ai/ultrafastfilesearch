@@ -38,7 +38,7 @@ exclude = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.2.58"
+version = "0.2.59"
 edition = "2024"
 rust-version = "1.85"
 license = "MPL-2.0 OR LicenseRef-UFFS-Commercial"
