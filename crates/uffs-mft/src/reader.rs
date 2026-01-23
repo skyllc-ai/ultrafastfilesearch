@@ -829,14 +829,17 @@ impl MftReader {
         }
 
         // M2 9.1-9.3: Select reader based on mode
+        // C++ team insight: "read all then parse" is faster than pipelining even on HDD
+        // because: no context switching, CPU cache stays hot, no channel overhead,
+        // OS can optimize continuous sequential reads better.
         let effective_mode = match self.mode {
             MftReadMode::Auto => {
                 // Auto-select based on drive type
-                // - SSD: Parallel (read all, parse in parallel)
-                // - HDD: PipelinedParallel (I/O overlap + multi-core parsing)
+                // All drive types now use Parallel (read all, parse in parallel)
+                // This matches C++ behavior for maximum performance
                 match drive_type {
                     crate::platform::DriveType::Ssd => MftReadMode::Parallel,
-                    crate::platform::DriveType::Hdd => MftReadMode::PipelinedParallel,
+                    crate::platform::DriveType::Hdd => MftReadMode::Parallel, /* Changed from PipelinedParallel */
                     crate::platform::DriveType::Unknown => MftReadMode::Parallel,
                 }
             }
@@ -1412,10 +1415,13 @@ impl MftReader {
         }
 
         // Select reader based on mode
+        // C++ team insight: "read all then parse" is faster than pipelining even on HDD
+        // because: no context switching, CPU cache stays hot, no channel overhead,
+        // OS can optimize continuous sequential reads better.
         let effective_mode = match self.mode {
             MftReadMode::Auto => match drive_type {
                 crate::platform::DriveType::Ssd => MftReadMode::Parallel,
-                crate::platform::DriveType::Hdd => MftReadMode::Pipelined,
+                crate::platform::DriveType::Hdd => MftReadMode::Parallel, // Changed from Pipelined
                 crate::platform::DriveType::Unknown => MftReadMode::Parallel,
             },
             mode => mode,
