@@ -3574,16 +3574,17 @@ impl MultiDriveMftReader {
                 match cache_result {
                     CacheStatus::Fresh {
                         index,
-                        header: _,
+                        header,
                         age_seconds,
                     } => {
                         info!(
                             drive = %drive,
                             age_seconds,
                             records = index.len(),
-                            "📦 Cache HIT - using cached index"
+                            "📦 Cache HIT - applying USN updates"
                         );
-                        Ok(index)
+                        // Apply USN changes to bring index up to date
+                        Self::apply_usn_updates_to_cached_index(drive, index, header).await
                     }
                     CacheStatus::Stale { age_seconds } => {
                         info!(
@@ -3777,6 +3778,161 @@ impl MultiDriveMftReader {
 
                 Ok(index)
             })
+        })
+        .await
+        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
+    }
+
+    /// Apply USN Journal updates to a cached index to bring it up to date.
+    ///
+    /// This reads changes from the USN Journal since the cached checkpoint,
+    /// applies them to the index, and saves the updated index back to cache.
+    ///
+    /// If USN Journal is unavailable or the journal has wrapped, falls back
+    /// to a full rebuild.
+    #[cfg(windows)]
+    async fn apply_usn_updates_to_cached_index(
+        drive: char,
+        mut index: crate::index::MftIndex,
+        header: crate::index::IndexHeader,
+    ) -> Result<crate::index::MftIndex> {
+        use tracing::{debug, info, warn};
+
+        use crate::cache::save_to_cache;
+        use crate::platform::VolumeHandle;
+        use crate::usn::{aggregate_changes, query_usn_journal, read_usn_journal};
+
+        tokio::task::spawn_blocking(move || {
+            // Query current USN Journal state
+            let current_info = match query_usn_journal(drive) {
+                Ok(info) => info,
+                Err(e) => {
+                    warn!(
+                        drive = %drive,
+                        error = %e,
+                        "⚠️ USN Journal unavailable - using cached index as-is"
+                    );
+                    return Ok(index);
+                }
+            };
+
+            // Check if journal ID matches (journal may have been recreated)
+            if header.usn_journal_id != 0 && current_info.journal_id != header.usn_journal_id {
+                info!(
+                    drive = %drive,
+                    cached_journal_id = header.usn_journal_id,
+                    current_journal_id = current_info.journal_id,
+                    "🔄 USN Journal ID changed - rebuilding index"
+                );
+                // Journal was recreated, need full rebuild
+                let rt = tokio::runtime::Handle::current();
+                return rt.block_on(Self::read_and_cache_single_drive(drive));
+            }
+
+            // Check if our checkpoint is still valid (not before first_usn)
+            let start_usn = header.next_usn;
+            if start_usn < current_info.first_usn {
+                info!(
+                    drive = %drive,
+                    cached_usn = start_usn,
+                    first_usn = current_info.first_usn,
+                    "🔄 USN Journal wrapped - rebuilding index"
+                );
+                // Journal wrapped, need full rebuild
+                let rt = tokio::runtime::Handle::current();
+                return rt.block_on(Self::read_and_cache_single_drive(drive));
+            }
+
+            // If we're already at the latest USN, no changes needed
+            if start_usn >= current_info.next_usn {
+                debug!(
+                    drive = %drive,
+                    usn = start_usn,
+                    "✅ Index is already up to date"
+                );
+                return Ok(index);
+            }
+
+            // Read USN changes since our checkpoint
+            let (records, next_usn) =
+                match read_usn_journal(drive, current_info.journal_id, start_usn) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        warn!(
+                            drive = %drive,
+                            error = %e,
+                            "⚠️ Failed to read USN Journal - using cached index as-is"
+                        );
+                        return Ok(index);
+                    }
+                };
+
+            if records.is_empty() {
+                debug!(
+                    drive = %drive,
+                    "✅ No USN changes since last cache"
+                );
+                return Ok(index);
+            }
+
+            // Aggregate changes (deduplicate by FRS)
+            let changes_map = aggregate_changes(&records);
+            let changes: Vec<_> = changes_map.into_values().collect();
+            info!(
+                drive = %drive,
+                usn_records = changes.len(),
+                from_usn = start_usn,
+                to_usn = next_usn,
+                "🔧 Applying USN changes"
+            );
+
+            // Apply changes to index
+            let stats = index.apply_usn_changes(&changes);
+            debug!(
+                drive = %drive,
+                created = stats.created,
+                deleted = stats.deleted,
+                modified = stats.modified,
+                skipped = stats.skipped,
+                "📊 USN changes applied"
+            );
+
+            // Save updated index to cache with new checkpoint
+            let handle = match VolumeHandle::open(drive) {
+                Ok(h) => h,
+                Err(e) => {
+                    warn!(
+                        drive = %drive,
+                        error = %e,
+                        "⚠️ Failed to open volume for cache update"
+                    );
+                    return Ok(index);
+                }
+            };
+            let volume_data = handle.volume_data();
+            let volume_serial = volume_data.volume_serial_number;
+
+            if let Err(e) = save_to_cache(
+                &index,
+                drive,
+                volume_serial,
+                current_info.journal_id,
+                next_usn,
+            ) {
+                warn!(
+                    drive = %drive,
+                    error = %e,
+                    "⚠️ Failed to update cache"
+                );
+            } else {
+                debug!(
+                    drive = %drive,
+                    next_usn,
+                    "💾 Cache updated with new USN checkpoint"
+                );
+            }
+
+            Ok(index)
         })
         .await
         .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
