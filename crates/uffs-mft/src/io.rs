@@ -2654,6 +2654,189 @@ pub fn generate_read_chunks(
     chunks
 }
 
+/// Generate precise read chunks for NVMe/SSD drives.
+///
+/// Unlike `generate_read_chunks` which creates large chunks and only skips at
+/// the beginning/end, this function generates smaller, more precise I/O
+/// operations that skip unused regions entirely.
+///
+/// For NVMe/SSD drives, there's no seek penalty, so many small reads are
+/// actually more efficient than fewer large reads that include unused data.
+///
+/// # Arguments
+///
+/// * `extent_map` - MFT extent map for physical offset calculation
+/// * `bitmap` - MFT bitmap indicating which records are in use
+/// * `max_io_size` - Maximum I/O size (e.g., 4MB for NVMe)
+/// * `min_gap_records` - Minimum gap size to split (smaller gaps are read
+///   through)
+///
+/// # Returns
+///
+/// Vector of read chunks optimized for NVMe/SSD I/O.
+pub fn generate_precise_read_chunks(
+    extent_map: &MftExtentMap,
+    bitmap: &crate::platform::MftBitmap,
+    max_io_size: usize,
+    min_gap_records: usize,
+) -> Vec<ReadChunk> {
+    let record_size = extent_map.bytes_per_record as usize;
+    let cluster_size = extent_map.bytes_per_cluster as usize;
+    let records_per_cluster = cluster_size / record_size;
+
+    // Use the bitmap's cluster range iterator to find contiguous in-use regions
+    let cluster_ranges: Vec<(u64, u64)> = bitmap
+        .in_use_cluster_ranges(records_per_cluster as u32)
+        .collect();
+
+    if cluster_ranges.is_empty() {
+        info!("📊 No in-use clusters found in bitmap");
+        return Vec::new();
+    }
+
+    let mut chunks = Vec::new();
+    let mut total_records_to_read = 0u64;
+    let mut total_records_skipped = 0u64;
+
+    // Process each extent and match with in-use cluster ranges
+    for extent in extent_map.extents() {
+        if extent.lcn < 0 {
+            continue; // Skip sparse extents
+        }
+
+        let extent_start_frs = extent.vcn * records_per_cluster as u64;
+        let extent_end_frs = extent_start_frs + extent.cluster_count * records_per_cluster as u64;
+        let extent_disk_offset = (extent.lcn as u64) * cluster_size as u64;
+
+        // Find cluster ranges that overlap with this extent
+        for &(range_start_cluster, range_cluster_count) in &cluster_ranges {
+            let range_start_frs = range_start_cluster * records_per_cluster as u64;
+            let range_end_frs = range_start_frs + range_cluster_count * records_per_cluster as u64;
+
+            // Check if this range overlaps with the extent
+            if range_end_frs <= extent_start_frs || range_start_frs >= extent_end_frs {
+                continue; // No overlap
+            }
+
+            // Clip range to extent boundaries
+            let clipped_start_frs = range_start_frs.max(extent_start_frs);
+            let clipped_end_frs = range_end_frs.min(extent_end_frs);
+            let clipped_records = clipped_end_frs - clipped_start_frs;
+
+            if clipped_records == 0 {
+                continue;
+            }
+
+            // Calculate disk offset for this range within the extent
+            let offset_within_extent = (clipped_start_frs - extent_start_frs) * record_size as u64;
+            let disk_offset = extent_disk_offset + offset_within_extent;
+
+            // Split into max_io_size chunks
+            let records_per_io = max_io_size / record_size;
+            let mut chunk_start = 0u64;
+
+            while chunk_start < clipped_records {
+                let chunk_records = (clipped_records - chunk_start).min(records_per_io as u64);
+                let chunk_frs_start = clipped_start_frs + chunk_start;
+                let chunk_frs_end = chunk_frs_start + chunk_records;
+
+                // Calculate precise skip ranges within this chunk
+                let (skip_begin, skip_end) =
+                    bitmap.calculate_skip_range(chunk_frs_start, chunk_frs_end);
+
+                let effective_records = chunk_records - skip_begin - skip_end;
+                if effective_records > 0 {
+                    total_records_to_read += effective_records;
+                    total_records_skipped += skip_begin + skip_end;
+
+                    chunks.push(ReadChunk {
+                        disk_offset: disk_offset + chunk_start * record_size as u64,
+                        start_frs: chunk_frs_start,
+                        record_count: chunk_records,
+                        skip_begin,
+                        skip_end,
+                    });
+                } else {
+                    total_records_skipped += chunk_records;
+                }
+
+                chunk_start += chunk_records;
+            }
+        }
+    }
+
+    // Merge adjacent chunks with small gaps (for NVMe, small gaps are cheaper to
+    // read through)
+    let min_gap_bytes = min_gap_records as u64 * record_size as u64;
+    let chunks = merge_precise_chunks(chunks, record_size as u32, min_gap_bytes, max_io_size);
+
+    let total_records = total_records_to_read + total_records_skipped;
+    info!(
+        chunks = chunks.len(),
+        records_to_read = total_records_to_read,
+        records_skipped = total_records_skipped,
+        skip_percentage = format!(
+            "{:.1}%",
+            if total_records > 0 {
+                (total_records_skipped as f64 / total_records as f64) * 100.0
+            } else {
+                0.0
+            }
+        ),
+        "📊 Precise read plan generated (NVMe/SSD optimized)"
+    );
+
+    chunks
+}
+
+/// Merge adjacent precise chunks with small gaps.
+///
+/// For NVMe/SSD, if two chunks are very close together, it's more efficient
+/// to read them as one chunk than to issue two separate I/O operations.
+fn merge_precise_chunks(
+    mut chunks: Vec<ReadChunk>,
+    record_size: u32,
+    min_gap_bytes: u64,
+    max_io_size: usize,
+) -> Vec<ReadChunk> {
+    if chunks.len() < 2 {
+        return chunks;
+    }
+
+    // Sort by disk offset for merging
+    chunks.sort_by_key(|c| c.disk_offset);
+
+    let mut merged = Vec::with_capacity(chunks.len());
+    let mut current = chunks.remove(0);
+
+    for next in chunks {
+        let current_end_offset =
+            current.disk_offset + current.record_count * u64::from(record_size);
+
+        // Check if chunks are close enough to merge
+        let gap_bytes = next.disk_offset.saturating_sub(current_end_offset);
+        let merged_bytes =
+            (next.disk_offset + next.record_count * u64::from(record_size)) - current.disk_offset;
+
+        if gap_bytes <= min_gap_bytes && merged_bytes <= max_io_size as u64 {
+            // Merge: extend current chunk to include next
+            let new_record_count = ((next.disk_offset
+                + next.record_count * u64::from(record_size))
+                - current.disk_offset)
+                / u64::from(record_size);
+            current.record_count = new_record_count;
+            current.skip_end = next.skip_end;
+        } else {
+            // Can't merge, push current and start new
+            merged.push(current);
+            current = next;
+        }
+    }
+    merged.push(current);
+
+    merged
+}
+
 /// M1 8.6: Merge adjacent chunks with small gaps.
 ///
 /// When two chunks are close together (gap < threshold), reading them as one
@@ -4301,9 +4484,34 @@ impl ParallelMftReader {
         );
 
         // Generate read chunks with bitmap skip optimization
-        let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
-        let mut sorted_chunks: Vec<ReadChunk> = chunks;
-        sorted_chunks.sort_by_key(|c| c.disk_offset);
+        // For NVMe/SSD, use precise chunk generation to skip unused regions entirely
+        let use_direct_chunk_io = matches!(
+            self.drive_type,
+            crate::platform::DriveType::Nvme | crate::platform::DriveType::Ssd
+        );
+
+        // For NVMe/SSD: use larger max to allow direct chunk-to-I/O mapping
+        // For HDD: use standard io_chunk_size for predictable sequential reads
+        const MAX_DIRECT_IO_SIZE: usize = 16 * 1024 * 1024; // 16MB max for direct I/O
+
+        let sorted_chunks: Vec<ReadChunk> = match (&self.drive_type, &self.bitmap) {
+            (crate::platform::DriveType::Nvme | crate::platform::DriveType::Ssd, Some(bitmap)) => {
+                // NVMe/SSD: Use precise chunks that skip unused regions
+                // min_gap_records=64 means gaps smaller than 64KB are read through
+                // Use MAX_DIRECT_IO_SIZE as the max chunk size for direct I/O
+                let mut chunks =
+                    generate_precise_read_chunks(&self.extent_map, bitmap, MAX_DIRECT_IO_SIZE, 64);
+                chunks.sort_by_key(|c| c.disk_offset);
+                chunks
+            }
+            _ => {
+                // HDD or no bitmap: Use standard chunk generation
+                let mut chunks =
+                    generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
+                chunks.sort_by_key(|c| c.disk_offset);
+                chunks
+            }
+        };
 
         // Build I/O operations with FRS tracking for inline parsing
         struct IoOp {
@@ -4322,23 +4530,35 @@ impl ParallelMftReader {
             }
 
             let chunk_bytes = effective_records as usize * record_size;
-            let mut offset_within_chunk = 0usize;
-            let mut frs_offset = 0u64;
 
-            while offset_within_chunk < chunk_bytes {
-                let io_size = std::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
-                let records_in_io = io_size / record_size;
-                let disk_offset =
-                    chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
-
+            if use_direct_chunk_io {
+                // NVMe/SSD: Use chunk directly as one I/O operation (no splitting)
+                // This minimizes syscall overhead since there's no seek penalty
                 io_ops.push_back(IoOp {
-                    disk_offset,
-                    size: io_size,
-                    start_frs: chunk.start_frs + chunk.skip_begin as u64 + frs_offset,
+                    disk_offset: chunk.disk_offset + skip_begin_bytes as u64,
+                    size: chunk_bytes,
+                    start_frs: chunk.start_frs + chunk.skip_begin,
                 });
+            } else {
+                // HDD: Split into io_chunk_size pieces for predictable sequential reads
+                let mut offset_within_chunk = 0usize;
+                let mut frs_offset = 0u64;
 
-                offset_within_chunk += io_size;
-                frs_offset += records_in_io as u64;
+                while offset_within_chunk < chunk_bytes {
+                    let io_size = std::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
+                    let records_in_io = io_size / record_size;
+                    let disk_offset =
+                        chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
+
+                    io_ops.push_back(IoOp {
+                        disk_offset,
+                        size: io_size,
+                        start_frs: chunk.start_frs + chunk.skip_begin + frs_offset,
+                    });
+
+                    offset_within_chunk += io_size;
+                    frs_offset += records_in_io as u64;
+                }
             }
         }
 
@@ -4349,9 +4569,21 @@ impl ParallelMftReader {
             total_records
         };
 
+        // Calculate total bytes to read and max I/O size for buffer allocation
+        let total_bytes_to_read: u64 = io_ops.iter().map(|op| op.size as u64).sum();
+        let max_io_size = io_ops
+            .iter()
+            .map(|op| op.size)
+            .max()
+            .unwrap_or(io_chunk_size);
+
         info!(
             io_ops = total_io_ops,
-            estimated_records, "📊 Generated I/O operations for inline parsing"
+            estimated_records,
+            bytes_to_read_mb = total_bytes_to_read / (1024 * 1024),
+            max_io_size_kb = max_io_size / 1024,
+            direct_io = use_direct_chunk_io,
+            "📊 Generated I/O operations for inline parsing"
         );
 
         // Create the index with pre-allocated capacity
@@ -4369,8 +4601,9 @@ impl ParallelMftReader {
             op: IoOp,
         }
 
+        // Allocate buffers sized for the max I/O operation
         let mut buffer_pool: Vec<AlignedBuffer> = (0..concurrency)
-            .map(|_| AlignedBuffer::new(io_chunk_size))
+            .map(|_| AlignedBuffer::new(max_io_size))
             .collect();
 
         let mut in_flight: Vec<Option<Pin<Box<InFlightOp>>>> =
@@ -4618,9 +4851,34 @@ impl ParallelMftReader {
         );
 
         // Generate read chunks with bitmap skip optimization
-        let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
-        let mut sorted_chunks: Vec<ReadChunk> = chunks;
-        sorted_chunks.sort_by_key(|c| c.disk_offset);
+        // For NVMe/SSD, use precise chunk generation to skip unused regions entirely
+        let use_direct_chunk_io = matches!(
+            self.drive_type,
+            crate::platform::DriveType::Nvme | crate::platform::DriveType::Ssd
+        );
+
+        // For NVMe/SSD: use larger max to allow direct chunk-to-I/O mapping
+        // For HDD: use standard io_chunk_size for predictable sequential reads
+        const MAX_DIRECT_IO_SIZE: usize = 16 * 1024 * 1024; // 16MB max for direct I/O
+
+        let sorted_chunks: Vec<ReadChunk> = match (&self.drive_type, &self.bitmap) {
+            (crate::platform::DriveType::Nvme | crate::platform::DriveType::Ssd, Some(bitmap)) => {
+                // NVMe/SSD: Use precise chunks that skip unused regions
+                // min_gap_records=64 means gaps smaller than 64KB are read through
+                // Use MAX_DIRECT_IO_SIZE as the max chunk size for direct I/O
+                let mut chunks =
+                    generate_precise_read_chunks(&self.extent_map, bitmap, MAX_DIRECT_IO_SIZE, 64);
+                chunks.sort_by_key(|c| c.disk_offset);
+                chunks
+            }
+            _ => {
+                // HDD or no bitmap: Use standard chunk generation
+                let mut chunks =
+                    generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
+                chunks.sort_by_key(|c| c.disk_offset);
+                chunks
+            }
+        };
 
         // Build I/O operations with FRS tracking
         struct IoOp {
@@ -4639,23 +4897,35 @@ impl ParallelMftReader {
             }
 
             let chunk_bytes = effective_records as usize * record_size;
-            let mut offset_within_chunk = 0usize;
-            let mut frs_offset = 0u64;
 
-            while offset_within_chunk < chunk_bytes {
-                let io_size = std::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
-                let records_in_io = io_size / record_size;
-                let disk_offset =
-                    chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
-
+            if use_direct_chunk_io {
+                // NVMe/SSD: Use chunk directly as one I/O operation (no splitting)
+                // This minimizes syscall overhead since there's no seek penalty
                 io_ops.push_back(IoOp {
-                    disk_offset,
-                    size: io_size,
-                    start_frs: chunk.start_frs + chunk.skip_begin as u64 + frs_offset,
+                    disk_offset: chunk.disk_offset + skip_begin_bytes as u64,
+                    size: chunk_bytes,
+                    start_frs: chunk.start_frs + chunk.skip_begin,
                 });
+            } else {
+                // HDD: Split into io_chunk_size pieces for predictable sequential reads
+                let mut offset_within_chunk = 0usize;
+                let mut frs_offset = 0u64;
 
-                offset_within_chunk += io_size;
-                frs_offset += records_in_io as u64;
+                while offset_within_chunk < chunk_bytes {
+                    let io_size = std::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
+                    let records_in_io = io_size / record_size;
+                    let disk_offset =
+                        chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
+
+                    io_ops.push_back(IoOp {
+                        disk_offset,
+                        size: io_size,
+                        start_frs: chunk.start_frs + chunk.skip_begin + frs_offset,
+                    });
+
+                    offset_within_chunk += io_size;
+                    frs_offset += records_in_io as u64;
+                }
             }
         }
 
@@ -4666,9 +4936,21 @@ impl ParallelMftReader {
             total_records
         };
 
+        // Calculate total bytes to read and max I/O size for buffer allocation
+        let total_bytes_to_read: u64 = io_ops.iter().map(|op| op.size as u64).sum();
+        let max_io_size = io_ops
+            .iter()
+            .map(|op| op.size)
+            .max()
+            .unwrap_or(io_chunk_size);
+
         info!(
             io_ops = total_io_ops,
-            estimated_records, "📊 Generated I/O operations for parallel parsing"
+            estimated_records,
+            bytes_to_read_mb = total_bytes_to_read / (1024 * 1024),
+            max_io_size_kb = max_io_size / 1024,
+            direct_io = use_direct_chunk_io,
+            "📊 Generated I/O operations for parallel parsing"
         );
 
         // Create channel for buffer handoff (bounded to prevent memory explosion)
@@ -4700,7 +4982,8 @@ impl ParallelMftReader {
                 let mut local_parsed = 0usize;
 
                 // Process buffers until channel closes
-                while let Ok(Some((buffer, start_frs, record_count))) = rx.recv() {
+                // Use `mut buffer` to apply fixup in-place (zero-copy optimization)
+                while let Ok(Some((mut buffer, start_frs, record_count))) = rx.recv() {
                     for i in 0..record_count {
                         let frs = start_frs + i as u64;
 
@@ -4717,16 +5000,14 @@ impl ParallelMftReader {
                             break;
                         }
 
-                        // Copy to mutable buffer for fixup
-                        let mut record_buf = buffer[offset..end].to_vec();
-
-                        // Apply fixup
-                        if !apply_fixup(&mut record_buf) {
+                        // Apply fixup in-place (zero-copy - no per-record allocation!)
+                        let record_slice = &mut buffer[offset..end];
+                        if !apply_fixup(record_slice) {
                             continue;
                         }
 
-                        // Parse into fragment
-                        if parse_record_to_fragment(&record_buf, frs, &mut fragment) {
+                        // Parse from the fixed-up slice
+                        if parse_record_to_fragment(record_slice, frs, &mut fragment) {
                             local_parsed += 1;
                         }
                     }
@@ -4761,8 +5042,9 @@ impl ParallelMftReader {
             op: IoOp,
         }
 
+        // Allocate buffers sized for the max I/O operation
         let mut buffer_pool: Vec<AlignedBuffer> = (0..concurrency)
-            .map(|_| AlignedBuffer::new(io_chunk_size))
+            .map(|_| AlignedBuffer::new(max_io_size))
             .collect();
 
         let mut in_flight: Vec<Option<Pin<Box<InFlightOp>>>> =
