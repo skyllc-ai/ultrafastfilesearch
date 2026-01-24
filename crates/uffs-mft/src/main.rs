@@ -454,6 +454,206 @@ enum Commands {
         /// increase latency per completion.
         #[arg(long, default_value = "1024")]
         io_size_kb: usize,
+
+        /// Enable parallel parsing (M3 optimization).
+        /// Uses worker threads to parse MFT records in parallel with I/O.
+        /// Beneficial for `NVMe` drives where I/O is faster than parsing.
+        /// Default: auto (enabled for `NVMe`, disabled for HDD/SSD).
+        #[arg(long)]
+        parallel_parse: bool,
+
+        /// Number of parsing worker threads (only used with --parallel-parse).
+        /// Default: number of CPU cores.
+        #[arg(long)]
+        parse_workers: Option<usize>,
+    },
+
+    /// Benchmark multi-volume indexing using single IOCP (M4 optimization).
+    ///
+    /// Reads MFTs from multiple drives simultaneously using a single I/O
+    /// Completion Port. This allows the OS to optimize I/O scheduling across
+    /// all drives.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft benchmark-multi-volume --drives C,D,S
+    /// uffs_mft benchmark-multi-volume -d C,F
+    /// ```
+    BenchmarkMultiVolume {
+        /// Comma-separated list of drive letters (e.g., C,D,S)
+        #[arg(short, long, value_delimiter = ',')]
+        drives: Vec<char>,
+    },
+
+    /// Query USN Journal information for a drive (M5 optimization).
+    ///
+    /// Shows the USN Journal ID, first/next USN, and other metadata.
+    /// This is useful for checking if incremental updates are possible.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft usn-info --drive C
+    /// ```
+    UsnInfo {
+        /// Drive letter (e.g., C, D, E)
+        #[arg(short, long)]
+        drive: char,
+    },
+
+    /// Read recent USN Journal changes for a drive (M5 optimization).
+    ///
+    /// Reads changes from the USN Journal since a given USN. If no start USN
+    /// is provided, reads from the beginning of the journal.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft usn-read --drive C
+    /// uffs_mft usn-read --drive C --start-usn 12345678
+    /// uffs_mft usn-read --drive C --limit 100
+    /// ```
+    UsnRead {
+        /// Drive letter (e.g., C, D, E)
+        #[arg(short, long)]
+        drive: char,
+
+        /// Starting USN (default: read from journal start)
+        #[arg(long)]
+        start_usn: Option<i64>,
+
+        /// Maximum number of records to display (default: 50)
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+
+    /// Save index to disk for incremental updates (M5 optimization).
+    ///
+    /// Saves the current MFT index to a binary file along with USN Journal
+    /// checkpoint. This allows fast incremental updates later.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft index-save --drive C --output c_index.uffs
+    /// ```
+    IndexSave {
+        /// Drive letter (e.g., C, D, E)
+        #[arg(short, long)]
+        drive: char,
+
+        /// Output file path
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+
+    /// Load index from disk and show info (M5 optimization).
+    ///
+    /// Loads a previously saved index and displays its metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft index-load --input c_index.uffs
+    /// ```
+    IndexLoad {
+        /// Input file path
+        #[arg(short, long)]
+        input: PathBuf,
+    },
+
+    /// Show cache status and manage cached indices (M5 optimization).
+    ///
+    /// Shows the status of cached indices in the system temp directory.
+    /// Use --clean to remove expired caches, --purge to remove all.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft cache-status
+    /// uffs_mft cache-status --clean
+    /// uffs_mft cache-status --purge
+    /// ```
+    CacheStatus {
+        /// Remove expired cache files
+        #[arg(long)]
+        clean: bool,
+
+        /// Remove ALL cache files
+        #[arg(long)]
+        purge: bool,
+    },
+
+    /// Get or refresh a cached index for a drive (M5 optimization).
+    ///
+    /// Loads the cached index if fresh, otherwise rebuilds and caches it.
+    /// Uses the default TTL of 10 minutes.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft cache-get --drive C
+    /// uffs_mft cache-get --drive C --force
+    /// ```
+    CacheGet {
+        /// Drive letter (e.g., C, D, E)
+        #[arg(short, long)]
+        drive: char,
+
+        /// Force rebuild even if cache is fresh
+        #[arg(long)]
+        force: bool,
+
+        /// Custom TTL in seconds (default: 600 = 10 minutes)
+        #[arg(long)]
+        ttl: Option<u64>,
+    },
+
+    /// Clear cached indices (M5 optimization).
+    ///
+    /// Removes cached indices to force a fresh re-read on next access.
+    /// Use --drive to clear a specific drive, or --all to clear everything.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft cache-clear --drive C
+    /// uffs_mft cache-clear --all
+    /// ```
+    CacheClear {
+        /// Drive letter to clear (e.g., C, D, E)
+        #[arg(short, long)]
+        drive: Option<char>,
+
+        /// Clear ALL cached indices
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Incremental index update using USN Journal (M5 optimization).
+    ///
+    /// Loads a cached index and applies USN Journal changes since the last
+    /// checkpoint. Much faster than a full MFT scan for typical workloads.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft index-update --drive C
+    /// uffs_mft index-update --drive C --force-full
+    /// ```
+    IndexUpdate {
+        /// Drive letter (e.g., C, D, E)
+        #[arg(short, long)]
+        drive: char,
+
+        /// Force full MFT scan instead of incremental update
+        #[arg(long)]
+        force_full: bool,
+
+        /// Custom TTL in seconds (default: 600 = 10 minutes)
+        #[arg(long)]
+        ttl: Option<u64>,
     },
 }
 
@@ -622,6 +822,8 @@ async fn run() -> Result<()> {
                 no_placeholders,
                 concurrency,
                 io_size_kb,
+                parallel_parse,
+                parse_workers,
             } => {
                 cmd_benchmark_index_lean(
                     drive,
@@ -630,9 +832,28 @@ async fn run() -> Result<()> {
                     no_placeholders,
                     concurrency,
                     io_size_kb,
+                    parallel_parse,
+                    parse_workers,
                 )
                 .await
             }
+            Commands::BenchmarkMultiVolume { drives } => cmd_benchmark_multi_volume(drives).await,
+            Commands::UsnInfo { drive } => cmd_usn_info(drive).await,
+            Commands::UsnRead {
+                drive,
+                start_usn,
+                limit,
+            } => cmd_usn_read(drive, start_usn, limit).await,
+            Commands::IndexSave { drive, output } => cmd_index_save(drive, &output).await,
+            Commands::IndexLoad { input } => cmd_index_load(&input).await,
+            Commands::CacheStatus { clean, purge } => cmd_cache_status(clean, purge).await,
+            Commands::CacheGet { drive, force, ttl } => cmd_cache_get(drive, force, ttl).await,
+            Commands::CacheClear { drive, all } => cmd_cache_clear(drive, all).await,
+            Commands::IndexUpdate {
+                drive,
+                force_full,
+                ttl,
+            } => cmd_index_update(drive, force_full, ttl).await,
         }
     }
 }
@@ -777,6 +998,7 @@ async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: bool) -> Res
     // Detect drive type for display
     let drive_type = detect_drive_type(drive_upper);
     let drive_type_str = match drive_type {
+        uffs_mft::DriveType::Nvme => "NVMe",
         uffs_mft::DriveType::Ssd => "SSD",
         uffs_mft::DriveType::Hdd => "HDD",
         uffs_mft::DriveType::Unknown => "Unknown",
@@ -1299,6 +1521,7 @@ async fn cmd_drives() -> Result<()> {
             // Detect drive type
             let drive_type = detect_drive_type(*drive);
             let drive_type_str = match drive_type {
+                uffs_mft::DriveType::Nvme => "NVMe",
                 uffs_mft::DriveType::Ssd => "SSD",
                 uffs_mft::DriveType::Hdd => "HDD",
                 uffs_mft::DriveType::Unknown => "???",
@@ -2154,6 +2377,7 @@ async fn cmd_save(
 
     let drive_type = detect_drive_type(drive_upper);
     let drive_type_str = match drive_type {
+        uffs_mft::DriveType::Nvme => "NVMe",
         uffs_mft::DriveType::Ssd => "SSD",
         uffs_mft::DriveType::Hdd => "HDD",
         uffs_mft::DriveType::Unknown => "Unknown",
@@ -2873,6 +3097,8 @@ async fn cmd_benchmark_index_lean(
     no_placeholders: bool,
     concurrency: usize,
     io_size_kb: usize,
+    parallel_parse: bool,
+    parse_workers: Option<usize>,
 ) -> Result<()> {
     use std::time::Instant;
 
@@ -2898,6 +3124,15 @@ async fn cmd_benchmark_index_lean(
     );
     println!("Concurrency: {} I/O ops in flight", concurrency);
     println!("I/O Size: {} KB ({} MB)", io_size_kb, io_size_kb / 1024);
+    println!(
+        "Parallel Parse: {} (workers: {})",
+        if parallel_parse {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        parse_workers.map_or_else(|| "auto".to_string(), |w| w.to_string())
+    );
     println!("This measures the UFFS indexing pipeline with lean MftIndex (no DataFrame overhead)");
     println!();
 
@@ -2934,7 +3169,9 @@ async fn cmd_benchmark_index_lean(
     // - no_placeholders: skip placeholder creation for ~15% speedup
     // - concurrency: number of I/O ops in flight
     // - io_size_kb: I/O chunk size in KB
-    let reader = MftReader::open(drive_upper)
+    // - parallel_parse: enable M3 parallel parsing optimization
+    // - parse_workers: number of parsing worker threads
+    let mut reader = MftReader::open(drive_upper)
         .await
         .with_context(|| format!("Failed to open drive {}:", drive_upper))?
         .with_mode(mode)
@@ -2942,6 +3179,14 @@ async fn cmd_benchmark_index_lean(
         .with_add_placeholders(!no_placeholders)
         .with_concurrency(concurrency)
         .with_io_size(io_size_kb * 1024);
+
+    // Apply parallel parsing settings if specified
+    if parallel_parse {
+        reader = reader.with_parallel_parse(true);
+    }
+    if let Some(workers) = parse_workers {
+        reader = reader.with_parse_workers(Some(workers));
+    }
 
     let index = reader
         .read_all_index()
@@ -3011,6 +3256,820 @@ async fn cmd_benchmark_index_lean(
         "Indexed {} items in {:.3} seconds (lean index, mode: {})",
         total_entries, elapsed_secs, mode
     );
+
+    Ok(())
+}
+
+/// Benchmark multi-volume indexing using single IOCP (M4 optimization).
+#[cfg(windows)]
+async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> {
+    use std::time::Instant;
+
+    use uffs_mft::io::{MultiVolumeIocpReader, prepare_volume_state};
+    use uffs_mft::platform::{MftExtent, VolumeHandle, detect_drive_type};
+
+    if drives.is_empty() {
+        anyhow::bail!("No drives specified. Use --drives C,D,S");
+    }
+
+    let drives: Vec<char> = drives.iter().map(|c| c.to_ascii_uppercase()).collect();
+
+    println!("=== Multi-Volume IOCP Benchmark (M4 Optimization) ===");
+    println!("Drives: {:?}", drives);
+    println!();
+
+    // Prepare volume states
+    let mut volume_states = Vec::new();
+    let start_time = Instant::now();
+
+    for &drive in &drives {
+        println!("📂 Preparing volume {}:...", drive);
+
+        // Open volume handle
+        let handle = match VolumeHandle::open(drive) {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("  ❌ Failed to open {}: {}", drive, e);
+                continue;
+            }
+        };
+
+        let drive_type = detect_drive_type(drive);
+        let record_size = handle.file_record_size();
+        let volume_data = handle.volume_data();
+
+        // Get MFT extents
+        let extents = handle.get_mft_extents().unwrap_or_else(|e| {
+            warn!(error = ?e, "Failed to get MFT extents, using fallback");
+            vec![MftExtent {
+                vcn: 0,
+                cluster_count: volume_data.mft_valid_data_length
+                    / u64::from(volume_data.bytes_per_cluster),
+                lcn: volume_data.mft_start_lcn as i64,
+            }]
+        });
+
+        // Create extent map
+        let extent_map =
+            uffs_mft::io::MftExtentMap::new(extents, volume_data.bytes_per_cluster, record_size);
+
+        // Get bitmap
+        let bitmap = handle.get_mft_bitmap().ok();
+
+        // Open overlapped handle for IOCP
+        let overlapped_handle = match handle.open_overlapped_handle() {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("  ❌ Failed to open overlapped handle for {}: {}", drive, e);
+                continue;
+            }
+        };
+
+        let total_records = extent_map.total_records();
+        let mft_size = total_records * u64::from(record_size);
+
+        println!(
+            "  ✅ {}: {:?}, {} records, {:.1} MB MFT",
+            drive,
+            drive_type,
+            total_records,
+            mft_size as f64 / (1024.0 * 1024.0)
+        );
+
+        let state = prepare_volume_state(drive, overlapped_handle, extent_map, bitmap, drive_type);
+        volume_states.push((state, overlapped_handle));
+    }
+
+    if volume_states.is_empty() {
+        anyhow::bail!("No volumes could be opened");
+    }
+
+    println!();
+    println!("🚀 Starting multi-volume IOCP read...");
+
+    // Extract handles for cleanup and states for the reader
+    let handles: Vec<_> = volume_states.iter().map(|(_, h)| *h).collect();
+    let states: Vec<_> = volume_states.into_iter().map(|(s, _)| s).collect();
+
+    let read_start = Instant::now();
+    let mut reader = MultiVolumeIocpReader::new(states);
+    let indices = reader.read_all_volumes()?;
+    let read_elapsed = read_start.elapsed();
+
+    // Close overlapped handles
+    for handle in handles {
+        #[allow(unsafe_code)]
+        unsafe {
+            windows::Win32::Foundation::CloseHandle(handle).ok();
+        }
+    }
+
+    let total_elapsed = start_time.elapsed();
+
+    // Print results
+    println!();
+    println!("=== Results ===");
+
+    let mut total_records = 0u64;
+    let mut total_files = 0u64;
+    let mut total_dirs = 0u64;
+
+    for (_idx, index) in indices.iter().enumerate() {
+        let files = index.records.iter().filter(|r| !r.is_directory()).count();
+        let dirs = index.records.iter().filter(|r| r.is_directory()).count();
+        total_records += index.len() as u64;
+        total_files += files as u64;
+        total_dirs += dirs as u64;
+
+        println!(
+            "  {}: {} records ({} files, {} dirs)",
+            index.volume,
+            index.len(),
+            files,
+            dirs
+        );
+    }
+
+    println!();
+    println!("=== Timing ===");
+    println!("Read time: {:.3}s", read_elapsed.as_secs_f64());
+    println!("Total time: {:.3}s", total_elapsed.as_secs_f64());
+    println!();
+    println!("=== Summary ===");
+    println!(
+        "Indexed {} records ({} files, {} dirs) from {} volumes in {:.3}s",
+        total_records,
+        total_files,
+        total_dirs,
+        indices.len(),
+        read_elapsed.as_secs_f64()
+    );
+
+    Ok(())
+}
+
+// ============================================================================
+// M5: USN Journal Commands
+// ============================================================================
+
+/// Query USN Journal information for a drive.
+#[cfg(windows)]
+async fn cmd_usn_info(drive: char) -> Result<()> {
+    use uffs_mft::usn::query_usn_journal;
+
+    println!("🔍 Querying USN Journal for {}:...", drive);
+    println!();
+
+    match query_usn_journal(drive) {
+        Ok(info) => {
+            println!("=== USN Journal Info ===");
+            println!("  Journal ID:       0x{:016X}", info.journal_id);
+            println!("  First USN:        {}", info.first_usn);
+            println!("  Next USN:         {}", info.next_usn);
+            println!("  Lowest Valid USN: {}", info.lowest_valid_usn);
+            println!("  Max USN:          {}", info.max_usn);
+            println!(
+                "  Max Size:         {:.1} MB",
+                info.max_size as f64 / (1024.0 * 1024.0)
+            );
+            println!(
+                "  Alloc Delta:      {:.1} MB",
+                info.allocation_delta as f64 / (1024.0 * 1024.0)
+            );
+            println!();
+            println!(
+                "📊 Journal contains ~{} changes",
+                (info.next_usn - info.first_usn) / 64
+            ); // Rough estimate
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to query USN Journal: {}", e);
+            eprintln!();
+            eprintln!("Note: USN Journal may not be enabled on this volume.");
+            eprintln!(
+                "Run as Administrator to enable: fsutil usn createjournal m=1000 a=100 {}:",
+                drive
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Read recent USN Journal changes for a drive.
+#[cfg(windows)]
+async fn cmd_usn_read(drive: char, start_usn: Option<i64>, limit: usize) -> Result<()> {
+    use uffs_mft::usn::{query_usn_journal, read_usn_journal};
+
+    println!("🔍 Reading USN Journal for {}:...", drive);
+    println!();
+
+    // First query the journal to get the ID
+    let info = match query_usn_journal(drive) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("❌ Failed to query USN Journal: {}", e);
+            return Ok(());
+        }
+    };
+
+    let start = start_usn.unwrap_or(info.first_usn);
+    println!(
+        "Reading from USN {} (journal ID: 0x{:016X})",
+        start, info.journal_id
+    );
+    println!();
+
+    match read_usn_journal(drive, info.journal_id, start) {
+        Ok((records, next_usn)) => {
+            println!(
+                "=== USN Records ({} found, showing up to {}) ===",
+                records.len(),
+                limit
+            );
+            println!();
+            println!(
+                "{:<12} {:<12} {:<10} {:<40}",
+                "FRS", "Parent", "Reason", "Filename"
+            );
+            println!("{}", "-".repeat(80));
+
+            for record in records.iter().take(limit) {
+                let reason_str = format_usn_reason(record.reason);
+                println!(
+                    "{:<12} {:<12} {:<10} {}",
+                    record.frs, record.parent_frs, reason_str, record.filename
+                );
+            }
+
+            if records.len() > limit {
+                println!();
+                println!("... and {} more records", records.len() - limit);
+            }
+
+            println!();
+            println!("Next USN: {}", next_usn);
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to read USN Journal: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
+/// Format USN reason flags as a short string.
+#[cfg(windows)]
+fn format_usn_reason(reason: u32) -> String {
+    use uffs_mft::usn::reason;
+
+    let mut parts = Vec::new();
+    if reason & reason::FILE_CREATE != 0 {
+        parts.push("CREATE");
+    }
+    if reason & reason::FILE_DELETE != 0 {
+        parts.push("DELETE");
+    }
+    if reason & reason::RENAME_NEW_NAME != 0 {
+        parts.push("RENAME");
+    }
+    if reason & reason::DATA_EXTEND != 0 || reason & reason::DATA_TRUNCATION != 0 {
+        parts.push("SIZE");
+    }
+    if reason & reason::BASIC_INFO_CHANGE != 0 {
+        parts.push("META");
+    }
+    if reason & reason::CLOSE != 0 {
+        parts.push("CLOSE");
+    }
+
+    if parts.is_empty() {
+        format!("0x{:08X}", reason)
+    } else {
+        parts.join("+")
+    }
+}
+
+/// Save index to disk for incremental updates.
+#[cfg(windows)]
+async fn cmd_index_save(drive: char, output: &Path) -> Result<()> {
+    use std::time::Instant;
+
+    use uffs_mft::usn::query_usn_journal;
+    use uffs_mft::{MftReader, VolumeHandle};
+
+    println!("📦 Building and saving index for {}:...", drive);
+    println!();
+
+    let start = Instant::now();
+
+    // Build the index
+    let reader = MftReader::open(drive).await?;
+    let index = reader.read_all_index().await?;
+
+    let build_time = start.elapsed();
+    println!(
+        "✅ Built index: {} records in {:.3}s",
+        index.len(),
+        build_time.as_secs_f64()
+    );
+
+    // Get volume serial and USN info
+    let handle = VolumeHandle::open(drive)?;
+    let volume_data = handle.volume_data();
+    let volume_serial = volume_data.volume_serial_number;
+
+    let (usn_journal_id, next_usn) = match query_usn_journal(drive) {
+        Ok(info) => (info.journal_id, info.next_usn),
+        Err(_) => {
+            println!("⚠️  USN Journal not available, saving without checkpoint");
+            (0, 0)
+        }
+    };
+
+    // Save to file
+    let save_start = Instant::now();
+    index.save_to_file(output, volume_serial, usn_journal_id, next_usn)?;
+    let save_time = save_start.elapsed();
+
+    let file_size = std::fs::metadata(output)?.len();
+    println!(
+        "✅ Saved to {}: {:.1} MB in {:.3}s",
+        output.display(),
+        file_size as f64 / (1024.0 * 1024.0),
+        save_time.as_secs_f64()
+    );
+
+    if usn_journal_id != 0 {
+        println!();
+        println!(
+            "📍 USN Checkpoint: {} (Journal ID: 0x{:016X})",
+            next_usn, usn_journal_id
+        );
+        println!("   Use this to apply incremental updates later.");
+    }
+
+    Ok(())
+}
+
+/// Load index from disk and show info.
+#[cfg(windows)]
+async fn cmd_index_load(input: &Path) -> Result<()> {
+    use std::time::Instant;
+
+    use uffs_mft::index::MftIndex;
+
+    println!("📂 Loading index from {}...", input.display());
+    println!();
+
+    let start = Instant::now();
+    let (index, header) = MftIndex::load_from_file(input)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let load_time = start.elapsed();
+
+    let file_size = std::fs::metadata(input)?.len();
+
+    println!("=== Index Header ===");
+    println!("  Volume:           {}:", header.volume);
+    println!("  Volume Serial:    0x{:016X}", header.volume_serial);
+    println!("  USN Journal ID:   0x{:016X}", header.usn_journal_id);
+    println!("  Next USN:         {}", header.next_usn);
+    println!("  Created At:       {} (FILETIME)", header.created_at);
+    println!();
+    println!("=== Index Stats ===");
+    println!("  Records:          {}", header.record_count);
+    println!("  Names Size:       {} bytes", header.names_size);
+    println!("  Links:            {}", header.links_count);
+    println!("  Streams:          {}", header.streams_count);
+    println!("  Children:         {}", header.children_count);
+    println!();
+    println!("=== Performance ===");
+    println!(
+        "  File Size:        {:.1} MB",
+        file_size as f64 / (1024.0 * 1024.0)
+    );
+    println!("  Load Time:        {:.3}s", load_time.as_secs_f64());
+    println!(
+        "  Throughput:       {:.1} MB/s",
+        (file_size as f64 / (1024.0 * 1024.0)) / load_time.as_secs_f64()
+    );
+
+    // Count files vs directories
+    let files = index.records.iter().filter(|r| !r.is_directory()).count();
+    let dirs = index.records.iter().filter(|r| r.is_directory()).count();
+    println!();
+    println!("=== Content ===");
+    println!("  Files:            {}", files);
+    println!("  Directories:      {}", dirs);
+
+    Ok(())
+}
+
+/// Show cache status and optionally clean up.
+#[cfg(windows)]
+async fn cmd_cache_status(clean: bool, purge: bool) -> Result<()> {
+    use uffs_mft::cache::{
+        INDEX_TTL_SECONDS, cache_age_seconds, cache_dir, cleanup_expired_cache, list_cached_drives,
+        remove_all_cached_indices,
+    };
+
+    let dir = cache_dir();
+    println!("📁 Cache Directory: {}", dir.display());
+    println!(
+        "⏱️  TTL: {} seconds ({} minutes)",
+        INDEX_TTL_SECONDS,
+        INDEX_TTL_SECONDS / 60
+    );
+    println!();
+
+    if purge {
+        println!("🗑️  Purging ALL cached indices...");
+        remove_all_cached_indices();
+        println!("✅ Cache purged.");
+        return Ok(());
+    }
+
+    if clean {
+        println!("🧹 Cleaning expired caches...");
+        cleanup_expired_cache(INDEX_TTL_SECONDS);
+        println!("✅ Cleanup complete.");
+        println!();
+    }
+
+    let drives = list_cached_drives();
+    if drives.is_empty() {
+        println!("📭 No cached indices found.");
+        return Ok(());
+    }
+
+    println!("=== Cached Indices ===");
+    println!("{:<8} {:<12} {:<10}", "Drive", "Age", "Status");
+    println!("{}", "-".repeat(32));
+
+    for drive in &drives {
+        let age = cache_age_seconds(*drive);
+        let (age_str, status) = match age {
+            Some(secs) if secs < INDEX_TTL_SECONDS => {
+                let remaining = INDEX_TTL_SECONDS - secs;
+                (
+                    format!("{}s", secs),
+                    format!("✅ Fresh ({}s left)", remaining),
+                )
+            }
+            Some(secs) => (format!("{}s", secs), "⚠️  Expired".to_string()),
+            None => ("?".to_string(), "❓ Unknown".to_string()),
+        };
+        println!("{:<8} {:<12} {}", format!("{}:", drive), age_str, status);
+    }
+
+    Ok(())
+}
+
+/// Get or refresh a cached index for a drive.
+#[cfg(windows)]
+async fn cmd_cache_get(drive: char, force: bool, ttl: Option<u64>) -> Result<()> {
+    use std::time::Instant;
+
+    use uffs_mft::cache::{CacheStatus, INDEX_TTL_SECONDS, check_cache_status, save_to_cache};
+    use uffs_mft::usn::query_usn_journal;
+    use uffs_mft::{MftReader, VolumeHandle};
+
+    let ttl_seconds = ttl.unwrap_or(INDEX_TTL_SECONDS);
+    println!("🔍 Checking cache for {}:...", drive);
+    println!("⏱️  TTL: {} seconds", ttl_seconds);
+    println!();
+
+    // Check cache status (unless force rebuild)
+    if !force {
+        match check_cache_status(drive, ttl_seconds) {
+            CacheStatus::Fresh {
+                index,
+                header,
+                age_seconds,
+            } => {
+                println!("✅ Cache HIT! Index is fresh ({} seconds old)", age_seconds);
+                println!();
+                println!("=== Cached Index ===");
+                println!("  Records:     {}", index.len());
+                println!("  USN:         {}", header.next_usn);
+                println!("  Journal ID:  0x{:016X}", header.usn_journal_id);
+
+                let files = index.records.iter().filter(|r| !r.is_directory()).count();
+                let dirs = index.records.iter().filter(|r| r.is_directory()).count();
+                println!("  Files:       {}", files);
+                println!("  Directories: {}", dirs);
+                return Ok(());
+            }
+            CacheStatus::Stale { age_seconds } => {
+                println!(
+                    "⚠️  Cache STALE (age: {}s, TTL: {}s)",
+                    age_seconds.map_or("?".to_string(), |a| a.to_string()),
+                    ttl_seconds
+                );
+            }
+            CacheStatus::Missing => {
+                println!("📭 Cache MISS - no cached index found");
+            }
+        }
+    } else {
+        println!("🔄 Force rebuild requested");
+    }
+
+    println!();
+    println!("🔨 Building fresh index...");
+
+    let start = Instant::now();
+    let reader = MftReader::open(drive).await?;
+    let index = reader.read_all_index().await?;
+    let build_time = start.elapsed();
+
+    println!(
+        "✅ Built index: {} records in {:.3}s",
+        index.len(),
+        build_time.as_secs_f64()
+    );
+
+    // Get volume info for caching
+    let handle = VolumeHandle::open(drive)?;
+    let volume_data = handle.volume_data();
+    let volume_serial = volume_data.volume_serial_number;
+
+    let (usn_journal_id, next_usn) = match query_usn_journal(drive) {
+        Ok(info) => (info.journal_id, info.next_usn),
+        Err(_) => {
+            println!("⚠️  USN Journal not available");
+            (0, 0)
+        }
+    };
+
+    // Save to cache
+    let cache_path = save_to_cache(&index, drive, volume_serial, usn_journal_id, next_usn)?;
+    let file_size = std::fs::metadata(&cache_path)?.len();
+
+    println!(
+        "💾 Cached to: {} ({:.1} MB)",
+        cache_path.display(),
+        file_size as f64 / (1024.0 * 1024.0)
+    );
+
+    if usn_journal_id != 0 {
+        println!(
+            "📍 USN Checkpoint: {} (Journal ID: 0x{:016X})",
+            next_usn, usn_journal_id
+        );
+    }
+
+    Ok(())
+}
+
+/// Clear cached indices.
+#[cfg(windows)]
+async fn cmd_cache_clear(drive: Option<char>, all: bool) -> Result<()> {
+    use uffs_mft::cache::{
+        cache_dir, cache_file_path, list_cached_drives, remove_all_cached_indices,
+        remove_cached_index,
+    };
+
+    if all {
+        println!("🗑️  Clearing ALL cached indices...");
+        let drives = list_cached_drives();
+        remove_all_cached_indices();
+        if drives.is_empty() {
+            println!("📭 No cached indices found.");
+        } else {
+            println!("✅ Cleared {} cached indices: {:?}", drives.len(), drives);
+        }
+        println!("📁 Cache directory: {}", cache_dir().display());
+    } else if let Some(d) = drive {
+        let path = cache_file_path(d);
+        if path.exists() {
+            remove_cached_index(d);
+            println!("✅ Cleared cache for {}:", d);
+            println!("   {}", path.display());
+        } else {
+            println!("📭 No cached index found for {}:", d);
+        }
+    } else {
+        println!("❌ Please specify --drive C or --all");
+        println!();
+        println!("Examples:");
+        println!("  uffs_mft cache-clear --drive C");
+        println!("  uffs_mft cache-clear --all");
+    }
+
+    Ok(())
+}
+
+/// Incremental index update using USN Journal.
+#[cfg(windows)]
+async fn cmd_index_update(drive: char, force_full: bool, ttl: Option<u64>) -> Result<()> {
+    use std::time::Instant;
+
+    use uffs_mft::cache::{CacheStatus, INDEX_TTL_SECONDS, check_cache_status, save_to_cache};
+    use uffs_mft::usn::{aggregate_changes, query_usn_journal, read_usn_journal};
+    use uffs_mft::{MftReader, VolumeHandle};
+
+    let ttl_seconds = ttl.unwrap_or(INDEX_TTL_SECONDS);
+    let start = Instant::now();
+
+    println!("🔄 Incremental index update for {}:...", drive);
+    println!();
+
+    // If force_full, skip cache and do full scan
+    if force_full {
+        println!("🔨 Force full scan requested...");
+        return do_full_index_build(drive).await;
+    }
+
+    // Check cache status
+    let cache_result = check_cache_status(drive, ttl_seconds);
+
+    match cache_result {
+        CacheStatus::Fresh {
+            index,
+            header,
+            age_seconds,
+        } => {
+            println!("📦 Found cached index ({} seconds old)", age_seconds);
+            println!(
+                "   Records: {}, USN checkpoint: {}",
+                index.len(),
+                header.next_usn
+            );
+            println!();
+
+            // Query current USN Journal
+            let current_info = match query_usn_journal(drive) {
+                Ok(info) => info,
+                Err(e) => {
+                    println!("⚠️  USN Journal not available: {}", e);
+                    println!("   Falling back to full scan...");
+                    return do_full_index_build(drive).await;
+                }
+            };
+
+            // Check if journal ID matches (journal may have been recreated)
+            if current_info.journal_id != header.usn_journal_id {
+                println!(
+                    "⚠️  USN Journal ID changed (was 0x{:016X}, now 0x{:016X})",
+                    header.usn_journal_id, current_info.journal_id
+                );
+                println!("   Falling back to full scan...");
+                return do_full_index_build(drive).await;
+            }
+
+            // Check if our checkpoint is still valid
+            if header.next_usn < current_info.first_usn {
+                println!(
+                    "⚠️  USN Journal wrapped (checkpoint {} < first {})",
+                    header.next_usn, current_info.first_usn
+                );
+                println!("   Falling back to full scan...");
+                return do_full_index_build(drive).await;
+            }
+
+            // Read changes since our checkpoint
+            println!("📖 Reading USN changes since {}...", header.next_usn);
+            let (records, next_usn) =
+                match read_usn_journal(drive, current_info.journal_id, header.next_usn) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("⚠️  Failed to read USN Journal: {}", e);
+                        println!("   Falling back to full scan...");
+                        return do_full_index_build(drive).await;
+                    }
+                };
+
+            if records.is_empty() {
+                println!("✅ No changes since last update!");
+                println!("   Index is up-to-date ({} records)", index.len());
+                let elapsed = start.elapsed();
+                println!();
+                println!("⏱️  Completed in {:.3}s", elapsed.as_secs_f64());
+                return Ok(());
+            }
+
+            // Aggregate changes by FRS
+            let changes_map = aggregate_changes(&records);
+            let changes: Vec<_> = changes_map.into_values().collect();
+            println!(
+                "   Found {} USN records → {} unique file changes",
+                records.len(),
+                changes.len()
+            );
+
+            // Apply changes to index
+            println!();
+            println!("🔧 Applying {} changes to index...", changes.len());
+
+            let mut updated_index = index;
+            let apply_start = Instant::now();
+            let stats = updated_index.apply_usn_changes(&changes);
+            let apply_time = apply_start.elapsed();
+
+            println!(
+                "   Created: {}, Deleted: {}, Modified: {}, Skipped: {}",
+                stats.created, stats.deleted, stats.modified, stats.skipped
+            );
+            println!("   Applied in {:.3}s", apply_time.as_secs_f64());
+
+            // Save updated index
+            let handle = VolumeHandle::open(drive)?;
+            let volume_data = handle.volume_data();
+            let volume_serial = volume_data.volume_serial_number;
+
+            let cache_path = save_to_cache(
+                &updated_index,
+                drive,
+                volume_serial,
+                current_info.journal_id,
+                next_usn,
+            )?;
+
+            let elapsed = start.elapsed();
+            println!();
+            println!("✅ Incremental update complete!");
+            println!("   Records: {}", updated_index.len());
+            println!("   New USN checkpoint: {}", next_usn);
+            println!("   Saved to: {}", cache_path.display());
+            println!("⏱️  Total time: {:.3}s", elapsed.as_secs_f64());
+        }
+        CacheStatus::Stale { age_seconds } => {
+            println!(
+                "⚠️  Cache is stale (age: {}s, TTL: {}s)",
+                age_seconds.map_or("?".to_string(), |a| a.to_string()),
+                ttl_seconds
+            );
+            println!("   Performing full scan...");
+            return do_full_index_build(drive).await;
+        }
+        CacheStatus::Missing => {
+            println!("📭 No cached index found");
+            println!("   Performing initial full scan...");
+            return do_full_index_build(drive).await;
+        }
+    }
+
+    Ok(())
+}
+
+/// Helper function to do a full index build and cache it.
+#[cfg(windows)]
+async fn do_full_index_build(drive: char) -> Result<()> {
+    use std::time::Instant;
+
+    use uffs_mft::cache::save_to_cache;
+    use uffs_mft::usn::query_usn_journal;
+    use uffs_mft::{MftReader, VolumeHandle};
+
+    let start = Instant::now();
+
+    println!();
+    println!("🔨 Building full index for {}:...", drive);
+
+    let reader = MftReader::open(drive).await?;
+    let index = reader.read_all_index().await?;
+    let build_time = start.elapsed();
+
+    println!(
+        "✅ Built index: {} records in {:.3}s",
+        index.len(),
+        build_time.as_secs_f64()
+    );
+
+    // Get volume info
+    let handle = VolumeHandle::open(drive)?;
+    let volume_data = handle.volume_data();
+    let volume_serial = volume_data.volume_serial_number;
+
+    let (usn_journal_id, next_usn) = match query_usn_journal(drive) {
+        Ok(info) => (info.journal_id, info.next_usn),
+        Err(_) => {
+            println!("⚠️  USN Journal not available");
+            (0, 0)
+        }
+    };
+
+    // Save to cache
+    let cache_path = save_to_cache(&index, drive, volume_serial, usn_journal_id, next_usn)?;
+    let file_size = std::fs::metadata(&cache_path)?.len();
+
+    println!(
+        "💾 Cached to: {} ({:.1} MB)",
+        cache_path.display(),
+        file_size as f64 / (1024.0 * 1024.0)
+    );
+
+    if usn_journal_id != 0 {
+        println!(
+            "📍 USN Checkpoint: {} (Journal ID: 0x{:016X})",
+            next_usn, usn_journal_id
+        );
+    }
+
+    let total_time = start.elapsed();
+    println!();
+    println!("⏱️  Total time: {:.3}s", total_time.as_secs_f64());
 
     Ok(())
 }

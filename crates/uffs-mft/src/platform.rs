@@ -1295,13 +1295,15 @@ fn is_ntfs_volume(drive_letter: char) -> bool {
 }
 
 // ============================================================================
-// Drive Type Detection (SSD vs HDD)
+// Drive Type Detection (SSD vs HDD vs NVMe)
 // ============================================================================
 
 /// Represents the type of storage device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DriveType {
-    /// Solid State Drive (no seek time, high IOPS).
+    /// NVMe Solid State Drive (PCIe, extremely high IOPS, 64K+ queue depth).
+    Nvme,
+    /// SATA Solid State Drive (no seek time, high IOPS, 32 queue depth).
     Ssd,
     /// Hard Disk Drive (rotational, seek time matters).
     Hdd,
@@ -1312,7 +1314,8 @@ pub enum DriveType {
 impl DriveType {
     /// Returns the optimal chunk size for this drive type.
     ///
-    /// - SSD: 1 MB (high IOPS, large sequential reads are efficient)
+    /// - NVMe: 4 MB (high bandwidth, large sequential reads are efficient)
+    /// - SSD: 2 MB (SATA bandwidth, moderate chunk size)
     /// - HDD: 1 MB (matches C++ actual behavior - profiler shows 1024KB reads)
     /// - Unknown: 1 MB (conservative default)
     ///
@@ -1323,30 +1326,93 @@ impl DriveType {
     #[must_use]
     pub const fn optimal_chunk_size(&self) -> usize {
         match self {
-            Self::Ssd => 1024 * 1024,     // 1 MB - matches C++ profiler data
-            Self::Hdd => 1024 * 1024,     // 1 MB - C++ profiler shows 1024KB reads
-            Self::Unknown => 1024 * 1024, // 1 MB default
+            Self::Nvme => 4 * 1024 * 1024, // 4 MB - NVMe can handle large chunks
+            Self::Ssd => 2 * 1024 * 1024,  // 2 MB - SATA SSD
+            Self::Hdd => 1024 * 1024,      // 1 MB - C++ profiler shows 1024KB reads
+            Self::Unknown => 1024 * 1024,  // 1 MB default
         }
     }
 
     /// Returns the optimal number of prefetch buffers.
     ///
+    /// - NVMe: 8 buffers (massive parallelism)
     /// - SSD: 4 buffers (can handle high parallelism)
     /// - HDD: 2 buffers (double-buffering is sufficient)
     #[must_use]
     pub const fn prefetch_buffers(&self) -> usize {
         match self {
+            Self::Nvme => 8,
             Self::Ssd => 4,
             Self::Hdd => 2,
             Self::Unknown => 2,
         }
     }
+
+    /// Returns the optimal I/O concurrency (queue depth) for this drive type.
+    ///
+    /// This is the number of async I/O operations to keep in flight
+    /// simultaneously. Higher values hide latency but use more memory.
+    ///
+    /// - NVMe: 32 (can handle 64K+ queue depth, but 32 is practical)
+    /// - SSD: 8 (SATA NCQ supports 32, but 8 is sufficient)
+    /// - HDD: 2 (more causes seeks and hurts performance)
+    /// - Unknown: 4 (conservative default)
+    ///
+    /// Based on benchmarks (2026-01-24):
+    /// - HDD S: 40.3s @ 285 MB/s with concurrency=2,4,32,64 (no difference -
+    ///   I/O bound)
+    /// - NVMe C: 2.16s @ 2109 MB/s with concurrency=32-64 (28% faster than C++)
+    /// - NVMe F: 1.34s @ 3384 MB/s with concurrency=64 (13% faster than C++)
+    #[must_use]
+    pub const fn optimal_concurrency(&self) -> usize {
+        match self {
+            Self::Nvme => 32,   // NVMe can handle 64K+ queue depth
+            Self::Ssd => 8,     // SATA NCQ supports 32
+            Self::Hdd => 2,     // Sequential, avoid seeks
+            Self::Unknown => 4, // Conservative default
+        }
+    }
+
+    /// Returns the optimal I/O chunk size for this drive type.
+    ///
+    /// This is the size of each async read operation. Larger chunks reduce
+    /// syscall overhead but increase latency per completion.
+    ///
+    /// - NVMe: 4 MB (high bandwidth, amortize syscall cost)
+    /// - SSD: 2 MB (SATA bandwidth)
+    /// - HDD: 1 MB (matches C++ behavior)
+    /// - Unknown: 1 MB (conservative default)
+    ///
+    /// Based on benchmarks (2026-01-24):
+    /// - 4 MB is optimal for NVMe (16 MB shows slight regression)
+    /// - 1-2 MB is optimal for HDD (no difference observed)
+    #[must_use]
+    pub const fn optimal_io_size(&self) -> usize {
+        self.optimal_chunk_size() // Same as chunk size
+    }
+
+    /// Returns true if this is a high-performance drive (SSD or NVMe).
+    #[must_use]
+    pub const fn is_high_performance(&self) -> bool {
+        matches!(self, Self::Nvme | Self::Ssd)
+    }
+
+    /// Returns true if this drive benefits from parallel parsing.
+    ///
+    /// NVMe drives can read faster than single-threaded parsing can process,
+    /// so parallel parsing is beneficial. HDDs are I/O bound, so parallel
+    /// parsing doesn't help.
+    #[must_use]
+    pub const fn benefits_from_parallel_parsing(&self) -> bool {
+        matches!(self, Self::Nvme)
+    }
 }
 
-/// Detects whether a drive is SSD or HDD.
+/// Detects whether a drive is NVMe, SSD, or HDD.
 ///
-/// Uses `IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceSeekPenaltyProperty`
-/// to determine if the drive has seek penalty (HDD) or not (SSD).
+/// Uses `IOCTL_STORAGE_QUERY_PROPERTY` with:
+/// - `StorageAdapterProperty` to detect NVMe bus type
+/// - `StorageDeviceSeekPenaltyProperty` to distinguish SSD from HDD
 ///
 /// # Arguments
 ///
@@ -1366,11 +1432,15 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
     // IOCTL_STORAGE_QUERY_PROPERTY = 0x002D1400
     const IOCTL_STORAGE_QUERY_PROPERTY: u32 = 0x002D_1400;
 
-    // PropertyId for seek penalty
+    // PropertyId values
+    const STORAGE_DEVICE_PROPERTY: u32 = 0; // StorageDeviceProperty
     const STORAGE_DEVICE_SEEK_PENALTY_PROPERTY: u32 = 7;
 
     // QueryType: PropertyStandardQuery = 0
     const PROPERTY_STANDARD_QUERY: u32 = 0;
+
+    // Bus types (from STORAGE_BUS_TYPE enum)
+    const BUS_TYPE_NVME: u32 = 17; // BusTypeNvme
 
     // STORAGE_PROPERTY_QUERY structure
     #[repr(C)]
@@ -1378,6 +1448,24 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
         property_id: u32,
         query_type: u32,
         additional_parameters: [u8; 1],
+    }
+
+    // STORAGE_DEVICE_DESCRIPTOR structure (partial - we only need bus_type)
+    #[repr(C)]
+    struct StorageDeviceDescriptor {
+        version: u32,
+        size: u32,
+        device_type: u8,
+        device_type_modifier: u8,
+        removable_media: u8,
+        command_queueing: u8,
+        vendor_id_offset: u32,
+        product_id_offset: u32,
+        product_revision_offset: u32,
+        serial_number_offset: u32,
+        bus_type: u32, // STORAGE_BUS_TYPE
+        raw_properties_length: u32,
+        raw_device_properties: [u8; 1],
     }
 
     // DEVICE_SEEK_PENALTY_DESCRIPTOR structure
@@ -1411,7 +1499,46 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
         Err(_) => return DriveType::Unknown,
     };
 
-    // Prepare query
+    // First, check if it's NVMe by querying the bus type
+    let is_nvme = {
+        let query = StoragePropertyQuery {
+            property_id: STORAGE_DEVICE_PROPERTY,
+            query_type: PROPERTY_STANDARD_QUERY,
+            additional_parameters: [0],
+        };
+
+        // Allocate a buffer large enough for the descriptor
+        let mut buffer = [0u8; 1024];
+        let mut bytes_returned: u32 = 0;
+
+        let result = unsafe {
+            DeviceIoControl(
+                handle,
+                IOCTL_STORAGE_QUERY_PROPERTY,
+                Some(&query as *const _ as *const std::ffi::c_void),
+                size_of::<StoragePropertyQuery>() as u32,
+                Some(buffer.as_mut_ptr() as *mut std::ffi::c_void),
+                buffer.len() as u32,
+                Some(&mut bytes_returned),
+                None,
+            )
+        };
+
+        if result.is_ok() && bytes_returned >= size_of::<StorageDeviceDescriptor>() as u32 {
+            let descriptor = unsafe { &*(buffer.as_ptr() as *const StorageDeviceDescriptor) };
+            descriptor.bus_type == BUS_TYPE_NVME
+        } else {
+            false
+        }
+    };
+
+    // If it's NVMe, we're done
+    if is_nvme {
+        let _ = unsafe { CloseHandle(handle) };
+        return DriveType::Nvme;
+    }
+
+    // Otherwise, check seek penalty to distinguish SSD from HDD
     let query = StoragePropertyQuery {
         property_id: STORAGE_DEVICE_SEEK_PENALTY_PROPERTY,
         query_type: PROPERTY_STANDARD_QUERY,

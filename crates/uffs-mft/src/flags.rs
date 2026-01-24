@@ -49,6 +49,9 @@ bitflags! {
         const NOT_INDEXED = 0x2000;
         /// File is encrypted.
         const ENCRYPTED   = 0x4000;
+        /// File was deleted (UFFS internal flag for USN tracking).
+        /// This uses bit 15 which is reserved in NTFS.
+        const DELETED     = 0x8000;
     }
 }
 

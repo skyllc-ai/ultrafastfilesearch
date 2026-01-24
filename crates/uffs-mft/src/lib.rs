@@ -96,18 +96,29 @@ pub mod io;
 #[cfg(windows)]
 pub mod platform;
 
+pub mod usn;
+
+pub mod cache;
+
 mod reader;
 
 // ============================================================================
 // Public API re-exports
 // ============================================================================
 
+// Re-export cache types
+pub use cache::{
+    CacheStatus, INDEX_TTL_SECONDS, MultiDriveCacheStatus, cache_age_seconds, cache_dir,
+    cache_file_path, check_cache_status, check_multi_drive_cache, cleanup_expired_cache,
+    is_cache_fresh, load_cached_index, remove_all_cached_indices, remove_cached_index,
+    save_to_cache,
+};
 pub use error::{MftError, Result};
 pub use flags::FileFlags;
 // Re-export lean index types
 pub use index::{
     ChildInfo, FileRecord, IndexNameRef, IndexStreamInfo, LinkInfo, MftIndex, NO_ENTRY, ROOT_FRS,
-    SizeInfo, StandardInfo,
+    SizeInfo, StandardInfo, UsnApplyStats,
 };
 // Re-export I/O types for advanced usage
 #[cfg(windows)]
@@ -144,3 +155,8 @@ pub use reader::{
 };
 // Re-export Polars types for convenience
 pub use uffs_polars::{DataFrame, IntoLazy, LazyFrame, col, lit};
+// Re-export USN Journal types
+pub use usn::{
+    ChangeType, FileChange, UsnJournalInfo, UsnRecord, aggregate_changes, query_usn_journal,
+    read_usn_journal, reason,
+};

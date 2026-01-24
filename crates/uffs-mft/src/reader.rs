@@ -445,6 +445,21 @@ pub struct MftReader {
     /// - Default: 1MB (1024 * 1024)
     /// - Larger chunks (2-4MB) reduce syscall overhead but increase latency
     io_size: Option<usize>,
+    /// Whether to use parallel parsing (M3 optimization).
+    ///
+    /// - `None` (default): Auto-detect based on drive type (enabled for `NVMe`)
+    /// - `Some(true)`: Force parallel parsing
+    /// - `Some(false)`: Force inline parsing
+    ///
+    /// Parallel parsing uses worker threads to parse MFT records in parallel
+    /// with I/O. This is beneficial for `NVMe` drives where I/O is faster than
+    /// parsing.
+    parallel_parse: Option<bool>,
+    /// Number of parsing worker threads (only used with parallel parsing).
+    ///
+    /// - `None` (default): Use number of CPU cores
+    /// - `Some(n)`: Use exactly n worker threads
+    parse_workers: Option<usize>,
 }
 
 impl MftReader {
@@ -486,6 +501,8 @@ impl MftReader {
             add_placeholders: true, // Add placeholders by default for path resolution
             concurrency: None,      // Use default (2 for HDD)
             io_size: None,          // Use default (1MB)
+            parallel_parse: None,   // Auto-detect based on drive type
+            parse_workers: None,    // Use num_cpus
         })
     }
 
@@ -667,6 +684,47 @@ impl MftReader {
     #[must_use]
     pub const fn io_size(&self) -> Option<usize> {
         self.io_size
+    }
+
+    /// Sets whether to use parallel parsing (M3 optimization).
+    ///
+    /// Parallel parsing uses worker threads to parse MFT records in parallel
+    /// with I/O. This is beneficial for `NVMe` drives where I/O is faster than
+    /// parsing.
+    ///
+    /// # Arguments
+    ///
+    /// * `parallel` - If `true`, use parallel parsing. If `false`, use inline
+    ///   parsing.
+    #[must_use]
+    pub const fn with_parallel_parse(mut self, parallel: bool) -> Self {
+        self.parallel_parse = Some(parallel);
+        self
+    }
+
+    /// Returns whether parallel parsing is enabled.
+    #[must_use]
+    pub const fn parallel_parse(&self) -> Option<bool> {
+        self.parallel_parse
+    }
+
+    /// Sets the number of parsing worker threads.
+    ///
+    /// Only used when parallel parsing is enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `workers` - Number of worker threads (None = use `num_cpus`)
+    #[must_use]
+    pub const fn with_parse_workers(mut self, workers: Option<usize>) -> Self {
+        self.parse_workers = workers;
+        self
+    }
+
+    /// Returns the configured number of parse workers.
+    #[must_use]
+    pub const fn parse_workers(&self) -> Option<usize> {
+        self.parse_workers
     }
 
     /// Read the entire MFT and return as a `DataFrame`.
@@ -931,8 +989,10 @@ impl MftReader {
             MftReadMode::Auto => {
                 // Auto-select based on drive type
                 // HDD uses Bulk (C++ style: read all, then parse)
-                // SSD uses Parallel (read chunks, parse in parallel)
+                // SSD/NVMe uses Parallel (read chunks, parse in parallel)
                 match drive_type {
+                    crate::platform::DriveType::Nvme => MftReadMode::Parallel, // NVMe: high
+                    // parallelism
                     crate::platform::DriveType::Ssd => MftReadMode::Parallel,
                     crate::platform::DriveType::Hdd => MftReadMode::Bulk, // C++ style: read
                     // all, then parse
@@ -1673,6 +1733,8 @@ impl MftReader {
         // OS can optimize continuous sequential reads better.
         let effective_mode = match self.mode {
             MftReadMode::Auto => match drive_type {
+                crate::platform::DriveType::Nvme => MftReadMode::Parallel, // NVMe: high
+                // parallelism
                 crate::platform::DriveType::Ssd => MftReadMode::Parallel,
                 crate::platform::DriveType::Hdd => MftReadMode::Bulk, // C++ style: read all,
                 // then parse
@@ -1934,13 +1996,31 @@ impl MftReader {
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
-                let result = parallel_reader.read_all_sliding_window_iocp_to_index::<fn(u64, u64)>(
-                    overlapped_handle,
-                    self.volume,
-                    self.concurrency,
-                    self.io_size,
-                    None,
-                );
+                // Determine if we should use parallel parsing (M3 optimization)
+                let use_parallel = self.parallel_parse.unwrap_or_else(|| {
+                    // Auto-detect: enable for NVMe where I/O is faster than parsing
+                    drive_type.benefits_from_parallel_parsing()
+                });
+
+                let result = if use_parallel {
+                    info!("🚀 Using PARALLEL parsing (M3 optimization)");
+                    parallel_reader.read_all_sliding_window_iocp_to_index_parallel::<fn(u64, u64)>(
+                        overlapped_handle,
+                        self.volume,
+                        self.concurrency,
+                        self.io_size,
+                        self.parse_workers,
+                        None,
+                    )
+                } else {
+                    parallel_reader.read_all_sliding_window_iocp_to_index::<fn(u64, u64)>(
+                        overlapped_handle,
+                        self.volume,
+                        self.concurrency,
+                        self.io_size,
+                        None,
+                    )
+                };
 
                 // Close the overlapped handle
                 #[allow(unsafe_code)]
@@ -2137,6 +2217,13 @@ impl MftReader {
         // ParallelMftReader. Estimate: ~70% read, ~30% parse on HDD; ~30% read,
         // ~70% parse on SSD
         let (read_ms, parse_ms, merge_ms) = match drive_type {
+            crate::platform::DriveType::Nvme => {
+                // NVMe: I/O is extremely fast, parsing dominates
+                let read_est = read_parse_ms * 20 / 100;
+                let parse_est = read_parse_ms * 60 / 100;
+                let merge_est = read_parse_ms * 20 / 100;
+                (read_est, parse_est, merge_est)
+            }
             crate::platform::DriveType::Ssd => {
                 // SSD: I/O is fast, parsing dominates
                 let read_est = read_parse_ms * 30 / 100;
@@ -2736,8 +2823,9 @@ impl MftReader {
         // Use larger chunks (4-8 MB) for streaming to reduce syscall overhead
         let drive_type = detect_drive_type(self.volume);
         let chunk_size = match drive_type {
-            crate::platform::DriveType::Ssd => 8 * 1024 * 1024, // 8 MB for SSD
-            crate::platform::DriveType::Hdd => 4 * 1024 * 1024, // 4 MB for HDD
+            crate::platform::DriveType::Nvme => 8 * 1024 * 1024, // 8 MB for NVMe
+            crate::platform::DriveType::Ssd => 8 * 1024 * 1024,  // 8 MB for SSD
+            crate::platform::DriveType::Hdd => 4 * 1024 * 1024,  // 4 MB for HDD
             crate::platform::DriveType::Unknown => 4 * 1024 * 1024,
         };
 

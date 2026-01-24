@@ -939,4 +939,830 @@ impl MftIndex {
 
         index
     }
+
+    /// Merge multiple index fragments into this index.
+    ///
+    /// This is used for parallel parsing where each worker builds a local
+    /// fragment, then all fragments are merged into the final index.
+    ///
+    /// # Performance
+    ///
+    /// O(n) merge - each fragment is processed once. The merge handles:
+    /// - Deduplication of records (same FRS from different fragments)
+    /// - Name buffer concatenation with offset adjustment
+    /// - Link/stream/child list merging
+    pub fn merge_fragments(&mut self, fragments: Vec<MftIndexFragment>) {
+        use tracing::debug;
+
+        let total_records: usize = fragments.iter().map(|f| f.records.len()).sum();
+        let total_names: usize = fragments.iter().map(|f| f.names.len()).sum();
+
+        debug!(
+            fragments = fragments.len(),
+            total_records, total_names, "🔀 Merging index fragments"
+        );
+
+        // Reserve capacity
+        self.records.reserve(total_records);
+        self.names.reserve(total_names);
+
+        for fragment in fragments {
+            let name_offset_adjustment = self.names.len() as u32;
+
+            // Append names buffer
+            self.names.push_str(&fragment.names);
+
+            // Merge records
+            for mut record in fragment.records {
+                let frs = record.frs;
+                let frs_usize = frs as usize;
+
+                // Adjust name offsets
+                if record.first_name.name.is_valid() {
+                    record.first_name.name.offset += name_offset_adjustment;
+                }
+                if record.first_stream.name.is_valid() {
+                    record.first_stream.name.offset += name_offset_adjustment;
+                }
+
+                // Expand lookup table if needed
+                if frs_usize >= self.frs_to_idx.len() {
+                    self.frs_to_idx.resize(frs_usize + 1, NO_ENTRY);
+                }
+
+                let existing_idx = self.frs_to_idx[frs_usize];
+                if existing_idx == NO_ENTRY {
+                    // New record - add it
+                    let new_idx = self.records.len() as u32;
+                    self.frs_to_idx[frs_usize] = new_idx;
+                    self.records.push(record);
+                } else {
+                    // Record exists - merge (keep the one with more data)
+                    let existing = &mut self.records[existing_idx as usize];
+                    // If existing is a placeholder (no name), replace with new
+                    if !existing.has_name() && record.has_name() {
+                        *existing = record;
+                    }
+                    // Otherwise keep existing (first wins)
+                }
+            }
+
+            // Merge links (with offset adjustment)
+            let link_offset_adjustment = self.links.len() as u32;
+            for mut link in fragment.links {
+                if link.name.is_valid() {
+                    link.name.offset += name_offset_adjustment;
+                }
+                if link.next_entry != NO_ENTRY {
+                    link.next_entry += link_offset_adjustment;
+                }
+                self.links.push(link);
+            }
+
+            // Merge streams (with offset adjustment)
+            let stream_offset_adjustment = self.streams.len() as u32;
+            for mut stream in fragment.streams {
+                if stream.name.is_valid() {
+                    stream.name.offset += name_offset_adjustment;
+                }
+                if stream.next_entry != NO_ENTRY {
+                    stream.next_entry += stream_offset_adjustment;
+                }
+                self.streams.push(stream);
+            }
+
+            // Merge children (with offset adjustment)
+            let child_offset_adjustment = self.children.len() as u32;
+            for mut child in fragment.children {
+                if child.next_entry != NO_ENTRY {
+                    child.next_entry += child_offset_adjustment;
+                }
+                self.children.push(child);
+            }
+        }
+
+        debug!(
+            records = self.records.len(),
+            names_kb = self.names.len() / 1024,
+            "✅ Fragment merge complete"
+        );
+    }
+}
+
+// ============================================================================
+// USN Journal Incremental Update Support
+// ============================================================================
+
+/// Statistics from applying USN changes to an index.
+#[derive(Debug, Clone, Default)]
+pub struct UsnApplyStats {
+    /// Number of records marked as deleted
+    pub deleted: usize,
+    /// Number of records created (placeholder)
+    pub created: usize,
+    /// Number of records modified (name/metadata)
+    pub modified: usize,
+    /// Number of changes skipped (FRS not in index)
+    pub skipped: usize,
+}
+
+impl MftIndex {
+    /// Applies USN Journal changes to update the index incrementally.
+    ///
+    /// This is much faster than a full MFT scan for typical workloads where
+    /// only a small percentage of files change between runs.
+    ///
+    /// # Limitations
+    ///
+    /// - **Deletes**: Marks records as deleted (sets flags)
+    /// - **Creates**: Creates placeholder records (limited info from USN)
+    /// - **Renames**: Updates filename if FRS exists
+    /// - **Metadata**: Marks as modified (actual values need MFT read)
+    ///
+    /// For full accuracy on creates/renames, a selective MFT read would be
+    /// needed. This implementation provides a fast approximation that's
+    /// sufficient for most search use cases.
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn apply_usn_changes(&mut self, changes: &[crate::usn::FileChange]) -> UsnApplyStats {
+        // DELETED flag uses bit 31 of the u32 flags field
+        const DELETED_FLAG: u32 = 0x8000_0000;
+
+        let mut stats = UsnApplyStats::default();
+
+        for change in changes {
+            let frs = change.frs;
+            let frs_usize = frs as usize;
+
+            // Check if FRS is in our lookup table
+            let idx = self.frs_to_idx.get(frs_usize).copied().unwrap_or(NO_ENTRY);
+
+            if change.deleted {
+                // Handle deletion
+                if idx == NO_ENTRY {
+                    stats.skipped += 1;
+                } else if let Some(record) = self.records.get_mut(idx as usize) {
+                    // Mark as deleted using bit 31 of flags
+                    record.stdinfo.flags |= DELETED_FLAG;
+                    stats.deleted += 1;
+                }
+            } else if change.created {
+                // Handle creation - create placeholder record
+                // Note: We only have limited info from USN (FRS, parent, name)
+                // For full info, we'd need to read the actual MFT record
+                if idx == NO_ENTRY {
+                    // Expand lookup table if needed
+                    if frs_usize >= self.frs_to_idx.len() {
+                        self.frs_to_idx.resize(frs_usize + 1, NO_ENTRY);
+                    }
+
+                    // Create new record
+                    let new_idx = self.records.len() as u32;
+                    if let Some(slot) = self.frs_to_idx.get_mut(frs_usize) {
+                        *slot = new_idx;
+                    }
+
+                    // Add filename to names buffer
+                    let name_start = self.names.len() as u32;
+                    self.names.push_str(&change.filename);
+                    let name_len = change.filename.len() as u16;
+
+                    // Truncate parent_frs to u32 (FRS values fit in 32 bits for most volumes)
+                    let parent_frs_u32 = change.parent_frs as u32;
+
+                    // Create placeholder record
+                    let record = FileRecord {
+                        frs,
+                        stdinfo: StandardInfo::default(),
+                        name_count: 1,
+                        stream_count: 0,
+                        first_child: NO_ENTRY,
+                        first_name: LinkInfo {
+                            next_entry: NO_ENTRY,
+                            name: IndexNameRef::new(
+                                name_start,
+                                name_len,
+                                change.filename.is_ascii(),
+                            ),
+                            parent_frs: parent_frs_u32,
+                        },
+                        first_stream: IndexStreamInfo::default(),
+                    };
+                    self.records.push(record);
+                    stats.created += 1;
+                } else {
+                    // FRS already exists - might be a re-create after delete
+                    // Clear the deleted flag if it was set
+                    if let Some(record) = self.records.get_mut(idx as usize) {
+                        record.stdinfo.flags &= !DELETED_FLAG;
+                    }
+                    stats.skipped += 1;
+                }
+            } else if change.renamed {
+                // Handle rename - update filename
+                if idx == NO_ENTRY {
+                    stats.skipped += 1;
+                } else if let Some(record) = self.records.get_mut(idx as usize) {
+                    // Update the primary name
+                    // Note: This appends to names buffer (old name becomes orphaned)
+                    // A compaction pass could reclaim this space if needed
+                    let name_start = self.names.len() as u32;
+                    self.names.push_str(&change.filename);
+                    let name_len = change.filename.len() as u16;
+
+                    record.first_name.name =
+                        IndexNameRef::new(name_start, name_len, change.filename.is_ascii());
+                    record.first_name.parent_frs = change.parent_frs as u32;
+                    stats.modified += 1;
+                }
+            } else if change.size_changed || change.metadata_changed {
+                // Handle size/metadata change
+                // We can't update the actual values without reading MFT
+                // Just mark as modified for now
+                if idx == NO_ENTRY {
+                    stats.skipped += 1;
+                } else {
+                    stats.modified += 1;
+                }
+            } else {
+                stats.skipped += 1;
+            }
+        }
+
+        stats
+    }
+}
+
+// ============================================================================
+// MftIndexFragment - Partial index for parallel parsing
+// ============================================================================
+
+/// A partial MFT index built by a worker thread during parallel parsing.
+///
+/// Each worker builds its own fragment, which is later merged into the
+/// final `MftIndex`. This avoids contention on a shared index.
+///
+/// # Thread Safety
+///
+/// Fragments are built by a single thread and then moved to the merge
+/// thread. No synchronization is needed during building.
+#[derive(Debug, Default)]
+pub struct MftIndexFragment {
+    /// File records parsed by this worker
+    pub records: Vec<FileRecord>,
+    /// FRS → record index lookup (local to this fragment)
+    pub frs_to_idx: Vec<u32>,
+    /// Filenames concatenated (local buffer)
+    pub names: String,
+    /// Overflow hard link entries
+    pub links: Vec<LinkInfo>,
+    /// Overflow stream entries
+    pub streams: Vec<IndexStreamInfo>,
+    /// Directory child entries
+    pub children: Vec<ChildInfo>,
+}
+
+impl MftIndexFragment {
+    /// Create a new empty fragment with estimated capacity.
+    #[must_use]
+    pub fn with_capacity(record_capacity: usize) -> Self {
+        Self {
+            records: Vec::with_capacity(record_capacity),
+            frs_to_idx: Vec::with_capacity(record_capacity),
+            names: String::with_capacity(record_capacity * 20), // ~20 chars avg
+            links: Vec::new(),
+            streams: Vec::new(),
+            children: Vec::with_capacity(record_capacity / 10), // ~10% are dirs
+        }
+    }
+
+    /// Get or create a record for the given FRS.
+    #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+    pub fn get_or_create(&mut self, frs: u64) -> &mut FileRecord {
+        let frs_usize = frs as usize;
+
+        // Expand lookup table if needed
+        if frs_usize >= self.frs_to_idx.len() {
+            self.frs_to_idx.resize(frs_usize + 1, NO_ENTRY);
+        }
+
+        let idx = self.frs_to_idx[frs_usize];
+        if idx == NO_ENTRY {
+            // Create new record
+            let new_idx = self.records.len() as u32;
+            self.frs_to_idx[frs_usize] = new_idx;
+            self.records.push(FileRecord::new(frs));
+            let len = self.records.len();
+            &mut self.records[len - 1]
+        } else {
+            &mut self.records[idx as usize]
+        }
+    }
+
+    /// Add a filename to the names buffer, return the offset.
+    pub fn add_name(&mut self, name: &str) -> u32 {
+        let offset = u32::try_from(self.names.len()).unwrap_or(u32::MAX);
+        self.names.push_str(name);
+        offset
+    }
+
+    /// Number of records in this fragment.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Check if fragment is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+}
+
+// ============================================================================
+// M5: Persistent Index Storage
+// ============================================================================
+
+/// Magic bytes for index file format.
+const INDEX_MAGIC: &[u8; 8] = b"UFFSIDX\0";
+
+/// Current index file format version.
+const INDEX_VERSION: u32 = 1;
+
+/// Persistent index header stored at the beginning of the index file.
+#[derive(Debug, Clone)]
+pub struct IndexHeader {
+    /// Magic bytes for format identification
+    pub magic: [u8; 8],
+    /// Format version for compatibility
+    pub version: u32,
+    /// Volume letter (e.g., 'C')
+    pub volume: char,
+    /// Volume serial number for validation
+    pub volume_serial: u64,
+    /// USN Journal ID at time of index creation
+    pub usn_journal_id: u64,
+    /// Next USN to read from (checkpoint)
+    pub next_usn: i64,
+    /// Timestamp when index was created (Unix epoch seconds)
+    pub created_at: u64,
+    /// Number of records in the index
+    pub record_count: u64,
+    /// Size of names buffer in bytes
+    pub names_size: u64,
+    /// Number of link entries
+    pub links_count: u64,
+    /// Number of stream entries
+    pub streams_count: u64,
+    /// Number of children entries
+    pub children_count: u64,
+}
+
+impl IndexHeader {
+    /// Creates a new header for the given index.
+    #[must_use]
+    pub fn new(index: &MftIndex, volume_serial: u64, usn_journal_id: u64, next_usn: i64) -> Self {
+        Self {
+            magic: *INDEX_MAGIC,
+            version: INDEX_VERSION,
+            volume: index.volume,
+            volume_serial,
+            usn_journal_id,
+            next_usn,
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|dur| dur.as_secs())
+                .unwrap_or(0),
+            record_count: index.records.len() as u64,
+            names_size: index.names.len() as u64,
+            links_count: index.links.len() as u64,
+            streams_count: index.streams.len() as u64,
+            children_count: index.children.len() as u64,
+        }
+    }
+
+    /// Validates the header magic and version.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the magic bytes are invalid or the version is
+    /// unsupported.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if &self.magic != INDEX_MAGIC {
+            return Err("Invalid index file magic");
+        }
+        if self.version != INDEX_VERSION {
+            return Err("Unsupported index version");
+        }
+        Ok(())
+    }
+}
+
+impl MftIndex {
+    /// Serializes the index to a byte vector.
+    ///
+    /// Format:
+    /// - Header (fixed size)
+    /// - `frs_to_idx` table (u32 array)
+    /// - records (`FileRecord` array)
+    /// - names (UTF-8 string)
+    /// - links (`LinkInfo` array)
+    /// - streams (`IndexStreamInfo` array)
+    /// - children (`ChildInfo` array)
+    ///
+    /// # Arguments
+    ///
+    /// * `volume_serial` - Volume serial number for validation
+    /// * `usn_journal_id` - USN Journal ID at time of serialization
+    /// * `next_usn` - Next USN to read from (checkpoint)
+    #[must_use]
+    pub fn serialize(&self, volume_serial: u64, usn_journal_id: u64, next_usn: i64) -> Vec<u8> {
+        let header = IndexHeader::new(self, volume_serial, usn_journal_id, next_usn);
+
+        // Estimate size (rough estimate for capacity)
+        let estimated_size = 128 // header
+            + self.frs_to_idx.len() * 4
+            + self.records.len() * 128 // rough estimate per record
+            + self.names.len()
+            + self.links.len() * 24
+            + self.streams.len() * 32
+            + self.children.len() * 16;
+
+        let mut buffer = Vec::with_capacity(estimated_size);
+
+        // Write header
+        buffer.extend_from_slice(&header.magic);
+        buffer.extend_from_slice(&header.version.to_le_bytes());
+        buffer.extend_from_slice(&(header.volume as u32).to_le_bytes());
+        buffer.extend_from_slice(&header.volume_serial.to_le_bytes());
+        buffer.extend_from_slice(&header.usn_journal_id.to_le_bytes());
+        buffer.extend_from_slice(&header.next_usn.to_le_bytes());
+        buffer.extend_from_slice(&header.created_at.to_le_bytes());
+        buffer.extend_from_slice(&header.record_count.to_le_bytes());
+        buffer.extend_from_slice(&header.names_size.to_le_bytes());
+        buffer.extend_from_slice(&header.links_count.to_le_bytes());
+        buffer.extend_from_slice(&header.streams_count.to_le_bytes());
+        buffer.extend_from_slice(&header.children_count.to_le_bytes());
+
+        // Write frs_to_idx table size and data
+        buffer.extend_from_slice(&(self.frs_to_idx.len() as u64).to_le_bytes());
+        for &idx in &self.frs_to_idx {
+            buffer.extend_from_slice(&idx.to_le_bytes());
+        }
+
+        // Write records
+        for record in &self.records {
+            // FileRecord fields
+            buffer.extend_from_slice(&record.frs.to_le_bytes());
+            // StandardInfo
+            buffer.extend_from_slice(&record.stdinfo.created.to_le_bytes());
+            buffer.extend_from_slice(&record.stdinfo.modified.to_le_bytes());
+            buffer.extend_from_slice(&record.stdinfo.accessed.to_le_bytes());
+            buffer.extend_from_slice(&record.stdinfo.mft_changed.to_le_bytes());
+            buffer.extend_from_slice(&record.stdinfo.flags.to_le_bytes());
+            // Counts
+            buffer.extend_from_slice(&record.name_count.to_le_bytes());
+            buffer.extend_from_slice(&record.stream_count.to_le_bytes());
+            buffer.extend_from_slice(&record.first_child.to_le_bytes());
+            // first_name (LinkInfo)
+            buffer.extend_from_slice(&record.first_name.next_entry.to_le_bytes());
+            buffer.extend_from_slice(&record.first_name.name.offset.to_le_bytes());
+            buffer.extend_from_slice(&record.first_name.name.length.to_le_bytes());
+            buffer.extend_from_slice(&record.first_name.name.flags.to_le_bytes());
+            buffer.extend_from_slice(&record.first_name.parent_frs.to_le_bytes());
+            // first_stream (IndexStreamInfo)
+            buffer.extend_from_slice(&record.first_stream.size.length.to_le_bytes());
+            buffer.extend_from_slice(&record.first_stream.size.allocated.to_le_bytes());
+            buffer.extend_from_slice(&record.first_stream.next_entry.to_le_bytes());
+            buffer.extend_from_slice(&record.first_stream.name.offset.to_le_bytes());
+            buffer.extend_from_slice(&record.first_stream.name.length.to_le_bytes());
+            buffer.extend_from_slice(&record.first_stream.name.flags.to_le_bytes());
+            buffer.extend_from_slice(&record.first_stream.flags.to_le_bytes());
+        }
+
+        // Write names
+        buffer.extend_from_slice(self.names.as_bytes());
+
+        // Write links (overflow links, not first_name)
+        for link in &self.links {
+            buffer.extend_from_slice(&link.next_entry.to_le_bytes());
+            buffer.extend_from_slice(&link.name.offset.to_le_bytes());
+            buffer.extend_from_slice(&link.name.length.to_le_bytes());
+            buffer.extend_from_slice(&link.name.flags.to_le_bytes());
+            buffer.extend_from_slice(&link.parent_frs.to_le_bytes());
+        }
+
+        // Write streams (overflow streams, not first_stream)
+        for stream in &self.streams {
+            buffer.extend_from_slice(&stream.size.length.to_le_bytes());
+            buffer.extend_from_slice(&stream.size.allocated.to_le_bytes());
+            buffer.extend_from_slice(&stream.next_entry.to_le_bytes());
+            buffer.extend_from_slice(&stream.name.offset.to_le_bytes());
+            buffer.extend_from_slice(&stream.name.length.to_le_bytes());
+            buffer.extend_from_slice(&stream.name.flags.to_le_bytes());
+            buffer.extend_from_slice(&stream.flags.to_le_bytes());
+        }
+
+        // Write children
+        for child in &self.children {
+            buffer.extend_from_slice(&child.next_entry.to_le_bytes());
+            buffer.extend_from_slice(&child.child_frs.to_le_bytes());
+            buffer.extend_from_slice(&child.name_index.to_le_bytes());
+        }
+
+        buffer
+    }
+
+    /// Deserializes an index from a byte slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the data is corrupted or incompatible.
+    // This function is intentionally long to keep all deserialization logic together
+    // for performance and maintainability. Splitting would add function call overhead
+    // and make the binary format harder to follow.
+    // The u64->usize casts are safe: this is a 64-bit Windows NTFS tool.
+    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
+    pub fn deserialize(data: &[u8]) -> Result<(Self, IndexHeader), &'static str> {
+        if data.len() < 96 {
+            return Err("Data too short for header");
+        }
+
+        let mut pos = 0;
+
+        // Helper macro to read bytes safely
+        macro_rules! read_u8 {
+            () => {{
+                let val = *data.get(pos).ok_or("Unexpected end of data")?;
+                pos += 1;
+                val
+            }};
+        }
+        macro_rules! read_u16 {
+            () => {{
+                let bytes: [u8; 2] = data
+                    .get(pos..pos + 2)
+                    .ok_or("Unexpected end of data")?
+                    .try_into()
+                    .map_err(|_| "Invalid u16 slice")?;
+                let val = u16::from_le_bytes(bytes);
+                pos += 2;
+                val
+            }};
+        }
+        macro_rules! read_u32 {
+            () => {{
+                let bytes: [u8; 4] = data
+                    .get(pos..pos + 4)
+                    .ok_or("Unexpected end of data")?
+                    .try_into()
+                    .map_err(|_| "Invalid u32 slice")?;
+                let val = u32::from_le_bytes(bytes);
+                pos += 4;
+                val
+            }};
+        }
+        macro_rules! read_u64 {
+            () => {{
+                let bytes: [u8; 8] = data
+                    .get(pos..pos + 8)
+                    .ok_or("Unexpected end of data")?
+                    .try_into()
+                    .map_err(|_| "Invalid u64 slice")?;
+                let val = u64::from_le_bytes(bytes);
+                pos += 8;
+                val
+            }};
+        }
+        macro_rules! read_i64 {
+            () => {{
+                let bytes: [u8; 8] = data
+                    .get(pos..pos + 8)
+                    .ok_or("Unexpected end of data")?
+                    .try_into()
+                    .map_err(|_| "Invalid i64 slice")?;
+                let val = i64::from_le_bytes(bytes);
+                pos += 8;
+                val
+            }};
+        }
+
+        // Read header
+        let mut magic = [0_u8; 8];
+        magic.copy_from_slice(data.get(pos..pos + 8).ok_or("Unexpected end of data")?);
+        pos += 8;
+
+        let version = read_u32!();
+        let volume = char::from_u32(read_u32!()).ok_or("Invalid volume char")?;
+        let volume_serial = read_u64!();
+        let usn_journal_id = read_u64!();
+        let next_usn = read_i64!();
+        let created_at = read_u64!();
+        let record_count = read_u64!();
+        let names_size = read_u64!();
+        let links_count = read_u64!();
+        let streams_count = read_u64!();
+        let children_count = read_u64!();
+
+        let header = IndexHeader {
+            magic,
+            version,
+            volume,
+            volume_serial,
+            usn_journal_id,
+            next_usn,
+            created_at,
+            record_count,
+            names_size,
+            links_count,
+            streams_count,
+            children_count,
+        };
+
+        header.validate()?;
+
+        // Read frs_to_idx table
+        let frs_to_idx_len = read_u64!() as usize;
+        let mut frs_to_idx = Vec::with_capacity(frs_to_idx_len);
+        for _ in 0..frs_to_idx_len {
+            frs_to_idx.push(read_u32!());
+        }
+
+        // Read records
+        let mut records = Vec::with_capacity(record_count as usize);
+        for _ in 0..record_count {
+            let frs = read_u64!();
+            // StandardInfo
+            let created = read_i64!();
+            let modified = read_i64!();
+            let accessed = read_i64!();
+            let mft_changed = read_i64!();
+            let flags = read_u32!();
+            // Counts
+            let name_count = read_u16!();
+            let rec_stream_count = read_u16!();
+            let first_child = read_u32!();
+            // first_name (LinkInfo)
+            let link_next_entry = read_u32!();
+            let link_name_offset = read_u32!();
+            let link_name_length = read_u16!();
+            let link_name_flags = read_u16!();
+            let link_parent_frs = read_u32!();
+            // first_stream (IndexStreamInfo)
+            let stream_size_length = read_u64!();
+            let stream_size_allocated = read_u64!();
+            let stream_next_entry = read_u32!();
+            let stream_name_offset = read_u32!();
+            let stream_name_length = read_u16!();
+            let stream_name_flags = read_u16!();
+            let stream_flags = read_u8!();
+
+            records.push(FileRecord {
+                frs,
+                stdinfo: StandardInfo {
+                    created,
+                    modified,
+                    accessed,
+                    mft_changed,
+                    flags,
+                },
+                name_count,
+                stream_count: rec_stream_count,
+                first_child,
+                first_name: LinkInfo {
+                    next_entry: link_next_entry,
+                    name: IndexNameRef {
+                        offset: link_name_offset,
+                        length: link_name_length,
+                        flags: link_name_flags,
+                    },
+                    parent_frs: link_parent_frs,
+                },
+                first_stream: IndexStreamInfo {
+                    size: SizeInfo {
+                        length: stream_size_length,
+                        allocated: stream_size_allocated,
+                    },
+                    next_entry: stream_next_entry,
+                    name: IndexNameRef {
+                        offset: stream_name_offset,
+                        length: stream_name_length,
+                        flags: stream_name_flags,
+                    },
+                    flags: stream_flags,
+                },
+            });
+        }
+
+        // Read names
+        let names_end = pos + names_size as usize;
+        let names_bytes = data.get(pos..names_end).ok_or("Unexpected end of data")?;
+        let names = String::from_utf8(names_bytes.to_vec())
+            .map_err(|_utf8_err| "Invalid UTF-8 in names")?;
+        pos = names_end;
+
+        // Read links (overflow links)
+        let mut links = Vec::with_capacity(links_count as usize);
+        for _ in 0..links_count {
+            let next_entry = read_u32!();
+            let name_offset = read_u32!();
+            let name_length = read_u16!();
+            let name_flags = read_u16!();
+            let parent_frs = read_u32!();
+
+            links.push(LinkInfo {
+                next_entry,
+                name: IndexNameRef {
+                    offset: name_offset,
+                    length: name_length,
+                    flags: name_flags,
+                },
+                parent_frs,
+            });
+        }
+
+        // Read streams (overflow streams)
+        let mut streams = Vec::with_capacity(streams_count as usize);
+        for _ in 0..streams_count {
+            let size_length = read_u64!();
+            let size_allocated = read_u64!();
+            let next_entry = read_u32!();
+            let name_offset = read_u32!();
+            let name_length = read_u16!();
+            let name_flags = read_u16!();
+            let flags = read_u8!();
+
+            streams.push(IndexStreamInfo {
+                size: SizeInfo {
+                    length: size_length,
+                    allocated: size_allocated,
+                },
+                next_entry,
+                name: IndexNameRef {
+                    offset: name_offset,
+                    length: name_length,
+                    flags: name_flags,
+                },
+                flags,
+            });
+        }
+
+        // Read children
+        let mut children = Vec::with_capacity(children_count as usize);
+        for _ in 0..children_count {
+            let next_entry = read_u32!();
+            let child_frs = read_u32!();
+            let name_index = read_u16!();
+
+            children.push(ChildInfo {
+                next_entry,
+                child_frs,
+                name_index,
+            });
+        }
+
+        let index = Self {
+            volume,
+            records,
+            frs_to_idx,
+            names,
+            links,
+            streams,
+            children,
+        };
+
+        Ok((index, header))
+    }
+
+    /// Saves the index to a file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if file writing fails.
+    pub fn save_to_file(
+        &self,
+        path: &std::path::Path,
+        volume_serial: u64,
+        usn_journal_id: u64,
+        next_usn: i64,
+    ) -> std::io::Result<()> {
+        use std::io::Write;
+
+        let data = self.serialize(volume_serial, usn_journal_id, next_usn);
+        let mut file = std::fs::File::create(path)?;
+        file.write_all(&data)?;
+        Ok(())
+    }
+
+    /// Loads an index from a file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if file reading fails or data is corrupted.
+    pub fn load_from_file(
+        path: &std::path::Path,
+    ) -> Result<(Self, IndexHeader), Box<dyn core::error::Error>> {
+        let data = std::fs::read(path)?;
+        let (index, header) = Self::deserialize(&data)?;
+        Ok((index, header))
+    }
 }

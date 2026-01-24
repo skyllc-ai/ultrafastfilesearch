@@ -1667,6 +1667,248 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     true
 }
 
+/// Parses a record directly into an `MftIndexFragment` (for parallel parsing).
+///
+/// This is the parallel-parsing variant of `parse_record_to_index`. Each worker
+/// thread builds its own fragment, which is later merged into the final index.
+///
+/// # Returns
+///
+/// `true` if a record was added to the fragment, `false` if skipped.
+#[allow(unsafe_code, clippy::too_many_lines, clippy::cast_possible_truncation)]
+pub fn parse_record_to_fragment(
+    data: &[u8],
+    frs: u64,
+    fragment: &mut crate::index::MftIndexFragment,
+) -> bool {
+    use crate::index::{IndexNameRef, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo};
+    use crate::ntfs::{
+        AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
+        StandardInformation, file_reference_to_frs, filetime_to_unix_micros,
+    };
+
+    if data.len() < size_of::<FileRecordSegmentHeader>() {
+        return false;
+    }
+
+    // SAFETY: We've verified the buffer is large enough for the header.
+    let header: FileRecordSegmentHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
+
+    // Check if record is in use
+    if !header.is_in_use() {
+        return false;
+    }
+
+    // Check magic
+    let multi_sector_header = header.multi_sector_header;
+    if !multi_sector_header.is_file_record() {
+        return false;
+    }
+
+    // Skip extension records
+    if !header.is_base_record() {
+        return false;
+    }
+
+    let is_directory = header.is_directory();
+
+    // Parse attributes
+    let mut offset = header.first_attribute_offset as usize;
+    let max_offset = core::cmp::min(header.bytes_in_use as usize, data.len());
+
+    // Temporary storage for parsed data
+    let mut std_info = StandardInfo::default();
+    let mut primary_name: Option<(String, u64, u8)> = None;
+    let mut additional_names: SmallVec<[(String, u64); 4]> = SmallVec::new();
+    let mut default_size = 0u64;
+    let mut default_allocated = 0u64;
+
+    while offset + size_of::<AttributeRecordHeader>() <= max_offset {
+        let attr_header: AttributeRecordHeader =
+            unsafe { core::ptr::read(data[offset..].as_ptr().cast()) };
+
+        if attr_header.type_code == AttributeType::End as u32 {
+            break;
+        }
+
+        if attr_header.length == 0 || offset + attr_header.length as usize > max_offset {
+            break;
+        }
+
+        match AttributeType::from_u32(attr_header.type_code) {
+            Some(AttributeType::StandardInformation) => {
+                if attr_header.is_non_resident == 0 {
+                    let value_offset_bytes = &data[offset + 20..offset + 22];
+                    let value_offset =
+                        u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0]))
+                            as usize;
+                    let si_offset = offset + value_offset;
+                    if si_offset + size_of::<StandardInformation>() <= data.len() {
+                        let si: StandardInformation =
+                            unsafe { core::ptr::read(data[si_offset..].as_ptr().cast()) };
+                        let mut info = StandardInfo::from_attributes(si.file_attributes);
+                        info.created = filetime_to_unix_micros(si.creation_time);
+                        info.modified = filetime_to_unix_micros(si.modification_time);
+                        info.accessed = filetime_to_unix_micros(si.access_time);
+                        info.mft_changed = filetime_to_unix_micros(si.mft_change_time);
+                        std_info = info;
+                    }
+                }
+            }
+            Some(AttributeType::FileName) => {
+                if attr_header.is_non_resident == 0 {
+                    let value_offset_bytes = &data[offset + 20..offset + 22];
+                    let value_offset =
+                        u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0]))
+                            as usize;
+                    let fn_offset = offset + value_offset;
+                    if fn_offset + size_of::<FileNameAttribute>() <= data.len() {
+                        let fn_attr: FileNameAttribute =
+                            unsafe { core::ptr::read(data[fn_offset..].as_ptr().cast()) };
+                        let name_len = fn_attr.file_name_length as usize;
+                        let name_bytes_offset = fn_offset + size_of::<FileNameAttribute>();
+                        if name_bytes_offset + name_len * 2 <= data.len() {
+                            let name_bytes =
+                                &data[name_bytes_offset..name_bytes_offset + name_len * 2];
+                            let name_u16: Vec<u16> = name_bytes
+                                .chunks_exact(2)
+                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .collect();
+                            let name = String::from_utf16_lossy(&name_u16);
+                            let parent_frs = file_reference_to_frs(fn_attr.parent_directory);
+                            let namespace = fn_attr.file_name_namespace;
+
+                            if namespace != 2 {
+                                let is_better = match namespace {
+                                    1 | 3 => true,
+                                    0 => primary_name.is_none(),
+                                    _ => false,
+                                };
+                                if is_better || primary_name.is_none() {
+                                    if let Some((old_name, old_parent, _)) = primary_name.take() {
+                                        additional_names.push((old_name, old_parent));
+                                    }
+                                    primary_name = Some((name, parent_frs, namespace));
+                                } else {
+                                    additional_names.push((name, parent_frs));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Some(AttributeType::Data) => {
+                let name_len = attr_header.name_length as usize;
+                if name_len == 0 {
+                    let (size, allocated) = if attr_header.is_non_resident != 0 {
+                        let alloc_offset = offset + 40;
+                        let size_offset = offset + 48;
+                        if size_offset + 8 <= data.len() {
+                            let allocated = u64::from_le_bytes(
+                                data[alloc_offset..alloc_offset + 8]
+                                    .try_into()
+                                    .unwrap_or([0; 8]),
+                            );
+                            let size = u64::from_le_bytes(
+                                data[size_offset..size_offset + 8]
+                                    .try_into()
+                                    .unwrap_or([0; 8]),
+                            );
+                            (size, allocated)
+                        } else {
+                            (0, 0)
+                        }
+                    } else {
+                        let len_offset = offset + 16;
+                        if len_offset + 4 <= data.len() {
+                            let len = u32::from_le_bytes(
+                                data[len_offset..len_offset + 4]
+                                    .try_into()
+                                    .unwrap_or([0; 4]),
+                            ) as u64;
+                            (len, len)
+                        } else {
+                            (0, 0)
+                        }
+                    };
+                    default_size = size;
+                    default_allocated = allocated;
+                }
+            }
+            _ => {}
+        }
+
+        offset += attr_header.length as usize;
+    }
+
+    // Skip records without a filename
+    let (name, parent_frs, _namespace) = match primary_name {
+        Some(n) => n,
+        None => return false,
+    };
+
+    // Set directory flag in std_info
+    if is_directory {
+        std_info.set_directory(true);
+    }
+
+    // Add primary name to names buffer and get reference
+    let name_offset = fragment.add_name(&name);
+    let name_len = name.len();
+    let is_ascii = name.is_ascii();
+    let name_ref = IndexNameRef::new(name_offset, name_len as u16, is_ascii);
+
+    // Pre-process additional names
+    let additional_count = additional_names.len();
+    let mut link_indices: Vec<u32> = Vec::with_capacity(additional_count);
+    for (link_name, link_parent) in additional_names {
+        let link_offset = fragment.add_name(&link_name);
+        let link_len = link_name.len();
+        let link_is_ascii = link_name.is_ascii();
+        let link_name_ref = IndexNameRef::new(link_offset, link_len as u16, link_is_ascii);
+
+        let link_idx = fragment.links.len() as u32;
+        fragment.links.push(LinkInfo {
+            next_entry: NO_ENTRY,
+            name: link_name_ref,
+            parent_frs: link_parent as u32,
+        });
+        link_indices.push(link_idx);
+    }
+
+    // Create parent placeholder if needed (within this fragment)
+    if parent_frs != frs && parent_frs != 0 {
+        let _ = fragment.get_or_create(parent_frs);
+    }
+
+    // Get or create the record in the fragment
+    let record = fragment.get_or_create(frs);
+    record.stdinfo = std_info;
+    record.first_stream.size = SizeInfo {
+        length: default_size,
+        allocated: default_allocated,
+    };
+    record.first_name = LinkInfo {
+        next_entry: NO_ENTRY,
+        name: name_ref,
+        parent_frs: parent_frs as u32,
+    };
+    record.name_count = 1 + additional_count as u16;
+
+    // Chain the additional links
+    if !link_indices.is_empty() {
+        record.first_name.next_entry = link_indices[0];
+    }
+
+    for i in 0..link_indices.len().saturating_sub(1) {
+        let current_idx = link_indices[i] as usize;
+        let next_idx = link_indices[i + 1];
+        fragment.links[current_idx].next_entry = next_idx;
+    }
+
+    true
+}
+
 /// Parses `$STANDARD_INFORMATION` into `ExtendedStandardInfo`.
 #[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
 fn parse_standard_info_full(data: &[u8], attr_offset: usize, result: &mut ExtendedStandardInfo) {
@@ -2494,7 +2736,7 @@ fn merge_adjacent_chunks(
 /// - Bitmap-based cluster skipping
 /// - Parallel record processing using Rayon
 /// - Large batch I/O (4-8 MB chunks) for reduced syscall overhead
-/// - Drive-type aware tuning (SSD vs HDD)
+/// - Drive-type aware tuning (SSD vs HDD vs NVMe)
 /// - Buffer reuse to minimize allocations
 #[derive(Debug)]
 pub struct ParallelMftReader {
@@ -2504,6 +2746,8 @@ pub struct ParallelMftReader {
     bitmap: Option<crate::platform::MftBitmap>,
     /// Read chunk size in bytes.
     pub chunk_size: usize,
+    /// Drive type for adaptive I/O tuning.
+    drive_type: crate::platform::DriveType,
     /// Progress counter (atomic for thread-safe updates).
     records_processed: Arc<AtomicU64>,
     /// Fixup failure counter (potential corruption).
@@ -2532,8 +2776,10 @@ impl ParallelMftReader {
     pub const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
 
     /// Creates a new parallel reader with default (legacy) chunk size.
+    /// Assumes HDD for conservative defaults.
     #[must_use]
     pub fn new(extent_map: MftExtentMap, bitmap: Option<crate::platform::MftBitmap>) -> Self {
+        let drive_type = crate::platform::DriveType::Unknown;
         let chunk_size = Self::DEFAULT_CHUNK_SIZE_HDD;
         // M1 8.4: Pre-allocate reusable buffer for chunk_size + sector alignment
         let buffer = AlignedBuffer::new(chunk_size + SECTOR_SIZE);
@@ -2541,6 +2787,7 @@ impl ParallelMftReader {
             extent_map,
             bitmap,
             chunk_size,
+            drive_type,
             records_processed: Arc::new(AtomicU64::new(0)),
             fixup_failures: Arc::new(AtomicU64::new(0)),
             skipped_records: Arc::new(AtomicU64::new(0)),
@@ -2567,6 +2814,7 @@ impl ParallelMftReader {
             extent_map,
             bitmap,
             chunk_size,
+            drive_type,
             records_processed: Arc::new(AtomicU64::new(0)),
             fixup_failures: Arc::new(AtomicU64::new(0)),
             skipped_records: Arc::new(AtomicU64::new(0)),
@@ -3253,8 +3501,8 @@ impl ParallelMftReader {
         );
 
         // Phase 3: Create IOCP and queue ALL reads at once
-        // C++ uses ~1MB per I/O operation for optimal disk scheduling
-        const IO_CHUNK_SIZE: usize = 1024 * 1024; // 1MB per read operation
+        // Use adaptive I/O size based on drive type (M2 optimization)
+        let io_chunk_size = self.drive_type.optimal_io_size();
 
         let read_start = std::time::Instant::now();
         let iocp = IoCompletionPort::new(0)?;
@@ -3266,8 +3514,8 @@ impl ParallelMftReader {
             overlapped: windows::Win32::System::IO::OVERLAPPED,
         }
 
-        // Estimate number of I/O operations: total bytes / 1MB
-        let estimated_ops = (bytes_to_read as usize / IO_CHUNK_SIZE) + sorted_chunks.len();
+        // Estimate number of I/O operations
+        let estimated_ops = (bytes_to_read as usize / io_chunk_size) + sorted_chunks.len();
 
         // Pin all overlapped structs for pointer stability
         let mut operations: Vec<Pin<Box<BulkOverlappedRead>>> = Vec::with_capacity(estimated_ops);
@@ -3286,11 +3534,11 @@ impl ParallelMftReader {
             let chunk_disk_offset = chunk.disk_offset + skip_begin_bytes as u64;
             let chunk_buffer_offset = chunk.start_frs as usize * record_size + skip_begin_bytes;
 
-            // Break this chunk into 1MB I/O operations
+            // Break this chunk into adaptive I/O operations
             let mut offset_within_chunk = 0usize;
             while offset_within_chunk < effective_bytes {
                 let remaining = effective_bytes - offset_within_chunk;
-                let io_size = remaining.min(IO_CHUNK_SIZE);
+                let io_size = remaining.min(io_chunk_size);
 
                 let disk_offset = chunk_disk_offset + offset_within_chunk as u64;
                 let buffer_offset = chunk_buffer_offset + offset_within_chunk;
@@ -3349,9 +3597,10 @@ impl ParallelMftReader {
 
         info!(
             queued = pending_count,
-            io_size_mb = IO_CHUNK_SIZE / (1024 * 1024),
+            io_size_mb = io_chunk_size / (1024 * 1024),
             workers = num_workers,
-            "📤 Queued all reads to IOCP (C++ style: many small reads, multi-threaded completions)"
+            drive_type = ?self.drive_type,
+            "📤 Queued all reads to IOCP (adaptive I/O size)"
         );
 
         // Wait for all completions using multiple worker threads (C++ approach)
@@ -3618,22 +3867,19 @@ impl ParallelMftReader {
         let total_records = self.extent_map.total_records() as usize;
         let total_bytes = total_records * record_size;
 
-        // C++ uses 2 reads in flight with 64KB buffers
-        // C++ profiler shows 8,141 reads of 1024KB each for 11.5GB MFT.
-        // That's 1MB per read, NOT 64KB as initially claimed.
-        // With 64KB reads, we'd need 183,484 reads = 22.5x more syscalls!
-        // Each syscall has overhead, so 1MB reads are much faster.
-        const CONCURRENCY: usize = 2;
-        const IO_CHUNK_SIZE: usize = 1024 * 1024; // 1MB per read (matches C++ profiler!)
+        // Use adaptive concurrency and I/O size based on drive type (M2 optimization)
+        let concurrency = self.drive_type.optimal_concurrency();
+        let io_chunk_size = self.drive_type.optimal_io_size();
 
         info!(
             total_records,
             total_bytes_mb = total_bytes / (1024 * 1024),
-            concurrency = CONCURRENCY,
-            io_size_kb = IO_CHUNK_SIZE / 1024,
-            "🚀 Starting sliding window IOCP read (C++ style: {} reads in flight, {}KB buffers)",
-            CONCURRENCY,
-            IO_CHUNK_SIZE / 1024
+            concurrency,
+            io_size_kb = io_chunk_size / 1024,
+            drive_type = ?self.drive_type,
+            "🚀 Starting sliding window IOCP read (adaptive: {} reads in flight, {}KB buffers)",
+            concurrency,
+            io_chunk_size / 1024
         );
 
         // Generate read chunks with bitmap skip optimization
@@ -3662,7 +3908,7 @@ impl ParallelMftReader {
             let mut offset_within_chunk = 0usize;
 
             while offset_within_chunk < chunk_bytes {
-                let io_size = std::cmp::min(IO_CHUNK_SIZE, chunk_bytes - offset_within_chunk);
+                let io_size = std::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
                 let disk_offset =
                     chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
 
@@ -3701,20 +3947,20 @@ impl ParallelMftReader {
             op: IoOp,
         }
 
-        // Pre-allocate buffer pool (CONCURRENCY buffers, recycled)
-        let mut buffer_pool: Vec<AlignedBuffer> = (0..CONCURRENCY)
-            .map(|_| AlignedBuffer::new(IO_CHUNK_SIZE))
+        // Pre-allocate buffer pool (concurrency buffers, recycled)
+        let mut buffer_pool: Vec<AlignedBuffer> = (0..concurrency)
+            .map(|_| AlignedBuffer::new(io_chunk_size))
             .collect();
 
         // In-flight operations (pinned for OVERLAPPED pointer stability)
         let mut in_flight: Vec<Option<Pin<Box<InFlightOp>>>> =
-            (0..CONCURRENCY).map(|_| None).collect();
+            (0..concurrency).map(|_| None).collect();
 
         let mut completed_count = 0usize;
         let mut bytes_read_total = 0u64;
 
-        // Queue initial reads (C++ queues 4)
-        for slot_id in 0..CONCURRENCY {
+        // Queue initial reads (adaptive concurrency)
+        for slot_id in 0..concurrency {
             if let Some(op) = io_ops.pop_front() {
                 let buffer = buffer_pool.pop().unwrap();
                 let mut in_flight_op = Box::pin(InFlightOp {
@@ -4041,15 +4287,17 @@ impl ParallelMftReader {
         let record_size = self.extent_map.bytes_per_record as usize;
         let total_records = self.extent_map.total_records() as usize;
 
-        // Use provided values or defaults
-        let concurrency = concurrency.unwrap_or(2);
-        let io_chunk_size = io_chunk_size.unwrap_or(1024 * 1024); // 1MB default
+        // Use provided values or adaptive defaults based on drive type
+        // M1: Adaptive concurrency and I/O size based on drive type
+        let concurrency = concurrency.unwrap_or_else(|| self.drive_type.optimal_concurrency());
+        let io_chunk_size = io_chunk_size.unwrap_or_else(|| self.drive_type.optimal_io_size());
 
         info!(
             total_records,
             concurrency,
             io_size_kb = io_chunk_size / 1024,
-            "🚀 Starting sliding window IOCP with INLINE parsing (C++ parity)"
+            drive_type = ?self.drive_type,
+            "🚀 Starting sliding window IOCP with INLINE parsing (adaptive settings)"
         );
 
         // Generate read chunks with bitmap skip optimization
@@ -4302,6 +4550,417 @@ impl ParallelMftReader {
             index_entries = index.records.len(),
             names_kb = index.names.len() / 1024,
             "✅ Sliding window IOCP with inline parsing complete"
+        );
+
+        Ok(index)
+    }
+
+    /// Reads all MFT records using parallel parsing (M3 optimization).
+    ///
+    /// This method uses a producer-consumer pattern:
+    /// - IOCP thread reads data and sends buffers to a channel
+    /// - Worker threads parse buffers into local `MftIndexFragment`s
+    /// - After all I/O completes, fragments are merged into final index
+    ///
+    /// This is beneficial for NVMe drives where I/O is faster than parsing.
+    /// For HDD, use `read_all_sliding_window_iocp_to_index` (inline parsing).
+    ///
+    /// # Arguments
+    ///
+    /// * `overlapped_handle` - Windows file handle opened with OVERLAPPED flag
+    /// * `volume` - Volume letter (e.g., 'C')
+    /// * `concurrency` - Number of I/O ops in flight (None = auto based on
+    ///   drive)
+    /// * `io_chunk_size` - Size of each I/O in bytes (None = auto based on
+    ///   drive)
+    /// * `num_workers` - Number of parsing worker threads (None = num_cpus)
+    /// * `_progress_callback` - Optional progress callback
+    #[allow(unsafe_code, clippy::too_many_lines)]
+    pub fn read_all_sliding_window_iocp_to_index_parallel<F>(
+        &self,
+        overlapped_handle: HANDLE,
+        volume: char,
+        concurrency: Option<usize>,
+        io_chunk_size: Option<usize>,
+        num_workers: Option<usize>,
+        _progress_callback: Option<F>,
+    ) -> Result<crate::index::MftIndex>
+    where
+        F: Fn(u64, u64),
+    {
+        use std::collections::VecDeque;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use crossbeam_channel::{Sender, bounded};
+        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
+        use windows::Win32::Storage::FileSystem::ReadFile;
+        use windows::Win32::System::IO::GetQueuedCompletionStatus;
+
+        use crate::index::{MftIndex, MftIndexFragment};
+
+        let record_size = self.extent_map.bytes_per_record as usize;
+        let total_records = self.extent_map.total_records() as usize;
+
+        // Use provided values or adaptive defaults
+        let concurrency = concurrency.unwrap_or_else(|| self.drive_type.optimal_concurrency());
+        let io_chunk_size = io_chunk_size.unwrap_or_else(|| self.drive_type.optimal_io_size());
+        let num_workers = num_workers.unwrap_or_else(num_cpus::get);
+
+        info!(
+            total_records,
+            concurrency,
+            io_size_kb = io_chunk_size / 1024,
+            num_workers,
+            drive_type = ?self.drive_type,
+            "🚀 Starting PARALLEL parsing IOCP (M3 optimization)"
+        );
+
+        // Generate read chunks with bitmap skip optimization
+        let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
+        let mut sorted_chunks: Vec<ReadChunk> = chunks;
+        sorted_chunks.sort_by_key(|c| c.disk_offset);
+
+        // Build I/O operations with FRS tracking
+        struct IoOp {
+            disk_offset: u64,
+            size: usize,
+            start_frs: u64,
+        }
+
+        let mut io_ops: VecDeque<IoOp> = VecDeque::new();
+
+        for chunk in sorted_chunks.iter() {
+            let skip_begin_bytes = chunk.skip_begin as usize * record_size;
+            let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
+            if effective_records == 0 {
+                continue;
+            }
+
+            let chunk_bytes = effective_records as usize * record_size;
+            let mut offset_within_chunk = 0usize;
+            let mut frs_offset = 0u64;
+
+            while offset_within_chunk < chunk_bytes {
+                let io_size = std::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
+                let records_in_io = io_size / record_size;
+                let disk_offset =
+                    chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
+
+                io_ops.push_back(IoOp {
+                    disk_offset,
+                    size: io_size,
+                    start_frs: chunk.start_frs + chunk.skip_begin as u64 + frs_offset,
+                });
+
+                offset_within_chunk += io_size;
+                frs_offset += records_in_io as u64;
+            }
+        }
+
+        let total_io_ops = io_ops.len();
+        let estimated_records = if let Some(ref bm) = self.bitmap {
+            bm.count_in_use()
+        } else {
+            total_records
+        };
+
+        info!(
+            io_ops = total_io_ops,
+            estimated_records, "📊 Generated I/O operations for parallel parsing"
+        );
+
+        // Create channel for buffer handoff (bounded to prevent memory explosion)
+        // Each message contains: (buffer_data, start_frs, record_count)
+        let channel_capacity = num_workers * 2;
+        let (tx, rx): (
+            Sender<Option<(Vec<u8>, u64, usize)>>,
+            crossbeam_channel::Receiver<Option<(Vec<u8>, u64, usize)>>,
+        ) = bounded(channel_capacity);
+
+        // Shared counter for parsed records
+        let records_parsed = Arc::new(AtomicUsize::new(0));
+
+        // Clone bitmap for workers
+        let bitmap_arc = self.bitmap.clone().map(Arc::new);
+
+        // Spawn worker threads
+        let mut worker_handles = Vec::with_capacity(num_workers);
+        let records_per_worker = (estimated_records / num_workers) + 1;
+
+        for worker_id in 0..num_workers {
+            let rx = rx.clone();
+            let bitmap = bitmap_arc.clone();
+            let records_parsed = Arc::clone(&records_parsed);
+            let record_size = record_size;
+
+            let handle = std::thread::spawn(move || {
+                let mut fragment = MftIndexFragment::with_capacity(records_per_worker);
+                let mut local_parsed = 0usize;
+
+                // Process buffers until channel closes
+                while let Ok(Some((buffer, start_frs, record_count))) = rx.recv() {
+                    for i in 0..record_count {
+                        let frs = start_frs + i as u64;
+
+                        // Check bitmap
+                        if let Some(ref bm) = bitmap {
+                            if !bm.is_record_in_use(frs) {
+                                continue;
+                            }
+                        }
+
+                        let offset = i * record_size;
+                        let end = offset + record_size;
+                        if end > buffer.len() {
+                            break;
+                        }
+
+                        // Copy to mutable buffer for fixup
+                        let mut record_buf = buffer[offset..end].to_vec();
+
+                        // Apply fixup
+                        if !apply_fixup(&mut record_buf) {
+                            continue;
+                        }
+
+                        // Parse into fragment
+                        if parse_record_to_fragment(&record_buf, frs, &mut fragment) {
+                            local_parsed += 1;
+                        }
+                    }
+                }
+
+                records_parsed.fetch_add(local_parsed, Ordering::Relaxed);
+
+                tracing::debug!(
+                    worker_id,
+                    local_parsed,
+                    fragment_records = fragment.len(),
+                    "Worker complete"
+                );
+
+                fragment
+            });
+
+            worker_handles.push(handle);
+        }
+
+        // Drop the receiver clone so workers can detect channel close
+        drop(rx);
+
+        // IOCP reading (producer)
+        let read_start = std::time::Instant::now();
+        let iocp = IoCompletionPort::new(0)?;
+        iocp.associate(overlapped_handle, 0)?;
+
+        struct InFlightOp {
+            overlapped: windows::Win32::System::IO::OVERLAPPED,
+            buffer: AlignedBuffer,
+            op: IoOp,
+        }
+
+        let mut buffer_pool: Vec<AlignedBuffer> = (0..concurrency)
+            .map(|_| AlignedBuffer::new(io_chunk_size))
+            .collect();
+
+        let mut in_flight: Vec<Option<Pin<Box<InFlightOp>>>> =
+            (0..concurrency).map(|_| None).collect();
+
+        let mut completed_count = 0usize;
+        let mut bytes_read_total = 0u64;
+
+        // Queue initial reads
+        for slot_id in 0..concurrency {
+            if let Some(op) = io_ops.pop_front() {
+                let buffer = buffer_pool.pop().unwrap();
+                let mut in_flight_op = Box::pin(InFlightOp {
+                    overlapped: unsafe { std::mem::zeroed() },
+                    buffer,
+                    op,
+                });
+
+                let offset = in_flight_op.op.disk_offset;
+                let op_mut = unsafe { in_flight_op.as_mut().get_unchecked_mut() };
+                op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
+                op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
+
+                let overlapped_ptr = &mut op_mut.overlapped as *mut _;
+                let read_size = op_mut.op.size;
+                let result = unsafe {
+                    ReadFile(
+                        overlapped_handle,
+                        Some(&mut op_mut.buffer.as_mut_slice()[..read_size]),
+                        None,
+                        Some(overlapped_ptr),
+                    )
+                };
+
+                match result {
+                    Ok(_) => {}
+                    Err(_) => {
+                        let last_error = unsafe { GetLastError() };
+                        if last_error != ERROR_IO_PENDING {
+                            // Signal workers to stop
+                            drop(tx);
+                            return Err(MftError::Io(std::io::Error::from_raw_os_error(
+                                last_error.0 as i32,
+                            )));
+                        }
+                    }
+                }
+
+                in_flight[slot_id] = Some(in_flight_op);
+            }
+        }
+
+        // Process completions and send to workers
+        while completed_count < total_io_ops {
+            let mut bytes_transferred: u32 = 0;
+            let mut completion_key: usize = 0;
+            let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
+                std::ptr::null_mut();
+
+            let result = unsafe {
+                GetQueuedCompletionStatus(
+                    iocp.handle,
+                    &mut bytes_transferred,
+                    &mut completion_key,
+                    &mut overlapped_ptr,
+                    u32::MAX,
+                )
+            };
+
+            if result.is_err() {
+                let err = std::io::Error::last_os_error();
+                warn!(error = %err, "GetQueuedCompletionStatus failed");
+                continue;
+            }
+
+            // Find completed slot
+            let mut completed_slot = None;
+            for (idx, slot) in in_flight.iter().enumerate() {
+                if let Some(op) = slot {
+                    let op_overlapped_ptr =
+                        &op.overlapped as *const _ as *mut windows::Win32::System::IO::OVERLAPPED;
+                    if op_overlapped_ptr == overlapped_ptr {
+                        completed_slot = Some(idx);
+                        break;
+                    }
+                }
+            }
+
+            if let Some(slot_idx) = completed_slot {
+                if let Some(mut completed_op) = in_flight[slot_idx].take() {
+                    let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
+
+                    // Send buffer to workers (copy the data)
+                    let buffer_data =
+                        op_mut.buffer.as_slice()[..bytes_transferred as usize].to_vec();
+                    let start_frs = op_mut.op.start_frs;
+                    let record_count = bytes_transferred as usize / record_size;
+
+                    if tx
+                        .send(Some((buffer_data, start_frs, record_count)))
+                        .is_err()
+                    {
+                        warn!("Failed to send buffer to workers - channel closed");
+                    }
+
+                    bytes_read_total += bytes_transferred as u64;
+                    completed_count += 1;
+
+                    // Recycle buffer and queue next read
+                    let recycled_buffer =
+                        std::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
+                    buffer_pool.push(recycled_buffer);
+
+                    if let Some(next_op) = io_ops.pop_front() {
+                        let buffer = buffer_pool.pop().unwrap();
+                        let mut new_in_flight = Box::pin(InFlightOp {
+                            overlapped: unsafe { std::mem::zeroed() },
+                            buffer,
+                            op: next_op,
+                        });
+
+                        let offset = new_in_flight.op.disk_offset;
+                        let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
+                        new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
+                        new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
+                            (offset >> 32) as u32;
+
+                        let overlapped_ptr = &mut new_op_mut.overlapped as *mut _;
+                        let read_size = new_op_mut.op.size;
+                        let result = unsafe {
+                            ReadFile(
+                                overlapped_handle,
+                                Some(&mut new_op_mut.buffer.as_mut_slice()[..read_size]),
+                                None,
+                                Some(overlapped_ptr),
+                            )
+                        };
+
+                        match result {
+                            Ok(_) => {}
+                            Err(_) => {
+                                let last_error = unsafe { GetLastError() };
+                                if last_error != ERROR_IO_PENDING {
+                                    warn!(error = ?last_error, "Failed to queue next read");
+                                }
+                            }
+                        }
+
+                        in_flight[slot_idx] = Some(new_in_flight);
+                    }
+                }
+            }
+        }
+
+        let read_ms = read_start.elapsed().as_millis();
+        info!(
+            read_ms,
+            bytes_mb = bytes_read_total / (1024 * 1024),
+            "✅ IOCP read complete, waiting for workers"
+        );
+
+        // Signal workers to stop (send None to each)
+        for _ in 0..num_workers {
+            let _ = tx.send(None);
+        }
+        drop(tx);
+
+        // Collect fragments from workers
+        let merge_start = std::time::Instant::now();
+        let mut fragments: Vec<MftIndexFragment> = Vec::with_capacity(num_workers);
+
+        for handle in worker_handles {
+            match handle.join() {
+                Ok(fragment) => fragments.push(fragment),
+                Err(e) => {
+                    warn!("Worker thread panicked: {:?}", e);
+                }
+            }
+        }
+
+        let total_parsed = records_parsed.load(Ordering::Relaxed);
+
+        // Merge fragments into final index
+        let mut index = MftIndex::with_capacity(volume, estimated_records);
+        index.merge_fragments(fragments);
+
+        let merge_ms = merge_start.elapsed().as_millis();
+        let total_ms = read_start.elapsed().as_millis();
+
+        info!(
+            total_ms,
+            read_ms,
+            merge_ms,
+            bytes_mb = bytes_read_total / (1024 * 1024),
+            records_parsed = total_parsed,
+            index_entries = index.records.len(),
+            names_kb = index.names.len() / 1024,
+            "✅ Parallel parsing IOCP complete"
         );
 
         Ok(index)
@@ -6031,6 +6690,435 @@ impl IocpMftReader {
             merger.add_result(result);
         }
         Ok(merger.merge())
+    }
+}
+
+// ============================================================================
+// M4: Multi-Volume Parallel IOCP Reader
+// ============================================================================
+
+/// Per-volume state for multi-volume IOCP reading.
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct VolumeState {
+    /// Drive letter (e.g., 'C')
+    pub drive_letter: char,
+    /// Volume handle (opened with OVERLAPPED flag)
+    pub handle: HANDLE,
+    /// Extent map for this volume's MFT
+    pub extent_map: MftExtentMap,
+    /// Optional bitmap for skip optimization
+    pub bitmap: Option<crate::platform::MftBitmap>,
+    /// Drive type for adaptive I/O tuning
+    pub drive_type: crate::platform::DriveType,
+    /// Number of pending I/O operations for this volume
+    pub pending_ops: usize,
+    /// Maximum concurrent ops for this volume (based on drive type)
+    pub max_concurrency: usize,
+    /// I/O chunk size for this volume
+    pub io_chunk_size: usize,
+    /// The MftIndex being built for this volume
+    pub index: crate::index::MftIndex,
+    /// Queue of pending I/O operations
+    pub io_queue: std::collections::VecDeque<MultiVolumeIoOp>,
+    /// Next I/O operation index to issue
+    pub next_io_idx: usize,
+    /// Total I/O operations for this volume
+    pub total_io_ops: usize,
+    /// Completed I/O operations
+    pub completed_io_ops: usize,
+}
+
+/// I/O operation for multi-volume reading.
+#[cfg(windows)]
+#[derive(Debug, Clone)]
+pub struct MultiVolumeIoOp {
+    /// Disk offset to read from
+    pub disk_offset: u64,
+    /// Size of the read in bytes
+    pub size: usize,
+    /// First FRS in this I/O
+    pub start_frs: u64,
+}
+
+/// Multi-volume IOCP reader that uses a single IOCP for all volumes.
+///
+/// This is the M4 optimization: instead of creating separate IOCPs for each
+/// volume, we use a single IOCP and associate all volume handles with it.
+/// The completion key identifies which volume completed.
+///
+/// Benefits:
+/// - Single event loop for all volumes
+/// - OS can optimize I/O scheduling across all drives
+/// - Reduced thread overhead
+/// - NVMe drives get high concurrency while HDDs get low concurrency
+#[cfg(windows)]
+pub struct MultiVolumeIocpReader {
+    /// Per-volume state, indexed by completion key
+    volumes: Vec<VolumeState>,
+}
+
+#[cfg(windows)]
+impl MultiVolumeIocpReader {
+    /// Creates a new multi-volume IOCP reader.
+    ///
+    /// # Arguments
+    ///
+    /// * `volumes` - Vector of volume states to read from
+    #[must_use]
+    pub fn new(volumes: Vec<VolumeState>) -> Self {
+        Self { volumes }
+    }
+
+    /// Reads all MFTs from all volumes using a single IOCP.
+    ///
+    /// Returns a vector of `MftIndex`, one per volume, in the same order
+    /// as the input volumes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if IOCP creation fails or if all volumes fail to read.
+    #[allow(unsafe_code, clippy::too_many_lines)]
+    pub fn read_all_volumes(&mut self) -> Result<Vec<crate::index::MftIndex>> {
+        use std::pin::Pin;
+
+        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError, HANDLE};
+        use windows::Win32::Storage::FileSystem::ReadFile;
+        use windows::Win32::System::IO::GetQueuedCompletionStatus;
+
+        let record_size = if self.volumes.is_empty() {
+            1024 // Default
+        } else {
+            self.volumes[0].extent_map.bytes_per_record as usize
+        };
+
+        // Create single IOCP for all volumes
+        let iocp = IoCompletionPort::new(0)?;
+
+        // Associate all volume handles with the IOCP
+        // The completion key is the volume index
+        for (idx, vol) in self.volumes.iter().enumerate() {
+            iocp.associate(vol.handle, idx)?;
+            info!(
+                volume = %vol.drive_letter,
+                key = idx,
+                drive_type = ?vol.drive_type,
+                concurrency = vol.max_concurrency,
+                io_size_kb = vol.io_chunk_size / 1024,
+                "📎 Associated volume with IOCP"
+            );
+        }
+
+        // In-flight operation tracking per volume
+        struct InFlightOp {
+            overlapped: windows::Win32::System::IO::OVERLAPPED,
+            buffer: AlignedBuffer,
+            op: MultiVolumeIoOp,
+            volume_idx: usize,
+        }
+
+        // Create buffer pools and in-flight tracking per volume
+        let mut buffer_pools: Vec<Vec<AlignedBuffer>> = self
+            .volumes
+            .iter()
+            .map(|v| {
+                (0..v.max_concurrency)
+                    .map(|_| AlignedBuffer::new(v.io_chunk_size))
+                    .collect()
+            })
+            .collect();
+
+        let mut in_flight: Vec<Vec<Option<Pin<Box<InFlightOp>>>>> = self
+            .volumes
+            .iter()
+            .map(|v| (0..v.max_concurrency).map(|_| None).collect())
+            .collect();
+
+        // Issue initial reads for all volumes
+        let mut total_pending = 0usize;
+
+        for (vol_idx, vol) in self.volumes.iter_mut().enumerate() {
+            let initial_count = std::cmp::min(vol.max_concurrency, vol.io_queue.len());
+
+            for slot_idx in 0..initial_count {
+                if let Some(op) = vol.io_queue.pop_front() {
+                    let mut buffer = buffer_pools[vol_idx]
+                        .pop()
+                        .unwrap_or_else(|| AlignedBuffer::new(vol.io_chunk_size));
+
+                    let mut in_flight_op = Box::pin(InFlightOp {
+                        overlapped: windows::Win32::System::IO::OVERLAPPED {
+                            Anonymous: windows::Win32::System::IO::OVERLAPPED_0 {
+                                Anonymous: windows::Win32::System::IO::OVERLAPPED_0_0 {
+                                    Offset: (op.disk_offset & 0xFFFF_FFFF) as u32,
+                                    OffsetHigh: (op.disk_offset >> 32) as u32,
+                                },
+                            },
+                            hEvent: HANDLE::default(),
+                            Internal: 0,
+                            InternalHigh: 0,
+                        },
+                        buffer,
+                        op: op.clone(),
+                        volume_idx: vol_idx,
+                    });
+
+                    let overlapped_ptr = std::ptr::addr_of_mut!(in_flight_op.overlapped);
+                    let buffer_ptr = in_flight_op.buffer.as_mut_slice().as_mut_ptr();
+
+                    let read_result = unsafe {
+                        ReadFile(
+                            vol.handle,
+                            Some(std::slice::from_raw_parts_mut(buffer_ptr, op.size)),
+                            None,
+                            Some(overlapped_ptr),
+                        )
+                    };
+
+                    if read_result.is_err() {
+                        let err = unsafe { GetLastError() };
+                        if err != ERROR_IO_PENDING {
+                            warn!(
+                                volume = %vol.drive_letter,
+                                error = ?err,
+                                "Failed to issue initial read"
+                            );
+                            continue;
+                        }
+                    }
+
+                    in_flight[vol_idx][slot_idx] = Some(in_flight_op);
+                    vol.pending_ops += 1;
+                    total_pending += 1;
+                }
+            }
+        }
+
+        info!(
+            volumes = self.volumes.len(),
+            total_pending, "🚀 Started multi-volume IOCP reading"
+        );
+
+        // Process completions
+        let mut bytes_read_total = 0u64;
+
+        while total_pending > 0 {
+            let mut bytes_transferred: u32 = 0;
+            let mut completion_key: usize = 0;
+            let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
+                std::ptr::null_mut();
+
+            let wait_result = unsafe {
+                GetQueuedCompletionStatus(
+                    iocp.raw_handle(),
+                    &mut bytes_transferred,
+                    &mut completion_key,
+                    &mut overlapped_ptr,
+                    u32::MAX,
+                )
+            };
+
+            if wait_result.is_err() || overlapped_ptr.is_null() {
+                let err = unsafe { GetLastError() };
+                warn!(error = ?err, "IOCP wait failed");
+                break;
+            }
+
+            let vol_idx = completion_key;
+            if vol_idx >= self.volumes.len() {
+                warn!(key = vol_idx, "Invalid completion key");
+                continue;
+            }
+
+            // Find the completed operation
+            let mut completed_slot = None;
+            for (slot_idx, slot) in in_flight[vol_idx].iter_mut().enumerate() {
+                if let Some(op) = slot {
+                    let op_ptr = std::ptr::addr_of!(op.overlapped);
+                    if op_ptr as *const _ == overlapped_ptr as *const _ {
+                        completed_slot = Some(slot_idx);
+                        break;
+                    }
+                }
+            }
+
+            let Some(slot_idx) = completed_slot else {
+                warn!("Could not find completed operation");
+                continue;
+            };
+
+            // Take the completed operation and unpin it to get ownership
+            let completed_pinned = in_flight[vol_idx][slot_idx].take().unwrap();
+            let completed_op = Pin::into_inner(completed_pinned);
+            let vol = &mut self.volumes[vol_idx];
+            vol.pending_ops -= 1;
+            vol.completed_io_ops += 1;
+            total_pending -= 1;
+            bytes_read_total += bytes_transferred as u64;
+
+            // Parse the completed buffer into the volume's index
+            let buffer_slice = &completed_op.buffer.as_slice()[..bytes_transferred as usize];
+            let records_in_buffer = bytes_transferred as usize / record_size;
+            let mut current_frs = completed_op.op.start_frs;
+
+            for record_idx in 0..records_in_buffer {
+                let record_start = record_idx * record_size;
+                let record_end = record_start + record_size;
+                if record_end > buffer_slice.len() {
+                    break;
+                }
+
+                let record_data = &buffer_slice[record_start..record_end];
+                parse_record_to_index(record_data, current_frs, &mut vol.index);
+                current_frs += 1;
+            }
+
+            // Return buffer to pool
+            buffer_pools[vol_idx].push(completed_op.buffer);
+
+            // Issue next read for this volume if available
+            if let Some(next_op) = vol.io_queue.pop_front() {
+                let buffer = buffer_pools[vol_idx]
+                    .pop()
+                    .unwrap_or_else(|| AlignedBuffer::new(vol.io_chunk_size));
+
+                let mut new_in_flight = Box::pin(InFlightOp {
+                    overlapped: windows::Win32::System::IO::OVERLAPPED {
+                        Anonymous: windows::Win32::System::IO::OVERLAPPED_0 {
+                            Anonymous: windows::Win32::System::IO::OVERLAPPED_0_0 {
+                                Offset: (next_op.disk_offset & 0xFFFF_FFFF) as u32,
+                                OffsetHigh: (next_op.disk_offset >> 32) as u32,
+                            },
+                        },
+                        hEvent: HANDLE::default(),
+                        Internal: 0,
+                        InternalHigh: 0,
+                    },
+                    buffer,
+                    op: next_op.clone(),
+                    volume_idx: vol_idx,
+                });
+
+                let overlapped_ptr = std::ptr::addr_of_mut!(new_in_flight.overlapped);
+                let buffer_ptr = new_in_flight.buffer.as_mut_slice().as_mut_ptr();
+
+                let read_result = unsafe {
+                    ReadFile(
+                        vol.handle,
+                        Some(std::slice::from_raw_parts_mut(buffer_ptr, next_op.size)),
+                        None,
+                        Some(overlapped_ptr),
+                    )
+                };
+
+                if read_result.is_err() {
+                    let err = unsafe { GetLastError() };
+                    if err != ERROR_IO_PENDING {
+                        warn!(
+                            volume = %vol.drive_letter,
+                            error = ?err,
+                            "Failed to issue next read"
+                        );
+                        // Unpin to recover the buffer
+                        let failed_op = Pin::into_inner(new_in_flight);
+                        buffer_pools[vol_idx].push(failed_op.buffer);
+                        continue;
+                    }
+                }
+
+                in_flight[vol_idx][slot_idx] = Some(new_in_flight);
+                vol.pending_ops += 1;
+                total_pending += 1;
+            }
+        }
+
+        // Log completion stats per volume
+        for vol in &self.volumes {
+            info!(
+                volume = %vol.drive_letter,
+                records = vol.index.len(),
+                completed_ops = vol.completed_io_ops,
+                total_ops = vol.total_io_ops,
+                "✅ Volume read complete"
+            );
+        }
+
+        info!(
+            volumes = self.volumes.len(),
+            total_bytes = bytes_read_total,
+            "✅ Multi-volume IOCP read complete"
+        );
+
+        // Extract indices from volumes
+        Ok(self.volumes.drain(..).map(|v| v.index).collect())
+    }
+}
+
+/// Helper function to prepare volume state for multi-volume reading.
+#[cfg(windows)]
+pub fn prepare_volume_state(
+    drive_letter: char,
+    handle: HANDLE,
+    extent_map: MftExtentMap,
+    bitmap: Option<crate::platform::MftBitmap>,
+    drive_type: crate::platform::DriveType,
+) -> VolumeState {
+    let record_size = extent_map.bytes_per_record as usize;
+    let total_records = extent_map.total_records() as usize;
+    let max_concurrency = drive_type.optimal_concurrency();
+    let io_chunk_size = drive_type.optimal_io_size();
+
+    // Generate I/O operations
+    let chunks = generate_read_chunks(&extent_map, bitmap.as_ref(), 64 * 1024);
+    let mut sorted_chunks: Vec<ReadChunk> = chunks;
+    sorted_chunks.sort_by_key(|c| c.disk_offset);
+
+    let mut io_queue = std::collections::VecDeque::new();
+
+    for chunk in sorted_chunks.iter() {
+        let skip_begin_bytes = chunk.skip_begin as usize * record_size;
+        let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
+        if effective_records == 0 {
+            continue;
+        }
+
+        let chunk_bytes = effective_records as usize * record_size;
+        let mut offset_within_chunk = 0usize;
+        let mut frs_offset = 0u64;
+
+        while offset_within_chunk < chunk_bytes {
+            let io_size = std::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
+            let disk_offset =
+                chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
+
+            io_queue.push_back(MultiVolumeIoOp {
+                disk_offset,
+                size: io_size,
+                start_frs: chunk.start_frs + chunk.skip_begin as u64 + frs_offset,
+            });
+
+            offset_within_chunk += io_size;
+            frs_offset += (io_size / record_size) as u64;
+        }
+    }
+
+    let total_io_ops = io_queue.len();
+    let estimated_records = bitmap.as_ref().map_or(total_records, |b| b.count_in_use());
+
+    VolumeState {
+        drive_letter,
+        handle,
+        extent_map,
+        bitmap,
+        drive_type,
+        pending_ops: 0,
+        max_concurrency,
+        io_chunk_size,
+        index: crate::index::MftIndex::with_capacity(drive_letter, estimated_records),
+        io_queue,
+        next_io_idx: 0,
+        total_io_ops,
+        completed_io_ops: 0,
     }
 }
 
