@@ -985,18 +985,21 @@ impl MftReader {
         // C++ team insight: "read all then parse" is faster than pipelining even on HDD
         // because: no context switching, CPU cache stays hot, no channel overhead,
         // OS can optimize continuous sequential reads better.
+        // For read_all() (returns Vec<ParsedRecord>), use SlidingIocp for IOCP-based
+        // I/O.
         let effective_mode = match self.mode {
             MftReadMode::Auto => {
-                // Auto-select based on drive type
-                // HDD uses Bulk (C++ style: read all, then parse)
-                // SSD/NVMe uses Parallel (read chunks, parse in parallel)
+                // Auto-select based on drive type - use IOCP for all drive types
+                // The concurrency is automatically adjusted per drive type
                 match drive_type {
-                    crate::platform::DriveType::Nvme => MftReadMode::Parallel, // NVMe: high
-                    // parallelism
-                    crate::platform::DriveType::Ssd => MftReadMode::Parallel,
-                    crate::platform::DriveType::Hdd => MftReadMode::Bulk, // C++ style: read
-                    // all, then parse
-                    crate::platform::DriveType::Unknown => MftReadMode::Parallel,
+                    // NVMe: IOCP with 32 concurrent reads
+                    crate::platform::DriveType::Nvme => MftReadMode::SlidingIocp,
+                    // SSD: IOCP with 8 concurrent reads
+                    crate::platform::DriveType::Ssd => MftReadMode::SlidingIocp,
+                    // HDD: IOCP with 2 concurrent reads (sequential is optimal)
+                    crate::platform::DriveType::Hdd => MftReadMode::SlidingIocp,
+                    // Unknown: Conservative IOCP approach
+                    crate::platform::DriveType::Unknown => MftReadMode::SlidingIocp,
                 }
             }
             mode => mode,
@@ -1731,14 +1734,19 @@ impl MftReader {
         // C++ team insight: "read all then parse" is faster than pipelining even on HDD
         // because: no context switching, CPU cache stays hot, no channel overhead,
         // OS can optimize continuous sequential reads better.
+        // For lean index (MftIndex), use SlidingIocpInline for NVMe/SSD - this uses
+        // IOCP with multiple reads in flight and inline parsing, matching C++
+        // performance.
         let effective_mode = match self.mode {
             MftReadMode::Auto => match drive_type {
-                crate::platform::DriveType::Nvme => MftReadMode::Parallel, // NVMe: high
-                // parallelism
-                crate::platform::DriveType::Ssd => MftReadMode::Parallel,
-                crate::platform::DriveType::Hdd => MftReadMode::Bulk, // C++ style: read all,
-                // then parse
-                crate::platform::DriveType::Unknown => MftReadMode::Parallel,
+                // NVMe: Use IOCP with 32 concurrent reads + parallel parsing (2024 MB/s)
+                crate::platform::DriveType::Nvme => MftReadMode::SlidingIocpInline,
+                // SSD: Use IOCP with 8 concurrent reads + parallel parsing
+                crate::platform::DriveType::Ssd => MftReadMode::SlidingIocpInline,
+                // HDD: Use IOCP with 2 concurrent reads (sequential is optimal)
+                crate::platform::DriveType::Hdd => MftReadMode::SlidingIocpInline,
+                // Unknown: Conservative IOCP approach
+                crate::platform::DriveType::Unknown => MftReadMode::SlidingIocpInline,
             },
             mode => mode,
         };
