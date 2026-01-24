@@ -576,6 +576,36 @@ impl<'a> IndexQuery<'a> {
         self
     }
 
+    /// Set whether to resolve full paths for results.
+    #[must_use]
+    pub const fn with_resolve_paths(mut self, resolve: bool) -> Self {
+        self.options.resolve_paths = resolve;
+        self
+    }
+
+    /// Set the pattern filter directly.
+    #[must_use]
+    pub fn with_pattern(mut self, pattern: IndexPattern) -> Self {
+        self.pattern = Some(pattern);
+        self
+    }
+
+    /// Set the pattern filter from a `Result`, ignoring errors.
+    #[must_use]
+    pub fn with_pattern_result(mut self, pattern: Result<IndexPattern>) -> Self {
+        if let Ok(pat) = pattern {
+            self.pattern = Some(pat);
+        }
+        self
+    }
+
+    /// Set the type filter.
+    #[must_use]
+    pub const fn with_type_filter(mut self, filter: TypeFilter) -> Self {
+        self.options.type_filter = filter;
+        self
+    }
+
     /// Execute the query and collect results.
     ///
     /// Uses Rayon for parallel execution across all records.
@@ -886,13 +916,19 @@ mod tests {
     fn test_query_mode_from_str() {
         assert_eq!(QueryMode::from_str_opt("auto"), Some(QueryMode::Auto));
         assert_eq!(QueryMode::from_str_opt("hybrid"), Some(QueryMode::Auto));
-        assert_eq!(QueryMode::from_str_opt("index"), Some(QueryMode::ForceIndex));
+        assert_eq!(
+            QueryMode::from_str_opt("index"),
+            Some(QueryMode::ForceIndex)
+        );
         assert_eq!(QueryMode::from_str_opt("fast"), Some(QueryMode::ForceIndex));
         assert_eq!(
             QueryMode::from_str_opt("dataframe"),
             Some(QueryMode::ForceDataFrame)
         );
-        assert_eq!(QueryMode::from_str_opt("df"), Some(QueryMode::ForceDataFrame));
+        assert_eq!(
+            QueryMode::from_str_opt("df"),
+            Some(QueryMode::ForceDataFrame)
+        );
         assert_eq!(
             QueryMode::from_str_opt("polars"),
             Some(QueryMode::ForceDataFrame)

@@ -271,7 +271,8 @@ use uffs_mft::{MftProgress, MftReader};
 ///
 /// Returns `true` if:
 /// - `QueryMode::ForceIndex` is set, OR
-/// - `QueryMode::Auto` AND query is simple (no parquet index, single drive, no tree columns)
+/// - `QueryMode::Auto` AND query is simple (no parquet index, single drive, no
+///   tree columns)
 ///
 /// Returns `false` if:
 /// - `QueryMode::ForceDataFrame` is set, OR
@@ -433,12 +434,8 @@ pub async fn search(
     let needs_paths = !benchmark && output_config.needs_path_column();
 
     // Decide which query path to use based on mode and query complexity
-    let use_index_path = should_use_index_path(
-        mode,
-        index.as_ref(),
-        multi_drives.as_ref(),
-        &output_config,
-    );
+    let use_index_path =
+        should_use_index_path(mode, index.as_ref(), multi_drives.as_ref(), &output_config);
 
     let mut results = if use_index_path {
         info!("🚀 Using fast MftIndex query path");
@@ -696,9 +693,11 @@ async fn load_and_filter_data(
     }
 }
 
-/// Load and filter data using fast `MftIndex` path (no `DataFrame` conversion during search).
+/// Load and filter data using fast `MftIndex` path (no `DataFrame` conversion
+/// during search).
 ///
-/// This is the fast path for simple queries. Uses cached `MftIndex` when available.
+/// This is the fast path for simple queries. Uses cached `MftIndex` when
+/// available.
 #[cfg(windows)]
 #[allow(clippy::single_call_fn, clippy::print_stderr)]
 async fn load_and_filter_data_index(
@@ -712,28 +711,31 @@ async fn load_and_filter_data_index(
     // Get effective drive
     let effective_drive = single_drive.or_else(|| filters.parsed.drive());
     let drive_letter = effective_drive.ok_or_else(|| {
-        anyhow::anyhow!("Index query mode requires a specific drive. Use --drive or include drive in pattern.")
+        anyhow::anyhow!(
+            "Index query mode requires a specific drive. Use --drive or include drive in pattern."
+        )
     })?;
 
     let t_load = std::time::Instant::now();
 
     // Try to load from cache first
-    let index = if let Some((cached_index, header)) = load_cached_index(drive_letter, INDEX_TTL_SECONDS) {
-        info!(
-            drive = %drive_letter,
-            records = cached_index.len(),
-            volume_serial = header.volume_serial,
-            "📦 Using cached MftIndex"
-        );
-        cached_index
-    } else {
-        // Cache miss - read fresh
-        info!(drive = %drive_letter, "🔄 Cache miss - reading MFT");
-        let reader = MftReader::open(drive_letter)
-            .await
-            .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
-        reader.read_all_index().await?
-    };
+    let index =
+        if let Some((cached_index, header)) = load_cached_index(drive_letter, INDEX_TTL_SECONDS) {
+            info!(
+                drive = %drive_letter,
+                records = cached_index.len(),
+                volume_serial = header.volume_serial,
+                "📦 Using cached MftIndex"
+            );
+            cached_index
+        } else {
+            // Cache miss - read fresh
+            info!(drive = %drive_letter, "🔄 Cache miss - reading MFT");
+            let reader = MftReader::open(drive_letter)
+                .await
+                .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
+            reader.read_all_index().await?
+        };
     let load_ms = t_load.elapsed().as_millis();
 
     // Execute query on index
@@ -744,8 +746,14 @@ async fn load_and_filter_data_index(
     if profile {
         let total_ms = load_ms + query_ms;
         eprintln!("=== PROFILE: Drive {drive_letter} (Index Path): ===");
-        eprintln!("  Index load:      {load_ms:>6} ms  ({} records)", index.len());
-        eprintln!("  Query/filter:    {query_ms:>6} ms  ({} matches)", results.height());
+        eprintln!(
+            "  Index load:      {load_ms:>6} ms  ({} records)",
+            index.len()
+        );
+        eprintln!(
+            "  Query/filter:    {query_ms:>6} ms  ({} matches)",
+            results.height()
+        );
         eprintln!("  TOTAL:           {total_ms:>6} ms");
     }
 
@@ -828,20 +836,24 @@ fn execute_index_query(
     filters: &QueryFilters<'_>,
     resolve_paths: bool,
 ) -> Result<uffs_mft::DataFrame> {
-    use uffs_core::{IndexQuery, TypeFilter, compile_extensions, compile_parsed_pattern};
+    use uffs_core::{IndexQuery, TypeFilter, compile_parsed_pattern};
 
     let mut query = IndexQuery::new(index);
 
     // Apply pattern filter
     let pattern = compile_parsed_pattern(filters.parsed);
-    query = query.with_pattern(pattern);
+    query = query.with_pattern_result(pattern);
 
-    // Apply extension filter if specified
+    // Apply extension filter if specified (extensions are handled via pattern)
     if let Some(ext_str) = filters.ext_filter {
         let parsed_ext_filter = ExtensionFilter::parse(ext_str)
             .map_err(|err| anyhow::anyhow!("Invalid extension filter: {err}"))?;
-        let ext_pattern = compile_extensions(parsed_ext_filter.extensions());
-        query = query.with_extension_pattern(ext_pattern);
+        let exts: Vec<&str> = parsed_ext_filter
+            .extensions()
+            .iter()
+            .map(String::as_str)
+            .collect();
+        query = query.extensions(&exts);
     }
 
     // Apply type filters
@@ -865,10 +877,10 @@ fn execute_index_query(
     }
 
     // Apply case sensitivity
-    query = query.case_sensitive(filters.parsed.case_sensitive());
+    query = query.case_sensitive(filters.parsed.is_case_sensitive());
 
     // Apply path resolution
-    query = query.resolve_paths(resolve_paths);
+    query = query.with_resolve_paths(resolve_paths);
 
     // Execute and convert to DataFrame
     let results = query.collect();
@@ -885,19 +897,21 @@ fn results_to_dataframe(
     use uffs_polars::{IntoColumn, NamedFrom, Series};
 
     // Build columns from results
-    let mut names: Vec<&str> = Vec::with_capacity(results.len());
+    let mut names: Vec<String> = Vec::with_capacity(results.len());
     let mut paths: Vec<String> = Vec::with_capacity(results.len());
     let mut sizes: Vec<u64> = Vec::with_capacity(results.len());
     let mut is_dirs: Vec<bool> = Vec::with_capacity(results.len());
     let mut frs_values: Vec<u64> = Vec::with_capacity(results.len());
 
     for result in results {
-        names.push(result.name);
+        names.push(result.name.clone());
         paths.push(result.path.clone().unwrap_or_default());
         sizes.push(result.size);
         is_dirs.push(result.is_directory);
         frs_values.push(result.frs);
     }
+
+    let height = results.len();
 
     // Create DataFrame
     let name_series = Series::new("name".into(), names);
@@ -908,17 +922,20 @@ fn results_to_dataframe(
 
     // Add volume column
     let volume_str = format!("{}:", index.volume);
-    let volumes: Vec<&str> = vec![volume_str.as_str(); results.len()];
+    let volumes: Vec<&str> = vec![volume_str.as_str(); height];
     let volume_series = Series::new("volume".into(), volumes);
 
-    uffs_mft::DataFrame::new(vec![
-        name_series.into_column(),
-        path_series.into_column(),
-        size_series.into_column(),
-        is_dir_series.into_column(),
-        frs_series.into_column(),
-        volume_series.into_column(),
-    ])
+    uffs_mft::DataFrame::new(
+        height,
+        vec![
+            name_series.into_column(),
+            path_series.into_column(),
+            size_series.into_column(),
+            is_dir_series.into_column(),
+            frs_series.into_column(),
+            volume_series.into_column(),
+        ],
+    )
     .map_err(|err| anyhow::anyhow!("Failed to create DataFrame: {err}"))
 }
 
