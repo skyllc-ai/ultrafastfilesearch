@@ -209,7 +209,7 @@ mod windows_impl {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
-    use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE};
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ,
         FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -266,10 +266,11 @@ mod windows_impl {
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
+        // USN Journal operations require GENERIC_READ access
         let handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(wide.as_ptr()),
-                0u32.into(),
+                GENERIC_READ.0.into(),
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 None,
                 OPEN_EXISTING,

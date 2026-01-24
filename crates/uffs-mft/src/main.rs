@@ -444,16 +444,17 @@ enum Commands {
         no_placeholders: bool,
 
         /// Number of concurrent I/O operations (reads in flight).
-        /// Default: 2 for HDD (optimal for sequential), higher for SSD/NVMe.
+        /// Default: auto (2 for HDD, 8 for SSD, 32 for `NVMe`).
         /// Use this to experiment with I/O parallelism.
-        #[arg(long, default_value = "2")]
-        concurrency: usize,
+        #[arg(long)]
+        concurrency: Option<usize>,
 
         /// I/O chunk size in KB (e.g., 1024 = 1MB, 2048 = 2MB, 4096 = 4MB).
-        /// Default: 1024 (1MB). Larger chunks reduce syscall overhead but
-        /// increase latency per completion.
-        #[arg(long, default_value = "1024")]
-        io_size_kb: usize,
+        /// Default: auto (1MB for HDD, 2MB for SSD, 4MB for `NVMe`).
+        /// Larger chunks reduce syscall overhead but increase latency per
+        /// completion.
+        #[arg(long)]
+        io_size_kb: Option<usize>,
 
         /// Enable parallel parsing (M3 optimization).
         /// Uses worker threads to parse MFT records in parallel with I/O.
@@ -3095,8 +3096,8 @@ async fn cmd_benchmark_index_lean(
     mode_str: &str,
     no_bitmap: bool,
     no_placeholders: bool,
-    concurrency: usize,
-    io_size_kb: usize,
+    concurrency: Option<usize>,
+    io_size_kb: Option<usize>,
     parallel_parse: bool,
     parse_workers: Option<usize>,
 ) -> Result<()> {
@@ -3110,8 +3111,14 @@ async fn cmd_benchmark_index_lean(
     // Parse read mode
     let mode: MftReadMode = mode_str.parse().map_err(|e: String| anyhow::anyhow!(e))?;
 
+    // Get drive type for adaptive defaults display
+    let drive_type = uffs_mft::platform::detect_drive_type(drive_upper);
+    let effective_concurrency = concurrency.unwrap_or_else(|| drive_type.optimal_concurrency());
+    let effective_io_size_kb = io_size_kb.unwrap_or_else(|| drive_type.optimal_io_size() / 1024);
+
     println!("=== Lean Index Build Benchmark Tool ===");
     println!("Drive: {}:", drive_upper);
+    println!("Drive Type: {:?}", drive_type);
     println!("Mode: {}", mode);
     println!("Bitmap: {}", if no_bitmap { "disabled" } else { "enabled" });
     println!(
@@ -3122,8 +3129,17 @@ async fn cmd_benchmark_index_lean(
             "enabled"
         }
     );
-    println!("Concurrency: {} I/O ops in flight", concurrency);
-    println!("I/O Size: {} KB ({} MB)", io_size_kb, io_size_kb / 1024);
+    println!(
+        "Concurrency: {} I/O ops in flight{}",
+        effective_concurrency,
+        if concurrency.is_none() { " (auto)" } else { "" }
+    );
+    println!(
+        "I/O Size: {} KB ({} MB){}",
+        effective_io_size_kb,
+        effective_io_size_kb / 1024,
+        if io_size_kb.is_none() { " (auto)" } else { "" }
+    );
     println!(
         "Parallel Parse: {} (workers: {})",
         if parallel_parse {
@@ -3167,8 +3183,8 @@ async fn cmd_benchmark_index_lean(
     // Open reader and read MFT into lean index
     // - no_bitmap: disable bitmap optimization to read entire MFT sequentially
     // - no_placeholders: skip placeholder creation for ~15% speedup
-    // - concurrency: number of I/O ops in flight
-    // - io_size_kb: I/O chunk size in KB
+    // - concurrency: number of I/O ops in flight (None = auto based on drive type)
+    // - io_size_kb: I/O chunk size in KB (None = auto based on drive type)
     // - parallel_parse: enable M3 parallel parsing optimization
     // - parse_workers: number of parsing worker threads
     let mut reader = MftReader::open(drive_upper)
@@ -3176,9 +3192,16 @@ async fn cmd_benchmark_index_lean(
         .with_context(|| format!("Failed to open drive {}:", drive_upper))?
         .with_mode(mode)
         .with_use_bitmap(!no_bitmap)
-        .with_add_placeholders(!no_placeholders)
-        .with_concurrency(concurrency)
-        .with_io_size(io_size_kb * 1024);
+        .with_add_placeholders(!no_placeholders);
+
+    // Only set concurrency/io_size if explicitly specified (otherwise use adaptive
+    // defaults)
+    if let Some(c) = concurrency {
+        reader = reader.with_concurrency(c);
+    }
+    if let Some(io_kb) = io_size_kb {
+        reader = reader.with_io_size(io_kb * 1024);
+    }
 
     // Apply parallel parsing settings if specified
     if parallel_parse {
