@@ -1606,8 +1606,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let is_ascii = name.is_ascii();
     let name_ref = IndexNameRef::new(name_offset, name_len as u16, is_ascii);
 
-    // Pre-process additional names: add to names buffer and links list BEFORE getting record reference
-    // This avoids borrow checker issues with holding &mut record while modifying index
+    // Pre-process additional names: add to names buffer and links list BEFORE
+    // getting record reference This avoids borrow checker issues with holding
+    // &mut record while modifying index
     let additional_count = additional_names.len();
     let mut link_indices: Vec<u32> = Vec::with_capacity(additional_count);
     for (link_name, link_parent) in additional_names {
@@ -1625,12 +1626,14 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         link_indices.push(link_idx);
     }
 
-    // Ensure parent exists (create placeholder if needed) - do this before getting our record
+    // Ensure parent exists (create placeholder if needed) - do this before getting
+    // our record
     if parent_frs != frs && parent_frs != 0 {
         let _ = index.get_or_create(parent_frs);
     }
 
-    // Now get or create the record in the index - no more index mutations after this
+    // Now get or create the record in the index - no more index mutations after
+    // this
     let record = index.get_or_create(frs);
     record.stdinfo = std_info;
     record.first_stream.size = SizeInfo {
@@ -1644,16 +1647,15 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     };
     record.name_count = 1 + additional_count as u16;
 
-    // Chain the additional links: first_name -> link[0] -> link[1] -> ... -> NO_ENTRY
-    // The links were pushed with next_entry = NO_ENTRY, now we chain them
+    // Chain the additional links: first_name -> link[0] -> link[1] -> ... ->
+    // NO_ENTRY The links were pushed with next_entry = NO_ENTRY, now we chain
+    // them
     if !link_indices.is_empty() {
         // Point first_name to the first additional link
         record.first_name.next_entry = link_indices[0];
     }
     // Note: The links in index.links already have next_entry = NO_ENTRY
-    // We need to chain them together, but we can't mutate index.links while holding record
-    // So we do it after releasing record
-    drop(record);
+    // We need to chain them together. The record reference goes out of scope here.
 
     // Chain the links together
     for i in 0..link_indices.len().saturating_sub(1) {
@@ -4048,9 +4050,7 @@ impl ParallelMftReader {
         struct IoOp {
             disk_offset: u64,
             size: usize,
-            start_frs: u64,    // First FRS in this I/O
-            skip_begin: u32,   // Records to skip at start
-            record_count: u64, // Total records in this I/O
+            start_frs: u64, // First FRS in this I/O
         }
 
         let mut io_ops: VecDeque<IoOp> = VecDeque::new();
@@ -4076,8 +4076,6 @@ impl ParallelMftReader {
                     disk_offset,
                     size: io_size,
                     start_frs: chunk.start_frs + chunk.skip_begin as u64 + frs_offset,
-                    skip_begin: 0, // Already accounted for in disk_offset
-                    record_count: records_in_io as u64,
                 });
 
                 offset_within_chunk += io_size;
