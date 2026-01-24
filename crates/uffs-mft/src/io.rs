@@ -4051,7 +4051,12 @@ impl ParallelMftReader {
         let total_bytes = total_records * record_size;
 
         // Use adaptive concurrency and I/O size based on drive type (M2 optimization)
-        let concurrency = self.drive_type.optimal_concurrency();
+        // For HDD, use extent-aware concurrency (fragmentation affects optimal value)
+        let concurrency = if matches!(self.drive_type, crate::platform::DriveType::Hdd) {
+            crate::platform::DriveType::optimal_concurrency_for_hdd(self.extent_map.extent_count())
+        } else {
+            self.drive_type.optimal_concurrency()
+        };
         let io_chunk_size = self.drive_type.optimal_io_size();
 
         info!(
@@ -4472,7 +4477,16 @@ impl ParallelMftReader {
 
         // Use provided values or adaptive defaults based on drive type
         // M1: Adaptive concurrency and I/O size based on drive type
-        let concurrency = concurrency.unwrap_or_else(|| self.drive_type.optimal_concurrency());
+        // For HDD, use extent-aware concurrency (fragmentation affects optimal value)
+        let concurrency = concurrency.unwrap_or_else(|| {
+            if matches!(self.drive_type, crate::platform::DriveType::Hdd) {
+                crate::platform::DriveType::optimal_concurrency_for_hdd(
+                    self.extent_map.extent_count(),
+                )
+            } else {
+                self.drive_type.optimal_concurrency()
+            }
+        });
         let io_chunk_size = io_chunk_size.unwrap_or_else(|| self.drive_type.optimal_io_size());
 
         info!(
@@ -4837,7 +4851,16 @@ impl ParallelMftReader {
         let total_records = self.extent_map.total_records() as usize;
 
         // Use provided values or adaptive defaults
-        let concurrency = concurrency.unwrap_or_else(|| self.drive_type.optimal_concurrency());
+        // For HDD, use extent-aware concurrency (fragmentation affects optimal value)
+        let concurrency = concurrency.unwrap_or_else(|| {
+            if matches!(self.drive_type, crate::platform::DriveType::Hdd) {
+                crate::platform::DriveType::optimal_concurrency_for_hdd(
+                    self.extent_map.extent_count(),
+                )
+            } else {
+                self.drive_type.optimal_concurrency()
+            }
+        });
         let io_chunk_size = io_chunk_size.unwrap_or_else(|| self.drive_type.optimal_io_size());
         let num_workers = num_workers.unwrap_or_else(num_cpus::get);
 
@@ -7344,7 +7367,12 @@ pub fn prepare_volume_state(
 ) -> VolumeState {
     let record_size = extent_map.bytes_per_record as usize;
     let total_records = extent_map.total_records() as usize;
-    let max_concurrency = drive_type.optimal_concurrency();
+    // For HDD, use extent-aware concurrency (fragmentation affects optimal value)
+    let max_concurrency = if matches!(drive_type, crate::platform::DriveType::Hdd) {
+        crate::platform::DriveType::optimal_concurrency_for_hdd(extent_map.extent_count())
+    } else {
+        drive_type.optimal_concurrency()
+    };
     let io_chunk_size = drive_type.optimal_io_size();
 
     // Generate I/O operations
@@ -7672,8 +7700,8 @@ mod tests {
         assert_eq!(resolve_concurrency(None, DriveType::Ssd), 8);
         assert_eq!(resolve_io_size(None, DriveType::Ssd), 2 * 1024 * 1024);
 
-        // Test HDD with None (should use optimal)
-        assert_eq!(resolve_concurrency(None, DriveType::Hdd), 2);
+        // Test HDD with None (default is 4, but actual I/O uses extent-aware logic)
+        assert_eq!(resolve_concurrency(None, DriveType::Hdd), 4);
         assert_eq!(resolve_io_size(None, DriveType::Hdd), 1024 * 1024);
 
         // Test Unknown with None (should use conservative)
