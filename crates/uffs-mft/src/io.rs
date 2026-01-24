@@ -6814,7 +6814,6 @@ impl MultiVolumeIocpReader {
             overlapped: windows::Win32::System::IO::OVERLAPPED,
             buffer: AlignedBuffer,
             op: MultiVolumeIoOp,
-            volume_idx: usize,
         }
 
         // Create buffer pools and in-flight tracking per volume
@@ -6842,7 +6841,7 @@ impl MultiVolumeIocpReader {
 
             for slot_idx in 0..initial_count {
                 if let Some(op) = vol.io_queue.pop_front() {
-                    let mut buffer = buffer_pools[vol_idx]
+                    let buffer = buffer_pools[vol_idx]
                         .pop()
                         .unwrap_or_else(|| AlignedBuffer::new(vol.io_chunk_size));
 
@@ -6860,7 +6859,6 @@ impl MultiVolumeIocpReader {
                         },
                         buffer,
                         op: op.clone(),
-                        volume_idx: vol_idx,
                     });
 
                     let overlapped_ptr = std::ptr::addr_of_mut!(in_flight_op.overlapped);
@@ -6996,7 +6994,6 @@ impl MultiVolumeIocpReader {
                     },
                     buffer,
                     op: next_op.clone(),
-                    volume_idx: vol_idx,
                 });
 
                 let overlapped_ptr = std::ptr::addr_of_mut!(new_in_flight.overlapped);

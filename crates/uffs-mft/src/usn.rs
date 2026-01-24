@@ -209,7 +209,6 @@ mod windows_impl {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
-    use windows::core::PCWSTR;
     use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ,
@@ -217,6 +216,7 @@ mod windows_impl {
     };
     use windows::Win32::System::IO::DeviceIoControl;
     use windows::Win32::System::Ioctl::{FSCTL_QUERY_USN_JOURNAL, FSCTL_READ_USN_JOURNAL};
+    use windows::core::PCWSTR;
 
     use super::*;
 
@@ -293,12 +293,12 @@ mod windows_impl {
             DeviceIoControl(
                 handle,
                 FSCTL_QUERY_USN_JOURNAL,
-                None,                                                   // Input buffer
-                0,                                                      // Input buffer size
-                Some(ptr::from_mut(&mut journal_data).cast()),          // Output buffer
-                size_of::<UsnJournalDataV0>() as u32,                   // Output buffer size
-                Some(&mut bytes_returned),                              // Bytes returned
-                None,                                                   // Overlapped
+                None,                                          // Input buffer
+                0,                                             // Input buffer size
+                Some(ptr::from_mut(&mut journal_data).cast()), // Output buffer
+                size_of::<UsnJournalDataV0>() as u32,          // Output buffer size
+                Some(&mut bytes_returned),                     // Bytes returned
+                None,                                          // Overlapped
             )
         };
         let _ = unsafe { CloseHandle(handle) };
@@ -337,12 +337,12 @@ mod windows_impl {
             DeviceIoControl(
                 handle,
                 FSCTL_READ_USN_JOURNAL,
-                Some(ptr::from_ref(&read_data).cast()),                 // Input buffer
-                size_of::<ReadUsnJournalDataV0>() as u32,               // Input buffer size
-                Some(buffer.as_mut_ptr().cast()),                       // Output buffer
-                buffer.len() as u32,                                    // Output buffer size
-                Some(&mut bytes_returned),                              // Bytes returned
-                None,                                                   // Overlapped
+                Some(ptr::from_ref(&read_data).cast()), // Input buffer
+                size_of::<ReadUsnJournalDataV0>() as u32, // Input buffer size
+                Some(buffer.as_mut_ptr().cast()),       // Output buffer
+                buffer.len() as u32,                    // Output buffer size
+                Some(&mut bytes_returned),              // Bytes returned
+                None,                                   // Overlapped
             )
         };
         let _ = unsafe { CloseHandle(handle) };

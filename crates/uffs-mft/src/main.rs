@@ -3623,8 +3623,7 @@ async fn cmd_index_load(input: &Path) -> Result<()> {
     println!();
 
     let start = Instant::now();
-    let (index, header) = MftIndex::load_from_file(input)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let (index, header) = MftIndex::load_from_file(input).map_err(|e| anyhow::anyhow!("{}", e))?;
     let load_time = start.elapsed();
 
     let file_size = std::fs::metadata(input)?.len();
@@ -3865,9 +3864,9 @@ async fn cmd_cache_clear(drive: Option<char>, all: bool) -> Result<()> {
 async fn cmd_index_update(drive: char, force_full: bool, ttl: Option<u64>) -> Result<()> {
     use std::time::Instant;
 
+    use uffs_mft::VolumeHandle;
     use uffs_mft::cache::{CacheStatus, INDEX_TTL_SECONDS, check_cache_status, save_to_cache};
     use uffs_mft::usn::{aggregate_changes, query_usn_journal, read_usn_journal};
-    use uffs_mft::{MftReader, VolumeHandle};
 
     let ttl_seconds = ttl.unwrap_or(INDEX_TTL_SECONDS);
     let start = Instant::now();
