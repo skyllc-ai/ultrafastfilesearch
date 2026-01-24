@@ -4007,11 +4007,21 @@ impl ParallelMftReader {
     ///
     /// This eliminates the separate parse and index build phases, saving ~7s
     /// on large MFTs by overlapping CPU work with I/O.
+    ///
+    /// # Arguments
+    ///
+    /// * `overlapped_handle` - IOCP handle for async I/O
+    /// * `volume` - Volume letter (e.g., 'C')
+    /// * `concurrency` - Number of I/O ops in flight (None = 2 for HDD)
+    /// * `io_chunk_size` - Size of each I/O in bytes (None = 1MB)
+    /// * `_progress_callback` - Optional progress callback
     #[allow(unsafe_code)]
     pub fn read_all_sliding_window_iocp_to_index<F>(
         &self,
         overlapped_handle: HANDLE,
         volume: char,
+        concurrency: Option<usize>,
+        io_chunk_size: Option<usize>,
         _progress_callback: Option<F>,
     ) -> Result<crate::index::MftIndex>
     where
@@ -4031,13 +4041,14 @@ impl ParallelMftReader {
         let record_size = self.extent_map.bytes_per_record as usize;
         let total_records = self.extent_map.total_records() as usize;
 
-        const CONCURRENCY: usize = 2;
-        const IO_CHUNK_SIZE: usize = 1024 * 1024; // 1MB per read
+        // Use provided values or defaults
+        let concurrency = concurrency.unwrap_or(2);
+        let io_chunk_size = io_chunk_size.unwrap_or(1024 * 1024); // 1MB default
 
         info!(
             total_records,
-            concurrency = CONCURRENCY,
-            io_size_kb = IO_CHUNK_SIZE / 1024,
+            concurrency,
+            io_size_kb = io_chunk_size / 1024,
             "🚀 Starting sliding window IOCP with INLINE parsing (C++ parity)"
         );
 
@@ -4067,7 +4078,7 @@ impl ParallelMftReader {
             let mut frs_offset = 0u64;
 
             while offset_within_chunk < chunk_bytes {
-                let io_size = std::cmp::min(IO_CHUNK_SIZE, chunk_bytes - offset_within_chunk);
+                let io_size = std::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
                 let records_in_io = io_size / record_size;
                 let disk_offset =
                     chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
@@ -4110,19 +4121,19 @@ impl ParallelMftReader {
             op: IoOp,
         }
 
-        let mut buffer_pool: Vec<AlignedBuffer> = (0..CONCURRENCY)
-            .map(|_| AlignedBuffer::new(IO_CHUNK_SIZE))
+        let mut buffer_pool: Vec<AlignedBuffer> = (0..concurrency)
+            .map(|_| AlignedBuffer::new(io_chunk_size))
             .collect();
 
         let mut in_flight: Vec<Option<Pin<Box<InFlightOp>>>> =
-            (0..CONCURRENCY).map(|_| None).collect();
+            (0..concurrency).map(|_| None).collect();
 
         let mut completed_count = 0usize;
         let mut bytes_read_total = 0u64;
         let mut records_parsed = 0usize;
 
         // Queue initial reads
-        for slot_id in 0..CONCURRENCY {
+        for slot_id in 0..concurrency {
             if let Some(op) = io_ops.pop_front() {
                 let buffer = buffer_pool.pop().unwrap();
                 let mut in_flight_op = Box::pin(InFlightOp {

@@ -432,6 +432,19 @@ pub struct MftReader {
     /// C++ team doesn't add placeholders upfront - they resolve paths lazily.
     /// Disabling this saves ~15% of CPU time during indexing.
     add_placeholders: bool,
+    /// Number of concurrent I/O operations (reads in flight).
+    ///
+    /// - Default: 2 for HDD (optimal for sequential reads)
+    /// - Higher values (8-32) may help on SSD/NVMe
+    ///
+    /// For HDDs, more concurrency can cause seeks and hurt performance.
+    /// For `NVMe`, high concurrency (16-32) is needed to saturate the device.
+    concurrency: Option<usize>,
+    /// I/O chunk size in bytes.
+    ///
+    /// - Default: 1MB (1024 * 1024)
+    /// - Larger chunks (2-4MB) reduce syscall overhead but increase latency
+    io_size: Option<usize>,
 }
 
 impl MftReader {
@@ -471,6 +484,8 @@ impl MftReader {
             use_bitmap: true,       // Use bitmap optimization by default
             expand_links: true,     // Expand hard links by default (C++ parity)
             add_placeholders: true, // Add placeholders by default for path resolution
+            concurrency: None,      // Use default (2 for HDD)
+            io_size: None,          // Use default (1MB)
         })
     }
 
@@ -603,6 +618,55 @@ impl MftReader {
     #[must_use]
     pub const fn add_placeholders(&self) -> bool {
         self.add_placeholders
+    }
+
+    /// Sets the number of concurrent I/O operations (reads in flight).
+    ///
+    /// This controls how many async read operations are queued simultaneously.
+    /// The optimal value depends on the drive type:
+    ///
+    /// - **HDD**: 2 (default) - More concurrency causes seeks and hurts
+    ///   performance
+    /// - **SSD**: 4-8 - Can benefit from moderate parallelism
+    /// - **`NVMe`**: 16-32 - High concurrency needed to saturate the device
+    ///
+    /// # Arguments
+    ///
+    /// * `concurrency` - Number of I/O operations in flight (1-64)
+    #[must_use]
+    pub const fn with_concurrency(mut self, concurrency: usize) -> Self {
+        self.concurrency = Some(concurrency);
+        self
+    }
+
+    /// Returns the configured concurrency, or None for default.
+    #[must_use]
+    pub const fn concurrency(&self) -> Option<usize> {
+        self.concurrency
+    }
+
+    /// Sets the I/O chunk size in bytes.
+    ///
+    /// This controls the size of each async read operation. Larger chunks
+    /// reduce syscall overhead but increase latency per completion.
+    ///
+    /// - **Default**: 1MB (1024 * 1024)
+    /// - **SSD**: 2MB may be slightly better
+    /// - **`NVMe`**: 4MB can reduce overhead
+    ///
+    /// # Arguments
+    ///
+    /// * `io_size` - I/O chunk size in bytes (e.g., 1024*1024 for 1MB)
+    #[must_use]
+    pub const fn with_io_size(mut self, io_size: usize) -> Self {
+        self.io_size = Some(io_size);
+        self
+    }
+
+    /// Returns the configured I/O size, or None for default.
+    #[must_use]
+    pub const fn io_size(&self) -> Option<usize> {
+        self.io_size
     }
 
     /// Read the entire MFT and return as a `DataFrame`.
@@ -1873,6 +1937,8 @@ impl MftReader {
                 let result = parallel_reader.read_all_sliding_window_iocp_to_index::<fn(u64, u64)>(
                     overlapped_handle,
                     self.volume,
+                    self.concurrency,
+                    self.io_size,
                     None,
                 );
 

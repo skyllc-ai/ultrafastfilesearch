@@ -442,6 +442,18 @@ enum Commands {
         /// paths lazily. Disabling saves ~15% of CPU time.
         #[arg(long)]
         no_placeholders: bool,
+
+        /// Number of concurrent I/O operations (reads in flight).
+        /// Default: 2 for HDD (optimal for sequential), higher for SSD/NVMe.
+        /// Use this to experiment with I/O parallelism.
+        #[arg(long, default_value = "2")]
+        concurrency: usize,
+
+        /// I/O chunk size in KB (e.g., 1024 = 1MB, 2048 = 2MB, 4096 = 4MB).
+        /// Default: 1024 (1MB). Larger chunks reduce syscall overhead but
+        /// increase latency per completion.
+        #[arg(long, default_value = "1024")]
+        io_size_kb: usize,
     },
 }
 
@@ -608,7 +620,19 @@ async fn run() -> Result<()> {
                 mode,
                 no_bitmap,
                 no_placeholders,
-            } => cmd_benchmark_index_lean(drive, &mode, no_bitmap, no_placeholders).await,
+                concurrency,
+                io_size_kb,
+            } => {
+                cmd_benchmark_index_lean(
+                    drive,
+                    &mode,
+                    no_bitmap,
+                    no_placeholders,
+                    concurrency,
+                    io_size_kb,
+                )
+                .await
+            }
         }
     }
 }
@@ -2847,6 +2871,8 @@ async fn cmd_benchmark_index_lean(
     mode_str: &str,
     no_bitmap: bool,
     no_placeholders: bool,
+    concurrency: usize,
+    io_size_kb: usize,
 ) -> Result<()> {
     use std::time::Instant;
 
@@ -2870,6 +2896,8 @@ async fn cmd_benchmark_index_lean(
             "enabled"
         }
     );
+    println!("Concurrency: {} I/O ops in flight", concurrency);
+    println!("I/O Size: {} KB ({} MB)", io_size_kb, io_size_kb / 1024);
     println!("This measures the UFFS indexing pipeline with lean MftIndex (no DataFrame overhead)");
     println!();
 
@@ -2904,12 +2932,16 @@ async fn cmd_benchmark_index_lean(
     // Open reader and read MFT into lean index
     // - no_bitmap: disable bitmap optimization to read entire MFT sequentially
     // - no_placeholders: skip placeholder creation for ~15% speedup
+    // - concurrency: number of I/O ops in flight
+    // - io_size_kb: I/O chunk size in KB
     let reader = MftReader::open(drive_upper)
         .await
         .with_context(|| format!("Failed to open drive {}:", drive_upper))?
         .with_mode(mode)
         .with_use_bitmap(!no_bitmap)
-        .with_add_placeholders(!no_placeholders);
+        .with_add_placeholders(!no_placeholders)
+        .with_concurrency(concurrency)
+        .with_io_size(io_size_kb * 1024);
 
     let index = reader
         .read_all_index()
