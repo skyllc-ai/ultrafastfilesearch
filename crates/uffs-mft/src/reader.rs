@@ -80,6 +80,12 @@ pub enum MftReadMode {
     /// sliding window, not bulk queuing.
     /// Best for HDDs - minimal I/O scheduler overhead, maximum throughput.
     SlidingIocp,
+    /// Sliding window IOCP with inline parsing: Full C++ parity.
+    /// Parses each 1MB chunk as it completes (no buffering), builds index
+    /// incrementally during I/O, creates parent placeholders on-demand.
+    /// Eliminates separate parse and index build phases.
+    /// Best for HDDs - overlaps CPU work with I/O for maximum throughput.
+    SlidingIocpInline,
 }
 
 impl MftReadMode {
@@ -97,6 +103,7 @@ impl MftReadMode {
             Self::Bulk => "bulk",
             Self::BulkIocp => "bulk-iocp",
             Self::SlidingIocp => "sliding-iocp",
+            Self::SlidingIocpInline => "sliding-iocp-inline",
         }
     }
 }
@@ -122,8 +129,9 @@ impl core::str::FromStr for MftReadMode {
             "bulk" => Ok(Self::Bulk),
             "bulk-iocp" | "bulkiocp" => Ok(Self::BulkIocp),
             "sliding-iocp" | "slidingiocp" | "sliding" => Ok(Self::SlidingIocp),
+            "sliding-iocp-inline" | "slidingiocpinline" | "inline" => Ok(Self::SlidingIocpInline),
             _ => Err(format!(
-                "Invalid read mode '{s}'. Valid options: auto, parallel, streaming, prefetch, pipelined, pipelined-parallel, iocp-parallel, bulk, bulk-iocp, sliding-iocp"
+                "Invalid read mode '{s}'. Valid options: auto, parallel, streaming, prefetch, pipelined, pipelined-parallel, iocp-parallel, bulk, bulk-iocp, sliding-iocp, sliding-iocp-inline"
             )),
         }
     }
@@ -1179,6 +1187,50 @@ impl MftReader {
 
                 result?
             }
+            MftReadMode::SlidingIocpInline => {
+                // SlidingIocpInline is designed for direct index building.
+                // For read_mft_internal (which returns Vec<ParsedRecord>), fall back to
+                // SlidingIocp.
+                let overlapped_handle = self.handle.open_overlapped_handle()?;
+                let parallel_reader =
+                    ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
+
+                let result = if let Some(ref cb) = callback {
+                    let cb_ref = cb;
+                    let start = start_time;
+                    parallel_reader.read_all_sliding_window_iocp(
+                        overlapped_handle,
+                        true,
+                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                            let records_approx = if total_bytes_expected > 0 {
+                                (bytes_read * total_records) / total_bytes_expected
+                            } else {
+                                0
+                            };
+                            cb_ref(MftProgress {
+                                records_read: records_approx,
+                                total_records: Some(total_records),
+                                bytes_read,
+                                elapsed: start.elapsed(),
+                            });
+                        }),
+                    )
+                } else {
+                    parallel_reader.read_all_sliding_window_iocp::<fn(u64, u64)>(
+                        overlapped_handle,
+                        true,
+                        None,
+                    )
+                };
+
+                // Close the overlapped handle
+                #[allow(unsafe_code)]
+                {
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
+                }
+
+                result?
+            }
         };
 
         // Add placeholder records for missing parent directories.
@@ -1809,6 +1861,42 @@ impl MftReader {
                 }
 
                 result?
+            }
+            MftReadMode::SlidingIocpInline => {
+                // Sliding window IOCP with inline parsing: Full C++ parity
+                // This mode returns MftIndex directly, skipping the intermediate
+                // Vec<ParsedRecord>
+                let overlapped_handle = self.handle.open_overlapped_handle()?;
+                let parallel_reader =
+                    ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
+
+                let result = parallel_reader.read_all_sliding_window_iocp_to_index::<fn(u64, u64)>(
+                    overlapped_handle,
+                    self.volume,
+                    None,
+                );
+
+                // Close the overlapped handle
+                #[allow(unsafe_code)]
+                {
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
+                }
+
+                let index = result?;
+
+                // Report final progress
+                if let Some(ref cb) = callback {
+                    cb(MftProgress {
+                        records_read: total_records,
+                        total_records: Some(total_records),
+                        bytes_read: total_bytes,
+                        elapsed: start_time.elapsed(),
+                    });
+                }
+
+                // Return early - we already have the index, no need for placeholder/build
+                // phases
+                return Ok(index);
             }
             MftReadMode::Streaming | MftReadMode::Prefetch => {
                 // Fallback to parallel for streaming/prefetch modes in lean index

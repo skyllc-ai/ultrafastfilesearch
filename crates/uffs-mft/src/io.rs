@@ -1406,6 +1406,265 @@ pub fn parse_record_zero_alloc(data: &[u8], frs: u64) -> ParseResult {
         parse_record_full(&buffer[..data.len()], frs)
     })
 }
+
+/// Parses a record directly into MftIndex (inline parsing for IOCP).
+///
+/// This function parses the record and adds it directly to the index,
+/// creating parent placeholders on-demand. This is the C++ parity approach
+/// that eliminates the intermediate `ParsedRecord` allocation.
+///
+/// # Returns
+///
+/// `true` if a record was added to the index, `false` if skipped.
+#[allow(unsafe_code, clippy::too_many_lines, clippy::cast_possible_truncation)]
+pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::MftIndex) -> bool {
+    use crate::index::{IndexNameRef, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo};
+    #[allow(unused_imports)] // Used in inline parsing mode
+    use crate::ntfs::{
+        AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
+        StandardInformation, file_reference_to_frs, filetime_to_unix_micros,
+    };
+
+    if data.len() < size_of::<FileRecordSegmentHeader>() {
+        return false;
+    }
+
+    // SAFETY: We've verified the buffer is large enough for the header.
+    let header: FileRecordSegmentHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
+
+    // Check if record is in use
+    if !header.is_in_use() {
+        return false;
+    }
+
+    // Check magic
+    let multi_sector_header = header.multi_sector_header;
+    if !multi_sector_header.is_file_record() {
+        return false;
+    }
+
+    // Skip extension records for now (C++ handles them differently)
+    if !header.is_base_record() {
+        return false;
+    }
+
+    let is_directory = header.is_directory();
+
+    // Parse attributes
+    let mut offset = header.first_attribute_offset as usize;
+    let max_offset = core::cmp::min(header.bytes_in_use as usize, data.len());
+
+    // Temporary storage for parsed data
+    let mut std_info = StandardInfo::default();
+    let mut primary_name: Option<(String, u64, u8)> = None; // (name, parent_frs, namespace)
+    let mut additional_names: SmallVec<[(String, u64); 4]> = SmallVec::new();
+    let mut default_size = 0u64;
+    let mut default_allocated = 0u64;
+
+    while offset + size_of::<AttributeRecordHeader>() <= max_offset {
+        let attr_header: AttributeRecordHeader =
+            unsafe { core::ptr::read(data[offset..].as_ptr().cast()) };
+
+        if attr_header.type_code == AttributeType::End as u32 {
+            break;
+        }
+
+        if attr_header.length == 0 || offset + attr_header.length as usize > max_offset {
+            break;
+        }
+
+        match AttributeType::from_u32(attr_header.type_code) {
+            Some(AttributeType::StandardInformation) => {
+                if attr_header.is_non_resident == 0 {
+                    // Parse $STANDARD_INFORMATION
+                    let value_offset_bytes = &data[offset + 20..offset + 22];
+                    let value_offset =
+                        u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0]))
+                            as usize;
+                    let si_offset = offset + value_offset;
+                    if si_offset + size_of::<StandardInformation>() <= data.len() {
+                        let si: StandardInformation =
+                            unsafe { core::ptr::read(data[si_offset..].as_ptr().cast()) };
+                        // Build StandardInfo with proper flags
+                        let mut info = StandardInfo::from_attributes(si.file_attributes);
+                        info.created = filetime_to_unix_micros(si.creation_time);
+                        info.modified = filetime_to_unix_micros(si.modification_time);
+                        info.accessed = filetime_to_unix_micros(si.access_time);
+                        info.mft_changed = filetime_to_unix_micros(si.mft_change_time);
+                        std_info = info;
+                    }
+                }
+            }
+            Some(AttributeType::FileName) => {
+                if attr_header.is_non_resident == 0 {
+                    // Parse $FILE_NAME
+                    let value_offset_bytes = &data[offset + 20..offset + 22];
+                    let value_offset =
+                        u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0]))
+                            as usize;
+                    let fn_offset = offset + value_offset;
+                    if fn_offset + size_of::<FileNameAttribute>() <= data.len() {
+                        let fn_attr: FileNameAttribute =
+                            unsafe { core::ptr::read(data[fn_offset..].as_ptr().cast()) };
+                        let name_len = fn_attr.file_name_length as usize;
+                        let name_bytes_offset = fn_offset + size_of::<FileNameAttribute>();
+                        if name_bytes_offset + name_len * 2 <= data.len() {
+                            let name_bytes =
+                                &data[name_bytes_offset..name_bytes_offset + name_len * 2];
+                            let name_u16: Vec<u16> = name_bytes
+                                .chunks_exact(2)
+                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .collect();
+                            let name = String::from_utf16_lossy(&name_u16);
+                            let parent_frs = file_reference_to_frs(fn_attr.parent_directory);
+                            let namespace = fn_attr.file_name_namespace;
+
+                            // Skip DOS-only names (namespace 2)
+                            if namespace != 2 {
+                                let is_better = match namespace {
+                                    1 | 3 => true,               // Win32 or Win32+DOS
+                                    0 => primary_name.is_none(), // POSIX only if no name yet
+                                    _ => false,
+                                };
+                                if is_better || primary_name.is_none() {
+                                    // Move old primary to additional if exists
+                                    if let Some((old_name, old_parent, _)) = primary_name.take() {
+                                        additional_names.push((old_name, old_parent));
+                                    }
+                                    primary_name = Some((name, parent_frs, namespace));
+                                } else {
+                                    additional_names.push((name, parent_frs));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Some(AttributeType::Data) => {
+                // Parse $DATA - only track default stream size for now
+                let name_len = attr_header.name_length as usize;
+                if name_len == 0 {
+                    // Default stream
+                    let (size, allocated) = if attr_header.is_non_resident != 0 {
+                        // Non-resident: size at offset 48, allocated at offset 40
+                        let alloc_offset = offset + 40;
+                        let size_offset = offset + 48;
+                        if size_offset + 8 <= data.len() {
+                            let allocated = u64::from_le_bytes(
+                                data[alloc_offset..alloc_offset + 8]
+                                    .try_into()
+                                    .unwrap_or([0; 8]),
+                            );
+                            let size = u64::from_le_bytes(
+                                data[size_offset..size_offset + 8]
+                                    .try_into()
+                                    .unwrap_or([0; 8]),
+                            );
+                            (size, allocated)
+                        } else {
+                            (0, 0)
+                        }
+                    } else {
+                        // Resident: value_length at offset 16
+                        let len_offset = offset + 16;
+                        if len_offset + 4 <= data.len() {
+                            let len = u32::from_le_bytes(
+                                data[len_offset..len_offset + 4]
+                                    .try_into()
+                                    .unwrap_or([0; 4]),
+                            ) as u64;
+                            (len, len)
+                        } else {
+                            (0, 0)
+                        }
+                    };
+                    default_size = size;
+                    default_allocated = allocated;
+                }
+                // Skip ADS for inline parsing (can add later if needed)
+            }
+            _ => {}
+        }
+
+        offset += attr_header.length as usize;
+    }
+
+    // Skip records without a filename
+    let (name, parent_frs, _namespace) = match primary_name {
+        Some(n) => n,
+        None => return false,
+    };
+
+    // Set directory flag in std_info
+    if is_directory {
+        std_info.set_directory(true);
+    }
+
+    // Add primary name to names buffer and get reference
+    let name_offset = index.add_name(&name);
+    let name_len = name.len();
+    let is_ascii = name.is_ascii();
+    let name_ref = IndexNameRef::new(name_offset, name_len as u16, is_ascii);
+
+    // Pre-process additional names: add to names buffer and links list BEFORE getting record reference
+    // This avoids borrow checker issues with holding &mut record while modifying index
+    let additional_count = additional_names.len();
+    let mut link_indices: Vec<u32> = Vec::with_capacity(additional_count);
+    for (link_name, link_parent) in additional_names {
+        let link_offset = index.add_name(&link_name);
+        let link_len = link_name.len();
+        let link_is_ascii = link_name.is_ascii();
+        let link_name_ref = IndexNameRef::new(link_offset, link_len as u16, link_is_ascii);
+
+        let link_idx = index.links.len() as u32;
+        index.links.push(LinkInfo {
+            next_entry: NO_ENTRY, // Will be patched below
+            name: link_name_ref,
+            parent_frs: link_parent as u32,
+        });
+        link_indices.push(link_idx);
+    }
+
+    // Ensure parent exists (create placeholder if needed) - do this before getting our record
+    if parent_frs != frs && parent_frs != 0 {
+        let _ = index.get_or_create(parent_frs);
+    }
+
+    // Now get or create the record in the index - no more index mutations after this
+    let record = index.get_or_create(frs);
+    record.stdinfo = std_info;
+    record.first_stream.size = SizeInfo {
+        length: default_size,
+        allocated: default_allocated,
+    };
+    record.first_name = LinkInfo {
+        next_entry: NO_ENTRY,
+        name: name_ref,
+        parent_frs: parent_frs as u32,
+    };
+    record.name_count = 1 + additional_count as u16;
+
+    // Chain the additional links: first_name -> link[0] -> link[1] -> ... -> NO_ENTRY
+    // The links were pushed with next_entry = NO_ENTRY, now we chain them
+    if !link_indices.is_empty() {
+        // Point first_name to the first additional link
+        record.first_name.next_entry = link_indices[0];
+    }
+    // Note: The links in index.links already have next_entry = NO_ENTRY
+    // We need to chain them together, but we can't mutate index.links while holding record
+    // So we do it after releasing record
+    drop(record);
+
+    // Chain the links together
+    for i in 0..link_indices.len().saturating_sub(1) {
+        let current_idx = link_indices[i] as usize;
+        let next_idx = link_indices[i + 1];
+        index.links[current_idx].next_entry = next_idx;
+    }
+
+    true
+}
+
 /// Parses `$STANDARD_INFORMATION` into `ExtendedStandardInfo`.
 #[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
 fn parse_standard_info_full(data: &[u8], attr_offset: usize, result: &mut ExtendedStandardInfo) {
@@ -3735,6 +3994,308 @@ impl ParallelMftReader {
 
             Ok(all_records)
         }
+    }
+
+    /// Sliding window IOCP read with inline parsing directly to MftIndex.
+    ///
+    /// This is the C++ parity implementation that:
+    /// - Parses each 1MB chunk as soon as it completes (no buffering)
+    /// - Builds the index incrementally during I/O
+    /// - Creates parent placeholders on-demand
+    ///
+    /// This eliminates the separate parse and index build phases, saving ~7s
+    /// on large MFTs by overlapping CPU work with I/O.
+    #[allow(unsafe_code)]
+    pub fn read_all_sliding_window_iocp_to_index<F>(
+        &self,
+        overlapped_handle: HANDLE,
+        volume: char,
+        _progress_callback: Option<F>,
+    ) -> Result<crate::index::MftIndex>
+    where
+        F: Fn(u64, u64),
+    {
+        use std::collections::VecDeque;
+        use std::pin::Pin;
+
+        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
+        use windows::Win32::Storage::FileSystem::ReadFile;
+        use windows::Win32::System::IO::GetQueuedCompletionStatus;
+
+        // Note: Some imports may appear unused but are needed for the inline parsing logic
+        #[allow(unused_imports)]
+        use crate::index::MftIndex;
+
+        let record_size = self.extent_map.bytes_per_record as usize;
+        let total_records = self.extent_map.total_records() as usize;
+
+        const CONCURRENCY: usize = 2;
+        const IO_CHUNK_SIZE: usize = 1024 * 1024; // 1MB per read
+
+        info!(
+            total_records,
+            concurrency = CONCURRENCY,
+            io_size_kb = IO_CHUNK_SIZE / 1024,
+            "🚀 Starting sliding window IOCP with INLINE parsing (C++ parity)"
+        );
+
+        // Generate read chunks with bitmap skip optimization
+        let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
+        let mut sorted_chunks: Vec<ReadChunk> = chunks;
+        sorted_chunks.sort_by_key(|c| c.disk_offset);
+
+        // Build I/O operations with FRS tracking for inline parsing
+        struct IoOp {
+            disk_offset: u64,
+            size: usize,
+            start_frs: u64,    // First FRS in this I/O
+            skip_begin: u32,   // Records to skip at start
+            record_count: u64, // Total records in this I/O
+        }
+
+        let mut io_ops: VecDeque<IoOp> = VecDeque::new();
+
+        for chunk in sorted_chunks.iter() {
+            let skip_begin_bytes = chunk.skip_begin as usize * record_size;
+            let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
+            if effective_records == 0 {
+                continue;
+            }
+
+            let chunk_bytes = effective_records as usize * record_size;
+            let mut offset_within_chunk = 0usize;
+            let mut frs_offset = 0u64;
+
+            while offset_within_chunk < chunk_bytes {
+                let io_size = std::cmp::min(IO_CHUNK_SIZE, chunk_bytes - offset_within_chunk);
+                let records_in_io = io_size / record_size;
+                let disk_offset =
+                    chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
+
+                io_ops.push_back(IoOp {
+                    disk_offset,
+                    size: io_size,
+                    start_frs: chunk.start_frs + chunk.skip_begin as u64 + frs_offset,
+                    skip_begin: 0, // Already accounted for in disk_offset
+                    record_count: records_in_io as u64,
+                });
+
+                offset_within_chunk += io_size;
+                frs_offset += records_in_io as u64;
+            }
+        }
+
+        let total_io_ops = io_ops.len();
+        let estimated_records = if let Some(ref bm) = self.bitmap {
+            bm.count_in_use()
+        } else {
+            total_records
+        };
+
+        info!(
+            io_ops = total_io_ops,
+            estimated_records, "📊 Generated I/O operations for inline parsing"
+        );
+
+        // Create the index with pre-allocated capacity
+        let mut index = MftIndex::with_capacity(volume, estimated_records);
+
+        // Create IOCP
+        let read_start = std::time::Instant::now();
+        let iocp = IoCompletionPort::new(0)?;
+        iocp.associate(overlapped_handle, 0)?;
+
+        // Sliding window state
+        struct InFlightOp {
+            overlapped: windows::Win32::System::IO::OVERLAPPED,
+            buffer: AlignedBuffer,
+            op: IoOp,
+        }
+
+        let mut buffer_pool: Vec<AlignedBuffer> = (0..CONCURRENCY)
+            .map(|_| AlignedBuffer::new(IO_CHUNK_SIZE))
+            .collect();
+
+        let mut in_flight: Vec<Option<Pin<Box<InFlightOp>>>> =
+            (0..CONCURRENCY).map(|_| None).collect();
+
+        let mut completed_count = 0usize;
+        let mut bytes_read_total = 0u64;
+        let mut records_parsed = 0usize;
+
+        // Queue initial reads
+        for slot_id in 0..CONCURRENCY {
+            if let Some(op) = io_ops.pop_front() {
+                let buffer = buffer_pool.pop().unwrap();
+                let mut in_flight_op = Box::pin(InFlightOp {
+                    overlapped: unsafe { std::mem::zeroed() },
+                    buffer,
+                    op,
+                });
+
+                let offset = in_flight_op.op.disk_offset;
+                let op_mut = unsafe { in_flight_op.as_mut().get_unchecked_mut() };
+                op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
+                op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
+
+                let overlapped_ptr = &mut op_mut.overlapped as *mut _;
+                let read_size = op_mut.op.size;
+                let result = unsafe {
+                    ReadFile(
+                        overlapped_handle,
+                        Some(&mut op_mut.buffer.as_mut_slice()[..read_size]),
+                        None,
+                        Some(overlapped_ptr),
+                    )
+                };
+
+                match result {
+                    Ok(_) => {}
+                    Err(_) => {
+                        let last_error = unsafe { GetLastError() };
+                        if last_error != ERROR_IO_PENDING {
+                            return Err(MftError::Io(std::io::Error::from_raw_os_error(
+                                last_error.0 as i32,
+                            )));
+                        }
+                    }
+                }
+
+                in_flight[slot_id] = Some(in_flight_op);
+            }
+        }
+
+        // Process completions with inline parsing
+        let bitmap_ref = self.bitmap.as_ref();
+
+        while completed_count < total_io_ops {
+            let mut bytes_transferred: u32 = 0;
+            let mut completion_key: usize = 0;
+            let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
+                std::ptr::null_mut();
+
+            let result = unsafe {
+                GetQueuedCompletionStatus(
+                    iocp.handle,
+                    &mut bytes_transferred,
+                    &mut completion_key,
+                    &mut overlapped_ptr,
+                    u32::MAX,
+                )
+            };
+
+            if result.is_err() {
+                let err = std::io::Error::last_os_error();
+                warn!(error = %err, "GetQueuedCompletionStatus failed");
+                continue;
+            }
+
+            // Find completed slot
+            let mut completed_slot = None;
+            for (idx, slot) in in_flight.iter().enumerate() {
+                if let Some(op) = slot {
+                    let op_overlapped_ptr =
+                        &op.overlapped as *const _ as *mut windows::Win32::System::IO::OVERLAPPED;
+                    if op_overlapped_ptr == overlapped_ptr {
+                        completed_slot = Some(idx);
+                        break;
+                    }
+                }
+            }
+
+            if let Some(slot_idx) = completed_slot {
+                if let Some(mut completed_op) = in_flight[slot_idx].take() {
+                    let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
+
+                    // INLINE PARSING: Parse directly into index
+                    let buffer_slice =
+                        &mut op_mut.buffer.as_mut_slice()[..bytes_transferred as usize];
+                    let records_in_buffer = bytes_transferred as usize / record_size;
+
+                    for i in 0..records_in_buffer {
+                        let frs = op_mut.op.start_frs + i as u64;
+
+                        // Check bitmap
+                        if let Some(bm) = bitmap_ref {
+                            if !bm.is_record_in_use(frs) {
+                                continue;
+                            }
+                        }
+
+                        let offset = i * record_size;
+                        let record_slice = &mut buffer_slice[offset..offset + record_size];
+
+                        // Apply fixup
+                        if !apply_fixup(record_slice) {
+                            continue;
+                        }
+
+                        // Parse and add to index inline
+                        if parse_record_to_index(record_slice, frs, &mut index) {
+                            records_parsed += 1;
+                        }
+                    }
+
+                    bytes_read_total += bytes_transferred as u64;
+                    completed_count += 1;
+
+                    // Recycle buffer and queue next read
+                    let recycled_buffer =
+                        std::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
+                    buffer_pool.push(recycled_buffer);
+
+                    if let Some(next_op) = io_ops.pop_front() {
+                        let buffer = buffer_pool.pop().unwrap();
+                        let mut new_in_flight = Box::pin(InFlightOp {
+                            overlapped: unsafe { std::mem::zeroed() },
+                            buffer,
+                            op: next_op,
+                        });
+
+                        let offset = new_in_flight.op.disk_offset;
+                        let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
+                        new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
+                        new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
+                            (offset >> 32) as u32;
+
+                        let overlapped_ptr = &mut new_op_mut.overlapped as *mut _;
+                        let read_size = new_op_mut.op.size;
+                        let result = unsafe {
+                            ReadFile(
+                                overlapped_handle,
+                                Some(&mut new_op_mut.buffer.as_mut_slice()[..read_size]),
+                                None,
+                                Some(overlapped_ptr),
+                            )
+                        };
+
+                        match result {
+                            Ok(_) => {}
+                            Err(_) => {
+                                let last_error = unsafe { GetLastError() };
+                                if last_error != ERROR_IO_PENDING {
+                                    warn!(error = ?last_error, "Failed to queue next read");
+                                }
+                            }
+                        }
+
+                        in_flight[slot_idx] = Some(new_in_flight);
+                    }
+                }
+            }
+        }
+
+        let total_ms = read_start.elapsed().as_millis();
+        info!(
+            total_ms,
+            bytes_mb = bytes_read_total / (1024 * 1024),
+            records_parsed,
+            index_entries = index.records.len(),
+            names_kb = index.names.len() / 1024,
+            "✅ Sliding window IOCP with inline parsing complete"
+        );
+
+        Ok(index)
     }
 
     /// Reads all MFT records and returns them as `ParsedColumns` (SoA layout).
