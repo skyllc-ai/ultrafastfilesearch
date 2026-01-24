@@ -2101,10 +2101,26 @@ pub fn generate_read_chunks(
     // M1 8.6: Merge adjacent chunks with small gaps
     // If two chunks are close together (gap < merge_threshold records),
     // it's more efficient to read them as one chunk than to do two I/O ops.
-    let merge_threshold = 64u64; // Records - about 64KB at 1024 bytes/record
-    let chunks_before_merge = chunks.len();
-    let chunks = merge_adjacent_chunks(chunks, record_size, merge_threshold);
-    let chunks_after_merge = chunks.len();
+    //
+    // IMPORTANT: Only merge when bitmap is NOT available. When we have bitmap,
+    // each chunk has its own skip_begin/skip_end calculated. Merging would lose
+    // the intermediate skip information, causing us to read 29% more data!
+    //
+    // C++ team confirmed: They calculate skip_begin/skip_end per ~1MB chunk,
+    // which gives ~23,000 skip opportunities for 11.5GB MFT. Merging into 62
+    // extent-sized chunks reduces this to only 124 skip opportunities.
+    let (chunks, chunks_before_merge, chunks_after_merge) = if bitmap.is_some() {
+        // With bitmap: keep all chunks to preserve per-chunk skip optimization
+        let count = chunks.len();
+        (chunks, count, count)
+    } else {
+        // Without bitmap: merge adjacent chunks to reduce I/O ops
+        let merge_threshold = 64u64; // Records - about 64KB at 1024 bytes/record
+        let chunks_before_merge = chunks.len();
+        let chunks = merge_adjacent_chunks(chunks, record_size, merge_threshold);
+        let chunks_after_merge = chunks.len();
+        (chunks, chunks_before_merge, chunks_after_merge)
+    };
 
     if chunks_before_merge != chunks_after_merge {
         debug!(
