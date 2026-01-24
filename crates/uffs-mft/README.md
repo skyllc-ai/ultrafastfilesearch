@@ -150,6 +150,29 @@ uffs_mft index-update --drive C --ttl 3600
 
 **This is the recommended command for production use.**
 
+#### `index-all` - Index All NTFS Drives
+
+```bash
+# Index all NTFS drives (uses cache + USN updates)
+uffs_mft index-all
+
+# Force fresh rebuild (ignore cache)
+uffs_mft index-all --no-cache
+
+# Custom TTL
+uffs_mft index-all --ttl 300
+```
+
+**How it works:**
+1. Detects all NTFS drives automatically
+2. Reads indices in parallel (one thread per drive)
+3. For each drive: loads from cache if fresh, applies USN changes, or rebuilds if stale
+4. Returns combined statistics for all drives
+
+**Performance:**
+- First run (cold): ~40s for 23M entries across 7 drives
+- Subsequent runs (cache + USN): ~1s for the same 23M entries
+
 #### `cache-status` - Show Cache Status
 
 ```bash

@@ -192,6 +192,14 @@ struct Cli {
     /// Representation for inactive/false boolean attributes
     #[arg(long, default_value = "0")]
     neg: String,
+
+    /// Query execution mode: auto, index, dataframe
+    ///
+    /// - auto: Automatically choose best path (default)
+    /// - index: Force fast `MftIndex` path (simple queries only)
+    /// - dataframe: Force Polars `DataFrame` path (full features)
+    #[arg(long, default_value = "auto")]
+    query_mode: String,
 }
 
 /// Available CLI subcommands.
@@ -324,6 +332,14 @@ enum Commands {
         /// Representation for inactive/false boolean attributes
         #[arg(long, default_value = "0")]
         neg: String,
+
+        /// Query execution mode: auto, index, dataframe
+        ///
+        /// - auto: Automatically choose best path (default)
+        /// - index: Force fast `MftIndex` path (simple queries only)
+        /// - dataframe: Force Polars `DataFrame` path (full features)
+        #[arg(long, default_value = "auto")]
+        query_mode: String,
     },
 
     /// Build an index from drive MFT(s)
@@ -499,6 +515,7 @@ async fn run() -> Result<()> {
             header,
             pos,
             neg,
+            query_mode,
         }) => {
             commands::search(
                 &pattern,
@@ -524,6 +541,7 @@ async fn run() -> Result<()> {
                 header,
                 &pos,
                 &neg,
+                &query_mode,
             )
             .await?;
         }
@@ -567,6 +585,7 @@ async fn run() -> Result<()> {
                     cli.header,
                     &cli.pos,
                     &cli.neg,
+                    &cli.query_mode,
                 )
                 .await?;
             } else {

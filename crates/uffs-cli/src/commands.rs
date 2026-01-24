@@ -17,6 +17,7 @@ use anyhow::{Context, Result, bail};
 use indicatif::MultiProgress;
 use indicatif::{ProgressBar, ProgressStyle};
 use tracing::info;
+use uffs_core::QueryMode;
 use uffs_core::extensions::ExtensionFilter;
 
 /// Check if progress bars are disabled via `UFFS_NO_PROGRESS=1` environment
@@ -266,6 +267,60 @@ use uffs_core::tree::add_tree_columns;
 use uffs_core::{MftQuery, export_csv, export_json, export_table};
 use uffs_mft::{MftProgress, MftReader};
 
+/// Determine if we should use the fast `MftIndex` query path.
+///
+/// Returns `true` if:
+/// - `QueryMode::ForceIndex` is set, OR
+/// - `QueryMode::Auto` AND query is simple (no parquet index, single drive, no tree columns)
+///
+/// Returns `false` if:
+/// - `QueryMode::ForceDataFrame` is set, OR
+/// - Query requires features only available in `DataFrame` path
+#[allow(clippy::single_call_fn)] // Extracted for clarity and testability
+fn should_use_index_path(
+    mode: QueryMode,
+    parquet_index: Option<&PathBuf>,
+    multi_drives: Option<&Vec<char>>,
+    output_config: &OutputConfig,
+) -> bool {
+    match mode {
+        QueryMode::ForceIndex => {
+            // User explicitly requested index path
+            // Warn if features are incompatible
+            if parquet_index.is_some() {
+                info!("⚠️ --query-mode=index ignored: using parquet index file");
+                return false;
+            }
+            if multi_drives.is_some() {
+                info!("⚠️ --query-mode=index: multi-drive not yet supported, using single drive");
+            }
+            true
+        }
+        QueryMode::ForceDataFrame => {
+            // User explicitly requested DataFrame path
+            false
+        }
+        QueryMode::Auto => {
+            // Auto mode: use index path for simple queries
+            // Conditions that require DataFrame path:
+            // 1. Loading from parquet index file (already a DataFrame)
+            // 2. Multi-drive search (not yet implemented for index path)
+            // 3. Tree columns requested (requires full DataFrame)
+            if parquet_index.is_some() {
+                return false;
+            }
+            if multi_drives.is_some() {
+                return false;
+            }
+            if output_config.needs_tree_columns() {
+                return false;
+            }
+            // Simple query - use fast index path
+            true
+        }
+    }
+}
+
 /// Search for files matching a pattern.
 ///
 /// Supports:
@@ -280,7 +335,8 @@ use uffs_mft::{MftProgress, MftReader};
 #[allow(
     clippy::too_many_arguments,
     clippy::fn_params_excessive_bools,
-    clippy::print_stderr
+    clippy::print_stderr,
+    clippy::too_many_lines
 )]
 pub async fn search(
     pattern: &str,
@@ -306,6 +362,7 @@ pub async fn search(
     header: bool,
     pos: &str,
     neg: &str,
+    query_mode: &str,
 ) -> Result<()> {
     // Start timing for "Finished in X s" output (C++ compatibility)
     let start_time = std::time::Instant::now();
@@ -326,6 +383,13 @@ pub async fn search(
         max_size,
         limit,
     };
+
+    // Parse query mode
+    let mode = QueryMode::from_str_opt(query_mode).unwrap_or_else(|| {
+        info!(query_mode, "Unknown query mode, defaulting to auto");
+        QueryMode::Auto
+    });
+    info!(?mode, "Query execution mode");
 
     // Build output configuration
     let output_config = OutputConfig::new()
@@ -367,16 +431,38 @@ pub async fn search(
     // Pass needs_paths so path resolution happens BEFORE filtering loses parent
     // directories (skip path resolution in benchmark mode for speed)
     let needs_paths = !benchmark && output_config.needs_path_column();
-    let mut results = load_and_filter_data(
-        index,
-        multi_drives,
-        single_drive,
-        &filters,
-        needs_paths,
-        profile,
-        no_bitmap,
-    )
-    .await?;
+
+    // Decide which query path to use based on mode and query complexity
+    let use_index_path = should_use_index_path(
+        mode,
+        index.as_ref(),
+        multi_drives.as_ref(),
+        &output_config,
+    );
+
+    let mut results = if use_index_path {
+        info!("🚀 Using fast MftIndex query path");
+        #[cfg(windows)]
+        {
+            load_and_filter_data_index(single_drive, &filters, needs_paths, profile).await?
+        }
+        #[cfg(not(windows))]
+        {
+            bail!("Index query mode is only available on Windows");
+        }
+    } else {
+        info!("📊 Using DataFrame query path");
+        load_and_filter_data(
+            index,
+            multi_drives,
+            single_drive,
+            &filters,
+            needs_paths,
+            profile,
+            no_bitmap,
+        )
+        .await?
+    };
 
     // Compute tree columns only if specifically requested (skip in benchmark mode)
     let t_tree = std::time::Instant::now();
@@ -610,6 +696,62 @@ async fn load_and_filter_data(
     }
 }
 
+/// Load and filter data using fast `MftIndex` path (no `DataFrame` conversion during search).
+///
+/// This is the fast path for simple queries. Uses cached `MftIndex` when available.
+#[cfg(windows)]
+#[allow(clippy::single_call_fn, clippy::print_stderr)]
+async fn load_and_filter_data_index(
+    single_drive: Option<char>,
+    filters: &QueryFilters<'_>,
+    needs_paths: bool,
+    profile: bool,
+) -> Result<uffs_mft::DataFrame> {
+    use uffs_mft::{INDEX_TTL_SECONDS, load_cached_index};
+
+    // Get effective drive
+    let effective_drive = single_drive.or_else(|| filters.parsed.drive());
+    let drive_letter = effective_drive.ok_or_else(|| {
+        anyhow::anyhow!("Index query mode requires a specific drive. Use --drive or include drive in pattern.")
+    })?;
+
+    let t_load = std::time::Instant::now();
+
+    // Try to load from cache first
+    let index = if let Some((cached_index, header)) = load_cached_index(drive_letter, INDEX_TTL_SECONDS) {
+        info!(
+            drive = %drive_letter,
+            records = cached_index.len(),
+            volume_serial = header.volume_serial,
+            "📦 Using cached MftIndex"
+        );
+        cached_index
+    } else {
+        // Cache miss - read fresh
+        info!(drive = %drive_letter, "🔄 Cache miss - reading MFT");
+        let reader = MftReader::open(drive_letter)
+            .await
+            .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
+        reader.read_all_index().await?
+    };
+    let load_ms = t_load.elapsed().as_millis();
+
+    // Execute query on index
+    let t_query = std::time::Instant::now();
+    let results = execute_index_query(&index, filters, needs_paths)?;
+    let query_ms = t_query.elapsed().as_millis();
+
+    if profile {
+        let total_ms = load_ms + query_ms;
+        eprintln!("=== PROFILE: Drive {drive_letter} (Index Path): ===");
+        eprintln!("  Index load:      {load_ms:>6} ms  ({} records)", index.len());
+        eprintln!("  Query/filter:    {query_ms:>6} ms  ({} matches)", results.height());
+        eprintln!("  TOTAL:           {total_ms:>6} ms");
+    }
+
+    Ok(results)
+}
+
 /// Query filter options for the search command.
 struct QueryFilters<'a> {
     /// Parsed search pattern (glob, regex, or literal).
@@ -673,6 +815,111 @@ fn execute_query(
         query = query.limit(filters.limit);
     }
     Ok(query.collect()?)
+}
+
+/// Execute query using fast `IndexQuery` path (no `DataFrame` conversion).
+///
+/// This is the fast path for simple queries. Returns results as a `DataFrame`
+/// for compatibility with the output pipeline.
+#[cfg(windows)]
+#[allow(clippy::single_call_fn)]
+fn execute_index_query(
+    index: &uffs_mft::MftIndex,
+    filters: &QueryFilters<'_>,
+    resolve_paths: bool,
+) -> Result<uffs_mft::DataFrame> {
+    use uffs_core::{IndexQuery, TypeFilter, compile_extensions, compile_parsed_pattern};
+
+    let mut query = IndexQuery::new(index);
+
+    // Apply pattern filter
+    let pattern = compile_parsed_pattern(filters.parsed);
+    query = query.with_pattern(pattern);
+
+    // Apply extension filter if specified
+    if let Some(ext_str) = filters.ext_filter {
+        let parsed_ext_filter = ExtensionFilter::parse(ext_str)
+            .map_err(|err| anyhow::anyhow!("Invalid extension filter: {err}"))?;
+        let ext_pattern = compile_extensions(parsed_ext_filter.extensions());
+        query = query.with_extension_pattern(ext_pattern);
+    }
+
+    // Apply type filters
+    if filters.files_only {
+        query = query.with_type_filter(TypeFilter::FilesOnly);
+    } else if filters.dirs_only {
+        query = query.with_type_filter(TypeFilter::DirsOnly);
+    }
+
+    // Apply size filters
+    if let Some(min) = filters.min_size {
+        query = query.min_size(min);
+    }
+    if let Some(max) = filters.max_size {
+        query = query.max_size(max);
+    }
+
+    // Apply limit (0 = unlimited)
+    if filters.limit > 0 {
+        query = query.limit(filters.limit as usize);
+    }
+
+    // Apply case sensitivity
+    query = query.case_sensitive(filters.parsed.case_sensitive());
+
+    // Apply path resolution
+    query = query.resolve_paths(resolve_paths);
+
+    // Execute and convert to DataFrame
+    let results = query.collect();
+    results_to_dataframe(index, &results, resolve_paths)
+}
+
+/// Convert `IndexQuery` results to a `DataFrame` for output compatibility.
+#[cfg(windows)]
+fn results_to_dataframe(
+    index: &uffs_mft::MftIndex,
+    results: &[uffs_core::SearchResult],
+    _resolve_paths: bool,
+) -> Result<uffs_mft::DataFrame> {
+    use uffs_polars::{IntoColumn, NamedFrom, Series};
+
+    // Build columns from results
+    let mut names: Vec<&str> = Vec::with_capacity(results.len());
+    let mut paths: Vec<String> = Vec::with_capacity(results.len());
+    let mut sizes: Vec<u64> = Vec::with_capacity(results.len());
+    let mut is_dirs: Vec<bool> = Vec::with_capacity(results.len());
+    let mut frs_values: Vec<u64> = Vec::with_capacity(results.len());
+
+    for result in results {
+        names.push(result.name);
+        paths.push(result.path.clone().unwrap_or_default());
+        sizes.push(result.size);
+        is_dirs.push(result.is_directory);
+        frs_values.push(result.frs);
+    }
+
+    // Create DataFrame
+    let name_series = Series::new("name".into(), names);
+    let path_series = Series::new("path".into(), paths);
+    let size_series = Series::new("size".into(), sizes);
+    let is_dir_series = Series::new("is_dir".into(), is_dirs);
+    let frs_series = Series::new("frs".into(), frs_values);
+
+    // Add volume column
+    let volume_str = format!("{}:", index.volume);
+    let volumes: Vec<&str> = vec![volume_str.as_str(); results.len()];
+    let volume_series = Series::new("volume".into(), volumes);
+
+    uffs_mft::DataFrame::new(vec![
+        name_series.into_column(),
+        path_series.into_column(),
+        size_series.into_column(),
+        is_dir_series.into_column(),
+        frs_series.into_column(),
+        volume_series.into_column(),
+    ])
+    .map_err(|err| anyhow::anyhow!("Failed to create DataFrame: {err}"))
 }
 
 /// Write search results to console or file.

@@ -581,6 +581,12 @@ impl MftIndex {
         self.get_name(&record.first_name.name)
     }
 
+    /// Get all records as a slice.
+    #[must_use]
+    pub fn records(&self) -> &[FileRecord] {
+        &self.records
+    }
+
     /// Number of records in the index
     #[must_use]
     pub fn len(&self) -> usize {

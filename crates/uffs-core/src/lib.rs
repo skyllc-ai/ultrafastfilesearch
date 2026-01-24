@@ -57,6 +57,7 @@ mod error;
 mod export;
 pub mod extensions;
 pub mod glob;
+pub mod index_search;
 pub mod output;
 mod path_resolver;
 pub mod pattern;
@@ -72,6 +73,10 @@ pub use error::{CoreError, Result};
 pub use export::{export_csv, export_json, export_table};
 pub use extensions::{
     ExtensionFilter, ExtensionIndex, ExtensionIndexStats, add_ext_column, ext_expr, has_ext_column,
+};
+pub use index_search::{
+    IndexPattern, IndexQuery, QueryComplexity, QueryFeatures, QueryMode, SearchResult, TypeFilter,
+    analyze_pattern_complexity, compile_extensions, compile_index_pattern, compile_parsed_pattern,
 };
 #[allow(deprecated)]
 pub use path_resolver::add_path_column_multi_drive;

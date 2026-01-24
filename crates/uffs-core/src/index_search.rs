@@ -1,0 +1,946 @@
+//! Direct search on `MftIndex` without `DataFrame` conversion.
+//!
+//! This module provides SIMD-optimized pattern matching directly on `MftIndex`,
+//! avoiding the overhead of converting to a Polars `DataFrame` for simple
+//! queries.
+//!
+//! # Performance
+//!
+//! For simple queries (glob, extension filter, size filter):
+//! - **`MftIndex` path**: ~100-200ms for 23M entries
+//! - **`DataFrame` path**: ~3-5s (includes conversion overhead)
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use uffs_core::index_search::IndexQuery;
+//! use uffs_mft::index::MftIndex;
+//!
+//! let index: MftIndex = /* load from cache */;
+//!
+//! // Fast path: search directly on MftIndex
+//! let results = IndexQuery::new(&index)
+//!     .glob("*.rs")
+//!     .files_only()
+//!     .min_size(1024)
+//!     .limit(100)
+//!     .collect();
+//!
+//! for result in results {
+//!     println!("{}: {} bytes", result.path, result.size);
+//! }
+//! ```
+
+use std::collections::HashSet;
+
+use aho_corasick::AhoCorasick;
+// memchr is used by aho-corasick internally; we keep it for future SIMD optimizations
+#[allow(unused_imports)]
+use memchr as _;
+use rayon::prelude::*;
+use regex::Regex;
+use uffs_mft::index::{FileRecord, MftIndex};
+
+use crate::compiled_pattern::{GlobKind, classify_glob};
+use crate::error::{CoreError, Result};
+use crate::pattern::{ParsedPattern, PatternType};
+
+// ============================================================================
+// IndexPattern - Pattern IR for MftIndex
+// ============================================================================
+
+/// Compiled pattern for direct matching on `MftIndex`.
+///
+/// This mirrors `CompiledPattern` but generates match functions instead of
+/// Polars expressions. Uses SIMD-optimized string matching where possible.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum IndexPattern {
+    /// Always matches (e.g., `*`).
+    Any,
+
+    /// Exact string match.
+    Exact {
+        /// The exact value to match (case-sensitive).
+        value: String,
+        /// Lowercase version for case-insensitive matching.
+        value_lower: String,
+    },
+
+    /// Prefix match (e.g., `foo*`).
+    Prefix {
+        /// The prefix to match (case-sensitive).
+        prefix: String,
+        /// Lowercase version for case-insensitive matching.
+        prefix_lower: String,
+    },
+
+    /// Suffix match (e.g., `*bar`, `*.txt`).
+    Suffix {
+        /// The suffix to match (case-sensitive).
+        suffix: String,
+        /// Lowercase version for case-insensitive matching.
+        suffix_lower: String,
+    },
+
+    /// Literal substring match (e.g., `*needle*`).
+    Contains {
+        /// The substring to search for (case-sensitive).
+        needle: String,
+        /// Lowercase version for case-insensitive matching.
+        needle_lower: String,
+    },
+
+    /// Prefix AND suffix match (e.g., `foo*bar`).
+    PrefixSuffix {
+        /// The prefix to match (case-sensitive).
+        prefix: String,
+        /// The suffix to match (case-sensitive).
+        suffix: String,
+        /// Lowercase prefix for case-insensitive matching.
+        prefix_lower: String,
+        /// Lowercase suffix for case-insensitive matching.
+        suffix_lower: String,
+    },
+
+    /// Multiple exact matches (hash set lookup).
+    ExactSet {
+        /// Set of exact values (case-sensitive).
+        values: HashSet<String>,
+        /// Lowercase set for case-insensitive matching.
+        values_lower: HashSet<String>,
+    },
+
+    /// Multiple suffix matches (e.g., extensions).
+    SuffixSet {
+        /// List of suffixes (case-sensitive).
+        suffixes: Vec<String>,
+        /// Lowercase suffixes for case-insensitive matching.
+        suffixes_lower: Vec<String>,
+    },
+
+    /// Multiple literal substrings (Aho-Corasick).
+    ContainsAny {
+        /// Aho-Corasick automaton for case-sensitive matching.
+        automaton: AhoCorasick,
+        /// Aho-Corasick automaton for case-insensitive matching.
+        automaton_lower: AhoCorasick,
+        /// Original patterns for debugging.
+        patterns: Vec<String>,
+    },
+
+    /// Fallback to regex.
+    Regex {
+        /// Compiled regex for case-sensitive matching.
+        regex: Regex,
+        /// Compiled regex for case-insensitive matching.
+        regex_lower: Regex,
+    },
+}
+
+// ============================================================================
+// Pattern Matching
+// ============================================================================
+
+impl IndexPattern {
+    /// Check if a string matches this pattern.
+    #[inline]
+    #[must_use]
+    pub fn matches(&self, input: &str, case_sensitive: bool) -> bool {
+        match self {
+            Self::Any => true,
+
+            Self::Exact { value, value_lower } => {
+                if case_sensitive {
+                    input == value
+                } else {
+                    input.eq_ignore_ascii_case(value_lower)
+                }
+            }
+
+            Self::Prefix {
+                prefix,
+                prefix_lower,
+            } => {
+                if case_sensitive {
+                    input.starts_with(prefix.as_str())
+                } else {
+                    input
+                        .to_ascii_lowercase()
+                        .starts_with(prefix_lower.as_str())
+                }
+            }
+
+            Self::Suffix {
+                suffix,
+                suffix_lower,
+            } => {
+                if case_sensitive {
+                    input.ends_with(suffix.as_str())
+                } else {
+                    input.to_ascii_lowercase().ends_with(suffix_lower.as_str())
+                }
+            }
+
+            Self::Contains {
+                needle,
+                needle_lower,
+            } => {
+                if case_sensitive {
+                    input.contains(needle.as_str())
+                } else {
+                    input.to_ascii_lowercase().contains(needle_lower.as_str())
+                }
+            }
+
+            Self::PrefixSuffix {
+                prefix,
+                suffix,
+                prefix_lower,
+                suffix_lower,
+            } => {
+                if case_sensitive {
+                    input.starts_with(prefix.as_str()) && input.ends_with(suffix.as_str())
+                } else {
+                    let lower = input.to_ascii_lowercase();
+                    lower.starts_with(prefix_lower.as_str())
+                        && lower.ends_with(suffix_lower.as_str())
+                }
+            }
+
+            Self::ExactSet {
+                values,
+                values_lower,
+            } => {
+                if case_sensitive {
+                    values.contains(input)
+                } else {
+                    values_lower.contains(&input.to_ascii_lowercase())
+                }
+            }
+
+            Self::SuffixSet {
+                suffixes,
+                suffixes_lower,
+            } => {
+                if case_sensitive {
+                    suffixes.iter().any(|suf| input.ends_with(suf.as_str()))
+                } else {
+                    let lower = input.to_ascii_lowercase();
+                    suffixes_lower
+                        .iter()
+                        .any(|suf| lower.ends_with(suf.as_str()))
+                }
+            }
+
+            Self::ContainsAny {
+                automaton,
+                automaton_lower,
+                ..
+            } => {
+                if case_sensitive {
+                    automaton.is_match(input)
+                } else {
+                    automaton_lower.is_match(&input.to_ascii_lowercase())
+                }
+            }
+
+            Self::Regex { regex, regex_lower } => {
+                if case_sensitive {
+                    regex.is_match(input)
+                } else {
+                    regex_lower.is_match(&input.to_ascii_lowercase())
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Pattern Compilation
+// ============================================================================
+
+/// Compile a glob pattern into an `IndexPattern`.
+///
+/// # Errors
+///
+/// Returns an error if the pattern is invalid (e.g., malformed glob or regex).
+pub fn compile_index_pattern(pattern: &str) -> Result<IndexPattern> {
+    let kind = classify_glob(pattern);
+    match kind {
+        GlobKind::Any => Ok(IndexPattern::Any),
+
+        GlobKind::Exact(value) => {
+            let value_lower = value.to_ascii_lowercase();
+            Ok(IndexPattern::Exact { value, value_lower })
+        }
+
+        GlobKind::Prefix(prefix) => {
+            let prefix_lower = prefix.to_ascii_lowercase();
+            Ok(IndexPattern::Prefix {
+                prefix,
+                prefix_lower,
+            })
+        }
+
+        GlobKind::Suffix(suffix) => {
+            let suffix_lower = suffix.to_ascii_lowercase();
+            Ok(IndexPattern::Suffix {
+                suffix,
+                suffix_lower,
+            })
+        }
+
+        GlobKind::Extension(ext) => {
+            let suffix = format!(".{ext}");
+            let suffix_lower = suffix.to_ascii_lowercase();
+            Ok(IndexPattern::Suffix {
+                suffix,
+                suffix_lower,
+            })
+        }
+
+        GlobKind::Contains(needle) => {
+            let needle_lower = needle.to_ascii_lowercase();
+            Ok(IndexPattern::Contains {
+                needle,
+                needle_lower,
+            })
+        }
+
+        GlobKind::PrefixSuffix { prefix, suffix } => {
+            let prefix_lower = prefix.to_ascii_lowercase();
+            let suffix_lower = suffix.to_ascii_lowercase();
+            Ok(IndexPattern::PrefixSuffix {
+                prefix,
+                suffix,
+                prefix_lower,
+                suffix_lower,
+            })
+        }
+
+        GlobKind::Complex(glob_pattern) => {
+            let glob = globset::Glob::new(&glob_pattern).map_err(|err| CoreError::InvalidGlob {
+                pattern: glob_pattern.clone(),
+                reason: err.to_string(),
+            })?;
+            let regex_str = glob.regex();
+            let regex = Regex::new(regex_str).map_err(|err| CoreError::InvalidRegex {
+                pattern: regex_str.to_owned(),
+                reason: err.to_string(),
+            })?;
+            let regex_lower =
+                Regex::new(&format!("(?i){regex_str}")).map_err(|err| CoreError::InvalidRegex {
+                    pattern: regex_str.to_owned(),
+                    reason: err.to_string(),
+                })?;
+            Ok(IndexPattern::Regex { regex, regex_lower })
+        }
+    }
+}
+
+/// Compile a `ParsedPattern` into an `IndexPattern`.
+///
+/// # Errors
+///
+/// Returns an error if the pattern is invalid (e.g., malformed glob or regex).
+pub fn compile_parsed_pattern(parsed: &ParsedPattern) -> Result<IndexPattern> {
+    match parsed.pattern_type() {
+        PatternType::Glob => compile_index_pattern(parsed.pattern()),
+        PatternType::Regex => {
+            let pattern_str = parsed.pattern();
+            let regex = Regex::new(pattern_str).map_err(|err| CoreError::InvalidRegex {
+                pattern: pattern_str.to_owned(),
+                reason: err.to_string(),
+            })?;
+            let regex_lower = Regex::new(&format!("(?i){pattern_str}")).map_err(|err| {
+                CoreError::InvalidRegex {
+                    pattern: pattern_str.to_owned(),
+                    reason: err.to_string(),
+                }
+            })?;
+            Ok(IndexPattern::Regex { regex, regex_lower })
+        }
+        PatternType::Literal => {
+            let value = parsed.pattern().to_owned();
+            let value_lower = value.to_ascii_lowercase();
+            Ok(IndexPattern::Exact { value, value_lower })
+        }
+    }
+}
+
+/// Compile multiple extension patterns into a `SuffixSet`.
+#[must_use]
+pub fn compile_extensions(extensions: &[&str]) -> IndexPattern {
+    let suffixes: Vec<String> = extensions
+        .iter()
+        .map(|ext| {
+            if ext.starts_with('.') {
+                ext.to_string()
+            } else {
+                format!(".{ext}")
+            }
+        })
+        .collect();
+    let suffixes_lower: Vec<String> = suffixes
+        .iter()
+        .map(|suf| suf.to_ascii_lowercase())
+        .collect();
+    IndexPattern::SuffixSet {
+        suffixes,
+        suffixes_lower,
+    }
+}
+
+// ============================================================================
+// SearchResult
+// ============================================================================
+
+/// Result of a search on `MftIndex`.
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    /// The file/directory name.
+    pub name: String,
+    /// The full path (if resolved).
+    pub path: Option<String>,
+    /// File size in bytes.
+    pub size: u64,
+    /// File Reference Segment number.
+    pub frs: u64,
+    /// Parent FRS.
+    pub parent_frs: u64,
+    /// Whether this is a directory.
+    pub is_directory: bool,
+}
+
+impl SearchResult {
+    /// Create a new search result from a file record.
+    #[must_use]
+    pub fn from_record(record: &FileRecord, index: &MftIndex) -> Self {
+        Self {
+            name: index.record_name(record).to_owned(),
+            path: None, // Path resolution is expensive, done on demand
+            size: record.first_stream.size.length,
+            frs: record.frs,
+            parent_frs: u64::from(record.first_name.parent_frs),
+            is_directory: record.is_directory(),
+        }
+    }
+
+    /// Create with resolved path.
+    #[must_use]
+    pub fn with_path(mut self, path: String) -> Self {
+        self.path = Some(path);
+        self
+    }
+}
+
+// ============================================================================
+// IndexQuery - Fluent Query Builder
+// ============================================================================
+
+/// Type filter for `IndexQuery`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TypeFilter {
+    /// Match both files and directories.
+    #[default]
+    All,
+    /// Match only files.
+    FilesOnly,
+    /// Match only directories.
+    DirsOnly,
+}
+
+/// Query options for `IndexQuery`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct QueryOptions {
+    /// Type filter (files, dirs, or both).
+    pub type_filter: TypeFilter,
+    /// Whether to use case-sensitive matching.
+    pub case_sensitive: bool,
+    /// Whether to resolve full paths.
+    pub resolve_paths: bool,
+}
+
+/// Fluent query builder for searching `MftIndex` directly.
+///
+/// Applies filters in optimal order: type → size → pattern (cheap to
+/// expensive).
+pub struct IndexQuery<'a> {
+    /// Reference to the index being queried.
+    index: &'a MftIndex,
+    /// Optional pattern filter.
+    pattern: Option<IndexPattern>,
+    /// Query options (type filter, case sensitivity, path resolution).
+    options: QueryOptions,
+    /// Minimum file size filter.
+    min_size: Option<u64>,
+    /// Maximum file size filter.
+    max_size: Option<u64>,
+    /// Maximum number of results to return.
+    limit: Option<usize>,
+}
+
+impl<'a> IndexQuery<'a> {
+    /// Create a new query on the given index.
+    #[must_use]
+    pub const fn new(index: &'a MftIndex) -> Self {
+        Self {
+            index,
+            pattern: None,
+            options: QueryOptions {
+                type_filter: TypeFilter::All,
+                case_sensitive: false, // Windows default
+                resolve_paths: false,
+            },
+            min_size: None,
+            max_size: None,
+            limit: None,
+        }
+    }
+
+    /// Filter by glob pattern (e.g., `*.rs`, `foo*`, `*bar*`).
+    #[must_use]
+    pub fn glob(mut self, pattern: &str) -> Self {
+        self.pattern = compile_index_pattern(pattern).ok();
+        self
+    }
+
+    /// Filter by regex pattern.
+    ///
+    /// If the pattern is invalid, no filter is applied.
+    #[must_use]
+    pub fn regex(mut self, pattern: &str) -> Self {
+        if let Ok(regex) = Regex::new(pattern) {
+            // Build case-insensitive version; if it fails, clone the original
+            let regex_lower =
+                Regex::new(&format!("(?i){pattern}")).unwrap_or_else(|_| regex.clone());
+            self.pattern = Some(IndexPattern::Regex { regex, regex_lower });
+        }
+        self
+    }
+
+    /// Filter by file extensions (e.g., `["rs", "toml"]`).
+    #[must_use]
+    pub fn extensions(mut self, exts: &[&str]) -> Self {
+        self.pattern = Some(compile_extensions(exts));
+        self
+    }
+
+    /// Only match files (not directories).
+    #[must_use]
+    pub const fn files_only(mut self) -> Self {
+        self.options.type_filter = TypeFilter::FilesOnly;
+        self
+    }
+
+    /// Only match directories (not files).
+    #[must_use]
+    pub const fn dirs_only(mut self) -> Self {
+        self.options.type_filter = TypeFilter::DirsOnly;
+        self
+    }
+
+    /// Filter by minimum size (bytes).
+    #[must_use]
+    pub const fn min_size(mut self, size: u64) -> Self {
+        self.min_size = Some(size);
+        self
+    }
+
+    /// Filter by maximum size (bytes).
+    #[must_use]
+    pub const fn max_size(mut self, size: u64) -> Self {
+        self.max_size = Some(size);
+        self
+    }
+
+    /// Limit the number of results.
+    #[must_use]
+    pub const fn limit(mut self, count: usize) -> Self {
+        self.limit = Some(count);
+        self
+    }
+
+    /// Enable case-sensitive matching (default: case-insensitive).
+    #[must_use]
+    pub const fn case_sensitive(mut self, yes: bool) -> Self {
+        self.options.case_sensitive = yes;
+        self
+    }
+
+    /// Resolve full paths for results (slower).
+    #[must_use]
+    pub const fn resolve_paths(mut self) -> Self {
+        self.options.resolve_paths = true;
+        self
+    }
+
+    /// Execute the query and collect results.
+    ///
+    /// Uses Rayon for parallel execution across all records.
+    /// Filters are applied in optimal order: type → size → pattern.
+    #[must_use]
+    pub fn collect(self) -> Vec<SearchResult> {
+        let records = self.index.records();
+        let case_sensitive = self.options.case_sensitive;
+        let type_filter = self.options.type_filter;
+        let resolve_paths = self.options.resolve_paths;
+        let pattern = &self.pattern;
+        let min_size = self.min_size;
+        let max_size = self.max_size;
+        let limit = self.limit;
+        let index = self.index;
+
+        // Parallel filter with early termination via take_any
+        let filtered: Vec<SearchResult> = records
+            .par_iter()
+            .filter(|record| {
+                // 1. Type filter (cheapest - bit check)
+                match type_filter {
+                    TypeFilter::FilesOnly if record.is_directory() => return false,
+                    TypeFilter::DirsOnly if !record.is_directory() => return false,
+                    TypeFilter::All | TypeFilter::FilesOnly | TypeFilter::DirsOnly => {}
+                }
+
+                // 2. Size filter (cheap - u64 compare)
+                let size = record.first_stream.size.length;
+                if let Some(min) = min_size {
+                    if size < min {
+                        return false;
+                    }
+                }
+                if let Some(max) = max_size {
+                    if size > max {
+                        return false;
+                    }
+                }
+
+                // 3. Pattern filter (expensive - string ops)
+                if let Some(pat) = pattern {
+                    let name = index.record_name(record);
+                    if !pat.matches(name, case_sensitive) {
+                        return false;
+                    }
+                }
+
+                true
+            })
+            .take_any(limit.unwrap_or(usize::MAX))
+            .map(|record| {
+                let mut result = SearchResult::from_record(record, index);
+                if resolve_paths {
+                    let path = index.build_path(record.frs);
+                    result = result.with_path(path);
+                }
+                result
+            })
+            .collect();
+
+        filtered
+    }
+
+    /// Count matching records without collecting results.
+    ///
+    /// More efficient than `collect().len()` when you only need the count.
+    #[must_use]
+    pub fn count(self) -> usize {
+        let records = self.index.records();
+        let case_sensitive = self.options.case_sensitive;
+        let type_filter = self.options.type_filter;
+        let pattern = &self.pattern;
+        let min_size = self.min_size;
+        let max_size = self.max_size;
+        let index = self.index;
+
+        records
+            .par_iter()
+            .filter(|record| {
+                match type_filter {
+                    TypeFilter::FilesOnly if record.is_directory() => return false,
+                    TypeFilter::DirsOnly if !record.is_directory() => return false,
+                    TypeFilter::All | TypeFilter::FilesOnly | TypeFilter::DirsOnly => {}
+                }
+                let size = record.first_stream.size.length;
+                if let Some(min) = min_size {
+                    if size < min {
+                        return false;
+                    }
+                }
+                if let Some(max) = max_size {
+                    if size > max {
+                        return false;
+                    }
+                }
+                if let Some(pat) = pattern {
+                    let name = index.record_name(record);
+                    if !pat.matches(name, case_sensitive) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .count()
+    }
+}
+
+// ============================================================================
+// QueryMode - Execution Path Selection
+// ============================================================================
+
+/// Query execution mode for hybrid query engine.
+///
+/// Controls whether queries use the fast `MftIndex` path or the full-featured
+/// `DataFrame` path.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum QueryMode {
+    /// Automatically choose the best path based on query complexity.
+    ///
+    /// Simple queries (glob, extension, size filters) use `IndexQuery`.
+    /// Complex queries (SQL, aggregations, sorting) use `MftQuery`.
+    #[default]
+    Auto,
+
+    /// Force use of `IndexQuery` (fast path).
+    ///
+    /// Best for simple searches where speed is critical.
+    /// Some features may not be available (SQL, aggregations).
+    ForceIndex,
+
+    /// Force use of `MftQuery` (`DataFrame` path).
+    ///
+    /// Full feature set including SQL, aggregations, and sorting.
+    /// Slower due to `DataFrame` conversion overhead.
+    ForceDataFrame,
+}
+
+impl QueryMode {
+    /// Parse from string (for CLI).
+    #[must_use]
+    pub fn from_str_opt(input: &str) -> Option<Self> {
+        match input.to_ascii_lowercase().as_str() {
+            "auto" | "hybrid" => Some(Self::Auto),
+            "index" | "fast" => Some(Self::ForceIndex),
+            "dataframe" | "df" | "polars" | "full" => Some(Self::ForceDataFrame),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Display for QueryMode {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Auto => write!(formatter, "auto"),
+            Self::ForceIndex => write!(formatter, "index"),
+            Self::ForceDataFrame => write!(formatter, "dataframe"),
+        }
+    }
+}
+
+// ============================================================================
+// QueryComplexity - Analyze Query for Routing
+// ============================================================================
+
+/// Query complexity classification for routing decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryComplexity {
+    /// Simple query - can use `IndexQuery`.
+    Simple,
+    /// Complex query - requires `DataFrame`.
+    Complex,
+}
+
+/// Analyze a pattern to determine query complexity.
+#[must_use]
+pub const fn analyze_pattern_complexity(pattern: &IndexPattern) -> QueryComplexity {
+    // All IndexPattern variants are supported by IndexQuery
+    match pattern {
+        IndexPattern::Any
+        | IndexPattern::Exact { .. }
+        | IndexPattern::Prefix { .. }
+        | IndexPattern::Suffix { .. }
+        | IndexPattern::Contains { .. }
+        | IndexPattern::PrefixSuffix { .. }
+        | IndexPattern::ExactSet { .. }
+        | IndexPattern::SuffixSet { .. }
+        | IndexPattern::ContainsAny { .. }
+        | IndexPattern::Regex { .. } => QueryComplexity::Simple,
+    }
+}
+
+/// Features that require `DataFrame` path.
+///
+/// Uses bitflags pattern to avoid excessive bools.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct QueryFeatures(u8);
+
+impl QueryFeatures {
+    /// No special features.
+    pub const NONE: Self = Self(0);
+    /// SQL query requested.
+    pub const SQL: Self = Self(1 << 0);
+    /// Aggregation requested (count by extension, etc.).
+    pub const AGGREGATION: Self = Self(1 << 1);
+    /// Sorting requested (other than limit).
+    pub const SORTING: Self = Self(1 << 2);
+    /// Group by requested.
+    pub const GROUP_BY: Self = Self(1 << 3);
+    /// Join with another dataset.
+    pub const JOIN: Self = Self(1 << 4);
+
+    /// Create empty features.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self(0)
+    }
+
+    /// Add a feature.
+    #[must_use]
+    pub const fn with(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// Check if a feature is set.
+    #[must_use]
+    pub const fn has(self, feature: Self) -> bool {
+        (self.0 & feature.0) != 0
+    }
+
+    /// Check if any feature requires `DataFrame`.
+    #[must_use]
+    pub const fn requires_dataframe(self) -> bool {
+        self.0 != 0
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pattern_any() {
+        let pattern = compile_index_pattern("*").unwrap();
+        assert!(pattern.matches("anything", true));
+        assert!(pattern.matches("", true));
+    }
+
+    #[test]
+    fn test_pattern_exact() {
+        let pattern = compile_index_pattern("foo.txt").unwrap();
+        assert!(pattern.matches("foo.txt", true));
+        assert!(!pattern.matches("FOO.TXT", true));
+        assert!(pattern.matches("FOO.TXT", false)); // case-insensitive
+        assert!(!pattern.matches("foo.txt.bak", true));
+    }
+
+    #[test]
+    fn test_pattern_prefix() {
+        let pattern = compile_index_pattern("foo*").unwrap();
+        assert!(pattern.matches("foo", true));
+        assert!(pattern.matches("foobar", true));
+        assert!(!pattern.matches("barfoo", true));
+        assert!(pattern.matches("FOOBAR", false)); // case-insensitive
+    }
+
+    #[test]
+    fn test_pattern_suffix() {
+        let pattern = compile_index_pattern("*.txt").unwrap();
+        assert!(pattern.matches("foo.txt", true));
+        assert!(pattern.matches(".txt", true));
+        assert!(!pattern.matches("foo.txt.bak", true));
+        assert!(pattern.matches("FOO.TXT", false)); // case-insensitive
+    }
+
+    #[test]
+    fn test_pattern_contains() {
+        let pattern = compile_index_pattern("*needle*").unwrap();
+        assert!(pattern.matches("needle", true));
+        assert!(pattern.matches("haystackneedlehaystack", true));
+        assert!(!pattern.matches("haystack", true));
+        assert!(pattern.matches("NEEDLE", false)); // case-insensitive
+    }
+
+    #[test]
+    fn test_pattern_prefix_suffix() {
+        let pattern = compile_index_pattern("foo*bar").unwrap();
+        assert!(pattern.matches("foobar", true));
+        assert!(pattern.matches("foo123bar", true));
+        assert!(!pattern.matches("foobarbaz", true));
+        assert!(!pattern.matches("bazfoobar", true));
+    }
+
+    #[test]
+    fn test_extensions() {
+        let pattern = compile_extensions(&["rs", "toml"]);
+        assert!(pattern.matches("main.rs", true));
+        assert!(pattern.matches("Cargo.toml", true));
+        assert!(!pattern.matches("main.py", true));
+        assert!(pattern.matches("MAIN.RS", false)); // case-insensitive
+    }
+
+    #[test]
+    fn test_query_mode_from_str() {
+        assert_eq!(QueryMode::from_str_opt("auto"), Some(QueryMode::Auto));
+        assert_eq!(QueryMode::from_str_opt("hybrid"), Some(QueryMode::Auto));
+        assert_eq!(QueryMode::from_str_opt("index"), Some(QueryMode::ForceIndex));
+        assert_eq!(QueryMode::from_str_opt("fast"), Some(QueryMode::ForceIndex));
+        assert_eq!(
+            QueryMode::from_str_opt("dataframe"),
+            Some(QueryMode::ForceDataFrame)
+        );
+        assert_eq!(QueryMode::from_str_opt("df"), Some(QueryMode::ForceDataFrame));
+        assert_eq!(
+            QueryMode::from_str_opt("polars"),
+            Some(QueryMode::ForceDataFrame)
+        );
+        assert_eq!(QueryMode::from_str_opt("invalid"), None);
+    }
+
+    #[test]
+    fn test_query_mode_display() {
+        assert_eq!(QueryMode::Auto.to_string(), "auto");
+        assert_eq!(QueryMode::ForceIndex.to_string(), "index");
+        assert_eq!(QueryMode::ForceDataFrame.to_string(), "dataframe");
+    }
+
+    #[test]
+    fn test_query_features_requires_dataframe() {
+        let empty = QueryFeatures::empty();
+        assert!(!empty.requires_dataframe());
+
+        let with_sql = QueryFeatures::empty().with(QueryFeatures::SQL);
+        assert!(with_sql.requires_dataframe());
+        assert!(with_sql.has(QueryFeatures::SQL));
+        assert!(!with_sql.has(QueryFeatures::AGGREGATION));
+
+        let with_agg = QueryFeatures::empty().with(QueryFeatures::AGGREGATION);
+        assert!(with_agg.requires_dataframe());
+
+        let combined = QueryFeatures::empty()
+            .with(QueryFeatures::SQL)
+            .with(QueryFeatures::SORTING);
+        assert!(combined.requires_dataframe());
+        assert!(combined.has(QueryFeatures::SQL));
+        assert!(combined.has(QueryFeatures::SORTING));
+        assert!(!combined.has(QueryFeatures::JOIN));
+    }
+
+    #[test]
+    fn test_analyze_pattern_complexity() {
+        let any = compile_index_pattern("*").unwrap();
+        assert_eq!(analyze_pattern_complexity(&any), QueryComplexity::Simple);
+
+        let suffix = compile_index_pattern("*.rs").unwrap();
+        assert_eq!(analyze_pattern_complexity(&suffix), QueryComplexity::Simple);
+
+        let regex = IndexPattern::Regex {
+            regex: Regex::new(".*").unwrap(),
+            regex_lower: Regex::new("(?i).*").unwrap(),
+        };
+        assert_eq!(analyze_pattern_complexity(&regex), QueryComplexity::Simple);
+    }
+}

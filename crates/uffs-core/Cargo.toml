@@ -39,6 +39,12 @@ serde_json.workspace = true
 rayon.workspace = true
 chrono.workspace = true
 
+# String matching (SIMD-optimized for IndexQuery)
+regex.workspace = true
+memchr.workspace = true
+aho-corasick.workspace = true
+globset.workspace = true
+
 [dev-dependencies]
 criterion.workspace = true
 tokio = { workspace = true, features = ["test-util", "macros"] }
