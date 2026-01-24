@@ -3113,7 +3113,6 @@ async fn cmd_benchmark_index_lean(
 
     // Get drive type for adaptive defaults display
     let drive_type = uffs_mft::platform::detect_drive_type(drive_upper);
-    let effective_concurrency = concurrency.unwrap_or_else(|| drive_type.optimal_concurrency());
     let effective_io_size_kb = io_size_kb.unwrap_or_else(|| drive_type.optimal_io_size() / 1024);
 
     println!("=== Lean Index Build Benchmark Tool ===");
@@ -3129,26 +3128,40 @@ async fn cmd_benchmark_index_lean(
             "enabled"
         }
     );
-    println!(
-        "Concurrency: {} I/O ops in flight{}",
-        effective_concurrency,
-        if concurrency.is_none() { " (auto)" } else { "" }
-    );
+    // For HDD, concurrency is determined by extent count (fragmentation-aware)
+    // so we can't show the exact value until after opening the volume
+    if let Some(c) = concurrency {
+        println!("Concurrency: {} I/O ops in flight", c);
+    } else if matches!(drive_type, uffs_mft::platform::DriveType::Hdd) {
+        println!("Concurrency: auto (extent-aware, determined after MFT scan)");
+    } else {
+        println!(
+            "Concurrency: {} I/O ops in flight (auto)",
+            drive_type.optimal_concurrency()
+        );
+    }
     println!(
         "I/O Size: {} KB ({} MB){}",
         effective_io_size_kb,
         effective_io_size_kb / 1024,
         if io_size_kb.is_none() { " (auto)" } else { "" }
     );
-    println!(
-        "Parallel Parse: {} (workers: {})",
-        if parallel_parse {
-            "enabled"
-        } else {
-            "disabled"
-        },
-        parse_workers.map_or_else(|| "auto".to_string(), |w| w.to_string())
-    );
+    // Determine effective parallel parse setting (auto-enabled for NVMe if not
+    // explicitly set)
+    let effective_parallel_parse = parallel_parse || drive_type.benefits_from_parallel_parsing();
+    if effective_parallel_parse {
+        println!(
+            "Parallel Parse: {} (workers: {})",
+            if parallel_parse {
+                "enabled"
+            } else {
+                "enabled (auto)"
+            },
+            parse_workers.map_or_else(|| "auto".to_string(), |w| w.to_string())
+        );
+    } else {
+        println!("Parallel Parse: disabled");
+    }
     println!("This measures the UFFS indexing pipeline with lean MftIndex (no DataFrame overhead)");
     println!();
 
