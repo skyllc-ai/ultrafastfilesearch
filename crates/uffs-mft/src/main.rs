@@ -656,6 +656,37 @@ enum Commands {
         #[arg(long)]
         ttl: Option<u64>,
     },
+
+    /// Index ALL NTFS drives in parallel (optimized lean index path).
+    ///
+    /// Reads MFTs from all detected NTFS drives simultaneously using the
+    /// optimized `SlidingIocpInline` path with parallel parsing. Returns
+    /// lean `MftIndex` structures (no `DataFrame` overhead).
+    ///
+    /// By default, uses cache: loads fresh indices from cache, rebuilds and
+    /// saves stale/missing ones. Use `--no-cache` to force fresh reads.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft index-all
+    /// uffs_mft index-all --drives C,D,E
+    /// uffs_mft index-all --no-cache
+    /// uffs_mft index-all --ttl 300
+    /// ```
+    IndexAll {
+        /// Comma-separated list of drive letters (default: all NTFS drives)
+        #[arg(short, long, value_delimiter = ',')]
+        drives: Option<Vec<char>>,
+
+        /// Skip cache (always read fresh from disk, still saves to cache)
+        #[arg(long)]
+        no_cache: bool,
+
+        /// Cache TTL in seconds (default: 600 = 10 minutes)
+        #[arg(long, default_value = "600")]
+        ttl: u64,
+    },
 }
 
 /// Initialize logging with terminal + file support.
@@ -773,89 +804,102 @@ async fn run() -> Result<()> {
 
     #[cfg(windows)]
     {
-        match cli.command {
-            Commands::Read {
+        dispatch_command(cli.command).await
+    }
+}
+
+/// Dispatch CLI commands to their handlers.
+///
+/// Separated from `run()` to keep each function under the line limit.
+#[cfg(windows)]
+async fn dispatch_command(command: Commands) -> Result<()> {
+    match command {
+        Commands::Read {
+            drive,
+            output,
+            mode,
+            full,
+            unique,
+        } => cmd_read(drive, output, &mode, full, unique).await,
+        Commands::Info {
+            drive,
+            deep,
+            no_bitmap,
+            unique,
+        } => cmd_info(drive, deep, no_bitmap, unique).await,
+        Commands::Drives => cmd_drives().await,
+        Commands::Bench {
+            drive,
+            json,
+            no_df,
+            runs,
+            mode,
+            full,
+        } => cmd_bench(drive, json, no_df, runs, &mode, full).await,
+        Commands::BenchAll {
+            output,
+            no_df,
+            runs,
+            full,
+        } => cmd_bench_all(output, no_df, runs, full).await,
+        Commands::BitmapDiag { drive, samples } => cmd_bitmap_diag(drive, samples).await,
+        Commands::Save {
+            drive,
+            output,
+            no_compress,
+            compression_level,
+        } => cmd_save(drive, &output, !no_compress, compression_level).await,
+        Commands::Load {
+            input,
+            output,
+            info_only,
+        } => cmd_load(&input, output.as_deref(), info_only).await,
+        Commands::BenchmarkMft { drive } => cmd_benchmark_mft(drive).await,
+        Commands::BenchmarkIndex { drive } => cmd_benchmark_index(drive).await,
+        Commands::BenchmarkIndexLean {
+            drive,
+            mode,
+            no_bitmap,
+            no_placeholders,
+            concurrency,
+            io_size_kb,
+            parallel_parse,
+            parse_workers,
+        } => {
+            cmd_benchmark_index_lean(
                 drive,
-                output,
-                mode,
-                full,
-                unique,
-            } => cmd_read(drive, output, &mode, full, unique).await,
-            Commands::Info {
-                drive,
-                deep,
-                no_bitmap,
-                unique,
-            } => cmd_info(drive, deep, no_bitmap, unique).await,
-            Commands::Drives => cmd_drives().await,
-            Commands::Bench {
-                drive,
-                json,
-                no_df,
-                runs,
-                mode,
-                full,
-            } => cmd_bench(drive, json, no_df, runs, &mode, full).await,
-            Commands::BenchAll {
-                output,
-                no_df,
-                runs,
-                full,
-            } => cmd_bench_all(output, no_df, runs, full).await,
-            Commands::BitmapDiag { drive, samples } => cmd_bitmap_diag(drive, samples).await,
-            Commands::Save {
-                drive,
-                output,
-                no_compress,
-                compression_level,
-            } => cmd_save(drive, &output, !no_compress, compression_level).await,
-            Commands::Load {
-                input,
-                output,
-                info_only,
-            } => cmd_load(&input, output.as_deref(), info_only).await,
-            Commands::BenchmarkMft { drive } => cmd_benchmark_mft(drive).await,
-            Commands::BenchmarkIndex { drive } => cmd_benchmark_index(drive).await,
-            Commands::BenchmarkIndexLean {
-                drive,
-                mode,
+                &mode,
                 no_bitmap,
                 no_placeholders,
                 concurrency,
                 io_size_kb,
                 parallel_parse,
                 parse_workers,
-            } => {
-                cmd_benchmark_index_lean(
-                    drive,
-                    &mode,
-                    no_bitmap,
-                    no_placeholders,
-                    concurrency,
-                    io_size_kb,
-                    parallel_parse,
-                    parse_workers,
-                )
-                .await
-            }
-            Commands::BenchmarkMultiVolume { drives } => cmd_benchmark_multi_volume(drives).await,
-            Commands::UsnInfo { drive } => cmd_usn_info(drive).await,
-            Commands::UsnRead {
-                drive,
-                start_usn,
-                limit,
-            } => cmd_usn_read(drive, start_usn, limit).await,
-            Commands::IndexSave { drive, output } => cmd_index_save(drive, &output).await,
-            Commands::IndexLoad { input } => cmd_index_load(&input).await,
-            Commands::CacheStatus { clean, purge } => cmd_cache_status(clean, purge).await,
-            Commands::CacheGet { drive, force, ttl } => cmd_cache_get(drive, force, ttl).await,
-            Commands::CacheClear { drive, all } => cmd_cache_clear(drive, all).await,
-            Commands::IndexUpdate {
-                drive,
-                force_full,
-                ttl,
-            } => cmd_index_update(drive, force_full, ttl).await,
+            )
+            .await
         }
+        Commands::BenchmarkMultiVolume { drives } => cmd_benchmark_multi_volume(drives).await,
+        Commands::UsnInfo { drive } => cmd_usn_info(drive).await,
+        Commands::UsnRead {
+            drive,
+            start_usn,
+            limit,
+        } => cmd_usn_read(drive, start_usn, limit).await,
+        Commands::IndexSave { drive, output } => cmd_index_save(drive, &output).await,
+        Commands::IndexLoad { input } => cmd_index_load(&input).await,
+        Commands::CacheStatus { clean, purge } => cmd_cache_status(clean, purge).await,
+        Commands::CacheGet { drive, force, ttl } => cmd_cache_get(drive, force, ttl).await,
+        Commands::CacheClear { drive, all } => cmd_cache_clear(drive, all).await,
+        Commands::IndexUpdate {
+            drive,
+            force_full,
+            ttl,
+        } => cmd_index_update(drive, force_full, ttl).await,
+        Commands::IndexAll {
+            drives,
+            no_cache,
+            ttl,
+        } => cmd_index_all(drives, no_cache, ttl).await,
     }
 }
 
@@ -4118,4 +4162,132 @@ async fn do_full_index_build(drive: char) -> Result<()> {
     println!("⏱️  Total time: {:.3}s", total_time.as_secs_f64());
 
     Ok(())
+}
+
+/// Index ALL NTFS drives in parallel using the optimized lean index path.
+#[cfg(windows)]
+async fn cmd_index_all(drives: Option<Vec<char>>, no_cache: bool, ttl: u64) -> Result<()> {
+    use std::time::Instant;
+
+    use uffs_mft::{MultiDriveMftReader, detect_ntfs_drives};
+
+    let start = Instant::now();
+
+    // Detect drives if not specified
+    let drive_list: Vec<char> = match drives {
+        Some(d) if !d.is_empty() => d.into_iter().map(|c| c.to_ascii_uppercase()).collect(),
+        _ => {
+            println!("🔍 Detecting NTFS drives...");
+            detect_ntfs_drives()
+        }
+    };
+
+    if drive_list.is_empty() {
+        println!("❌ No NTFS drives found");
+        return Ok(());
+    }
+
+    println!();
+    println!("=== Index All NTFS Drives ===");
+    println!(
+        "Drives: {}",
+        drive_list
+            .iter()
+            .map(|c| format!("{}:", c))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
+        "Mode: {}",
+        if no_cache {
+            "fresh (no cache read)"
+        } else {
+            "cached"
+        }
+    );
+    if !no_cache {
+        println!("TTL: {} seconds", ttl);
+    }
+    println!();
+
+    // Create multi-drive reader
+    let reader = MultiDriveMftReader::new(drive_list.clone());
+
+    // Read all indices (default: use cache)
+    let indices = if no_cache {
+        println!("🔨 Building fresh indices (will save to cache)...");
+        reader.read_all_index_cached(0).await? // TTL=0 forces rebuild but still saves
+    } else {
+        println!("📦 Reading indices (with cache)...");
+        reader.read_all_index_cached(ttl).await?
+    };
+
+    let read_time = start.elapsed();
+
+    // Print summary
+    println!();
+    println!("=== Index Summary ===");
+    println!();
+
+    let mut total_files = 0u64;
+    let mut total_dirs = 0u64;
+    let mut total_entries = 0u64;
+
+    for index in &indices {
+        let files = index.file_count() as u64;
+        let dirs = index.dir_count() as u64;
+        total_files += files;
+        total_dirs += dirs;
+        total_entries += index.len() as u64;
+
+        println!(
+            "  {}:  {:>10} files  {:>8} dirs  {:>10} total",
+            index.volume,
+            format_number(files),
+            format_number(dirs),
+            format_number(index.len() as u64),
+        );
+    }
+
+    println!();
+    println!("─────────────────────────────────────────────────");
+    println!(
+        "  TOTAL: {:>10} files  {:>8} dirs  {:>10} entries",
+        format_number(total_files),
+        format_number(total_dirs),
+        format_number(total_entries),
+    );
+    println!();
+
+    // Performance stats
+    let elapsed_secs = read_time.as_secs_f64();
+    let entries_per_sec = total_entries as f64 / elapsed_secs;
+
+    println!("=== Performance ===");
+    println!("Time: {:.3}s", elapsed_secs);
+    println!("Throughput: {:.0} entries/sec", entries_per_sec);
+    println!();
+
+    Ok(())
+}
+
+/// Format a number with thousands separators.
+#[cfg(windows)]
+fn format_number(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.chars().rev().collect()
+}
+
+/// Index ALL NTFS drives (non-Windows stub).
+#[cfg(not(windows))]
+#[allow(dead_code, clippy::unused_async)]
+async fn cmd_index_all(_drives: Option<Vec<char>>, _no_cache: bool, _ttl: u64) -> Result<()> {
+    anyhow::bail!("index-all command is only supported on Windows")
 }

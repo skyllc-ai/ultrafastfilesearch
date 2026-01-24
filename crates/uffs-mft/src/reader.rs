@@ -3460,6 +3460,327 @@ impl MultiDriveMftReader {
     pub async fn read_all_detailed(&self) -> Result<Vec<DriveReadResult>> {
         Err(MftError::PlatformNotSupported)
     }
+
+    // =========================================================================
+    // Lean Index Methods (Optimized Path)
+    // =========================================================================
+
+    /// Read MFTs from all drives concurrently into lean `MftIndex` structures.
+    ///
+    /// This is the optimized path that uses `SlidingIocpInline` with parallel
+    /// parsing for maximum performance. Returns a vector of `MftIndex` objects,
+    /// one per drive.
+    ///
+    /// If some drives fail, the successful ones are still returned.
+    /// Only fails if ALL drives fail.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if all drives fail to read.
+    #[cfg(windows)]
+    pub async fn read_all_index(&self) -> Result<Vec<crate::index::MftIndex>> {
+        self.read_all_index_internal(None::<fn(char, MftProgress)>)
+            .await
+    }
+
+    /// Read MFTs from all drives into lean index (non-Windows stub).
+    ///
+    /// # Errors
+    ///
+    /// Always returns `MftError::PlatformNotSupported` on non-Windows
+    /// platforms.
+    #[cfg(not(windows))]
+    #[allow(clippy::unused_async)]
+    pub async fn read_all_index(&self) -> Result<Vec<crate::index::MftIndex>> {
+        Err(MftError::PlatformNotSupported)
+    }
+
+    /// Read MFTs from all drives with progress callbacks into lean index.
+    ///
+    /// The callback receives `(drive_letter, progress)` for each drive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if all drives fail to read.
+    #[cfg(windows)]
+    pub async fn read_all_index_with_progress<F>(
+        &self,
+        callback: F,
+    ) -> Result<Vec<crate::index::MftIndex>>
+    where
+        F: Fn(char, MftProgress) + Send + Sync + Clone + 'static,
+    {
+        self.read_all_index_internal(Some(callback)).await
+    }
+
+    /// Read MFTs with progress into lean index (non-Windows stub).
+    ///
+    /// # Errors
+    ///
+    /// Always returns `MftError::PlatformNotSupported` on non-Windows
+    /// platforms.
+    #[cfg(not(windows))]
+    #[allow(clippy::unused_async)]
+    pub async fn read_all_index_with_progress<F>(
+        &self,
+        _callback: F,
+    ) -> Result<Vec<crate::index::MftIndex>>
+    where
+        F: Fn(char, MftProgress) + Send + Sync + Clone + 'static,
+    {
+        Err(MftError::PlatformNotSupported)
+    }
+
+    /// Read MFTs from all drives with cache support.
+    ///
+    /// For each drive:
+    /// - If cache is fresh (within TTL), use cached index
+    /// - If cache is stale or missing, read from disk and update cache
+    ///
+    /// This provides the best of both worlds: fast startup when cache is valid,
+    /// and automatic refresh when needed.
+    ///
+    /// # Arguments
+    ///
+    /// * `ttl_seconds` - Time-to-live for cache entries (use
+    ///   `INDEX_TTL_SECONDS` for default)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if all drives fail to read.
+    #[cfg(windows)]
+    pub async fn read_all_index_cached(
+        &self,
+        ttl_seconds: u64,
+    ) -> Result<Vec<crate::index::MftIndex>> {
+        use tokio::task::JoinSet;
+        use tracing::info;
+
+        use crate::cache::{CacheStatus, check_cache_status};
+
+        if self.drives.is_empty() {
+            return Err(MftError::InvalidInput("No drives specified".into()));
+        }
+
+        let mut join_set = JoinSet::new();
+
+        for &drive in &self.drives {
+            let ttl = ttl_seconds;
+
+            join_set.spawn(async move {
+                // Check cache first
+                let cache_result = check_cache_status(drive, ttl);
+
+                match cache_result {
+                    CacheStatus::Fresh {
+                        index,
+                        header: _,
+                        age_seconds,
+                    } => {
+                        info!(
+                            drive = %drive,
+                            age_seconds,
+                            records = index.len(),
+                            "📦 Cache HIT - using cached index"
+                        );
+                        Ok(index)
+                    }
+                    CacheStatus::Stale { age_seconds } => {
+                        info!(
+                            drive = %drive,
+                            age_seconds = ?age_seconds,
+                            "🔄 Cache STALE - rebuilding index"
+                        );
+                        Self::read_and_cache_single_drive(drive).await
+                    }
+                    CacheStatus::Missing => {
+                        info!(drive = %drive, "🆕 Cache MISS - building index");
+                        Self::read_and_cache_single_drive(drive).await
+                    }
+                }
+            });
+        }
+
+        // Collect results
+        let mut indices: Vec<crate::index::MftIndex> = Vec::new();
+        let mut errors: Vec<(char, MftError)> = Vec::new();
+
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok(Ok(index)) => {
+                    indices.push(index);
+                }
+                Ok(Err(e)) => {
+                    errors.push(('?', e));
+                }
+                Err(join_err) => {
+                    errors.push((
+                        '?',
+                        MftError::InvalidInput(format!("Task failed: {join_err}")),
+                    ));
+                }
+            }
+        }
+
+        // If no indices were collected, return the first error
+        if indices.is_empty() {
+            return Err(errors
+                .into_iter()
+                .next()
+                .map(|(_, e)| e)
+                .unwrap_or(MftError::InvalidInput("No drives could be read".into())));
+        }
+
+        Ok(indices)
+    }
+
+    /// Read MFTs with cache support (non-Windows stub).
+    ///
+    /// # Errors
+    ///
+    /// Always returns `MftError::PlatformNotSupported` on non-Windows
+    /// platforms.
+    #[cfg(not(windows))]
+    #[allow(clippy::unused_async)]
+    pub async fn read_all_index_cached(
+        &self,
+        _ttl_seconds: u64,
+    ) -> Result<Vec<crate::index::MftIndex>> {
+        Err(MftError::PlatformNotSupported)
+    }
+
+    /// Internal implementation for concurrent lean index reading.
+    #[cfg(windows)]
+    async fn read_all_index_internal<F>(
+        &self,
+        callback: Option<F>,
+    ) -> Result<Vec<crate::index::MftIndex>>
+    where
+        F: Fn(char, MftProgress) + Send + Sync + Clone + 'static,
+    {
+        use std::sync::Arc;
+
+        use tokio::task::JoinSet;
+
+        if self.drives.is_empty() {
+            return Err(MftError::InvalidInput("No drives specified".into()));
+        }
+
+        // Wrap callback in Arc for sharing across tasks
+        let callback = callback.map(Arc::new);
+
+        // Spawn a task for each drive
+        let mut join_set = JoinSet::new();
+
+        for &drive in &self.drives {
+            let cb = callback.clone();
+
+            join_set.spawn(async move { Self::read_single_drive_index(drive, cb).await });
+        }
+
+        // Collect results
+        let mut indices: Vec<crate::index::MftIndex> = Vec::new();
+        let mut errors: Vec<(char, MftError)> = Vec::new();
+
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok(Ok(index)) => {
+                    indices.push(index);
+                }
+                Ok(Err(e)) => {
+                    errors.push(('?', e));
+                }
+                Err(join_err) => {
+                    errors.push((
+                        '?',
+                        MftError::InvalidInput(format!("Task failed: {join_err}")),
+                    ));
+                }
+            }
+        }
+
+        // If no indices were collected, return the first error
+        if indices.is_empty() {
+            return Err(errors
+                .into_iter()
+                .next()
+                .map(|(_, e)| e)
+                .unwrap_or(MftError::InvalidInput("No drives could be read".into())));
+        }
+
+        Ok(indices)
+    }
+
+    /// Read a single drive into lean index with optional progress callback.
+    #[cfg(windows)]
+    async fn read_single_drive_index<F>(
+        drive: char,
+        callback: Option<Arc<F>>,
+    ) -> Result<crate::index::MftIndex>
+    where
+        F: Fn(char, MftProgress) + Send + Sync + 'static,
+    {
+        tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                let reader = MftReader::open(drive).await?;
+
+                if let Some(cb) = callback {
+                    reader
+                        .read_index_with_progress(move |progress| {
+                            cb(drive, progress);
+                        })
+                        .await
+                } else {
+                    reader.read_all_index().await
+                }
+            })
+        })
+        .await
+        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
+    }
+
+    /// Read a single drive and save to cache.
+    #[cfg(windows)]
+    async fn read_and_cache_single_drive(drive: char) -> Result<crate::index::MftIndex> {
+        use tracing::info;
+
+        use crate::cache::save_to_cache;
+        use crate::platform::VolumeHandle;
+        use crate::usn::query_usn_journal;
+
+        tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                let reader = MftReader::open(drive).await?;
+                let index = reader.read_all_index().await?;
+
+                // Get volume info for caching
+                let handle = VolumeHandle::open(drive)?;
+                let volume_data = handle.volume_data();
+                let volume_serial = volume_data.volume_serial_number;
+
+                let (usn_journal_id, next_usn) = match query_usn_journal(drive) {
+                    Ok(info) => (info.journal_id, info.next_usn),
+                    Err(_) => (0, 0),
+                };
+
+                // Save to cache
+                if let Err(e) =
+                    save_to_cache(&index, drive, volume_serial, usn_journal_id, next_usn)
+                {
+                    // Log but don't fail - caching is optional
+                    info!(drive = %drive, error = %e, "⚠️ Failed to save to cache");
+                } else {
+                    info!(drive = %drive, records = index.len(), "💾 Saved to cache");
+                }
+
+                Ok(index)
+            })
+        })
+        .await
+        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
+    }
 }
 
 #[cfg(test)]
@@ -3520,6 +3841,22 @@ mod tests {
     async fn test_multi_drive_platform_not_supported() {
         let reader = MultiDriveMftReader::new(vec!['C', 'D']);
         let result = reader.read_all().await;
+        assert!(matches!(result, Err(MftError::PlatformNotSupported)));
+    }
+
+    #[tokio::test]
+    #[cfg(not(windows))]
+    async fn test_multi_drive_index_platform_not_supported() {
+        let reader = MultiDriveMftReader::new(vec!['C', 'D']);
+        let result = reader.read_all_index().await;
+        assert!(matches!(result, Err(MftError::PlatformNotSupported)));
+    }
+
+    #[tokio::test]
+    #[cfg(not(windows))]
+    async fn test_multi_drive_index_cached_platform_not_supported() {
+        let reader = MultiDriveMftReader::new(vec!['C', 'D']);
+        let result = reader.read_all_index_cached(3600).await;
         assert!(matches!(result, Err(MftError::PlatformNotSupported)));
     }
 
