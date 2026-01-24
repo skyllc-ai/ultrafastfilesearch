@@ -2,27 +2,37 @@
 
 **Direct NTFS Master File Table (MFT) reader for Windows.**
 
-This crate provides ultra-fast, low-level access to the NTFS MFT, bypassing Windows file enumeration APIs entirely. It reads raw disk sectors and parses MFT records in parallel, outputting a Polars DataFrame ready for analysis.
+This crate provides ultra-fast, low-level access to the NTFS MFT, bypassing Windows file enumeration APIs entirely. It reads raw disk sectors and parses MFT records in parallel, achieving **11-20% faster** indexing than the C++ implementation.
 
-## 🚀 Performance (v0.2.0)
+## 🚀 Performance
 
-| Drive Type | Throughput | Example |
-|------------|------------|---------|
-| **SSD** | **1,472-1,839 MB/s** | 1.77M records in 3.1s |
-| **HDD** | **206-250 MB/s** | 7.18M records in 45.9s |
+| Drive Type | Rust | C++ | Improvement |
+|------------|------|-----|-------------|
+| **NVMe C:** | 2.2s | 2.5s | **11% faster** |
+| **NVMe F:** | 1.2s | 1.4s | **19% faster** |
+| **HDD S:** | 41s | 41s | Same (I/O bound) |
 
-**55% faster** than v0.1.30 baseline. See [Benchmarks](#benchmarks) for details.
+### Key Optimizations
+
+- **M1: Adaptive Concurrency** - 32 I/O ops for NVMe, 8 for SSD, 2 for HDD
+- **M2: Large I/O Chunks** - 4MB for NVMe, 2MB for SSD, 1MB for HDD
+- **M3: Parallel Parsing** - 24 workers on 24-core CPU
+- **M4: Multi-Volume IOCP** - Single IOCP for multiple drives
+- **M5: USN Journal** - Sub-second incremental updates
+- **P1: Precise Chunks** - Skip unused MFT regions (30-50% less I/O)
+- **P2: Direct I/O** - Each chunk = one I/O operation
+- **P3: Zero-Copy** - In-place fixup, no per-record allocation
 
 ## Features
 
 - **Direct disk access** - Reads raw clusters, bypassing filesystem overhead
-- **Bitmap optimization** - Skips free/unused records (often 10-30% of MFT)
+- **Bitmap optimization** - Skips free/unused records (30-50% of MFT)
 - **Parallel parsing** - Uses Rayon to parse records across all CPU cores
-- **SoA layout** - Struct-of-Arrays for optimal DataFrame building
-- **Fast/Full modes** - Skip extension records for speed, or merge for completeness
-- **SSD/HDD auto-tuning** - Optimal chunk sizes per drive type
+- **Drive type detection** - Auto-detects NVMe/SSD/HDD for optimal settings
+- **Incremental updates** - USN Journal integration for sub-second refreshes
+- **Multi-volume support** - Index multiple drives in parallel
+- **Caching** - Persistent index cache with TTL-based freshness
 - **Polars DataFrame output** - Columnar format with SIMD operations
-- **Comprehensive logging** - Rich tracing output for debugging and analysis
 
 ## Binary: `uffs_mft`
 
@@ -35,157 +45,39 @@ cargo build --release -p uffs-mft
 # The binary will be at: target/release/uffs_mft.exe
 ```
 
-### Commands
-
-#### `info` - Show MFT Information (Fast)
-
-Displays volume geometry and MFT metadata without reading all records (~10ms):
+## Quick Start
 
 ```bash
+# List available NTFS drives
+uffs_mft drives
+
+# Get MFT info for a drive (fast, ~10ms)
 uffs_mft info --drive C
-```
 
-Output:
-```
-═══════════════════════════════════════════════════════════════
-                    MFT INFO (Lightweight)
-                    Drive: C:
-═══════════════════════════════════════════════════════════════
+# Build and cache index (recommended for repeated use)
+uffs_mft index-update --drive C
 
-📐 VOLUME GEOMETRY
-  Bytes per sector:     512
-  Bytes per cluster:    4096
-  Bytes per MFT record: 1024
-  Total clusters:       244190646
-  Volume size:          931.51 GB
+# Incremental update (sub-second after initial build)
+uffs_mft index-update --drive C
 
-📁 MFT STRUCTURE
-  MFT start LCN:        786432
-  MFT size:             512.00 MB
-  MFT % of volume:      0.054%
-  Total records:        524288
-  In-use records:       450000
-  Free records:         74288
-  Utilization:          85.8%
-  Fragmentation:        1 extent(s) ✅
-
-✅ HEALTH STATUS: Good (based on metadata)
-
-💡 TIP: Use --deep for detailed file statistics.
-
-⏱️  Completed in 8.2ms
-═══════════════════════════════════════════════════════════════
-```
-
-#### `info --deep` - Full MFT Analysis
-
-Reads and parses all MFT records for comprehensive statistics (~10-30s):
-
-```bash
-uffs_mft info --drive C --deep
-```
-
-Additional output with `--deep`:
-```
-📊 DEEP SCAN: Reading all MFT records...
-
-📊 FILE SYSTEM STATISTICS
-  Parsed records:       450000
-  Directories:          50000
-  Files:                400000
-
-🏷️  ATTRIBUTE FLAGS
-  Hidden:               1200
-  System:               500
-  Read-only:            150
-  Archive:              380000
-  Compressed:           100
-  Encrypted:            50
-  Sparse:               20
-  Reparse points:       10
-
-🔗 EXTENDED ATTRIBUTES
-  Files with ADS:       25 (Alternate Data Streams)
-  Files with hardlinks: 150
-
-💾 STORAGE ANALYSIS
-  Total file size:      450.25 GB
-  Total allocated:      465.50 GB
-  Slack space:          15616.00 MB (3.3%)
-
-⏱️  Deep scan completed in 12.45s
-```
-
-#### `read` - Export MFT to Parquet
-
-Reads the MFT and exports to a Parquet file:
-
-```bash
-# Fast mode (default) - maximum speed, skips extension records
+# Export to Parquet for analysis
 uffs_mft read --drive C --output mft.parquet
-
-# Full mode - complete data including extension records
-uffs_mft read --drive C --output mft.parquet --full
-
-# Specify read mode (auto, parallel, streaming, prefetch)
-uffs_mft read --drive C --output mft.parquet --mode prefetch
 ```
 
-**Options:**
-- `--mode <MODE>` - Read mode: `auto` (default), `parallel`, `streaming`, `prefetch`
-- `--full` - Merge extension records for complete data (slower, see [Fast vs Full Mode](#fast-vs-full-mode))
-
-The output Parquet contains all file metadata:
-- `frs`, `parent_frs` - File Record Segment numbers
-- `name` - Primary file name
-- `size`, `allocated_size` - File sizes
-- `created`, `modified`, `accessed`, `mft_modified` - Timestamps
-- `is_directory`, `is_hidden`, `is_system`, `is_compressed`, etc. - Flags
-
-#### `bench` - Benchmark Single Drive
-
-Benchmark MFT reading with detailed phase timing:
+## Global Options
 
 ```bash
-# Basic benchmark
-uffs_mft bench --drive C
+# Enable verbose output (shows detailed logging)
+uffs_mft -v <command>
 
-# Multiple runs for averaging
-uffs_mft bench --drive C --runs 3
-
-# JSON output for scripting
-uffs_mft bench --drive C --json
-
-# Compare fast vs full mode
-uffs_mft bench --drive C          # Fast (default)
-uffs_mft bench --drive C --full   # Full (with extension merging)
+# Or use environment variable for fine-grained control
+RUST_LOG=info uffs_mft <command>
+RUST_LOG=debug uffs_mft <command>
 ```
 
-**Options:**
-- `--runs <N>` - Number of runs for averaging (default: 1)
-- `--json` - Output results as JSON
-- `--no-df` - Skip DataFrame building (measure I/O + parse only)
-- `--mode <MODE>` - Read mode: `auto`, `parallel`, `streaming`, `prefetch`
-- `--full` - Merge extension records (slower)
+## Commands Reference
 
-#### `bench-all` - Benchmark All Drives
-
-Benchmark all NTFS drives and save results to JSON:
-
-```bash
-# Benchmark all drives
-uffs_mft bench-all
-
-# Save to specific file
-uffs_mft bench-all --output benchmark_results.json
-
-# Multiple runs per drive
-uffs_mft bench-all --runs 3
-
-# Compare fast vs full mode
-uffs_mft bench-all --output fast.json
-uffs_mft bench-all --output full.json --full
-```
+### Core Commands
 
 #### `drives` - List NTFS Drives
 
@@ -193,12 +85,257 @@ uffs_mft bench-all --output full.json --full
 uffs_mft drives
 ```
 
-Output:
+Lists all available NTFS drives with size and estimated MFT records.
+
+#### `info` - Show MFT Information
+
+```bash
+# Quick info (~10ms)
+uffs_mft info --drive C
+
+# Deep scan with file statistics (~2-10s)
+uffs_mft info --drive C --deep
+
+# Show unique FRS only (no hard link expansion)
+uffs_mft info --drive C --deep --unique
 ```
-NTFS drives:
-  C: (931.5 GB, ~524288 MFT records)
-  D: (1863.0 GB, ~1048576 MFT records)
+
+**Options:**
+- `--deep` - Read all MFT records for detailed statistics
+- `--no-bitmap` - Disable bitmap optimization (read all records)
+- `--unique` - Show unique FRS count (no hard link expansion)
+
+#### `read` - Export MFT to Parquet
+
+```bash
+# Export to Parquet (recommended)
+uffs_mft read --drive C --output mft.parquet
+
+# Export to CSV
+uffs_mft read --drive C --output mft.csv
+
+# Full mode with extension record merging
+uffs_mft read --drive C --output mft.parquet --full
 ```
+
+**Options:**
+- `--output <FILE>` - Output file (.parquet or .csv)
+- `--full` - Merge extension records for complete data
+- `--mode <MODE>` - Read mode: `auto`, `parallel`, `streaming`, `prefetch`
+
+---
+
+### Indexing Commands (Recommended for Production)
+
+These commands use the optimized lean index format with caching.
+
+#### `index-update` - Build or Update Index (⭐ Primary Command)
+
+```bash
+# Build index (or update incrementally if cache exists)
+uffs_mft index-update --drive C
+
+# Force full rebuild (ignore cache)
+uffs_mft index-update --drive C --force-full
+
+# Custom TTL (default: 600 seconds = 10 minutes)
+uffs_mft index-update --drive C --ttl 3600
+```
+
+**How it works:**
+1. Checks for cached index (default location: `%TEMP%\uffs_index_cache\`)
+2. If cache is fresh and USN journal is valid → applies incremental changes (~0.8s)
+3. If cache is stale/missing → performs full MFT scan (~2.2s for NVMe)
+4. If volume is read-only → uses cached index directly (instant)
+
+**This is the recommended command for production use.**
+
+#### `cache-status` - Show Cache Status
+
+```bash
+# Show status for all cached drives
+uffs_mft cache-status
+
+# Show status for specific drive
+uffs_mft cache-status --drive C
+```
+
+Shows cache age, record count, and freshness status.
+
+#### `cache-get` - Get or Refresh Cache
+
+```bash
+# Get cached index (refresh if stale)
+uffs_mft cache-get --drive C
+
+# Force refresh
+uffs_mft cache-get --drive C --force
+```
+
+#### `cache-clear` - Clear Cached Indices
+
+```bash
+# Clear all cached indices
+uffs_mft cache-clear
+
+# Clear specific drive
+uffs_mft cache-clear --drive C
+```
+
+#### `index-save` / `index-load` - Manual Index Management
+
+```bash
+# Save index to custom location
+uffs_mft index-save --drive C --output my_index.uffs
+
+# Load and inspect saved index
+uffs_mft index-load --input my_index.uffs
+```
+
+---
+
+### USN Journal Commands (M5 Optimization)
+
+#### `usn-info` - Query USN Journal
+
+```bash
+uffs_mft usn-info --drive C
+```
+
+Shows journal ID, first/next USN, and estimated change count.
+
+#### `usn-read` - Read Recent Changes
+
+```bash
+# Read last 100 changes
+uffs_mft usn-read --drive C --limit 100
+
+# Read changes since specific USN
+uffs_mft usn-read --drive C --since 1234567890
+```
+
+---
+
+### Benchmark Commands
+
+#### `benchmark-index-lean` - Fair Comparison Benchmark (⭐ Recommended)
+
+```bash
+# Basic benchmark (auto-detects drive type and uses optimal settings)
+uffs_mft benchmark-index-lean --drive C
+
+# With custom concurrency (override auto-detection)
+uffs_mft benchmark-index-lean --drive C --concurrency 64
+
+# With custom I/O size
+uffs_mft benchmark-index-lean --drive C --io-size-kb 8192
+
+# Force parallel parsing (default: auto based on drive type)
+uffs_mft benchmark-index-lean --drive C --parallel-parse
+
+# Disable bitmap optimization (read entire MFT)
+uffs_mft benchmark-index-lean --drive C --no-bitmap
+
+# Disable placeholder creation (saves ~15% CPU)
+uffs_mft benchmark-index-lean --drive C --no-placeholders
+```
+
+**Use this for comparing against C++.** Measures only MFT read + parse + index build, without cache save overhead.
+
+**Options:**
+- `--mode <MODE>` - Read mode: `auto`, `sliding-iocp-inline`, `pipelined`, `pipelined-parallel`
+- `--concurrency <N>` - I/O ops in flight (default: 32 NVMe, 8 SSD, 2 HDD)
+- `--io-size-kb <KB>` - I/O chunk size (default: 4096 NVMe, 2048 SSD, 1024 HDD)
+- `--parallel-parse` - Enable parallel parsing workers
+- `--parse-workers <N>` - Number of parsing threads (default: CPU cores)
+- `--no-bitmap` - Disable bitmap optimization (read all records)
+- `--no-placeholders` - Disable placeholder creation
+
+| Metric | C++ | Rust |
+|--------|-----|------|
+| Time | 2.5s | 2.2s |
+| Speed | 1826 MB/s | 2042 MB/s |
+
+#### `benchmark-index` - Full Index Benchmark
+
+```bash
+uffs_mft benchmark-index --drive C
+```
+
+Matches C++ `--benchmark-index` output format exactly. Includes DataFrame overhead.
+
+#### `benchmark-mft` - Raw MFT Read Benchmark
+
+```bash
+uffs_mft benchmark-mft --drive C
+```
+
+Measures raw MFT reading speed without parsing. Matches C++ `--benchmark-mft` output.
+
+#### `benchmark-multi-volume` - Multi-Volume IOCP Benchmark
+
+```bash
+# Benchmark two NVMe drives in parallel
+uffs_mft benchmark-multi-volume --drives C,F
+
+# Benchmark all drives
+uffs_mft benchmark-multi-volume --drives C,F,S
+```
+
+Tests M4 optimization: single IOCP handling multiple volumes simultaneously.
+
+#### `bench` - Detailed Phase Timing
+
+```bash
+# Basic benchmark with phase breakdown
+uffs_mft bench --drive C
+
+# Multiple runs for averaging
+uffs_mft bench --drive C --runs 3
+
+# JSON output
+uffs_mft bench --drive C --json
+
+# Skip DataFrame building (measure I/O + parse only)
+uffs_mft bench --drive C --no-df
+```
+
+**Options:**
+- `--runs <N>` - Number of runs for averaging
+- `--json` - Output as JSON
+- `--no-df` - Skip DataFrame building
+- `--mode <MODE>` - Read mode
+- `--full` - Merge extension records
+
+#### `bench-all` - Benchmark All Drives
+
+```bash
+uffs_mft bench-all --output results.json --runs 3
+```
+
+---
+
+### Diagnostic Commands
+
+#### `bitmap-diag` - MFT Bitmap Diagnostics
+
+```bash
+uffs_mft bitmap-diag --drive C
+```
+
+Analyzes MFT bitmap to show in-use vs free record distribution.
+
+#### `save` / `load` - Offline Analysis
+
+```bash
+# Save raw MFT bytes for offline analysis
+uffs_mft save --drive C --output mft_raw.bin
+
+# Load and process saved MFT
+uffs_mft load --input mft_raw.bin --output mft.parquet
+```
+
+Useful for debugging or analyzing MFT from another machine.
 
 ## Library Usage
 
@@ -315,43 +452,103 @@ Extension records are rare (~1% of files on typical systems).
 
 ## Benchmarks
 
-### v0.2.0 Results (Fast Mode)
+### Latest Results (v0.2.71)
 
-Tested on Windows 11, 24-core CPU:
+Tested on Windows 11, 24-core CPU, NVMe drives:
 
-| Drive | Type | Records | Time | Throughput |
-|-------|------|---------|------|------------|
-| C: | SSD | 1.77M | **3.1s** | **1,472 MB/s** |
-| F: | SSD | 1.53M | **2.5s** | **1,839 MB/s** |
-| D: | HDD | 3.81M | **23.3s** | **206 MB/s** |
-| S: | HDD | 7.18M | **45.9s** | **250 MB/s** |
+#### Full Scan (Rust vs C++)
 
-### Phase Breakdown (SSD C:)
+| Drive | Type | MFT Size | C++ | Rust | Improvement |
+|-------|------|----------|-----|------|-------------|
+| C: | NVMe | 4547 MB | 2.50s | **2.22s** | **11% faster** |
+| F: | NVMe | 4547 MB | 1.44s | **1.16s** | **19% faster** |
+| S: | HDD | 11483 MB | 41.6s | 41.0s | Same (I/O bound) |
+
+#### Phase 2.5 Optimizations
+
+| Drive | MFT Size | Bytes Read | Reduction | I/O Ops |
+|-------|----------|------------|-----------|---------|
+| C: | 4547 MB | 3199 MB | **30% less** | 343 |
+| F: | 4547 MB | 2565 MB | **44% less** | 777 |
+
+#### Incremental Updates (M5)
+
+| Operation | Time | Notes |
+|-----------|------|-------|
+| Initial build | 2.2s | Full MFT scan |
+| Incremental update | **0.8s** | USN Journal delta |
+| Read-only volume | **0.3s** | Cache load only |
+
+### Phase Breakdown (NVMe C:)
 
 | Phase | Time | % |
 |-------|------|---|
-| Read | 813ms | 26% |
-| Parse | 1,356ms | 44% |
-| Merge | 542ms | 18% |
-| DF Build | 185ms | 6% |
-| **Total** | **3,090ms** | 100% |
-
-### Fast vs Full Mode Comparison
-
-| Drive | Fast | Full | Difference |
-|-------|------|------|------------|
-| SSD C: | 3.1s | 5.8s | Fast is 46% faster |
-| SSD F: | 2.5s | 4.8s | Fast is 48% faster |
-| HDD D: | 23.3s | 30.6s | Fast is 24% faster |
-| HDD S: | 45.9s | 62.1s | Fast is 26% faster |
+| I/O Read | 1870ms | 87% |
+| Parse + Merge | 260ms | 12% |
+| Overhead | 20ms | 1% |
+| **Total** | **2150ms** | 100% |
 
 ### Optimization History
 
-| Version | Total (7 drives) | SSD Throughput | Key Changes |
-|---------|------------------|----------------|-------------|
-| v0.1.30 | 315s | 400-550 MB/s | Baseline |
-| v0.1.38 | 173s | 791-942 MB/s | Bitmap fix, Rayon fold/reduce, prefetch |
-| **v0.2.0** | **142s** | **1,472-1,839 MB/s** | SoA layout, fast path |
+| Version | Key Changes |
+|---------|-------------|
+| v0.1.30 | Baseline |
+| v0.1.38 | Bitmap fix, Rayon fold/reduce, prefetch |
+| v0.2.0 | SoA layout, fast path |
+| v0.2.50 | M1-M5 optimizations (adaptive concurrency, large I/O, parallel parse, multi-volume, USN) |
+| **v0.2.71** | **P1-P3 optimizations (precise chunks, direct I/O, zero-copy) - 11-19% faster than C++** |
+
+## Performance Tuning
+
+### Auto-Detection (Default)
+
+By default, `uffs_mft` auto-detects drive type and uses optimal settings:
+
+| Setting | NVMe | SSD | HDD |
+|---------|------|-----|-----|
+| **Concurrency** | 32 | 8 | 2 |
+| **I/O Size** | 4 MB | 2 MB | 1 MB |
+| **Parallel Parse** | Yes | No | No |
+| **Bitmap** | Yes | Yes | Optional |
+
+### Manual Tuning
+
+Override auto-detection for experimentation:
+
+```bash
+# Maximum concurrency for fast NVMe
+uffs_mft benchmark-index-lean --drive C --concurrency 64 --io-size-kb 8192
+
+# Conservative settings for older SSD
+uffs_mft benchmark-index-lean --drive D --concurrency 4 --io-size-kb 1024
+
+# HDD: try disabling bitmap (sequential may beat seeking)
+uffs_mft benchmark-index-lean --drive S --no-bitmap
+
+# Force parallel parsing with custom worker count
+uffs_mft benchmark-index-lean --drive C --parallel-parse --parse-workers 16
+```
+
+### Key Tuning Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--concurrency <N>` | I/O operations in flight | Auto (2-32) |
+| `--io-size-kb <KB>` | Chunk size in KB | Auto (1024-4096) |
+| `--parallel-parse` | Enable parallel parsing | Auto |
+| `--parse-workers <N>` | Parsing thread count | CPU cores |
+| `--no-bitmap` | Read entire MFT | false |
+| `--no-placeholders` | Skip placeholder dirs | false |
+| `--mode <MODE>` | Read strategy | auto |
+
+### Read Modes
+
+| Mode | Description | Best For |
+|------|-------------|----------|
+| `auto` | Auto-select based on drive type | Default |
+| `sliding-iocp-inline` | IOCP with inline parsing | NVMe/SSD |
+| `pipelined` | I/O+CPU overlap, single-threaded | SSD |
+| `pipelined-parallel` | I/O+CPU overlap, multi-core | HDD |
 
 ## Requirements
 

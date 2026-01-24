@@ -143,7 +143,7 @@ pub use ntfs::{
 #[cfg(windows)]
 pub use platform::{
     DriveType, MftBitmap, MftExtent, NtfsVolumeData, VolumeHandle, detect_drive_type,
-    detect_ntfs_drives, infer_drive_from_path, is_elevated,
+    detect_ntfs_drives, infer_drive_from_path, is_elevated, is_volume_read_only,
 };
 pub use raw::{
     LoadRawOptions, RawMftData, RawMftHeader, SaveRawOptions, load_raw_mft, load_raw_mft_header,

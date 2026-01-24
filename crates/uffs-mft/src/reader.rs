@@ -3522,4 +3522,106 @@ mod tests {
         let result = reader.read_all().await;
         assert!(matches!(result, Err(MftError::PlatformNotSupported)));
     }
+
+    // =========================================================================
+    // Tests for MftReader optimal defaults
+    // =========================================================================
+
+    /// Test that MftReader stores None for concurrency/io_size by default,
+    /// allowing the I/O layer to use optimal settings based on drive type.
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn test_mft_reader_uses_none_defaults() {
+        // This test requires admin privileges, so we check if we can open
+        let reader = match MftReader::open('C').await {
+            Ok(r) => r,
+            Err(MftError::InsufficientPrivileges) => {
+                // Skip test if not running as admin
+                return;
+            }
+            Err(e) => panic!("Unexpected error: {:?}", e),
+        };
+
+        // Verify that concurrency and io_size are None (will use optimal defaults)
+        assert!(
+            reader.concurrency.is_none(),
+            "MftReader should default to None for concurrency"
+        );
+        assert!(
+            reader.io_size.is_none(),
+            "MftReader should default to None for io_size"
+        );
+        assert!(
+            reader.parallel_parse.is_none(),
+            "MftReader should default to None for parallel_parse"
+        );
+        assert!(
+            reader.parse_workers.is_none(),
+            "MftReader should default to None for parse_workers"
+        );
+    }
+
+    /// Test that MftReader builder methods correctly set values
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn test_mft_reader_builder_overrides() {
+        let reader = match MftReader::open('C').await {
+            Ok(r) => r,
+            Err(MftError::InsufficientPrivileges) => return,
+            Err(e) => panic!("Unexpected error: {:?}", e),
+        };
+
+        // Apply builder methods
+        let reader = reader
+            .with_concurrency(16)
+            .with_io_size(2 * 1024 * 1024)
+            .with_parallel_parse(true)
+            .with_parse_workers(4);
+
+        // Verify values are set
+        assert_eq!(reader.concurrency, Some(16));
+        assert_eq!(reader.io_size, Some(2 * 1024 * 1024));
+        assert_eq!(reader.parallel_parse, Some(true));
+        assert_eq!(reader.parse_workers, Some(4));
+    }
+
+    /// Test that MftReadMode::Auto is the default
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn test_mft_reader_default_mode_is_auto() {
+        let reader = match MftReader::open('C').await {
+            Ok(r) => r,
+            Err(MftError::InsufficientPrivileges) => return,
+            Err(e) => panic!("Unexpected error: {:?}", e),
+        };
+
+        assert_eq!(
+            reader.mode,
+            MftReadMode::Auto,
+            "MftReader should default to Auto mode"
+        );
+    }
+
+    /// Test that all boolean defaults are set for optimal performance
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn test_mft_reader_boolean_defaults() {
+        let reader = match MftReader::open('C').await {
+            Ok(r) => r,
+            Err(MftError::InsufficientPrivileges) => return,
+            Err(e) => panic!("Unexpected error: {:?}", e),
+        };
+
+        // These defaults are set for optimal performance and C++ parity
+        assert!(reader.use_bitmap, "use_bitmap should default to true");
+        assert!(reader.expand_links, "expand_links should default to true");
+        assert!(
+            reader.add_placeholders,
+            "add_placeholders should default to true"
+        );
+        assert!(
+            reader.merge_extensions,
+            "merge_extensions should default to true"
+        );
+    }
 }

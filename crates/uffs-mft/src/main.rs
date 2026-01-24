@@ -3889,6 +3889,7 @@ async fn cmd_index_update(drive: char, force_full: bool, ttl: Option<u64>) -> Re
 
     use uffs_mft::VolumeHandle;
     use uffs_mft::cache::{CacheStatus, INDEX_TTL_SECONDS, check_cache_status, save_to_cache};
+    use uffs_mft::platform::is_volume_read_only;
     use uffs_mft::usn::{aggregate_changes, query_usn_journal, read_usn_journal};
 
     let ttl_seconds = ttl.unwrap_or(INDEX_TTL_SECONDS);
@@ -3919,6 +3920,16 @@ async fn cmd_index_update(drive: char, force_full: bool, ttl: Option<u64>) -> Re
                 header.next_usn
             );
             println!();
+
+            // Check if volume is read-only - if so, nothing can have changed
+            if is_volume_read_only(drive) {
+                println!("🔒 Volume is read-only - no changes possible");
+                println!("✅ Using cached index ({} records)", index.len());
+                let elapsed = start.elapsed();
+                println!();
+                println!("⏱️  Completed in {:.3}s", elapsed.as_secs_f64());
+                return Ok(());
+            }
 
             // Query current USN Journal
             let current_info = match query_usn_journal(drive) {

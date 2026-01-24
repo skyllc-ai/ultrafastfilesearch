@@ -1294,6 +1294,60 @@ fn is_ntfs_volume(drive_letter: char) -> bool {
     fs_name == "NTFS"
 }
 
+/// Checks if a volume is read-only.
+///
+/// Uses `GetVolumeInformationW` to check the `FILE_READ_ONLY_VOLUME` flag.
+/// This is useful for incremental updates - if a volume is read-only,
+/// nothing can have changed, so we can skip USN journal checks.
+///
+/// # Arguments
+///
+/// * `drive_letter` - The drive letter to check (e.g., 'C', 'F')
+///
+/// # Returns
+///
+/// `true` if the volume is read-only, `false` otherwise (or on error).
+#[cfg(windows)]
+#[must_use]
+#[allow(unsafe_code)] // Required: Windows FFI (GetVolumeInformationW)
+pub fn is_volume_read_only(drive_letter: char) -> bool {
+    use windows::Win32::Storage::FileSystem::GetVolumeInformationW;
+
+    // FILE_READ_ONLY_VOLUME = 0x00080000
+    const FILE_READ_ONLY_VOLUME: u32 = 0x0008_0000;
+
+    let root_path: Vec<u16> = format!("{}:\\", drive_letter.to_ascii_uppercase())
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let mut fs_flags: u32 = 0;
+
+    let result = unsafe {
+        GetVolumeInformationW(
+            PCWSTR(root_path.as_ptr()),
+            None,                // Volume name buffer (not needed)
+            None,                // Volume serial number (not needed)
+            None,                // Max component length (not needed)
+            Some(&mut fs_flags), // File system flags
+            None,                // File system name buffer (not needed)
+        )
+    };
+
+    if result.is_err() {
+        return false;
+    }
+
+    (fs_flags & FILE_READ_ONLY_VOLUME) != 0
+}
+
+/// Stub for non-Windows platforms.
+#[cfg(not(windows))]
+#[must_use]
+pub fn is_volume_read_only(_drive_letter: char) -> bool {
+    false
+}
+
 // ============================================================================
 // Drive Type Detection (SSD vs HDD vs NVMe)
 // ============================================================================
@@ -1683,5 +1737,83 @@ mod tests {
     fn test_is_elevated() {
         // Just verify it doesn't panic
         let _ = is_elevated();
+    }
+
+    // =========================================================================
+    // DriveType optimal settings tests
+    // =========================================================================
+
+    #[test]
+    fn test_nvme_optimal_settings() {
+        let drive_type = DriveType::Nvme;
+
+        // NVMe should use highest concurrency and largest I/O size
+        assert_eq!(drive_type.optimal_concurrency(), 32);
+        assert_eq!(drive_type.optimal_io_size(), 4 * 1024 * 1024); // 4 MB
+        assert_eq!(drive_type.optimal_chunk_size(), 4 * 1024 * 1024); // 4 MB
+        assert_eq!(drive_type.prefetch_buffers(), 8);
+        assert!(drive_type.is_high_performance());
+        assert!(drive_type.benefits_from_parallel_parsing());
+    }
+
+    #[test]
+    fn test_ssd_optimal_settings() {
+        let drive_type = DriveType::Ssd;
+
+        // SSD should use moderate concurrency and I/O size
+        assert_eq!(drive_type.optimal_concurrency(), 8);
+        assert_eq!(drive_type.optimal_io_size(), 2 * 1024 * 1024); // 2 MB
+        assert_eq!(drive_type.optimal_chunk_size(), 2 * 1024 * 1024); // 2 MB
+        assert_eq!(drive_type.prefetch_buffers(), 4);
+        assert!(drive_type.is_high_performance());
+        assert!(!drive_type.benefits_from_parallel_parsing());
+    }
+
+    #[test]
+    fn test_hdd_optimal_settings() {
+        let drive_type = DriveType::Hdd;
+
+        // HDD should use minimal concurrency to avoid seeks
+        assert_eq!(drive_type.optimal_concurrency(), 2);
+        assert_eq!(drive_type.optimal_io_size(), 1024 * 1024); // 1 MB
+        assert_eq!(drive_type.optimal_chunk_size(), 1024 * 1024); // 1 MB
+        assert_eq!(drive_type.prefetch_buffers(), 2);
+        assert!(!drive_type.is_high_performance());
+        assert!(!drive_type.benefits_from_parallel_parsing());
+    }
+
+    #[test]
+    fn test_unknown_optimal_settings() {
+        let drive_type = DriveType::Unknown;
+
+        // Unknown should use conservative defaults (similar to HDD)
+        assert_eq!(drive_type.optimal_concurrency(), 4);
+        assert_eq!(drive_type.optimal_io_size(), 1024 * 1024); // 1 MB
+        assert_eq!(drive_type.optimal_chunk_size(), 1024 * 1024); // 1 MB
+        assert_eq!(drive_type.prefetch_buffers(), 2);
+        assert!(!drive_type.is_high_performance());
+        assert!(!drive_type.benefits_from_parallel_parsing());
+    }
+
+    #[test]
+    fn test_optimal_settings_are_reasonable() {
+        // Verify that optimal settings follow expected ordering:
+        // NVMe > SSD > HDD for concurrency and I/O size
+
+        let nvme = DriveType::Nvme;
+        let ssd = DriveType::Ssd;
+        let hdd = DriveType::Hdd;
+
+        // Concurrency: NVMe > SSD > HDD
+        assert!(nvme.optimal_concurrency() > ssd.optimal_concurrency());
+        assert!(ssd.optimal_concurrency() > hdd.optimal_concurrency());
+
+        // I/O size: NVMe > SSD > HDD
+        assert!(nvme.optimal_io_size() > ssd.optimal_io_size());
+        assert!(ssd.optimal_io_size() >= hdd.optimal_io_size());
+
+        // Prefetch buffers: NVMe > SSD > HDD
+        assert!(nvme.prefetch_buffers() > ssd.prefetch_buffers());
+        assert!(ssd.prefetch_buffers() >= hdd.prefetch_buffers());
     }
 }
