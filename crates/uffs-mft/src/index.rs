@@ -252,6 +252,36 @@ impl StandardInfo {
     pub const fn is_temporary(&self) -> bool {
         self.flags & Self::IS_TEMPORARY != 0
     }
+    /// Returns true if the integrity stream flag is set.
+    #[inline]
+    #[must_use]
+    pub const fn is_integrity_stream(&self) -> bool {
+        self.flags & Self::IS_INTEGRITY_STREAM != 0
+    }
+    /// Returns true if the no scrub data flag is set.
+    #[inline]
+    #[must_use]
+    pub const fn is_no_scrub_data(&self) -> bool {
+        self.flags & Self::IS_NO_SCRUB_DATA != 0
+    }
+    /// Returns true if the pinned flag is set.
+    #[inline]
+    #[must_use]
+    pub const fn is_pinned(&self) -> bool {
+        self.flags & Self::IS_PINNED != 0
+    }
+    /// Returns true if the unpinned flag is set.
+    #[inline]
+    #[must_use]
+    pub const fn is_unpinned(&self) -> bool {
+        self.flags & Self::IS_UNPINNED != 0
+    }
+    /// Returns true if the virtual flag is set.
+    #[inline]
+    #[must_use]
+    pub const fn is_virtual(&self) -> bool {
+        self.flags & Self::IS_VIRTUAL != 0
+    }
 
     /// Sets or clears the directory flag.
     #[inline]
