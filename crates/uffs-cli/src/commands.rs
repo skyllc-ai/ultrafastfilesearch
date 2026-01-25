@@ -1275,6 +1275,44 @@ fn results_to_dataframe(
     let mut df = uffs_mft::DataFrame::new_infer_height(columns)
         .map_err(|err| anyhow::anyhow!("Failed to create DataFrame: {err}"))?;
 
+    // Compute tree metrics (descendants, treesize, tree_allocated) for C++ parity
+    // The C++ version shows tree metrics in the Size/Size on Disk columns for
+    // directories
+    use uffs_core::tree::{TreeColumn, TreeIndex};
+    let mut tree = TreeIndex::from_dataframe(&df)
+        .map_err(|err| anyhow::anyhow!("Failed to build tree index: {err}"))?;
+    df = tree
+        .add_columns(
+            &df,
+            &[
+                TreeColumn::Descendants,
+                TreeColumn::TreeSize,
+                TreeColumn::TreeAllocated,
+            ],
+        )
+        .map_err(|err| anyhow::anyhow!("Failed to add tree columns: {err}"))?;
+
+    // Replace size and allocated_size columns with tree metrics for directories
+    // (C++ parity) For directories: size = treesize, allocated_size =
+    // tree_allocated For files: keep original size and allocated_size
+    use uffs_polars::{IntoLazy, col, when};
+    df = df
+        .lazy()
+        .with_column(
+            when(col("is_directory"))
+                .then(col("treesize"))
+                .otherwise(col("size"))
+                .alias("size"),
+        )
+        .with_column(
+            when(col("is_directory"))
+                .then(col("tree_allocated"))
+                .otherwise(col("allocated_size"))
+                .alias("allocated_size"),
+        )
+        .collect()
+        .map_err(|err| anyhow::anyhow!("Failed to merge tree metrics: {err}"))?;
+
     // Add path_only column (directory portion of path)
     df = uffs_core::add_path_only_column(&df)
         .map_err(|err| anyhow::anyhow!("Failed to add path_only column: {err}"))?;
