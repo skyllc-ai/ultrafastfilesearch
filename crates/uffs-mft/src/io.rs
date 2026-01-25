@@ -1418,7 +1418,7 @@ pub fn parse_record_zero_alloc(data: &[u8], frs: u64) -> ParseResult {
 /// `true` if a record was added to the index, `false` if skipped.
 #[allow(unsafe_code, clippy::too_many_lines, clippy::cast_possible_truncation)]
 pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::MftIndex) -> bool {
-    use crate::index::{IndexNameRef, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo};
+    use crate::index::{IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo};
     #[allow(unused_imports)] // Used in inline parsing mode
     use crate::ntfs::{
         AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
@@ -1460,6 +1460,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let mut additional_names: SmallVec<[(String, u64); 4]> = SmallVec::new();
     let mut default_size = 0u64;
     let mut default_allocated = 0u64;
+    // ADS: (stream_name, size, allocated)
+    let mut additional_streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
 
     while offset + size_of::<AttributeRecordHeader>() <= max_offset {
         let attr_header: AttributeRecordHeader =
@@ -1541,47 +1543,59 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 }
             }
             Some(AttributeType::Data) => {
-                // Parse $DATA - only track default stream size for now
+                // Parse $DATA - track both default stream and ADS
                 let name_len = attr_header.name_length as usize;
+                let (size, allocated) = if attr_header.is_non_resident != 0 {
+                    // Non-resident: size at offset 48, allocated at offset 40
+                    let alloc_offset = offset + 40;
+                    let size_offset = offset + 48;
+                    if size_offset + 8 <= data.len() {
+                        let allocated = u64::from_le_bytes(
+                            data[alloc_offset..alloc_offset + 8]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        );
+                        let size = u64::from_le_bytes(
+                            data[size_offset..size_offset + 8]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        );
+                        (size, allocated)
+                    } else {
+                        (0, 0)
+                    }
+                } else {
+                    // Resident: value_length at offset 16
+                    let len_offset = offset + 16;
+                    if len_offset + 4 <= data.len() {
+                        let len = u32::from_le_bytes(
+                            data[len_offset..len_offset + 4]
+                                .try_into()
+                                .unwrap_or([0; 4]),
+                        ) as u64;
+                        (len, len)
+                    } else {
+                        (0, 0)
+                    }
+                };
+
                 if name_len == 0 {
                     // Default stream
-                    let (size, allocated) = if attr_header.is_non_resident != 0 {
-                        // Non-resident: size at offset 48, allocated at offset 40
-                        let alloc_offset = offset + 40;
-                        let size_offset = offset + 48;
-                        if size_offset + 8 <= data.len() {
-                            let allocated = u64::from_le_bytes(
-                                data[alloc_offset..alloc_offset + 8]
-                                    .try_into()
-                                    .unwrap_or([0; 8]),
-                            );
-                            let size = u64::from_le_bytes(
-                                data[size_offset..size_offset + 8]
-                                    .try_into()
-                                    .unwrap_or([0; 8]),
-                            );
-                            (size, allocated)
-                        } else {
-                            (0, 0)
-                        }
-                    } else {
-                        // Resident: value_length at offset 16
-                        let len_offset = offset + 16;
-                        if len_offset + 4 <= data.len() {
-                            let len = u32::from_le_bytes(
-                                data[len_offset..len_offset + 4]
-                                    .try_into()
-                                    .unwrap_or([0; 4]),
-                            ) as u64;
-                            (len, len)
-                        } else {
-                            (0, 0)
-                        }
-                    };
                     default_size = size;
                     default_allocated = allocated;
+                } else {
+                    // Alternate Data Stream (ADS)
+                    let name_offset = offset + attr_header.name_offset as usize;
+                    if name_offset + name_len * 2 <= data.len() {
+                        let name_bytes = &data[name_offset..name_offset + name_len * 2];
+                        let name_u16: SmallVec<[u16; 64]> = name_bytes
+                            .chunks_exact(2)
+                            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                            .collect();
+                        let stream_name = String::from_utf16_lossy(&name_u16);
+                        additional_streams.push((stream_name, size, allocated));
+                    }
                 }
-                // Skip ADS for inline parsing (can add later if needed)
             }
             _ => {}
         }
@@ -1626,6 +1640,29 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         link_indices.push(link_idx);
     }
 
+    // Pre-process additional streams (ADS): add to names buffer and streams list
+    let additional_stream_count = additional_streams.len();
+    let mut stream_indices: Vec<u32> = Vec::with_capacity(additional_stream_count);
+    for (stream_name, stream_size, stream_allocated) in additional_streams {
+        let stream_name_offset = index.add_name(&stream_name);
+        let stream_name_len = stream_name.len();
+        let stream_is_ascii = stream_name.is_ascii();
+        let stream_name_ref =
+            IndexNameRef::new(stream_name_offset, stream_name_len as u16, stream_is_ascii);
+
+        let stream_idx = index.streams.len() as u32;
+        index.streams.push(IndexStreamInfo {
+            size: SizeInfo {
+                length: stream_size,
+                allocated: stream_allocated,
+            },
+            next_entry: NO_ENTRY, // Will be patched below
+            name: stream_name_ref,
+            flags: 0,
+        });
+        stream_indices.push(stream_idx);
+    }
+
     // Ensure parent exists (create placeholder if needed) - do this before getting
     // our record
     if parent_frs != frs && parent_frs != 0 {
@@ -1646,6 +1683,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         parent_frs: parent_frs as u32,
     };
     record.name_count = 1 + additional_count as u16;
+    // stream_count = 1 (default) + additional ADS
+    record.stream_count = 1 + additional_stream_count as u16;
 
     // Chain the additional links: first_name -> link[0] -> link[1] -> ... ->
     // NO_ENTRY The links were pushed with next_entry = NO_ENTRY, now we chain
@@ -1654,14 +1693,25 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         // Point first_name to the first additional link
         record.first_name.next_entry = link_indices[0];
     }
-    // Note: The links in index.links already have next_entry = NO_ENTRY
-    // We need to chain them together. The record reference goes out of scope here.
+
+    // Chain the additional streams: first_stream -> stream[0] -> stream[1] -> ...
+    if !stream_indices.is_empty() {
+        // Point first_stream to the first additional stream
+        record.first_stream.next_entry = stream_indices[0];
+    }
 
     // Chain the links together
     for i in 0..link_indices.len().saturating_sub(1) {
         let current_idx = link_indices[i] as usize;
         let next_idx = link_indices[i + 1];
         index.links[current_idx].next_entry = next_idx;
+    }
+
+    // Chain the streams together
+    for i in 0..stream_indices.len().saturating_sub(1) {
+        let current_idx = stream_indices[i] as usize;
+        let next_idx = stream_indices[i + 1];
+        index.streams[current_idx].next_entry = next_idx;
     }
 
     true
@@ -1681,7 +1731,7 @@ pub fn parse_record_to_fragment(
     frs: u64,
     fragment: &mut crate::index::MftIndexFragment,
 ) -> bool {
-    use crate::index::{IndexNameRef, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo};
+    use crate::index::{IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo};
     use crate::ntfs::{
         AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
         StandardInformation, file_reference_to_frs, filetime_to_unix_micros,
@@ -1722,6 +1772,8 @@ pub fn parse_record_to_fragment(
     let mut additional_names: SmallVec<[(String, u64); 4]> = SmallVec::new();
     let mut default_size = 0u64;
     let mut default_allocated = 0u64;
+    // ADS: (stream_name, size, allocated)
+    let mut additional_streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
 
     while offset + size_of::<AttributeRecordHeader>() <= max_offset {
         let attr_header: AttributeRecordHeader =
@@ -1798,41 +1850,56 @@ pub fn parse_record_to_fragment(
                 }
             }
             Some(AttributeType::Data) => {
+                // Parse $DATA - track both default stream and ADS
                 let name_len = attr_header.name_length as usize;
-                if name_len == 0 {
-                    let (size, allocated) = if attr_header.is_non_resident != 0 {
-                        let alloc_offset = offset + 40;
-                        let size_offset = offset + 48;
-                        if size_offset + 8 <= data.len() {
-                            let allocated = u64::from_le_bytes(
-                                data[alloc_offset..alloc_offset + 8]
-                                    .try_into()
-                                    .unwrap_or([0; 8]),
-                            );
-                            let size = u64::from_le_bytes(
-                                data[size_offset..size_offset + 8]
-                                    .try_into()
-                                    .unwrap_or([0; 8]),
-                            );
-                            (size, allocated)
-                        } else {
-                            (0, 0)
-                        }
+                let (size, allocated) = if attr_header.is_non_resident != 0 {
+                    let alloc_offset = offset + 40;
+                    let size_offset = offset + 48;
+                    if size_offset + 8 <= data.len() {
+                        let allocated = u64::from_le_bytes(
+                            data[alloc_offset..alloc_offset + 8]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        );
+                        let size = u64::from_le_bytes(
+                            data[size_offset..size_offset + 8]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        );
+                        (size, allocated)
                     } else {
-                        let len_offset = offset + 16;
-                        if len_offset + 4 <= data.len() {
-                            let len = u32::from_le_bytes(
-                                data[len_offset..len_offset + 4]
-                                    .try_into()
-                                    .unwrap_or([0; 4]),
-                            ) as u64;
-                            (len, len)
-                        } else {
-                            (0, 0)
-                        }
-                    };
+                        (0, 0)
+                    }
+                } else {
+                    let len_offset = offset + 16;
+                    if len_offset + 4 <= data.len() {
+                        let len = u32::from_le_bytes(
+                            data[len_offset..len_offset + 4]
+                                .try_into()
+                                .unwrap_or([0; 4]),
+                        ) as u64;
+                        (len, len)
+                    } else {
+                        (0, 0)
+                    }
+                };
+
+                if name_len == 0 {
+                    // Default stream
                     default_size = size;
                     default_allocated = allocated;
+                } else {
+                    // Alternate Data Stream (ADS)
+                    let name_offset = offset + attr_header.name_offset as usize;
+                    if name_offset + name_len * 2 <= data.len() {
+                        let name_bytes = &data[name_offset..name_offset + name_len * 2];
+                        let name_u16: SmallVec<[u16; 64]> = name_bytes
+                            .chunks_exact(2)
+                            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                            .collect();
+                        let stream_name = String::from_utf16_lossy(&name_u16);
+                        additional_streams.push((stream_name, size, allocated));
+                    }
                 }
             }
             _ => {}
@@ -1876,6 +1943,29 @@ pub fn parse_record_to_fragment(
         link_indices.push(link_idx);
     }
 
+    // Pre-process additional streams (ADS)
+    let additional_stream_count = additional_streams.len();
+    let mut stream_indices: Vec<u32> = Vec::with_capacity(additional_stream_count);
+    for (stream_name, stream_size, stream_allocated) in additional_streams {
+        let stream_name_offset = fragment.add_name(&stream_name);
+        let stream_name_len = stream_name.len();
+        let stream_is_ascii = stream_name.is_ascii();
+        let stream_name_ref =
+            IndexNameRef::new(stream_name_offset, stream_name_len as u16, stream_is_ascii);
+
+        let stream_idx = fragment.streams.len() as u32;
+        fragment.streams.push(IndexStreamInfo {
+            size: SizeInfo {
+                length: stream_size,
+                allocated: stream_allocated,
+            },
+            next_entry: NO_ENTRY,
+            name: stream_name_ref,
+            flags: 0,
+        });
+        stream_indices.push(stream_idx);
+    }
+
     // Create parent placeholder if needed (within this fragment)
     if parent_frs != frs && parent_frs != 0 {
         let _ = fragment.get_or_create(parent_frs);
@@ -1894,16 +1984,30 @@ pub fn parse_record_to_fragment(
         parent_frs: parent_frs as u32,
     };
     record.name_count = 1 + additional_count as u16;
+    // stream_count = 1 (default) + additional ADS
+    record.stream_count = 1 + additional_stream_count as u16;
 
     // Chain the additional links
     if !link_indices.is_empty() {
         record.first_name.next_entry = link_indices[0];
     }
 
+    // Chain the additional streams
+    if !stream_indices.is_empty() {
+        record.first_stream.next_entry = stream_indices[0];
+    }
+
     for i in 0..link_indices.len().saturating_sub(1) {
         let current_idx = link_indices[i] as usize;
         let next_idx = link_indices[i + 1];
         fragment.links[current_idx].next_entry = next_idx;
+    }
+
+    // Chain the streams together
+    for i in 0..stream_indices.len().saturating_sub(1) {
+        let current_idx = stream_indices[i] as usize;
+        let next_idx = stream_indices[i + 1];
+        fragment.streams[current_idx].next_entry = next_idx;
     }
 
     true

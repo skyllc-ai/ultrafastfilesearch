@@ -26,19 +26,20 @@ members = [
     "crates/uffs-tui",      # 📟 Terminal UI
     "crates/uffs-gui",      # 🪟 Graphical UI (future)
     "crates/uffs-legacy",   # 📜 Legacy code (reference only)
+    "crates/uffs-diag",     # 🔬 Diagnostic tools (temporarily enabled)
 ]
 exclude = [
     # Vendored reference tools / external code (kept out of the main workspace)
     "vendor/mft-reader-rs",
     # Diagnostic/forensic tools - rarely needed, move to members when required
-    "crates/uffs-diag",
+    # "crates/uffs-diag",  # Temporarily enabled for analysis
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.2.86"
+version = "0.2.87"
 edition = "2024"
 rust-version = "1.85"
 license = "MPL-2.0 OR LicenseRef-UFFS-Commercial"

@@ -397,24 +397,35 @@ pub fn compile_extensions(extensions: &[&str]) -> IndexPattern {
 // ============================================================================
 
 /// Result of a search on `MftIndex`.
+///
+/// Each result represents a unique (record, name, stream) combination.
+/// Files with hard links produce multiple results (different paths, same FRS).
+/// Files with ADS produce multiple results (same path, different stream names).
 #[derive(Debug, Clone)]
 pub struct SearchResult {
     /// The file/directory name.
     pub name: String,
-    /// The full path (if resolved).
+    /// The full path (if resolved), including `:stream_name` for ADS.
     pub path: Option<String>,
-    /// File size in bytes.
+    /// File size in bytes (for this specific stream).
     pub size: u64,
     /// File Reference Segment number.
     pub frs: u64,
-    /// Parent FRS.
+    /// Parent FRS (for this specific hard link).
     pub parent_frs: u64,
     /// Whether this is a directory.
     pub is_directory: bool,
+    /// Stream name (empty for default `$DATA` stream).
+    pub stream_name: String,
+    /// Which hard link (0 = primary name).
+    pub name_index: u16,
+    /// Which stream (0 = default `$DATA`).
+    pub stream_index: u16,
 }
 
 impl SearchResult {
-    /// Create a new search result from a file record.
+    /// Create a new search result from a file record (primary name, default
+    /// stream).
     #[must_use]
     pub fn from_record(record: &FileRecord, index: &MftIndex) -> Self {
         Self {
@@ -424,6 +435,37 @@ impl SearchResult {
             frs: record.frs,
             parent_frs: u64::from(record.first_name.parent_frs),
             is_directory: record.is_directory(),
+            stream_name: String::new(),
+            name_index: 0,
+            stream_index: 0,
+        }
+    }
+
+    /// Create a search result for a specific (name, stream) combination.
+    #[must_use]
+    pub fn from_expanded(
+        record: &FileRecord,
+        index: &MftIndex,
+        name_idx: u16,
+        stream_idx: u16,
+    ) -> Self {
+        let name_info = index
+            .get_name_at(record, name_idx)
+            .unwrap_or(&record.first_name);
+        let stream_info = index
+            .get_stream_at(record, stream_idx)
+            .unwrap_or(&record.first_stream);
+
+        Self {
+            name: index.get_name(&name_info.name).to_owned(),
+            path: None,
+            size: stream_info.size.length,
+            frs: record.frs,
+            parent_frs: u64::from(name_info.parent_frs),
+            is_directory: record.is_directory(),
+            stream_name: index.stream_name(stream_info).to_owned(),
+            name_index: name_idx,
+            stream_index: stream_idx,
         }
     }
 
@@ -432,6 +474,18 @@ impl SearchResult {
     pub fn with_path(mut self, path: String) -> Self {
         self.path = Some(path);
         self
+    }
+
+    /// Check if this is an Alternate Data Stream (ADS).
+    #[must_use]
+    pub fn is_ads(&self) -> bool {
+        !self.stream_name.is_empty()
+    }
+
+    /// Check if this is a hard link (not the primary name).
+    #[must_use]
+    pub const fn is_hard_link(&self) -> bool {
+        self.name_index > 0
     }
 }
 
@@ -453,6 +507,7 @@ pub enum TypeFilter {
 
 /// Query options for `IndexQuery`.
 #[derive(Debug, Clone, Copy, Default)]
+#[allow(clippy::struct_excessive_bools)] // Configuration struct with boolean flags
 pub struct QueryOptions {
     /// Type filter (files, dirs, or both).
     pub type_filter: TypeFilter,
@@ -460,6 +515,10 @@ pub struct QueryOptions {
     pub case_sensitive: bool,
     /// Whether to resolve full paths.
     pub resolve_paths: bool,
+    /// Whether to expand hard links (multiple names per FRS).
+    pub expand_names: bool,
+    /// Whether to expand Alternate Data Streams (ADS).
+    pub expand_streams: bool,
 }
 
 /// Fluent query builder for searching `MftIndex` directly.
@@ -492,6 +551,8 @@ impl<'a> IndexQuery<'a> {
                 type_filter: TypeFilter::All,
                 case_sensitive: false, // Windows default
                 resolve_paths: false,
+                expand_names: true,   // Match C++ behavior by default
+                expand_streams: true, // Match C++ behavior by default
             },
             min_size: None,
             max_size: None,
@@ -606,16 +667,40 @@ impl<'a> IndexQuery<'a> {
         self
     }
 
+    /// Enable/disable hard link expansion (default: true).
+    ///
+    /// When enabled, files with multiple hard links produce multiple results,
+    /// one for each path.
+    #[must_use]
+    pub const fn with_expand_names(mut self, expand: bool) -> Self {
+        self.options.expand_names = expand;
+        self
+    }
+
+    /// Enable/disable ADS expansion (default: true).
+    ///
+    /// When enabled, files with Alternate Data Streams produce multiple
+    /// results, one for each stream.
+    #[must_use]
+    pub const fn with_expand_streams(mut self, expand: bool) -> Self {
+        self.options.expand_streams = expand;
+        self
+    }
+
     /// Execute the query and collect results.
     ///
     /// Uses Rayon for parallel execution across all records.
     /// Filters are applied in optimal order: type → size → pattern.
+    /// When expansion is enabled, each (name × stream) combination produces a
+    /// result.
     #[must_use]
     pub fn collect(self) -> Vec<SearchResult> {
         let records = self.index.records();
         let case_sensitive = self.options.case_sensitive;
         let type_filter = self.options.type_filter;
         let resolve_paths = self.options.resolve_paths;
+        let expand_names = self.options.expand_names;
+        let expand_streams = self.options.expand_streams;
         let pattern = &self.pattern;
         let min_size = self.min_size;
         let max_size = self.max_size;
@@ -623,6 +708,7 @@ impl<'a> IndexQuery<'a> {
         let index = self.index;
 
         // Parallel filter with early termination via take_any
+        // Then expand (names × streams) for each matching record
         let filtered: Vec<SearchResult> = records
             .par_iter()
             .filter(|record| {
@@ -634,6 +720,7 @@ impl<'a> IndexQuery<'a> {
                 }
 
                 // 2. Size filter (cheap - u64 compare)
+                // Note: We check the first stream's size here; ADS may have different sizes
                 let size = record.first_stream.size.length;
                 if let Some(min) = min_size {
                     if size < min {
@@ -647,6 +734,7 @@ impl<'a> IndexQuery<'a> {
                 }
 
                 // 3. Pattern filter (expensive - string ops)
+                // Note: We match against the primary name; hard links may have different names
                 if let Some(pat) = pattern {
                     let name = index.record_name(record);
                     if !pat.matches(name, case_sensitive) {
@@ -657,13 +745,29 @@ impl<'a> IndexQuery<'a> {
                 true
             })
             .take_any(limit.unwrap_or(usize::MAX))
-            .map(|record| {
-                let mut result = SearchResult::from_record(record, index);
-                if resolve_paths {
-                    let path = index.build_path(record.frs);
-                    result = result.with_path(path);
-                }
-                result
+            .flat_map_iter(|record| {
+                // Expand (names × streams) for each matching record
+                // Fast path: most files have 1 name and 1 stream
+                let name_count = if expand_names { record.name_count } else { 1 };
+                let stream_count = if expand_streams {
+                    record.stream_count
+                } else {
+                    1
+                };
+
+                (0..name_count).flat_map(move |name_idx| {
+                    (0..stream_count).map(move |stream_idx| {
+                        let mut result =
+                            SearchResult::from_expanded(record, index, name_idx, stream_idx);
+                        if resolve_paths {
+                            if let Some(stream) = index.get_stream_at(record, stream_idx) {
+                                let path = index.build_path_with_stream(record, name_idx, stream);
+                                result = result.with_path(path);
+                            }
+                        }
+                        result
+                    })
+                })
             })
             .collect();
 

@@ -110,6 +110,32 @@ fn extract_drive(path: &str) -> Option<char> {
     path.chars().next().filter(char::is_ascii_alphabetic)
 }
 
+/// Checks if a path is an Alternate Data Stream (ADS).
+///
+/// ADS paths contain a `:` after the drive letter, e.g.:
+/// `f:/path/file.txt:Zone.Identifier`
+fn is_ads_path(path: &str) -> bool {
+    // Skip the drive letter portion (e.g., "f:/")
+    // ADS has a colon AFTER the drive letter colon
+    if path.len() > 2 {
+        // Find colon after "X:/" prefix
+        path[2..].contains(':')
+    } else {
+        false
+    }
+}
+
+/// Extracts the ADS stream name from a path.
+///
+/// Returns the stream name portion after the last `:` (excluding drive letter).
+fn extract_ads_name(path: &str) -> Option<&str> {
+    if path.len() > 2 {
+        path[2..].rfind(':').map(|idx| &path[2 + idx + 1..])
+    } else {
+        None
+    }
+}
+
 /// Entry point for the UFFS diff analysis tool.
 ///
 /// Compares C++ and Rust UFFS outputs to identify differences in:
@@ -321,12 +347,101 @@ fn main() -> Result<()> {
     println!("Rust paths ending with '/.' (dir entries): {rust_dot_count}");
 
     println!("\n{}", "=".repeat(70));
+    println!("STEP 7: Alternate Data Streams (ADS) Analysis");
+    println!("{}", "=".repeat(70));
+
+    // Count ADS entries in each set
+    let cpp_ads_count = cpp_paths.iter().filter(|p| is_ads_path(p)).count();
+    let rust_ads_count = rust_paths.iter().filter(|p| is_ads_path(p)).count();
+    let cpp_only_ads_count = cpp_only.iter().filter(|p| is_ads_path(p)).count();
+    let rust_only_ads_count = rust_only.iter().filter(|p| is_ads_path(p)).count();
+
+    println!("ADS entries in C++: {cpp_ads_count}");
+    println!("ADS entries in Rust: {rust_ads_count}");
+    println!("ADS entries in C++ only (missing from Rust): {cpp_only_ads_count}");
+    println!("ADS entries in Rust only (extra): {rust_only_ads_count}");
+
+    // Sample ADS entries
+    if cpp_ads_count > 0 {
+        println!("\nSample ADS entries from C++ (first 10):");
+        for (idx, path) in cpp_paths
+            .iter()
+            .filter(|p| is_ads_path(p))
+            .take(10)
+            .enumerate()
+        {
+            println!("  {}: {path}", idx + 1);
+        }
+    }
+
+    // Analyze ADS stream names
+    let mut ads_name_freq: HashMap<&str, usize> = HashMap::new();
+    for path in cpp_paths.iter().filter(|p| is_ads_path(p)) {
+        if let Some(name) = extract_ads_name(path) {
+            *ads_name_freq.entry(name).or_insert(0) += 1;
+        }
+    }
+    if !ads_name_freq.is_empty() {
+        let mut ads_names: Vec<_> = ads_name_freq.iter().collect();
+        ads_names.sort_by_key(|(_, cnt)| Reverse(*cnt));
+        println!("\nTop 10 ADS stream names in C++:");
+        for (name, count) in ads_names.iter().take(10) {
+            println!("  {count:>8}: {name}");
+        }
+    }
+
+    println!("\n{}", "=".repeat(70));
+    println!("STEP 8: Comparison EXCLUDING ADS");
+    println!("{}", "=".repeat(70));
+
+    // Filter out ADS entries for a "base files only" comparison
+    let cpp_no_ads: HashSet<_> = cpp_paths.iter().filter(|p| !is_ads_path(p)).collect();
+    let rust_no_ads: HashSet<_> = rust_paths.iter().filter(|p| !is_ads_path(p)).collect();
+
+    let common_no_ads: HashSet<_> = cpp_no_ads.intersection(&rust_no_ads).collect();
+    let cpp_only_no_ads: Vec<_> = cpp_no_ads.difference(&rust_no_ads).collect();
+    let rust_only_no_ads: Vec<_> = rust_no_ads.difference(&cpp_no_ads).collect();
+
+    let match_rate_no_ads = if cpp_no_ads.is_empty() {
+        0.0
+    } else {
+        100.0 * common_no_ads.len() as f64 / cpp_no_ads.len() as f64
+    };
+
+    println!("\nExcluding ADS entries:");
+    println!("  C++ base files: {}", cpp_no_ads.len());
+    println!("  Rust base files: {}", rust_no_ads.len());
+    println!("  Exact matches: {}", common_no_ads.len());
+    println!("  C++ only (missing from Rust): {}", cpp_only_no_ads.len());
+    println!("  Rust only (extra): {}", rust_only_no_ads.len());
+    println!("  Match rate (no ADS): {match_rate_no_ads:.2}%");
+
+    if !cpp_only_no_ads.is_empty() {
+        println!("\nSample base files in C++ but NOT in Rust (first 20):");
+        for (idx, path) in cpp_only_no_ads.iter().take(20).enumerate() {
+            println!("  {}: {path}", idx + 1);
+        }
+    }
+
+    if !rust_only_no_ads.is_empty() {
+        println!("\nSample base files in Rust but NOT in C++ (first 20):");
+        for (idx, path) in rust_only_no_ads.iter().take(20).enumerate() {
+            println!("  {}: {path}", idx + 1);
+        }
+    }
+
+    println!("\n{}", "=".repeat(70));
     println!("SUMMARY & ROOT CAUSE HYPOTHESIS");
     println!("{}", "=".repeat(70));
 
     let missing_pct = 100.0 * cpp_only.len() as f64 / cpp_paths.len() as f64;
+    let missing_no_ads_pct = if cpp_no_ads.is_empty() {
+        0.0
+    } else {
+        100.0 * cpp_only_no_ads.len() as f64 / cpp_no_ads.len() as f64
+    };
 
-    println!("\nAnalysis Complete:");
+    println!("\nAnalysis Complete (ALL paths):");
     println!("  - C++ found {} unique paths", cpp_paths.len());
     println!("  - Rust found {} unique paths", rust_paths.len());
     println!(
@@ -334,17 +449,34 @@ fn main() -> Result<()> {
         cpp_only.len(),
     );
     println!("  - Extra in Rust: {}", rust_only.len());
-    println!("\nLikely Issues:");
+    println!("  - Match rate: {match_rate:.2}%");
+
+    println!("\nAnalysis Complete (EXCLUDING ADS):");
+    println!("  - C++ base files: {}", cpp_no_ads.len());
+    println!("  - Rust base files: {}", rust_no_ads.len());
     println!(
-        "  1. <unknown> paths: {} paths have unresolved parents",
+        "  - Missing from Rust: {} ({missing_no_ads_pct:.1}%)",
+        cpp_only_no_ads.len(),
+    );
+    println!("  - Extra in Rust: {}", rust_only_no_ads.len());
+    println!("  - Match rate (no ADS): {match_rate_no_ads:.2}%");
+
+    println!("\nLikely Issues:");
+    #[allow(clippy::cast_possible_wrap)]
+    let ads_diff = cpp_ads_count as i64 - rust_ads_count as i64;
+    println!(
+        "  1. ADS entries: {cpp_ads_count} in C++, {rust_ads_count} in Rust (diff: {ads_diff})"
+    );
+    println!(
+        "  2. <unknown> paths: {} paths have unresolved parents",
         unknown_paths.len()
     );
     println!(
-        "  2. Missing parent dirs: {} parent directories not in Rust",
+        "  3. Missing parent dirs: {} parent directories not in Rust",
         missing_parents.len()
     );
-    println!("  3. System files ($): {system_files_count} $-prefixed files missing");
-    println!("  4. Directory entries (.): C++ has {cpp_dot_count}, Rust has {rust_dot_count}");
+    println!("  4. System files ($): {system_files_count} $-prefixed files missing");
+    println!("  5. Directory entries (.): C++ has {cpp_dot_count}, Rust has {rust_dot_count}");
 
     Ok(())
 }
