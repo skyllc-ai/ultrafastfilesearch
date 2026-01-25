@@ -738,11 +738,20 @@ impl<'a> IndexQuery<'a> {
                 // 0. System metafile filter (cheapest - FRS check)
                 // FRS 0-15 are system metafiles ($MFT, $MFTMirr, $LogFile, etc.)
                 // FRS 5 is the root directory (always included)
-                if !include_system_metafiles
-                    && record.frs <= SYSTEM_METAFILE_MAX_FRS
-                    && record.frs != ROOT_FRS
-                {
-                    return false;
+                // C++ uses tree traversal from root, so children of system metafiles
+                // (like $Extend's children: $Quota, $ObjId, etc.) are never visited.
+                // We must also filter out records whose parent is a system metafile.
+                if !include_system_metafiles {
+                    // Filter out system metafiles themselves (except root)
+                    if record.frs <= SYSTEM_METAFILE_MAX_FRS && record.frs != ROOT_FRS {
+                        return false;
+                    }
+                    // Filter out children of system metafiles (e.g., $Extend's children)
+                    // $Extend is FRS 11, its children have parent_frs = 11
+                    let parent_frs = u64::from(record.first_name.parent_frs);
+                    if parent_frs <= SYSTEM_METAFILE_MAX_FRS && parent_frs != ROOT_FRS {
+                        return false;
+                    }
                 }
 
                 // 1. Type filter (cheapest - bit check)
