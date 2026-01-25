@@ -302,21 +302,17 @@ fn should_use_index_path(
             false
         }
         QueryMode::Auto => {
-            // Auto mode: use index path for simple queries
+            // Auto mode: use index path by default (fast, cached)
             // Conditions that require DataFrame path:
             // 1. Loading from parquet index file (already a DataFrame)
-            // 2. Multi-drive search (not yet implemented for index path)
-            // 3. Tree columns requested (requires full DataFrame)
+            // 2. Tree columns requested (requires full DataFrame)
             if parquet_index.is_some() {
-                return false;
-            }
-            if multi_drives.is_some() {
                 return false;
             }
             if output_config.needs_tree_columns() {
                 return false;
             }
-            // Simple query - use fast index path
+            // Use fast cached index path (works for single and multi-drive)
             true
         }
     }
@@ -401,47 +397,48 @@ pub async fn search(
         .with_pos(pos)
         .with_neg(neg);
 
-    // Streaming mode for multi-drive searches (Windows only)
-    // Skip streaming in benchmark mode - we want to measure without output overhead
-    #[cfg(windows)]
-    if !benchmark {
-        let needs_streaming = index.is_none()
-            && (multi_drives.is_some()
-                || (single_drive.is_none() && filters.parsed.drive().is_none()));
-
-        if needs_streaming {
-            // Streaming mode: output results as each drive completes
-            let result = search_streaming(
-                multi_drives,
-                single_drive,
-                &filters,
-                format,
-                out,
-                &output_config,
-                no_bitmap,
-            )
-            .await;
-            // Print timing after streaming completes
-            let elapsed = start_time.elapsed();
-            eprintln!("Finished in {} s", elapsed.as_secs());
-            return result;
-        }
-    }
-
-    // Non-streaming mode: load all data, then output
     // Pass needs_paths so path resolution happens BEFORE filtering loses parent
     // directories (skip path resolution in benchmark mode for speed)
     let needs_paths = !benchmark && output_config.needs_path_column();
 
     // Decide which query path to use based on mode and query complexity
+    // Index path is the default (fast, cached) - DataFrame path is fallback
     let use_index_path =
         should_use_index_path(mode, index.as_ref(), multi_drives.as_ref(), &output_config);
 
     let mut results = if use_index_path {
-        info!("🚀 Using fast MftIndex query path");
+        info!("🚀 Using fast cached MftIndex query path");
         #[cfg(windows)]
         {
-            load_and_filter_data_index(single_drive, &filters, needs_paths, profile).await?
+            // Determine drives to search
+            let drives_to_search: Vec<char> = if let Some(ref drives) = multi_drives {
+                drives.clone()
+            } else if let Some(drive) = single_drive.or_else(|| filters.parsed.drive()) {
+                vec![drive]
+            } else {
+                // No drive specified - search ALL available NTFS drives
+                let all_drives = uffs_mft::detect_ntfs_drives();
+                if all_drives.is_empty() {
+                    bail!("No NTFS drives found on this system");
+                }
+                info!(drives = ?all_drives, "No drive specified - searching all NTFS drives");
+                all_drives
+            };
+
+            if drives_to_search.len() == 1 {
+                // Single drive - use existing function
+                load_and_filter_data_index(
+                    Some(drives_to_search[0]),
+                    &filters,
+                    needs_paths,
+                    profile,
+                )
+                .await?
+            } else {
+                // Multi-drive with cached index path
+                load_and_filter_data_index_multi(&drives_to_search, &filters, needs_paths, profile)
+                    .await?
+            }
         }
         #[cfg(not(windows))]
         {
@@ -449,6 +446,32 @@ pub async fn search(
         }
     } else {
         info!("📊 Using DataFrame query path");
+        // Streaming mode for multi-drive DataFrame searches (Windows only)
+        #[cfg(windows)]
+        if !benchmark {
+            let needs_streaming = index.is_none()
+                && (multi_drives.is_some()
+                    || (single_drive.is_none() && filters.parsed.drive().is_none()));
+
+            if needs_streaming {
+                // Streaming mode: output results as each drive completes
+                let result = search_streaming(
+                    multi_drives.clone(),
+                    single_drive,
+                    &filters,
+                    format,
+                    out,
+                    &output_config,
+                    no_bitmap,
+                )
+                .await;
+                // Print timing after streaming completes
+                let elapsed = start_time.elapsed();
+                eprintln!("Finished in {} s", elapsed.as_secs());
+                return result;
+            }
+        }
+
         load_and_filter_data(
             index,
             multi_drives,
@@ -693,6 +716,30 @@ async fn load_and_filter_data(
     }
 }
 
+/// Save an `MftIndex` to the cache with volume info.
+///
+/// Gets volume serial and USN journal info, then saves to cache.
+/// Returns an error if any step fails.
+#[cfg(windows)]
+fn save_index_to_cache(index: &uffs_mft::MftIndex, drive: char) -> Result<()> {
+    use uffs_mft::usn::query_usn_journal;
+    use uffs_mft::{VolumeHandle, save_to_cache};
+
+    let handle =
+        VolumeHandle::open(drive).with_context(|| format!("Failed to open volume {drive}:"))?;
+    let volume_serial = handle.volume_data().volume_serial_number;
+
+    let (usn_journal_id, next_usn) = match query_usn_journal(drive) {
+        Ok(info) => (info.journal_id, info.next_usn),
+        Err(_) => (0, 0), // USN not available, save without checkpoint
+    };
+
+    save_to_cache(index, drive, volume_serial, usn_journal_id, next_usn)
+        .with_context(|| format!("Failed to write cache for {drive}:"))?;
+
+    Ok(())
+}
+
 /// Load and filter data using fast `MftIndex` path (no `DataFrame` conversion
 /// during search).
 ///
@@ -729,12 +776,21 @@ async fn load_and_filter_data_index(
             );
             cached_index
         } else {
-            // Cache miss - read fresh
+            // Cache miss - read fresh and save to cache
             info!(drive = %drive_letter, "🔄 Cache miss - reading MFT");
             let reader = MftReader::open(drive_letter)
                 .await
                 .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
-            reader.read_all_index().await?
+            let index = reader.read_all_index().await?;
+
+            // Save to cache for next time
+            if let Err(e) = save_index_to_cache(&index, drive_letter) {
+                info!(drive = %drive_letter, error = %e, "⚠️ Failed to save to cache (non-fatal)");
+            } else {
+                info!(drive = %drive_letter, records = index.len(), "💾 Saved to cache");
+            }
+
+            index
         };
     let load_ms = t_load.elapsed().as_millis();
 
@@ -758,6 +814,171 @@ async fn load_and_filter_data_index(
     }
 
     Ok(results)
+}
+
+/// Load and filter data using fast `MftIndex` path for multiple drives.
+///
+/// Searches each drive in parallel using cached indices, then combines results.
+#[cfg(windows)]
+#[allow(clippy::single_call_fn, clippy::print_stderr)]
+async fn load_and_filter_data_index_multi(
+    drives: &[char],
+    filters: &QueryFilters<'_>,
+    needs_paths: bool,
+    profile: bool,
+) -> Result<uffs_mft::DataFrame> {
+    use std::sync::Arc;
+
+    use tokio::task::JoinSet;
+    use uffs_mft::{INDEX_TTL_SECONDS, load_cached_index};
+
+    if drives.is_empty() {
+        bail!("No drives specified for multi-drive search");
+    }
+
+    info!(
+        count = drives.len(),
+        drives = ?drives,
+        "Searching drives in PARALLEL with cached indices"
+    );
+
+    let t_total = std::time::Instant::now();
+
+    // Create owned filters for async tasks
+    let owned_filters = Arc::new(OwnedQueryFilters::from_borrowed(filters));
+
+    // Spawn tasks for each drive
+    let mut join_set: JoinSet<Result<(char, uffs_mft::DataFrame, u128, u128, usize)>> =
+        JoinSet::new();
+
+    for &drive in drives {
+        let filters = Arc::clone(&owned_filters);
+
+        join_set.spawn(async move {
+            let t_load = std::time::Instant::now();
+
+            // Try to load from cache first
+            let index =
+                if let Some((cached_index, header)) = load_cached_index(drive, INDEX_TTL_SECONDS) {
+                    info!(
+                        drive = %drive,
+                        records = cached_index.len(),
+                        volume_serial = header.volume_serial,
+                        "📦 Cache HIT"
+                    );
+                    cached_index
+                } else {
+                    // Cache miss - read fresh and save to cache
+                    info!(drive = %drive, "🔄 Cache MISS - reading MFT");
+                    let reader = MftReader::open(drive)
+                        .await
+                        .with_context(|| format!("Failed to open drive {drive}:"))?;
+                    let index = reader.read_all_index().await?;
+
+                    // Save to cache for next time
+                    if let Err(e) = save_index_to_cache(&index, drive) {
+                        info!(drive = %drive, error = %e, "⚠️ Failed to save to cache");
+                    } else {
+                        info!(drive = %drive, records = index.len(), "💾 Saved to cache");
+                    }
+
+                    index
+                };
+            let load_ms = t_load.elapsed().as_millis();
+            let record_count = index.len();
+
+            // Execute query on index
+            let t_query = std::time::Instant::now();
+            let borrowed_filters = QueryFilters {
+                parsed: &filters.parsed,
+                ext_filter: filters.ext_filter.as_deref(),
+                files_only: filters.files_only,
+                dirs_only: filters.dirs_only,
+                hide_system: filters.hide_system,
+                min_size: filters.min_size,
+                max_size: filters.max_size,
+                limit: filters.limit,
+            };
+            let results = execute_index_query(&index, &borrowed_filters, needs_paths)?;
+            let query_ms = t_query.elapsed().as_millis();
+
+            Ok((drive, results, load_ms, query_ms, record_count))
+        });
+    }
+
+    // Collect results from all drives
+    let mut all_results: Vec<uffs_mft::DataFrame> = Vec::with_capacity(drives.len());
+    let mut total_records = 0usize;
+    let mut total_matches = 0usize;
+
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(Ok((drive, df, load_ms, query_ms, record_count))) => {
+                let matches = df.height();
+                if profile {
+                    eprintln!(
+                        "  Drive {drive}: {record_count} records, {matches} matches (load: {load_ms}ms, query: {query_ms}ms)"
+                    );
+                }
+                total_records += record_count;
+                total_matches += matches;
+                if matches > 0 {
+                    all_results.push(df);
+                }
+            }
+            Ok(Err(e)) => {
+                info!(error = %e, "Drive search failed (continuing with other drives)");
+            }
+            Err(e) => {
+                info!(error = %e, "Task join error (continuing with other drives)");
+            }
+        }
+    }
+
+    let total_ms = t_total.elapsed().as_millis();
+
+    if profile {
+        eprintln!("=== PROFILE: Multi-drive Index Path ===");
+        eprintln!("  Drives:          {:>6}", drives.len());
+        eprintln!("  Total records:   {total_records:>6}");
+        eprintln!("  Total matches:   {total_matches:>6}");
+        eprintln!("  TOTAL time:      {total_ms:>6} ms");
+    }
+
+    // Combine all results
+    if all_results.is_empty() {
+        // Return empty DataFrame with correct schema
+        return Ok(uffs_mft::DataFrame::empty());
+    }
+
+    if all_results.len() == 1 {
+        return Ok(all_results.remove(0));
+    }
+
+    // Vertical concatenation of all DataFrames
+    // Convert DataFrames to LazyFrames for concat, then collect back
+    use uffs_polars::IntoLazy;
+    let lazy_frames: Vec<uffs_polars::LazyFrame> =
+        all_results.into_iter().map(|df| df.lazy()).collect();
+    let combined = uffs_polars::concat(&lazy_frames, uffs_polars::UnionArgs::default())
+        .context("Failed to combine results from multiple drives")?
+        .collect()
+        .context("Failed to collect combined results")?;
+
+    // Apply limit if specified
+    let final_result = if filters.limit > 0 && combined.height() > filters.limit as usize {
+        combined.head(Some(filters.limit as usize))
+    } else {
+        combined
+    };
+
+    info!(
+        total_matches = final_result.height(),
+        drives = drives.len(),
+        "Multi-drive cached index search complete"
+    );
+
+    Ok(final_result)
 }
 
 /// Query filter options for the search command.
@@ -996,6 +1217,8 @@ struct OwnedQueryFilters {
     min_size: Option<u64>,
     /// Maximum file size filter.
     max_size: Option<u64>,
+    /// Maximum number of results to return.
+    limit: u32,
 }
 
 #[cfg(windows)]
@@ -1010,6 +1233,7 @@ impl OwnedQueryFilters {
             hide_system: filters.hide_system,
             min_size: filters.min_size,
             max_size: filters.max_size,
+            limit: filters.limit,
         }
     }
 
