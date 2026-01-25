@@ -1071,4 +1071,37 @@ mod tests {
         assert!(result.column("path").is_ok());
         Ok(())
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // path_only column tests
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_add_path_only_column() -> TestResult {
+        // Create a DataFrame with path column
+        let df = DataFrame::new_infer_height(vec![Column::new(
+            "path".into(),
+            &[
+                "G:\\",
+                "G:\\MFT_TEST\\",
+                "G:\\MFT_TEST\\Backup\\",
+                "G:\\MFT_TEST\\Backup\\backup1.bak",
+                "G:\\MFT_TEST\\Backup\\doc1_hardlink.txt",
+            ],
+        )])?;
+
+        let result = add_path_only_column(&df)?;
+
+        assert!(result.column("path_only").is_ok());
+        let path_only_col = result.column("path_only")?.str()?;
+
+        // Check values
+        assert_eq!(path_only_col.get(0), Some("G:\\"));
+        assert_eq!(path_only_col.get(1), Some("G:\\MFT_TEST\\"));
+        assert_eq!(path_only_col.get(2), Some("G:\\MFT_TEST\\Backup\\"));
+        assert_eq!(path_only_col.get(3), Some("G:\\MFT_TEST\\Backup\\"));
+        assert_eq!(path_only_col.get(4), Some("G:\\MFT_TEST\\Backup\\"));
+
+        Ok(())
+    }
 }
