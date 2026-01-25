@@ -914,7 +914,11 @@ impl MftIndex {
 
         // Reverse and join
         components.reverse();
-        format!("{}:\\{}", self.volume, components.join("\\"))
+        format!(
+            "{}:/{}",
+            self.volume.to_ascii_lowercase(),
+            components.join("/")
+        )
     }
 }
 

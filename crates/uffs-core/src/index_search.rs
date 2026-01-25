@@ -506,7 +506,7 @@ pub enum TypeFilter {
 }
 
 /// Query options for `IndexQuery`.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 #[allow(clippy::struct_excessive_bools)] // Configuration struct with boolean flags
 pub struct QueryOptions {
     /// Type filter (files, dirs, or both).
@@ -519,6 +519,22 @@ pub struct QueryOptions {
     pub expand_names: bool,
     /// Whether to expand Alternate Data Streams (ADS).
     pub expand_streams: bool,
+    /// Whether to include system metafiles (FRS < 16, except root FRS 5).
+    /// Default is `false` to match C++ behavior.
+    pub include_system_metafiles: bool,
+}
+
+impl Default for QueryOptions {
+    fn default() -> Self {
+        Self {
+            type_filter: TypeFilter::default(),
+            case_sensitive: false,
+            resolve_paths: false,
+            expand_names: true,
+            expand_streams: true,
+            include_system_metafiles: false, // C++ default: exclude $MFT, $Bitmap, etc.
+        }
+    }
 }
 
 /// Fluent query builder for searching `MftIndex` directly.
@@ -551,8 +567,9 @@ impl<'a> IndexQuery<'a> {
                 type_filter: TypeFilter::All,
                 case_sensitive: false, // Windows default
                 resolve_paths: false,
-                expand_names: true,   // Match C++ behavior by default
-                expand_streams: true, // Match C++ behavior by default
+                expand_names: true,              // Match C++ behavior by default
+                expand_streams: true,            // Match C++ behavior by default
+                include_system_metafiles: false, // Match C++ behavior by default
             },
             min_size: None,
             max_size: None,
@@ -695,12 +712,18 @@ impl<'a> IndexQuery<'a> {
     /// result.
     #[must_use]
     pub fn collect(self) -> Vec<SearchResult> {
+        // Root directory FRS (always included)
+        const ROOT_FRS: u64 = 5;
+        // System metafiles are FRS 0-15 (except root at FRS 5)
+        const SYSTEM_METAFILE_MAX_FRS: u64 = 15;
+
         let records = self.index.records();
         let case_sensitive = self.options.case_sensitive;
         let type_filter = self.options.type_filter;
         let resolve_paths = self.options.resolve_paths;
         let expand_names = self.options.expand_names;
         let expand_streams = self.options.expand_streams;
+        let include_system_metafiles = self.options.include_system_metafiles;
         let pattern = &self.pattern;
         let min_size = self.min_size;
         let max_size = self.max_size;
@@ -712,6 +735,16 @@ impl<'a> IndexQuery<'a> {
         let filtered: Vec<SearchResult> = records
             .par_iter()
             .filter(|record| {
+                // 0. System metafile filter (cheapest - FRS check)
+                // FRS 0-15 are system metafiles ($MFT, $MFTMirr, $LogFile, etc.)
+                // FRS 5 is the root directory (always included)
+                if !include_system_metafiles
+                    && record.frs <= SYSTEM_METAFILE_MAX_FRS
+                    && record.frs != ROOT_FRS
+                {
+                    return false;
+                }
+
                 // 1. Type filter (cheapest - bit check)
                 match type_filter {
                     TypeFilter::FilesOnly if record.is_directory() => return false,
@@ -767,7 +800,12 @@ impl<'a> IndexQuery<'a> {
                             SearchResult::from_expanded(record, index, name_idx, stream_idx);
                         if resolve_paths {
                             if let Some(stream) = index.get_stream_at(record, stream_idx) {
-                                let path = index.build_path_with_stream(record, name_idx, stream);
+                                let mut path =
+                                    index.build_path_with_stream(record, name_idx, stream);
+                                // Add trailing slash for directories (C++ compatibility)
+                                if record.is_directory() && !path.ends_with('/') {
+                                    path.push('/');
+                                }
                                 result = result.with_path(path);
                             }
                         }
