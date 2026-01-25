@@ -1199,7 +1199,8 @@ fn results_to_dataframe(
             is_pinned.push(rec.stdinfo.is_pinned());
             is_unpinned.push(rec.stdinfo.is_unpinned());
             is_virtual.push(rec.stdinfo.is_virtual());
-            flags_values.push(rec.stdinfo.flags);
+            // Convert internal flags back to Windows FILE_ATTRIBUTE_* format for C++ parity
+            flags_values.push(rec.stdinfo.to_attributes());
         } else {
             // Record not found - use defaults
             allocated_sizes.push(0);
