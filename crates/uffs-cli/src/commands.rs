@@ -2098,8 +2098,7 @@ pub async fn index(
 
             // Create progress bar (None if disabled via UFFS_NO_PROGRESS=1)
             let progress_disabled = std::env::var("UFFS_NO_PROGRESS")
-                .map(|val| val == "1" || val.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
+                .is_ok_and(|val| val == "1" || val.eq_ignore_ascii_case("true"));
 
             let progress_bar: Option<ProgressBar> = if progress_disabled {
                 None

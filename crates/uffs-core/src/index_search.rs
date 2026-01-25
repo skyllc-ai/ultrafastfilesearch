@@ -720,6 +720,85 @@ impl<'a> IndexQuery<'a> {
         self
     }
 
+    /// Build extension filter indices for simple extension queries.
+    ///
+    /// Returns `Some(Vec<u32>)` if the pattern is a simple suffix (extension)
+    /// pattern and the index has an extension index. Returns `None`
+    /// otherwise.
+    ///
+    /// Extracted to reduce line count of `collect` method.
+    #[allow(clippy::single_call_fn)] // Extracted to satisfy clippy::too_many_lines
+    fn build_extension_filter_indices(
+        pattern: Option<&IndexPattern>,
+        index: &MftIndex,
+    ) -> Option<Vec<u32>> {
+        let pat = pattern?;
+        let ext_index = index.extension_index.as_ref()?;
+
+        // Check if pattern is a simple suffix (extension) pattern
+        let IndexPattern::Suffix { suffix, .. } = pat else {
+            return None;
+        };
+
+        // Extract extension from suffix (e.g., ".txt" → "txt")
+        let ext_str = suffix.strip_prefix('.')?;
+
+        // Check if it's a simple extension (no additional dots)
+        if ext_str.contains('.') {
+            return None;
+        }
+
+        // Look up extension_id
+        // Extensions are stored lowercase in ExtensionTable
+        let ext_lower = ext_str.to_ascii_lowercase();
+        let ext_id = index.extensions.map.get(ext_lower.as_str())?;
+
+        // Get record indices from extension index
+        let record_indices = ext_index.get_records(*ext_id);
+        Some(record_indices.to_vec())
+    }
+
+    /// Resolve the full path for a search result.
+    ///
+    /// Handles both primary names and hard links, and appends ADS names if
+    /// needed.
+    ///
+    /// Extracted to reduce line count of `collect` method.
+    #[allow(clippy::single_call_fn)] // Extracted to satisfy clippy::too_many_lines
+    fn resolve_result_path(
+        result: SearchResult,
+        record: &FileRecord,
+        index: &MftIndex,
+        name_idx: u16,
+        stream_idx: u16,
+        cached_path: Option<String>,
+    ) -> SearchResult {
+        let Some(stream) = index.get_stream_at(record, stream_idx) else {
+            return result;
+        };
+
+        // Use cached path for primary name (idx 0), build for hard links
+        let mut base_path = if name_idx == 0 {
+            cached_path.unwrap_or_else(|| index.build_path(record.frs))
+        } else {
+            index.build_path_for_name(record, name_idx)
+        };
+
+        // Append stream name for ADS
+        let stream_name = index.stream_name(stream);
+        let path = if stream_name.is_empty() {
+            // Add trailing backslash for directories (C++ parity)
+            if record.is_directory() && !base_path.ends_with('\\') {
+                base_path.push('\\');
+            }
+            base_path
+        } else {
+            format!("{base_path}:{stream_name}")
+        };
+
+        result.with_path(path)
+    }
+
     /// Execute the query and collect results.
     ///
     /// Uses Rayon for parallel execution across all records.
@@ -748,9 +827,25 @@ impl<'a> IndexQuery<'a> {
         // descendants of system metafiles, cycles) so we can filter with O(1) lookup.
         let path_cache = PathCache::build(index, include_system_metafiles);
 
+        // Fast path: Use extension index for simple extension queries (*.ext)
+        // This reduces O(n) scan to O(matches) lookup
+        let extension_filter_indices =
+            Self::build_extension_filter_indices(pattern.as_ref(), index);
+
+        // Choose iteration strategy based on whether we have extension filter
+        let records_to_scan: Vec<&FileRecord> = extension_filter_indices.as_ref().map_or_else(
+            || records.iter().collect(),
+            |indices| {
+                indices
+                    .iter()
+                    .filter_map(|&idx| records.get(idx as usize))
+                    .collect()
+            },
+        );
+
         // Parallel filter with early termination via take_any
         // Then expand (names × streams) for each matching record
-        let filtered: Vec<SearchResult> = records
+        let filtered: Vec<SearchResult> = records_to_scan
             .par_iter()
             .filter(|record| {
                 // 0. System metafile filter - O(1) cache lookup
@@ -818,37 +913,21 @@ impl<'a> IndexQuery<'a> {
 
                 (0..name_count).flat_map(move |name_idx| {
                     let inner_cached_path = outer_cached_path.clone();
-                    let is_dir = record.is_directory();
                     (0..stream_count).map(move |stream_idx| {
-                        let mut result =
+                        let result =
                             SearchResult::from_expanded(record, index, name_idx, stream_idx);
                         if resolve_paths {
-                            if let Some(stream) = index.get_stream_at(record, stream_idx) {
-                                // Use cached path for primary name (idx 0), build for hard links
-                                let mut base_path = if name_idx == 0 {
-                                    inner_cached_path
-                                        .clone()
-                                        .unwrap_or_else(|| index.build_path(record.frs))
-                                } else {
-                                    index.build_path_for_name(record, name_idx)
-                                };
-
-                                // Append stream name for ADS
-                                let stream_name = index.stream_name(stream);
-                                let path = if stream_name.is_empty() {
-                                    // Add trailing backslash for directories (C++ parity)
-                                    if is_dir && !base_path.ends_with('\\') {
-                                        base_path.push('\\');
-                                    }
-                                    base_path
-                                } else {
-                                    format!("{base_path}:{stream_name}")
-                                };
-
-                                result = result.with_path(path);
-                            }
+                            Self::resolve_result_path(
+                                result,
+                                record,
+                                index,
+                                name_idx,
+                                stream_idx,
+                                inner_cached_path.clone(),
+                            )
+                        } else {
+                            result
                         }
-                        result
                     })
                 })
             })
@@ -1097,6 +1176,69 @@ mod tests {
         assert!(pattern.matches("Cargo.toml", true));
         assert!(!pattern.matches("main.py", true));
         assert!(pattern.matches("MAIN.RS", false)); // case-insensitive
+    }
+
+    #[test]
+    fn test_extension_index_integration() {
+        use uffs_mft::index::{IndexNameRef, MftIndex, ROOT_FRS, SizeInfo};
+
+        // Create index with various extensions
+        let mut index = MftIndex::new('C');
+
+        // Create root directory (FRS 5) so path validation works
+        let root_name_offset = index.add_name(".");
+        let root = index.get_or_create(ROOT_FRS);
+        root.stdinfo.set_directory(true);
+        root.first_name.name = IndexNameRef::new(root_name_offset, 1, true, 0);
+        root.first_name.parent_frs = u32::try_from(ROOT_FRS).unwrap(); // Root points to itself
+
+        // Add files with different extensions
+        let files = [
+            ("readme.txt", 1000),
+            ("notes.txt", 2000),
+            ("data.csv", 3000),
+            ("script.py", 4000),
+            ("config.json", 5000),
+            ("test.txt", 6000),
+        ];
+
+        for (i, (name, size)) in files.iter().enumerate() {
+            let frs = (i + 100) as u64; // Start at FRS 100 to avoid system metafiles
+            let offset = index.add_name(name);
+            let ext_id = index.intern_extension(name);
+
+            let rec = index.get_or_create(frs);
+            rec.first_name.name =
+                IndexNameRef::new(offset, u16::try_from(name.len()).unwrap(), true, ext_id);
+            rec.first_name.parent_frs = u32::try_from(ROOT_FRS).unwrap(); // All files are in root
+            rec.first_stream.size = SizeInfo {
+                length: *size,
+                allocated: *size,
+            };
+
+            // Record the file size in the extension table
+            index.extensions.record_file(ext_id, *size);
+        }
+
+        // Build extension index
+        index.build_extension_index();
+
+        // Query for *.txt files
+        let pattern = compile_index_pattern("*.txt").unwrap();
+        let results: Vec<_> = IndexQuery::new(&index).with_pattern(pattern).collect();
+
+        // Should find exactly 3 .txt files
+        assert_eq!(results.len(), 3, "Should find 3 .txt files");
+
+        // Verify the results
+        let names: Vec<String> = results.iter().map(|rec| rec.name.clone()).collect();
+        assert!(names.contains(&"readme.txt".to_owned()));
+        assert!(names.contains(&"notes.txt".to_owned()));
+        assert!(names.contains(&"test.txt".to_owned()));
+
+        // Verify sizes
+        let total_size: u64 = results.iter().map(|rec| rec.size).sum();
+        assert_eq!(total_size, 1000 + 2000 + 6000);
     }
 
     #[test]

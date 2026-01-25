@@ -1628,7 +1628,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let name_offset = index.add_name(&name);
     let name_len = name.len();
     let is_ascii = name.is_ascii();
-    let name_ref = IndexNameRef::new(name_offset, name_len as u16, is_ascii);
+    let extension_id = index.intern_extension(&name);
+    let name_ref = IndexNameRef::new(name_offset, name_len as u16, is_ascii, extension_id);
 
     // Pre-process additional names: add to names buffer and links list BEFORE
     // getting record reference This avoids borrow checker issues with holding
@@ -1639,7 +1640,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         let link_offset = index.add_name(&link_name);
         let link_len = link_name.len();
         let link_is_ascii = link_name.is_ascii();
-        let link_name_ref = IndexNameRef::new(link_offset, link_len as u16, link_is_ascii);
+        let extension_id = index.intern_extension(&link_name);
+        let link_name_ref =
+            IndexNameRef::new(link_offset, link_len as u16, link_is_ascii, extension_id);
 
         let link_idx = index.links.len() as u32;
         index.links.push(LinkInfo {
@@ -1657,8 +1660,13 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         let stream_name_offset = index.add_name(&stream_name);
         let stream_name_len = stream_name.len();
         let stream_is_ascii = stream_name.is_ascii();
-        let stream_name_ref =
-            IndexNameRef::new(stream_name_offset, stream_name_len as u16, stream_is_ascii);
+        let extension_id = index.intern_extension(&stream_name);
+        let stream_name_ref = IndexNameRef::new(
+            stream_name_offset,
+            stream_name_len as u16,
+            stream_is_ascii,
+            extension_id,
+        );
 
         let stream_idx = index.streams.len() as u32;
         index.streams.push(IndexStreamInfo {
@@ -1933,7 +1941,8 @@ pub fn parse_record_to_fragment(
     let name_offset = fragment.add_name(&name);
     let name_len = name.len();
     let is_ascii = name.is_ascii();
-    let name_ref = IndexNameRef::new(name_offset, name_len as u16, is_ascii);
+    let extension_id = fragment.intern_extension(&name);
+    let name_ref = IndexNameRef::new(name_offset, name_len as u16, is_ascii, extension_id);
 
     // Pre-process additional names
     let additional_count = additional_names.len();
@@ -1942,7 +1951,9 @@ pub fn parse_record_to_fragment(
         let link_offset = fragment.add_name(&link_name);
         let link_len = link_name.len();
         let link_is_ascii = link_name.is_ascii();
-        let link_name_ref = IndexNameRef::new(link_offset, link_len as u16, link_is_ascii);
+        let extension_id = fragment.intern_extension(&link_name);
+        let link_name_ref =
+            IndexNameRef::new(link_offset, link_len as u16, link_is_ascii, extension_id);
 
         let link_idx = fragment.links.len() as u32;
         fragment.links.push(LinkInfo {
@@ -1960,8 +1971,13 @@ pub fn parse_record_to_fragment(
         let stream_name_offset = fragment.add_name(&stream_name);
         let stream_name_len = stream_name.len();
         let stream_is_ascii = stream_name.is_ascii();
-        let stream_name_ref =
-            IndexNameRef::new(stream_name_offset, stream_name_len as u16, stream_is_ascii);
+        let extension_id = fragment.intern_extension(&stream_name);
+        let stream_name_ref = IndexNameRef::new(
+            stream_name_offset,
+            stream_name_len as u16,
+            stream_is_ascii,
+            extension_id,
+        );
 
         let stream_idx = fragment.streams.len() as u32;
         fragment.streams.push(IndexStreamInfo {
