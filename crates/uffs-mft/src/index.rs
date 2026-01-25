@@ -473,6 +473,110 @@ impl FileRecord {
 // MftIndex - The main index structure
 // ============================================================================
 
+// ============================================================================
+// MftStats - Statistics collected during MFT parsing
+// ============================================================================
+
+/// Statistics collected during MFT parsing for optimization.
+///
+/// These stats are collected incrementally as records are parsed and used to:
+/// - Pre-allocate data structures with accurate capacity
+/// - Enable fast-path optimizations (skip unnecessary work)
+/// - Provide insights for debugging and profiling
+///
+/// All counters are cheap to update (just incrementing) and don't require
+/// the complete MFT to be parsed first.
+#[derive(Debug, Clone, Default)]
+pub struct MftStats {
+    /// Total number of in-use records parsed
+    pub record_count: u32,
+    /// Number of directory records
+    pub dir_count: u32,
+    /// Number of file records (= `record_count` - `dir_count`)
+    pub file_count: u32,
+    /// Maximum FRS seen (for sizing `frs_to_idx` lookup table)
+    pub max_frs: u64,
+    /// Total bytes of all filenames (for path string pre-allocation)
+    pub total_name_bytes: u64,
+    /// Number of records with multiple names (hard links)
+    pub multi_name_count: u32,
+    /// Number of records with ADS (alternate data streams)
+    pub ads_count: u32,
+    /// Number of system metafiles (FRS < 16, except root)
+    pub system_metafile_count: u32,
+    /// Number of records whose parent FRS is a system metafile.
+    /// These will be filtered out in path resolution.
+    pub system_child_count: u32,
+}
+
+impl MftStats {
+    /// Create new empty stats
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            record_count: 0,
+            dir_count: 0,
+            file_count: 0,
+            max_frs: 0,
+            total_name_bytes: 0,
+            multi_name_count: 0,
+            ads_count: 0,
+            system_metafile_count: 0,
+            system_child_count: 0,
+        }
+    }
+
+    /// Estimate average path depth based on collected stats.
+    ///
+    /// Uses heuristic: depth ≈ log2(dirs) + 2.
+    /// Typical NTFS volumes have depth 5-15.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn estimated_avg_depth(&self) -> usize {
+        if self.dir_count == 0 {
+            return 5; // Default for empty/small volumes
+        }
+        // log2(dir_count) + 2, clamped to reasonable range
+        let log2 = f64::from(self.dir_count).log2() as usize;
+        (log2 + 2).clamp(3, 20)
+    }
+
+    /// Estimate average path length in bytes.
+    ///
+    /// Formula: (name bytes / records) × depth
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn estimated_avg_path_bytes(&self) -> usize {
+        if self.record_count == 0 {
+            return 50; // Default
+        }
+        let avg_name_len = (self.total_name_bytes / u64::from(self.record_count)) as usize;
+        let depth = self.estimated_avg_depth();
+        // path = "c:/" + depth components with "/" separators
+        3 + (avg_name_len + 1) * depth
+    }
+
+    /// Check if there are any hard links (multi-name records).
+    #[must_use]
+    pub const fn has_hard_links(&self) -> bool {
+        self.multi_name_count > 0
+    }
+
+    /// Check if there are any ADS (alternate data streams).
+    #[must_use]
+    pub const fn has_ads(&self) -> bool {
+        self.ads_count > 0
+    }
+
+    /// Estimate number of valid (non-system) records for path cache sizing.
+    #[must_use]
+    pub const fn valid_record_estimate(&self) -> usize {
+        // Subtract system metafiles and their children
+        let invalid = self.system_metafile_count + self.system_child_count;
+        self.record_count.saturating_sub(invalid) as usize
+    }
+}
+
 /// Lean in-memory MFT index matching C++ `NtfsIndex` architecture.
 ///
 /// This is the core data structure for fast file searching.
@@ -494,6 +598,8 @@ pub struct MftIndex {
     pub streams: Vec<IndexStreamInfo>,
     /// Directory child entries
     pub children: Vec<ChildInfo>,
+    /// Statistics collected during parsing
+    pub stats: MftStats,
 }
 
 impl MftIndex {
@@ -517,7 +623,62 @@ impl MftIndex {
             links: Vec::new(),
             streams: Vec::new(),
             children: Vec::with_capacity(record_capacity),
+            stats: MftStats::new(),
         }
+    }
+
+    /// Recompute stats from the current index data.
+    ///
+    /// This is useful after deserializing an index from disk,
+    /// or after merging fragments.
+    pub fn recompute_stats(&mut self) {
+        /// System metafiles are FRS 0-15 (except root at FRS 5)
+        const SYSTEM_METAFILE_MAX_FRS: u64 = 15;
+        const ROOT_FRS_LOCAL: u64 = 5;
+
+        let mut stats = MftStats::new();
+
+        for record in &self.records {
+            stats.record_count += 1;
+
+            // Track max FRS
+            if record.frs > stats.max_frs {
+                stats.max_frs = record.frs;
+            }
+
+            // Count directories vs files
+            if record.is_directory() {
+                stats.dir_count += 1;
+            } else {
+                stats.file_count += 1;
+            }
+
+            // Count multi-name records (hard links)
+            if record.name_count > 1 {
+                stats.multi_name_count += 1;
+            }
+
+            // Count ADS records
+            if record.stream_count > 1 {
+                stats.ads_count += 1;
+            }
+
+            // System metafile detection
+            if record.frs <= SYSTEM_METAFILE_MAX_FRS && record.frs != ROOT_FRS_LOCAL {
+                stats.system_metafile_count += 1;
+            }
+
+            // Child of system metafile detection
+            let parent_frs = u64::from(record.first_name.parent_frs);
+            if parent_frs <= SYSTEM_METAFILE_MAX_FRS && parent_frs != ROOT_FRS_LOCAL {
+                stats.system_child_count += 1;
+            }
+
+            // Sum name bytes
+            stats.total_name_bytes += u64::from(record.first_name.name.length);
+        }
+
+        self.stats = stats;
     }
 
     /// Get or create a record for the given FRS.
@@ -980,8 +1141,16 @@ impl PathCache {
     /// * `include_system_metafiles` - If true, include FRS < 16 (except root)
     #[must_use]
     pub fn build(index: &MftIndex, include_system_metafiles: bool) -> Self {
+        // Use stats for smarter capacity estimation
+        let capacity = if include_system_metafiles {
+            index.records.len()
+        } else {
+            // Exclude system metafiles and their children from capacity estimate
+            index.stats.valid_record_estimate().max(index.records.len())
+        };
+
         let mut path_cache = Self {
-            cache: std::collections::HashMap::with_capacity(index.records.len()),
+            cache: std::collections::HashMap::with_capacity(capacity),
             volume: index.volume,
         };
 
@@ -1143,20 +1312,14 @@ impl PathCache {
             // Get the record's name
             let name = index.record_name(record);
 
-            // Build path
+            // Build path - don't add trailing slashes to cached paths
+            // (trailing slash is only added when outputting final directory paths)
             if !name.is_empty() && name != "." {
                 path_prefix = format!("{path_prefix}/{name}");
             }
 
-            // Add trailing slash for directories
-            let final_path = if record.is_directory() && !path_prefix.ends_with('/') {
-                format!("{path_prefix}/")
-            } else {
-                path_prefix.clone()
-            };
-
-            // Cache this node's path
-            self.cache.insert(chain_frs, Some(final_path));
+            // Cache this node's path (no trailing slash - added on output if needed)
+            self.cache.insert(chain_frs, Some(path_prefix.clone()));
         }
 
         // Return the path for the original FRS
@@ -1324,12 +1487,42 @@ impl MftIndex {
     /// This is the fast path - directly builds the lean index without
     /// going through Polars DataFrame.
     pub fn from_parsed_records(volume: char, records: Vec<crate::io::ParsedRecord>) -> Self {
+        /// System metafiles are FRS 0-15 (except root at FRS 5)
+        const SYSTEM_METAFILE_MAX_FRS: u64 = 15;
+        const ROOT_FRS_LOCAL: u64 = 5;
+
         let capacity = records.len();
         let mut index = Self::with_capacity(volume, capacity);
 
         for parsed in records {
             if !parsed.in_use {
                 continue;
+            }
+
+            // === Collect stats (cheap - just incrementing counters) ===
+            index.stats.record_count += 1;
+            index.stats.total_name_bytes += parsed.name.len() as u64;
+            if parsed.frs > index.stats.max_frs {
+                index.stats.max_frs = parsed.frs;
+            }
+            if parsed.is_directory {
+                index.stats.dir_count += 1;
+            } else {
+                index.stats.file_count += 1;
+            }
+            if parsed.names.len() > 1 {
+                index.stats.multi_name_count += 1;
+            }
+            if parsed.streams.len() > 1 {
+                index.stats.ads_count += 1;
+            }
+            // System metafile detection
+            if parsed.frs <= SYSTEM_METAFILE_MAX_FRS && parsed.frs != ROOT_FRS_LOCAL {
+                index.stats.system_metafile_count += 1;
+            }
+            // Child of system metafile detection
+            if parsed.parent_frs <= SYSTEM_METAFILE_MAX_FRS && parsed.parent_frs != ROOT_FRS_LOCAL {
+                index.stats.system_child_count += 1;
             }
 
             // Add primary name to names buffer FIRST (before borrowing record)
@@ -2225,7 +2418,7 @@ impl MftIndex {
             });
         }
 
-        let index = Self {
+        let mut index = Self {
             volume,
             records,
             frs_to_idx,
@@ -2233,7 +2426,11 @@ impl MftIndex {
             links,
             streams,
             children,
+            stats: MftStats::new(),
         };
+
+        // Compute stats from loaded data
+        index.recompute_stats();
 
         Ok((index, header))
     }
