@@ -430,6 +430,8 @@ impl FileRecord {
     pub fn new(frs: u64) -> Self {
         Self {
             frs,
+            name_count: 1,   // Every file has at least one name
+            stream_count: 1, // Every file has at least the default $DATA stream
             first_child: NO_ENTRY,
             first_name: LinkInfo {
                 next_entry: NO_ENTRY,
@@ -1391,7 +1393,7 @@ impl MftIndex {
                         frs,
                         stdinfo: StandardInfo::default(),
                         name_count: 1,
-                        stream_count: 0,
+                        stream_count: 1, // Every file has at least the default $DATA stream
                         first_child: NO_ENTRY,
                         first_name: LinkInfo {
                             next_entry: NO_ENTRY,

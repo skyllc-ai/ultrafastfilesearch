@@ -748,9 +748,15 @@ impl<'a> IndexQuery<'a> {
             .flat_map_iter(|record| {
                 // Expand (names × streams) for each matching record
                 // Fast path: most files have 1 name and 1 stream
-                let name_count = if expand_names { record.name_count } else { 1 };
+                // Use max(1, count) to ensure at least one iteration (every file has at least
+                // one name and one stream, even if count is 0 for placeholder records)
+                let name_count = if expand_names {
+                    record.name_count.max(1)
+                } else {
+                    1
+                };
                 let stream_count = if expand_streams {
-                    record.stream_count
+                    record.stream_count.max(1)
                 } else {
                     1
                 };
