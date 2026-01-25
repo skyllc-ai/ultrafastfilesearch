@@ -922,6 +922,248 @@ impl MftIndex {
     }
 }
 
+// ============================================================================
+// Memoized Path Cache - O(n) path computation with illegal ancestor filtering
+// ============================================================================
+
+/// System metafiles are FRS 0-15 (except root at FRS 5).
+/// These are filtered out by default to match C++ behavior.
+const SYSTEM_METAFILE_MAX_FRS: u64 = 15;
+
+/// Cached path result for a record.
+///
+/// - `Some(path)` = valid path, record should be included in output
+/// - `None` = illegal record (system metafile, cycle, or descendant of illegal)
+pub type CachedPath = Option<String>;
+
+/// Pre-computed path cache for all records in an `MftIndex`.
+///
+/// This cache is built once using memoized upward traversal, achieving O(n)
+/// amortized time complexity. Each record's path is computed by walking up
+/// the parent chain until hitting a cached ancestor, root, or illegal node.
+///
+/// ## Illegal Records
+///
+/// Records are marked as illegal (`None`) if:
+/// - FRS < 16 (except root FRS 5) - system metafiles like `$MFT`, `$Bitmap`
+/// - Any ancestor is illegal (e.g., children of `$Extend`)
+/// - Part of a cycle (corrupted MFT)
+///
+/// ## Usage
+///
+/// ```ignore
+/// let cache = PathCache::build(&index, false); // exclude system metafiles
+/// if let Some(path) = cache.get(record.frs) {
+///     println!("Valid: {}", path);
+/// } else {
+///     println!("Illegal/filtered record");
+/// }
+/// ```
+#[derive(Debug, Default)]
+pub struct PathCache {
+    /// FRS → cached path (None = illegal/filtered)
+    cache: std::collections::HashMap<u64, CachedPath>,
+    /// Volume letter for path prefix
+    volume: char,
+}
+
+impl PathCache {
+    /// Build the path cache for all records in the index.
+    ///
+    /// This uses memoized upward traversal for O(n) amortized complexity.
+    /// Each record is processed once, and parent chains are walked only
+    /// until hitting a cached ancestor.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - The MFT index to build paths for
+    /// * `include_system_metafiles` - If true, include FRS < 16 (except root)
+    #[must_use]
+    pub fn build(index: &MftIndex, include_system_metafiles: bool) -> Self {
+        let mut path_cache = Self {
+            cache: std::collections::HashMap::with_capacity(index.records.len()),
+            volume: index.volume,
+        };
+
+        // Process all records
+        for record in &index.records {
+            path_cache.compute_path_for(record.frs, index, include_system_metafiles);
+        }
+
+        path_cache
+    }
+
+    /// Get the cached path for a record.
+    ///
+    /// Returns `Some(&path)` if the record is valid, `None` if
+    /// illegal/filtered.
+    #[must_use]
+    pub fn get(&self, frs: u64) -> Option<&String> {
+        self.cache.get(&frs).and_then(|opt| opt.as_ref())
+    }
+
+    /// Check if a record is valid (has a path, not illegal).
+    #[must_use]
+    pub fn is_valid(&self, frs: u64) -> bool {
+        self.cache.get(&frs).is_some_and(Option::is_some)
+    }
+
+    /// Check if a record is illegal (filtered out).
+    #[must_use]
+    pub fn is_illegal(&self, frs: u64) -> bool {
+        self.cache.get(&frs).is_some_and(Option::is_none)
+    }
+
+    /// Get the number of valid (non-illegal) records.
+    #[must_use]
+    pub fn valid_count(&self) -> usize {
+        self.cache.values().filter(|path| path.is_some()).count()
+    }
+
+    /// Get the number of illegal records.
+    #[must_use]
+    pub fn illegal_count(&self) -> usize {
+        self.cache.values().filter(|path| path.is_none()).count()
+    }
+
+    /// Compute and cache the path for a single FRS.
+    ///
+    /// Uses memoized upward traversal:
+    /// 1. Walk up parent chain until hitting cached ancestor, root, or illegal
+    /// 2. Build path from top-down and cache each node along the way
+    /// 3. Detect cycles via visited set
+    fn compute_path_for(
+        &mut self,
+        frs: u64,
+        index: &MftIndex,
+        include_system_metafiles: bool,
+    ) -> CachedPath {
+        // Fast return if already cached
+        if let Some(cached) = self.cache.get(&frs) {
+            return cached.clone();
+        }
+
+        // Check if this FRS is a system metafile (illegal unless included)
+        if !include_system_metafiles && frs <= SYSTEM_METAFILE_MAX_FRS && frs != ROOT_FRS {
+            self.cache.insert(frs, None);
+            return None;
+        }
+
+        // Walk up parent chain, collecting nodes until we hit:
+        // - A cached ancestor
+        // - Root (FRS 5)
+        // - A cycle
+        // - A missing parent
+        let mut chain: Vec<u64> = Vec::new();
+        let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let mut current_frs = frs;
+
+        loop {
+            // If already cached, use as base
+            if self.cache.contains_key(&current_frs) {
+                break;
+            }
+
+            // Cycle detection
+            if !seen.insert(current_frs) {
+                // Cycle detected - mark all nodes in chain as illegal
+                for &chain_frs in &chain {
+                    self.cache.insert(chain_frs, None);
+                }
+                self.cache.insert(current_frs, None);
+                return None;
+            }
+
+            // Check if current is a system metafile (illegal)
+            if !include_system_metafiles
+                && current_frs <= SYSTEM_METAFILE_MAX_FRS
+                && current_frs != ROOT_FRS
+            {
+                // Mark all nodes in chain as illegal (descendants of system metafile)
+                for &chain_frs in &chain {
+                    self.cache.insert(chain_frs, None);
+                }
+                self.cache.insert(current_frs, None);
+                return None;
+            }
+
+            // Add to chain
+            chain.push(current_frs);
+
+            // Look up the record
+            let Some(record) = index.find(current_frs) else {
+                // Missing record - treat as root boundary
+                break;
+            };
+
+            // Get parent FRS
+            let parent_frs = u64::from(record.first_name.parent_frs);
+
+            // Check for root or self-reference
+            if parent_frs == u64::from(NO_ENTRY) || parent_frs == current_frs {
+                break; // Root or self-reference
+            }
+            if parent_frs == ROOT_FRS {
+                break; // Reached root
+            }
+
+            current_frs = parent_frs;
+        }
+
+        // At this point, either:
+        // - current_frs is cached (use as base)
+        // - current_frs is root/missing (start fresh)
+
+        // Check if ancestor is illegal (cached as None)
+        if matches!(self.cache.get(&current_frs), Some(None)) {
+            // Ancestor is illegal - mark all in chain as illegal
+            for &chain_frs in &chain {
+                self.cache.insert(chain_frs, None);
+            }
+            return None;
+        }
+
+        // Build paths from top-down (reverse the chain)
+        // Start with ancestor's path or empty if root
+        let mut path_prefix = if let Some(Some(ancestor_path)) = self.cache.get(&current_frs) {
+            ancestor_path.clone()
+        } else {
+            // Root - start with volume prefix
+            format!("{}:", self.volume.to_ascii_lowercase())
+        };
+
+        // Process chain in reverse (from ancestor to original node)
+        for &chain_frs in chain.iter().rev() {
+            let Some(record) = index.find(chain_frs) else {
+                // Missing record - cache as None and continue
+                self.cache.insert(chain_frs, None);
+                continue;
+            };
+
+            // Get the record's name
+            let name = index.record_name(record);
+
+            // Build path
+            if !name.is_empty() && name != "." {
+                path_prefix = format!("{path_prefix}/{name}");
+            }
+
+            // Add trailing slash for directories
+            let final_path = if record.is_directory() && !path_prefix.ends_with('/') {
+                format!("{path_prefix}/")
+            } else {
+                path_prefix.clone()
+            };
+
+            // Cache this node's path
+            self.cache.insert(chain_frs, Some(final_path));
+        }
+
+        // Return the path for the original FRS
+        self.cache.get(&frs).cloned().flatten()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -712,10 +712,7 @@ impl<'a> IndexQuery<'a> {
     /// result.
     #[must_use]
     pub fn collect(self) -> Vec<SearchResult> {
-        // Root directory FRS (always included)
-        const ROOT_FRS: u64 = 5;
-        // System metafiles are FRS 0-15 (except root at FRS 5)
-        const SYSTEM_METAFILE_MAX_FRS: u64 = 15;
+        use uffs_mft::index::PathCache;
 
         let records = self.index.records();
         let case_sensitive = self.options.case_sensitive;
@@ -730,28 +727,21 @@ impl<'a> IndexQuery<'a> {
         let limit = self.limit;
         let index = self.index;
 
+        // Build path cache once - O(n) amortized with memoization
+        // This pre-computes all paths and marks illegal records (system metafiles,
+        // descendants of system metafiles, cycles) so we can filter with O(1) lookup.
+        let path_cache = PathCache::build(index, include_system_metafiles);
+
         // Parallel filter with early termination via take_any
         // Then expand (names × streams) for each matching record
         let filtered: Vec<SearchResult> = records
             .par_iter()
             .filter(|record| {
-                // 0. System metafile filter (cheapest - FRS check)
-                // FRS 0-15 are system metafiles ($MFT, $MFTMirr, $LogFile, etc.)
-                // FRS 5 is the root directory (always included)
-                // C++ uses tree traversal from root, so children of system metafiles
-                // (like $Extend's children: $Quota, $ObjId, etc.) are never visited.
-                // We must also filter out records whose parent is a system metafile.
-                if !include_system_metafiles {
-                    // Filter out system metafiles themselves (except root)
-                    if record.frs <= SYSTEM_METAFILE_MAX_FRS && record.frs != ROOT_FRS {
-                        return false;
-                    }
-                    // Filter out children of system metafiles (e.g., $Extend's children)
-                    // $Extend is FRS 11, its children have parent_frs = 11
-                    let parent_frs = u64::from(record.first_name.parent_frs);
-                    if parent_frs <= SYSTEM_METAFILE_MAX_FRS && parent_frs != ROOT_FRS {
-                        return false;
-                    }
+                // 0. System metafile filter - O(1) cache lookup
+                // PathCache has already computed validity for all records,
+                // including descendants of system metafiles like $Extend/$RmMetadata
+                if !path_cache.is_valid(record.frs) {
+                    return false;
                 }
 
                 // 1. Type filter (cheapest - bit check)
@@ -803,18 +793,37 @@ impl<'a> IndexQuery<'a> {
                     1
                 };
 
+                // Get cached path for primary name (idx 0) once, outside the inner loops
+                let outer_cached_path = if resolve_paths {
+                    path_cache.get(record.frs).cloned()
+                } else {
+                    None
+                };
+
                 (0..name_count).flat_map(move |name_idx| {
+                    let inner_cached_path = outer_cached_path.clone();
                     (0..stream_count).map(move |stream_idx| {
                         let mut result =
                             SearchResult::from_expanded(record, index, name_idx, stream_idx);
                         if resolve_paths {
                             if let Some(stream) = index.get_stream_at(record, stream_idx) {
-                                let mut path =
-                                    index.build_path_with_stream(record, name_idx, stream);
-                                // Add trailing slash for directories (C++ compatibility)
-                                if record.is_directory() && !path.ends_with('/') {
-                                    path.push('/');
-                                }
+                                // Use cached path for primary name (idx 0), build for hard links
+                                let base_path = if name_idx == 0 {
+                                    inner_cached_path
+                                        .clone()
+                                        .unwrap_or_else(|| index.build_path(record.frs))
+                                } else {
+                                    index.build_path_for_name(record, name_idx)
+                                };
+
+                                // Append stream name for ADS
+                                let stream_name = index.stream_name(stream);
+                                let path = if stream_name.is_empty() {
+                                    base_path
+                                } else {
+                                    format!("{base_path}:{stream_name}")
+                                };
+
                                 result = result.with_path(path);
                             }
                         }
