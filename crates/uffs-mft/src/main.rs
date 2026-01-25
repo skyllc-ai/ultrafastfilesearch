@@ -57,8 +57,7 @@ use crossbeam_channel as _;
 use indicatif as _;
 #[cfg(windows)]
 use indicatif::{ProgressBar, ProgressStyle};
-// SmallVec for zero-copy parsing (used in io.rs on Windows)
-#[cfg(windows)]
+// SmallVec for path chain building (used in index.rs PathResolver)
 use smallvec as _;
 #[cfg(not(windows))]
 use tracing as _;

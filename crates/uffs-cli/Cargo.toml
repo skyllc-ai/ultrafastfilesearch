@@ -53,8 +53,7 @@ uffs-polars = { version = "0.2.9", path = "../uffs-polars" }
 # Time handling
 chrono.workspace = true
 
-# Memory allocator (Windows only - reduces fragmentation)
-[target.'cfg(windows)'.dependencies]
+# Memory allocator - mimalloc is faster than system allocator on all platforms
 mimalloc.workspace = true
 
 # ─────────────────────────────────────────────────────────────────────────────

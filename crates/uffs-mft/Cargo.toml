@@ -34,6 +34,7 @@ uffs-polars.workspace = true
 
 # Data structures
 bitflags.workspace = true
+smallvec.workspace = true
 
 # Error handling
 thiserror.workspace = true
@@ -62,7 +63,6 @@ rustc-hash = "2.1.1"
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
 crossbeam-channel = "0.5.15"
-smallvec.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

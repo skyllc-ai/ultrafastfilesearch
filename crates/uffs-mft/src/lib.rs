@@ -48,6 +48,8 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
+extern crate alloc;
+
 // ============================================================================
 // Suppress unused crate warnings
 // ============================================================================
@@ -75,7 +77,8 @@ use windows as _;
 // Binary dependencies (used by src/main.rs)
 use {
     anyhow as _, chrono as _, clap as _, dirs_next as _, hostname as _, indicatif as _,
-    num_cpus as _, tokio as _, tracing as _, tracing_appender as _, tracing_subscriber as _,
+    num_cpus as _, smallvec as _, tokio as _, tracing as _, tracing_appender as _,
+    tracing_subscriber as _,
 };
 
 // ============================================================================

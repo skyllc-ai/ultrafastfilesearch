@@ -795,7 +795,7 @@ impl<'a> IndexQuery<'a> {
 
                 // Get cached path for primary name (idx 0) once, outside the inner loops
                 let outer_cached_path = if resolve_paths {
-                    path_cache.get(record.frs).cloned()
+                    path_cache.get(record.frs)
                 } else {
                     None
                 };
