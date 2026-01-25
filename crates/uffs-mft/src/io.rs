@@ -927,7 +927,12 @@ impl ParsedColumns {
     pub fn push_record(&mut self, record: &ParsedRecord) {
         self.frs.push(record.frs);
         self.parent_frs.push(record.parent_frs);
-        self.name.push(record.name.clone());
+        // C++ parity: directories have empty name
+        if record.is_directory {
+            self.name.push(String::new());
+        } else {
+            self.name.push(record.name.clone());
+        }
         self.size.push(record.size);
         self.allocated_size.push(record.allocated_size);
         self.created.push(record.std_info.created);
@@ -997,7 +1002,12 @@ impl ParsedColumns {
             for stream_info in &streams {
                 self.frs.push(record.frs);
                 self.parent_frs.push(name_info.parent_frs);
-                self.name.push(name_info.name.clone());
+                // C++ parity: directories have empty name
+                if record.is_directory {
+                    self.name.push(String::new());
+                } else {
+                    self.name.push(name_info.name.clone());
+                }
                 // Use stream-specific size for ADS, file size for default stream
                 let (size, alloc) = if stream_info.name.is_empty() {
                     (record.size, record.allocated_size)

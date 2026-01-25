@@ -270,8 +270,8 @@ impl FastPathResolver {
             }
         }
 
-        // Build final path
-        path_buf.push(self.volume);
+        // Build final path (uppercase drive letter for C++ parity)
+        path_buf.push(self.volume.to_ascii_uppercase());
         path_buf.push_str(":\\");
 
         // Append components in reverse order
@@ -618,9 +618,13 @@ impl PathResolver {
             }
         }
 
-        // Build path from components (reverse order)
+        // Build path from components (reverse order, uppercase drive letter)
         components.reverse();
-        let path = format!("{}:\\{}", self.volume, components.join("\\"));
+        let path = format!(
+            "{}:\\{}",
+            self.volume.to_ascii_uppercase(),
+            components.join("\\")
+        );
 
         // Cache the result
         self.cache.insert(frs, path.clone());

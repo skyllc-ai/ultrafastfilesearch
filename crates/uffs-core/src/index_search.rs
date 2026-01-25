@@ -428,13 +428,21 @@ impl SearchResult {
     /// stream).
     #[must_use]
     pub fn from_record(record: &FileRecord, index: &MftIndex) -> Self {
+        let is_directory = record.is_directory();
+        // C++ parity: directories have empty name, files have actual name
+        let name = if is_directory {
+            String::new()
+        } else {
+            index.record_name(record).to_owned()
+        };
+
         Self {
-            name: index.record_name(record).to_owned(),
+            name,
             path: None, // Path resolution is expensive, done on demand
             size: record.first_stream.size.length,
             frs: record.frs,
             parent_frs: u64::from(record.first_name.parent_frs),
-            is_directory: record.is_directory(),
+            is_directory,
             stream_name: String::new(),
             name_index: 0,
             stream_index: 0,
@@ -455,14 +463,22 @@ impl SearchResult {
         let stream_info = index
             .get_stream_at(record, stream_idx)
             .unwrap_or(&record.first_stream);
+        let is_directory = record.is_directory();
+
+        // C++ parity: directories have empty name, files have actual name
+        let name = if is_directory {
+            String::new()
+        } else {
+            index.get_name(&name_info.name).to_owned()
+        };
 
         Self {
-            name: index.get_name(&name_info.name).to_owned(),
+            name,
             path: None,
             size: stream_info.size.length,
             frs: record.frs,
             parent_frs: u64::from(name_info.parent_frs),
-            is_directory: record.is_directory(),
+            is_directory,
             stream_name: index.stream_name(stream_info).to_owned(),
             name_index: name_idx,
             stream_index: stream_idx,
@@ -802,13 +818,14 @@ impl<'a> IndexQuery<'a> {
 
                 (0..name_count).flat_map(move |name_idx| {
                     let inner_cached_path = outer_cached_path.clone();
+                    let is_dir = record.is_directory();
                     (0..stream_count).map(move |stream_idx| {
                         let mut result =
                             SearchResult::from_expanded(record, index, name_idx, stream_idx);
                         if resolve_paths {
                             if let Some(stream) = index.get_stream_at(record, stream_idx) {
                                 // Use cached path for primary name (idx 0), build for hard links
-                                let base_path = if name_idx == 0 {
+                                let mut base_path = if name_idx == 0 {
                                     inner_cached_path
                                         .clone()
                                         .unwrap_or_else(|| index.build_path(record.frs))
@@ -819,6 +836,10 @@ impl<'a> IndexQuery<'a> {
                                 // Append stream name for ADS
                                 let stream_name = index.stream_name(stream);
                                 let path = if stream_name.is_empty() {
+                                    // Add trailing backslash for directories (C++ parity)
+                                    if is_dir && !base_path.ends_with('\\') {
+                                        base_path.push('\\');
+                                    }
                                     base_path
                                 } else {
                                     format!("{base_path}:{stream_name}")

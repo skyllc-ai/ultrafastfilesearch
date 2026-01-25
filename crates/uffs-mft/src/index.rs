@@ -1053,12 +1053,12 @@ impl MftIndex {
             }
         }
 
-        // Reverse and join with volume prefix
+        // Reverse and join with volume prefix (backslash for C++ parity)
         components.reverse();
         format!(
-            "{}:/{}",
-            self.volume.to_ascii_lowercase(),
-            components.join("/")
+            "{}:\\{}",
+            self.volume.to_ascii_uppercase(),
+            components.join("\\")
         )
     }
 
@@ -1115,12 +1115,12 @@ impl MftIndex {
             current_frs = u64::from(parent_frs);
         }
 
-        // Reverse and join
+        // Reverse and join (backslash for C++ parity)
         components.reverse();
         format!(
-            "{}:/{}",
-            self.volume.to_ascii_lowercase(),
-            components.join("/")
+            "{}:\\{}",
+            self.volume.to_ascii_uppercase(),
+            components.join("\\")
         )
     }
 }
@@ -1254,14 +1254,14 @@ impl PathResolver {
 
         // Build path with single allocation
         let mut path = String::with_capacity(total_len);
-        path.push(self.volume.to_ascii_lowercase());
+        path.push(self.volume.to_ascii_uppercase());
         path.push(':');
 
         for &chain_idx in chain.iter().rev() {
             if let Some(record) = index.records.get(chain_idx) {
                 let name = index.record_name(record);
                 if !name.is_empty() && name != "." {
-                    path.push('/');
+                    path.push('\\');
                     path.push_str(name);
                 }
             }
@@ -1287,7 +1287,7 @@ impl PathResolver {
         let parent_path = if let Some(pidx) = index.frs_to_idx_opt(parent_frs) {
             self.materialize_path(index, pidx)
         } else if parent_frs == ROOT_FRS {
-            format!("{}:", self.volume.to_ascii_lowercase())
+            format!("{}:", self.volume.to_ascii_uppercase())
         } else {
             return String::new();
         };
@@ -1298,7 +1298,7 @@ impl PathResolver {
         } else {
             let mut path = String::with_capacity(parent_path.len() + 1 + name.len());
             path.push_str(&parent_path);
-            path.push('/');
+            path.push('\\');
             path.push_str(name);
             path
         }
