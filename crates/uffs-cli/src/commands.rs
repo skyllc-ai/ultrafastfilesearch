@@ -633,15 +633,25 @@ async fn load_and_filter_data(
     let effective_drive = single_drive.or_else(|| filters.parsed.drive());
     if let Some(drive_letter) = effective_drive {
         // Single drive search with proper path resolution
-        let t_open = std::time::Instant::now();
-        let reader = MftReader::open(drive_letter)
-            .await
-            .with_context(|| format!("Failed to open drive {drive_letter}:"))?
-            .with_use_bitmap(!no_bitmap);
-        let open_ms = t_open.elapsed().as_millis();
-
         let t_read = std::time::Instant::now();
-        let full_df = reader.read_all().await?;
+
+        // Use cached DataFrame path for performance (Windows only)
+        #[cfg(windows)]
+        let full_df =
+            uffs_mft::load_or_build_dataframe_cached(drive_letter, uffs_mft::INDEX_TTL_SECONDS)
+                .await
+                .with_context(|| format!("Failed to read MFT for drive {drive_letter}:"))?;
+
+        // Non-Windows: read directly (no caching)
+        #[cfg(not(windows))]
+        let full_df = {
+            let reader = MftReader::open(drive_letter)
+                .await
+                .with_context(|| format!("Failed to open drive {drive_letter}:"))?
+                .with_use_bitmap(!no_bitmap);
+            reader.read_all().await?
+        };
+
         let read_ms = t_read.elapsed().as_millis();
         let total_records = full_df.height();
 
@@ -676,14 +686,13 @@ async fn load_and_filter_data(
         let paths_ms = t_paths.elapsed().as_millis();
 
         if profile {
-            let total_ms = open_ms + read_ms + resolver_ms + filter_ms + paths_ms;
+            let total_ms = read_ms + resolver_ms + filter_ms + paths_ms;
             eprintln!("=== PROFILE: Drive {drive_letter}: ===");
-            eprintln!("  MFT open:        {open_ms:>6} ms");
-            eprintln!("  MFT read:        {read_ms:>6} ms  ({total_records} records)");
-            eprintln!("  Path resolver:   {resolver_ms:>6} ms");
-            eprintln!("  Query/filter:    {filter_ms:>6} ms  ({filtered_count} matches)");
-            eprintln!("  Path resolution: {paths_ms:>6} ms");
-            eprintln!("  TOTAL:           {total_ms:>6} ms");
+            eprintln!("  MFT read (cached): {read_ms:>6} ms  ({total_records} records)");
+            eprintln!("  Path resolver:     {resolver_ms:>6} ms");
+            eprintln!("  Query/filter:      {filter_ms:>6} ms  ({filtered_count} matches)");
+            eprintln!("  Path resolution:   {paths_ms:>6} ms");
+            eprintln!("  TOTAL:             {total_ms:>6} ms");
         }
 
         return Ok(filtered);
@@ -1362,41 +1371,11 @@ async fn search_multi_drive_filtered(
         tokio::spawn(async move {
             let pb = pbs.as_ref().and_then(|p| p.get(&drive_char));
 
-            // Open the drive
-            let reader = match MftReader::open(drive_char).await {
-                Ok(r) => r.with_use_bitmap(use_bitmap),
-                Err(e) => {
-                    if let Some(p) = pb {
-                        p.finish_with_message(format!("Error: {e}"));
-                    }
-                    let _ = tx
-                        .send(DriveResult {
-                            drive: drive_char,
-                            df: None,
-                            records_read: 0,
-                            matches: 0,
-                            error: Some(e.to_string()),
-                            paths_resolved: false,
-                        })
-                        .await;
-                    return;
-                }
-            };
-
-            // Read with progress callback
-            let pb_clone = pbs.clone();
-            let full_df = reader
-                .read_with_progress(move |progress| {
-                    if let Some(ref pbs) = pb_clone {
-                        if let Some(p) = pbs.get(&drive_char) {
-                            if let Some(total) = progress.total_records {
-                                p.set_length(progress.bytes_read.max(total));
-                            }
-                            p.set_position(progress.bytes_read);
-                        }
-                    }
-                })
-                .await;
+            // Use cached DataFrame path for performance
+            // Progress bar will complete quickly on cache hit (which is good!)
+            let full_df =
+                uffs_mft::load_or_build_dataframe_cached(drive_char, uffs_mft::INDEX_TTL_SECONDS)
+                    .await;
 
             let full_df = match full_df {
                 Ok(df) => df,
@@ -1417,6 +1396,9 @@ async fn search_multi_drive_filtered(
                     return;
                 }
             };
+
+            // Suppress unused variable warning
+            let _ = use_bitmap;
 
             let records_read = full_df.height();
             if let Some(p) = pb {
@@ -1679,26 +1661,10 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
         let use_bitmap = !no_bitmap; // Capture for the spawned task
 
         tokio::spawn(async move {
-            // Open the drive
-            let reader = match MftReader::open(drive_char).await {
-                Ok(r) => r.with_use_bitmap(use_bitmap),
-                Err(e) => {
-                    let _ = tx
-                        .send(DriveResult {
-                            drive: drive_char,
-                            df: None,
-                            records_read: 0,
-                            matches: 0,
-                            error: Some(e.to_string()),
-                            paths_resolved: false,
-                        })
-                        .await;
-                    return;
-                }
-            };
-
-            // Read without progress callback (streaming output is the progress)
-            let df = reader.read_all().await;
+            // Use cached DataFrame path for performance
+            let df =
+                uffs_mft::load_or_build_dataframe_cached(drive_char, uffs_mft::INDEX_TTL_SECONDS)
+                    .await;
 
             let df = match df {
                 Ok(df) => df,
@@ -1716,6 +1682,9 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
                     return;
                 }
             };
+
+            // Suppress unused variable warning
+            let _ = use_bitmap;
 
             let records_read = df.height();
 

@@ -107,6 +107,8 @@ mod reader;
 // ============================================================================
 
 // Re-export cache types
+#[cfg(windows)]
+pub use cache::load_or_build_dataframe_cached;
 pub use cache::{
     CacheStatus, INDEX_TTL_SECONDS, MultiDriveCacheStatus, cache_age_seconds, cache_dir,
     cache_file_path, check_cache_status, check_multi_drive_cache, cleanup_expired_cache,

@@ -298,6 +298,61 @@ pub fn check_cache_status(drive: char, ttl_seconds: u64) -> CacheStatus {
     }
 }
 
+/// Loads a cached index and converts to DataFrame, or builds fresh if cache
+/// miss.
+///
+/// This is the recommended way to get a DataFrame with caching support.
+/// It uses the lean `MftIndex` cache format and converts to DataFrame on
+/// demand.
+///
+/// # Arguments
+///
+/// * `drive` - Drive letter to read
+/// * `ttl_seconds` - TTL in seconds for cache freshness
+///
+/// # Returns
+///
+/// A DataFrame with all MFT records for the drive.
+///
+/// # Errors
+///
+/// Returns an error if MFT reading or DataFrame conversion fails.
+#[cfg(windows)]
+pub async fn load_or_build_dataframe_cached(
+    drive: char,
+    ttl_seconds: u64,
+) -> crate::Result<uffs_polars::DataFrame> {
+    use crate::VolumeHandle;
+    use crate::reader::MftReader;
+    use crate::usn::query_usn_journal;
+
+    // Try to load from cache first
+    if let Some((index, _header)) = load_cached_index(drive, ttl_seconds) {
+        tracing::info!(drive = %drive, records = index.records.len(), "📦 Cache hit - converting to DataFrame");
+        return index.to_dataframe();
+    }
+
+    // Cache miss - read fresh
+    tracing::info!(drive = %drive, "📖 Cache miss - reading MFT fresh");
+    let reader = MftReader::open(drive).await?;
+    let index = reader.read_all_index().await?;
+
+    // Save to cache for next time
+    let handle = VolumeHandle::open(drive)?;
+    let volume_serial = handle.volume_data().volume_serial_number;
+    let (usn_journal_id, next_usn) = match query_usn_journal(drive) {
+        Ok(info) => (info.journal_id, info.next_usn),
+        Err(_) => (0, 0),
+    };
+
+    if let Err(e) = save_to_cache(&index, drive, volume_serial, usn_journal_id, next_usn) {
+        tracing::warn!(drive = %drive, error = %e, "Failed to save cache");
+    }
+
+    // Convert to DataFrame
+    index.to_dataframe()
+}
+
 /// Multi-drive cache status for coordinated operations.
 #[derive(Debug)]
 pub enum MultiDriveCacheStatus {
