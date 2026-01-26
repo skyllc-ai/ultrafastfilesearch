@@ -41,10 +41,6 @@ use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx
 use crate::error::{MftError, Result};
 // Re-export SECTOR_SIZE for use by other modules (e.g., reader.rs streaming save)
 pub use crate::ntfs::SECTOR_SIZE;
-use crate::ntfs::{
-    AttributeRecordHeader, AttributeType, FILE_RECORD_MAGIC, FileNameAttribute,
-    FileRecordSegmentHeader, MultiSectorHeader, StandardInformation,
-};
 use crate::platform::{MftExtent, VolumeHandle};
 
 // ============================================================================
@@ -482,8 +478,6 @@ impl MftRecordReader {
 // Cross-Platform Parsing (Re-exports from parse module)
 // ============================================================================
 
-// Re-export parsing functions and types from the cross-platform parse module
-use crate::ntfs::{ExtendedStandardInfo, NameInfo, StreamInfo};
 // ============================================================================
 // ParsedColumns - Re-export from parse module (now cross-platform)
 // ============================================================================
@@ -1121,143 +1115,6 @@ pub fn parse_record_to_fragment(
     }
 
     true
-}
-
-/// Parses `$STANDARD_INFORMATION` into `ExtendedStandardInfo`.
-#[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
-fn parse_standard_info_full(data: &[u8], attr_offset: usize, result: &mut ExtendedStandardInfo) {
-    use crate::ntfs::filetime_to_unix_micros;
-
-    // Get value offset (resident attribute)
-    let value_offset_bytes = &data[attr_offset + 20..attr_offset + 22];
-    let value_offset = u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0])) as usize;
-
-    let si_offset = attr_offset + value_offset;
-    if si_offset + size_of::<StandardInformation>() > data.len() {
-        return;
-    }
-
-    // SAFETY: We've verified the buffer is large enough.
-    let si: StandardInformation = unsafe { core::ptr::read(data[si_offset..].as_ptr().cast()) };
-
-    result.created = filetime_to_unix_micros(si.creation_time);
-    result.modified = filetime_to_unix_micros(si.modification_time);
-    result.accessed = filetime_to_unix_micros(si.access_time);
-    result.mft_changed = filetime_to_unix_micros(si.mft_change_time);
-
-    // Parse all flags
-    *result = ExtendedStandardInfo {
-        created: result.created,
-        modified: result.modified,
-        accessed: result.accessed,
-        mft_changed: result.mft_changed,
-        ..ExtendedStandardInfo::from_attributes(si.file_attributes)
-    };
-}
-
-/// Parses `$FILE_NAME` and returns a `NameInfo`.
-#[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
-fn parse_file_name_full(data: &[u8], attr_offset: usize) -> Option<NameInfo> {
-    use crate::ntfs::file_reference_to_frs;
-
-    // Get value offset (resident attribute)
-    let value_offset_bytes = &data[attr_offset + 20..attr_offset + 22];
-    let value_offset = u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0])) as usize;
-
-    let fn_offset = attr_offset + value_offset;
-    if fn_offset + size_of::<FileNameAttribute>() > data.len() {
-        return None;
-    }
-
-    // SAFETY: We've verified the buffer is large enough.
-    let fn_attr: FileNameAttribute = unsafe { core::ptr::read(data[fn_offset..].as_ptr().cast()) };
-
-    // Extract file name (UTF-16LE)
-    let name_len = fn_attr.file_name_length as usize;
-    let name_offset = fn_offset + size_of::<FileNameAttribute>();
-
-    if name_offset + name_len * 2 > data.len() {
-        return None;
-    }
-
-    let name_bytes = &data[name_offset..name_offset + name_len * 2];
-    // Use SmallVec to avoid heap allocation for typical file names (< 128 chars)
-    let name_u16: SmallVec<[u16; 128]> = name_bytes
-        .chunks_exact(2)
-        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-        .collect();
-
-    let name = String::from_utf16(&name_u16).ok()?;
-
-    Some(NameInfo {
-        name,
-        parent_frs: file_reference_to_frs(fn_attr.parent_directory),
-        namespace: fn_attr.file_name_namespace,
-    })
-}
-
-/// Parses `$DATA` attribute and returns a `StreamInfo`.
-fn parse_data_attribute_full(
-    data: &[u8],
-    attr_offset: usize,
-    header: &AttributeRecordHeader,
-) -> Option<StreamInfo> {
-    // Extract stream name from attribute header
-    // Use SmallVec to avoid heap allocation for typical stream names (< 64 chars)
-    let stream_name = if header.name_length > 0 {
-        let name_offset = attr_offset + header.name_offset as usize;
-        let name_len = header.name_length as usize;
-        if name_offset + name_len * 2 > data.len() {
-            return None;
-        }
-        let name_bytes = &data[name_offset..name_offset + name_len * 2];
-        let name_u16: SmallVec<[u16; 64]> = name_bytes
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect();
-        String::from_utf16(&name_u16).unwrap_or_default()
-    } else {
-        String::new()
-    };
-
-    let (size, allocated_size, is_sparse, is_compressed) = if header.is_non_resident != 0 {
-        // Non-resident: get sizes from non-resident header
-        let nr_offset = attr_offset + 16; // After common header
-        if nr_offset + 48 > data.len() {
-            return None;
-        }
-
-        let allocated_size =
-            i64::from_le_bytes(data[nr_offset + 24..nr_offset + 32].try_into().ok()?);
-        let data_size = i64::from_le_bytes(data[nr_offset + 40..nr_offset + 48].try_into().ok()?);
-
-        // Check compression unit (at offset 16 in non-resident header)
-        let compression_unit = data[nr_offset + 8];
-        let is_compressed = compression_unit > 0;
-
-        // Check sparse flag in attribute flags
-        let is_sparse = (header.flags & 0x8000) != 0;
-
-        (
-            data_size.max(0) as u64,
-            allocated_size.max(0) as u64,
-            is_sparse,
-            is_compressed,
-        )
-    } else {
-        // Resident: get size from resident header
-        let value_length_bytes = &data[attr_offset + 16..attr_offset + 20];
-        let value_length = u32::from_le_bytes(value_length_bytes.try_into().ok()?);
-        (value_length as u64, 0, false, false)
-    };
-
-    Some(StreamInfo {
-        name: stream_name,
-        size,
-        allocated_size,
-        is_sparse,
-        is_compressed,
-    })
 }
 
 // ============================================================================
@@ -3794,6 +3651,20 @@ impl ParallelMftReader {
             names_kb = index.names.len() / 1024,
             "✅ Sliding window IOCP with inline parsing complete"
         );
+
+        // Post-processing: compute derived data structures
+        // These are fast O(n) operations that enhance query performance
+        // (Same as from_parsed_records and merge_fragments)
+        debug!("🔨 Building extension index...");
+        index.extension_index = Some(crate::index::ExtensionIndex::build(&index));
+
+        debug!("🔨 Sorting directory children...");
+        index.sort_directory_children();
+
+        debug!("🔨 Computing tree metrics...");
+        index.compute_tree_metrics();
+
+        debug!("✅ Post-processing complete");
 
         Ok(index)
     }
