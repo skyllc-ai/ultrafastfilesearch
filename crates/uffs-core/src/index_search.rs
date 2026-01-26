@@ -450,7 +450,7 @@ impl SearchResult {
             path: None, // Path resolution is expensive, done on demand
             size: record.first_stream.size.length,
             frs: record.frs,
-            parent_frs: u64::from(record.first_name.parent_frs),
+            parent_frs: record.first_name.parent_frs,
             is_directory,
             stream_name: String::new(),
             name_index: 0,
@@ -489,7 +489,7 @@ impl SearchResult {
             path: None,
             size: stream_info.size.length,
             frs: record.frs,
-            parent_frs: u64::from(name_info.parent_frs),
+            parent_frs: name_info.parent_frs,
             is_directory,
             stream_name: index.stream_name(stream_info).to_owned(),
             name_index: name_idx,
@@ -1212,7 +1212,7 @@ mod tests {
         let root = index.get_or_create(ROOT_FRS);
         root.stdinfo.set_directory(true);
         root.first_name.name = IndexNameRef::new(root_name_offset, 1, true, 0);
-        root.first_name.parent_frs = u32::try_from(ROOT_FRS).unwrap(); // Root points to itself
+        root.first_name.parent_frs = ROOT_FRS; // Root points to itself
 
         // Add files with different extensions
         let files = [
@@ -1232,7 +1232,7 @@ mod tests {
             let rec = index.get_or_create(frs);
             rec.first_name.name =
                 IndexNameRef::new(offset, u16::try_from(name.len()).unwrap(), true, ext_id);
-            rec.first_name.parent_frs = u32::try_from(ROOT_FRS).unwrap(); // All files are in root
+            rec.first_name.parent_frs = ROOT_FRS; // All files are in root
             rec.first_stream.size = SizeInfo {
                 length: *size,
                 allocated: *size,

@@ -73,9 +73,9 @@ pub struct NtfsBootSector {
     pub unused3: u32,
     /// Total sectors on volume.
     pub total_sectors: i64,
-    /// Logical Cluster Number of $MFT.
+    /// Logical Cluster Number of `$MFT`.
     pub mft_start_lcn: i64,
-    /// Logical Cluster Number of $MFTMirr.
+    /// Logical Cluster Number of `$MFTMirr`.
     pub mft_mirror_start_lcn: i64,
     /// Clusters per File Record Segment (can be negative for byte shift).
     pub clusters_per_file_record: i8,
@@ -184,34 +184,35 @@ impl MultiSectorHeader {
 /// `true` if all check values matched and fixup was successful,
 /// `false` if any check value was incorrect (data corruption).
 ///
-/// # Safety
+/// # Panics
 ///
-/// The buffer must be large enough to contain the USA and all sector
-/// boundaries that need to be fixed up.
+/// This function does not panic - it performs bounds checking and returns
+/// `false` if the buffer is too small.
 #[must_use]
+#[allow(clippy::indexing_slicing)] // Bounds are checked before each access
 pub fn apply_usa_fixup(buffer: &mut [u8], usa_offset: u16, usa_count: u16) -> bool {
-    let usa_offset = usa_offset as usize;
+    let usa_offset_usize = usize::from(usa_offset);
 
     // Need at least the check value
-    if usa_count < 1 || usa_offset + 2 > buffer.len() {
+    if usa_count < 1 || usa_offset_usize + 2 > buffer.len() {
         return false;
     }
 
     // Read the check value (first entry in USA)
-    let check_value = u16::from_le_bytes([buffer[usa_offset], buffer[usa_offset + 1]]);
+    let check_value = u16::from_le_bytes([buffer[usa_offset_usize], buffer[usa_offset_usize + 1]]);
 
     let mut result = true;
 
     // Process each sector (starting from sector 1, since sector 0 contains the
     // header)
-    for i in 1..usa_count {
-        let i = i as usize;
+    for sector_idx in 1..usa_count {
+        let sector_idx_usize = usize::from(sector_idx);
 
         // Offset of the last 2 bytes of this sector
-        let sector_end_offset = i * SECTOR_SIZE - 2;
+        let sector_end_offset = sector_idx_usize * SECTOR_SIZE - 2;
 
         // Offset of the replacement value in the USA
-        let usa_entry_offset = usa_offset + i * 2;
+        let usa_entry_offset = usa_offset_usize + sector_idx_usize * 2;
 
         // Check bounds
         if sector_end_offset + 2 > buffer.len() || usa_entry_offset + 2 > buffer.len() {
@@ -539,7 +540,7 @@ impl FileNameAttribute {
     #[must_use]
     pub const fn parent_sequence(&self) -> u16 {
         #[allow(clippy::cast_possible_truncation)]
-        let seq = (self.parent_directory >> 48) as u16;
+        let seq = (self.parent_directory >> 48_i32) as u16;
         seq
     }
 }
@@ -590,11 +591,11 @@ pub struct ReparsePointHeader {
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct ReparseMountPointBuffer {
-    /// Offset of the substitute name in PathBuffer (in bytes).
+    /// Offset of the substitute name in `PathBuffer` (in bytes).
     pub substitute_name_offset: u16,
     /// Length of the substitute name (in bytes).
     pub substitute_name_length: u16,
-    /// Offset of the print name in PathBuffer (in bytes).
+    /// Offset of the print name in `PathBuffer` (in bytes).
     pub print_name_offset: u16,
     /// Length of the print name (in bytes).
     pub print_name_length: u16,
@@ -641,7 +642,7 @@ impl AttributeListEntry {
     #[must_use]
     pub const fn target_sequence(&self) -> u16 {
         #[allow(clippy::cast_possible_truncation)]
-        let seq = (self.file_reference >> 48) as u16;
+        let seq = (self.file_reference >> 48_i32) as u16;
         seq
     }
 }
@@ -650,7 +651,7 @@ impl AttributeListEntry {
 // Index Structures (for directories)
 // ============================================================================
 
-/// Index header (common to INDEX_ROOT and INDEX_ALLOCATION).
+/// Index header (common to `INDEX_ROOT` and `INDEX_ALLOCATION`).
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct IndexHeader {
@@ -660,14 +661,14 @@ pub struct IndexHeader {
     pub first_free_byte: u32,
     /// Allocated size of the index entries.
     pub bytes_available: u32,
-    /// Flags: 0x01 = has INDEX_ALLOCATION (large index).
+    /// Flags: 0x01 = has `INDEX_ALLOCATION` (large index).
     pub flags: u8,
     /// Reserved.
     pub reserved: [u8; 3],
 }
 
 impl IndexHeader {
-    /// Returns true if this index has an INDEX_ALLOCATION attribute.
+    /// Returns true if this index has an `INDEX_ALLOCATION` attribute.
     #[must_use]
     pub const fn has_index_allocation(&self) -> bool {
         (self.flags & 0x01) != 0
@@ -680,7 +681,7 @@ impl IndexHeader {
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct IndexRoot {
-    /// Type of the indexed attribute (usually 0x30 for $FILE_NAME).
+    /// Type of the indexed attribute (usually 0x30 for `$FILE_NAME`).
     pub indexed_attribute_type: u32,
     /// Collation rule.
     pub collation_rule: u32,
@@ -728,7 +729,7 @@ pub const fn file_reference_to_frs(file_reference: u64) -> u64 {
 #[must_use]
 pub const fn file_reference_to_sequence(file_reference: u64) -> u16 {
     #[allow(clippy::cast_possible_truncation)]
-    let seq = (file_reference >> 48) as u16;
+    let seq = (file_reference >> 48_i32) as u16;
     seq
 }
 
@@ -744,7 +745,7 @@ pub struct AttributeIterator<'a> {
     data: &'a [u8],
     /// Current offset within the buffer.
     offset: usize,
-    /// Maximum valid offset (bytes_in_use from header).
+    /// Maximum valid offset (`bytes_in_use` from header).
     max_offset: usize,
 }
 
@@ -758,7 +759,7 @@ impl<'a> AttributeIterator<'a> {
     ///
     /// `None` if the buffer is too small or doesn't contain a valid record.
     #[must_use]
-    #[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
+    #[allow(unsafe_code, clippy::missing_const_for_fn)] // Required: ptr::read for packed NTFS struct; can't be const due to unsafe
     pub fn new(record: &'a [u8]) -> Option<Self> {
         if record.len() < size_of::<FileRecordSegmentHeader>() {
             return None;
@@ -800,7 +801,7 @@ pub struct AttributeRef<'a> {
 impl<'a> AttributeRef<'a> {
     /// Returns the attribute type.
     #[must_use]
-    pub fn attribute_type(&self) -> Option<AttributeType> {
+    pub const fn attribute_type(&self) -> Option<AttributeType> {
         AttributeType::from_u32(self.header.type_code)
     }
 
@@ -812,7 +813,7 @@ impl<'a> AttributeRef<'a> {
 
     /// Returns the resident attribute value, if this is a resident attribute.
     #[must_use]
-    #[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
+    #[allow(unsafe_code, clippy::indexing_slicing)] // Required: ptr::read for packed NTFS struct; bounds checked
     pub fn resident_value(&self) -> Option<&'a [u8]> {
         if self.is_non_resident() {
             return None;
@@ -840,7 +841,7 @@ impl<'a> AttributeRef<'a> {
     /// Returns the non-resident attribute data, if this is a non-resident
     /// attribute.
     #[must_use]
-    #[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
+    #[allow(unsafe_code, clippy::indexing_slicing)] // Required: ptr::read for packed NTFS struct; bounds checked
     pub fn non_resident_data(&self) -> Option<NonResidentAttributeData> {
         if !self.is_non_resident() {
             return None;
@@ -867,6 +868,7 @@ impl<'a> AttributeRef<'a> {
 
     /// Returns the attribute name, if present.
     #[must_use]
+    #[allow(clippy::indexing_slicing)] // Bounds checked before access
     pub fn name(&self) -> Option<&'a [u16]> {
         if self.header.name_length == 0 {
             return None;
@@ -880,21 +882,18 @@ impl<'a> AttributeRef<'a> {
             return None;
         }
 
-        // Safety: We've verified bounds, and u16 alignment is handled by
-        // slice::from_raw_parts
+        // Bounds verified above
         let name_bytes = &self.data[name_offset..name_end];
         if name_bytes.len() % 2 != 0 {
             return None;
         }
 
         // Convert bytes to u16 slice (handling potential unaligned access)
-        let mut name = Vec::with_capacity(name_length);
-        for i in 0..name_length {
-            let offset = i * 2;
-            name.push(u16::from_le_bytes([
-                name_bytes[offset],
-                name_bytes[offset + 1],
-            ]));
+        // Note: We build a Vec but return None since we can't return a reference to
+        // local data
+        for idx in 0..name_length {
+            let offset = idx * 2;
+            let _char = u16::from_le_bytes([name_bytes[offset], name_bytes[offset + 1]]);
         }
 
         // This is a bit awkward - we need to return a reference but we created a Vec
@@ -906,7 +905,7 @@ impl<'a> AttributeRef<'a> {
 impl<'a> Iterator for AttributeIterator<'a> {
     type Item = AttributeRef<'a>;
 
-    #[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
+    #[allow(unsafe_code, clippy::indexing_slicing)] // Required: ptr::read for packed NTFS struct; bounds checked
     fn next(&mut self) -> Option<Self::Item> {
         // Check if we've reached the end
         if self.offset + size_of::<AttributeRecordHeader>() > self.max_offset {
@@ -966,6 +965,7 @@ impl DataRun {
 
     /// Returns the byte offset of this run on the volume.
     #[must_use]
+    #[allow(clippy::cast_sign_loss)] // lcn is checked to be positive before cast
     pub fn byte_offset(&self, bytes_per_cluster: u32) -> u64 {
         if self.lcn <= 0 {
             0
@@ -997,6 +997,7 @@ impl DataRun {
 ///
 /// A vector of `DataRun` entries describing the physical layout.
 #[must_use]
+#[allow(clippy::similar_names, clippy::indexing_slicing)] // vcn and lcn are standard NTFS terms; bounds checked
 pub fn parse_data_runs(data: &[u8], lowest_vcn: i64) -> Vec<DataRun> {
     let mut runs = Vec::new();
     let mut offset = 0;
@@ -1012,7 +1013,7 @@ pub fn parse_data_runs(data: &[u8], lowest_vcn: i64) -> Vec<DataRun> {
         }
 
         let length_size = (header & 0x0F) as usize;
-        let offset_size = ((header >> 4) & 0x0F) as usize;
+        let offset_size = ((header >> 4_i32) & 0x0F) as usize;
 
         offset += 1;
 
@@ -1042,13 +1043,18 @@ pub fn parse_data_runs(data: &[u8], lowest_vcn: i64) -> Vec<DataRun> {
             lcn: if offset_size > 0 { current_lcn } else { 0 },
         });
 
-        current_vcn += run_length as i64;
+        // run_length is u64, cast to i64 is safe for reasonable cluster counts
+        #[allow(clippy::cast_possible_wrap)]
+        {
+            current_vcn += run_length as i64;
+        }
     }
 
     runs
 }
 
 /// Parses a variable-length unsigned integer (little-endian).
+#[allow(clippy::single_call_fn)]
 fn parse_variable_length_unsigned(data: &[u8]) -> u64 {
     let mut value: u64 = 0;
     for (i, &byte) in data.iter().enumerate() {
@@ -1058,14 +1064,16 @@ fn parse_variable_length_unsigned(data: &[u8]) -> u64 {
 }
 
 /// Parses a variable-length signed integer (little-endian, sign-extended).
+#[allow(clippy::single_call_fn)]
+#[allow(clippy::indexing_slicing)] // data.is_empty() check ensures data.len() >= 1
 fn parse_variable_length_signed(data: &[u8]) -> i64 {
     if data.is_empty() {
         return 0;
     }
 
     let mut value: i64 = 0;
-    for (i, &byte) in data.iter().enumerate() {
-        value |= i64::from(byte) << (i * 8);
+    for (idx, &byte) in data.iter().enumerate() {
+        value |= i64::from(byte) << (idx * 8);
     }
 
     // Sign-extend if the high bit of the last byte is set
@@ -1091,7 +1099,7 @@ fn parse_variable_length_signed(data: &[u8]) -> i64 {
 ///
 /// A vector of `DataRun` entries, or an empty vector if parsing fails.
 #[must_use]
-#[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
+#[allow(unsafe_code, clippy::indexing_slicing)] // Required: ptr::read for packed NTFS struct; bounds checked
 pub fn extract_data_runs_from_attribute(attr_data: &[u8]) -> Vec<DataRun> {
     if attr_data.len() < size_of::<AttributeRecordHeader>() {
         return Vec::new();
@@ -1165,6 +1173,7 @@ pub struct StreamInfo {
 /// Matches the C++ `StandardInfo` struct with 15+ boolean flags
 /// for easier querying in Polars.
 #[derive(Debug, Clone, Copy, Default)]
+#[allow(clippy::struct_excessive_bools)] // NTFS has many boolean flags, this is intentional
 pub struct ExtendedStandardInfo {
     /// File creation time (Unix microseconds).
     pub created: i64,
@@ -1241,8 +1250,9 @@ impl ExtendedStandardInfo {
 
     /// Returns the raw flags as u32.
     #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // Can't be const due to if statements
     pub fn to_raw_flags(&self) -> u32 {
-        let mut flags = 0u32;
+        let mut flags = 0_u32;
         if self.is_readonly {
             flags |= 0x0001;
         }
@@ -1305,6 +1315,7 @@ impl ExtendedStandardInfo {
 // Size assertions
 // ============================================================================
 
+#[allow(clippy::missing_assert_message)] // These are compile-time size checks, messages not needed
 const _: () = {
     // Verify struct sizes match expected on-disk sizes
     assert!(size_of::<NtfsBootSector>() == 512);
@@ -1325,8 +1336,8 @@ mod tests {
     #[test]
     fn test_filetime_conversion() {
         // Test known value: 2024-01-01 00:00:00 UTC
-        // FILETIME: 133480416000000000
-        let filetime: i64 = 133_480_416_000_000_000;
+        // FILETIME: 133485408000000000 (100ns intervals since 1601-01-01)
+        let filetime: i64 = 133_485_408_000_000_000;
         let unix_micros = filetime_to_unix_micros(filetime);
 
         // Expected: 1704067200 seconds = 1704067200000000 microseconds
@@ -1336,7 +1347,7 @@ mod tests {
     #[test]
     fn test_file_reference_extraction() {
         // File reference with FRS=12345 and sequence=7
-        let file_ref: u64 = (7_u64 << 48) | 12345;
+        let file_ref: u64 = (7_u64 << 48) | 0x3039;
 
         assert_eq!(file_reference_to_frs(file_ref), 12345);
         assert_eq!(file_reference_to_sequence(file_ref), 7);

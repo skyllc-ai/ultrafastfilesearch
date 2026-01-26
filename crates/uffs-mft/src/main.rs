@@ -38,13 +38,9 @@
 #[cfg(not(windows))]
 use core::future::Future;
 use std::io::stdout;
-#[cfg(windows)]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-#[cfg(windows)]
-use anyhow::Context;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 // Dev-dependencies (used in benchmarks only)
 #[cfg(test)]
@@ -91,7 +87,6 @@ use {chrono as _, hostname as _, num_cpus as _};
 /// - Milliseconds+: `500 ms 250 μs`
 /// - Microseconds+: `250 μs 100 ns`
 /// - Nanoseconds only: `100 ns`
-#[cfg(windows)]
 fn format_duration(duration: core::time::Duration) -> String {
     let total_seconds = duration.as_secs();
     let seconds = total_seconds % 60;
@@ -128,7 +123,7 @@ fn format_duration(duration: core::time::Duration) -> String {
 /// - < 1 GB: `123.45 MB`
 /// - < 1 TB: `123.45 GB`
 /// - >= 1 TB: `123.45 TB`
-#[cfg(windows)]
+#[allow(clippy::cast_precision_loss, clippy::float_arithmetic)] // Precision loss acceptable for display
 fn format_bytes(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{bytes:>4} B")
@@ -149,7 +144,6 @@ fn format_bytes(bytes: u64) -> String {
 /// Formats a number with comma separators for readability.
 ///
 /// Examples: 1234567 → "1,234,567", 1000 → "1,000"
-#[cfg(windows)]
 fn format_number_commas(num: u64) -> String {
     let num_str = num.to_string();
     let mut result = String::with_capacity(num_str.len() + num_str.len() / 3);
@@ -166,14 +160,11 @@ fn format_number_commas(num: u64) -> String {
 ///
 /// On Windows, `std::fs::canonicalize` returns extended-length paths with
 /// the `\\?\` prefix. This function strips that prefix for cleaner output.
-#[cfg(windows)]
 fn clean_path_for_display(path: &Path) -> PathBuf {
     let path_str = path.to_string_lossy();
-    if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
-        PathBuf::from(stripped)
-    } else {
-        path.to_path_buf()
-    }
+    path_str
+        .strip_prefix(r"\\?\")
+        .map_or_else(|| path.to_path_buf(), PathBuf::from)
 }
 
 /// `uffs_mft`: Low-level NTFS MFT reading tool.
@@ -793,23 +784,9 @@ async fn run() -> Result<()> {
     // Clap already provides excellent error messages with usage hints
     let cli = Cli::parse();
 
-    // Platform check - this tool only works on Windows
-    #[cfg(not(windows))]
-    {
-        // Reference cli.verbose to avoid unused variable warning
-        if cli.verbose {
-            // Verbose mode requested but not available on non-Windows
-        }
-        anyhow::bail!(
-            "uffs_mft only works on Windows.\n\
-             It requires direct access to the NTFS Master File Table via Windows APIs."
-        );
-    }
-
-    #[cfg(windows)]
-    {
-        dispatch_command(cli.command).await
-    }
+    // Dispatch command (platform-specific functionality handled in
+    // dispatch_command)
+    dispatch_command(cli.command).await
 }
 
 /// Dispatch CLI commands to their handlers.
@@ -858,7 +835,7 @@ async fn dispatch_command(command: Commands) -> Result<()> {
             output,
             info_only,
             build_index,
-        } => cmd_load(&input, output.as_deref(), info_only, build_index).await,
+        } => cmd_load(&input, output.as_deref(), info_only, build_index),
         Commands::BenchmarkMft { drive } => cmd_benchmark_mft(drive).await,
         Commands::BenchmarkIndex { drive } => cmd_benchmark_index(drive).await,
         Commands::BenchmarkIndexLean {
@@ -905,6 +882,48 @@ async fn dispatch_command(command: Commands) -> Result<()> {
             no_cache,
             ttl,
         } => cmd_index_all(drives, no_cache, ttl).await,
+    }
+}
+
+/// Command dispatcher for non-Windows platforms (limited functionality).
+///
+/// Only the `load` command works on non-Windows platforms.
+#[cfg(not(windows))]
+#[allow(clippy::unused_async, clippy::single_call_fn)] // Async for API parity with Windows
+async fn dispatch_command(command: Commands) -> Result<()> {
+    match command {
+        Commands::Load {
+            input,
+            output,
+            info_only,
+            build_index,
+        } => cmd_load(&input, output.as_deref(), info_only, build_index),
+        // All other commands require Windows (direct NTFS volume access)
+        Commands::Read { .. }
+        | Commands::Info { .. }
+        | Commands::Drives
+        | Commands::Bench { .. }
+        | Commands::BenchAll { .. }
+        | Commands::BitmapDiag { .. }
+        | Commands::Save { .. }
+        | Commands::BenchmarkMft { .. }
+        | Commands::BenchmarkIndex { .. }
+        | Commands::BenchmarkIndexLean { .. }
+        | Commands::BenchmarkMultiVolume { .. }
+        | Commands::UsnInfo { .. }
+        | Commands::UsnRead { .. }
+        | Commands::IndexSave { .. }
+        | Commands::IndexLoad { .. }
+        | Commands::CacheStatus { .. }
+        | Commands::CacheGet { .. }
+        | Commands::CacheClear { .. }
+        | Commands::IndexUpdate { .. }
+        | Commands::IndexAll { .. } => {
+            anyhow::bail!(
+                "This command requires Windows.\n\
+                 Only the 'load' command works on macOS/Linux for parsing saved MFT files."
+            );
+        }
     }
 }
 
@@ -2534,13 +2553,18 @@ async fn cmd_save(
 
 /// Load MFT from a saved file and optionally export.
 ///
-/// Currently Windows-only due to parsing code being in Windows-only io module.
-/// TODO: Move parsing functions to cross-platform module to enable macOS/Linux
-/// support.
-#[cfg(windows)]
-async fn cmd_load(
+/// Works on all platforms - parses NTFS structures from saved file.
+#[allow(
+    clippy::too_many_lines,
+    clippy::print_stdout,
+    clippy::shadow_reuse,
+    clippy::min_ident_chars,
+    clippy::expect_used,
+    clippy::single_call_fn
+)] // CLI output function with complex display logic
+fn cmd_load(
     input: &Path,
-    output: Option<&Path>,
+    output_path: Option<&Path>,
     info_only: bool,
     build_index: bool,
 ) -> Result<()> {
@@ -2549,7 +2573,7 @@ async fn cmd_load(
     use uffs_mft::{MftReader, load_raw_mft_header};
 
     // Validate arguments upfront - don't print anything if we're going to fail
-    if !info_only && !build_index && output.is_none() {
+    if !info_only && !build_index && output_path.is_none() {
         anyhow::bail!("--output is required when not using --info-only or --build-index");
     }
 
@@ -2562,7 +2586,7 @@ async fn cmd_load(
     // Get absolute path and file size for display
     let abs_path = std::fs::canonicalize(input).unwrap_or_else(|_| input.to_path_buf());
     let abs_path = clean_path_for_display(&abs_path);
-    let file_size = std::fs::metadata(input).map(|meta| meta.len()).unwrap_or(0);
+    let file_size = std::fs::metadata(input).map_or(0, |meta| meta.len());
 
     // Print formatted output
     println!("═══════════════════════════════════════════════════════════════");
@@ -2577,11 +2601,11 @@ async fn cmd_load(
     println!("📊 MFT STRUCTURE");
     println!(
         "  Total records:        {}",
-        format_number_commas(header.record_count.into())
+        format_number_commas(header.record_count)
     );
     println!(
         "  Bytes per record:     {}",
-        format_number_commas(header.record_size.into())
+        format_number_commas(u64::from(header.record_size))
     );
     println!(
         "  Original MFT size:   {}",
@@ -2618,18 +2642,16 @@ async fn cmd_load(
         let dir_count = df
             .column("is_directory")
             .ok()
-            .and_then(|c| c.bool().ok())
-            .map(|b| b.sum().unwrap_or(0) as u64)
-            .unwrap_or(0);
+            .and_then(|col| col.bool().ok())
+            .map_or(0, |bool_col| u64::from(bool_col.sum().unwrap_or(0)));
         let file_count = (total_parsed as u64).saturating_sub(dir_count);
 
         // Helper closure to count bool columns
         let count_bool = |name: &str| -> u64 {
             df.column(name)
                 .ok()
-                .and_then(|c| c.bool().ok())
-                .map(|b| b.sum().unwrap_or(0) as u64)
-                .unwrap_or(0)
+                .and_then(|col| col.bool().ok())
+                .map_or(0, |bool_col| u64::from(bool_col.sum().unwrap_or(0)))
         };
 
         let hidden_count = count_bool("is_hidden");
@@ -2642,9 +2664,8 @@ async fn cmd_load(
         let total_size: u64 = df
             .column("size")
             .ok()
-            .and_then(|c| c.u64().ok())
-            .map(|s| s.iter().flatten().sum())
-            .unwrap_or(0);
+            .and_then(|col| col.u64().ok())
+            .map_or(0, |size_col| size_col.iter().flatten().sum());
 
         println!();
         println!("📊 FILE STATISTICS");
@@ -2692,8 +2713,6 @@ async fn cmd_load(
 
     // Build index and show tree metrics (for debugging)
     if build_index {
-        use uffs_mft::index::MftIndex;
-
         println!();
         println!("🔨 BUILDING MFTINDEX...");
 
@@ -2720,9 +2739,9 @@ async fn cmd_load(
         );
         println!("  {}", "─".repeat(60));
 
-        let mut shown = 0;
+        let mut shown = 0_i32;
         for record in &index.records {
-            if record.is_directory() && shown < 10 {
+            if record.is_directory() && shown < 10_i32 {
                 println!(
                     "  {:<8} {:<12} {:<15} {:<15}",
                     record.frs,
@@ -2730,7 +2749,7 @@ async fn cmd_load(
                     format_bytes(record.treesize),
                     format_bytes(record.tree_allocated)
                 );
-                shown += 1;
+                shown += 1_i32;
             }
         }
 
@@ -2756,24 +2775,51 @@ async fn cmd_load(
     }
 
     // Parse and export (output is guaranteed to be Some by upfront validation)
-    let output = output.expect("output validated at function start");
+    let output = output_path.expect("output validated at function start");
 
     // Determine output format from extension
     let ext = output
         .extension()
-        .and_then(|e| e.to_str())
+        .and_then(|ext| ext.to_str())
         .unwrap_or("parquet");
 
     let format_name = if ext == "csv" { "CSV" } else { "Parquet" };
 
     println!();
-    println!("📤 EXPORTING TO {}...", format_name);
+    println!("📤 EXPORTING TO {format_name}...");
+    println!("  Building MftIndex with tree metrics...");
 
-    let df = MftReader::load_raw_to_dataframe(input)
-        .with_context(|| format!("Failed to parse raw MFT from {}", input.display()))?;
+    // Build MftIndex (includes tree metrics computation)
+    let build_start = Instant::now();
+    let index = MftReader::load_raw_to_index(input)
+        .with_context(|| format!("Failed to build index from {}", input.display()))?;
+    let build_time = build_start.elapsed();
+
+    println!(
+        "  ✅ Index built in {} ({} records)",
+        format_duration(build_time),
+        format_number_commas(index.len() as u64)
+    );
+
+    // Convert MftIndex to DataFrame (includes tree metrics + path!)
+    println!("  Converting to DataFrame with paths...");
+    let df_start = Instant::now();
+    let mut df = index
+        .to_dataframe()
+        .with_context(|| "Failed to convert index to DataFrame")?;
+    let df_time = df_start.elapsed();
+
+    println!(
+        "  ✅ DataFrame created in {} ({} columns)",
+        format_duration(df_time),
+        df.width()
+    );
 
     let parsed_count = df.height();
 
+    // Export to file
+    println!("  Writing {format_name} file...");
+    let export_start = Instant::now();
     match ext {
         "csv" => {
             use std::fs::File;
@@ -2781,31 +2827,36 @@ async fn cmd_load(
             use uffs_polars::{CsvWriter, SerWriter};
 
             let file = File::create(output)?;
-            let mut df = df;
             CsvWriter::new(file).finish(&mut df)?;
         }
         _ => {
-            let mut df = df;
             MftReader::save_parquet(&mut df, output)?;
         }
     }
+    let export_time = export_start.elapsed();
+
+    println!("  ✅ Export completed in {}", format_duration(export_time));
 
     // Get absolute path and file size after creation
     let output_abs = std::fs::canonicalize(output).unwrap_or_else(|_| output.to_path_buf());
     let output_abs = clean_path_for_display(&output_abs);
-    let output_size = std::fs::metadata(output)
-        .map(|meta| meta.len())
-        .unwrap_or(0);
+    let output_size = std::fs::metadata(output).map_or(0, |meta| meta.len());
 
     println!();
     println!("📁 OUTPUT FILE");
     println!("  Path:                 {}", output_abs.display());
-    println!("  Format:               {}", format_name);
+    println!("  Format:               {format_name}");
     println!("  File size:           {}", format_bytes(output_size));
     println!(
         "  Records exported:     {}",
         format_number_commas(parsed_count as u64)
     );
+    println!("  Columns:              {} columns including:", df.width());
+    println!("                        - Core: frs, parent_frs, name, size, allocated_size");
+    println!("                        - Timestamps: created, modified, accessed, mft_changed");
+    println!("                        - Flags: is_directory, is_readonly, is_hidden, etc.");
+    println!("                        - Tree metrics: descendants, treesize, tree_allocated");
+    println!("                        - Path: full resolved path (e.g., C:\\Users\\file.txt)");
 
     let elapsed = start_time.elapsed();
     println!();

@@ -413,10 +413,13 @@ impl IndexNameRef {
 // LinkInfo - Hard link chain entry
 // ============================================================================
 
-/// Hard link information (matches C++ `LinkInfo`).
+/// Hard link information.
 ///
 /// Most files have only one name, stored inline in `FileRecord::first_name`.
 /// Files with multiple hard links form a linked list via `next_entry`.
+///
+/// **Note**: Changed from C++ implementation - uses u64 for `parent_frs`
+/// instead of u32 to support all valid NTFS volumes (48-bit FRS values).
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct LinkInfo {
@@ -424,8 +427,8 @@ pub struct LinkInfo {
     pub next_entry: u32,
     /// Filename reference
     pub name: IndexNameRef,
-    /// Parent directory FRS
-    pub parent_frs: u32,
+    /// Parent directory FRS (u64 to support all valid NTFS volumes)
+    pub parent_frs: u64,
 }
 
 // ============================================================================
@@ -850,16 +853,19 @@ impl ExtensionIndex {
 // ChildInfo - Directory child entry
 // ============================================================================
 
-/// Directory child entry (matches C++ `ChildInfo`).
+/// Directory child entry.
 ///
 /// Directories maintain a linked list of their children for traversal.
+///
+/// **Note**: Changed from C++ implementation - uses u64 for `child_frs` instead
+/// of u32 to support all valid NTFS volumes (48-bit FRS values).
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct ChildInfo {
     /// Index of next `ChildInfo` in `MftIndex::children`, or `NO_ENTRY`
     pub next_entry: u32,
-    /// FRS of the child file/directory
-    pub child_frs: u32,
+    /// FRS of the child file/directory (u64 to support all valid NTFS volumes)
+    pub child_frs: u64,
     /// Which name index (for hard links)
     pub name_index: u16,
 }
@@ -914,7 +920,7 @@ impl FileRecord {
                     offset: NO_ENTRY,
                     meta: 0,
                 },
-                parent_frs: NO_ENTRY,
+                parent_frs: u64::from(NO_ENTRY),
             },
             first_stream: IndexStreamInfo {
                 next_entry: NO_ENTRY,
@@ -1280,7 +1286,7 @@ impl MftIndex {
             }
 
             // Child of system metafile detection
-            let parent_frs = u64::from(record.first_name.parent_frs);
+            let parent_frs = record.first_name.parent_frs;
             if parent_frs <= SYSTEM_METAFILE_MAX_FRS && parent_frs != ROOT_FRS_LOCAL {
                 stats.system_child_count += 1;
             }
@@ -1558,10 +1564,10 @@ impl MftIndex {
 
                 // Get child records
                 let rec_a = self
-                    .frs_to_idx_opt(u64::from(child_a.child_frs))
+                    .frs_to_idx_opt(child_a.child_frs)
                     .and_then(|idx| self.records.get(idx));
                 let rec_b = self
-                    .frs_to_idx_opt(u64::from(child_b.child_frs))
+                    .frs_to_idx_opt(child_b.child_frs)
                     .and_then(|idx| self.records.get(idx));
 
                 // Get filenames (use appropriate name index for hard links)
@@ -1667,7 +1673,7 @@ impl MftIndex {
             .take(n)
             .map(|(idx, record)| {
                 let frs = record.frs;
-                let parent_frs = u64::from(record.first_name.parent_frs);
+                let parent_frs = record.first_name.parent_frs;
                 let size = record.first_stream.size.length;
                 let allocated = record.first_stream.size.allocated;
                 (idx, frs, parent_frs, size, allocated)
@@ -2199,7 +2205,7 @@ impl MftIndex {
         }
 
         // Walk up the parent chain from this name's parent
-        let mut current_frs = u64::from(name_info.parent_frs);
+        let mut current_frs = name_info.parent_frs;
 
         while current_frs != u64::from(NO_ENTRY) && current_frs != ROOT_FRS {
             if let Some(parent_record) = self.find(current_frs) {
@@ -2209,10 +2215,10 @@ impl MftIndex {
                 }
 
                 let parent_frs = parent_record.first_name.parent_frs;
-                if parent_frs == NO_ENTRY || u64::from(parent_frs) == current_frs {
+                if parent_frs == u64::from(NO_ENTRY) || parent_frs == current_frs {
                     break;
                 }
-                current_frs = u64::from(parent_frs);
+                current_frs = parent_frs;
             } else {
                 break;
             }
@@ -2271,13 +2277,13 @@ impl MftIndex {
 
             // Move to parent
             let parent_frs = record.first_name.parent_frs;
-            if parent_frs == NO_ENTRY || u64::from(parent_frs) == current_frs {
+            if parent_frs == u64::from(NO_ENTRY) || parent_frs == current_frs {
                 break; // Root or self-reference
             }
-            if u64::from(parent_frs) == ROOT_FRS {
+            if parent_frs == ROOT_FRS {
                 break; // Reached root
             }
-            current_frs = u64::from(parent_frs);
+            current_frs = parent_frs;
         }
 
         // Reverse and join (backslash for C++ parity)
@@ -2393,7 +2399,7 @@ impl PathResolver {
             };
             chain.push(current_idx);
 
-            let parent_frs = u64::from(record.first_name.parent_frs);
+            let parent_frs = record.first_name.parent_frs;
             if parent_frs == ROOT_FRS
                 || parent_frs == record.frs
                 || parent_frs == u64::from(NO_ENTRY)
@@ -2448,7 +2454,7 @@ impl PathResolver {
             return self.materialize_path(index, idx);
         };
 
-        let parent_frs = u64::from(link.parent_frs);
+        let parent_frs = link.parent_frs;
         let parent_path = if let Some(pidx) = index.frs_to_idx_opt(parent_frs) {
             self.materialize_path(index, pidx)
         } else if parent_frs == ROOT_FRS {
@@ -2502,7 +2508,7 @@ impl PathResolver {
                 let Some(child_info) = index.children.get(child_entry as usize) else {
                     break;
                 };
-                if let Some(child_idx) = index.frs_to_idx_opt(u64::from(child_info.child_frs)) {
+                if let Some(child_idx) = index.frs_to_idx_opt(child_info.child_frs) {
                     if let Some(state) = self.state.get_mut(child_idx) {
                         if *state == path_state::UNSEEN {
                             *state = path_state::INVALID;
@@ -2543,7 +2549,7 @@ impl PathResolver {
                     break path_state::INVALID;
                 };
 
-                let parent_frs = u64::from(record.first_name.parent_frs);
+                let parent_frs = record.first_name.parent_frs;
 
                 if parent_frs == ROOT_FRS {
                     break path_state::VALID;
@@ -3393,12 +3399,12 @@ mod tests {
             let ext_id = index.intern_extension(name);
             let rec = index.get_or_create(child_frs);
             rec.first_name.name = IndexNameRef::new(offset, name.len() as u16, true, ext_id);
-            rec.first_name.parent_frs = dir_frs as u32;
+            rec.first_name.parent_frs = dir_frs;
 
             // Add child to directory's children list
             let child_info = ChildInfo {
                 next_entry: NO_ENTRY,
-                child_frs: child_frs as u32,
+                child_frs,
                 name_index: 0,
             };
             let child_idx = index.children.len() as u32;
@@ -3425,8 +3431,7 @@ mod tests {
 
         while current_idx != NO_ENTRY {
             let child = &index.children[current_idx as usize];
-            let child_frs = u64::from(child.child_frs);
-            let child_idx = index.frs_to_idx_opt(child_frs).unwrap();
+            let child_idx = index.frs_to_idx_opt(child.child_frs).unwrap();
             let name = index.get_name(&index.records[child_idx].first_name.name);
             sorted_names.push(name.to_string());
             current_idx = child.next_entry;
@@ -3469,11 +3474,11 @@ mod tests {
         let ext_id = index.intern_extension("only_child.txt");
         let rec = index.get_or_create(child_frs);
         rec.first_name.name = IndexNameRef::new(offset, 14, true, ext_id);
-        rec.first_name.parent_frs = dir_frs as u32;
+        rec.first_name.parent_frs = dir_frs;
 
         let child_info = ChildInfo {
             next_entry: NO_ENTRY,
-            child_frs: child_frs as u32,
+            child_frs,
             name_index: 0,
         };
         let child_idx = index.children.len() as u32;
@@ -3510,11 +3515,11 @@ mod tests {
             let ext_id = index.intern_extension(&name);
             let rec = index.get_or_create(child_frs);
             rec.first_name.name = IndexNameRef::new(offset, name.len() as u16, true, ext_id);
-            rec.first_name.parent_frs = dir_frs as u32;
+            rec.first_name.parent_frs = dir_frs;
 
             let child_info = ChildInfo {
                 next_entry: NO_ENTRY,
-                child_frs: child_frs as u32,
+                child_frs,
                 name_index: 0,
             };
             let child_idx = index.children.len() as u32;
@@ -3546,8 +3551,7 @@ mod tests {
                 break;
             }
             let child = &index.children[current_idx as usize];
-            let child_frs = u64::from(child.child_frs);
-            let child_idx = index.frs_to_idx_opt(child_frs).unwrap();
+            let child_idx = index.frs_to_idx_opt(child.child_frs).unwrap();
             let name = index.get_name(&index.records[child_idx].first_name.name);
             sorted_names.push(name.to_string());
             current_idx = child.next_entry;
@@ -3582,7 +3586,7 @@ mod tests {
         let root_frs = 5_u64;
         let root_rec = index.get_or_create(root_frs);
         root_rec.stdinfo.set_directory(true);
-        root_rec.first_name.parent_frs = root_frs as u32; // Self-parent
+        root_rec.first_name.parent_frs = root_frs; // Self-parent
 
         // dir1
         let dir1_frs = 100_u64;
@@ -3590,14 +3594,14 @@ mod tests {
         let rec = index.get_or_create(dir1_frs);
         rec.stdinfo.set_directory(true);
         rec.first_name.name = IndexNameRef::new(offset, 4, true, IndexNameRef::NO_EXTENSION);
-        rec.first_name.parent_frs = root_frs as u32;
+        rec.first_name.parent_frs = root_frs;
 
         // file1.txt (child of dir1)
         let file1_frs = 200_u64;
         let offset = index.add_name("file1.txt");
         let rec = index.get_or_create(file1_frs);
         rec.first_name.name = IndexNameRef::new(offset, 9, true, IndexNameRef::NO_EXTENSION);
-        rec.first_name.parent_frs = dir1_frs as u32;
+        rec.first_name.parent_frs = dir1_frs;
         rec.first_stream.size = SizeInfo {
             length: 1000,
             allocated: 4096,
@@ -3608,7 +3612,7 @@ mod tests {
         let offset = index.add_name("file2.txt");
         let rec = index.get_or_create(file2_frs);
         rec.first_name.name = IndexNameRef::new(offset, 9, true, IndexNameRef::NO_EXTENSION);
-        rec.first_name.parent_frs = dir1_frs as u32;
+        rec.first_name.parent_frs = dir1_frs;
         rec.first_stream.size = SizeInfo {
             length: 2000,
             allocated: 4096,
@@ -3619,7 +3623,7 @@ mod tests {
         let offset = index.add_name("file3.txt");
         let rec = index.get_or_create(file3_frs);
         rec.first_name.name = IndexNameRef::new(offset, 9, true, IndexNameRef::NO_EXTENSION);
-        rec.first_name.parent_frs = root_frs as u32;
+        rec.first_name.parent_frs = root_frs;
         rec.first_stream.size = SizeInfo {
             length: 500,
             allocated: 4096,
@@ -3674,7 +3678,7 @@ mod tests {
         let root_frs = 5_u64;
         let root_rec = index.get_or_create(root_frs);
         root_rec.stdinfo.set_directory(true);
-        root_rec.first_name.parent_frs = root_frs as u32;
+        root_rec.first_name.parent_frs = root_frs;
 
         // dir1
         let dir1_frs = 100_u64;
@@ -3682,7 +3686,7 @@ mod tests {
         let rec = index.get_or_create(dir1_frs);
         rec.stdinfo.set_directory(true);
         rec.first_name.name = IndexNameRef::new(offset, 4, true, IndexNameRef::NO_EXTENSION);
-        rec.first_name.parent_frs = root_frs as u32;
+        rec.first_name.parent_frs = root_frs;
 
         // dir2
         let dir2_frs = 101_u64;
@@ -3690,7 +3694,7 @@ mod tests {
         let rec = index.get_or_create(dir2_frs);
         rec.stdinfo.set_directory(true);
         rec.first_name.name = IndexNameRef::new(offset, 4, true, IndexNameRef::NO_EXTENSION);
-        rec.first_name.parent_frs = dir1_frs as u32;
+        rec.first_name.parent_frs = dir1_frs;
 
         // dir3
         let dir3_frs = 102_u64;
@@ -3698,14 +3702,14 @@ mod tests {
         let rec = index.get_or_create(dir3_frs);
         rec.stdinfo.set_directory(true);
         rec.first_name.name = IndexNameRef::new(offset, 4, true, IndexNameRef::NO_EXTENSION);
-        rec.first_name.parent_frs = dir2_frs as u32;
+        rec.first_name.parent_frs = dir2_frs;
 
         // file.txt
         let file_frs = 200_u64;
         let offset = index.add_name("file.txt");
         let rec = index.get_or_create(file_frs);
         rec.first_name.name = IndexNameRef::new(offset, 8, true, IndexNameRef::NO_EXTENSION);
-        rec.first_name.parent_frs = dir3_frs as u32;
+        rec.first_name.parent_frs = dir3_frs;
         rec.first_stream.size = SizeInfo {
             length: 1000,
             allocated: 4096,
@@ -3762,7 +3766,7 @@ mod tests {
         let root_frs = 5_u64;
         let root_rec = index.get_or_create(root_frs);
         root_rec.stdinfo.set_directory(true);
-        root_rec.first_name.parent_frs = root_frs as u32;
+        root_rec.first_name.parent_frs = root_frs;
 
         let mut frs_counter = 1000_u64;
 
@@ -3779,7 +3783,7 @@ mod tests {
                 true,
                 IndexNameRef::NO_EXTENSION,
             );
-            rec.first_name.parent_frs = root_frs as u32;
+            rec.first_name.parent_frs = root_frs;
 
             // Create 100 files in each directory
             for file_idx in 0..100 {
@@ -3795,7 +3799,7 @@ mod tests {
                     true,
                     IndexNameRef::NO_EXTENSION,
                 );
-                rec.first_name.parent_frs = dir_frs as u32;
+                rec.first_name.parent_frs = dir_frs;
                 rec.first_stream.size = SizeInfo {
                     length: 1000,
                     allocated: 4096,
@@ -3945,14 +3949,14 @@ mod tests {
         let root_frs = 5;
         let root_rec = index.get_or_create(root_frs);
         root_rec.stdinfo.set_directory(true);
-        root_rec.first_name.parent_frs = u32::try_from(root_frs).unwrap(); // Self-parent
+        root_rec.first_name.parent_frs = root_frs; // Self-parent
 
         // Add 100 directories
         for dir_i in 0..100 {
             let dir_frs = 100 + dir_i;
             let rec = index.get_or_create(dir_frs);
             rec.stdinfo.set_directory(true);
-            rec.first_name.parent_frs = u32::try_from(root_frs).unwrap();
+            rec.first_name.parent_frs = root_frs;
         }
 
         // Add 1000 files per directory (100K total)
@@ -3961,7 +3965,7 @@ mod tests {
             for file_i in 0..1000 {
                 let file_frs = 10_000 + dir_i * 1000 + file_i;
                 let rec = index.get_or_create(file_frs);
-                rec.first_name.parent_frs = u32::try_from(dir_frs).unwrap();
+                rec.first_name.parent_frs = dir_frs;
                 rec.first_stream.size.length = 1024;
             }
         }
@@ -4007,7 +4011,6 @@ mod tests {
 // Polars DataFrame Conversion (optional, on-demand)
 // ============================================================================
 
-#[cfg(windows)]
 impl MftIndex {
     /// Convert the lean index to a Polars `DataFrame`.
     ///
@@ -4017,6 +4020,28 @@ impl MftIndex {
     /// - Export to Parquet/CSV
     ///
     /// For simple searches, use the lean index directly (faster).
+    ///
+    /// # Cross-Platform
+    ///
+    /// This method is cross-platform and works on all platforms.
+    ///
+    /// # Output Format
+    ///
+    /// Outputs **one row per FRS** (File Record Segment) - this is the true
+    /// `MftIndex` representation. Hard links and ADS are NOT expanded.
+    ///
+    /// For search results with expansion (matching C++ `uffs.exe` behavior),
+    /// use `IndexQuery::collect()` which expands hard links and ADS.
+    ///
+    /// # Tree Metrics
+    ///
+    /// The `DataFrame` includes tree metrics (descendants, treesize,
+    /// `tree_allocated`) that are pre-computed in the `MftIndex` via
+    /// `compute_tree_metrics()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `DataFrame` construction fails.
     pub fn to_dataframe(&self) -> crate::Result<uffs_polars::DataFrame> {
         use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
 
@@ -4040,12 +4065,18 @@ impl MftIndex {
         let mut is_sparse_vec: Vec<bool> = Vec::with_capacity(cap);
         let mut is_reparse_vec: Vec<bool> = Vec::with_capacity(cap);
         let mut flags_vec: Vec<u16> = Vec::with_capacity(cap);
+        // Tree metrics (pre-computed in MftIndex)
+        let mut descendants_vec: Vec<u32> = Vec::with_capacity(cap);
+        let mut treesize_vec: Vec<u64> = Vec::with_capacity(cap);
+        let mut tree_allocated_vec: Vec<u64> = Vec::with_capacity(cap);
+        // Path column (resolved on-demand using MftIndex::build_path)
+        let mut path_vec: Vec<String> = Vec::with_capacity(cap);
 
         // Extract data from records
         for record in &self.records {
             frs_vec.push(record.frs);
-            parent_frs_vec.push(record.first_name.parent_frs as u64);
-            name_vec.push(self.record_name(record).to_string());
+            parent_frs_vec.push(record.first_name.parent_frs);
+            name_vec.push(self.record_name(record).to_owned());
             size_vec.push(record.first_stream.size.length);
             allocated_size_vec.push(record.first_stream.size.allocated);
             created_vec.push(record.stdinfo.created);
@@ -4060,7 +4091,16 @@ impl MftIndex {
             is_encrypted_vec.push(record.stdinfo.is_encrypted());
             is_sparse_vec.push(record.stdinfo.is_sparse());
             is_reparse_vec.push(record.stdinfo.is_reparse());
+            // to_attributes() returns u32, but we only need the lower 16 bits for flags
+            // The upper bits are reserved/unused in NTFS FILE_ATTRIBUTE_* constants
+            #[allow(clippy::cast_possible_truncation)]
             flags_vec.push(record.stdinfo.to_attributes() as u16);
+            // Tree metrics (already computed)
+            descendants_vec.push(record.descendants);
+            treesize_vec.push(record.treesize);
+            tree_allocated_vec.push(record.tree_allocated);
+            // Path (resolved on-demand using MftIndex::build_path)
+            path_vec.push(self.build_path(record.frs));
         }
 
         // Build DataFrame columns
@@ -4091,6 +4131,12 @@ impl MftIndex {
             Series::new("is_sparse".into(), is_sparse_vec).into_column(),
             Series::new("is_reparse".into(), is_reparse_vec).into_column(),
             Series::new("flags".into(), flags_vec).into_column(),
+            // Tree metrics (pre-computed in MftIndex, no need to recompute!)
+            Series::new("descendants".into(), descendants_vec).into_column(),
+            Series::new("treesize".into(), treesize_vec).into_column(),
+            Series::new("tree_allocated".into(), tree_allocated_vec).into_column(),
+            // Path column (resolved using MftIndex::build_path)
+            Series::new("path".into(), path_vec).into_column(),
         ];
 
         uffs_polars::DataFrame::new_infer_height(columns).map_err(crate::MftError::from)
@@ -4098,19 +4144,25 @@ impl MftIndex {
 }
 
 // ============================================================================
-// Building MftIndex from ParsedRecords
+// Building MftIndex from ParsedRecords (Cross-Platform)
 // ============================================================================
 
-#[cfg(windows)]
 impl MftIndex {
     /// Build an `MftIndex` from a vector of parsed records.
     ///
     /// This is the fast path - directly builds the lean index without
-    /// going through Polars DataFrame.
+    /// going through Polars `DataFrame`.
     ///
-    /// Currently Windows-only due to ParsedRecord being in Windows-only io
-    /// module. TODO: Move ParsedRecord to cross-platform module.
-    pub fn from_parsed_records(volume: char, records: Vec<crate::io::ParsedRecord>) -> Self {
+    /// Works on all platforms - uses cross-platform `ParsedRecord` from parse
+    /// module.
+    #[must_use]
+    #[allow(
+        clippy::cognitive_complexity,
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::indexing_slicing
+    )]
+    pub fn from_parsed_records(volume: char, records: Vec<crate::parse::ParsedRecord>) -> Self {
         /// System metafiles are FRS 0-15 (except root at FRS 5)
         const SYSTEM_METAFILE_MAX_FRS: u64 = 15;
         const ROOT_FRS_LOCAL: u64 = 5;
@@ -4219,7 +4271,7 @@ impl MftIndex {
             let extension_id = IndexNameRef::NO_EXTENSION;
             record.first_name.name =
                 IndexNameRef::new(name_offset, name_len, is_ascii, extension_id);
-            record.first_name.parent_frs = parsed.parent_frs as u32;
+            record.first_name.parent_frs = parsed.parent_frs;
             record.name_count = parsed.names.len() as u16;
 
             // Set size from first stream
@@ -4230,7 +4282,7 @@ impl MftIndex {
             }
 
             // Build parent-child relationship
-            if parsed.parent_frs != parsed.frs && parsed.parent_frs != NO_ENTRY as u64 {
+            if parsed.parent_frs != parsed.frs && parsed.parent_frs != u64::from(NO_ENTRY) {
                 // Ensure parent exists
                 let parent_idx = {
                     let parent_frs_usize = parsed.parent_frs as usize;
@@ -4256,7 +4308,7 @@ impl MftIndex {
 
                 index.children.push(ChildInfo {
                     next_entry: old_first_child,
-                    child_frs: parsed.frs as u32,
+                    child_frs: parsed.frs,
                     name_index: 0,
                 });
             }
@@ -4288,11 +4340,12 @@ impl MftIndex {
     /// - Deduplication of records (same FRS from different fragments)
     /// - Name buffer concatenation with offset adjustment
     /// - Link/stream/child list merging
+    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
     pub fn merge_fragments(&mut self, fragments: Vec<MftIndexFragment>) {
         use tracing::debug;
 
-        let total_records: usize = fragments.iter().map(|f| f.records.len()).sum();
-        let total_names: usize = fragments.iter().map(|f| f.names.len()).sum();
+        let total_records: usize = fragments.iter().map(|frag| frag.records.len()).sum();
+        let total_names: usize = fragments.iter().map(|frag| frag.names.len()).sum();
 
         debug!(
             fragments = fragments.len(),
@@ -4304,132 +4357,7 @@ impl MftIndex {
         self.names.reserve(total_names);
 
         for fragment in fragments {
-            let name_offset_adjustment = self.names.len() as u32;
-
-            // Build extension_id remapping table
-            // Maps fragment extension_id → merged extension_id
-            let mut extension_id_map: Vec<u16> = Vec::with_capacity(fragment.extensions.len());
-
-            // Extension ID 0 is always "no extension" - no remapping needed
-            extension_id_map.push(0);
-
-            // Intern all extensions from fragment into merged table
-            for i in 1..fragment.extensions.len() {
-                if let Some(ext_str) = fragment.extensions.get_extension(i as u16) {
-                    let merged_id = self.extensions.intern(ext_str);
-                    extension_id_map.push(merged_id);
-
-                    // Merge counts and bytes
-                    let count = fragment.extensions.get_count(i as u16);
-                    let bytes = fragment.extensions.get_bytes(i as u16);
-
-                    // Add to merged table's counts/bytes
-                    let merged_idx = merged_id as usize;
-                    if merged_idx < self.extensions.counts.len() {
-                        self.extensions.counts[merged_idx] += count;
-                        self.extensions.bytes[merged_idx] += bytes;
-                    }
-                }
-            }
-
-            // Append names buffer
-            self.names.push_str(&fragment.names);
-
-            // Merge records
-            for mut record in fragment.records {
-                let frs = record.frs;
-                let frs_usize = frs as usize;
-
-                // Adjust name offsets and remap extension_id
-                if record.first_name.name.is_valid() {
-                    record.first_name.name.offset += name_offset_adjustment;
-
-                    // Remap extension_id
-                    let old_ext_id = record.first_name.name.extension_id();
-                    if (old_ext_id as usize) < extension_id_map.len() {
-                        let new_ext_id = extension_id_map[old_ext_id as usize];
-                        record.first_name.name.remap_extension_id(new_ext_id);
-                    }
-                }
-                if record.first_stream.name.is_valid() {
-                    record.first_stream.name.offset += name_offset_adjustment;
-
-                    // Remap extension_id
-                    let old_ext_id = record.first_stream.name.extension_id();
-                    if (old_ext_id as usize) < extension_id_map.len() {
-                        let new_ext_id = extension_id_map[old_ext_id as usize];
-                        record.first_stream.name.remap_extension_id(new_ext_id);
-                    }
-                }
-
-                // Expand lookup table if needed
-                if frs_usize >= self.frs_to_idx.len() {
-                    self.frs_to_idx.resize(frs_usize + 1, NO_ENTRY);
-                }
-
-                let existing_idx = self.frs_to_idx[frs_usize];
-                if existing_idx == NO_ENTRY {
-                    // New record - add it
-                    let new_idx = self.records.len() as u32;
-                    self.frs_to_idx[frs_usize] = new_idx;
-                    self.records.push(record);
-                } else {
-                    // Record exists - merge (keep the one with more data)
-                    let existing = &mut self.records[existing_idx as usize];
-                    // If existing is a placeholder (no name), replace with new
-                    if !existing.has_name() && record.has_name() {
-                        *existing = record;
-                    }
-                    // Otherwise keep existing (first wins)
-                }
-            }
-
-            // Merge links (with offset and extension_id adjustment)
-            let link_offset_adjustment = self.links.len() as u32;
-            for mut link in fragment.links {
-                if link.name.is_valid() {
-                    link.name.offset += name_offset_adjustment;
-
-                    // Remap extension_id
-                    let old_ext_id = link.name.extension_id();
-                    if (old_ext_id as usize) < extension_id_map.len() {
-                        let new_ext_id = extension_id_map[old_ext_id as usize];
-                        link.name.remap_extension_id(new_ext_id);
-                    }
-                }
-                if link.next_entry != NO_ENTRY {
-                    link.next_entry += link_offset_adjustment;
-                }
-                self.links.push(link);
-            }
-
-            // Merge streams (with offset and extension_id adjustment)
-            let stream_offset_adjustment = self.streams.len() as u32;
-            for mut stream in fragment.streams {
-                if stream.name.is_valid() {
-                    stream.name.offset += name_offset_adjustment;
-
-                    // Remap extension_id
-                    let old_ext_id = stream.name.extension_id();
-                    if (old_ext_id as usize) < extension_id_map.len() {
-                        let new_ext_id = extension_id_map[old_ext_id as usize];
-                        stream.name.remap_extension_id(new_ext_id);
-                    }
-                }
-                if stream.next_entry != NO_ENTRY {
-                    stream.next_entry += stream_offset_adjustment;
-                }
-                self.streams.push(stream);
-            }
-
-            // Merge children (with offset adjustment)
-            let child_offset_adjustment = self.children.len() as u32;
-            for mut child in fragment.children {
-                if child.next_entry != NO_ENTRY {
-                    child.next_entry += child_offset_adjustment;
-                }
-                self.children.push(child);
-            }
+            self.merge_single_fragment(fragment);
         }
 
         debug!(
@@ -4451,6 +4379,176 @@ impl MftIndex {
         self.compute_tree_metrics();
 
         debug!("✅ Post-processing complete");
+    }
+
+    /// Merge a single fragment into this index.
+    #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+    fn merge_single_fragment(&mut self, fragment: MftIndexFragment) {
+        let name_offset_adjustment = self.names.len() as u32;
+
+        // Build extension_id remapping table
+        let extension_id_map = self.build_extension_id_map(&fragment);
+
+        // Append names buffer
+        self.names.push_str(&fragment.names);
+
+        // Merge records
+        self.merge_fragment_records(fragment.records, name_offset_adjustment, &extension_id_map);
+
+        // Merge links (with offset and extension_id adjustment)
+        self.merge_fragment_links(fragment.links, name_offset_adjustment, &extension_id_map);
+
+        // Merge streams (with offset and extension_id adjustment)
+        self.merge_fragment_streams(fragment.streams, name_offset_adjustment, &extension_id_map);
+
+        // Merge children (with offset adjustment)
+        self.merge_fragment_children(fragment.children);
+    }
+
+    /// Build extension ID remapping table from fragment to merged index.
+    #[allow(clippy::cast_possible_truncation)]
+    fn build_extension_id_map(&mut self, fragment: &MftIndexFragment) -> Vec<u16> {
+        let mut extension_id_map: Vec<u16> = Vec::with_capacity(fragment.extensions.len());
+
+        // Extension ID 0 is always "no extension" - no remapping needed
+        extension_id_map.push(0);
+
+        // Intern all extensions from fragment into merged table
+        for idx in 1..fragment.extensions.len() {
+            let ext_idx = u16::try_from(idx).unwrap_or(u16::MAX);
+            if let Some(ext_str) = fragment.extensions.get_extension(ext_idx) {
+                let merged_id = self.extensions.intern(ext_str);
+                extension_id_map.push(merged_id);
+
+                // Merge counts and bytes
+                let count = fragment.extensions.get_count(ext_idx);
+                let bytes = fragment.extensions.get_bytes(ext_idx);
+
+                // Add to merged table's counts/bytes
+                let merged_idx = merged_id as usize;
+                if let Some(count_slot) = self.extensions.counts.get_mut(merged_idx) {
+                    *count_slot += count;
+                }
+                if let Some(bytes_slot) = self.extensions.bytes.get_mut(merged_idx) {
+                    *bytes_slot += bytes;
+                }
+            }
+        }
+
+        extension_id_map
+    }
+
+    /// Merge records from a fragment into this index.
+    #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+    fn merge_fragment_records(
+        &mut self,
+        records: Vec<FileRecord>,
+        name_offset_adjustment: u32,
+        extension_id_map: &[u16],
+    ) {
+        for mut record in records {
+            let frs = record.frs;
+            // FRS values are bounded by MFT size, which is always < 2^32 on real systems
+            let frs_usize = usize::try_from(frs).unwrap_or(usize::MAX);
+
+            // Adjust name offsets and remap extension_id
+            Self::adjust_name_ref(
+                &mut record.first_name.name,
+                name_offset_adjustment,
+                extension_id_map,
+            );
+            Self::adjust_name_ref(
+                &mut record.first_stream.name,
+                name_offset_adjustment,
+                extension_id_map,
+            );
+
+            // Expand lookup table if needed
+            if frs_usize >= self.frs_to_idx.len() {
+                self.frs_to_idx.resize(frs_usize + 1, NO_ENTRY);
+            }
+
+            let existing_idx = self.frs_to_idx[frs_usize];
+            if existing_idx == NO_ENTRY {
+                // New record - add it
+                let new_idx = self.records.len() as u32;
+                self.frs_to_idx[frs_usize] = new_idx;
+                self.records.push(record);
+            } else {
+                // Record exists - merge (keep the one with more data)
+                let existing = &mut self.records[existing_idx as usize];
+                // If existing is a placeholder (no name), replace with new
+                if !existing.has_name() && record.has_name() {
+                    *existing = record;
+                }
+                // Otherwise keep existing (first wins)
+            }
+        }
+    }
+
+    /// Adjust a name reference with offset and extension ID remapping.
+    fn adjust_name_ref(
+        name_ref: &mut IndexNameRef,
+        offset_adjustment: u32,
+        extension_id_map: &[u16],
+    ) {
+        if name_ref.is_valid() {
+            name_ref.offset += offset_adjustment;
+
+            // Remap extension_id
+            let old_ext_id = name_ref.extension_id();
+            if let Some(&new_ext_id) = extension_id_map.get(old_ext_id as usize) {
+                name_ref.remap_extension_id(new_ext_id);
+            }
+        }
+    }
+
+    /// Merge links from a fragment into this index.
+    #[allow(clippy::cast_possible_truncation)]
+    fn merge_fragment_links(
+        &mut self,
+        links: Vec<LinkInfo>,
+        name_offset_adjustment: u32,
+        extension_id_map: &[u16],
+    ) {
+        let link_offset_adjustment = self.links.len() as u32;
+        for mut link in links {
+            Self::adjust_name_ref(&mut link.name, name_offset_adjustment, extension_id_map);
+            if link.next_entry != NO_ENTRY {
+                link.next_entry += link_offset_adjustment;
+            }
+            self.links.push(link);
+        }
+    }
+
+    /// Merge streams from a fragment into this index.
+    #[allow(clippy::cast_possible_truncation)]
+    fn merge_fragment_streams(
+        &mut self,
+        streams: Vec<IndexStreamInfo>,
+        name_offset_adjustment: u32,
+        extension_id_map: &[u16],
+    ) {
+        let stream_offset_adjustment = self.streams.len() as u32;
+        for mut stream in streams {
+            Self::adjust_name_ref(&mut stream.name, name_offset_adjustment, extension_id_map);
+            if stream.next_entry != NO_ENTRY {
+                stream.next_entry += stream_offset_adjustment;
+            }
+            self.streams.push(stream);
+        }
+    }
+
+    /// Merge children from a fragment into this index.
+    #[allow(clippy::cast_possible_truncation)]
+    fn merge_fragment_children(&mut self, children: Vec<ChildInfo>) {
+        let child_offset_adjustment = self.children.len() as u32;
+        for mut child in children {
+            if child.next_entry != NO_ENTRY {
+                child.next_entry += child_offset_adjustment;
+            }
+            self.children.push(child);
+        }
     }
 }
 
@@ -4531,9 +4629,6 @@ impl MftIndex {
                     self.names.push_str(&change.filename);
                     let name_len = change.filename.len() as u16;
 
-                    // Truncate parent_frs to u32 (FRS values fit in 32 bits for most volumes)
-                    let parent_frs_u32 = change.parent_frs as u32;
-
                     // Create placeholder record
                     let record = FileRecord {
                         frs,
@@ -4549,7 +4644,7 @@ impl MftIndex {
                                 change.filename.is_ascii(),
                                 IndexNameRef::NO_EXTENSION, // TODO: Extract extension (Phase 1)
                             ),
-                            parent_frs: parent_frs_u32,
+                            parent_frs: change.parent_frs,
                         },
                         first_stream: IndexStreamInfo::default(),
                         descendants: 0,
@@ -4584,7 +4679,7 @@ impl MftIndex {
                         change.filename.is_ascii(),
                         IndexNameRef::NO_EXTENSION,
                     ); // TODO: Extract extension (Phase 1)
-                    record.first_name.parent_frs = change.parent_frs as u32;
+                    record.first_name.parent_frs = change.parent_frs;
                     stats.modified += 1;
                 }
             } else if change.size_changed || change.metadata_changed {
@@ -5073,7 +5168,7 @@ impl MftIndex {
             let link_next_entry = read_u32!();
             let link_name_offset = read_u32!();
             let link_name_meta = read_u32!();
-            let link_parent_frs = read_u32!();
+            let link_parent_frs = read_u64!();
             // first_stream (IndexStreamInfo)
             let stream_size_length = read_u64!();
             let stream_size_allocated = read_u64!();
@@ -5137,7 +5232,7 @@ impl MftIndex {
             let next_entry = read_u32!();
             let name_offset = read_u32!();
             let name_meta = read_u32!();
-            let parent_frs = read_u32!();
+            let parent_frs = read_u64!();
 
             links.push(LinkInfo {
                 next_entry,
@@ -5177,7 +5272,7 @@ impl MftIndex {
         let mut children = Vec::with_capacity(children_count as usize);
         for _ in 0..children_count {
             let next_entry = read_u32!();
-            let child_frs = read_u32!();
+            let child_frs = read_u64!();
             let name_index = read_u16!();
 
             children.push(ChildInfo {

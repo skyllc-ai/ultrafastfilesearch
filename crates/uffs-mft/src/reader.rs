@@ -2546,13 +2546,17 @@ impl MftReader {
         DataFrame::new_infer_height(columns).map_err(MftError::from)
     }
 
-    /// Builds a `DataFrame` directly from `ParsedColumns` (SoA layout).
+    /// Builds a `DataFrame` directly from `ParsedColumns` (`SoA` layout).
     ///
     /// This is the optimized path that avoids the AoS→SoA transpose.
     /// The columns are already in the correct format, so we just wrap them
     /// in Polars Series.
-    #[cfg(windows)]
-    fn build_dataframe_from_columns(columns: crate::io::ParsedColumns) -> Result<DataFrame> {
+    ///
+    /// # Platform
+    ///
+    /// Cross-platform - works on all platforms.
+    #[allow(clippy::single_call_fn)]
+    fn build_dataframe_from_columns(columns: crate::parse::ParsedColumns) -> Result<DataFrame> {
         use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
 
         let polars_columns = vec![
@@ -2977,10 +2981,10 @@ impl MftReader {
         Err(MftError::PlatformNotSupported)
     }
 
-    /// Load raw MFT from file and parse to DataFrame.
+    /// Load raw MFT from file and parse to `DataFrame`.
     ///
     /// This loads a previously saved raw MFT file and parses it into a
-    /// DataFrame.
+    /// `DataFrame`.
     ///
     /// # Arguments
     ///
@@ -2992,15 +2996,16 @@ impl MftReader {
     ///
     /// # Platform
     ///
-    /// Currently Windows-only due to parsing code being in Windows-only io
-    /// module. TODO: Move parsing functions to cross-platform module.
-    #[cfg(windows)]
+    /// Cross-platform - works on all platforms. Uses cross-platform
+    /// `MftRecordMerger` from parse module.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn load_raw_to_dataframe<P: AsRef<Path>>(path: P) -> Result<DataFrame> {
-        use crate::io::{MftRecordMerger, apply_fixup, parse_record_full};
+        use crate::parse::{MftRecordMerger, apply_fixup, parse_record_full};
 
         let raw = crate::raw::load_raw_mft(path, &crate::raw::LoadRawOptions::default())?;
 
         // Parse all records
+        // record_count is u64 but MFT sizes are bounded by disk size, always < 2^32
         let mut merger = MftRecordMerger::with_capacity(raw.header.record_count as usize);
 
         for (frs, record_data) in raw.iter_records() {
@@ -3025,10 +3030,10 @@ impl MftReader {
         Self::build_dataframe_from_columns(parsed_columns)
     }
 
-    /// Load raw MFT from file and build MftIndex.
+    /// Load raw MFT from file and build `MftIndex`.
     ///
-    /// This loads a previously saved raw MFT file and builds a lean MftIndex
-    /// (fast path, no DataFrame overhead).
+    /// This loads a previously saved raw MFT file and builds a lean `MftIndex`
+    /// (fast path, no `DataFrame` overhead).
     ///
     /// # Arguments
     ///
@@ -3040,17 +3045,16 @@ impl MftReader {
     ///
     /// # Platform
     ///
-    /// Currently Windows-only due to parsing code being in Windows-only io
-    /// module. TODO: Move parsing functions to cross-platform module.
-    #[cfg(windows)]
+    /// Works on all platforms - parses NTFS structures from saved file.
     pub fn load_raw_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIndex> {
         use crate::index::MftIndex;
-        use crate::io::{apply_fixup, parse_record};
+        use crate::parse::{apply_fixup, parse_record};
 
         let raw = crate::raw::load_raw_mft(path, &crate::raw::LoadRawOptions::default())?;
 
         // Parse all records into ParsedRecord format
-        let mut parsed_records = Vec::with_capacity(raw.header.record_count as usize);
+        let capacity = usize::try_from(raw.header.record_count).unwrap_or(0);
+        let mut parsed_records = Vec::with_capacity(capacity);
 
         for (frs, record_data) in raw.iter_records() {
             let mut record_buf = record_data.to_vec();
@@ -3069,17 +3073,6 @@ impl MftReader {
         // Build MftIndex from parsed records (includes tree metrics computation)
         // Use 'X' as volume letter since we don't have that info from raw file
         Ok(MftIndex::from_parsed_records('X', parsed_records))
-    }
-
-    /// Load raw MFT from file (non-Windows stub).
-    ///
-    /// # Errors
-    ///
-    /// Always returns `MftError::PlatformNotSupported` on non-Windows
-    /// platforms.
-    #[cfg(not(windows))]
-    pub fn load_raw_to_dataframe<P: AsRef<Path>>(_path: P) -> Result<DataFrame> {
-        Err(MftError::PlatformNotSupported)
     }
 
     /// Convert parsed records to DataFrame (legacy AoS path).

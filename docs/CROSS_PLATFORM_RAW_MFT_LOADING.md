@@ -1,14 +1,20 @@
 # Cross-Platform Raw MFT Loading
 
-## Current Status
+## Current Status (2026-01-26)
 
-**Problem**: The `uffs_mft load` command currently only works on Windows, even though it's loading from a saved file (not accessing a live volume).
+**Progress**: Partial refactoring completed!
 
-**Root Cause**: The entire `crates/uffs-mft/src/io.rs` module is gated with `#[cfg(windows)]` because it contains both:
-1. **Windows-specific I/O code** (direct volume access, IOCP, etc.)
-2. **Cross-platform parsing code** (`apply_fixup()`, `parse_record()`, etc.)
+✅ **Done**:
+- `ntfs.rs` is now cross-platform (NTFS structure definitions)
+- `parse.rs` created with cross-platform parsing structures (`ParsedRecord`, `ParseResult`, `apply_fixup()`)
+- `apply_fixup()` moved to cross-platform module
 
-The parsing functions don't actually use any Windows APIs - they just parse NTFS byte structures. But because they're in the same module as the Windows-specific I/O code, they're not available on macOS/Linux.
+❌ **Still Windows-only**:
+- `parse_record()`, `parse_record_full()` - complex parsing logic with many dependencies
+- `MftRecordMerger` - extension record merging
+- `load_raw_to_dataframe()`, `load_raw_to_index()` - depend on above functions
+
+**Root Cause**: The parsing functions (`parse_record_full()`, etc.) are still in `io.rs` because they depend on many helper functions and structures that would all need to be moved together. This is a larger refactoring than initially anticipated.
 
 ## Impact
 
