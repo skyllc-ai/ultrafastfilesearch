@@ -340,6 +340,10 @@ enum Commands {
 
     /// Load MFT from a saved file and export to parquet/csv
     ///
+    /// Supports both UFFS-MFT format (with header) and raw NTFS format
+    /// (compatible with other MFT tools). For raw NTFS files, use --drive
+    /// to specify the volume letter for path resolution.
+    ///
     /// # Examples
     ///
     /// ```text
@@ -347,9 +351,10 @@ enum Commands {
     /// uffs_mft load mft_c.mft --output index.parquet
     /// uffs_mft load mft_c.mft -o index.csv
     /// uffs_mft load mft_c.mft --build-index  # Debug tree metrics
+    /// uffs_mft load mft_c.raw --drive C -o output.csv  # Raw NTFS format
     /// ```
     Load {
-        /// Input raw MFT file path (created with 'save' command)
+        /// Input raw MFT file path (created with 'save' command or other tools)
         #[arg(value_name = "FILE")]
         input: PathBuf,
 
@@ -364,6 +369,12 @@ enum Commands {
         /// Build `MftIndex` and show tree metrics (for debugging)
         #[arg(long)]
         build_index: bool,
+
+        /// Volume letter for path resolution (e.g., C, D, E).
+        /// Required for raw NTFS files that don't have this info in header.
+        /// For UFFS-MFT format files, this overrides the stored volume letter.
+        #[arg(short, long, value_name = "LETTER")]
+        drive: Option<char>,
     },
 
     /// Raw MFT read benchmark (matches C++ --benchmark-mft output exactly)
@@ -843,7 +854,8 @@ async fn dispatch_command(command: Commands) -> Result<()> {
             output,
             info_only,
             build_index,
-        } => cmd_load(&input, output.as_deref(), info_only, build_index),
+            drive,
+        } => cmd_load(&input, output.as_deref(), info_only, build_index, drive),
         Commands::BenchmarkMft { drive } => cmd_benchmark_mft(drive).await,
         Commands::BenchmarkIndex { drive } => cmd_benchmark_index(drive).await,
         Commands::BenchmarkIndexLean {
@@ -905,7 +917,8 @@ async fn dispatch_command(command: Commands) -> Result<()> {
             output,
             info_only,
             build_index,
-        } => cmd_load(&input, output.as_deref(), info_only, build_index),
+            drive,
+        } => cmd_load(&input, output.as_deref(), info_only, build_index, drive),
         // All other commands require Windows (direct NTFS volume access)
         Commands::Read { .. }
         | Commands::Info { .. }
@@ -2569,6 +2582,7 @@ async fn cmd_save(
 /// Load MFT from a saved file and optionally export.
 ///
 /// Works on all platforms - parses NTFS structures from saved file.
+/// Supports both UFFS-MFT format and raw NTFS format.
 #[allow(
     clippy::too_many_lines,
     clippy::print_stdout,
@@ -2582,10 +2596,12 @@ fn cmd_load(
     output_path: Option<&Path>,
     info_only: bool,
     build_index: bool,
+    drive_override: Option<char>,
 ) -> Result<()> {
     use std::time::Instant;
 
-    use uffs_mft::{MftReader, load_raw_mft_header};
+    use uffs_mft::raw::LoadRawOptions;
+    use uffs_mft::{MftReader, load_raw_mft};
 
     // Validate arguments upfront - don't print anything if we're going to fail
     if !info_only && !build_index && output_path.is_none() {
@@ -2594,14 +2610,26 @@ fn cmd_load(
 
     let start_time = Instant::now();
 
-    // Load header first
-    let header = load_raw_mft_header(input)
+    // Load header first (with volume letter override if provided)
+    let load_options = LoadRawOptions {
+        header_only: true,
+        volume_letter: drive_override.map(|c| c.to_ascii_uppercase()),
+    };
+    let raw_data = load_raw_mft(input, &load_options)
         .with_context(|| format!("Failed to load raw MFT header from {}", input.display()))?;
+    let header = raw_data.header;
 
     // Get absolute path and file size for display
     let abs_path = std::fs::canonicalize(input).unwrap_or_else(|_| input.to_path_buf());
     let abs_path = clean_path_for_display(&abs_path);
     let file_size = std::fs::metadata(input).map_or(0, |meta| meta.len());
+
+    // Determine format type for display
+    let format_str = if header.version == 0 {
+        "raw NTFS (compatible)"
+    } else {
+        "UFFS-MFT"
+    };
 
     // Print formatted output
     println!("═══════════════════════════════════════════════════════════════");
@@ -2611,7 +2639,12 @@ fn cmd_load(
     println!("📁 FILE DETAILS");
     println!("  Path:                 {}", abs_path.display());
     println!("  File size:           {}", format_bytes(file_size));
-    println!("  Format version:       {}", header.version);
+    if header.version == 0 {
+        println!("  Format:               {format_str}");
+    } else {
+        println!("  Format:               {format_str} v{}", header.version);
+    }
+    println!("  Volume letter:        {}:", header.volume_letter);
     println!();
     println!("📊 MFT STRUCTURE");
     println!(
@@ -2627,28 +2660,36 @@ fn cmd_load(
         format_bytes(header.original_size)
     );
     println!();
-    println!("💾 COMPRESSION");
-    if header.is_compressed() {
-        println!(
-            "  Compressed size:     {}",
-            format_bytes(header.compressed_size)
-        );
-        #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
-        let ratio = header.compressed_size as f64 / header.original_size as f64 * 100.0_f64;
-        println!("  Compression ratio:    {ratio:.1}%");
-        #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
-        let savings = 100.0_f64 - ratio;
-        println!("  Space saved:          {savings:.1}%");
-    } else {
-        println!("  Status:               uncompressed");
+    if header.version > 0 {
+        println!("💾 COMPRESSION");
+        if header.is_compressed() {
+            println!(
+                "  Compressed size:     {}",
+                format_bytes(header.compressed_size)
+            );
+            #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+            let ratio = header.compressed_size as f64 / header.original_size as f64 * 100.0_f64;
+            println!("  Compression ratio:    {ratio:.1}%");
+            #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+            let savings = 100.0_f64 - ratio;
+            println!("  Space saved:          {savings:.1}%");
+        } else {
+            println!("  Status:               uncompressed");
+        }
     }
+
+    // Create load options for data loading (not header-only)
+    let data_load_options = LoadRawOptions {
+        header_only: false,
+        volume_letter: drive_override.map(|c| c.to_ascii_uppercase()),
+    };
 
     if info_only {
         // Parse the MFT to get detailed statistics
         println!();
         println!("📈 PARSING MFT FOR STATISTICS...");
 
-        let df = MftReader::load_raw_to_dataframe(input)
+        let df = MftReader::load_raw_to_dataframe_with_options(input, &data_load_options)
             .with_context(|| format!("Failed to parse raw MFT from {}", input.display()))?;
 
         let total_parsed = df.height();
@@ -2732,7 +2773,7 @@ fn cmd_load(
         println!("🔨 BUILDING MFTINDEX...");
 
         let build_start = Instant::now();
-        let index = MftReader::load_raw_to_index(input)
+        let index = MftReader::load_raw_to_index_with_options(input, &data_load_options)
             .with_context(|| format!("Failed to build index from {}", input.display()))?;
         let build_time = build_start.elapsed();
 
@@ -2806,7 +2847,7 @@ fn cmd_load(
 
     // Build MftIndex (includes tree metrics computation)
     let build_start = Instant::now();
-    let index = MftReader::load_raw_to_index(input)
+    let index = MftReader::load_raw_to_index_with_options(input, &data_load_options)
         .with_context(|| format!("Failed to build index from {}", input.display()))?;
     let build_time = build_start.elapsed();
 

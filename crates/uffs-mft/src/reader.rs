@@ -3000,9 +3000,33 @@ impl MftReader {
     /// `MftRecordMerger` from parse module.
     #[allow(clippy::cast_possible_truncation)]
     pub fn load_raw_to_dataframe<P: AsRef<Path>>(path: P) -> Result<DataFrame> {
+        Self::load_raw_to_dataframe_with_options(path, &crate::raw::LoadRawOptions::default())
+    }
+
+    /// Load raw MFT from file and convert to `DataFrame` with custom options.
+    ///
+    /// This variant allows specifying load options like volume letter override.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Input file path
+    /// * `options` - Load options (volume letter override, etc.)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading or parsing fails.
+    ///
+    /// # Platform
+    ///
+    /// Cross-platform - works on all platforms.
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn load_raw_to_dataframe_with_options<P: AsRef<Path>>(
+        path: P,
+        options: &crate::raw::LoadRawOptions,
+    ) -> Result<DataFrame> {
         use crate::parse::{MftRecordMerger, apply_fixup, parse_record_full};
 
-        let raw = crate::raw::load_raw_mft(path, &crate::raw::LoadRawOptions::default())?;
+        let raw = crate::raw::load_raw_mft(path, options)?;
 
         // Parse all records
         // record_count is u64 but MFT sizes are bounded by disk size, always < 2^32
@@ -3047,10 +3071,33 @@ impl MftReader {
     ///
     /// Works on all platforms - parses NTFS structures from saved file.
     pub fn load_raw_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIndex> {
+        Self::load_raw_to_index_with_options(path, &crate::raw::LoadRawOptions::default())
+    }
+
+    /// Load raw MFT from file and build `MftIndex` with custom options.
+    ///
+    /// This variant allows specifying load options like volume letter override.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Input file path
+    /// * `options` - Load options (volume letter override, etc.)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading or parsing fails.
+    ///
+    /// # Platform
+    ///
+    /// Works on all platforms - parses NTFS structures from saved file.
+    pub fn load_raw_to_index_with_options<P: AsRef<Path>>(
+        path: P,
+        options: &crate::raw::LoadRawOptions,
+    ) -> Result<crate::index::MftIndex> {
         use crate::index::MftIndex;
         use crate::parse::{apply_fixup, parse_record};
 
-        let raw = crate::raw::load_raw_mft(path, &crate::raw::LoadRawOptions::default())?;
+        let raw = crate::raw::load_raw_mft(path, options)?;
 
         // Parse all records into ParsedRecord format
         let capacity = usize::try_from(raw.header.record_count).unwrap_or(0);

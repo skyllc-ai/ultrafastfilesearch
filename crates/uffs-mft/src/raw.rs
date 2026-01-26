@@ -39,6 +39,9 @@ use crate::error::{MftError, Result};
 /// Magic bytes for raw MFT file format.
 const MAGIC: &[u8; 8] = b"UFFS-MFT";
 
+/// NTFS FILE record magic bytes ("FILE" in ASCII).
+const NTFS_FILE_MAGIC: &[u8; 4] = b"FILE";
+
 /// Current file format version.
 /// - v1: Initial format
 /// - v2: Added `volume_letter` field
@@ -49,6 +52,9 @@ const FLAG_COMPRESSED: u32 = 0x0001;
 
 /// Header size in bytes.
 const HEADER_SIZE: usize = 64;
+
+/// Default record size for NTFS MFT (1024 bytes is standard).
+const DEFAULT_RECORD_SIZE: u32 = 1024;
 
 /// Raw MFT file header.
 #[derive(Debug, Clone)]
@@ -174,6 +180,9 @@ impl Default for SaveRawOptions {
 pub struct LoadRawOptions {
     /// If true, only load the header without reading data.
     pub header_only: bool,
+    /// Override volume letter (useful for raw NTFS files that don't have this
+    /// info). If None, uses 'X' as default for raw files.
+    pub volume_letter: Option<char>,
 }
 
 /// Loaded raw MFT data.
@@ -299,7 +308,31 @@ pub fn save_raw_mft<P: AsRef<Path>>(
     Ok(header)
 }
 
+/// Detects record size from the first MFT record.
+///
+/// NTFS MFT records have `bytes_allocated` at offset 28-32 which tells us the
+/// record size. Standard is 1024 bytes, but some systems use 4096.
+#[allow(clippy::single_call_fn)] // Separate function for clarity and testability
+fn detect_record_size_from_first_record(data: &[u8]) -> u32 {
+    // bytes_allocated is at offset 28 in FileRecordSegmentHeader
+    // Use get() with try_into to avoid indexing panics
+    if let Some(bytes) = data.get(28..32) {
+        if let Ok(arr) = <[u8; 4]>::try_from(bytes) {
+            let bytes_allocated = u32::from_le_bytes(arr);
+            // Sanity check: record size should be 1024, 2048, or 4096
+            if bytes_allocated == 1024 || bytes_allocated == 2048 || bytes_allocated == 4096 {
+                return bytes_allocated;
+            }
+        }
+    }
+    DEFAULT_RECORD_SIZE
+}
+
 /// Loads raw MFT bytes from a file.
+///
+/// This function is format-agnostic and can load:
+/// - UFFS-MFT format (our custom format with header)
+/// - Raw NTFS MFT format (no header, just raw MFT records starting with "FILE")
 ///
 /// # Arguments
 ///
@@ -311,65 +344,133 @@ pub fn save_raw_mft<P: AsRef<Path>>(
 /// Returns an error if reading fails or file format is invalid.
 #[allow(clippy::shadow_reuse)]
 pub fn load_raw_mft<P: AsRef<Path>>(path: P, options: &LoadRawOptions) -> Result<RawMftData> {
+    use std::io::{Seek, SeekFrom};
+
     let path = path.as_ref();
     let file = File::open(path)?;
+    let file_size = file.metadata()?.len();
     let mut reader = BufReader::new(file);
 
-    // Read header
-    let mut header_buf = [0_u8; HEADER_SIZE];
-    reader.read_exact(&mut header_buf)?;
-    let header = RawMftHeader::from_bytes(&header_buf)?;
+    // Read first 8 bytes to detect format
+    let mut magic_buf = [0_u8; 8];
+    reader.read_exact(&mut magic_buf)?;
 
-    // If header-only mode, return empty data
-    if options.header_only {
-        return Ok(RawMftData {
-            header,
-            data: Vec::new(),
-        });
+    // Check if it's our UFFS-MFT format
+    if &magic_buf == MAGIC {
+        // Seek back and read full header
+        reader.seek(SeekFrom::Start(0))?;
+        let mut header_buf = [0_u8; HEADER_SIZE];
+        reader.read_exact(&mut header_buf)?;
+        let header = RawMftHeader::from_bytes(&header_buf)?;
+
+        // If header-only mode, return empty data
+        if options.header_only {
+            return Ok(RawMftData {
+                header,
+                data: Vec::new(),
+            });
+        }
+
+        // Read data
+        let mut compressed_data = Vec::new();
+        reader.read_to_end(&mut compressed_data)?;
+
+        // Decompress if needed
+        let data = if header.is_compressed() {
+            #[cfg(feature = "zstd")]
+            {
+                zstd::decode_all(&compressed_data[..])
+                    .map_err(|err| MftError::Io(std::io::Error::other(err)))?
+            }
+            #[cfg(not(feature = "zstd"))]
+            {
+                return Err(MftError::InvalidData(
+                    "zstd feature not enabled for decompression".into(),
+                ));
+            }
+        } else {
+            compressed_data
+        };
+
+        // Validate size
+        let expected_size = header.record_count * u64::from(header.record_size);
+        if data.len() as u64 != expected_size {
+            return Err(MftError::InvalidData(format!(
+                "Data size mismatch: expected {expected_size}, got {}",
+                data.len()
+            )));
+        }
+
+        return Ok(RawMftData { header, data });
     }
 
-    // Read data
-    let mut compressed_data = Vec::new();
-    reader.read_to_end(&mut compressed_data)?;
+    // Check if it's raw NTFS format (starts with "FILE")
+    if &magic_buf[0..4] == NTFS_FILE_MAGIC {
+        // Seek back to start
+        reader.seek(SeekFrom::Start(0))?;
 
-    // Decompress if needed
-    let data = if header.is_compressed() {
-        #[cfg(feature = "zstd")]
-        {
-            zstd::decode_all(&compressed_data[..])
-                .map_err(|err| MftError::Io(std::io::Error::other(err)))?
-        }
-        #[cfg(not(feature = "zstd"))]
-        {
-            return Err(MftError::InvalidData(
-                "zstd feature not enabled for decompression".into(),
-            ));
-        }
-    } else {
-        compressed_data
-    };
+        // Read entire file as raw MFT data
+        let mut data = Vec::new();
+        reader.read_to_end(&mut data)?;
 
-    // Validate size
-    let expected_size = header.record_count * u64::from(header.record_size);
-    if data.len() as u64 != expected_size {
-        return Err(MftError::InvalidData(format!(
-            "Data size mismatch: expected {expected_size}, got {}",
-            data.len()
-        )));
+        // Detect record size from first record
+        let record_size = detect_record_size_from_first_record(&data);
+
+        // Calculate record count
+        let record_count = file_size / u64::from(record_size);
+
+        // Validate file size is a multiple of record size
+        if file_size % u64::from(record_size) != 0 {
+            return Err(MftError::InvalidData(format!(
+                "File size {file_size} is not a multiple of record size {record_size}"
+            )));
+        }
+
+        // Create synthetic header for raw NTFS format
+        // version=0 indicates raw format (no UFFS header)
+        let header = RawMftHeader {
+            version: 0,
+            flags: 0,
+            record_size,
+            record_count,
+            original_size: file_size,
+            compressed_size: 0,
+            volume_letter: options.volume_letter.unwrap_or('X'),
+        };
+
+        // If header-only mode, return empty data
+        if options.header_only {
+            return Ok(RawMftData {
+                header,
+                data: Vec::new(),
+            });
+        }
+
+        return Ok(RawMftData { header, data });
     }
 
-    Ok(RawMftData { header, data })
+    // Unknown format
+    Err(MftError::InvalidData(
+        "Invalid MFT file: expected UFFS-MFT header or raw NTFS FILE records".into(),
+    ))
 }
 
 /// Loads only the header from a raw MFT file.
 ///
 /// This is useful for inspecting file metadata without loading the full data.
+/// Works with both UFFS-MFT format and raw NTFS format.
 ///
 /// # Errors
 ///
 /// Returns an error if reading fails or file format is invalid.
 pub fn load_raw_mft_header<P: AsRef<Path>>(path: P) -> Result<RawMftHeader> {
-    let result = load_raw_mft(path, &LoadRawOptions { header_only: true })?;
+    let result = load_raw_mft(
+        path,
+        &LoadRawOptions {
+            header_only: true,
+            volume_letter: None,
+        },
+    )?;
     Ok(result.header)
 }
 
@@ -870,6 +971,60 @@ mod tests {
         // File content should be exactly the raw data
         let file_content = std::fs::read(&path)?;
         assert_eq!(file_content, data);
+
+        // Cleanup
+        std::fs::remove_file(&path)?;
+
+        Ok(())
+    }
+
+    #[test]
+    #[allow(clippy::indexing_slicing, clippy::cast_possible_truncation)]
+    fn test_load_raw_ntfs_format() -> TestResult {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_mft_raw_ntfs.raw");
+
+        let record_size = 1024_u32;
+        let record_count = 4_u64;
+        let mut data = vec![0_u8; (record_count as usize) * (record_size as usize)];
+
+        // Create valid NTFS MFT records with FILE signature and bytes_allocated
+        for i in 0..record_count {
+            let offset = (i as usize) * (record_size as usize);
+            // FILE signature at offset 0
+            data[offset] = b'F';
+            data[offset + 1] = b'I';
+            data[offset + 2] = b'L';
+            data[offset + 3] = b'E';
+            // bytes_allocated at offset 28-31 (little-endian)
+            data[offset + 28] = 0x00; // 1024 = 0x400
+            data[offset + 29] = 0x04;
+            data[offset + 30] = 0x00;
+            data[offset + 31] = 0x00;
+        }
+
+        // Write raw data directly (no UFFS header)
+        std::fs::write(&path, &data)?;
+
+        // Load as raw NTFS format
+        let loaded = load_raw_mft(&path, &LoadRawOptions::default())?;
+
+        // Should detect as raw format (version 0)
+        assert_eq!(loaded.header.version, 0);
+        assert_eq!(loaded.header.record_size, record_size);
+        assert_eq!(loaded.header.record_count, record_count);
+        // Default volume letter should be 'X'
+        assert_eq!(loaded.header.volume_letter, 'X');
+        // Data should match
+        assert_eq!(loaded.data, data);
+
+        // Load with volume letter override
+        let options = LoadRawOptions {
+            header_only: false,
+            volume_letter: Some('D'),
+        };
+        let loaded_with_override = load_raw_mft(&path, &options)?;
+        assert_eq!(loaded_with_override.header.volume_letter, 'D');
 
         // Cleanup
         std::fs::remove_file(&path)?;
