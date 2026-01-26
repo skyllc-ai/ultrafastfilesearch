@@ -4688,7 +4688,9 @@ const INDEX_MAGIC: &[u8; 8] = b"UFFSIDX\0";
 /// Current index file format version.
 /// Version 2: Changed `IndexNameRef` to use bit-packed `meta` field instead of
 /// separate length/flags
-const INDEX_VERSION: u32 = 2;
+/// Version 3: Added tree metrics (descendants, treesize, `tree_allocated`) to
+/// `FileRecord` serialization
+const INDEX_VERSION: u32 = 3;
 
 /// Persistent index header stored at the beginning of the index file.
 #[derive(Debug, Clone)]
@@ -4836,6 +4838,10 @@ impl MftIndex {
             buffer.extend_from_slice(&record.first_stream.name.offset.to_le_bytes());
             buffer.extend_from_slice(&record.first_stream.name.meta.to_le_bytes());
             buffer.extend_from_slice(&record.first_stream.flags.to_le_bytes());
+            // Tree metrics (Version 3+)
+            buffer.extend_from_slice(&record.descendants.to_le_bytes());
+            buffer.extend_from_slice(&record.treesize.to_le_bytes());
+            buffer.extend_from_slice(&record.tree_allocated.to_le_bytes());
         }
 
         // Write names
@@ -5039,6 +5045,10 @@ impl MftIndex {
             let stream_name_offset = read_u32!();
             let stream_name_meta = read_u32!();
             let stream_flags = read_u8!();
+            // Tree metrics (Version 3+)
+            let descendants = if version >= 3 { read_u32!() } else { 0 };
+            let treesize = if version >= 3 { read_u64!() } else { 0 };
+            let tree_allocated = if version >= 3 { read_u64!() } else { 0 };
 
             records.push(FileRecord {
                 frs,
@@ -5072,9 +5082,9 @@ impl MftIndex {
                     },
                     flags: stream_flags,
                 },
-                descendants: 0,
-                treesize: 0,
-                tree_allocated: 0,
+                descendants,
+                treesize,
+                tree_allocated,
             });
         }
 
@@ -5192,6 +5202,12 @@ impl MftIndex {
 
         // Compute stats from loaded data
         index.recompute_stats();
+
+        // If loading an old version (< 3) without tree metrics, recompute them
+        if version < 3 {
+            tracing::debug!("Old index version {version} - recomputing tree metrics");
+            index.compute_tree_metrics();
+        }
 
         Ok((index, header))
     }

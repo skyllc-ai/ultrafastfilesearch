@@ -3897,6 +3897,10 @@ impl MultiDriveMftReader {
                 "📊 USN changes applied"
             );
 
+            // Recompute tree metrics after structural changes
+            debug!(drive = %drive, "🔨 Recomputing tree metrics after USN updates");
+            index.compute_tree_metrics();
+
             // Save updated index to cache with new checkpoint
             let handle = match VolumeHandle::open(drive) {
                 Ok(h) => h,

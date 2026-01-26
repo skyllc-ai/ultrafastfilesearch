@@ -4062,6 +4062,14 @@ async fn cmd_index_update(drive: char, force_full: bool, ttl: Option<u64>) -> Re
             );
             println!("   Applied in {:.3}s", apply_time.as_secs_f64());
 
+            // Recompute tree metrics after structural changes
+            println!();
+            println!("🔨 Recomputing tree metrics...");
+            let tree_start = Instant::now();
+            updated_index.compute_tree_metrics();
+            let tree_time = tree_start.elapsed();
+            println!("   Computed in {:.3}s", tree_time.as_secs_f64());
+
             // Save updated index
             let handle = VolumeHandle::open(drive)?;
             let volume_data = handle.volume_data();
