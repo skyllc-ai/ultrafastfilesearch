@@ -341,7 +341,7 @@ impl PipelineContext {
         Self {
             start_time: Instant::now(),
             max_parallel_jobs: num_cpus::get().min(16),
-            timeout_duration: Duration::from_secs(1800), // 30 minutes max
+            timeout_duration: Duration::from_secs(3600), // 60 minutes max
             verbose,
             coverage_report,
         }

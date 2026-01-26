@@ -366,6 +366,9 @@ pub fn load_raw_mft_header<P: AsRef<Path>>(path: P) -> Result<RawMftHeader> {
 pub struct StreamingRawMftWriter {
     /// The underlying file writer.
     writer: BufWriter<File>,
+    /// Output file path (needed to reopen for header update in compressed
+    /// mode).
+    output_path: std::path::PathBuf,
     /// Record size in bytes.
     record_size: u32,
     /// Total bytes written (for record count calculation).
@@ -397,6 +400,7 @@ impl StreamingRawMftWriter {
         record_size: u32,
         options: &SaveRawOptions,
     ) -> Result<Self> {
+        let output_path = path.as_ref().to_path_buf();
         let output_file = File::create(path.as_ref())?;
         let mut writer = BufWriter::with_capacity(8 * 1024 * 1024, output_file); // 8MB buffer
 
@@ -432,6 +436,7 @@ impl StreamingRawMftWriter {
 
             return Ok(Self {
                 writer: BufWriter::new(dummy_file),
+                output_path,
                 record_size,
                 bytes_written: 0,
                 compress: true,
@@ -442,6 +447,7 @@ impl StreamingRawMftWriter {
 
         Ok(Self {
             writer,
+            output_path,
             record_size,
             bytes_written: 0,
             compress: options.compress,
@@ -525,6 +531,24 @@ impl StreamingRawMftWriter {
                 .writer
                 .into_inner()
                 .map_err(|err| MftError::Io(err.into_error()))?;
+
+            // Seek to beginning and write final header
+            output_file.seek(SeekFrom::Start(0))?;
+            output_file.write_all(&header.to_bytes())?;
+            output_file.flush()?;
+        }
+
+        // For compressed files, reopen the file and update the header
+        // The zstd encoder has already closed the file, so we reopen it
+        #[cfg(feature = "zstd")]
+        if self.compress {
+            use std::fs::OpenOptions;
+
+            // Reopen the file for read+write to update the header
+            let mut output_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&self.output_path)?;
 
             // Seek to beginning and write final header
             output_file.seek(SeekFrom::Start(0))?;

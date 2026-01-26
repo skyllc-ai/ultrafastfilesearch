@@ -483,12 +483,11 @@ impl MftRecordReader {
 // ============================================================================
 
 // Re-export ParsedColumns from parse module (now cross-platform)
-pub use crate::parse::ParsedColumns;
 // Re-export placeholder creation helper (also in parse module)
-pub use crate::parse::add_missing_parent_placeholders_to_vec;
 pub use crate::parse::{
-    ExtensionAttributes, ParseResult, ParsedRecord, apply_fixup, create_placeholder_record,
-    parse_record, parse_record_full, parse_record_zero_alloc,
+    ExtensionAttributes, ParseResult, ParsedColumns, ParsedRecord,
+    add_missing_parent_placeholders_to_vec, apply_fixup, create_placeholder_record, parse_record,
+    parse_record_full, parse_record_zero_alloc,
 };
 
 // ============================================================================
