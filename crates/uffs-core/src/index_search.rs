@@ -1133,6 +1133,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
     fn test_pattern_any() {
         let pattern = compile_index_pattern("*").unwrap();
         assert!(pattern.matches("anything", true));
@@ -1140,6 +1141,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
     fn test_pattern_exact() {
         let pattern = compile_index_pattern("foo.txt").unwrap();
         assert!(pattern.matches("foo.txt", true));
@@ -1149,6 +1151,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
     fn test_pattern_prefix() {
         let pattern = compile_index_pattern("foo*").unwrap();
         assert!(pattern.matches("foo", true));
@@ -1158,6 +1161,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
     fn test_pattern_suffix() {
         let pattern = compile_index_pattern("*.txt").unwrap();
         assert!(pattern.matches("foo.txt", true));
@@ -1167,6 +1171,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
     fn test_pattern_contains() {
         let pattern = compile_index_pattern("*needle*").unwrap();
         assert!(pattern.matches("needle", true));
@@ -1176,6 +1181,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
     fn test_pattern_prefix_suffix() {
         let pattern = compile_index_pattern("foo*bar").unwrap();
         assert!(pattern.matches("foobar", true));
@@ -1194,6 +1200,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
     fn test_extension_index_integration() {
         use uffs_mft::index::{IndexNameRef, MftIndex, ROOT_FRS, SizeInfo};
 
@@ -1310,6 +1317,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
     fn test_analyze_pattern_complexity() {
         let any = compile_index_pattern("*").unwrap();
         assert_eq!(analyze_pattern_complexity(&any), QueryComplexity::Simple);

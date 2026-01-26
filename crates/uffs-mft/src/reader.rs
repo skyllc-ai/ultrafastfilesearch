@@ -2992,7 +2992,8 @@ impl MftReader {
     ///
     /// # Platform
     ///
-    /// Currently only available on Windows due to NTFS parsing dependencies.
+    /// Currently Windows-only due to parsing code being in Windows-only io
+    /// module. TODO: Move parsing functions to cross-platform module.
     #[cfg(windows)]
     pub fn load_raw_to_dataframe<P: AsRef<Path>>(path: P) -> Result<DataFrame> {
         use crate::io::{MftRecordMerger, apply_fixup, parse_record_full};
@@ -3022,6 +3023,52 @@ impl MftReader {
 
         // Convert to DataFrame using SoA path (no transpose needed!)
         Self::build_dataframe_from_columns(parsed_columns)
+    }
+
+    /// Load raw MFT from file and build MftIndex.
+    ///
+    /// This loads a previously saved raw MFT file and builds a lean MftIndex
+    /// (fast path, no DataFrame overhead).
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Input file path
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading or parsing fails.
+    ///
+    /// # Platform
+    ///
+    /// Currently Windows-only due to parsing code being in Windows-only io
+    /// module. TODO: Move parsing functions to cross-platform module.
+    #[cfg(windows)]
+    pub fn load_raw_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIndex> {
+        use crate::index::MftIndex;
+        use crate::io::{apply_fixup, parse_record};
+
+        let raw = crate::raw::load_raw_mft(path, &crate::raw::LoadRawOptions::default())?;
+
+        // Parse all records into ParsedRecord format
+        let mut parsed_records = Vec::with_capacity(raw.header.record_count as usize);
+
+        for (frs, record_data) in raw.iter_records() {
+            let mut record_buf = record_data.to_vec();
+
+            // Apply fixup
+            if !apply_fixup(&mut record_buf) {
+                continue;
+            }
+
+            // Parse record (skips extension records for simplicity)
+            if let Some(parsed) = parse_record(&record_buf, frs) {
+                parsed_records.push(parsed);
+            }
+        }
+
+        // Build MftIndex from parsed records (includes tree metrics computation)
+        // Use 'X' as volume letter since we don't have that info from raw file
+        Ok(MftIndex::from_parsed_records('X', parsed_records))
     }
 
     /// Load raw MFT from file (non-Windows stub).

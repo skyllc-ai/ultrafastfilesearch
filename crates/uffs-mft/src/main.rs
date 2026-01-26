@@ -348,6 +348,7 @@ enum Commands {
     /// uffs_mft load mft_c.mft --info-only
     /// uffs_mft load mft_c.mft --output index.parquet
     /// uffs_mft load mft_c.mft -o index.csv
+    /// uffs_mft load mft_c.mft --build-index  # Debug tree metrics
     /// ```
     Load {
         /// Input raw MFT file path (created with 'save' command)
@@ -361,6 +362,10 @@ enum Commands {
         /// Show info about the raw MFT file only (don't export)
         #[arg(long)]
         info_only: bool,
+
+        /// Build `MftIndex` and show tree metrics (for debugging)
+        #[arg(long)]
+        build_index: bool,
     },
 
     /// Raw MFT read benchmark (matches C++ --benchmark-mft output exactly)
@@ -852,7 +857,8 @@ async fn dispatch_command(command: Commands) -> Result<()> {
             input,
             output,
             info_only,
-        } => cmd_load(&input, output.as_deref(), info_only).await,
+            build_index,
+        } => cmd_load(&input, output.as_deref(), info_only, build_index).await,
         Commands::BenchmarkMft { drive } => cmd_benchmark_mft(drive).await,
         Commands::BenchmarkIndex { drive } => cmd_benchmark_index(drive).await,
         Commands::BenchmarkIndexLean {
@@ -2527,15 +2533,24 @@ async fn cmd_save(
 }
 
 /// Load MFT from a saved file and optionally export.
+///
+/// Currently Windows-only due to parsing code being in Windows-only io module.
+/// TODO: Move parsing functions to cross-platform module to enable macOS/Linux
+/// support.
 #[cfg(windows)]
-async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Result<()> {
+async fn cmd_load(
+    input: &Path,
+    output: Option<&Path>,
+    info_only: bool,
+    build_index: bool,
+) -> Result<()> {
     use std::time::Instant;
 
     use uffs_mft::{MftReader, load_raw_mft_header};
 
     // Validate arguments upfront - don't print anything if we're going to fail
-    if !info_only && output.is_none() {
-        anyhow::bail!("--output is required when not using --info-only");
+    if !info_only && !build_index && output.is_none() {
+        anyhow::bail!("--output is required when not using --info-only or --build-index");
     }
 
     let start_time = Instant::now();
@@ -2671,6 +2686,71 @@ async fn cmd_load(input: &Path, output: Option<&Path>, info_only: bool) -> Resul
 
         println!();
         let elapsed = start_time.elapsed();
+        println!("⏱️  Completed in {}", format_duration(elapsed));
+        return Ok(());
+    }
+
+    // Build index and show tree metrics (for debugging)
+    if build_index {
+        use uffs_mft::index::MftIndex;
+
+        println!();
+        println!("🔨 BUILDING MFTINDEX...");
+
+        let build_start = Instant::now();
+        let index = MftReader::load_raw_to_index(input)
+            .with_context(|| format!("Failed to build index from {}", input.display()))?;
+        let build_time = build_start.elapsed();
+
+        println!();
+        println!("✅ INDEX BUILT");
+        println!(
+            "  Records:              {}",
+            format_number_commas(index.len() as u64)
+        );
+        println!("  Build time:          {}", format_duration(build_time));
+
+        // Show sample tree metrics
+        println!();
+        println!("📊 TREE METRICS SAMPLE (first 10 directories):");
+        println!();
+        println!(
+            "  {:<8} {:<12} {:<15} {:<15}",
+            "FRS", "Descendants", "TreeSize", "TreeAllocated"
+        );
+        println!("  {}", "─".repeat(60));
+
+        let mut shown = 0;
+        for record in &index.records {
+            if record.is_directory() && shown < 10 {
+                println!(
+                    "  {:<8} {:<12} {:<15} {:<15}",
+                    record.frs,
+                    record.descendants,
+                    format_bytes(record.treesize),
+                    format_bytes(record.tree_allocated)
+                );
+                shown += 1;
+            }
+        }
+
+        // Show root directory specifically
+        if let Some(root) = index.records.iter().find(|r| r.frs == 5) {
+            println!();
+            println!("📁 ROOT DIRECTORY (FRS 5):");
+            println!(
+                "  Descendants:          {}",
+                format_number_commas(root.descendants.into())
+            );
+            println!("  Tree size:           {}", format_bytes(root.treesize));
+            println!(
+                "  Tree allocated:      {}",
+                format_bytes(root.tree_allocated)
+            );
+        }
+
+        let elapsed = start_time.elapsed();
+        println!();
         println!("⏱️  Completed in {}", format_duration(elapsed));
         return Ok(());
     }

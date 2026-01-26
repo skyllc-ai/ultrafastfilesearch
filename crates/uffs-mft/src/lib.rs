@@ -90,9 +90,11 @@ pub mod flags;
 pub mod index;
 pub mod raw;
 
-#[cfg(windows)]
-pub mod ntfs;
+// Cross-platform modules (NTFS structures and parsing)
+pub mod ntfs;  // NTFS structure definitions - cross-platform
+pub mod parse; // MFT record parsing - cross-platform
 
+// Windows-only modules (I/O operations)
 #[cfg(windows)]
 pub mod io;
 

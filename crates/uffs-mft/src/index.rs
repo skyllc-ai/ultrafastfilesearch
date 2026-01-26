@@ -1639,12 +1639,19 @@ impl MftIndex {
     /// // ... parse MFT records ...
     /// index.compute_tree_metrics(); // Compute tree metrics for all directories
     /// ```
-    #[allow(clippy::cast_possible_truncation)] // Justified: n < u32::MAX in practice, checked below
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cognitive_complexity,
+        clippy::too_many_lines
+    )] // Justified: n < u32::MAX in practice, algorithm is inherently complex
     pub fn compute_tree_metrics(&mut self) {
         let n = self.records.len();
         if n == 0 {
+            tracing::debug!("⏭️  Skipping tree metrics - no records");
             return;
         }
+
+        tracing::debug!(records = n, "🔨 Computing tree metrics...");
 
         // Temporary arrays for the algorithm
         let mut parent_idx = vec![NO_ENTRY; n];
@@ -1750,9 +1757,33 @@ impl MftIndex {
         // Phase 4: Defensive corruption detection
         // If processed != n, there are cycles or broken parent links
         // We leave partial aggregates and continue (don't panic)
-        if processed != n {
-            // In production, you might want to log this as a warning
-            // For now, we silently continue with partial results
+        if processed == n {
+            tracing::debug!(
+                processed,
+                total = n,
+                "✅ Tree metrics computed successfully for all records"
+            );
+        } else {
+            tracing::warn!(
+                processed,
+                total = n,
+                missing = n - processed,
+                "⚠️ Tree metrics computation incomplete - possible cycles or broken parent links"
+            );
+        }
+
+        // Debug: Show sample of computed metrics (first 5 directories)
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let sample_dirs: Vec<_> = self
+                .records
+                .iter()
+                .filter(|rec| rec.is_directory())
+                .take(5)
+                .map(|rec| (rec.frs, rec.descendants, rec.treesize, rec.tree_allocated))
+                .collect();
+            if !sample_dirs.is_empty() {
+                tracing::debug!("📊 Sample tree metrics (first 5 dirs): {:?}", sample_dirs);
+            }
         }
     }
 
@@ -2642,7 +2673,9 @@ impl<'a> PathCache<'a> {
     clippy::std_instead_of_core,
     clippy::str_to_string,
     clippy::uninlined_format_args,
-    clippy::use_debug
+    clippy::use_debug,
+    clippy::unwrap_used, // Test code - unwrap is acceptable
+    clippy::expect_used  // Test code - expect is acceptable
 )]
 mod tests {
     use super::*;
@@ -4074,6 +4107,9 @@ impl MftIndex {
     ///
     /// This is the fast path - directly builds the lean index without
     /// going through Polars DataFrame.
+    ///
+    /// Currently Windows-only due to ParsedRecord being in Windows-only io
+    /// module. TODO: Move ParsedRecord to cross-platform module.
     pub fn from_parsed_records(volume: char, records: Vec<crate::io::ParsedRecord>) -> Self {
         /// System metafiles are FRS 0-15 (except root at FRS 5)
         const SYSTEM_METAFILE_MAX_FRS: u64 = 15;

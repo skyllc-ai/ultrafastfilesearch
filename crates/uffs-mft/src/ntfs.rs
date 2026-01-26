@@ -11,8 +11,11 @@
 //! # Reference
 //!
 //! Based on the original C++ UFFS implementation and NTFS documentation.
-
-#![cfg(windows)]
+//!
+//! # Platform Support
+//!
+//! This module is cross-platform - NTFS structures are just byte layouts
+//! and can be parsed on any platform.
 
 use core::mem::size_of;
 
