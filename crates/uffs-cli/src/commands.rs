@@ -282,7 +282,6 @@ fn should_use_index_path(
     mode: QueryMode,
     parquet_index: Option<&PathBuf>,
     multi_drives: Option<&Vec<char>>,
-    output_config: &OutputConfig,
 ) -> bool {
     match mode {
         QueryMode::ForceIndex => {
@@ -305,13 +304,10 @@ fn should_use_index_path(
             // Auto mode: use index path by default (fast, cached)
             // Conditions that require DataFrame path:
             // 1. Loading from parquet index file (already a DataFrame)
-            // 2. Tree columns requested (requires full DataFrame)
             if parquet_index.is_some() {
                 return false;
             }
-            if output_config.needs_tree_columns() {
-                return false;
-            }
+            // Tree columns are now available via MftIndex path (no need to force DataFrame)
             // Use fast cached index path (works for single and multi-drive)
             true
         }
@@ -403,8 +399,7 @@ pub async fn search(
 
     // Decide which query path to use based on mode and query complexity
     // Index path is the default (fast, cached) - DataFrame path is fallback
-    let use_index_path =
-        should_use_index_path(mode, index.as_ref(), multi_drives.as_ref(), &output_config);
+    let use_index_path = should_use_index_path(mode, index.as_ref(), multi_drives.as_ref());
 
     let mut results = if use_index_path {
         info!("🚀 Using fast cached MftIndex query path");
@@ -485,12 +480,24 @@ pub async fn search(
     };
 
     // Compute tree columns only if specifically requested (skip in benchmark mode)
+    // Note: Tree columns are already included when using MftIndex path (via
+    // results_to_dataframe) This code only runs for DataFrame path (parquet
+    // index or --force-dataframe)
     let t_tree = std::time::Instant::now();
     if !benchmark && output_config.needs_tree_columns() {
         let tree_cols = output_config.get_tree_columns();
-        info!(columns = tree_cols.len(), "Computing tree metrics");
-        results =
-            add_tree_columns(&results, &tree_cols).context("Failed to compute tree columns")?;
+        // Check if tree columns already exist (from MftIndex path)
+        let missing_cols: Vec<_> = tree_cols
+            .iter()
+            .filter(|col| results.column(col.column_name()).is_err())
+            .copied()
+            .collect();
+
+        if !missing_cols.is_empty() {
+            info!(columns = missing_cols.len(), "Computing tree metrics");
+            results = add_tree_columns(&results, &missing_cols)
+                .context("Failed to compute tree columns")?;
+        }
     }
     let tree_ms = t_tree.elapsed().as_millis();
 
@@ -1165,6 +1172,11 @@ fn results_to_dataframe(
     let mut is_virtual: Vec<bool> = Vec::with_capacity(height);
     let mut flags_values: Vec<u32> = Vec::with_capacity(height);
 
+    // Tree metrics (pre-computed in MftIndex)
+    let mut descendants_values: Vec<u32> = Vec::with_capacity(height);
+    let mut treesize_values: Vec<u64> = Vec::with_capacity(height);
+    let mut tree_allocated_values: Vec<u64> = Vec::with_capacity(height);
+
     for result in results {
         // Look up the full record from the index to get all attributes
         let record = index.find(result.frs);
@@ -1227,6 +1239,11 @@ fn results_to_dataframe(
             is_virtual.push(false);
             flags_values.push(0);
         }
+
+        // Tree metrics are always available from SearchResult
+        descendants_values.push(result.descendants);
+        treesize_values.push(result.treesize);
+        tree_allocated_values.push(result.tree_allocated);
     }
 
     // Create DataFrame with full schema matching MftIndex::to_dataframe()
@@ -1271,27 +1288,17 @@ fn results_to_dataframe(
         Series::new("is_unpinned".into(), is_unpinned).into_column(),
         Series::new("is_virtual".into(), is_virtual).into_column(),
         Series::new("flags".into(), flags_values).into_column(),
+        // Tree metrics (pre-computed in MftIndex, no need to recompute!)
+        Series::new("descendants".into(), descendants_values).into_column(),
+        Series::new("treesize".into(), treesize_values).into_column(),
+        Series::new("tree_allocated".into(), tree_allocated_values).into_column(),
     ];
 
     let mut df = uffs_mft::DataFrame::new_infer_height(columns)
         .map_err(|err| anyhow::anyhow!("Failed to create DataFrame: {err}"))?;
 
-    // Compute tree metrics (descendants, treesize, tree_allocated) for C++ parity
-    // The C++ version shows tree metrics in the Size/Size on Disk columns for
-    // directories
-    use uffs_core::tree::{TreeColumn, TreeIndex};
-    let mut tree = TreeIndex::from_dataframe(&df)
-        .map_err(|err| anyhow::anyhow!("Failed to build tree index: {err}"))?;
-    df = tree
-        .add_columns(
-            &df,
-            &[
-                TreeColumn::Descendants,
-                TreeColumn::TreeSize,
-                TreeColumn::TreeAllocated,
-            ],
-        )
-        .map_err(|err| anyhow::anyhow!("Failed to add tree columns: {err}"))?;
+    // Tree metrics are already computed in MftIndex and included in the columns
+    // above! No need to recompute them here - this was the missed optimization.
 
     // Replace size and allocated_size columns with tree metrics for directories
     // (C++ parity) For directories: size = treesize, allocated_size =

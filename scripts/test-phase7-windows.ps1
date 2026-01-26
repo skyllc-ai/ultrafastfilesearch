@@ -11,8 +11,8 @@
 #
 # PREREQUISITES (run on Mac):
 #   1. rust-script scripts/ci-pipeline.rs go -v
-#      This cross-compiles Windows binaries and places them in dist/latest/
-#   2. Copy dist/latest/ directory to Windows machine
+#      This cross-compiles Windows binaries and places them in dist/
+#   2. Copy binaries to Windows machine at ~\bin\
 #
 # USAGE:
 #   Run in elevated PowerShell:
@@ -63,15 +63,16 @@ $binaryPath = ""
 if ($UseBinaries) {
     Write-Header "Step 1: Using Pre-Built Binaries"
 
-    # Check for binaries in dist/latest/windows-x64/
-    $distPath = "dist\latest\windows-x64\uffs_mft.exe"
-    if (Test-Path $distPath) {
-        $binaryPath = $distPath
-        Write-Success "Found pre-built binary: $distPath"
+    # Check for binaries in ~\bin\
+    $binPath = Join-Path $env:USERPROFILE "bin\uffs_mft.exe"
+    if (Test-Path $binPath) {
+        $binaryPath = $binPath
+        Write-Success "Found pre-built binary: $binPath"
     } else {
-        Write-Error "Pre-built binary not found at: $distPath"
+        Write-Error "Pre-built binary not found at: $binPath"
         Write-Info "Please run on Mac: rust-script scripts/ci-pipeline.rs go -v"
-        Write-Info "Then copy dist/latest/ directory to Windows"
+        Write-Info "Then run: just use"
+        Write-Info "This copies binaries to ~\bin\"
         exit 1
     }
 } else {

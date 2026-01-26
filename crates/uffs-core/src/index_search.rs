@@ -421,6 +421,15 @@ pub struct SearchResult {
     pub name_index: u16,
     /// Which stream (0 = default `$DATA`).
     pub stream_index: u16,
+
+    // Tree metrics (pre-computed in MftIndex)
+    /// Count of all descendants (files + subdirectories) in subtree (0 for
+    /// files).
+    pub descendants: u32,
+    /// Sum of logical file sizes in subtree (includes this file/directory).
+    pub treesize: u64,
+    /// Sum of allocated disk sizes in subtree (includes this file/directory).
+    pub tree_allocated: u64,
 }
 
 impl SearchResult {
@@ -446,6 +455,9 @@ impl SearchResult {
             stream_name: String::new(),
             name_index: 0,
             stream_index: 0,
+            descendants: record.descendants,
+            treesize: record.treesize,
+            tree_allocated: record.tree_allocated,
         }
     }
 
@@ -482,6 +494,9 @@ impl SearchResult {
             stream_name: index.stream_name(stream_info).to_owned(),
             name_index: name_idx,
             stream_index: stream_idx,
+            descendants: record.descendants,
+            treesize: record.treesize,
+            tree_allocated: record.tree_allocated,
         }
     }
 
