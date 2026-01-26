@@ -312,6 +312,7 @@ enum Commands {
     /// ```text
     /// uffs_mft save --drive C --output mft_c.mft
     /// uffs_mft save -d C -o mft_c.mft --no-compress
+    /// uffs_mft save -d C -o mft_c.raw --raw  # Compatible with other MFT tools
     /// ```
     Save {
         /// Drive letter to read MFT from (e.g., C, D, E)
@@ -329,6 +330,12 @@ enum Commands {
         /// Compression level (1-22, default 3)
         #[arg(long, default_value = "3")]
         compression_level: i32,
+
+        /// Raw compatibility mode: output raw MFT bytes without header.
+        /// This format is compatible with other MFT tools like analyzeMFT,
+        /// MFT2CSV. Note: --raw implies --no-compress.
+        #[arg(long)]
+        raw: bool,
     },
 
     /// Load MFT from a saved file and export to parquet/csv
@@ -829,7 +836,8 @@ async fn dispatch_command(command: Commands) -> Result<()> {
             output,
             no_compress,
             compression_level,
-        } => cmd_save(drive, &output, !no_compress, compression_level).await,
+            raw,
+        } => cmd_save(drive, &output, !no_compress, compression_level, raw).await,
         Commands::Load {
             input,
             output,
@@ -2429,6 +2437,7 @@ async fn cmd_save(
     output: &Path,
     compress: bool,
     compression_level: i32,
+    raw_compat: bool,
 ) -> Result<()> {
     use std::time::Instant;
 
@@ -2480,9 +2489,12 @@ async fn cmd_save(
         .await
         .with_context(|| format!("Failed to open drive {drive}:"))?;
 
+    // Raw compat mode implies no compression
     let options = SaveRawOptions {
-        compress,
+        compress: if raw_compat { false } else { compress },
         compression_level,
+        volume_letter: drive_upper,
+        raw_compat,
     };
 
     let header = reader
@@ -2531,7 +2543,9 @@ async fn cmd_save(
         "  Original size:       {}",
         format_bytes(header.original_size)
     );
-    if header.is_compressed() {
+    if raw_compat {
+        println!("  Format:               raw (compatible with other MFT tools)");
+    } else if header.is_compressed() {
         println!(
             "  Compressed size:     {}",
             format_bytes(header.compressed_size)
@@ -2544,6 +2558,7 @@ async fn cmd_save(
         println!("  Space saved:          {savings:.1}%");
     } else {
         println!("  Compression:          none");
+        println!("  Volume letter:        {}:", header.volume_letter);
     }
     println!();
     println!("⏱️  Completed in {}", format_duration(elapsed));

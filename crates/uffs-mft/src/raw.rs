@@ -12,16 +12,23 @@
 //! ```text
 //! [Header: 64 bytes]
 //!   - Magic: "UFFS-MFT" (8 bytes)
-//!   - Version: u32 (4 bytes)
+//!   - Version: u32 (4 bytes) - currently 2
 //!   - Flags: u32 (4 bytes) - bit 0: compressed
 //!   - Record size: u32 (4 bytes)
 //!   - Record count: u64 (8 bytes)
 //!   - Original size: u64 (8 bytes) - uncompressed size
 //!   - Compressed size: u64 (8 bytes) - 0 if not compressed
-//!   - Reserved: 20 bytes
+//!   - Volume letter: u8 (1 byte) - ASCII drive letter (e.g., 'C') [v2+]
+//!   - Reserved: 19 bytes
 //! [Data: variable]
 //!   - Raw MFT bytes (optionally zstd compressed)
 //! ```
+//!
+//! # Compatibility Mode
+//!
+//! Use `--raw` flag with the save command to output raw MFT bytes without
+//! any header. This format is compatible with other MFT analysis tools like
+//! analyzeMFT, MFT2CSV, and ntfstool.
 
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
@@ -33,7 +40,9 @@ use crate::error::{MftError, Result};
 const MAGIC: &[u8; 8] = b"UFFS-MFT";
 
 /// Current file format version.
-const VERSION: u32 = 1;
+/// - v1: Initial format
+/// - v2: Added `volume_letter` field
+const VERSION: u32 = 2;
 
 /// Flag: data is zstd compressed.
 const FLAG_COMPRESSED: u32 = 0x0001;
@@ -56,6 +65,9 @@ pub struct RawMftHeader {
     pub original_size: u64,
     /// Compressed size (0 if not compressed).
     pub compressed_size: u64,
+    /// Volume letter (e.g., 'C', 'D'). Added in v2.
+    /// For v1 files, this defaults to 'X'.
+    pub volume_letter: char,
 }
 
 impl RawMftHeader {
@@ -76,7 +88,9 @@ impl RawMftHeader {
         buf[20..28].copy_from_slice(&self.record_count.to_le_bytes());
         buf[28..36].copy_from_slice(&self.original_size.to_le_bytes());
         buf[36..44].copy_from_slice(&self.compressed_size.to_le_bytes());
-        // Reserved bytes 44-63 are already zero
+        // Volume letter at byte 44 (v2+)
+        buf[44] = self.volume_letter as u8;
+        // Reserved bytes 45-63 are already zero
         buf
     }
 
@@ -111,6 +125,13 @@ impl RawMftHeader {
             buf[36], buf[37], buf[38], buf[39], buf[40], buf[41], buf[42], buf[43],
         ]);
 
+        // Volume letter at byte 44 (v2+), default to 'X' for v1 files
+        let volume_letter = if version >= 2 && buf[44].is_ascii_alphabetic() {
+            char::from(buf[44]).to_ascii_uppercase()
+        } else {
+            'X'
+        };
+
         Ok(Self {
             version,
             flags,
@@ -118,6 +139,7 @@ impl RawMftHeader {
             record_count,
             original_size,
             compressed_size,
+            volume_letter,
         })
     }
 }
@@ -129,6 +151,11 @@ pub struct SaveRawOptions {
     pub compress: bool,
     /// Compression level (1-22, default 3).
     pub compression_level: i32,
+    /// Volume letter (e.g., 'C', 'D').
+    pub volume_letter: char,
+    /// If true, save in raw compatibility mode (no header, just raw MFT bytes).
+    /// This format is compatible with other MFT tools like analyzeMFT, MFT2CSV.
+    pub raw_compat: bool,
 }
 
 impl Default for SaveRawOptions {
@@ -136,6 +163,8 @@ impl Default for SaveRawOptions {
         Self {
             compress: true,
             compression_level: 3,
+            volume_letter: 'X',
+            raw_compat: false,
         }
     }
 }
@@ -253,6 +282,7 @@ pub fn save_raw_mft<P: AsRef<Path>>(
         record_count,
         original_size,
         compressed_size,
+        volume_letter: options.volume_letter,
     };
 
     // Write file
@@ -378,6 +408,10 @@ pub struct StreamingRawMftWriter {
     /// Compression level (if compressing).
     #[allow(dead_code)]
     compression_level: i32,
+    /// Volume letter (e.g., 'C', 'D').
+    volume_letter: char,
+    /// Whether raw compatibility mode is enabled (no header).
+    raw_compat: bool,
     /// Zstd encoder (if compressing).
     #[cfg(feature = "zstd")]
     encoder: Option<zstd::stream::Encoder<'static, BufWriter<File>>>,
@@ -404,6 +438,22 @@ impl StreamingRawMftWriter {
         let output_file = File::create(path.as_ref())?;
         let mut writer = BufWriter::with_capacity(8 * 1024 * 1024, output_file); // 8MB buffer
 
+        // In raw compatibility mode, don't write any header
+        if options.raw_compat {
+            return Ok(Self {
+                writer,
+                output_path,
+                record_size,
+                bytes_written: 0,
+                compress: false, // Raw compat mode doesn't support compression
+                compression_level: options.compression_level,
+                volume_letter: options.volume_letter,
+                raw_compat: true,
+                #[cfg(feature = "zstd")]
+                encoder: None,
+            });
+        }
+
         // Write placeholder header (will be updated in finish())
         let placeholder_header = RawMftHeader {
             version: VERSION,
@@ -412,6 +462,7 @@ impl StreamingRawMftWriter {
             record_count: 0,
             original_size: 0,
             compressed_size: 0,
+            volume_letter: options.volume_letter,
         };
         writer.write_all(&placeholder_header.to_bytes())?;
 
@@ -441,6 +492,8 @@ impl StreamingRawMftWriter {
                 bytes_written: 0,
                 compress: true,
                 compression_level: options.compression_level,
+                volume_letter: options.volume_letter,
+                raw_compat: false,
                 encoder: Some(encoder),
             });
         }
@@ -452,6 +505,8 @@ impl StreamingRawMftWriter {
             bytes_written: 0,
             compress: options.compress,
             compression_level: options.compression_level,
+            volume_letter: options.volume_letter,
+            raw_compat: false,
             #[cfg(feature = "zstd")]
             encoder: None,
         })
@@ -495,6 +550,21 @@ impl StreamingRawMftWriter {
         let original_size = self.bytes_written;
         let record_count = original_size / u64::from(self.record_size);
 
+        // For raw compatibility mode, just flush and return a header struct
+        // (the file has no header, just raw MFT bytes)
+        if self.raw_compat {
+            self.writer.flush()?;
+            return Ok(RawMftHeader {
+                version: 0, // Indicates raw compat mode
+                flags: 0,
+                record_size: self.record_size,
+                record_count,
+                original_size,
+                compressed_size: 0,
+                volume_letter: self.volume_letter,
+            });
+        }
+
         #[cfg(feature = "zstd")]
         let compressed_size = if let Some(encoder) = self.encoder.take() {
             let mut zstd_writer = encoder
@@ -522,6 +592,7 @@ impl StreamingRawMftWriter {
             record_count,
             original_size,
             compressed_size,
+            volume_letter: self.volume_letter,
         };
 
         // For uncompressed, update the header at the beginning of the file
@@ -575,6 +646,7 @@ mod tests {
             record_count: 1000,
             original_size: 1024 * 1000,
             compressed_size: 500_000,
+            volume_letter: 'G',
         };
 
         let bytes = header.to_bytes();
@@ -586,6 +658,7 @@ mod tests {
         assert_eq!(parsed.record_count, header.record_count);
         assert_eq!(parsed.original_size, header.original_size);
         assert_eq!(parsed.compressed_size, header.compressed_size);
+        assert_eq!(parsed.volume_letter, header.volume_letter);
         assert!(parsed.is_compressed());
 
         Ok(())
@@ -618,11 +691,14 @@ mod tests {
         let options = SaveRawOptions {
             compress: false,
             compression_level: 3,
+            volume_letter: 'C',
+            raw_compat: false,
         };
         let header = save_raw_mft(&path, &data, record_size, &options)?;
 
         assert_eq!(header.record_count, 4);
         assert_eq!(header.record_size, record_size);
+        assert_eq!(header.volume_letter, 'C');
         assert!(!header.is_compressed());
 
         // Load and verify
@@ -691,6 +767,8 @@ mod tests {
         let options = SaveRawOptions {
             compress: false,
             compression_level: 3,
+            volume_letter: 'D',
+            raw_compat: false,
         };
         save_raw_mft(&path, &data, record_size, &options)?;
 
@@ -715,6 +793,7 @@ mod tests {
             record_count: 3,
             original_size: 12,
             compressed_size: 0,
+            volume_letter: 'X',
         };
 
         let data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
@@ -725,5 +804,76 @@ mod tests {
         assert_eq!(records[0], (0, &[1, 2, 3, 4][..]));
         assert_eq!(records[1], (1, &[5, 6, 7, 8][..]));
         assert_eq!(records[2], (2, &[9, 10, 11, 12][..]));
+    }
+
+    #[test]
+    fn test_volume_letter_preserved() -> TestResult {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_mft_volume_letter.raw");
+
+        let record_size = 1024_u32;
+        let data = vec![0_u8; 4 * record_size as usize];
+
+        // Save with volume letter 'G'
+        let options = SaveRawOptions {
+            compress: false,
+            compression_level: 3,
+            volume_letter: 'G',
+            raw_compat: false,
+        };
+        let header = save_raw_mft(&path, &data, record_size, &options)?;
+        assert_eq!(header.volume_letter, 'G');
+
+        // Load and verify volume letter is preserved
+        let loaded = load_raw_mft(&path, &LoadRawOptions::default())?;
+        assert_eq!(loaded.header.volume_letter, 'G');
+
+        // Cleanup
+        std::fs::remove_file(&path)?;
+
+        Ok(())
+    }
+
+    #[test]
+    #[allow(clippy::indexing_slicing)]
+    fn test_raw_compat_mode() -> TestResult {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_mft_raw_compat.raw");
+
+        let record_size = 1024_u32;
+        let mut data = vec![0_u8; 4 * record_size as usize];
+        // Mark each record
+        for i in 0_u8..4 {
+            data[usize::from(i) * record_size as usize] = i;
+        }
+
+        // Save in raw compat mode (no header)
+        let options = SaveRawOptions {
+            compress: false,
+            compression_level: 3,
+            volume_letter: 'G',
+            raw_compat: true,
+        };
+
+        let mut writer = StreamingRawMftWriter::new(&path, record_size, &options)?;
+        writer.write_chunk(&data)?;
+        let header = writer.finish()?;
+
+        // Header should indicate raw compat mode (version 0)
+        assert_eq!(header.version, 0);
+        assert_eq!(header.record_count, 4);
+
+        // File should be exactly the size of the data (no header)
+        let file_size = std::fs::metadata(&path)?.len();
+        assert_eq!(file_size, data.len() as u64);
+
+        // File content should be exactly the raw data
+        let file_content = std::fs::read(&path)?;
+        assert_eq!(file_content, data);
+
+        // Cleanup
+        std::fs::remove_file(&path)?;
+
+        Ok(())
     }
 }

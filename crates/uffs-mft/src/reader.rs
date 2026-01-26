@@ -3071,8 +3071,11 @@ impl MftReader {
         }
 
         // Build MftIndex from parsed records (includes tree metrics computation)
-        // Use 'X' as volume letter since we don't have that info from raw file
-        Ok(MftIndex::from_parsed_records('X', parsed_records))
+        // Use volume letter from header (v2+) or 'X' as fallback for v1 files
+        Ok(MftIndex::from_parsed_records(
+            raw.header.volume_letter,
+            parsed_records,
+        ))
     }
 
     /// Convert parsed records to DataFrame (legacy AoS path).
