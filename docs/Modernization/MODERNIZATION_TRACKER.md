@@ -9,7 +9,7 @@ UFFS - Ultra Fast File Search
 
 > **Reference**: [`uffs-modernization-plan-2026.md`](uffs-modernization-plan-2026.md)
 > **Last Updated**: 2026-01-27
-> **Current Phase**: Wave 2 - Architecture Completion
+> **Current Phase**: Wave 3 - Performance Optimization
 
 ---
 
@@ -48,7 +48,7 @@ Location: LOG/<<YYYY_MM_DD_HH_MM>>_CHANGELOG_HEALING.md
 |------|--------|----------|---------|-----------|
 | **1** Immediate Wins | ✅ Complete | 5/5 | 2026-01-27 | 2026-01-27 |
 | **2** Architecture Completion | ✅ Complete | 4/4 | 2026-01-27 | 2026-01-27 |
-| **2.5** Module Restructuring | ⬜ Not Started | 0/7 | - | - |
+| **2.5** Module Restructuring | ⏸️ Deferred | 0/7 | 2026-01-27 | Requires Windows testing |
 | **3** Testing Excellence | ⬜ Not Started | 0/4 | - | - |
 | **4** Documentation & API | ⬜ Not Started | 0/4 | - | - |
 | **5** Performance & Observability | ⬜ Not Started | 0/4 | - | - |
@@ -87,7 +87,7 @@ Location: LOG/<<YYYY_MM_DD_HH_MM>>_CHANGELOG_HEALING.md
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 2.5.1 | Split `io.rs` (6,623 lines) | ⬜ | → `io/` directory (8-10 files) |
+| 2.5.1 | Split `io.rs` (6,623 lines) | ⏸️ | → `io/` directory (8-10 files) - Deferred |
 | 2.5.2 | Split `index.rs` (5,690 lines) | ⬜ | → `index/` directory (6-8 files) |
 | 2.5.3 | Split `reader.rs` (4,475 lines) | ⬜ | → `reader/` directory (4-6 files) |
 | 2.5.4 | Refactor `main.rs` (4,543 lines) | ⬜ | Extract CLI logic to modules |
