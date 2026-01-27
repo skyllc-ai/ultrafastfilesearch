@@ -1,8 +1,8 @@
 # CHANGELOG_HEALING - C++ vs Rust UFFS Parity Fixes
 
-**Date:** 2026-01-27 18:00  
-**Session:** C++ vs Rust Output Parity  
-**Version:** v0.2.123 → v0.2.124
+**Date:** 2026-01-27 18:00
+**Session:** C++ vs Rust Output Parity
+**Version:** v0.2.123 → v0.2.126
 
 ## Summary
 
@@ -101,10 +101,57 @@ Key changes:
 
 ---
 
+## Fix 5: Resident File Size on Disk (io.rs) ✅ FIXED
+
+### What Failed
+- Deep dive analysis with read-only drive revealed 15,046 files still had wrong Size on Disk
+- C++ shows `Size on Disk = 0` for resident files (correct)
+- Rust shows `Size on Disk = logical_size` for resident files (incorrect)
+
+### Why It Failed
+- The fix in v0.2.124 added `allocated_size` field to `SearchResult` and used it in output
+- BUT the underlying MFT parsing in `crates/uffs-mft/src/io.rs` had a bug
+- Two locations (lines 663 and 976) returned `(len, len)` for resident files
+- This set `allocated_size = logical_size` instead of `allocated_size = 0`
+
+### Evidence
+```
+autorun.inf:     C++ Size on Disk=0,  Rust Size on Disk=208
+sfile_*.tmp:     C++ Size on Disk=0,  Rust Size on Disk=19-22
+Zone.Identifier: C++ Size on Disk=0,  Rust Size on Disk=25
+```
+
+### How Fixed
+Changed `(len, len)` to `(len, 0)` at both locations in `crates/uffs-mft/src/io.rs`:
+- Line 663: Resident file handling in first parsing path
+- Line 976: Resident file handling in second parsing path
+
+This matches the correct behavior already in `parse.rs` line 590:
+```rust
+(value_length as u64, 0, false, false)  // allocated_size = 0 for resident
+```
+
+---
+
+## Remaining Issues (Under Investigation)
+
+### Issue B: Reparse Point Size
+- Junctions show Size=0 in Rust but Size=48 in C++
+- The 48 bytes is reparse point metadata
+- Design decision: whether to include reparse point data size
+
+### Issue C: Treesize Calculation Difference
+- C++ shows ~524 bytes extra per resident file in directory treesize
+- Root cause unclear - may be MFT record space counting
+- Needs further investigation
+
+---
+
 ## Commits
 
 | Commit | Description |
 |--------|-------------|
 | v0.2.124 | fix: C++ parity - Size on Disk, Directory Size, ADS Name |
 | v0.2.125 | fix: C++ parity - Descendant count includes ADS |
+| v0.2.126 | fix: Resident file Size on Disk = 0 (io.rs bug) |
 

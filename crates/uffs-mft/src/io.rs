@@ -653,6 +653,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     }
                 } else {
                     // Resident: value_length at offset 16
+                    // Resident files have no clusters allocated - data is stored in MFT record
+                    // C++ correctly shows allocated_size=0 for resident files
                     let len_offset = offset + 16;
                     if len_offset + 4 <= data.len() {
                         let len = u32::from_le_bytes(
@@ -660,7 +662,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                                 .try_into()
                                 .unwrap_or([0; 4]),
                         ) as u64;
-                        (len, len)
+                        (len, 0) // allocated_size = 0 for resident files
                     } else {
                         (0, 0)
                     }
@@ -966,6 +968,9 @@ pub fn parse_record_to_fragment(
                         (0, 0)
                     }
                 } else {
+                    // Resident: value_length at offset 16
+                    // Resident files have no clusters allocated - data is stored in MFT record
+                    // C++ correctly shows allocated_size=0 for resident files
                     let len_offset = offset + 16;
                     if len_offset + 4 <= data.len() {
                         let len = u32::from_le_bytes(
@@ -973,7 +978,7 @@ pub fn parse_record_to_fragment(
                                 .try_into()
                                 .unwrap_or([0; 4]),
                         ) as u64;
-                        (len, len)
+                        (len, 0) // allocated_size = 0 for resident files
                     } else {
                         (0, 0)
                     }
