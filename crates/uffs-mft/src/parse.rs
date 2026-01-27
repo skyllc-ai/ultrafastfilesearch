@@ -33,7 +33,8 @@ use core::mem::size_of;
 use tracing::{debug, info, warn};
 
 use crate::ntfs::{
-    ExtendedStandardInfo, FILE_RECORD_MAGIC, MultiSectorHeader, NameInfo, SECTOR_SIZE, StreamInfo,
+    ExtendedStandardInfo, FILE_RECORD_MAGIC, MultiSectorHeader, NameInfo, ReparsePointHeader,
+    SECTOR_SIZE, StreamInfo,
 };
 
 // Thread-local buffer for record processing to avoid per-record allocations.
@@ -53,14 +54,24 @@ thread_local! {
 /// - Multiple data streams (Alternate Data Streams)
 /// - Extended size information (allocated, compressed)
 /// - All 18 attribute flags
+/// - Sequence number (for detecting reused FRS)
+/// - Log File Sequence Number (LSN) for journal correlation
+/// - `$FILE_NAME` timestamps (often differ from `$STANDARD_INFORMATION`)
 #[derive(Debug, Clone, Default)]
+#[allow(clippy::struct_excessive_bools)] // Forensic fields require multiple bool flags
 pub struct ParsedRecord {
     /// File Record Segment number.
     pub frs: u64,
+    /// Sequence number (incremented when FRS is reused).
+    pub sequence_number: u16,
+    /// Log File Sequence Number - correlates with `$LogFile` journal.
+    pub lsn: u64,
     /// Primary parent directory FRS (from best name).
     pub parent_frs: u64,
     /// Primary file name (Win32 or Win32+DOS preferred).
     pub name: String,
+    /// Primary filename namespace (0=POSIX, 1=Win32, 2=DOS, 3=Win32+DOS).
+    pub namespace: u8,
     /// All file names (hard links). Includes primary name.
     pub names: Vec<NameInfo>,
     /// All data streams. First is the default (unnamed) stream.
@@ -75,6 +86,32 @@ pub struct ParsedRecord {
     pub in_use: bool,
     /// Whether this is a directory.
     pub is_directory: bool,
+    /// Creation time from primary `$FILE_NAME` (Unix microseconds).
+    pub fn_created: i64,
+    /// Modification time from primary `$FILE_NAME` (Unix microseconds).
+    pub fn_modified: i64,
+    /// Access time from primary `$FILE_NAME` (Unix microseconds).
+    pub fn_accessed: i64,
+    /// MFT change time from primary `$FILE_NAME` (Unix microseconds).
+    pub fn_mft_changed: i64,
+    /// Reparse tag from `$REPARSE_POINT` attribute (0 if not a reparse point).
+    /// Common values: symlink (0xA000000C), junction (0xA0000003), `OneDrive`,
+    /// etc.
+    pub reparse_tag: u32,
+
+    // P3 Forensic fields (populated when ParseOptions::forensic is true)
+    /// True if this record is deleted (`FRH_IN_USE` flag not set).
+    /// Only populated when parsing with `ParseOptions::include_deleted`.
+    pub is_deleted: bool,
+    /// True if this record has corrupt fixup (USA mismatch).
+    /// Only populated when parsing with `ParseOptions::include_corrupt`.
+    pub is_corrupt: bool,
+    /// True if this is an extension record (not a base record).
+    /// Only populated when parsing with `ParseOptions::include_extensions`.
+    pub is_extension: bool,
+    /// Base FRS for extension records (0 for base records).
+    /// Only meaningful when `is_extension` is true.
+    pub base_frs: u64,
 }
 
 impl ParsedRecord {
@@ -148,6 +185,59 @@ pub enum ParseResult {
     Extension(ExtensionAttributes),
     /// Record is not in use or invalid.
     Skip,
+}
+
+// ============================================================================
+// Parse Options (Forensic Mode)
+// ============================================================================
+
+/// Options for MFT record parsing.
+///
+/// By default, parsing skips deleted records, corrupt records, and merges
+/// extension records into their base records. Forensic mode enables
+/// extraction of these records for analysis.
+///
+/// # Performance Impact
+///
+/// - `include_deleted`: +10-50% more records (significant memory/CPU impact)
+/// - `include_corrupt`: Minimal impact (corrupt records are rare)
+/// - `include_extensions`: Minimal impact (extensions are rare, ~0.1% of
+///   records)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ParseOptions {
+    /// Include deleted records (`FRH_IN_USE` flag not set).
+    /// These records may have partial/stale data but are valuable for
+    /// forensics.
+    pub include_deleted: bool,
+    /// Include corrupt records (USA fixup failed).
+    /// These records have torn writes but may still contain recoverable data.
+    pub include_corrupt: bool,
+    /// Include extension records as separate rows instead of merging.
+    /// Useful for analyzing fragmented files with many attributes.
+    pub include_extensions: bool,
+}
+
+impl ParseOptions {
+    /// Default options: skip deleted, corrupt, and merge extensions.
+    pub const DEFAULT: Self = Self {
+        include_deleted: false,
+        include_corrupt: false,
+        include_extensions: false,
+    };
+
+    /// Forensic mode: include all records for analysis.
+    pub const FORENSIC: Self = Self {
+        include_deleted: true,
+        include_corrupt: true,
+        include_extensions: true,
+    };
+
+    /// Returns true if any forensic options are enabled.
+    #[inline]
+    #[must_use]
+    pub const fn is_forensic(&self) -> bool {
+        self.include_deleted || self.include_corrupt || self.include_extensions
+    }
 }
 
 // ============================================================================
@@ -243,15 +333,28 @@ pub fn apply_fixup(data: &mut [u8]) -> bool {
 pub fn create_placeholder_record(frs: u64) -> ParsedRecord {
     ParsedRecord {
         frs,
+        sequence_number: 0,
+        lsn: 0,
+        reparse_tag: 0,
         parent_frs: 5, // Assume root as parent (FRS 5 is root directory)
         name: format!("<dir:{frs}>"),
+        namespace: 1, // Win32 namespace
         names: Vec::new(),
         streams: Vec::new(),
         size: 0,
         allocated_size: 0,
         std_info: ExtendedStandardInfo::default(),
+        fn_created: 0,
+        fn_modified: 0,
+        fn_accessed: 0,
+        fn_mft_changed: 0,
         in_use: true,       // Mark as in-use so it's included in output
         is_directory: true, // Assume directory since it's referenced as parent
+        // P3 forensic fields - placeholders are not deleted/corrupt/extension
+        is_deleted: false,
+        is_corrupt: false,
+        is_extension: false,
+        base_frs: 0,
     }
 }
 
@@ -340,47 +443,74 @@ pub fn add_missing_parent_placeholders_to_vec(records: &mut Vec<ParsedRecord>) -
 // ============================================================================
 
 /// Parses `$STANDARD_INFORMATION` into `ExtendedStandardInfo`.
+///
+/// Handles both NTFS 1.2 (36 bytes) and NTFS 3.0+ (72 bytes) formats.
+/// For NTFS 3.0+, also extracts `usn`, `security_id`, and `owner_id`.
 #[allow(unsafe_code, clippy::single_call_fn)] // Required: ptr::read for packed NTFS struct
 fn parse_standard_info_full(data: &[u8], attr_offset: usize, result: &mut ExtendedStandardInfo) {
     use core::mem::size_of;
 
-    use crate::ntfs::{StandardInformation, filetime_to_unix_micros};
+    use crate::ntfs::{
+        STANDARD_INFO_SIZE_V12, STANDARD_INFO_SIZE_V30, StandardInformation,
+        StandardInformationExtended, filetime_to_unix_micros,
+    };
 
-    // Get value offset (resident attribute)
+    // Get value offset and length (resident attribute)
+    let value_length_bytes = &data[attr_offset + 16..attr_offset + 20];
+    let value_length =
+        u32::from_le_bytes(value_length_bytes.try_into().unwrap_or([0, 0, 0, 0])) as usize;
     let value_offset_bytes = &data[attr_offset + 20..attr_offset + 22];
     let value_offset = u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0])) as usize;
 
     let si_offset = attr_offset + value_offset;
-    if si_offset + size_of::<StandardInformation>() > data.len() {
-        return;
+
+    // Check if we have NTFS 3.0+ extended format (72 bytes)
+    if value_length >= STANDARD_INFO_SIZE_V30
+        && si_offset + size_of::<StandardInformationExtended>() <= data.len()
+    {
+        // SAFETY: We've verified the buffer is large enough.
+        let si: StandardInformationExtended =
+            unsafe { core::ptr::read(data[si_offset..].as_ptr().cast()) };
+
+        *result = ExtendedStandardInfo {
+            created: filetime_to_unix_micros(si.creation_time),
+            modified: filetime_to_unix_micros(si.modification_time),
+            accessed: filetime_to_unix_micros(si.access_time),
+            mft_changed: filetime_to_unix_micros(si.mft_change_time),
+            usn: si.usn,
+            security_id: si.security_id,
+            owner_id: si.owner_id,
+            ..ExtendedStandardInfo::from_attributes(si.file_attributes)
+        };
+    } else if value_length >= STANDARD_INFO_SIZE_V12
+        && si_offset + size_of::<StandardInformation>() <= data.len()
+    {
+        // NTFS 1.2 format (36 bytes) - no extended fields
+        // SAFETY: We've verified the buffer is large enough.
+        let si: StandardInformation = unsafe { core::ptr::read(data[si_offset..].as_ptr().cast()) };
+
+        *result = ExtendedStandardInfo {
+            created: filetime_to_unix_micros(si.creation_time),
+            modified: filetime_to_unix_micros(si.modification_time),
+            accessed: filetime_to_unix_micros(si.access_time),
+            mft_changed: filetime_to_unix_micros(si.mft_change_time),
+            usn: 0,
+            security_id: 0,
+            owner_id: 0,
+            ..ExtendedStandardInfo::from_attributes(si.file_attributes)
+        };
     }
-
-    // SAFETY: We've verified the buffer is large enough.
-    let si: StandardInformation = unsafe { core::ptr::read(data[si_offset..].as_ptr().cast()) };
-
-    result.created = filetime_to_unix_micros(si.creation_time);
-    result.modified = filetime_to_unix_micros(si.modification_time);
-    result.accessed = filetime_to_unix_micros(si.access_time);
-    result.mft_changed = filetime_to_unix_micros(si.mft_change_time);
-
-    // Parse all flags
-    *result = ExtendedStandardInfo {
-        created: result.created,
-        modified: result.modified,
-        accessed: result.accessed,
-        mft_changed: result.mft_changed,
-        ..ExtendedStandardInfo::from_attributes(si.file_attributes)
-    };
+    // If neither format fits, leave result as default
 }
 
-/// Parses `$FILE_NAME` and returns a `NameInfo`.
+/// Parses `$FILE_NAME` and returns a `NameInfo` with timestamps.
 #[allow(unsafe_code, clippy::single_call_fn)] // Required: ptr::read for packed NTFS struct
 fn parse_file_name_full(data: &[u8], attr_offset: usize) -> Option<NameInfo> {
     use core::mem::size_of;
 
     use smallvec::SmallVec;
 
-    use crate::ntfs::{FileNameAttribute, file_reference_to_frs};
+    use crate::ntfs::{FileNameAttribute, file_reference_to_frs, filetime_to_unix_micros};
 
     // Get value offset (resident attribute)
     let value_offset_bytes = &data[attr_offset + 20..attr_offset + 22];
@@ -416,6 +546,10 @@ fn parse_file_name_full(data: &[u8], attr_offset: usize) -> Option<NameInfo> {
         name,
         parent_frs: file_reference_to_frs(fn_attr.parent_directory),
         namespace: fn_attr.file_name_namespace,
+        fn_created: filetime_to_unix_micros(fn_attr.creation_time),
+        fn_modified: filetime_to_unix_micros(fn_attr.modification_time),
+        fn_accessed: filetime_to_unix_micros(fn_attr.access_time),
+        fn_mft_changed: filetime_to_unix_micros(fn_attr.mft_change_time),
     })
 }
 
@@ -448,7 +582,13 @@ fn parse_data_attribute_full(
         String::new()
     };
 
-    let (size, allocated_size, is_sparse, is_compressed) = if header.is_non_resident != 0 {
+    let is_resident = header.is_non_resident == 0;
+    let (size, allocated_size, is_sparse, is_compressed) = if is_resident {
+        // Resident: get size from resident header
+        let value_length_bytes = &data[attr_offset + 16..attr_offset + 20];
+        let value_length = u32::from_le_bytes(value_length_bytes.try_into().ok()?);
+        (value_length as u64, 0, false, false)
+    } else {
         // Non-resident: get sizes from non-resident header
         let nr_offset = attr_offset + 16; // After common header
         if nr_offset + 48 > data.len() {
@@ -472,11 +612,6 @@ fn parse_data_attribute_full(
             is_sparse,
             is_compressed,
         )
-    } else {
-        // Resident: get size from resident header
-        let value_length_bytes = &data[attr_offset + 16..attr_offset + 20];
-        let value_length = u32::from_le_bytes(value_length_bytes.try_into().ok()?);
-        (value_length as u64, 0, false, false)
     };
 
     Some(StreamInfo {
@@ -485,12 +620,67 @@ fn parse_data_attribute_full(
         allocated_size,
         is_sparse,
         is_compressed,
+        is_resident,
     })
 }
 
 // ============================================================================
 // Main Parsing Functions
 // ============================================================================
+
+/// Tracks the best primary name during parsing.
+/// Win32 (1) and Win32+DOS (3) are preferred over POSIX (0).
+struct PrimaryNameTracker {
+    /// Primary filename.
+    name: String,
+    /// Parent FRS of the primary name.
+    parent_frs: u64,
+    /// Namespace of the primary name (255 = invalid/unset).
+    namespace: u8,
+    /// `$FILE_NAME` creation timestamp.
+    fn_created: i64,
+    /// `$FILE_NAME` modification timestamp.
+    fn_modified: i64,
+    /// `$FILE_NAME` access timestamp.
+    fn_accessed: i64,
+    /// `$FILE_NAME` MFT change timestamp.
+    fn_mft_changed: i64,
+}
+
+impl PrimaryNameTracker {
+    /// Sentinel value indicating no namespace has been set yet.
+    const INVALID_NAMESPACE: u8 = 255;
+
+    /// Updates the primary name if the new name is better.
+    fn update(&mut self, name_info: &NameInfo) {
+        let dominated = self.namespace == Self::INVALID_NAMESPACE;
+        let is_better =
+            matches!(name_info.namespace, 1 | 3) || (name_info.namespace == 0 && dominated);
+        if is_better || dominated {
+            self.name = name_info.name.clone();
+            self.parent_frs = name_info.parent_frs;
+            self.namespace = name_info.namespace;
+            self.fn_created = name_info.fn_created;
+            self.fn_modified = name_info.fn_modified;
+            self.fn_accessed = name_info.fn_accessed;
+            self.fn_mft_changed = name_info.fn_mft_changed;
+        }
+    }
+}
+
+impl Default for PrimaryNameTracker {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            parent_frs: 0,
+            namespace: Self::INVALID_NAMESPACE,
+            fn_created: 0,
+            fn_modified: 0,
+            fn_accessed: 0,
+            fn_mft_changed: 0,
+        }
+    }
+}
 
 /// Parses an MFT record and extracts relevant information.
 ///
@@ -508,7 +698,9 @@ fn parse_data_attribute_full(
 /// `ParseResult::Base` for base records, `ParseResult::Extension` for
 /// extension records, or `ParseResult::Skip` if invalid/not in use.
 #[must_use]
-#[allow(unsafe_code)] // Required: ptr::read for packed NTFS structs
+// Required: ptr::read for packed NTFS structs
+// 101 lines: just over limit due to P2 reparse_tag extraction; splitting would hurt readability
+#[allow(unsafe_code, clippy::too_many_lines)]
 pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     use core::mem::size_of;
 
@@ -542,13 +734,16 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
         frs
     };
 
+    // Extract sequence number and LSN from header
+    let sequence_number = header.sequence_number;
+    let lsn = header.log_file_sequence_number;
+
     // Prepare result containers
     let mut names: Vec<NameInfo> = Vec::new();
     let mut streams: Vec<StreamInfo> = Vec::new();
     let mut std_info = ExtendedStandardInfo::default();
-    let mut primary_name = String::new();
-    let mut primary_parent_frs = 0_u64;
-    let mut primary_namespace = 255_u8; // Invalid, will be replaced
+    let mut primary = PrimaryNameTracker::default();
+    let mut reparse_tag: u32 = 0;
 
     // Parse attributes
     let mut offset = header.first_attribute_offset as usize;
@@ -556,45 +751,27 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
 
     while offset + size_of::<AttributeRecordHeader>() <= max_offset {
         // SAFETY: We've verified offset + size_of::<AttributeRecordHeader>() <=
-        // max_offset <= data.len()
+        // max_offset
         let attr_header: AttributeRecordHeader =
             unsafe { core::ptr::read(data[offset..].as_ptr().cast()) };
 
-        // Check for end marker
         if attr_header.type_code == AttributeType::End as u32 {
             break;
         }
-
-        // Validate attribute length
         if attr_header.length == 0 || offset + attr_header.length as usize > max_offset {
             break;
         }
 
-        // Parse based on attribute type
         match AttributeType::from_u32(attr_header.type_code) {
-            Some(AttributeType::StandardInformation) => {
-                if attr_header.is_non_resident == 0 {
-                    parse_standard_info_full(data, offset, &mut std_info);
-                }
+            Some(AttributeType::StandardInformation) if attr_header.is_non_resident == 0 => {
+                parse_standard_info_full(data, offset, &mut std_info);
             }
-            Some(AttributeType::FileName) => {
-                if attr_header.is_non_resident == 0 {
-                    if let Some(name_info) = parse_file_name_full(data, offset) {
-                        // Skip DOS-only names (namespace 2)
-                        if name_info.namespace != 2 {
-                            // Check if this is a better primary name
-                            let is_better = match name_info.namespace {
-                                1 | 3 => true,                 // Win32 or Win32+DOS
-                                0 => primary_namespace == 255, // POSIX only if no name yet
-                                _ => false,
-                            };
-                            if is_better || primary_namespace == 255 {
-                                primary_name = name_info.name.clone();
-                                primary_parent_frs = name_info.parent_frs;
-                                primary_namespace = name_info.namespace;
-                            }
-                            names.push(name_info);
-                        }
+            Some(AttributeType::FileName) if attr_header.is_non_resident == 0 => {
+                if let Some(name_info) = parse_file_name_full(data, offset) {
+                    if name_info.namespace != 2 {
+                        // Skip DOS-only names
+                        primary.update(&name_info);
+                        names.push(name_info);
                     }
                 }
             }
@@ -603,9 +780,23 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                     streams.push(stream_info);
                 }
             }
+            Some(AttributeType::ReparsePoint) if attr_header.is_non_resident == 0 => {
+                // Parse $REPARSE_POINT to get the reparse tag (first 4 bytes of value)
+                let value_offset = u16::from_le_bytes(
+                    data.get(offset + 20..offset + 22)
+                        .and_then(|b| b.try_into().ok())
+                        .unwrap_or([0, 0]),
+                ) as usize;
+                let rp_offset = offset + value_offset;
+                if rp_offset + size_of::<ReparsePointHeader>() <= data.len() {
+                    // SAFETY: We've verified the buffer is large enough
+                    let rp_header: ReparsePointHeader =
+                        unsafe { core::ptr::read(data[rp_offset..].as_ptr().cast()) };
+                    reparse_tag = rp_header.reparse_tag;
+                }
+            }
             _ => {}
         }
-
         offset += attr_header.length as usize;
     }
 
@@ -619,11 +810,8 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
         });
     }
 
-    // Skip records without a $FILE_NAME attribute (matching C++ behavior).
-    // C++ uses nameinfo() which returns NULL for records without filenames,
-    // causing the traversal loop to skip them entirely.
-    // These are typically extension records, deleted files, or corrupted records.
-    if primary_name.is_empty() {
+    // Skip records without a $FILE_NAME attribute (matching C++ behavior)
+    if primary.name.is_empty() {
         return ParseResult::Skip;
     }
 
@@ -631,13 +819,15 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     let (size, allocated_size) = streams
         .iter()
         .find(|s| s.name.is_empty())
-        .map(|s| (s.size, s.allocated_size))
-        .unwrap_or((0, 0));
+        .map_or((0, 0), |s| (s.size, s.allocated_size));
 
     ParseResult::Base(ParsedRecord {
         frs,
-        parent_frs: primary_parent_frs,
-        name: primary_name,
+        sequence_number,
+        lsn,
+        parent_frs: primary.parent_frs,
+        name: primary.name,
+        namespace: primary.namespace,
         names,
         streams,
         size,
@@ -645,6 +835,248 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
         std_info,
         in_use: true,
         is_directory: header.is_directory(),
+        fn_created: primary.fn_created,
+        fn_modified: primary.fn_modified,
+        fn_accessed: primary.fn_accessed,
+        fn_mft_changed: primary.fn_mft_changed,
+        reparse_tag,
+        // P3 forensic fields (not populated in normal mode)
+        is_deleted: false,
+        is_corrupt: false,
+        is_extension: false,
+        base_frs: 0,
+    })
+}
+
+/// Parses an MFT record with forensic options.
+///
+/// This function extends `parse_record_full` to support forensic analysis:
+/// - `include_deleted`: Returns deleted records (`FRH_IN_USE` not set)
+/// - `include_corrupt`: Returns records with corrupt fixup (handled by caller)
+/// - `include_extensions`: Returns extension records as separate
+///   `ParsedRecord`s
+///
+/// # Arguments
+///
+/// * `data` - The raw record data (after fixup, or raw if checking corrupt)
+/// * `frs` - The File Record Segment number
+/// * `options` - Forensic parsing options
+/// * `is_corrupt` - True if fixup failed (set by caller)
+///
+/// # Returns
+///
+/// `ParseResult::Base` for all records matching options, or
+/// `ParseResult::Skip`.
+#[must_use]
+#[allow(unsafe_code, clippy::too_many_lines, clippy::cognitive_complexity)]
+pub fn parse_record_forensic(
+    data: &[u8],
+    frs: u64,
+    options: &ParseOptions,
+    is_corrupt: bool,
+) -> ParseResult {
+    use core::mem::size_of;
+
+    use crate::ntfs::{
+        AttributeRecordHeader, AttributeType, FileRecordSegmentHeader, file_reference_to_frs,
+    };
+
+    // Handle corrupt records
+    if is_corrupt {
+        if !options.include_corrupt {
+            return ParseResult::Skip;
+        }
+        // Return a minimal record for corrupt entries
+        return ParseResult::Base(ParsedRecord {
+            frs,
+            name: format!("<CORRUPT:{frs}>"),
+            is_corrupt: true,
+            ..Default::default()
+        });
+    }
+
+    if data.len() < size_of::<FileRecordSegmentHeader>() {
+        return ParseResult::Skip;
+    }
+
+    // SAFETY: We've verified the buffer is large enough for the header.
+    let header: FileRecordSegmentHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
+
+    // Check if record is in use
+    let is_deleted = !header.is_in_use();
+    if is_deleted && !options.include_deleted {
+        return ParseResult::Skip;
+    }
+
+    // Copy the packed field to avoid unaligned reference
+    let multi_sector_header = header.multi_sector_header;
+    if !multi_sector_header.is_file_record() {
+        return ParseResult::Skip;
+    }
+
+    // Check if this is an extension record
+    let is_extension_record = !header.is_base_record();
+    let base_frs_value = if is_extension_record {
+        file_reference_to_frs(header.base_file_record_segment)
+    } else {
+        0
+    };
+
+    // In non-forensic mode, return Extension variant for merging
+    if is_extension_record && !options.include_extensions {
+        // Parse attributes for extension merging
+        let mut names: Vec<NameInfo> = Vec::new();
+        let mut streams: Vec<StreamInfo> = Vec::new();
+
+        let mut offset = header.first_attribute_offset as usize;
+        let max_offset = core::cmp::min(header.bytes_in_use as usize, data.len());
+
+        while offset + size_of::<AttributeRecordHeader>() <= max_offset {
+            // SAFETY: Bounds checked above; AttributeRecordHeader is repr(C) and packed.
+            let attr_header: AttributeRecordHeader =
+                unsafe { core::ptr::read(data[offset..].as_ptr().cast()) };
+
+            if attr_header.type_code == AttributeType::End as u32 {
+                break;
+            }
+            if attr_header.length == 0 || offset + attr_header.length as usize > max_offset {
+                break;
+            }
+
+            match AttributeType::from_u32(attr_header.type_code) {
+                Some(AttributeType::FileName) if attr_header.is_non_resident == 0 => {
+                    if let Some(name_info) = parse_file_name_full(data, offset) {
+                        if name_info.namespace != 2 {
+                            names.push(name_info);
+                        }
+                    }
+                }
+                Some(AttributeType::Data) => {
+                    if let Some(stream_info) = parse_data_attribute_full(data, offset, &attr_header)
+                    {
+                        streams.push(stream_info);
+                    }
+                }
+                _ => {}
+            }
+            offset += attr_header.length as usize;
+        }
+
+        return ParseResult::Extension(ExtensionAttributes {
+            base_frs: base_frs_value,
+            extension_frs: frs,
+            names,
+            streams,
+        });
+    }
+
+    // Extract sequence number and LSN from header
+    let sequence_number = header.sequence_number;
+    let lsn = header.log_file_sequence_number;
+
+    // Prepare result containers
+    let mut names: Vec<NameInfo> = Vec::new();
+    let mut streams: Vec<StreamInfo> = Vec::new();
+    let mut std_info = ExtendedStandardInfo::default();
+    let mut primary = PrimaryNameTracker::default();
+    let mut reparse_tag: u32 = 0;
+
+    // Parse attributes
+    let mut offset = header.first_attribute_offset as usize;
+    let max_offset = core::cmp::min(header.bytes_in_use as usize, data.len());
+
+    while offset + size_of::<AttributeRecordHeader>() <= max_offset {
+        // SAFETY: Bounds checked above; AttributeRecordHeader is repr(C) and packed.
+        let attr_header: AttributeRecordHeader =
+            unsafe { core::ptr::read(data[offset..].as_ptr().cast()) };
+
+        if attr_header.type_code == AttributeType::End as u32 {
+            break;
+        }
+        if attr_header.length == 0 || offset + attr_header.length as usize > max_offset {
+            break;
+        }
+
+        match AttributeType::from_u32(attr_header.type_code) {
+            Some(AttributeType::StandardInformation) if attr_header.is_non_resident == 0 => {
+                parse_standard_info_full(data, offset, &mut std_info);
+            }
+            Some(AttributeType::FileName) if attr_header.is_non_resident == 0 => {
+                if let Some(name_info) = parse_file_name_full(data, offset) {
+                    if name_info.namespace != 2 {
+                        primary.update(&name_info);
+                        names.push(name_info);
+                    }
+                }
+            }
+            Some(AttributeType::Data) => {
+                if let Some(stream_info) = parse_data_attribute_full(data, offset, &attr_header) {
+                    streams.push(stream_info);
+                }
+            }
+            Some(AttributeType::ReparsePoint) if attr_header.is_non_resident == 0 => {
+                let value_offset = u16::from_le_bytes(
+                    data.get(offset + 20..offset + 22)
+                        .and_then(|b| b.try_into().ok())
+                        .unwrap_or([0, 0]),
+                ) as usize;
+                let rp_offset = offset + value_offset;
+                if rp_offset + size_of::<ReparsePointHeader>() <= data.len() {
+                    // SAFETY: Bounds checked above; ReparsePointHeader is repr(C).
+                    let rp_header: ReparsePointHeader =
+                        unsafe { core::ptr::read(data[rp_offset..].as_ptr().cast()) };
+                    reparse_tag = rp_header.reparse_tag;
+                }
+            }
+            _ => {}
+        }
+        offset += attr_header.length as usize;
+    }
+
+    // For deleted/extension records without $FILE_NAME, use FRS as name
+    let name = if primary.name.is_empty() {
+        if is_deleted {
+            format!("<DELETED:{frs}>")
+        } else if is_extension_record {
+            format!("<EXT:{frs}→{base_frs_value}>")
+        } else {
+            // Normal record without name - skip (shouldn't happen)
+            return ParseResult::Skip;
+        }
+    } else {
+        primary.name
+    };
+
+    // Calculate primary size from default stream
+    let (size, allocated_size) = streams
+        .iter()
+        .find(|s| s.name.is_empty())
+        .map_or((0, 0), |s| (s.size, s.allocated_size));
+
+    ParseResult::Base(ParsedRecord {
+        frs,
+        sequence_number,
+        lsn,
+        parent_frs: primary.parent_frs,
+        name,
+        namespace: primary.namespace,
+        names,
+        streams,
+        size,
+        allocated_size,
+        std_info,
+        in_use: !is_deleted,
+        is_directory: header.is_directory(),
+        fn_created: primary.fn_created,
+        fn_modified: primary.fn_modified,
+        fn_accessed: primary.fn_accessed,
+        fn_mft_changed: primary.fn_mft_changed,
+        reparse_tag,
+        // P3 forensic fields
+        is_deleted,
+        is_corrupt: false,
+        is_extension: is_extension_record,
+        base_frs: base_frs_value,
     })
 }
 
@@ -693,6 +1125,51 @@ pub fn parse_record_zero_alloc(data: &[u8], frs: u64) -> ParseResult {
 
         // Parse the record
         parse_record_full(&buffer[..data.len()], frs)
+    })
+}
+
+/// Parses a record with forensic options using a thread-local buffer.
+///
+/// This is the forensic variant of `parse_record_zero_alloc` that supports
+/// deleted, corrupt, and extension record extraction.
+///
+/// # Arguments
+///
+/// * `data` - The raw record data (will be copied to thread-local buffer)
+/// * `frs` - The File Record Segment number
+/// * `options` - Forensic parsing options
+///
+/// # Returns
+///
+/// `ParseResult::Base` for records matching options, `ParseResult::Extension`
+/// for extension records (when not in forensic mode), or `ParseResult::Skip`.
+#[must_use]
+pub fn parse_record_zero_alloc_forensic(
+    data: &[u8],
+    frs: u64,
+    options: &ParseOptions,
+) -> ParseResult {
+    RECORD_BUFFER.with(|buf| {
+        let mut buffer = buf.borrow_mut();
+
+        // Ensure buffer is large enough
+        if buffer.len() < data.len() {
+            buffer.resize(data.len(), 0);
+        }
+
+        // Copy data into thread-local buffer
+        buffer[..data.len()].copy_from_slice(data);
+
+        // Apply fixup in place
+        let fixup_ok = apply_fixup(&mut buffer[..data.len()]);
+
+        // In forensic mode, we may want corrupt records
+        if !fixup_ok {
+            return parse_record_forensic(&buffer[..data.len()], frs, options, true);
+        }
+
+        // Parse the record with forensic options
+        parse_record_forensic(&buffer[..data.len()], frs, options, false)
     })
 }
 
@@ -1132,6 +1609,10 @@ impl ParsedColumns {
                 name: record.name.clone(),
                 parent_frs: record.parent_frs,
                 namespace: 3, // Win32+DOS
+                fn_created: record.fn_created,
+                fn_modified: record.fn_modified,
+                fn_accessed: record.fn_accessed,
+                fn_mft_changed: record.fn_mft_changed,
             }]
         } else {
             record.names.clone()
@@ -1145,6 +1626,7 @@ impl ParsedColumns {
                 allocated_size: record.allocated_size,
                 is_sparse: false,
                 is_compressed: false,
+                is_resident: false,
             }]
         } else {
             record.streams.clone()

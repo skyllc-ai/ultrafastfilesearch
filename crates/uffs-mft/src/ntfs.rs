@@ -459,7 +459,7 @@ impl FileRecordSegmentHeader {
 // Standard Information Attribute (0x10)
 // ============================================================================
 
-/// Standard Information attribute content.
+/// Standard Information attribute content (NTFS 1.2 - 36 bytes).
 ///
 /// Contains timestamps and basic file attributes.
 #[repr(C, packed)]
@@ -477,6 +477,46 @@ pub struct StandardInformation {
     pub file_attributes: u32,
     // Extended fields follow in NTFS 3.0+
 }
+
+/// Standard Information attribute content (NTFS 3.0+ - 72 bytes).
+///
+/// Contains timestamps, file attributes, and extended fields for
+/// security, quota, and USN journal tracking.
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct StandardInformationExtended {
+    /// File creation time (FILETIME).
+    pub creation_time: i64,
+    /// Last modification time (FILETIME).
+    pub modification_time: i64,
+    /// Last MFT change time (FILETIME).
+    pub mft_change_time: i64,
+    /// Last access time (FILETIME).
+    pub access_time: i64,
+    /// File attributes (same as DOS attributes).
+    pub file_attributes: u32,
+    // NTFS 3.0+ extended fields (36 bytes additional)
+    /// Maximum number of versions (usually 0).
+    pub max_versions: u32,
+    /// Version number (usually 0).
+    pub version_number: u32,
+    /// Class ID (usually 0).
+    pub class_id: u32,
+    /// Owner ID for quota tracking.
+    pub owner_id: u32,
+    /// Security ID - index into $Secure file.
+    pub security_id: u32,
+    /// Quota charged (bytes charged to user's quota).
+    pub quota_charged: u64,
+    /// Update Sequence Number - correlates with USN journal.
+    pub usn: u64,
+}
+
+/// Size of NTFS 1.2 `$STANDARD_INFORMATION` (36 bytes).
+pub const STANDARD_INFO_SIZE_V12: usize = 36;
+
+/// Size of NTFS 3.0+ `$STANDARD_INFORMATION` (72 bytes).
+pub const STANDARD_INFO_SIZE_V30: usize = 72;
 
 // ============================================================================
 // File Name Attribute (0x30)
@@ -1139,7 +1179,8 @@ pub fn extract_data_runs_from_attribute(attr_data: &[u8]) -> Vec<DataRun> {
 /// Information about a single file name (hard link).
 ///
 /// Each file can have multiple names via hard links. This struct captures
-/// all the information about a single name entry.
+/// all the information about a single name entry, including the `$FILE_NAME`
+/// timestamps which often differ from `$STANDARD_INFORMATION` timestamps.
 #[derive(Debug, Clone, Default)]
 pub struct NameInfo {
     /// The file name.
@@ -1148,6 +1189,14 @@ pub struct NameInfo {
     pub parent_frs: u64,
     /// Namespace (0=POSIX, 1=Win32, 2=DOS, 3=Win32+DOS).
     pub namespace: u8,
+    /// Creation time from `$FILE_NAME` (Unix microseconds).
+    pub fn_created: i64,
+    /// Modification time from `$FILE_NAME` (Unix microseconds).
+    pub fn_modified: i64,
+    /// Access time from `$FILE_NAME` (Unix microseconds).
+    pub fn_accessed: i64,
+    /// MFT change time from `$FILE_NAME` (Unix microseconds).
+    pub fn_mft_changed: i64,
 }
 
 /// Information about a single data stream.
@@ -1166,12 +1215,16 @@ pub struct StreamInfo {
     pub is_sparse: bool,
     /// Whether this stream is compressed.
     pub is_compressed: bool,
+    /// Whether this stream's data is resident (stored in MFT record itself).
+    /// Resident streams are typically < 700 bytes and stored inline.
+    pub is_resident: bool,
 }
 
 /// Extended standard information with individual flags.
 ///
 /// Matches the C++ `StandardInfo` struct with 15+ boolean flags
-/// for easier querying in Polars.
+/// for easier querying in Polars. Also includes NTFS 3.0+ extended
+/// fields (`usn`, `security_id`, `owner_id`) for forensic analysis.
 #[derive(Debug, Clone, Copy, Default)]
 #[allow(clippy::struct_excessive_bools)] // NTFS has many boolean flags, this is intentional
 pub struct ExtendedStandardInfo {
@@ -1183,6 +1236,14 @@ pub struct ExtendedStandardInfo {
     pub accessed: i64,
     /// MFT record change time (Unix microseconds).
     pub mft_changed: i64,
+    // NTFS 3.0+ extended fields (forensic value)
+    /// Update Sequence Number - correlates with USN journal (`$UsnJrnl`).
+    pub usn: u64,
+    /// Security ID - index into `$Secure` file for ACL lookup.
+    pub security_id: u32,
+    /// Owner ID - for quota tracking.
+    pub owner_id: u32,
+    // Boolean flags
     /// Read-only flag.
     pub is_readonly: bool,
     /// Hidden flag.

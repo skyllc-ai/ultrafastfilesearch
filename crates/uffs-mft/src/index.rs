@@ -59,6 +59,13 @@ pub struct StandardInfo {
     pub mft_changed: i64,
     /// Bit-packed attribute flags
     pub flags: u32,
+    // NTFS 3.0+ extended fields (forensic value)
+    /// Update Sequence Number - correlates with USN journal (`$UsnJrnl`)
+    pub usn: u64,
+    /// Security ID - index into $Secure file for ACL lookup
+    pub security_id: u32,
+    /// Owner ID - for quota tracking
+    pub owner_id: u32,
 }
 
 impl StandardInfo {
@@ -462,7 +469,8 @@ pub struct IndexStreamInfo {
     pub next_entry: u32,
     /// Stream name reference (empty for default `$DATA`)
     pub name: IndexNameRef,
-    /// Packed flags: `is_sparse`, `type_name_id`
+    /// Packed flags: bit 0 = `is_sparse`, bit 1 = `is_resident`, bits 2-7 =
+    /// `type_name_id`
     pub flags: u8,
 }
 
@@ -472,6 +480,12 @@ impl IndexStreamInfo {
     #[must_use]
     pub const fn is_sparse(&self) -> bool {
         self.flags & 0x01 != 0
+    }
+    /// Returns true if this stream's data is resident (stored in MFT record).
+    #[inline]
+    #[must_use]
+    pub const fn is_resident(&self) -> bool {
+        self.flags & 0x02 != 0
     }
     /// Returns the type name ID for this stream.
     #[inline]
@@ -876,13 +890,29 @@ pub struct ChildInfo {
 
 /// Core file/directory record (matches C++ `Record`).
 ///
-/// Size: ~96 bytes per record (was ~80 bytes before tree metrics)
+/// Size: ~232 bytes per record (includes sequence number, `$FILE_NAME`
+/// timestamps, forensic fields)
 #[derive(Debug, Clone, Default)]
 #[repr(C)]
 pub struct FileRecord {
     /// FRS (File Record Segment) number - primary key
     pub frs: u64,
-    /// Timestamps and bit-packed attributes
+    /// Sequence number (incremented when FRS is reused, forensic value)
+    pub sequence_number: u16,
+    /// Primary filename namespace (0=POSIX, 1=Win32, 2=DOS, 3=Win32+DOS)
+    pub namespace: u8,
+    /// Forensic flags (bit-packed): bit 0 = `is_deleted`, bit 1 = `is_corrupt`,
+    /// bit 2 = `is_extension`
+    pub forensic_flags: u8,
+    /// Log File Sequence Number - correlates with `$LogFile` journal (forensic)
+    pub lsn: u64,
+    /// Reparse tag from `$REPARSE_POINT` (0 if not a reparse point).
+    /// Common: symlink (0xA000000C), junction (0xA0000003), `OneDrive`, etc.
+    pub reparse_tag: u32,
+    /// Base FRS for extension records (0 for base records).
+    /// Only meaningful when `is_extension()` returns true.
+    pub base_frs: u64,
+    /// Timestamps and bit-packed attributes from `$STANDARD_INFORMATION`
     pub stdinfo: StandardInfo,
     /// Number of hard links (usually 1)
     pub name_count: u16,
@@ -894,6 +924,16 @@ pub struct FileRecord {
     pub first_name: LinkInfo,
     /// Primary data stream (inline, no allocation)
     pub first_stream: IndexStreamInfo,
+
+    // $FILE_NAME timestamps (often differ from $STANDARD_INFORMATION)
+    /// Creation time from `$FILE_NAME` (Unix microseconds)
+    pub fn_created: i64,
+    /// Modification time from `$FILE_NAME` (Unix microseconds)
+    pub fn_modified: i64,
+    /// Access time from `$FILE_NAME` (Unix microseconds)
+    pub fn_accessed: i64,
+    /// MFT change time from `$FILE_NAME` (Unix microseconds)
+    pub fn_mft_changed: i64,
 
     // Tree metrics (computed after all records parsed via compute_tree_metrics)
     /// Count of all descendants (files + subdirectories) in subtree (0 for
@@ -945,6 +985,42 @@ impl FileRecord {
     #[must_use]
     pub const fn has_name(&self) -> bool {
         self.first_name.name.is_valid()
+    }
+
+    // ===== P3 Forensic Flag Accessors =====
+    // forensic_flags bit layout: bit 0 = is_deleted, bit 1 = is_corrupt, bit 2 =
+    // is_extension
+
+    /// Returns true if this record is deleted (MFT record not in use).
+    /// Only meaningful when parsed with `--forensic` flag.
+    #[inline]
+    #[must_use]
+    pub const fn is_deleted(&self) -> bool {
+        self.forensic_flags & 0b001 != 0
+    }
+
+    /// Returns true if this record is corrupt (USA fixup failed or BAAD magic).
+    /// Only meaningful when parsed with `--forensic` flag.
+    #[inline]
+    #[must_use]
+    pub const fn is_corrupt(&self) -> bool {
+        self.forensic_flags & 0b010 != 0
+    }
+
+    /// Returns true if this is an extension record (not a base record).
+    /// Only meaningful when parsed with `--forensic` flag.
+    #[inline]
+    #[must_use]
+    pub const fn is_extension(&self) -> bool {
+        self.forensic_flags & 0b100 != 0
+    }
+
+    /// Sets the forensic flags from parsed record fields.
+    #[inline]
+    pub fn set_forensic_flags(&mut self, is_deleted: bool, is_corrupt: bool, is_extension: bool) {
+        self.forensic_flags = u8::from(is_deleted)
+            | (u8::from(is_corrupt) << 1_u8)
+            | (u8::from(is_extension) << 2_u8);
     }
 }
 
@@ -2700,9 +2776,14 @@ mod tests {
 
     #[test]
     fn test_file_record_size() {
-        // Verify compact size - should be reasonably compact (< 150 bytes)
+        // Verify compact size - should be reasonably compact (< 224 bytes)
+        // Version 4 added: sequence_number (2), namespace (1), reserved (1),
+        // fn_created/modified/accessed/mft_changed (4 × 8 = 32) = 36 bytes extra
+        // Version 5 added: lsn (8 bytes) for forensic correlation
+        // Version 6 added: reparse_tag (4 bytes)
+        // Version 7 added: base_frs (8 bytes) for forensic extension records
         let size = size_of::<FileRecord>();
-        assert!(size < 150, "FileRecord too large: {size} bytes");
+        assert!(size < 224, "FileRecord too large: {size} bytes");
     }
 
     #[test]
@@ -4042,104 +4123,188 @@ impl MftIndex {
     /// # Errors
     ///
     /// Returns an error if `DataFrame` construction fails.
+    #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
     pub fn to_dataframe(&self) -> crate::Result<uffs_polars::DataFrame> {
         use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
-
-        // Pre-allocate vectors
-        let cap = self.records.len();
-        let mut frs_vec: Vec<u64> = Vec::with_capacity(cap);
-        let mut parent_frs_vec: Vec<u64> = Vec::with_capacity(cap);
-        let mut name_vec: Vec<String> = Vec::with_capacity(cap);
-        let mut size_vec: Vec<u64> = Vec::with_capacity(cap);
-        let mut allocated_size_vec: Vec<u64> = Vec::with_capacity(cap);
-        let mut created_vec: Vec<i64> = Vec::with_capacity(cap);
-        let mut modified_vec: Vec<i64> = Vec::with_capacity(cap);
-        let mut accessed_vec: Vec<i64> = Vec::with_capacity(cap);
-        let mut mft_changed_vec: Vec<i64> = Vec::with_capacity(cap);
-        let mut is_directory_vec: Vec<bool> = Vec::with_capacity(cap);
-        let mut is_readonly_vec: Vec<bool> = Vec::with_capacity(cap);
-        let mut is_hidden_vec: Vec<bool> = Vec::with_capacity(cap);
-        let mut is_system_vec: Vec<bool> = Vec::with_capacity(cap);
-        let mut is_compressed_vec: Vec<bool> = Vec::with_capacity(cap);
-        let mut is_encrypted_vec: Vec<bool> = Vec::with_capacity(cap);
-        let mut is_sparse_vec: Vec<bool> = Vec::with_capacity(cap);
-        let mut is_reparse_vec: Vec<bool> = Vec::with_capacity(cap);
-        let mut flags_vec: Vec<u16> = Vec::with_capacity(cap);
-        // Tree metrics (pre-computed in MftIndex)
-        let mut descendants_vec: Vec<u32> = Vec::with_capacity(cap);
-        let mut treesize_vec: Vec<u64> = Vec::with_capacity(cap);
-        let mut tree_allocated_vec: Vec<u64> = Vec::with_capacity(cap);
-        // Path column (resolved on-demand using MftIndex::build_path)
-        let mut path_vec: Vec<String> = Vec::with_capacity(cap);
-
+        let n = self.records.len();
+        // Pre-allocate all column vectors (35 columns in v5)
+        let (mut frs, mut seq, mut lsn, mut parent, mut name, mut ns) = (
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+        );
+        let (mut size, mut alloc) = (Vec::with_capacity(n), Vec::with_capacity(n));
+        let (mut si_c, mut si_m, mut si_a, mut si_mft) = (
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+        );
+        let (mut usn, mut sec_id, mut own_id): (Vec<u64>, Vec<u32>, Vec<u32>) = (
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+        );
+        let (mut fn_c, mut fn_m, mut fn_a, mut fn_mft) = (
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+        );
+        let (
+            mut dir,
+            mut ro,
+            mut hid,
+            mut sys,
+            mut arc,
+            mut cmp,
+            mut enc,
+            mut spr,
+            mut rp,
+            mut off,
+            mut nix,
+            mut tmp,
+        ) = (
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+        );
+        let (mut flags, mut lnk, mut str, mut path): (Vec<u16>, Vec<u16>, Vec<u16>, Vec<String>) = (
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+        );
+        let (mut reparse_tag, mut is_resident): (Vec<u32>, Vec<bool>) =
+            (Vec::with_capacity(n), Vec::with_capacity(n));
+        // P3 forensic columns
+        let (mut is_deleted, mut is_corrupt, mut is_extension): (Vec<bool>, Vec<bool>, Vec<bool>) = (
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+        );
+        let mut base_frs_col: Vec<u64> = Vec::with_capacity(n);
         // Extract data from records
-        for record in &self.records {
-            frs_vec.push(record.frs);
-            parent_frs_vec.push(record.first_name.parent_frs);
-            name_vec.push(self.record_name(record).to_owned());
-            size_vec.push(record.first_stream.size.length);
-            allocated_size_vec.push(record.first_stream.size.allocated);
-            created_vec.push(record.stdinfo.created);
-            modified_vec.push(record.stdinfo.modified);
-            accessed_vec.push(record.stdinfo.accessed);
-            mft_changed_vec.push(record.stdinfo.mft_changed);
-            is_directory_vec.push(record.stdinfo.is_directory());
-            is_readonly_vec.push(record.stdinfo.is_readonly());
-            is_hidden_vec.push(record.stdinfo.is_hidden());
-            is_system_vec.push(record.stdinfo.is_system());
-            is_compressed_vec.push(record.stdinfo.is_compressed());
-            is_encrypted_vec.push(record.stdinfo.is_encrypted());
-            is_sparse_vec.push(record.stdinfo.is_sparse());
-            is_reparse_vec.push(record.stdinfo.is_reparse());
-            // to_attributes() returns u32, but we only need the lower 16 bits for flags
-            // The upper bits are reserved/unused in NTFS FILE_ATTRIBUTE_* constants
-            #[allow(clippy::cast_possible_truncation)]
-            flags_vec.push(record.stdinfo.to_attributes() as u16);
-            // Tree metrics (already computed)
-            descendants_vec.push(record.descendants);
-            treesize_vec.push(record.treesize);
-            tree_allocated_vec.push(record.tree_allocated);
-            // Path (resolved on-demand using MftIndex::build_path)
-            path_vec.push(self.build_path(record.frs));
+        for rec in &self.records {
+            frs.push(rec.frs);
+            seq.push(rec.sequence_number);
+            lsn.push(rec.lsn);
+            parent.push(rec.first_name.parent_frs);
+            name.push(self.record_name(rec).to_owned());
+            ns.push(rec.namespace);
+            size.push(rec.first_stream.size.length);
+            alloc.push(rec.first_stream.size.allocated);
+            si_c.push(rec.stdinfo.created);
+            si_m.push(rec.stdinfo.modified);
+            si_a.push(rec.stdinfo.accessed);
+            si_mft.push(rec.stdinfo.mft_changed);
+            usn.push(rec.stdinfo.usn);
+            sec_id.push(rec.stdinfo.security_id);
+            own_id.push(rec.stdinfo.owner_id);
+            fn_c.push(rec.fn_created);
+            fn_m.push(rec.fn_modified);
+            fn_a.push(rec.fn_accessed);
+            fn_mft.push(rec.fn_mft_changed);
+            let si = &rec.stdinfo;
+            dir.push(si.is_directory());
+            ro.push(si.is_readonly());
+            hid.push(si.is_hidden());
+            sys.push(si.is_system());
+            arc.push(si.is_archive());
+            cmp.push(si.is_compressed());
+            enc.push(si.is_encrypted());
+            spr.push(si.is_sparse());
+            rp.push(si.is_reparse());
+            off.push(si.is_offline());
+            nix.push(si.is_not_indexed());
+            tmp.push(si.is_temporary());
+            flags.push(si.to_attributes() as u16);
+            lnk.push(rec.name_count);
+            str.push(rec.stream_count);
+            reparse_tag.push(rec.reparse_tag);
+            is_resident.push(rec.first_stream.is_resident());
+            // P3 forensic fields
+            is_deleted.push(rec.is_deleted());
+            is_corrupt.push(rec.is_corrupt());
+            is_extension.push(rec.is_extension());
+            base_frs_col.push(rec.base_frs);
+            path.push(self.build_path(rec.frs));
         }
-
-        // Build DataFrame columns
-        let columns = vec![
-            Series::new("frs".into(), frs_vec).into_column(),
-            Series::new("parent_frs".into(), parent_frs_vec).into_column(),
-            Series::new("name".into(), name_vec).into_column(),
-            Series::new("size".into(), size_vec).into_column(),
-            Series::new("allocated_size".into(), allocated_size_vec).into_column(),
-            Series::new("created".into(), created_vec)
-                .cast(&DataType::Datetime(TimeUnit::Microseconds, None))?
+        // Build DataFrame
+        let dt = DataType::Datetime(TimeUnit::Microseconds, None);
+        let cols = vec![
+            Series::new("frs".into(), frs).into_column(),
+            Series::new("sequence_number".into(), seq).into_column(),
+            Series::new("lsn".into(), lsn).into_column(),
+            Series::new("parent_frs".into(), parent).into_column(),
+            Series::new("name".into(), name).into_column(),
+            Series::new("namespace".into(), ns).into_column(),
+            Series::new("size".into(), size).into_column(),
+            Series::new("allocated_size".into(), alloc).into_column(),
+            Series::new("si_created".into(), si_c)
+                .cast(&dt)?
                 .into_column(),
-            Series::new("modified".into(), modified_vec)
-                .cast(&DataType::Datetime(TimeUnit::Microseconds, None))?
+            Series::new("si_modified".into(), si_m)
+                .cast(&dt)?
                 .into_column(),
-            Series::new("accessed".into(), accessed_vec)
-                .cast(&DataType::Datetime(TimeUnit::Microseconds, None))?
+            Series::new("si_accessed".into(), si_a)
+                .cast(&dt)?
                 .into_column(),
-            Series::new("mft_changed".into(), mft_changed_vec)
-                .cast(&DataType::Datetime(TimeUnit::Microseconds, None))?
+            Series::new("si_mft_changed".into(), si_mft)
+                .cast(&dt)?
                 .into_column(),
-            Series::new("is_directory".into(), is_directory_vec).into_column(),
-            Series::new("is_readonly".into(), is_readonly_vec).into_column(),
-            Series::new("is_hidden".into(), is_hidden_vec).into_column(),
-            Series::new("is_system".into(), is_system_vec).into_column(),
-            Series::new("is_compressed".into(), is_compressed_vec).into_column(),
-            Series::new("is_encrypted".into(), is_encrypted_vec).into_column(),
-            Series::new("is_sparse".into(), is_sparse_vec).into_column(),
-            Series::new("is_reparse".into(), is_reparse_vec).into_column(),
-            Series::new("flags".into(), flags_vec).into_column(),
-            // Tree metrics (pre-computed in MftIndex, no need to recompute!)
-            Series::new("descendants".into(), descendants_vec).into_column(),
-            Series::new("treesize".into(), treesize_vec).into_column(),
-            Series::new("tree_allocated".into(), tree_allocated_vec).into_column(),
-            // Path column (resolved using MftIndex::build_path)
-            Series::new("path".into(), path_vec).into_column(),
+            Series::new("usn".into(), usn).into_column(),
+            Series::new("security_id".into(), sec_id).into_column(),
+            Series::new("owner_id".into(), own_id).into_column(),
+            Series::new("fn_created".into(), fn_c)
+                .cast(&dt)?
+                .into_column(),
+            Series::new("fn_modified".into(), fn_m)
+                .cast(&dt)?
+                .into_column(),
+            Series::new("fn_accessed".into(), fn_a)
+                .cast(&dt)?
+                .into_column(),
+            Series::new("fn_mft_changed".into(), fn_mft)
+                .cast(&dt)?
+                .into_column(),
+            Series::new("is_directory".into(), dir).into_column(),
+            Series::new("is_readonly".into(), ro).into_column(),
+            Series::new("is_hidden".into(), hid).into_column(),
+            Series::new("is_system".into(), sys).into_column(),
+            Series::new("is_archive".into(), arc).into_column(),
+            Series::new("is_compressed".into(), cmp).into_column(),
+            Series::new("is_encrypted".into(), enc).into_column(),
+            Series::new("is_sparse".into(), spr).into_column(),
+            Series::new("is_reparse".into(), rp).into_column(),
+            Series::new("is_offline".into(), off).into_column(),
+            Series::new("is_not_indexed".into(), nix).into_column(),
+            Series::new("is_temporary".into(), tmp).into_column(),
+            Series::new("reparse_tag".into(), reparse_tag).into_column(),
+            Series::new("is_resident".into(), is_resident).into_column(),
+            // P3 forensic columns (v7)
+            Series::new("is_deleted".into(), is_deleted).into_column(),
+            Series::new("is_corrupt".into(), is_corrupt).into_column(),
+            Series::new("is_extension".into(), is_extension).into_column(),
+            Series::new("base_frs".into(), base_frs_col).into_column(),
+            Series::new("flags".into(), flags).into_column(),
+            Series::new("link_count".into(), lnk).into_column(),
+            Series::new("stream_count".into(), str).into_column(),
+            Series::new("path".into(), path).into_column(),
         ];
-
-        uffs_polars::DataFrame::new_infer_height(columns).map_err(crate::MftError::from)
+        uffs_polars::DataFrame::new_infer_height(cols).map_err(crate::MftError::from)
     }
 }
 
@@ -4171,7 +4336,12 @@ impl MftIndex {
         let mut index = Self::with_capacity(volume, capacity);
 
         for parsed in records {
-            if !parsed.in_use {
+            // In normal mode, skip records not in use.
+            // In forensic mode, include deleted/corrupt/extension records.
+            // Forensic records have is_deleted/is_corrupt/is_extension set by
+            // parse_record_forensic().
+            let is_forensic_record = parsed.is_deleted || parsed.is_corrupt || parsed.is_extension;
+            if !parsed.in_use && !is_forensic_record {
                 continue;
             }
 
@@ -4205,15 +4375,32 @@ impl MftIndex {
             let name_offset = index.add_name(&parsed.name);
             let name_len = parsed.name.len() as u16;
             let is_ascii = parsed.name.is_ascii();
+            // Extract and intern extension (must be done before get_or_create borrows
+            // mutably)
+            let extension_id = index.intern_extension(&parsed.name);
 
             // Get or create the record
             let record = index.get_or_create(parsed.frs);
 
-            // Set timestamps and flags
+            // Set sequence number, LSN, and namespace (raw MFT fields)
+            record.sequence_number = parsed.sequence_number;
+            record.lsn = parsed.lsn;
+            record.namespace = parsed.namespace;
+
+            // Set $FILE_NAME timestamps (often differ from $STANDARD_INFORMATION)
+            record.fn_created = parsed.fn_created;
+            record.fn_modified = parsed.fn_modified;
+            record.fn_accessed = parsed.fn_accessed;
+            record.fn_mft_changed = parsed.fn_mft_changed;
+
+            // Set $STANDARD_INFORMATION timestamps and flags
             record.stdinfo.created = parsed.std_info.created;
             record.stdinfo.modified = parsed.std_info.modified;
             record.stdinfo.accessed = parsed.std_info.accessed;
             record.stdinfo.mft_changed = parsed.std_info.mft_changed;
+            record.stdinfo.usn = parsed.std_info.usn;
+            record.stdinfo.security_id = parsed.std_info.security_id;
+            record.stdinfo.owner_id = parsed.std_info.owner_id;
             record.stdinfo.set_directory(parsed.is_directory);
 
             // Set attribute flags from ExtendedStandardInfo
@@ -4266,16 +4453,34 @@ impl MftIndex {
                 record.stdinfo.flags |= StandardInfo::IS_VIRTUAL;
             }
 
-            // Set name info (offset was computed before borrowing record)
-            // TODO: Extract extension and intern it (Phase 1)
-            let extension_id = IndexNameRef::NO_EXTENSION;
+            // Set name info (offset and extension_id were computed before borrowing record)
             record.first_name.name =
                 IndexNameRef::new(name_offset, name_len, is_ascii, extension_id);
             record.first_name.parent_frs = parsed.parent_frs;
             record.name_count = parsed.names.len() as u16;
 
-            // Set size from first stream
-            if !parsed.streams.is_empty() {
+            // Set reparse tag (0 if not a reparse point)
+            record.reparse_tag = parsed.reparse_tag;
+
+            // Set P3 forensic fields (is_deleted, is_corrupt, is_extension, base_frs)
+            record.set_forensic_flags(parsed.is_deleted, parsed.is_corrupt, parsed.is_extension);
+            record.base_frs = parsed.base_frs;
+
+            // Set size and flags from first (default) stream
+            if let Some(default_stream) = parsed.streams.iter().find(|st| st.name.is_empty()) {
+                record.first_stream.size.length = default_stream.size;
+                record.first_stream.size.allocated = default_stream.allocated_size;
+                record.stream_count = parsed.streams.len() as u16;
+                // Set is_resident flag (bit 1)
+                if default_stream.is_resident {
+                    record.first_stream.flags |= 0x02;
+                }
+                // Set is_sparse flag (bit 0)
+                if default_stream.is_sparse {
+                    record.first_stream.flags |= 0x01;
+                }
+            } else if !parsed.streams.is_empty() {
+                // No default stream, use first available
                 record.first_stream.size.length = parsed.size;
                 record.first_stream.size.allocated = parsed.allocated_size;
                 record.stream_count = parsed.streams.len() as u16;
@@ -4632,6 +4837,12 @@ impl MftIndex {
                     // Create placeholder record
                     let record = FileRecord {
                         frs,
+                        sequence_number: 0, // USN doesn't provide sequence number
+                        namespace: 1,       // Assume Win32 namespace
+                        forensic_flags: 0,  // Not deleted/corrupt/extension
+                        base_frs: 0,        // Not an extension record
+                        lsn: 0,             // USN doesn't provide LSN
+                        reparse_tag: 0,     // USN doesn't provide reparse tag
                         stdinfo: StandardInfo::default(),
                         name_count: 1,
                         stream_count: 1, // Every file has at least the default $DATA stream
@@ -4647,6 +4858,10 @@ impl MftIndex {
                             parent_frs: change.parent_frs,
                         },
                         first_stream: IndexStreamInfo::default(),
+                        fn_created: 0,
+                        fn_modified: 0,
+                        fn_accessed: 0,
+                        fn_mft_changed: 0,
                         descendants: 0,
                         treesize: 0,
                         tree_allocated: 0,
@@ -4821,7 +5036,13 @@ const INDEX_MAGIC: &[u8; 8] = b"UFFSIDX\0";
 /// separate length/flags
 /// Version 3: Added tree metrics (descendants, treesize, `tree_allocated`) to
 /// `FileRecord` serialization
-const INDEX_VERSION: u32 = 3;
+/// Version 4: Added `sequence_number`, `namespace`, and `$FILE_NAME` timestamps
+/// (`fn_created`, `fn_modified`, `fn_accessed`, `fn_mft_changed`)
+/// Version 5: Added NTFS 3.0+ forensic fields: `lsn`, `usn`, `security_id`,
+/// `owner_id` Version 6: Added P2 forensic fields: `reparse_tag`, `is_resident`
+/// (in stream flags) Version 7: Added P3 forensic fields: `forensic_flags`
+/// (renamed from reserved), `base_frs` for extension records
+const INDEX_VERSION: u32 = 7;
 
 /// Persistent index header stored at the beginning of the index file.
 #[derive(Debug, Clone)]
@@ -4884,7 +5105,8 @@ impl IndexHeader {
         if &self.magic != INDEX_MAGIC {
             return Err("Invalid index file magic");
         }
-        if self.version != INDEX_VERSION {
+        // Accept version 3 (legacy) and version 4 (current)
+        if self.version < 3 || self.version > INDEX_VERSION {
             return Err("Unsupported index version");
         }
         Ok(())
@@ -4909,6 +5131,7 @@ impl MftIndex {
     /// * `usn_journal_id` - USN Journal ID at time of serialization
     /// * `next_usn` - Next USN to read from (checkpoint)
     #[must_use]
+    #[allow(clippy::too_many_lines)] // Binary serialization requires many field writes
     pub fn serialize(&self, volume_serial: u64, usn_journal_id: u64, next_usn: i64) -> Vec<u8> {
         let header = IndexHeader::new(self, volume_serial, usn_journal_id, next_usn);
 
@@ -4947,12 +5170,26 @@ impl MftIndex {
         for record in &self.records {
             // FileRecord fields
             buffer.extend_from_slice(&record.frs.to_le_bytes());
+            // Version 4+: sequence_number and namespace
+            buffer.extend_from_slice(&record.sequence_number.to_le_bytes());
+            buffer.push(record.namespace);
+            buffer.push(record.forensic_flags); // Version 7: renamed from reserved
+            // Version 5+: LSN (Log File Sequence Number)
+            buffer.extend_from_slice(&record.lsn.to_le_bytes());
+            // Version 6+: reparse_tag
+            buffer.extend_from_slice(&record.reparse_tag.to_le_bytes());
+            // Version 7+: base_frs for extension records
+            buffer.extend_from_slice(&record.base_frs.to_le_bytes());
             // StandardInfo
             buffer.extend_from_slice(&record.stdinfo.created.to_le_bytes());
             buffer.extend_from_slice(&record.stdinfo.modified.to_le_bytes());
             buffer.extend_from_slice(&record.stdinfo.accessed.to_le_bytes());
             buffer.extend_from_slice(&record.stdinfo.mft_changed.to_le_bytes());
             buffer.extend_from_slice(&record.stdinfo.flags.to_le_bytes());
+            // Version 5+: NTFS 3.0+ forensic fields
+            buffer.extend_from_slice(&record.stdinfo.usn.to_le_bytes());
+            buffer.extend_from_slice(&record.stdinfo.security_id.to_le_bytes());
+            buffer.extend_from_slice(&record.stdinfo.owner_id.to_le_bytes());
             // Counts
             buffer.extend_from_slice(&record.name_count.to_le_bytes());
             buffer.extend_from_slice(&record.stream_count.to_le_bytes());
@@ -4973,6 +5210,11 @@ impl MftIndex {
             buffer.extend_from_slice(&record.descendants.to_le_bytes());
             buffer.extend_from_slice(&record.treesize.to_le_bytes());
             buffer.extend_from_slice(&record.tree_allocated.to_le_bytes());
+            // $FILE_NAME timestamps (Version 4+)
+            buffer.extend_from_slice(&record.fn_created.to_le_bytes());
+            buffer.extend_from_slice(&record.fn_modified.to_le_bytes());
+            buffer.extend_from_slice(&record.fn_accessed.to_le_bytes());
+            buffer.extend_from_slice(&record.fn_mft_changed.to_le_bytes());
         }
 
         // Write names
@@ -5044,7 +5286,12 @@ impl MftIndex {
     // for performance and maintainability. Splitting would add function call overhead
     // and make the binary format harder to follow.
     // The u64->usize casts are safe: this is a 64-bit Windows NTFS tool.
-    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
+    // Cognitive complexity is high due to version-conditional field reads (v3/v4/v5/v6).
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cognitive_complexity
+    )]
     pub fn deserialize(data: &[u8]) -> Result<(Self, IndexHeader), &'static str> {
         if data.len() < 96 {
             return Err("Data too short for header");
@@ -5154,12 +5401,27 @@ impl MftIndex {
         let mut records = Vec::with_capacity(record_count as usize);
         for _ in 0..record_count {
             let frs = read_u64!();
+            // Version 4+: sequence_number and namespace (read sequentially to avoid
+            // unsequenced reads)
+            let sequence_number = if version >= 4 { read_u16!() } else { 0 };
+            let namespace = if version >= 4 { read_u8!() } else { 1 }; // Default: Win32
+            let forensic_flags = if version >= 4 { read_u8!() } else { 0 }; // Version 7: renamed from reserved
+            // Version 5+: LSN (Log File Sequence Number)
+            let lsn = if version >= 5 { read_u64!() } else { 0 };
+            // Version 6+: reparse_tag
+            let reparse_tag = if version >= 6 { read_u32!() } else { 0 };
+            // Version 7+: base_frs for extension records
+            let base_frs = if version >= 7 { read_u64!() } else { 0 };
             // StandardInfo
             let created = read_i64!();
             let modified = read_i64!();
             let accessed = read_i64!();
             let mft_changed = read_i64!();
             let flags = read_u32!();
+            // Version 5+: NTFS 3.0+ forensic fields
+            let usn = if version >= 5 { read_u64!() } else { 0 };
+            let security_id = if version >= 5 { read_u32!() } else { 0 };
+            let owner_id = if version >= 5 { read_u32!() } else { 0 };
             // Counts
             let name_count = read_u16!();
             let rec_stream_count = read_u16!();
@@ -5180,15 +5442,29 @@ impl MftIndex {
             let descendants = if version >= 3 { read_u32!() } else { 0 };
             let treesize = if version >= 3 { read_u64!() } else { 0 };
             let tree_allocated = if version >= 3 { read_u64!() } else { 0 };
+            // $FILE_NAME timestamps (Version 4+, read sequentially)
+            let fn_created = if version >= 4 { read_i64!() } else { 0 };
+            let fn_modified = if version >= 4 { read_i64!() } else { 0 };
+            let fn_accessed = if version >= 4 { read_i64!() } else { 0 };
+            let fn_mft_changed = if version >= 4 { read_i64!() } else { 0 };
 
             records.push(FileRecord {
                 frs,
+                sequence_number,
+                namespace,
+                forensic_flags,
+                lsn,
+                reparse_tag,
+                base_frs,
                 stdinfo: StandardInfo {
                     created,
                     modified,
                     accessed,
                     mft_changed,
                     flags,
+                    usn,
+                    security_id,
+                    owner_id,
                 },
                 name_count,
                 stream_count: rec_stream_count,
@@ -5213,6 +5489,10 @@ impl MftIndex {
                     },
                     flags: stream_flags,
                 },
+                fn_created,
+                fn_modified,
+                fn_accessed,
+                fn_mft_changed,
                 descendants,
                 treesize,
                 tree_allocated,

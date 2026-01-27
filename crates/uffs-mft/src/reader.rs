@@ -460,6 +460,15 @@ pub struct MftReader {
     /// - `None` (default): Use number of CPU cores
     /// - `Some(n)`: Use exactly n worker threads
     parse_workers: Option<usize>,
+    /// Whether to include forensic records (deleted, corrupt, extension).
+    ///
+    /// - `false` (default): Normal mode - skip deleted/corrupt, merge
+    ///   extensions.
+    /// - `true`: Forensic mode - include all records with `is_deleted`,
+    ///   `is_corrupt`, `is_extension`, `base_frs` columns.
+    ///
+    /// WARNING: May significantly increase output size (10-50% more rows).
+    forensic: bool,
 }
 
 impl MftReader {
@@ -503,6 +512,7 @@ impl MftReader {
             io_size: None,          // Use default (1MB)
             parallel_parse: None,   // Auto-detect based on drive type
             parse_workers: None,    // Use num_cpus
+            forensic: false,        // Normal mode by default
         })
     }
 
@@ -725,6 +735,32 @@ impl MftReader {
     #[must_use]
     pub const fn parse_workers(&self) -> Option<usize> {
         self.parse_workers
+    }
+
+    /// Enables forensic mode for this reader.
+    ///
+    /// Forensic mode includes deleted, corrupt, and extension records in the
+    /// output, adding `is_deleted`, `is_corrupt`, `is_extension`, `base_frs`
+    /// columns.
+    ///
+    /// # Arguments
+    ///
+    /// * `forensic` - If `true`, enable forensic mode. If `false` (default),
+    ///   use normal mode.
+    ///
+    /// # Warning
+    ///
+    /// Forensic mode may significantly increase output size (10-50% more rows).
+    #[must_use]
+    pub const fn with_forensic(mut self, forensic: bool) -> Self {
+        self.forensic = forensic;
+        self
+    }
+
+    /// Returns whether forensic mode is enabled.
+    #[must_use]
+    pub const fn forensic(&self) -> bool {
+        self.forensic
     }
 
     /// Read the entire MFT and return as a `DataFrame`.
@@ -1488,6 +1524,10 @@ impl MftReader {
                         name: parsed.name.clone(),
                         parent_frs: parsed.parent_frs,
                         namespace: 3,
+                        fn_created: parsed.fn_created,
+                        fn_modified: parsed.fn_modified,
+                        fn_accessed: parsed.fn_accessed,
+                        fn_mft_changed: parsed.fn_mft_changed,
                     }]
                 } else {
                     parsed.names.clone()
@@ -1501,6 +1541,7 @@ impl MftReader {
                         allocated_size: parsed.allocated_size,
                         is_sparse: false,
                         is_compressed: false,
+                        is_resident: false,
                     }]
                 } else {
                     parsed.streams.clone()
@@ -3095,7 +3136,9 @@ impl MftReader {
         options: &crate::raw::LoadRawOptions,
     ) -> Result<crate::index::MftIndex> {
         use crate::index::MftIndex;
-        use crate::parse::{apply_fixup, parse_record};
+        use crate::parse::{
+            ParseOptions, ParseResult, apply_fixup, parse_record, parse_record_forensic,
+        };
 
         let raw = crate::raw::load_raw_mft(path, options)?;
 
@@ -3103,17 +3146,36 @@ impl MftReader {
         let capacity = usize::try_from(raw.header.record_count).unwrap_or(0);
         let mut parsed_records = Vec::with_capacity(capacity);
 
+        // Use forensic parsing if enabled
+        let parse_options = if options.forensic {
+            ParseOptions::FORENSIC
+        } else {
+            ParseOptions::DEFAULT
+        };
+
         for (frs, record_data) in raw.iter_records() {
             let mut record_buf = record_data.to_vec();
 
-            // Apply fixup
-            if !apply_fixup(&mut record_buf) {
-                continue;
-            }
+            // Apply fixup - in forensic mode, we may want corrupt records
+            let fixup_ok = apply_fixup(&mut record_buf);
 
-            // Parse record (skips extension records for simplicity)
-            if let Some(parsed) = parse_record(&record_buf, frs) {
-                parsed_records.push(parsed);
+            if options.forensic {
+                // Forensic mode: use forensic parser that handles deleted/corrupt/extension
+                let result = parse_record_forensic(&record_buf, frs, &parse_options, !fixup_ok);
+                if let ParseResult::Base(parsed) = result {
+                    parsed_records.push(parsed);
+                }
+                // Note: In forensic mode with include_extensions, extension
+                // records are returned as Base records, not
+                // Extension variants
+            } else {
+                // Normal mode: skip corrupt records, use simple parser
+                if !fixup_ok {
+                    continue;
+                }
+                if let Some(parsed) = parse_record(&record_buf, frs) {
+                    parsed_records.push(parsed);
+                }
             }
         }
 

@@ -39,7 +39,7 @@ exclude = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.2.108"
+version = "0.2.109"
 edition = "2024"
 rust-version = "1.85"
 license = "MPL-2.0 OR LicenseRef-UFFS-Commercial"
@@ -121,7 +121,7 @@ simplelog = "0.12.2"
 # ───── Time ─────
 # Note: chrono version constrained by Polars git dependency (requires <= 0.4.41)
 chrono = { version = "0.4.41", features = ["serde"] }
-time = { version = "0.3.45", features = ["macros", "formatting"] }
+time = { version = "0.3.46", features = ["macros", "formatting"] }
 
 # ───── Configuration ─────
 toml = "0.9.8"
@@ -140,9 +140,9 @@ mimalloc = "0.1.48"
 # ───── Utilities ─────
 glob = "0.3.3"
 regex = "1.12.2"
-memchr = "2.7.4"
-aho-corasick = "1.1.3"
-globset = "0.4.16"
+memchr = "2.7.6"
+aho-corasick = "1.1.4"
+globset = "0.4.18"
 walkdir = "2.5.0"
 memmap2 = "0.9.9"
 parking_lot = "0.12.5"
@@ -152,7 +152,7 @@ once_cell = "1.21.3"
 colored = "3.1.1"
 ignore = "0.4.25"
 jwalk = "0.8.1"
-sysinfo = "0.37.2"
+sysinfo = "0.38.0"
 num-format = "0.4.4"
 async-recursion = "1.1.1"
 async-trait = "0.1.89"

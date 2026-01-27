@@ -183,6 +183,11 @@ pub struct LoadRawOptions {
     /// Override volume letter (useful for raw NTFS files that don't have this
     /// info). If None, uses 'X' as default for raw files.
     pub volume_letter: Option<char>,
+    /// Enable forensic mode: include deleted, corrupt, and extension records.
+    /// Adds `is_deleted`, `is_corrupt`, `is_extension`, `base_frs` columns to
+    /// output. WARNING: May significantly increase output size (10-50% more
+    /// rows).
+    pub forensic: bool,
 }
 
 /// Loaded raw MFT data.
@@ -469,6 +474,7 @@ pub fn load_raw_mft_header<P: AsRef<Path>>(path: P) -> Result<RawMftHeader> {
         &LoadRawOptions {
             header_only: true,
             volume_letter: None,
+            forensic: false,
         },
     )?;
     Ok(result.header)
@@ -1022,6 +1028,7 @@ mod tests {
         let options = LoadRawOptions {
             header_only: false,
             volume_letter: Some('D'),
+            forensic: false,
         };
         let loaded_with_override = load_raw_mft(&path, &options)?;
         assert_eq!(loaded_with_override.header.volume_letter, 'D');

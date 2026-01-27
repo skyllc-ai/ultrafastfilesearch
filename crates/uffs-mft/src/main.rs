@@ -214,6 +214,12 @@ enum Commands {
         /// count unique files, not paths.
         #[arg(long)]
         unique: bool,
+
+        /// Include forensic records (deleted, corrupt, extension records).
+        /// Adds `is_deleted`, `is_corrupt`, `is_extension`, `base_frs` columns.
+        /// WARNING: May significantly increase output size (10-50% more rows).
+        #[arg(long)]
+        forensic: bool,
     },
 
     /// Show MFT information for a drive
@@ -375,6 +381,12 @@ enum Commands {
         /// For UFFS-MFT format files, this overrides the stored volume letter.
         #[arg(short, long, value_name = "LETTER")]
         drive: Option<char>,
+
+        /// Include forensic records (deleted, corrupt, extension records).
+        /// Adds `is_deleted`, `is_corrupt`, `is_extension`, `base_frs` columns.
+        /// WARNING: May significantly increase output size (10-50% more rows).
+        #[arg(long)]
+        forensic: bool,
     },
 
     /// Raw MFT read benchmark (matches C++ --benchmark-mft output exactly)
@@ -819,7 +831,8 @@ async fn dispatch_command(command: Commands) -> Result<()> {
             mode,
             full,
             unique,
-        } => cmd_read(drive, output, &mode, full, unique).await,
+            forensic,
+        } => cmd_read(drive, output, &mode, full, unique, forensic).await,
         Commands::Info {
             drive,
             deep,
@@ -855,7 +868,15 @@ async fn dispatch_command(command: Commands) -> Result<()> {
             info_only,
             build_index,
             drive,
-        } => cmd_load(&input, output.as_deref(), info_only, build_index, drive),
+            forensic,
+        } => cmd_load(
+            &input,
+            output.as_deref(),
+            info_only,
+            build_index,
+            drive,
+            forensic,
+        ),
         Commands::BenchmarkMft { drive } => cmd_benchmark_mft(drive).await,
         Commands::BenchmarkIndex { drive } => cmd_benchmark_index(drive).await,
         Commands::BenchmarkIndexLean {
@@ -918,7 +939,15 @@ async fn dispatch_command(command: Commands) -> Result<()> {
             info_only,
             build_index,
             drive,
-        } => cmd_load(&input, output.as_deref(), info_only, build_index, drive),
+            forensic,
+        } => cmd_load(
+            &input,
+            output.as_deref(),
+            info_only,
+            build_index,
+            drive,
+            forensic,
+        ),
         // All other commands require Windows (direct NTFS volume access)
         Commands::Read { .. }
         | Commands::Info { .. }
@@ -955,6 +984,7 @@ async fn cmd_read(
     mode_str: &str,
     full: bool,
     unique: bool,
+    forensic: bool,
 ) -> Result<()> {
     use std::time::Instant;
 
@@ -963,6 +993,16 @@ async fn cmd_read(
 
     let start_time = Instant::now();
     let drive_upper = drive.to_ascii_uppercase();
+
+    // Forensic mode is not yet supported for live reads
+    // (requires significant I/O layer refactoring)
+    if forensic {
+        warn!("⚠️ Forensic mode (--forensic) is not yet supported for live reads.");
+        warn!(
+            "   Use 'uffs_mft save' to save the MFT, then 'uffs_mft load --forensic' to analyze."
+        );
+        warn!("   Proceeding with normal mode...");
+    }
 
     // Parse read mode
     let mode: MftReadMode = mode_str.parse().map_err(|e: String| anyhow::anyhow!(e))?;
@@ -994,6 +1034,7 @@ async fn cmd_read(
         .with_mode(mode)
         .with_merge_extensions(full)
         .with_expand_links(!unique); // unique=true means don't expand
+    // Note: forensic mode is not yet supported for live reads (see warning above)
 
     info!(
         drive = %drive_upper,
@@ -2597,6 +2638,7 @@ fn cmd_load(
     info_only: bool,
     build_index: bool,
     drive_override: Option<char>,
+    forensic: bool,
 ) -> Result<()> {
     use std::time::Instant;
 
@@ -2614,6 +2656,7 @@ fn cmd_load(
     let load_options = LoadRawOptions {
         header_only: true,
         volume_letter: drive_override.map(|c| c.to_ascii_uppercase()),
+        forensic,
     };
     let raw_data = load_raw_mft(input, &load_options)
         .with_context(|| format!("Failed to load raw MFT header from {}", input.display()))?;
@@ -2682,7 +2725,16 @@ fn cmd_load(
     let data_load_options = LoadRawOptions {
         header_only: false,
         volume_letter: drive_override.map(|c| c.to_ascii_uppercase()),
+        forensic,
     };
+
+    // Print forensic mode warning if enabled
+    if forensic {
+        println!();
+        println!("⚠️  FORENSIC MODE ENABLED");
+        println!("  Including: deleted records, corrupt records, extension records");
+        println!("  Output may contain 10-50% more rows than normal mode");
+    }
 
     if info_only {
         // Parse the MFT to get detailed statistics
