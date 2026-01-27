@@ -245,7 +245,7 @@ impl OutputColumn {
             Self::Virtual => "Virtual",
             Self::Pinned => "Pinned",
             Self::Unpinned => "Unpinned",
-            Self::Descendants => "Descendents",
+            Self::Descendants => "Descendants",
             Self::TreeSize => "TreeSize",
             Self::TreeAllocated => "TreeAllocated",
             Self::Bulkiness => "Bulkiness",
