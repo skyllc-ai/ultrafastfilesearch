@@ -85,6 +85,7 @@ pub use path_resolver::{
     add_path_only_column, add_paths_from_full_data,
 };
 pub use query::MftQuery;
+pub use tree::{TreeColumn, TreeIndex, add_tree_columns, apply_directory_treesize};
 // Re-export commonly used types
 pub use uffs_mft::{DataFrame, FileFlags, LazyFrame};
 pub use uffs_polars::columns;

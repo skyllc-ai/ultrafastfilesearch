@@ -567,6 +567,51 @@ pub fn add_tree_columns(df: &DataFrame, columns: &[TreeColumn]) -> Result<DataFr
     tree.add_columns(df, columns)
 }
 
+/// Apply treesize transformation to directories for C++ parity.
+///
+/// For directories, replaces:
+/// - `size` with `treesize` (sum of logical sizes in subtree)
+/// - `allocated_size` with `tree_allocated` (sum of allocated sizes in subtree)
+///
+/// For files, keeps the original `size` and `allocated_size` values.
+///
+/// This matches C++ UFFS behavior where directory sizes show the total
+/// size of all files under them, not the directory's own metadata size.
+///
+/// # Requirements
+///
+/// The `DataFrame` must have these columns:
+/// - `is_directory` (bool)
+/// - `size` (u64)
+/// - `allocated_size` (u64)
+/// - `treesize` (u64)
+/// - `tree_allocated` (u64)
+///
+/// # Errors
+///
+/// Returns an error if required columns are missing or the transformation
+/// fails.
+pub fn apply_directory_treesize(df: &DataFrame) -> Result<DataFrame> {
+    use uffs_polars::{IntoLazy, col, when};
+
+    df.clone()
+        .lazy()
+        .with_column(
+            when(col("is_directory"))
+                .then(col("treesize"))
+                .otherwise(col("size"))
+                .alias("size"),
+        )
+        .with_column(
+            when(col("is_directory"))
+                .then(col("tree_allocated"))
+                .otherwise(col("allocated_size"))
+                .alias("allocated_size"),
+        )
+        .collect()
+        .map_err(crate::CoreError::Polars)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

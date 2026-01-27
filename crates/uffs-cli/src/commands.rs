@@ -1173,7 +1173,9 @@ fn results_to_dataframe(
 
         if let Some(rec) = record {
             // Populate from record's StandardInfo
-            allocated_sizes.push(result.size); // TODO: Get actual allocated size from stream
+            // Use allocated_size from SearchResult (populated from stream's
+            // SizeInfo.allocated)
+            allocated_sizes.push(result.allocated_size);
             created_times.push(rec.stdinfo.created);
             modified_times.push(rec.stdinfo.modified);
             accessed_times.push(rec.stdinfo.accessed);
@@ -1288,23 +1290,8 @@ fn results_to_dataframe(
     // Replace size and allocated_size columns with tree metrics for directories
     // (C++ parity) For directories: size = treesize, allocated_size =
     // tree_allocated For files: keep original size and allocated_size
-    use uffs_polars::{IntoLazy, col, when};
-    df = df
-        .lazy()
-        .with_column(
-            when(col("is_directory"))
-                .then(col("treesize"))
-                .otherwise(col("size"))
-                .alias("size"),
-        )
-        .with_column(
-            when(col("is_directory"))
-                .then(col("tree_allocated"))
-                .otherwise(col("allocated_size"))
-                .alias("allocated_size"),
-        )
-        .collect()
-        .map_err(|err| anyhow::anyhow!("Failed to merge tree metrics: {err}"))?;
+    df = uffs_core::apply_directory_treesize(&df)
+        .map_err(|err| anyhow::anyhow!("Failed to apply directory treesize: {err}"))?;
 
     // Add path_only column (directory portion of path)
     df = uffs_core::add_path_only_column(&df)
@@ -1598,7 +1585,27 @@ async fn search_multi_drive_filtered(
                     Ok(df) => {
                         // Add path_only column (directory portion of path)
                         match uffs_core::add_path_only_column(&df) {
-                            Ok(df_with_path_only) => df_with_path_only,
+                            Ok(df_with_path_only) => {
+                                // Apply treesize transformation for directories (C++ parity)
+                                match uffs_core::apply_directory_treesize(&df_with_path_only) {
+                                    Ok(df_with_treesize) => df_with_treesize,
+                                    Err(e) => {
+                                        let _ = tx
+                                            .send(DriveResult {
+                                                drive: drive_char,
+                                                df: None,
+                                                records_read,
+                                                matches,
+                                                error: Some(format!(
+                                                    "Failed to apply treesize: {e}"
+                                                )),
+                                                paths_resolved: false,
+                                            })
+                                            .await;
+                                        return;
+                                    }
+                                }
+                            }
                             Err(e) => {
                                 let _ = tx
                                     .send(DriveResult {
@@ -1629,7 +1636,23 @@ async fn search_multi_drive_filtered(
                     }
                 }
             } else {
-                filtered
+                // No path resolver - still apply treesize transformation
+                match uffs_core::apply_directory_treesize(&filtered) {
+                    Ok(df) => df,
+                    Err(e) => {
+                        let _ = tx
+                            .send(DriveResult {
+                                drive: drive_char,
+                                df: None,
+                                records_read,
+                                matches,
+                                error: Some(format!("Failed to apply treesize: {e}")),
+                                paths_resolved: false,
+                            })
+                            .await;
+                        return;
+                    }
+                }
             };
 
             // Add drive column
@@ -1877,7 +1900,27 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
                     Ok(df) => {
                         // Add path_only column (directory portion of path)
                         match uffs_core::add_path_only_column(&df) {
-                            Ok(df_with_path_only) => df_with_path_only,
+                            Ok(df_with_path_only) => {
+                                // Apply treesize transformation for directories (C++ parity)
+                                match uffs_core::apply_directory_treesize(&df_with_path_only) {
+                                    Ok(df_with_treesize) => df_with_treesize,
+                                    Err(e) => {
+                                        let _ = tx
+                                            .send(DriveResult {
+                                                drive: drive_char,
+                                                df: None,
+                                                records_read,
+                                                matches,
+                                                error: Some(format!(
+                                                    "Failed to apply treesize: {e}"
+                                                )),
+                                                paths_resolved: false,
+                                            })
+                                            .await;
+                                        return;
+                                    }
+                                }
+                            }
                             Err(e) => {
                                 let _ = tx
                                     .send(DriveResult {
@@ -1908,7 +1951,23 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
                     }
                 }
             } else {
-                filtered
+                // No path resolver - still apply treesize transformation
+                match uffs_core::apply_directory_treesize(&filtered) {
+                    Ok(df) => df,
+                    Err(e) => {
+                        let _ = tx
+                            .send(DriveResult {
+                                drive: drive_char,
+                                df: None,
+                                records_read,
+                                matches,
+                                error: Some(format!("Failed to apply treesize: {e}")),
+                                paths_resolved: false,
+                            })
+                            .await;
+                        return;
+                    }
+                }
             };
 
             // Add drive column

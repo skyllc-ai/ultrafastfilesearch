@@ -403,12 +403,15 @@ pub fn compile_extensions(extensions: &[&str]) -> IndexPattern {
 /// Files with ADS produce multiple results (same path, different stream names).
 #[derive(Debug, Clone)]
 pub struct SearchResult {
-    /// The file/directory name.
+    /// The file/directory name (includes `:stream_name` for ADS, C++ parity).
     pub name: String,
     /// The full path (if resolved), including `:stream_name` for ADS.
     pub path: Option<String>,
     /// File size in bytes (for this specific stream).
     pub size: u64,
+    /// Allocated size on disk (0 for resident files, cluster-aligned for
+    /// non-resident).
+    pub allocated_size: u64,
     /// File Reference Segment number.
     pub frs: u64,
     /// Parent FRS (for this specific hard link).
@@ -449,6 +452,7 @@ impl SearchResult {
             name,
             path: None, // Path resolution is expensive, done on demand
             size: record.first_stream.size.length,
+            allocated_size: record.first_stream.size.allocated,
             frs: record.frs,
             parent_frs: record.first_name.parent_frs,
             is_directory,
@@ -477,21 +481,31 @@ impl SearchResult {
             .unwrap_or(&record.first_stream);
         let is_directory = record.is_directory();
 
-        // C++ parity: directories have empty name, files have actual name
-        let name = if is_directory {
+        // Get base filename
+        let base_name = if is_directory {
             String::new()
         } else {
             index.get_name(&name_info.name).to_owned()
+        };
+
+        // C++ parity: ADS entries include stream name in Name column
+        // e.g., "readme.txt:Zone.Identifier" instead of just "readme.txt"
+        let stream_name = index.stream_name(stream_info);
+        let name = if !stream_name.is_empty() && !is_directory {
+            format!("{base_name}:{stream_name}")
+        } else {
+            base_name
         };
 
         Self {
             name,
             path: None,
             size: stream_info.size.length,
+            allocated_size: stream_info.size.allocated,
             frs: record.frs,
             parent_frs: name_info.parent_frs,
             is_directory,
-            stream_name: index.stream_name(stream_info).to_owned(),
+            stream_name: stream_name.to_owned(),
             name_index: name_idx,
             stream_index: stream_idx,
             descendants: record.descendants,
