@@ -77,21 +77,27 @@ Fixing identified differences between C++ and Rust UFFS outputs to achieve featu
 
 ---
 
-## Fix 4: Descendant Count Difference ⏳ DEFERRED
+## Fix 4: Descendant Count Difference ✅ FIXED
 
 ### What Failed
 - C++ G:\: 15,115 descendants
 - Rust G:\: 15,087 descendants (28 fewer)
 
 ### Why It Failed
-- Likely due to ADS handling differences
-- C++ may count ADS as separate entries in descendant count
-- Rust tree metrics are computed per-FRS, not per-stream
+- C++ counts each ADS (Alternate Data Stream) as a separate descendant
+- Rust tree metrics were computed per-FRS, counting each file as 1 regardless of stream count
+- C++ also includes all streams' sizes in treesize/tree_allocated
 
-### Status
-- Deferred for now - requires Windows testing to verify
-- The difference is small (0.18%) and may be intentional design difference
-- ADS are not separate file records, so not counting them in descendants may be correct
+### How Fixed
+Modified `compute_tree_metrics()` in `crates/uffs-mft/src/index.rs`:
+
+1. **Sum all streams' sizes**: In the first pass, iterate through all streams (default + ADS) to sum total size and allocated size, not just the first stream
+2. **Count streams as descendants**: When accumulating into parent, use `stream_count` instead of `1` to count each ADS as a separate descendant
+
+Key changes:
+- Extended `parent_info` tuple to include `stream_count`
+- Added loop to follow linked list of additional streams and sum their sizes
+- Changed accumulation from `1 + child_descendants` to `stream_count + child_descendants`
 
 ---
 
@@ -100,4 +106,5 @@ Fixing identified differences between C++ and Rust UFFS outputs to achieve featu
 | Commit | Description |
 |--------|-------------|
 | v0.2.124 | fix: C++ parity - Size on Disk, Directory Size, ADS Name |
+| v0.2.125 | fix: C++ parity - Descendant count includes ADS |
 

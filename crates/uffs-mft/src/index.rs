@@ -1746,7 +1746,9 @@ impl MftIndex {
 
         // Phase 1: Build parent links and count pending children
         // Also initialize base metrics (each node's own contribution)
-        // First pass: initialize base metrics and collect parent info
+        // First pass: collect parent info and sum ALL streams' sizes (for C++ parity)
+        // C++ counts each ADS as a separate descendant and includes ADS sizes in
+        // treesize
         let parent_info: Vec<_> = self
             .records
             .iter()
@@ -1755,14 +1757,37 @@ impl MftIndex {
             .map(|(idx, record)| {
                 let frs = record.frs;
                 let parent_frs = record.first_name.parent_frs;
-                let size = record.first_stream.size.length;
-                let allocated = record.first_stream.size.allocated;
-                (idx, frs, parent_frs, size, allocated)
+                let stream_count = record.stream_count;
+
+                // Sum sizes across ALL streams (default + ADS) for C++ parity
+                let mut total_size = record.first_stream.size.length;
+                let mut total_allocated = record.first_stream.size.allocated;
+
+                // Follow the linked list of additional streams
+                let mut next_entry = record.first_stream.next_entry;
+                while next_entry != NO_ENTRY {
+                    if let Some(stream) = self.streams.get(next_entry as usize) {
+                        total_size = total_size.saturating_add(stream.size.length);
+                        total_allocated = total_allocated.saturating_add(stream.size.allocated);
+                        next_entry = stream.next_entry;
+                    } else {
+                        break;
+                    }
+                }
+
+                (
+                    idx,
+                    frs,
+                    parent_frs,
+                    total_size,
+                    total_allocated,
+                    stream_count,
+                )
             })
             .collect();
 
         // Second pass: initialize base metrics
-        for (idx, _frs, _parent_frs, size, allocated) in &parent_info {
+        for (idx, _frs, _parent_frs, size, allocated, _stream_count) in &parent_info {
             if let Some(record) = self.records.get_mut(*idx) {
                 record.descendants = 0;
                 record.treesize = *size;
@@ -1771,7 +1796,7 @@ impl MftIndex {
         }
 
         // Third pass: build parent links
-        for (idx, frs, parent_frs, _size, _allocated) in &parent_info {
+        for (idx, frs, parent_frs, _size, _allocated, _stream_count) in &parent_info {
             // Skip root or self-parent
             if parent_frs == frs {
                 continue;
@@ -1816,17 +1841,25 @@ impl MftIndex {
 
             let parent_idx_usize = parent_idx_u32 as usize;
 
-            // Read child's metrics
-            let (child_descendants, child_treesize, child_tree_allocated) =
+            // Read child's metrics and stream_count
+            // For C++ parity, each stream (default + ADS) counts as a separate descendant
+            let (child_descendants, child_treesize, child_tree_allocated, child_stream_count) =
                 if let Some(child) = self.records.get(child_idx) {
-                    (child.descendants, child.treesize, child.tree_allocated)
+                    (
+                        child.descendants,
+                        child.treesize,
+                        child.tree_allocated,
+                        child.stream_count,
+                    )
                 } else {
                     continue; // Safety: skip if index is invalid
                 };
 
             // Accumulate into parent
+            // Use stream_count instead of 1 to count each ADS as a separate descendant
+            // This matches C++ behavior where ADS are expanded as separate rows
             if let Some(parent) = self.records.get_mut(parent_idx_usize) {
-                parent.descendants += 1 + child_descendants;
+                parent.descendants += u32::from(child_stream_count) + child_descendants;
                 parent.treesize += child_treesize;
                 parent.tree_allocated += child_tree_allocated;
             }
