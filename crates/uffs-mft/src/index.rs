@@ -1231,6 +1231,10 @@ pub struct MftIndex {
     pub extensions: ExtensionTable,
     /// Extension index for O(matches) queries (built after parsing)
     pub extension_index: Option<ExtensionIndex>,
+    /// Whether this index was built with forensic mode enabled.
+    /// When true, `to_dataframe()` includes `is_deleted`, `is_corrupt`,
+    /// `is_extension`, and `base_frs` columns.
+    pub forensic_mode: bool,
 }
 
 // ============================================================================
@@ -1281,6 +1285,7 @@ impl MftIndex {
             stats: MftStats::new(),
             extensions: ExtensionTable::new(),
             extension_index: None,
+            forensic_mode: false,
         }
     }
 
@@ -4189,13 +4194,18 @@ impl MftIndex {
         );
         let (mut reparse_tag, mut is_resident): (Vec<u32>, Vec<bool>) =
             (Vec::with_capacity(n), Vec::with_capacity(n));
-        // P3 forensic columns
-        let (mut is_deleted, mut is_corrupt, mut is_extension): (Vec<bool>, Vec<bool>, Vec<bool>) = (
-            Vec::with_capacity(n),
-            Vec::with_capacity(n),
-            Vec::with_capacity(n),
-        );
-        let mut base_frs_col: Vec<u64> = Vec::with_capacity(n);
+        // P3 forensic columns - only allocate if forensic mode is enabled
+        let (mut is_deleted, mut is_corrupt, mut is_extension, mut base_frs_col) =
+            if self.forensic_mode {
+                (
+                    Vec::with_capacity(n),
+                    Vec::with_capacity(n),
+                    Vec::with_capacity(n),
+                    Vec::with_capacity(n),
+                )
+            } else {
+                (Vec::new(), Vec::new(), Vec::new(), Vec::new())
+            };
         // Extract data from records
         for rec in &self.records {
             frs.push(rec.frs);
@@ -4235,16 +4245,19 @@ impl MftIndex {
             str.push(rec.stream_count);
             reparse_tag.push(rec.reparse_tag);
             is_resident.push(rec.first_stream.is_resident());
-            // P3 forensic fields
-            is_deleted.push(rec.is_deleted());
-            is_corrupt.push(rec.is_corrupt());
-            is_extension.push(rec.is_extension());
-            base_frs_col.push(rec.base_frs);
+            // P3 forensic fields - only populate if forensic mode is enabled
+            if self.forensic_mode {
+                is_deleted.push(rec.is_deleted());
+                is_corrupt.push(rec.is_corrupt());
+                is_extension.push(rec.is_extension());
+                base_frs_col.push(rec.base_frs);
+            }
             path.push(self.build_path(rec.frs));
         }
         // Build DataFrame
         let dt = DataType::Datetime(TimeUnit::Microseconds, None);
-        let cols = vec![
+        // Base columns (37 without forensic, 41 with forensic)
+        let mut cols = vec![
             Series::new("frs".into(), frs).into_column(),
             Series::new("sequence_number".into(), seq).into_column(),
             Series::new("lsn".into(), lsn).into_column(),
@@ -4294,16 +4307,20 @@ impl MftIndex {
             Series::new("is_temporary".into(), tmp).into_column(),
             Series::new("reparse_tag".into(), reparse_tag).into_column(),
             Series::new("is_resident".into(), is_resident).into_column(),
-            // P3 forensic columns (v7)
-            Series::new("is_deleted".into(), is_deleted).into_column(),
-            Series::new("is_corrupt".into(), is_corrupt).into_column(),
-            Series::new("is_extension".into(), is_extension).into_column(),
-            Series::new("base_frs".into(), base_frs_col).into_column(),
-            Series::new("flags".into(), flags).into_column(),
-            Series::new("link_count".into(), lnk).into_column(),
-            Series::new("stream_count".into(), str).into_column(),
-            Series::new("path".into(), path).into_column(),
         ];
+        // P3 forensic columns - only include when forensic_mode is enabled
+        if self.forensic_mode {
+            cols.push(Series::new("is_deleted".into(), is_deleted).into_column());
+            cols.push(Series::new("is_corrupt".into(), is_corrupt).into_column());
+            cols.push(Series::new("is_extension".into(), is_extension).into_column());
+            cols.push(Series::new("base_frs".into(), base_frs_col).into_column());
+        }
+        // Remaining columns (always included)
+        cols.push(Series::new("flags".into(), flags).into_column());
+        cols.push(Series::new("link_count".into(), lnk).into_column());
+        cols.push(Series::new("stream_count".into(), str).into_column());
+        cols.push(Series::new("path".into(), path).into_column());
+
         uffs_polars::DataFrame::new_infer_height(cols).map_err(crate::MftError::from)
     }
 }
@@ -4334,6 +4351,7 @@ impl MftIndex {
 
         let capacity = records.len();
         let mut index = Self::with_capacity(volume, capacity);
+        let mut has_forensic_records = false;
 
         for parsed in records {
             // In normal mode, skip records not in use.
@@ -4341,6 +4359,9 @@ impl MftIndex {
             // Forensic records have is_deleted/is_corrupt/is_extension set by
             // parse_record_forensic().
             let is_forensic_record = parsed.is_deleted || parsed.is_corrupt || parsed.is_extension;
+            if is_forensic_record {
+                has_forensic_records = true;
+            }
             if !parsed.in_use && !is_forensic_record {
                 continue;
             }
@@ -4530,6 +4551,9 @@ impl MftIndex {
 
         // 3. Compute tree metrics for directory statistics (Phase 5)
         index.compute_tree_metrics();
+
+        // 4. Set forensic mode flag if any forensic records were included
+        index.forensic_mode = has_forensic_records;
 
         index
     }
@@ -5609,6 +5633,7 @@ impl MftIndex {
             stats: MftStats::new(),
             extensions,
             extension_index: None,
+            forensic_mode: false, // Loaded indexes don't have forensic records
         };
 
         // Compute stats from loaded data

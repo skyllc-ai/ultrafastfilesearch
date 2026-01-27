@@ -113,10 +113,10 @@ Understanding the cost of each field helps decide what to include by default vs.
 Before P1:  192 bytes/record
 After P1:   200 bytes/record (+8 bytes for lsn)
 After P2:   216 bytes/record (+16 bytes for reparse_tag + alignment padding)
-After P3:   ~232 bytes/record (+16 bytes for base_frs + flags)
+After P3:   224 bytes/record (+8 bytes for base_frs, forensic_flags packed in existing u8)
 
-Total growth: 192 → 232 = +40 bytes (+21%)
-At 10M files: 1.92 GB → 2.32 GB = +400 MB
+Total growth: 192 → 224 = +32 bytes (+17%)
+At 10M files: 1.92 GB → 2.24 GB = +320 MB
 ```
 
 ### CPU/Speed Impact
@@ -357,7 +357,10 @@ Source:   FileRecordSegmentHeader.base_file_record_segment
 |----------|--------|--------|---------------|---------|
 | P1 | lsn, usn, security_id, owner_id | ✅ Complete | v5 | 35 |
 | P2 | reparse_tag, is_resident | ✅ Complete | v6 | 37 |
-| P3 | is_deleted, is_corrupt, is_extension, base_frs | ⬜ Pending | v7 | 41 |
+| P3 | is_deleted, is_corrupt, is_extension, base_frs | ✅ Complete | v7 | 37 (normal) / 41 (forensic) |
+
+> **Note**: P3 forensic columns are only included in output when `--forensic` flag is used.
+> Normal mode outputs 37 columns; forensic mode outputs 41 columns.
 
 ### Priority 1: Easy Wins ✅
 
@@ -375,14 +378,27 @@ Source:   FileRecordSegmentHeader.base_file_record_segment
 | `reparse_tag` | ✅ | 2026-01-26 | `FileRecord.reparse_tag` from $REPARSE_POINT @0x00 |
 | `is_resident` | ✅ | 2026-01-26 | `IndexStreamInfo.flags` bit 1, from $DATA header |
 
-### Priority 3: Architecture Changes ⬜
+### Priority 3: Architecture Changes ✅
 
-| Field | Status | Blocker | Proposed Solution |
-|-------|--------|---------|-------------------|
-| `is_deleted` | ⬜ | Changes record count | `--forensic` flag |
-| `is_corrupt` | ⬜ | Changes record count | `--forensic` flag |
-| `is_extension` | ⬜ | Changes data model | `--forensic` flag |
-| `base_frs` | ⬜ | Only useful with is_extension | `--forensic` flag |
+| Field | Status | Date | Implementation |
+|-------|--------|------|----------------|
+| `is_deleted` | ✅ | 2026-01-27 | `FileRecord.forensic_flags` bit 0, `--forensic` flag |
+| `is_corrupt` | ✅ | 2026-01-27 | `FileRecord.forensic_flags` bit 1, `--forensic` flag |
+| `is_extension` | ✅ | 2026-01-27 | `FileRecord.forensic_flags` bit 2, `--forensic` flag |
+| `base_frs` | ✅ | 2026-01-27 | `FileRecord.base_frs` u64, `--forensic` flag |
+
+#### P3 Test Results (G Drive MFT, 20MB)
+
+| Mode | Records | File Size |
+|------|---------|-----------|
+| Normal | 15,085 | 5.96 MB |
+| Forensic (`--forensic`) | 20,220 (+34%) | 7.98 MB |
+
+| Forensic Type | Count |
+|---------------|-------|
+| Deleted | 4,970 |
+| Corrupt | 165 |
+| Extension | 0 |
 
 ---
 
