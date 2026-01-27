@@ -329,7 +329,8 @@ fn should_use_index_path(
     clippy::too_many_arguments,
     clippy::fn_params_excessive_bools,
     clippy::print_stderr,
-    clippy::too_many_lines
+    clippy::too_many_lines,
+    clippy::single_call_fn
 )]
 pub async fn search(
     pattern: &str,
@@ -342,6 +343,7 @@ pub async fn search(
     profile: bool,
     benchmark: bool,
     no_bitmap: bool,
+    #[cfg_attr(not(windows), allow(unused_variables))] no_cache: bool,
     min_size: Option<u64>,
     max_size: Option<u64>,
     limit: u32,
@@ -427,12 +429,19 @@ pub async fn search(
                     &filters,
                     needs_paths,
                     profile,
+                    no_cache,
                 )
                 .await?
             } else {
                 // Multi-drive with cached index path
-                load_and_filter_data_index_multi(&drives_to_search, &filters, needs_paths, profile)
-                    .await?
+                load_and_filter_data_index_multi(
+                    &drives_to_search,
+                    &filters,
+                    needs_paths,
+                    profile,
+                    no_cache,
+                )
+                .await?
             }
         }
         #[cfg(not(windows))]
@@ -732,35 +741,11 @@ async fn load_and_filter_data(
     }
 }
 
-/// Save an `MftIndex` to the cache with volume info.
-///
-/// Gets volume serial and USN journal info, then saves to cache.
-/// Returns an error if any step fails.
-#[cfg(windows)]
-fn save_index_to_cache(index: &uffs_mft::MftIndex, drive: char) -> Result<()> {
-    use uffs_mft::usn::query_usn_journal;
-    use uffs_mft::{VolumeHandle, save_to_cache};
-
-    let handle =
-        VolumeHandle::open(drive).with_context(|| format!("Failed to open volume {drive}:"))?;
-    let volume_serial = handle.volume_data().volume_serial_number;
-
-    let (usn_journal_id, next_usn) = match query_usn_journal(drive) {
-        Ok(info) => (info.journal_id, info.next_usn),
-        Err(_) => (0, 0), // USN not available, save without checkpoint
-    };
-
-    save_to_cache(index, drive, volume_serial, usn_journal_id, next_usn)
-        .with_context(|| format!("Failed to write cache for {drive}:"))?;
-
-    Ok(())
-}
-
 /// Load and filter data using fast `MftIndex` path (no `DataFrame` conversion
 /// during search).
 ///
 /// This is the fast path for simple queries. Uses cached `MftIndex` when
-/// available.
+/// available (unless `no_cache` is true).
 #[cfg(windows)]
 #[allow(clippy::single_call_fn, clippy::print_stderr)]
 async fn load_and_filter_data_index(
@@ -768,8 +753,9 @@ async fn load_and_filter_data_index(
     filters: &QueryFilters<'_>,
     needs_paths: bool,
     profile: bool,
+    no_cache: bool,
 ) -> Result<uffs_mft::DataFrame> {
-    use uffs_mft::{INDEX_TTL_SECONDS, load_cached_index};
+    use uffs_mft::INDEX_TTL_SECONDS;
 
     // Get effective drive
     let effective_drive = single_drive.or_else(|| filters.parsed.drive());
@@ -781,33 +767,17 @@ async fn load_and_filter_data_index(
 
     let t_load = std::time::Instant::now();
 
-    // Try to load from cache first
-    let index =
-        if let Some((cached_index, header)) = load_cached_index(drive_letter, INDEX_TTL_SECONDS) {
-            info!(
-                drive = %drive_letter,
-                records = cached_index.len(),
-                volume_serial = header.volume_serial,
-                "📦 Using cached MftIndex"
-            );
-            cached_index
-        } else {
-            // Cache miss - read fresh and save to cache
-            info!(drive = %drive_letter, "🔄 Cache miss - reading MFT");
-            let reader = MftReader::open(drive_letter)
-                .await
-                .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
-            let index = reader.read_all_index().await?;
+    let reader = MftReader::open(drive_letter)
+        .await
+        .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
 
-            // Save to cache for next time
-            if let Err(e) = save_index_to_cache(&index, drive_letter) {
-                info!(drive = %drive_letter, error = %e, "⚠️ Failed to save to cache (non-fatal)");
-            } else {
-                info!(drive = %drive_letter, records = index.len(), "💾 Saved to cache");
-            }
-
-            index
-        };
+    // Use cached read by default, fresh read if --no-cache
+    let index = if no_cache {
+        info!(drive = %drive_letter, "🔄 --no-cache: reading MFT fresh");
+        reader.read_all_index().await?
+    } else {
+        reader.read_index_cached(INDEX_TTL_SECONDS).await?
+    };
     let load_ms = t_load.elapsed().as_millis();
 
     // Execute query on index
@@ -834,7 +804,8 @@ async fn load_and_filter_data_index(
 
 /// Load and filter data using fast `MftIndex` path for multiple drives.
 ///
-/// Searches each drive in parallel using cached indices, then combines results.
+/// Searches each drive in parallel using cached indices (unless `no_cache` is
+/// true), then combines results.
 #[cfg(windows)]
 #[allow(clippy::single_call_fn, clippy::print_stderr)]
 async fn load_and_filter_data_index_multi(
@@ -842,11 +813,12 @@ async fn load_and_filter_data_index_multi(
     filters: &QueryFilters<'_>,
     needs_paths: bool,
     profile: bool,
+    no_cache: bool,
 ) -> Result<uffs_mft::DataFrame> {
     use std::sync::Arc;
 
     use tokio::task::JoinSet;
-    use uffs_mft::{INDEX_TTL_SECONDS, load_cached_index};
+    use uffs_mft::INDEX_TTL_SECONDS;
 
     if drives.is_empty() {
         bail!("No drives specified for multi-drive search");
@@ -855,7 +827,8 @@ async fn load_and_filter_data_index_multi(
     info!(
         count = drives.len(),
         drives = ?drives,
-        "Searching drives in PARALLEL with cached indices"
+        no_cache,
+        "Searching drives in PARALLEL"
     );
 
     let t_total = std::time::Instant::now();
@@ -873,33 +846,17 @@ async fn load_and_filter_data_index_multi(
         join_set.spawn(async move {
             let t_load = std::time::Instant::now();
 
-            // Try to load from cache first
-            let index =
-                if let Some((cached_index, header)) = load_cached_index(drive, INDEX_TTL_SECONDS) {
-                    info!(
-                        drive = %drive,
-                        records = cached_index.len(),
-                        volume_serial = header.volume_serial,
-                        "📦 Cache HIT"
-                    );
-                    cached_index
-                } else {
-                    // Cache miss - read fresh and save to cache
-                    info!(drive = %drive, "🔄 Cache MISS - reading MFT");
-                    let reader = MftReader::open(drive)
-                        .await
-                        .with_context(|| format!("Failed to open drive {drive}:"))?;
-                    let index = reader.read_all_index().await?;
+            let reader = MftReader::open(drive)
+                .await
+                .with_context(|| format!("Failed to open drive {drive}:"))?;
 
-                    // Save to cache for next time
-                    if let Err(e) = save_index_to_cache(&index, drive) {
-                        info!(drive = %drive, error = %e, "⚠️ Failed to save to cache");
-                    } else {
-                        info!(drive = %drive, records = index.len(), "💾 Saved to cache");
-                    }
-
-                    index
-                };
+            // Use cached read by default, fresh read if --no-cache
+            let index = if no_cache {
+                info!(drive = %drive, "🔄 --no-cache: reading MFT fresh");
+                reader.read_all_index().await?
+            } else {
+                reader.read_index_cached(INDEX_TTL_SECONDS).await?
+            };
             let load_ms = t_load.elapsed().as_millis();
             let record_count = index.len();
 

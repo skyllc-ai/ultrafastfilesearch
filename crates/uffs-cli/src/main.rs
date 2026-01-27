@@ -2,11 +2,28 @@
 //!
 //! Fast file search from the command line.
 //!
+//! ## Usage
+//!
+//! Search is the default action (no subcommand needed):
+//! ```bash
+//! uffs *.txt              # Find all .txt files
+//! uffs c:/pro*            # Find files starting with "pro" on C:
+//! uffs --ext=rs,toml      # Find Rust files
+//! ```
+//!
+//! ## Multi-Personality CLI (`BusyBox` Pattern)
+//!
+//! The binary name determines CLI behavior. Create symlinks for compatibility:
+//! ```bash
+//! ln -s uffs es           # Everything-compatible mode
+//! ln -s uffs uffs-cpp     # C++ UFFS compatible mode
+//! ```
+//!
 //! ## Logging
 //!
 //! Use `-v` / `--verbose` for info-level terminal output:
 //! ```bash
-//! uffs -v search *.txt
+//! uffs -v *.txt
 //! ```
 //!
 //! For finer control, use environment variables:
@@ -17,16 +34,16 @@
 //! Examples:
 //! ```bash
 //! # Debug mode - verbose terminal output
-//! RUST_LOG=debug uffs search *.txt
+//! RUST_LOG=debug uffs *.txt
 //!
 //! # Trace mode - maximum verbosity
-//! RUST_LOG=trace RUST_LOG_FILE=trace uffs search *.txt
+//! RUST_LOG=trace RUST_LOG_FILE=trace uffs *.txt
 //! ```
 
 // Dependencies used in commands.rs for streaming output (Windows-only code
 // paths)
 use std::io::stdout;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -44,6 +61,68 @@ use {chrono as _, uffs_polars as _};
 static GLOBAL: MiMalloc = MiMalloc;
 
 mod commands;
+
+// ============================================================================
+// Multi-Personality CLI (BusyBox Pattern)
+// ============================================================================
+
+/// CLI personality based on binary name (argv[0]).
+///
+/// Allows a single binary to behave differently based on how it's invoked,
+/// similar to `BusyBox`. Users can create symlinks to get different CLI styles:
+/// - `uffs` → Modern CLI (ripgrep/fd style)
+/// - `es` → Everything-compatible mode
+/// - `uffs-cpp` → C++ UFFS compatible mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(dead_code)] // Variants will be used as personalities are implemented
+pub enum Personality {
+    /// Modern CLI: clean, ripgrep/fd style (default)
+    #[default]
+    Modern,
+    /// Everything-compatible: matches voidtools Everything CLI
+    Everything,
+    /// C++ UFFS compatible: matches original C++ implementation
+    CppCompat,
+}
+
+impl Personality {
+    /// Detect personality from the binary name (argv[0]).
+    ///
+    /// Returns `Modern` for unknown binary names.
+    #[must_use]
+    pub fn detect() -> Self {
+        let binary_name = std::env::args()
+            .next()
+            .and_then(|path| {
+                Path::new(&path)
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().to_lowercase())
+            })
+            .unwrap_or_default();
+
+        match binary_name.as_ref() {
+            "es" | "everything" => Self::Everything,
+            "uffs-cpp" | "uffs_cpp" => Self::CppCompat,
+            _ => Self::Modern, // "uffs" or anything else
+        }
+    }
+
+    /// Get the display name for this personality.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Modern => "UFFS (Ultra Fast File Search)",
+            Self::Everything => "UFFS (Everything-compatible mode)",
+            Self::CppCompat => "UFFS (C++ compatible mode)",
+        }
+    }
+
+    /// Check if this personality should use C++ compatible output quirks.
+    #[must_use]
+    pub const fn is_cpp_compat(&self) -> bool {
+        matches!(self, Self::CppCompat)
+    }
+}
 
 /// Parse a drive letter from various formats for CPP compatibility.
 ///
@@ -139,6 +218,10 @@ struct Cli {
     #[arg(long)]
     no_bitmap: bool,
 
+    /// Bypass cache and read MFT fresh (default: use cache)
+    #[arg(long)]
+    no_cache: bool,
+
     /// Minimum file size in bytes
     #[arg(long)]
     min_size: Option<u64>,
@@ -203,145 +286,12 @@ struct Cli {
 }
 
 /// Available CLI subcommands.
+///
+/// Note: Search is NOT a subcommand - it's the default action.
+/// This matches ripgrep/fd/Everything patterns where the tool name IS the
+/// search.
 #[derive(Subcommand)]
-#[allow(clippy::large_enum_variant)]
 enum Commands {
-    /// Search for files matching a pattern
-    ///
-    /// Supports multiple pattern syntaxes:
-    /// - Glob: `*.txt`, `**/*.rs`, `file?.doc`
-    /// - Drive prefix: `c:/pro*`, `D:\Users\*`
-    /// - REGEX: `">C:\\Temp.*"` (patterns starting with `>`)
-    /// - Literal: `readme` (no wildcards = substring match)
-    Search {
-        /// Search pattern (glob, regex with `>`, or literal)
-        ///
-        /// Examples:
-        ///   `*.txt`           - All .txt files
-        ///   `c:/pro*`         - Files starting with "pro" on C:
-        ///   `**/*.rs`         - All .rs files recursively
-        ///   `">.*\.log$"`     - REGEX for .log files
-        pattern: String,
-
-        /// Drive letter to search (e.g., C or C:). Overrides drive in pattern.
-        #[arg(short, long, conflicts_with = "drives", value_parser = parse_drive_letter)]
-        drive: Option<char>,
-
-        /// Multiple drive letters to search concurrently (e.g., C,D,E or
-        /// C:,D:,E:)
-        #[arg(long, value_delimiter = ',', conflicts_with = "drive", value_parser = parse_drive_letter)]
-        drives: Option<Vec<char>>,
-
-        /// Use pre-built index file instead of live MFT
-        #[arg(short, long, conflicts_with_all = ["drive", "drives"])]
-        index: Option<PathBuf>,
-
-        /// Show only files (exclude directories)
-        #[arg(long)]
-        files_only: bool,
-
-        /// Show only directories
-        #[arg(long)]
-        dirs_only: bool,
-
-        /// Hide system files (files starting with $)
-        #[arg(long)]
-        hide_system: bool,
-
-        /// Show detailed timing breakdown for performance profiling
-        #[arg(long)]
-        profile: bool,
-
-        /// Benchmark mode: skip output, only measure MFT reading and filtering
-        /// Use this for profiling without stdout I/O overhead
-        #[arg(long)]
-        benchmark: bool,
-
-        /// Disable MFT bitmap optimization (read ALL records)
-        /// Use this for debugging if records appear to be missing
-        #[arg(long)]
-        no_bitmap: bool,
-
-        /// Minimum file size in bytes
-        #[arg(long)]
-        min_size: Option<u64>,
-
-        /// Maximum file size in bytes
-        #[arg(long)]
-        max_size: Option<u64>,
-
-        /// Maximum number of results (0 = unlimited)
-        #[arg(short = 'n', long, default_value = "0")]
-        limit: u32,
-
-        /// Output format: table, json, csv, custom
-        #[arg(short, long, default_value = "custom")]
-        format: String,
-
-        /// Case-sensitive matching (default: off)
-        #[arg(long, default_value = "false")]
-        case: bool,
-
-        /// Filter by file extension(s)
-        ///
-        /// Accepts comma-separated extensions or collection aliases:
-        /// - Extensions: `jpg,png,gif`
-        /// - Collections: `pictures`, `documents`, `videos`, `music`,
-        ///   `archives`, `code`
-        /// - Mixed: `pictures,mp4,pdf`
-        #[arg(long)]
-        ext: Option<String>,
-
-        /// Output destination: console or filename
-        ///
-        /// Special values: console, con, term, terminal (all output to stdout)
-        /// Otherwise treated as a file path to write results to.
-        #[arg(long, default_value = "console")]
-        out: String,
-
-        /// Columns to output (comma-separated or "all")
-        ///
-        /// Available: path, name, pathonly, size, sizeondisk, created,
-        /// modified, accessed, type, attributes, attributevalue,
-        /// hidden, system, archive, readonly, compressed, encrypted,
-        /// sparse, reparse, offline, notindexed, temporary, virtual,
-        /// pinned, unpinned, descendants
-        /// Default: all columns (CPP compatible)
-        #[arg(long, default_value = "all")]
-        columns: String,
-
-        /// Column separator (default: comma)
-        ///
-        /// Special values: TAB, NEWLINE
-        #[arg(long, default_value = ",")]
-        sep: String,
-
-        /// Quote character for string values (default: double-quote for CPP
-        /// compatibility)
-        #[arg(long, default_value = "\"")]
-        quotes: String,
-
-        /// Include header row in output (default: true for CPP compatibility)
-        #[arg(long, default_value = "true")]
-        header: bool,
-
-        /// Representation for active/true boolean attributes
-        #[arg(long, default_value = "1")]
-        pos: String,
-
-        /// Representation for inactive/false boolean attributes
-        #[arg(long, default_value = "0")]
-        neg: String,
-
-        /// Query execution mode: auto, index, dataframe
-        ///
-        /// - auto: Automatically choose best path (default)
-        /// - index: Force fast `MftIndex` path (simple queries only)
-        /// - dataframe: Force Polars `DataFrame` path (full features)
-        #[arg(long, default_value = "auto")]
-        query_mode: String,
-    },
-
     /// Build an index from drive MFT(s)
     ///
     /// By default, indexes ALL available NTFS drives. Use --drive or --drives
@@ -480,71 +430,21 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
 #[allow(clippy::too_many_lines, clippy::single_call_fn)]
 async fn run() -> Result<()> {
     // Check for -v/--verbose flag early to set log level before initializing
-    // logging This allows `uffs -v search ...` to show info-level logs without
+    // logging This allows `uffs -v ...` to show info-level logs without
     // RUST_LOG=info
     let verbose = std::env::args().any(|arg| arg == "-v" || arg == "--verbose");
 
     // Initialize logging with terminal + file support
     let _guard = init_logging(verbose);
 
+    // Detect CLI personality based on binary name (BusyBox pattern)
+    let personality = Personality::detect();
+    tracing::debug!(?personality, "CLI personality detected");
+
     let cli = Cli::parse();
 
-    // Handle default search (no subcommand) or explicit subcommand
+    // Handle subcommands or default search action
     match cli.command {
-        Some(Commands::Search {
-            pattern,
-            drive,
-            drives,
-            index,
-            files_only,
-            dirs_only,
-            hide_system,
-            profile,
-            benchmark,
-            no_bitmap,
-            min_size,
-            max_size,
-            limit,
-            format,
-            case,
-            ext,
-            out,
-            columns,
-            sep,
-            quotes,
-            header,
-            pos,
-            neg,
-            query_mode,
-        }) => {
-            commands::search(
-                &pattern,
-                drive,
-                drives,
-                index,
-                files_only,
-                dirs_only,
-                hide_system,
-                profile,
-                benchmark,
-                no_bitmap,
-                min_size,
-                max_size,
-                limit,
-                &format,
-                case,
-                ext.as_deref(),
-                &out,
-                &columns,
-                &sep,
-                &quotes,
-                header,
-                &pos,
-                &neg,
-                &query_mode,
-            )
-            .await?;
-        }
         Some(Commands::Index {
             output,
             drive,
@@ -559,7 +459,7 @@ async fn run() -> Result<()> {
             commands::stats(&path, top)?;
         }
         None => {
-            // Default action: search with top-level arguments
+            // Default action: search
             if let Some(pattern) = cli.pattern {
                 commands::search(
                     &pattern,
@@ -572,6 +472,7 @@ async fn run() -> Result<()> {
                     cli.profile,
                     cli.benchmark,
                     cli.no_bitmap,
+                    cli.no_cache,
                     cli.min_size,
                     cli.max_size,
                     cli.limit,
