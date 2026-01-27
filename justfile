@@ -1,4 +1,4 @@
-# TTAPI - Modern Rust Development Workflow (Cross-Platform & Educational)
+# UFFS - Modern Rust Development Workflow (Cross-Platform & Educational)
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 # 🎓 LEARNING GUIDE: Professional Rust Development Workflow Masterclass
@@ -334,7 +334,7 @@ test_flags := common_flags + " -A clippy::unwrap_used -A clippy::expect_used"
 
 # Default recipe - show available commands
 default:
-    @printf "\033[0;34m🚀 TTAPI - Modern Rust Development Workflow\033[0m\n"
+    @printf "\033[0;34m🚀 UFFS - Modern Rust Development Workflow\033[0m\n"
     @echo "=================================================="
     @echo ""
     @printf "\033[0;32m🚀 Main Workflow (RUST OPTIMIZED):\033[0m\n"
@@ -601,20 +601,15 @@ verify-toolchain:
     @rust-script scripts/verify-toolchain.rs
 
 # AUTOMATIC: Applies formatting automatically (no --check flag)
-# ENHANCED: Uses centralized formatting logic (simplified)
+# Uses standard cargo fmt for all workspace members
 fmt:
-    @printf "\033[0;34m📝 Formatting code (CENTRALIZED WORKFLOW)...\033[0m\n"
-    @printf "\033[0;36m  → Using ttapi-core formatting module\033[0m\n"
-    cargo run -p ttapi-devenv -- format
+    @printf "\033[0;34m📝 Formatting code...\033[0m\n"
+    cargo fmt --all
 
 # Check code formatting without applying fixes
 # WHY: Validation for CI/CD pipelines - ensures code is properly formatted
-# ENHANCED: Uses centralized formatting logic
 fmt-check:
-    @printf "\033[0;34m📝 Checking code formatting (CENTRALIZED WORKFLOW)...\033[0m\n"
-    @printf "\033[0;36m  → Using ttapi-core formatting module\033[0m\n"
-    cargo run -p ttapi-devenv -- format --check --verbose
-    @printf "\033[0;36m  → Step 3: Validate formatting (all workspace members)\033[0m\n"
+    @printf "\033[0;34m📝 Checking code formatting...\033[0m\n"
     cargo fmt --all -- --check
 
 # Run all tests with nextest (modern test runner)
@@ -701,7 +696,7 @@ build-release:
 
 # Build and install all binaries locally (PLATFORM-SPECIFIC)
 build-local:
-    @printf "\033[0;34m🚀 Building and installing all TTAPI binaries locally...\033[0m\n"
+    @printf "\033[0;34m🚀 Building and installing all UFFS binaries locally...\033[0m\n"
     @printf "\033[1;33m📦 Platform-specific build with Fat LTO optimization\033[0m\n"
     @printf "\033[1;33m📁 Installing to ~/bin with PATH setup\033[0m\n"
     @echo "========================================================"
@@ -1004,7 +999,7 @@ audit:
 # Show current version
 version:
     @printf "\033[0;34m📋 Current version:\033[0m\n"
-    @cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "ttapi") | .version'
+    @cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "uffs-cli") | .version'
 
 # Trigger GitHub Actions release workflow (builds binaries for all platforms)
 # Usage: just release          - Auto-detect version from Cargo.toml
@@ -1151,183 +1146,25 @@ check-cross:
     rust-script scripts/ci-pipeline.rs cross-check
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Development Environment Management (Rust-based)
+# Development Environment Management
 # ═══════════════════════════════════════════════════════════════════════════
+# NOTE: The uffs-devenv crate is not yet implemented. These are placeholder
+# recipes that will be enabled once the devenv tooling is created.
+# For now, use the standard cargo/just commands for development.
 
-# Complete development environment setup
-devenv-setup:
-    @printf "\033[0;34m🚀 Setting up complete development environment...\033[0m\n"
-    cargo run -p ttapi-devenv -- setup
-
-# Install all development tools (core + refactoring)
+# Install core development tools
 devenv-tools:
-    @printf "\033[0;34m🛠️ Installing all development tools...\033[0m\n"
-    cargo run -p ttapi-devenv -- tools
+    @printf "\033[0;34m🛠️ Installing core development tools...\033[0m\n"
+    cargo install cargo-nextest
+    cargo install cargo-llvm-cov
+    cargo install cargo-audit
+    cargo install cargo-deny
+    cargo install cargo-semver-checks
+    @printf "\033[0;32m✅ Core tools installed\033[0m\n"
 
-# Install core development tools only
-devenv-tools-core:
-    @printf "\033[0;34m🔧 Installing core development tools...\033[0m\n"
-    cargo run -p ttapi-devenv -- tools --tool core
-
-# Install refactoring and analysis tools only
-devenv-tools-refactoring:
-    @printf "\033[0;34m🔍 Installing refactoring and analysis tools...\033[0m\n"
-    cargo run -p ttapi-devenv -- tools --tool refactoring
-
-# Install specific development tool
-devenv-tool TOOL:
-    @printf "\033[0;34m📦 Installing specific tool: {{ TOOL }}...\033[0m\n"
-    cargo run -p ttapi-devenv -- tools --tool {{ TOOL }}
-
-# Preview development tools installation (dry run)
-devenv-tools-preview:
-    @printf "\033[0;34m👀 Previewing development tools installation...\033[0m\n"
-    cargo run -p ttapi-devenv -- --dry-run tools
-
-# Add legal headers to source files (Rust, TOML, Markdown)
-devenv-legal-headers:
-    @printf "\033[0;34m🏢 Adding legal headers to source files...\033[0m\n"
-    cargo run -p ttapi-devenv -- legal headers
-
-# Complete legal compliance for all file types
-devenv-legal-complete:
-    @printf "\033[0;34m📋 Complete legal compliance setup...\033[0m\n"
-    cargo run -p ttapi-devenv -- legal complete
-
-# Validate legal compliance status
-devenv-legal-validate:
-    @printf "\033[0;34m🔍 Validating legal compliance...\033[0m\n"
-    cargo run -p ttapi-devenv -- legal validate
-
-# Preview legal compliance changes (dry run)
-devenv-legal-preview:
-    @printf "\033[0;34m👀 Previewing legal compliance changes...\033[0m\n"
-    cargo run -p ttapi-devenv -- --dry-run legal headers
-
-# Setup CI/CD pipeline configuration
-devenv-ci-setup:
-    @printf "\033[0;34m🚀 Setting up CI/CD pipeline...\033[0m\n"
-    cargo run -p ttapi-devenv -- ci setup
-
-# Validate CI configuration
-devenv-ci-validate:
-    @printf "\033[0;34m🔍 Validating CI configuration...\033[0m\n"
-    cargo run -p ttapi-devenv -- ci validate
-
-# Run local CI pipeline
-devenv-ci-run:
-    @printf "\033[0;34m⚡ Running local CI pipeline...\033[0m\n"
-    cargo run -p ttapi-devenv -- ci run
-
-# Setup monitoring infrastructure
-devenv-monitoring-setup:
-    @printf "\033[0;34m📊 Setting up monitoring infrastructure...\033[0m\n"
-    cargo run -p ttapi-devenv -- monitoring setup
-
-# Setup performance monitoring only
-devenv-monitoring-performance:
-    @printf "\033[0;34m📈 Setting up performance monitoring...\033[0m\n"
-    cargo run -p ttapi-devenv -- monitoring performance
-
-# Setup log monitoring only
-devenv-monitoring-logs:
-    @printf "\033[0;34m📋 Setting up log monitoring...\033[0m\n"
-    cargo run -p ttapi-devenv -- monitoring logs
-
-# Validate monitoring configuration
-devenv-monitoring-validate:
-    @printf "\033[0;34m🔍 Validating monitoring configuration...\033[0m\n"
-    cargo run -p ttapi-devenv -- monitoring validate
-
-# Preview CI/CD setup (dry run)
-devenv-ci-preview:
-    @printf "\033[0;34m👀 Previewing CI/CD setup...\033[0m\n"
-    cargo run -p ttapi-devenv -- --dry-run ci setup
-
-# Preview monitoring setup (dry run)
-devenv-monitoring-preview:
-    @printf "\033[0;34m👀 Previewing monitoring setup...\033[0m\n"
-    cargo run -p ttapi-devenv -- --dry-run monitoring setup
-
-# Validate production readiness
-devenv-validate-production:
-    @printf "\033[0;34m🚀 Validating production readiness...\033[0m\n"
-    cargo run -p ttapi-devenv -- validate production
-
-# Validate code quality improvements
-devenv-validate-improvements:
-    @printf "\033[0;34m🔍 Validating code quality improvements...\033[0m\n"
-    cargo run -p ttapi-devenv -- validate improvements
-
-# Validate workspace structure
-devenv-validate-workspace:
-    @printf "\033[0;34m🏗️ Validating workspace structure...\033[0m\n"
-    cargo run -p ttapi-devenv -- validate workspace
-
-# Validate all aspects
-devenv-validate-all:
-    @printf "\033[0;34m📊 Running comprehensive validation...\033[0m\n"
-    cargo run -p ttapi-devenv -- validate all
-
-# Run unit tests
-devenv-test-unit:
-    @printf "\033[0;34m🧪 Running unit tests...\033[0m\n"
-    cargo run -p ttapi-devenv -- test unit
-
-# Run functional tests
-devenv-test-functional:
-    @printf "\033[0;34m⚙️ Running functional tests...\033[0m\n"
-    cargo run -p ttapi-devenv -- test functional
-
-# Run integration tests
-devenv-test-integration:
-    @printf "\033[0;34m🔗 Running integration tests...\033[0m\n"
-    cargo run -p ttapi-devenv -- test integration
-
-# Run performance tests
-devenv-test-performance:
-    @printf "\033[0;34m⚡ Running performance tests...\033[0m\n"
-    cargo run -p ttapi-devenv -- test performance
-
-# Run all test categories
-devenv-test-all:
-    @printf "\033[0;34m🎯 Running all test categories...\033[0m\n"
-    cargo run -p ttapi-devenv -- test all
-
-# Run specific test category
-devenv-test-category CATEGORY:
-    @printf "\033[0;34m🔬 Running test category: {{ CATEGORY }}...\033[0m\n"
-    cargo run -p ttapi-devenv -- test category {{ CATEGORY }}
-
-# Complete development environment setup (minimal)
-devenv-setup-minimal:
-    @printf "\033[0;34m⚡ Setting up minimal development environment...\033[0m\n"
-    cargo run -p ttapi-devenv -- setup --minimal
-
-# Create software release
-devenv-release VERSION:
-    @printf "\033[0;34m📦 Creating release: {{ VERSION }}...\033[0m\n"
-    cargo run -p ttapi-devenv -- release {{ VERSION }}
-
-# Rollback to previous version
-devenv-rollback:
-    @printf "\033[0;34m⏪ Rolling back to previous version...\033[0m\n"
-    cargo run -p ttapi-devenv -- rollback
-
-# Rollback to specific backup
-devenv-rollback-target TARGET:
-    @printf "\033[0;34m⏪ Rolling back to: {{ TARGET }}...\033[0m\n"
-    cargo run -p ttapi-devenv -- rollback --target {{ TARGET }}
-
-# Preview setup (dry run)
-devenv-setup-preview:
-    @printf "\033[0;34m👀 Previewing development environment setup...\033[0m\n"
-    cargo run -p ttapi-devenv -- --dry-run setup
-
-# Preview release creation (dry run)
-devenv-release-preview VERSION:
-    @printf "\033[0;34m👀 Previewing release creation: {{ VERSION }}...\033[0m\n"
-    cargo run -p ttapi-devenv -- --dry-run release {{ VERSION }}
+# Run all tests (alias for test)
+devenv-test-all: test
+    @printf "\033[0;32m✅ All tests complete\033[0m\n"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Tool Installation & Management
@@ -1399,7 +1236,7 @@ copy-binary profile:
 
         # Set extended attributes (macOS/Linux)
         if command -v xattr >/dev/null 2>&1; then
-            xattr -w com.ttapi.buildtype "{{ profile }}" "$DEST_PATH" 2>/dev/null || true
+            xattr -w com.uffs.buildtype "{{ profile }}" "$DEST_PATH" 2>/dev/null || true
             printf "\033[0;32m🏷️  Extended attributes set\033[0m\n"
         fi
     else
@@ -1417,10 +1254,11 @@ copy-binary profile:
 # Legal Compliance Tools (migrated from Makefile)
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Add legal headers to all source files (using Rust implementation)
+# Add legal headers to all source files
+# NOTE: Manual process until uffs-devenv is implemented
 legal-headers:
-    @printf "\033[0;34m🏢 Adding legal headers to all source files...\033[0m\n"
-    cargo run -p ttapi-devenv -- legal headers
+    @printf "\033[0;34m🏢 Legal headers should be added manually or via reuse tool\033[0m\n"
+    @printf "\033[1;33m⚠️  Run 'just legal-check' to verify compliance\033[0m\n"
 
 # Check REUSE compliance (requires reuse tool)
 legal-check:
@@ -1438,19 +1276,17 @@ legal-check:
 legal-fix:
     @printf "\033[0;34m🔧 Fixing REUSE compliance...\033[0m\n"
     @if command -v reuse >/dev/null 2>&1; then \
-        reuse annotate --license "MPL-2.0 OR LicenseRef-TTAPI-Commercial" \
-                      --copyright "SKY, LLC." \
+        reuse annotate --license "MPL-2.0" \
+                      --copyright "Robert Nio" \
                       --template rust \
                       src/**/*.rs crates/**/*.rs; \
     elif [ -f "/Users/rnio/Library/Python/3.12/bin/reuse" ]; then \
-        /Users/rnio/Library/Python/3.12/bin/reuse annotate --license "MPL-2.0 OR LicenseRef-TTAPI-Commercial" \
-                      --copyright "SKY, LLC." \
+        /Users/rnio/Library/Python/3.12/bin/reuse annotate --license "MPL-2.0" \
+                      --copyright "Robert Nio" \
                       --template rust \
                       src/**/*.rs crates/**/*.rs; \
     else \
         printf "\033[0;31m❌ reuse tool not installed. Install with: just install-legal-tools\033[0m\n"; \
-        printf "\033[1;33m🔄 Falling back to Rust implementation...\033[0m\n"; \
-        cargo run -p ttapi-devenv -- legal headers; \
     fi
 
 # Install legal compliance tools
@@ -2250,9 +2086,9 @@ legal-setup: install-legal-tools legal-headers legal-check
     @printf "\033[0;32m✅ REUSE compliance verified\033[0m\n"
     @echo ""
     @printf "\033[0;34mLegal Information:\033[0m\n"
-    @echo "  Copyright: SKY, LLC."
-    @echo "  Contact: skylegal@nios.net"
-    @echo "  License: MPL-2.0 OR LicenseRef-TTAPI-Commercial"
+    @echo "  Copyright: Robert Nio"
+    @echo "  Contact: 50460704+githubrobbi@users.noreply.github.com"
+    @echo "  License: MPL-2.0"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ⚠️  TESTING REQUIREMENTS BEFORE CHANGES
