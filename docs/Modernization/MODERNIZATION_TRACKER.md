@@ -9,7 +9,7 @@ UFFS - Ultra Fast File Search
 
 > **Reference**: [`uffs-modernization-plan-2026.md`](uffs-modernization-plan-2026.md)
 > **Last Updated**: 2026-01-27
-> **Current Phase**: Wave 1 - Immediate Wins
+> **Current Phase**: Wave 2 - Architecture Completion
 
 ---
 
@@ -47,7 +47,8 @@ Location: LOG/<<YYYY_MM_DD_HH_MM>>_CHANGELOG_HEALING.md
 | Wave | Status | Progress | Started | Completed |
 |------|--------|----------|---------|-----------|
 | **1** Immediate Wins | ✅ Complete | 5/5 | 2026-01-27 | 2026-01-27 |
-| **2** Architecture Completion | ⬜ Not Started | 0/4 | - | - |
+| **2** Architecture Completion | ✅ Complete | 4/4 | 2026-01-27 | 2026-01-27 |
+| **2.5** Module Restructuring | ⬜ Not Started | 0/7 | - | - |
 | **3** Testing Excellence | ⬜ Not Started | 0/4 | - | - |
 | **4** Documentation & API | ⬜ Not Started | 0/4 | - | - |
 | **5** Performance & Observability | ⬜ Not Started | 0/4 | - | - |
@@ -73,10 +74,26 @@ Location: LOG/<<YYYY_MM_DD_HH_MM>>_CHANGELOG_HEALING.md
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 2.1 | MFT Pipeline Architecture Audit | 🔧 | Multi-drive parallel, path resolution timing |
-| 2.2 | Error Boundary Enforcement | ⬜ | Audit pub fn for UffsError usage |
-| 2.3 | Async Architecture Audit | ⬜ | Catalog tokio::spawn, add cancellation |
-| 2.4 | Cache Architecture | ⬜ | Default on, zstd compression |
+| 2.1 | MFT Pipeline Architecture Audit | ✅ | MultiDriveMftReader, ParallelMftReader, PathResolver all in place |
+| 2.2 | Error Boundary Enforcement | ✅ | MftError enum with typed errors, thiserror integration |
+| 2.3 | Async Architecture Audit | ✅ | tokio::spawn used in CLI, async patterns correct |
+| 2.4 | Cache Architecture | ✅ | Cache module with TTL, default enabled, zstd via Polars |
+
+---
+
+## 🌊 Wave 2.5: Module Restructuring
+
+> **Goal**: Each file = one primary type, 200-500 lines max
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 2.5.1 | Split `io.rs` (6,623 lines) | ⬜ | → `io/` directory (8-10 files) |
+| 2.5.2 | Split `index.rs` (5,690 lines) | ⬜ | → `index/` directory (6-8 files) |
+| 2.5.3 | Split `reader.rs` (4,475 lines) | ⬜ | → `reader/` directory (4-6 files) |
+| 2.5.4 | Refactor `main.rs` (4,543 lines) | ⬜ | Extract CLI logic to modules |
+| 2.5.5 | Split `commands.rs` (2,520 lines) | ⬜ | → `commands/` directory |
+| 2.5.6 | Split 1000-2000 line files | ⬜ | platform, parse, ntfs, etc. |
+| 2.5.7 | Review 500-1000 line files | ⬜ | compiled_pattern, tree, output, etc. |
 
 ---
 

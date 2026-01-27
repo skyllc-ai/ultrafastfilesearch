@@ -132,6 +132,7 @@ This document outlines a comprehensive modernization roadmap to elevate UFFS to 
 |------|-------|--------|--------|----------|---------------------|
 | **1** | Immediate Wins | 1-2 days | High | 🔴 Critical | [📘 Guide](modernization-guides/wave-1-immediate-wins.md) |
 | **2** | Architecture Completion | 3-5 days | High | 🔴 Critical | [📘 Guide](modernization-guides/wave-2-architecture-completion.md) |
+| **2.5** | Module Restructuring | 3-5 days | High | 🔴 Critical | [📘 Guide](modernization-guides/wave-2.5-module-restructuring.md) |
 | **3** | Testing Excellence | 2-3 days | High | 🟠 Major | [📘 Guide](modernization-guides/wave-3-testing-excellence.md) |
 | **4** | Documentation & API | 2-3 days | Medium | 🟠 Major | [📘 Guide](modernization-guides/wave-4-documentation-api.md) |
 | **5** | Performance & Observability | 2-3 days | Medium | 🟡 Moderate | [📘 Guide](modernization-guides/wave-5-performance-observability.md) |
@@ -216,6 +217,45 @@ Optimize caching strategy:
 - [ ] Default cache enabled (opt-out with `--no-cache`)
 - [ ] Zstd compression for cache files
 - [ ] Cache invalidation based on MFT sequence numbers
+
+---
+
+## 🌊 Wave 2.5: Module Restructuring (3-5 Days)
+
+> 📘 **Detailed Guide**: [wave-2.5-module-restructuring.md](modernization-guides/wave-2.5-module-restructuring.md)
+
+**Goal**: Each file = one primary type or responsibility, 200-500 lines max
+
+### 2.5.1 Critical Files (>2000 lines)
+**Status**: ⬜ Not Started | **Priority**: 🔴 Critical
+
+Split oversized files into focused modules:
+- [ ] `io.rs` (6,623 lines) → `io/` directory
+- [ ] `index.rs` (5,690 lines) → `index/` directory
+- [ ] `main.rs` (4,543 lines) → Extract CLI logic
+- [ ] `reader.rs` (4,475 lines) → `reader/` directory
+- [ ] `commands.rs` (2,520 lines) → `commands/` directory
+
+### 2.5.2 Large Files (1000-2000 lines)
+**Status**: ⬜ Not Started | **Priority**: 🟠 Major
+
+Split remaining large files:
+- [ ] `platform.rs` (1,872 lines)
+- [ ] `parse.rs` (1,861 lines)
+- [ ] `ntfs.rs` (1,457 lines)
+- [ ] `index_search.rs` (1,334 lines)
+- [ ] `path_resolver.rs` (1,107 lines)
+- [ ] `raw.rs` (1,041 lines)
+
+### 2.5.3 Medium Files (500-1000 lines)
+**Status**: ⬜ Not Started | **Priority**: 🟡 Moderate
+
+Review and split if multiple types:
+- [ ] `compiled_pattern.rs` (974 lines)
+- [ ] `tree.rs` (854 lines)
+- [ ] `output.rs` (790 lines)
+- [ ] `query.rs` (679 lines)
+- [ ] `extensions.rs` (616 lines)
 
 ---
 

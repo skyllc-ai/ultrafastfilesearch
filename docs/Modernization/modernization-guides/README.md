@@ -19,12 +19,13 @@ UFFS - Ultra Fast File Search
 |------|-------|--------|----------|
 | 1 | [Immediate Wins](wave-1-immediate-wins.md) | 1-2 days | 🔴 Critical |
 | 2 | [Architecture Completion](wave-2-architecture-completion.md) | 3-5 days | 🔴 Critical |
+| 2.5 | [Module Restructuring](wave-2.5-module-restructuring.md) | 3-5 days | 🔴 Critical |
 | 3 | [Testing Excellence](wave-3-testing-excellence.md) | 2-3 days | 🟠 Major |
 | 4 | [Documentation & API](wave-4-documentation-api.md) | 2-3 days | 🟠 Major |
 | 5 | [Performance & Observability](wave-5-performance-observability.md) | 2-3 days | 🟡 Moderate |
 | 6 | [Advanced Tooling](wave-6-advanced-tooling.md) | 1-2 days | 🟢 Enhancement |
 
-**Total Estimated Effort**: 12-18 days
+**Total Estimated Effort**: 15-23 days
 
 ---
 
