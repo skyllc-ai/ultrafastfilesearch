@@ -66,6 +66,7 @@ crossbeam-channel = "0.5.15"
 
 [dev-dependencies]
 criterion.workspace = true
+proptest.workspace = true
 tokio = { workspace = true, features = ["test-util", "macros"] }
 
 [[bench]]

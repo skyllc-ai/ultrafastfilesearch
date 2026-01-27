@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-// Dev-dependencies (used in benchmarks only)
+// Dev-dependencies (used in benchmarks and tests only)
 #[cfg(test)]
 use criterion as _;
 // Pipelining dependencies (used in io.rs PipelinedMftReader on Windows)
@@ -53,6 +53,8 @@ use crossbeam_channel as _;
 use indicatif as _;
 #[cfg(windows)]
 use indicatif::{ProgressBar, ProgressStyle};
+#[cfg(test)]
+use proptest as _;
 // SmallVec for path chain building (used in index.rs PathResolver)
 use smallvec as _;
 #[cfg(not(windows))]

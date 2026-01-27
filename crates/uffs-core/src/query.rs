@@ -676,4 +676,103 @@ mod tests {
         assert_eq!(result.height(), 1); // photo.jpg
         Ok(())
     }
+
+    #[test]
+    fn test_max_size() -> TestResult {
+        let df = create_test_df()?;
+        let result = MftQuery::new(df).max_size(1500).collect()?;
+        // Should include: root (0), file.txt (1024), src (0) = 3 items
+        assert!(result.height() >= 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_sort_by_size_descending() -> TestResult {
+        let df = create_test_df()?;
+        let result = MftQuery::new(df)
+            .files_only()
+            .sort_by_size(true)
+            .collect()?;
+        // First file should be largest (main.rs = 2048)
+        let sizes = result.column("size")?.u64()?;
+        let first_size = sizes.get(0).unwrap_or(0);
+        assert_eq!(first_size, 2048);
+        Ok(())
+    }
+
+    #[test]
+    fn test_sort_by_size_ascending() -> TestResult {
+        let df = create_test_df()?;
+        let result = MftQuery::new(df)
+            .files_only()
+            .sort_by_size(false)
+            .collect()?;
+        // First file should be smallest (file.txt = 1024)
+        let sizes = result.column("size")?.u64()?;
+        let first_size = sizes.get(0).unwrap_or(0);
+        assert_eq!(first_size, 1024);
+        Ok(())
+    }
+
+    #[test]
+    fn test_hide_system() -> TestResult {
+        // Create df with NTFS system files ($ prefix and low FRS)
+        let df = DataFrame::new_infer_height(vec![
+            Column::new("frs".into(), &[0_u64, 5, 16, 100]),
+            Column::new("name".into(), &["$MFT", ".", "$Extend", "normal.txt"]),
+            Column::new("size".into(), &[100_u64, 0, 200, 300]),
+            Column::new("is_directory".into(), &[false, true, true, false]),
+            Column::new("is_hidden".into(), &[false, false, false, false]),
+            Column::new("is_system".into(), &[true, false, true, false]),
+        ])?;
+
+        let result = MftQuery::new(df).hide_system().collect()?;
+        // Should keep: FRS 5 (root ".") and FRS 100 (normal.txt)
+        // Should exclude: FRS 0 ($MFT, metadata), FRS 16 ($Extend, $ prefix)
+        assert_eq!(result.height(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_query_mode_from_str() {
+        use crate::index_search::QueryMode;
+        assert!(matches!(
+            QueryMode::from_str_opt("auto"),
+            Some(QueryMode::Auto)
+        ));
+        assert!(matches!(
+            QueryMode::from_str_opt("polars"),
+            Some(QueryMode::ForceDataFrame)
+        ));
+        assert!(matches!(
+            QueryMode::from_str_opt("index"),
+            Some(QueryMode::ForceIndex)
+        ));
+        assert!(QueryMode::from_str_opt("invalid").is_none());
+    }
+
+    #[test]
+    fn test_empty_dataframe() -> TestResult {
+        let df = DataFrame::new_infer_height(vec![
+            Column::new("frs".into(), Vec::<u64>::new()),
+            Column::new("name".into(), Vec::<&str>::new()),
+            Column::new("size".into(), Vec::<u64>::new()),
+            Column::new("is_directory".into(), Vec::<bool>::new()),
+            Column::new("is_hidden".into(), Vec::<bool>::new()),
+            Column::new("is_system".into(), Vec::<bool>::new()),
+        ])?;
+
+        let result = MftQuery::new(df).files_only().collect()?;
+        assert_eq!(result.height(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_combined_size_filters() -> TestResult {
+        let df = create_test_df()?;
+        let result = MftQuery::new(df).min_size(500).max_size(1500).collect()?;
+        // Should include file.txt (1024) only
+        assert_eq!(result.height(), 1);
+        Ok(())
+    }
 }

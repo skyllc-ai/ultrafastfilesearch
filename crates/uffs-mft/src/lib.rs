@@ -59,9 +59,11 @@ extern crate alloc;
 // Platform-specific dependencies (used on Windows only)
 #[cfg(not(windows))]
 use bitflags as _;
-// Dev-dependencies (used in benchmarks only)
+// Dev-dependencies (used in benchmarks and tests only)
 #[cfg(test)]
 use criterion as _;
+#[cfg(test)]
+use proptest as _;
 // Pipelining dependencies (used in io.rs PipelinedMftReader on Windows)
 #[cfg(not(windows))]
 use rayon as _;
