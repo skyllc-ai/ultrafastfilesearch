@@ -4192,6 +4192,8 @@ impl MftIndex {
             Vec::with_capacity(n),
             Vec::with_capacity(n),
         );
+        // File type (extension) column - first-class citizen like name, size, etc.
+        let mut file_type: Vec<String> = Vec::with_capacity(n);
         let (mut reparse_tag, mut is_resident): (Vec<u32>, Vec<bool>) =
             (Vec::with_capacity(n), Vec::with_capacity(n));
         // P3 forensic columns - only allocate if forensic mode is enabled
@@ -4245,6 +4247,10 @@ impl MftIndex {
             str.push(rec.stream_count);
             reparse_tag.push(rec.reparse_tag);
             is_resident.push(rec.first_stream.is_resident());
+            // File type (extension) - lookup from ExtensionTable using extension_id
+            let ext_id = rec.first_name.name.extension_id();
+            let ext_str = self.extensions.get_extension(ext_id).unwrap_or("");
+            file_type.push(ext_str.to_owned());
             // P3 forensic fields - only populate if forensic mode is enabled
             if self.forensic_mode {
                 is_deleted.push(rec.is_deleted());
@@ -4263,6 +4269,7 @@ impl MftIndex {
             Series::new("lsn".into(), lsn).into_column(),
             Series::new("parent_frs".into(), parent).into_column(),
             Series::new("name".into(), name).into_column(),
+            Series::new("type".into(), file_type).into_column(),
             Series::new("namespace".into(), ns).into_column(),
             Series::new("size".into(), size).into_column(),
             Series::new("allocated_size".into(), alloc).into_column(),

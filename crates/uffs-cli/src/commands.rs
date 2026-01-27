@@ -1103,6 +1103,7 @@ fn results_to_dataframe(
     let mut frs_values: Vec<u64> = Vec::with_capacity(height);
     let mut parent_frs_values: Vec<u64> = Vec::with_capacity(height);
     let mut names: Vec<String> = Vec::with_capacity(height);
+    let mut file_types: Vec<String> = Vec::with_capacity(height);
     let mut paths: Vec<String> = Vec::with_capacity(height);
     let mut sizes: Vec<u64> = Vec::with_capacity(height);
     let mut allocated_sizes: Vec<u64> = Vec::with_capacity(height);
@@ -1143,6 +1144,32 @@ fn results_to_dataframe(
         names.push(result.name.clone());
         paths.push(result.path.clone().unwrap_or_default());
         sizes.push(result.size);
+
+        // File type (extension) - lookup from index's ExtensionTable or extract from
+        // name
+        let file_type = if let Some(rec) = record {
+            let ext_id = rec.first_name.name.extension_id();
+            index
+                .extensions
+                .get_extension(ext_id)
+                .unwrap_or("")
+                .to_owned()
+        } else {
+            // Fallback: extract extension from name
+            result
+                .name
+                .rfind('.')
+                .and_then(|pos| {
+                    if pos > 0 && pos < result.name.len() - 1 {
+                        result.name.get(pos + 1..)
+                    } else {
+                        None
+                    }
+                })
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default()
+        };
+        file_types.push(file_type);
 
         if let Some(rec) = record {
             // Populate from record's StandardInfo
@@ -1208,6 +1235,7 @@ fn results_to_dataframe(
         Series::new("frs".into(), frs_values).into_column(),
         Series::new("parent_frs".into(), parent_frs_values).into_column(),
         Series::new("name".into(), names).into_column(),
+        Series::new("type".into(), file_types).into_column(),
         Series::new("path".into(), paths).into_column(),
         Series::new("size".into(), sizes).into_column(),
         Series::new("allocated_size".into(), allocated_sizes).into_column(),
