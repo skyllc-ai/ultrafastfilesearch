@@ -351,14 +351,93 @@ Analyzes MFT bitmap to show in-use vs free record distribution.
 #### `save` / `load` - Offline Analysis
 
 ```bash
-# Save raw MFT bytes for offline analysis
-uffs_mft save --drive C --output mft_raw.bin
+# Save raw MFT bytes for offline analysis (compressed)
+uffs_mft save --drive C -o mft_raw.bin
 
-# Load and process saved MFT
-uffs_mft load --input mft_raw.bin --output mft.parquet
+# Load and export to CSV (37 columns)
+uffs_mft load mft_raw.bin -o mft.csv
+
+# Load and export to Parquet
+uffs_mft load mft_raw.bin -o mft.parquet
+
+# Build index only (show tree metrics, no export)
+uffs_mft load mft_raw.bin --build-index
 ```
 
 Useful for debugging or analyzing MFT from another machine.
+
+**Compression:** The `save` command uses LZ4 compression, typically achieving 95-97% space savings (e.g., 20MB MFT → 670KB `.bin` file).
+
+---
+
+### Forensic Mode
+
+The `--forensic` flag enables recovery of deleted, corrupt, and extension records that are normally filtered out.
+
+#### When to Use Forensic Mode
+
+| Use Case | Normal Mode | Forensic Mode |
+|----------|-------------|---------------|
+| File search | ✅ | ❌ |
+| Size analysis | ✅ | ❌ |
+| Deleted file recovery | ❌ | ✅ |
+| Incident response | ❌ | ✅ |
+| MFT corruption analysis | ❌ | ✅ |
+| Extension record debugging | ❌ | ✅ |
+
+#### Forensic Mode Commands
+
+```bash
+# Export with forensic records (41 columns)
+uffs_mft load mft_raw.bin -o mft_forensic.csv --forensic
+
+# Direct from drive with forensic mode
+uffs_mft read --drive C --output mft_forensic.parquet --forensic
+```
+
+#### Output Columns
+
+| Mode | Columns | Description |
+|------|---------|-------------|
+| Normal | 37 | Core MFT fields, timestamps, flags, path |
+| Forensic | 41 | + `is_deleted`, `is_corrupt`, `is_extension`, `base_frs` |
+
+#### Forensic Columns Explained
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `is_deleted` | bool | Record marked as deleted (FILE flags bit 0 = 0) |
+| `is_corrupt` | bool | Record failed validation (bad signature, fixup, etc.) |
+| `is_extension` | bool | Extension record (base_frs ≠ 0) |
+| `base_frs` | u64 | FRS of base record (0 for base records) |
+
+#### Example: Deleted File Recovery
+
+```bash
+# Save MFT from suspect drive
+uffs_mft save --drive G -o evidence.bin
+
+# Export with forensic data
+uffs_mft load evidence.bin -o evidence.csv --forensic
+
+# In your analysis tool, filter for deleted files:
+# WHERE is_deleted = TRUE AND name LIKE '%.docx'
+```
+
+#### Forensic Mode Statistics
+
+Typical forensic mode output includes 10-50% more records than normal mode:
+
+| Record Type | Normal | Forensic |
+|-------------|--------|----------|
+| Active files/dirs | ✅ | ✅ |
+| Deleted (recoverable) | ❌ | ✅ |
+| Corrupt records | ❌ | ✅ |
+| Extension records | ❌ | ✅ |
+
+**Example (20MB MFT):**
+- Normal mode: 15,085 records
+- Forensic mode: 20,220 records (+34%)
 
 ## Library Usage
 

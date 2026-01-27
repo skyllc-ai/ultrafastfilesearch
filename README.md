@@ -21,7 +21,7 @@ Traditional file search tools (including `os.walk`, `FindFirstFile`, etc.) work 
 
 **UFFS reads the MFT directly** - once - and queries it in memory using Polars DataFrames. This is like reading the entire phonebook once instead of looking up each name individually.
 
-### Benchmark Results (v0.2.111)
+### Benchmark Results (v0.2.112)
 
 | Drive Type | Records | Time | Throughput |
 |------------|---------|------|------------|
@@ -33,7 +33,7 @@ Traditional file search tools (including `os.walk`, `FindFirstFile`, etc.) work 
 
 | Comparison | Records | Time | Notes |
 |------------|---------|------|-------|
-| **UFFS v0.2.111** | **18.7 Million** | **~142 seconds** | All disks, fast mode |
+| **UFFS v0.2.112** | **18.7 Million** | **~142 seconds** | All disks, fast mode |
 | UFFS v0.1.30 | 18.7 Million | ~315 seconds | Baseline |
 | Everything | 19 Million | 178 seconds | All disks |
 | WizFile | 6.5 Million | 299 seconds | Single HDD |
@@ -254,6 +254,9 @@ uffs_mft drives
 **Fast vs Full:**
 - Default (fast): Skips extension records (~1% of files), ~15-25% faster
 - `--full`: Merges extension records for complete hard link/ADS data
+
+**Forensic Mode:**
+- `--forensic`: Include deleted, corrupt, and extension records for incident response and data recovery
 
 See [uffs-mft README](crates/uffs-mft/README.md) for detailed documentation.
 

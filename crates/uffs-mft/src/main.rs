@@ -2961,9 +2961,13 @@ fn cmd_load(
     );
     println!("  Columns:              {} columns including:", df.width());
     println!("                        - Core: frs, parent_frs, name, size, allocated_size");
-    println!("                        - Timestamps: created, modified, accessed, mft_changed");
+    println!("                        - Timestamps: si_created, si_modified, fn_created, etc.");
     println!("                        - Flags: is_directory, is_readonly, is_hidden, etc.");
-    println!("                        - Tree metrics: descendants, treesize, tree_allocated");
+    if forensic {
+        println!(
+            "                        - Forensic: is_deleted, is_corrupt, is_extension, base_frs"
+        );
+    }
     println!("                        - Path: full resolved path (e.g., C:\\Users\\file.txt)");
 
     let elapsed = start_time.elapsed();
