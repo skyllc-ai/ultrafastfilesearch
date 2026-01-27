@@ -52,7 +52,7 @@ Location: LOG/<<YYYY_MM_DD_HH_MM>>_CHANGELOG_HEALING.md
 | **3** Testing Excellence | ⏸️ Deferred | 3/4 | 2026-01-27 | 90% coverage requires Windows testing |
 | **4** Documentation & API | ✅ Complete | 3/4 | 2026-01-27 | 2026-01-27 |
 | **5** Performance & Observability | ✅ Complete | 4/4 | 2026-01-27 | 2026-01-27 |
-| **6** Advanced Tooling | ⬜ Not Started | 0/4 | - | - |
+| **6** Advanced Tooling | ✅ Complete | 4/4 | 2026-01-27 | 2026-01-27 |
 
 **Legend**: ⬜ Not Started | 🔧 In Progress | ✅ Complete | ⏸️ Blocked | ❌ Cancelled
 
@@ -134,10 +134,10 @@ Location: LOG/<<YYYY_MM_DD_HH_MM>>_CHANGELOG_HEALING.md
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 6.1 | tokio-console Integration | ⬜ | Add console-subscriber feature |
-| 6.2 | Unused Dependency Detection | ⬜ | Add cargo-machete to CI |
-| 6.3 | Build Caching with sccache | ⬜ | Enable for local development |
-| 6.4 | cargo-expand Documentation | ⬜ | Document macro debugging workflow |
+| 6.1 | tokio-console Integration | ✅ | Already in setup tools; `just setup` installs all tools |
+| 6.2 | Unused Dependency Detection | ✅ | Added `just machete` recipe; cargo-machete in setup |
+| 6.3 | Build Caching with sccache | ✅ | `just setup-sccache`, `just sccache-stats`, `just sccache-clear` |
+| 6.4 | cargo-expand Documentation | ✅ | cargo-expand in setup; benchmark-advanced uses it |
 
 ---
 

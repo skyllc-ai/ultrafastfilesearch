@@ -2116,6 +2116,19 @@ sccache-clear:
 
     printf "\033[0;32m✅ sccache cache cleared!\033[0m\n"
 
+# Check for unused dependencies with cargo-machete
+machete:
+    #!/usr/bin/env bash
+    printf "\033[0;34m🔪 Checking for unused dependencies...\033[0m\n"
+
+    if ! command -v cargo-machete >/dev/null 2>&1; then
+        printf "\033[1;33m⚠️  cargo-machete not installed. Run 'just setup' first.\033[0m\n"
+        exit 1
+    fi
+
+    cargo machete --skip-target-dir
+    printf "\033[0;32m✅ Dependency check complete!\033[0m\n"
+
 legal-setup: install-legal-tools legal-headers legal-check
     @printf "\033[0;32m🎉 Legal setup complete!\033[0m\n"
     @printf "\033[0;32m📋 All files now have proper legal headers\033[0m\n"
