@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025-2026 Robert Nio
+#
+# UFFS - Ultra Fast File Search
+# Fuzz testing configuration for MFT parsing
+
+[package]
+name = "uffs-mft-fuzz"
+version = "0.0.0"
+authors = ["Robert Nio"]
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.uffs-mft]
+path = ".."
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "fuzz_parse_record"
+path = "fuzz_targets/fuzz_parse_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_apply_fixup"
+path = "fuzz_targets/fuzz_apply_fixup.rs"
+test = false
+doc = false
+bench = false
+
