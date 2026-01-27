@@ -51,7 +51,7 @@ Location: LOG/<<YYYY_MM_DD_HH_MM>>_CHANGELOG_HEALING.md
 | **2.5** Module Restructuring | ⏸️ Deferred | 0/7 | 2026-01-27 | Requires Windows testing |
 | **3** Testing Excellence | ⏸️ Deferred | 3/4 | 2026-01-27 | 90% coverage requires Windows testing |
 | **4** Documentation & API | ✅ Complete | 3/4 | 2026-01-27 | 2026-01-27 |
-| **5** Performance & Observability | ⬜ Not Started | 0/4 | - | - |
+| **5** Performance & Observability | ✅ Complete | 4/4 | 2026-01-27 | 2026-01-27 |
 | **6** Advanced Tooling | ⬜ Not Started | 0/4 | - | - |
 
 **Legend**: ⬜ Not Started | 🔧 In Progress | ✅ Complete | ⏸️ Blocked | ❌ Cancelled
@@ -123,10 +123,10 @@ Location: LOG/<<YYYY_MM_DD_HH_MM>>_CHANGELOG_HEALING.md
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 5.1 | Performance Baselines | ⬜ | MFT read speed, path resolution |
-| 5.2 | Tracing & Telemetry | ⬜ | Structured spans for MFT ops |
-| 5.3 | Memory Profiling | ⬜ | Peak RSS, memory per million files |
-| 5.4 | Flamegraph Automation | ⬜ | Add flamegraph recipe to justfile |
+| 5.1 | Performance Baselines | ✅ | Criterion benchmarks exist in uffs-core and uffs-mft |
+| 5.2 | Tracing & Telemetry | ✅ | Comprehensive tracing in io.rs, index.rs, parse.rs, reader.rs, cache.rs |
+| 5.3 | Memory Profiling | ✅ | valgrind/massif in benchmark-advanced; profile-usb for Windows |
+| 5.4 | Flamegraph Automation | ✅ | Added `just flamegraph` recipe with cargo-flamegraph |
 
 ---
 

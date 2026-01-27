@@ -1931,6 +1931,42 @@ bench-help:
     printf "\033[0;34m📊 Results are saved to: benchmarks/*.json\033[0m\n"
     printf "\033[0;34m📈 Criterion reports: target/criterion/report/index.html\033[0m\n"
 
+# Generate flamegraph for performance analysis
+# Requires: cargo-flamegraph (install with: cargo install flamegraph)
+# On macOS: requires dtrace permissions (run with sudo or add to sudoers)
+# On Linux: requires perf (install with: apt install linux-tools-generic)
+flamegraph target="uffs-cli" pattern="*.txt":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf "\033[0;34m🔥 Generating Flamegraph for {{target}}...\033[0m\n"
+    echo ""
+
+    # Check for cargo-flamegraph
+    if ! command -v cargo-flamegraph >/dev/null 2>&1; then
+        printf "\033[1;31m❌ cargo-flamegraph not found\033[0m\n"
+        printf "\033[0;34m   Install with: cargo install flamegraph\033[0m\n"
+        exit 1
+    fi
+
+    # Build release first
+    printf "\033[0;34m  → Building release binary...\033[0m\n"
+    cargo build --release -p {{target}} --quiet
+
+    # Generate flamegraph
+    printf "\033[0;34m  → Generating flamegraph (this may require elevated permissions)...\033[0m\n"
+    FLAMEGRAPH_OUTPUT="target/flamegraph-$(date +%Y%m%d-%H%M%S).svg"
+
+    # Run flamegraph with the search pattern
+    cargo flamegraph --bin uffs -o "$FLAMEGRAPH_OUTPUT" -- "{{pattern}}" 2>/dev/null || {
+        printf "\033[1;33m⚠️  Flamegraph requires elevated permissions\033[0m\n"
+        printf "\033[0;34m   On macOS: sudo just flamegraph\033[0m\n"
+        printf "\033[0;34m   On Linux: ensure perf is available\033[0m\n"
+        exit 1
+    }
+
+    printf "\033[0;32m✅ Flamegraph generated: $FLAMEGRAPH_OUTPUT\033[0m\n"
+    printf "\033[0;34m   Open in browser to analyze CPU hotspots\033[0m\n"
+
 # Comprehensive CI pipeline analysis and optimization recommendations
 ci-analyze:
     #!/usr/bin/env bash
