@@ -935,6 +935,13 @@ impl MftReader {
         let use_bitmap = self.use_bitmap;
         let expand_links = self.expand_links;
 
+        let add_placeholders = self.add_placeholders;
+        let concurrency = self.concurrency;
+        let io_size = self.io_size;
+        let parallel_parse = self.parallel_parse;
+        let parse_workers = self.parse_workers;
+        let forensic = self.forensic;
+
         let result = tokio::task::spawn_blocking(move || {
             eprintln!("[DEBUG] read_all_index: INSIDE spawn_blocking volume={volume}");
             // Create a new reader in the blocking thread
@@ -946,6 +953,12 @@ impl MftReader {
                 merge_extensions,
                 use_bitmap,
                 expand_links,
+                add_placeholders,
+                concurrency,
+                io_size,
+                parallel_parse,
+                parse_workers,
+                forensic,
             };
             let idx = reader.read_mft_index_internal(None::<fn(MftProgress)>);
             eprintln!("[DEBUG] read_all_index: read_mft_index_internal done");
@@ -1047,6 +1060,12 @@ impl MftReader {
         let merge_extensions = self.merge_extensions;
         let use_bitmap = self.use_bitmap;
         let expand_links = self.expand_links;
+        let add_placeholders = self.add_placeholders;
+        let concurrency = self.concurrency;
+        let io_size = self.io_size;
+        let parallel_parse = self.parallel_parse;
+        let parse_workers = self.parse_workers;
+        let forensic = self.forensic;
 
         tokio::task::spawn_blocking(move || {
             // Create a new reader in the blocking thread
@@ -1058,6 +1077,12 @@ impl MftReader {
                 merge_extensions,
                 use_bitmap,
                 expand_links,
+                add_placeholders,
+                concurrency,
+                io_size,
+                parallel_parse,
+                parse_workers,
+                forensic,
             };
             reader.read_mft_index_internal(Some(callback))
         })
