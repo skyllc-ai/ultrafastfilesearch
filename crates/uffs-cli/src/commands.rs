@@ -1488,8 +1488,12 @@ fn results_to_dataframe(
     // Replace size and allocated_size columns with tree metrics for directories
     // (C++ parity) For directories: size = treesize, allocated_size =
     // tree_allocated For files: keep original size and allocated_size
+    //
+    // NOTE: apply_directory_treesize uses polars .lazy().collect() which with
+    // the new_streaming feature triggers tokio internally. We use block_in_place
+    // to allow this blocking operation within the async context.
     eprintln!("[DEBUG] results_to_dataframe: before apply_directory_treesize");
-    df = uffs_core::apply_directory_treesize(&df)
+    df = tokio::task::block_in_place(|| uffs_core::apply_directory_treesize(&df))
         .map_err(|err| anyhow::anyhow!("Failed to apply directory treesize: {err}"))?;
     eprintln!("[DEBUG] results_to_dataframe: after apply_directory_treesize");
 
