@@ -927,6 +927,7 @@ impl MftReader {
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
     pub async fn read_all_index(&self) -> Result<crate::index::MftIndex> {
+        eprintln!("[DEBUG] read_all_index: ENTER volume={}", self.volume);
         // Capture configuration to recreate reader in blocking thread
         let volume = self.volume;
         let mode = self.mode;
@@ -934,7 +935,8 @@ impl MftReader {
         let use_bitmap = self.use_bitmap;
         let expand_hardlinks = self.expand_hardlinks;
 
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
+            eprintln!("[DEBUG] read_all_index: INSIDE spawn_blocking volume={volume}");
             // Create a new reader in the blocking thread
             let handle = crate::platform::VolumeHandle::open(volume)?;
             let reader = MftReader {
@@ -945,10 +947,14 @@ impl MftReader {
                 use_bitmap,
                 expand_hardlinks,
             };
-            reader.read_mft_index_internal(None::<fn(MftProgress)>)
+            let idx = reader.read_mft_index_internal(None::<fn(MftProgress)>);
+            eprintln!("[DEBUG] read_all_index: read_mft_index_internal done");
+            idx
         })
         .await
-        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
+        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?;
+        eprintln!("[DEBUG] read_all_index: EXIT volume={volume}");
+        result
     }
 
     /// Read MFT into lean index (non-Windows stub).

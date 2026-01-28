@@ -330,12 +330,18 @@ pub async fn load_or_build_dataframe_cached(
     drive: char,
     ttl_seconds: u64,
 ) -> crate::Result<uffs_polars::DataFrame> {
+    eprintln!("[DEBUG] load_or_build_dataframe_cached: ENTER drive={drive}");
     // Use spawn_blocking to run all MFT reading and polars operations on a
     // dedicated blocking thread. This avoids nested tokio runtime issues since
     // polars uses tokio internally for some operations.
-    tokio::task::spawn_blocking(move || load_or_build_dataframe_cached_sync(drive, ttl_seconds))
-        .await
-        .map_err(|e| crate::MftError::InvalidInput(format!("Task join error: {e}")))?
+    let result = tokio::task::spawn_blocking(move || {
+        eprintln!("[DEBUG] load_or_build_dataframe_cached: INSIDE spawn_blocking drive={drive}");
+        load_or_build_dataframe_cached_sync(drive, ttl_seconds)
+    })
+    .await
+    .map_err(|e| crate::MftError::InvalidInput(format!("Task join error: {e}")))?;
+    eprintln!("[DEBUG] load_or_build_dataframe_cached: EXIT drive={drive}");
+    result
 }
 
 /// Synchronous version of `load_or_build_dataframe_cached`.
@@ -351,16 +357,24 @@ fn load_or_build_dataframe_cached_sync(
     use crate::reader::MftReader;
     use crate::usn::query_usn_journal;
 
+    eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: ENTER drive={drive}");
+
     // Try to load from cache first
     if let Some((index, _header)) = load_cached_index(drive, ttl_seconds) {
+        eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: cache HIT, calling to_dataframe");
         tracing::info!(drive = %drive, records = index.records.len(), "📦 Cache hit - converting to DataFrame");
-        return index.to_dataframe();
+        let df = index.to_dataframe();
+        eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: to_dataframe done");
+        return df;
     }
 
     // Cache miss - read fresh
+    eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: cache MISS, reading MFT fresh");
     tracing::info!(drive = %drive, "📖 Cache miss - reading MFT fresh");
     let reader = MftReader::open_sync(drive)?;
+    eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: reader opened, calling read_all_index_sync");
     let index = reader.read_all_index_sync()?;
+    eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: read_all_index_sync done, records={}", index.len());
 
     // Save to cache for next time
     let handle = VolumeHandle::open(drive)?;
@@ -375,7 +389,10 @@ fn load_or_build_dataframe_cached_sync(
     }
 
     // Convert to DataFrame
-    index.to_dataframe()
+    eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: calling to_dataframe");
+    let df = index.to_dataframe();
+    eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: to_dataframe done");
+    df
 }
 
 /// Multi-drive cache status for coordinated operations.

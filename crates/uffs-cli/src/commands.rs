@@ -824,6 +824,7 @@ async fn load_and_filter_data(
     if let Some(drive_letter) = effective_drive {
         // Single drive search with proper path resolution
         let t_read = std::time::Instant::now();
+        eprintln!("[DEBUG] search_dataframe: before load_or_build_dataframe_cached drive={drive_letter}");
 
         // Use cached DataFrame path for performance (Windows only)
         #[cfg(windows)]
@@ -831,6 +832,8 @@ async fn load_and_filter_data(
             uffs_mft::load_or_build_dataframe_cached(drive_letter, uffs_mft::INDEX_TTL_SECONDS)
                 .await
                 .with_context(|| format!("Failed to read MFT for drive {drive_letter}:"))?;
+
+        eprintln!("[DEBUG] search_dataframe: after load_or_build_dataframe_cached");
 
         // Non-Windows: read directly (no caching)
         #[cfg(not(windows))]
