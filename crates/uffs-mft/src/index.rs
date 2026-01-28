@@ -1754,6 +1754,11 @@ impl MftIndex {
         // First pass: collect parent info and sum ALL streams' sizes (for C++ parity)
         // C++ counts each ADS as a separate descendant and includes ADS sizes in
         // treesize
+        //
+        // C++ HARDLINK SIZE DIVISION (Q16 answer from C++ team):
+        // When a file has N hardlinks, C++ divides the file's size by N before
+        // adding to each parent's treesize. This is the Accumulator::delta formula.
+        // Example: 99-byte file with 3 hardlinks → 33 bytes to each parent.
         let parent_info: Vec<_> = self
             .records
             .iter()
@@ -1763,6 +1768,7 @@ impl MftIndex {
                 let frs = record.frs;
                 let parent_frs = record.first_name.parent_frs;
                 let stream_count = record.stream_count;
+                let name_count = record.name_count.max(1); // At least 1 name
                 let is_directory = record.is_directory();
 
                 // Sum sizes across ALL streams (default + ADS) for C++ parity
@@ -1788,13 +1794,18 @@ impl MftIndex {
                     total_size,
                     total_allocated,
                     stream_count,
+                    name_count,
                     is_directory,
                 )
             })
             .collect();
 
         // Second pass: initialize base metrics
-        for (idx, _frs, _parent_frs, size, allocated, _stream_count, is_directory) in &parent_info {
+        // C++ HARDLINK SIZE DIVISION: Divide size by name_count for files with
+        // hardlinks
+        for (idx, _frs, _parent_frs, size, allocated, _stream_count, name_count, is_directory) in
+            &parent_info
+        {
             if let Some(record) = self.records.get_mut(*idx) {
                 // C++ parity: Files have descendants = 0, Directories have descendants = 1
                 // Formula: parent.descendants = 1 + sum(max(1, child.descendants))
@@ -1809,13 +1820,23 @@ impl MftIndex {
                 } else {
                     0
                 };
-                record.treesize = size.saturating_add(mft_overhead);
-                record.tree_allocated = allocated.saturating_add(mft_overhead);
+
+                // C++ HARDLINK SIZE DIVISION (Q16 answer):
+                // Divide size by name_count so each hardlink parent gets a proportional share.
+                // Example: 99-byte file with 3 hardlinks → 33 bytes to each parent.
+                // Directories don't have hardlinks, so name_count is always 1 for them.
+                let divisor = u64::from(*name_count);
+                let divided_size = size.saturating_add(mft_overhead) / divisor;
+                let divided_allocated = allocated.saturating_add(mft_overhead) / divisor;
+
+                record.treesize = divided_size;
+                record.tree_allocated = divided_allocated;
             }
         }
 
         // Third pass: build parent links
-        for (idx, frs, parent_frs, _size, _allocated, _stream_count, _is_directory) in &parent_info
+        for (idx, frs, parent_frs, _size, _allocated, _stream_count, _name_count, _is_directory) in
+            &parent_info
         {
             // Skip root or self-parent
             if parent_frs == frs {
@@ -1906,10 +1927,20 @@ impl MftIndex {
             }
         }
 
-        // Phase 3b: Hardlink pass - add contributions to additional parents
+        // Phase 3b: Hardlink pass - add DESCENDANTS ONLY to additional parents
         // C++ counts hardlinks as children of EACH parent directory they appear in.
         // The main loop only handled the primary name (first_name.parent_frs).
-        // Now we need to add contributions to additional parents (other hardlinks).
+        // Now we need to add descendants to additional parents (other hardlinks).
+        //
+        // IMPORTANT (Q16 answer from C++ team):
+        // - C++ DIVIDES file size by name_count, so each parent gets a proportional
+        //   share
+        // - The divided size is already set in record.treesize (from Phase 1)
+        // - We do NOT add treesize to additional parents here because:
+        //   1. The divided size is already the correct per-parent contribution
+        //   2. Phase 3b runs AFTER Phase 3, so ancestors wouldn't get the contribution
+        //   3. Adding here would cause double-counting at the root level
+        // - We ONLY add descendants count to additional parents
         let mut hardlink_contributions = 0_usize;
         for idx in 0..n {
             let Some(record) = self.records.get(idx) else {
@@ -1925,8 +1956,6 @@ impl MftIndex {
             let is_file = !record.is_directory();
             let stream_count = u32::from(record.stream_count).max(1);
             let child_descendants = record.descendants;
-            let child_treesize = record.treesize;
-            let child_tree_allocated = record.tree_allocated;
             let primary_parent_frs = record.first_name.parent_frs;
 
             // Calculate contribution (same logic as main loop)
@@ -1951,9 +1980,12 @@ impl MftIndex {
                     if let Some(parent_record_idx) = self.frs_to_idx_opt(additional_parent_frs) {
                         if let Some(parent) = self.records.get_mut(parent_record_idx) {
                             if parent.is_directory() {
+                                // Only add descendants count, NOT treesize!
+                                // Size is already divided and counted via primary parent path
                                 parent.descendants += child_contribution;
-                                parent.treesize += child_treesize;
-                                parent.tree_allocated += child_tree_allocated;
+                                // DO NOT add treesize or tree_allocated here!
+                                // parent.treesize += child_treesize;  // REMOVED
+                                // parent.tree_allocated += child_tree_allocated;  // REMOVED
                                 hardlink_contributions += 1;
                             }
                         }
@@ -1967,7 +1999,7 @@ impl MftIndex {
         if hardlink_contributions > 0 {
             tracing::debug!(
                 hardlink_contributions,
-                "📎 Added hardlink contributions to additional parents"
+                "📎 Added hardlink descendants to additional parents"
             );
         }
 
