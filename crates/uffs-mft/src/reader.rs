@@ -528,6 +528,41 @@ impl MftReader {
         Err(MftError::PlatformNotSupported)
     }
 
+    /// Synchronous version of `open` for use in blocking contexts.
+    ///
+    /// This is the same as `open` but without the async wrapper, for use
+    /// with `spawn_blocking` or other blocking contexts.
+    #[cfg(windows)]
+    pub fn open_sync(volume: char) -> Result<Self> {
+        let handle = VolumeHandle::open(volume)?;
+
+        Ok(Self {
+            volume: volume.to_ascii_uppercase(),
+            handle,
+            mode: MftReadMode::Auto,
+            merge_extensions: true,
+            use_bitmap: true,
+            expand_links: true,
+            add_placeholders: true,
+            concurrency: None,
+            io_size: None,
+            parallel_parse: None,
+            parse_workers: None,
+            forensic: false,
+        })
+    }
+
+    /// Synchronous version of `open` (non-Windows stub).
+    ///
+    /// # Errors
+    ///
+    /// Always returns `MftError::PlatformNotSupported` on non-Windows
+    /// platforms.
+    #[cfg(not(windows))]
+    pub const fn open_sync(_volume: char) -> Result<Self> {
+        Err(MftError::PlatformNotSupported)
+    }
+
     /// Sets the read mode for this reader.
     ///
     /// # Arguments
@@ -822,6 +857,55 @@ impl MftReader {
         Err(MftError::PlatformNotSupported)
     }
 
+    /// Synchronous version of `read_all` for use in blocking contexts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MFT reading fails.
+    #[cfg(windows)]
+    pub fn read_all_sync(&self) -> Result<DataFrame> {
+        self.read_mft_internal(None::<fn(MftProgress)>)
+    }
+
+    /// Synchronous version of `read_all` (non-Windows stub).
+    ///
+    /// # Errors
+    ///
+    /// Always returns `MftError::PlatformNotSupported` on non-Windows
+    /// platforms.
+    #[cfg(not(windows))]
+    pub const fn read_all_sync(&self) -> Result<DataFrame> {
+        Err(MftError::PlatformNotSupported)
+    }
+
+    /// Synchronous version of `read_with_progress` for use in blocking
+    /// contexts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MFT reading fails.
+    #[cfg(windows)]
+    pub fn read_with_progress_sync<F>(&self, callback: F) -> Result<DataFrame>
+    where
+        F: Fn(MftProgress) + Send + 'static,
+    {
+        self.read_mft_internal(Some(callback))
+    }
+
+    /// Synchronous version of `read_with_progress` (non-Windows stub).
+    ///
+    /// # Errors
+    ///
+    /// Always returns `MftError::PlatformNotSupported` on non-Windows
+    /// platforms.
+    #[cfg(not(windows))]
+    pub fn read_with_progress_sync<F>(&self, _callback: F) -> Result<DataFrame>
+    where
+        F: Fn(MftProgress) + Send + 'static,
+    {
+        Err(MftError::PlatformNotSupported)
+    }
+
     /// Read the entire MFT into a lean `MftIndex` (fast path).
     ///
     /// This method builds a compact `MftIndex` structure instead of a Polars
@@ -849,6 +933,58 @@ impl MftReader {
     #[cfg(not(windows))]
     #[allow(clippy::unused_async)]
     pub async fn read_all_index(&self) -> Result<crate::index::MftIndex> {
+        Err(MftError::PlatformNotSupported)
+    }
+
+    /// Synchronous version of `read_all_index` for use in blocking contexts.
+    ///
+    /// This is the same as `read_all_index` but without the async wrapper,
+    /// for use with `spawn_blocking` or other blocking contexts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MFT reading fails.
+    #[cfg(windows)]
+    pub fn read_all_index_sync(&self) -> Result<crate::index::MftIndex> {
+        self.read_mft_index_internal(None::<fn(MftProgress)>)
+    }
+
+    /// Synchronous version of `read_all_index` (non-Windows stub).
+    ///
+    /// # Errors
+    ///
+    /// Always returns `MftError::PlatformNotSupported` on non-Windows
+    /// platforms.
+    #[cfg(not(windows))]
+    pub const fn read_all_index_sync(&self) -> Result<crate::index::MftIndex> {
+        Err(MftError::PlatformNotSupported)
+    }
+
+    /// Synchronous version of `read_index_with_progress` for use in blocking
+    /// contexts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MFT reading fails.
+    #[cfg(windows)]
+    pub fn read_index_with_progress_sync<F>(&self, callback: F) -> Result<crate::index::MftIndex>
+    where
+        F: Fn(MftProgress) + Send + 'static,
+    {
+        self.read_mft_index_internal(Some(callback))
+    }
+
+    /// Synchronous version of `read_index_with_progress` (non-Windows stub).
+    ///
+    /// # Errors
+    ///
+    /// Always returns `MftError::PlatformNotSupported` on non-Windows
+    /// platforms.
+    #[cfg(not(windows))]
+    pub fn read_index_with_progress_sync<F>(&self, _callback: F) -> Result<crate::index::MftIndex>
+    where
+        F: Fn(MftProgress) + Send + 'static,
+    {
         Err(MftError::PlatformNotSupported)
     }
 
@@ -3723,30 +3859,27 @@ impl MultiDriveMftReader {
     /// Read a single drive with optional progress callback.
     ///
     /// Uses `spawn_blocking` because `MftReader` contains Windows HANDLEs
-    /// which are not `Send`.
+    /// which are not `Send`, and the MFT reading is blocking I/O.
     #[cfg(windows)]
     async fn read_single_drive<F>(drive: char, callback: Option<Arc<F>>) -> Result<DataFrame>
     where
         F: Fn(char, MftProgress) + Send + Sync + 'static,
     {
-        // Use block_in_place to allow blocking I/O within the async runtime.
-        // This temporarily moves the current thread out of the async worker pool,
-        // allowing block_on to work correctly without causing a nested runtime panic.
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let reader = MftReader::open(drive).await?;
+        // Use spawn_blocking to run blocking I/O on a dedicated thread pool.
+        // This avoids blocking the async runtime and prevents nested runtime panics.
+        tokio::task::spawn_blocking(move || {
+            let reader = MftReader::open_sync(drive)?;
 
-                if let Some(cb) = callback {
-                    reader
-                        .read_with_progress(move |progress| {
-                            cb(drive, progress);
-                        })
-                        .await
-                } else {
-                    reader.read_all().await
-                }
-            })
+            if let Some(cb) = callback {
+                reader.read_with_progress_sync(move |progress| {
+                    cb(drive, progress);
+                })
+            } else {
+                reader.read_all_sync()
+            }
         })
+        .await
+        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
     }
 
     /// Read all drives and return individual results (for detailed error
@@ -4069,62 +4202,62 @@ impl MultiDriveMftReader {
     where
         F: Fn(char, MftProgress) + Send + Sync + 'static,
     {
-        // Use block_in_place to allow blocking I/O within the async runtime.
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let reader = MftReader::open(drive).await?;
+        // Use spawn_blocking to run blocking I/O on a dedicated thread pool.
+        tokio::task::spawn_blocking(move || {
+            let reader = MftReader::open_sync(drive)?;
 
-                if let Some(cb) = callback {
-                    reader
-                        .read_index_with_progress(move |progress| {
-                            cb(drive, progress);
-                        })
-                        .await
-                } else {
-                    reader.read_all_index().await
-                }
-            })
+            if let Some(cb) = callback {
+                reader.read_index_with_progress_sync(move |progress| {
+                    cb(drive, progress);
+                })
+            } else {
+                reader.read_all_index_sync()
+            }
         })
+        .await
+        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
     }
 
     /// Read a single drive and save to cache.
     #[cfg(windows)]
     async fn read_and_cache_single_drive(drive: char) -> Result<crate::index::MftIndex> {
+        // Use spawn_blocking to run blocking I/O on a dedicated thread pool.
+        tokio::task::spawn_blocking(move || Self::read_and_cache_single_drive_sync(drive))
+            .await
+            .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
+    }
+
+    /// Synchronous implementation of read_and_cache_single_drive.
+    #[cfg(windows)]
+    fn read_and_cache_single_drive_sync(drive: char) -> Result<crate::index::MftIndex> {
         use tracing::info;
 
         use crate::cache::save_to_cache;
         use crate::platform::VolumeHandle;
         use crate::usn::query_usn_journal;
 
-        // Use block_in_place to allow blocking I/O within the async runtime.
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let reader = MftReader::open(drive).await?;
-                let index = reader.read_all_index().await?;
+        let reader = MftReader::open_sync(drive)?;
+        let index = reader.read_all_index_sync()?;
 
-                // Get volume info for caching
-                let handle = VolumeHandle::open(drive)?;
-                let volume_data = handle.volume_data();
-                let volume_serial = volume_data.volume_serial_number;
+        // Get volume info for caching
+        let handle = VolumeHandle::open(drive)?;
+        let volume_data = handle.volume_data();
+        let volume_serial = volume_data.volume_serial_number;
 
-                let (usn_journal_id, next_usn) = match query_usn_journal(drive) {
-                    Ok(info) => (info.journal_id, info.next_usn),
-                    Err(_) => (0, 0),
-                };
+        let (usn_journal_id, next_usn) = match query_usn_journal(drive) {
+            Ok(info) => (info.journal_id, info.next_usn),
+            Err(_) => (0, 0),
+        };
 
-                // Save to cache
-                if let Err(e) =
-                    save_to_cache(&index, drive, volume_serial, usn_journal_id, next_usn)
-                {
-                    // Log but don't fail - caching is optional
-                    info!(drive = %drive, error = %e, "⚠️ Failed to save to cache");
-                } else {
-                    info!(drive = %drive, records = index.len(), "💾 Saved to cache");
-                }
+        // Save to cache
+        if let Err(e) = save_to_cache(&index, drive, volume_serial, usn_journal_id, next_usn) {
+            // Log but don't fail - caching is optional
+            info!(drive = %drive, error = %e, "⚠️ Failed to save to cache");
+        } else {
+            info!(drive = %drive, records = index.len(), "💾 Saved to cache");
+        }
 
-                Ok(index)
-            })
-        })
+        Ok(index)
     }
 
     /// Apply USN Journal updates to a cached index to bring it up to date.
@@ -4137,6 +4270,21 @@ impl MultiDriveMftReader {
     #[cfg(windows)]
     async fn apply_usn_updates_to_cached_index(
         drive: char,
+        index: crate::index::MftIndex,
+        header: crate::index::IndexHeader,
+    ) -> Result<crate::index::MftIndex> {
+        // Use spawn_blocking to run blocking I/O on a dedicated thread pool.
+        tokio::task::spawn_blocking(move || {
+            Self::apply_usn_updates_to_cached_index_sync(drive, index, header)
+        })
+        .await
+        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
+    }
+
+    /// Synchronous implementation of apply_usn_updates_to_cached_index.
+    #[cfg(windows)]
+    fn apply_usn_updates_to_cached_index_sync(
+        drive: char,
         mut index: crate::index::MftIndex,
         header: crate::index::IndexHeader,
     ) -> Result<crate::index::MftIndex> {
@@ -4146,143 +4294,138 @@ impl MultiDriveMftReader {
         use crate::platform::VolumeHandle;
         use crate::usn::{aggregate_changes, query_usn_journal, read_usn_journal};
 
-        // Use block_in_place to allow blocking I/O within the async runtime.
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                // Query current USN Journal state
-                let current_info = match query_usn_journal(drive) {
-                    Ok(info) => info,
-                    Err(e) => {
-                        warn!(
-                            drive = %drive,
-                            error = %e,
-                            "⚠️ USN Journal unavailable - using cached index as-is"
-                        );
-                        return Ok(index);
-                    }
-                };
-
-                // Check if journal ID matches (journal may have been recreated)
-                if header.usn_journal_id != 0 && current_info.journal_id != header.usn_journal_id {
-                    info!(
-                        drive = %drive,
-                        cached_journal_id = header.usn_journal_id,
-                        current_journal_id = current_info.journal_id,
-                        "🔄 USN Journal ID changed - rebuilding index"
-                    );
-                    // Journal was recreated, need full rebuild
-                    return Self::read_and_cache_single_drive(drive).await;
-                }
-
-                // Check if our checkpoint is still valid (not before first_usn)
-                let start_usn = header.next_usn;
-                if start_usn < current_info.first_usn {
-                    info!(
-                        drive = %drive,
-                        cached_usn = start_usn,
-                        first_usn = current_info.first_usn,
-                        "🔄 USN Journal wrapped - rebuilding index"
-                    );
-                    // Journal wrapped, need full rebuild
-                    return Self::read_and_cache_single_drive(drive).await;
-                }
-
-                // If we're already at the latest USN, no changes needed
-                if start_usn >= current_info.next_usn {
-                    debug!(
-                        drive = %drive,
-                        usn = start_usn,
-                        "✅ Index is already up to date"
-                    );
-                    return Ok(index);
-                }
-
-                // Read USN changes since our checkpoint
-                let (records, next_usn) =
-                    match read_usn_journal(drive, current_info.journal_id, start_usn) {
-                        Ok(result) => result,
-                        Err(e) => {
-                            warn!(
-                                drive = %drive,
-                                error = %e,
-                                "⚠️ Failed to read USN Journal - using cached index as-is"
-                            );
-                            return Ok(index);
-                        }
-                    };
-
-                if records.is_empty() {
-                    debug!(
-                        drive = %drive,
-                        "✅ No USN changes since last cache"
-                    );
-                    return Ok(index);
-                }
-
-                // Aggregate changes (deduplicate by FRS)
-                let changes_map = aggregate_changes(&records);
-                let changes: Vec<_> = changes_map.into_values().collect();
-                info!(
+        // Query current USN Journal state
+        let current_info = match query_usn_journal(drive) {
+            Ok(info) => info,
+            Err(e) => {
+                warn!(
                     drive = %drive,
-                    usn_records = changes.len(),
-                    from_usn = start_usn,
-                    to_usn = next_usn,
-                    "🔧 Applying USN changes"
+                    error = %e,
+                    "⚠️ USN Journal unavailable - using cached index as-is"
                 );
+                return Ok(index);
+            }
+        };
 
-                // Apply changes to index
-                let stats = index.apply_usn_changes(&changes);
-                debug!(
+        // Check if journal ID matches (journal may have been recreated)
+        if header.usn_journal_id != 0 && current_info.journal_id != header.usn_journal_id {
+            info!(
+                drive = %drive,
+                cached_journal_id = header.usn_journal_id,
+                current_journal_id = current_info.journal_id,
+                "🔄 USN Journal ID changed - rebuilding index"
+            );
+            // Journal was recreated, need full rebuild
+            return Self::read_and_cache_single_drive_sync(drive);
+        }
+
+        // Check if our checkpoint is still valid (not before first_usn)
+        let start_usn = header.next_usn;
+        if start_usn < current_info.first_usn {
+            info!(
+                drive = %drive,
+                cached_usn = start_usn,
+                first_usn = current_info.first_usn,
+                "🔄 USN Journal wrapped - rebuilding index"
+            );
+            // Journal wrapped, need full rebuild
+            return Self::read_and_cache_single_drive_sync(drive);
+        }
+
+        // If we're already at the latest USN, no changes needed
+        if start_usn >= current_info.next_usn {
+            debug!(
+                drive = %drive,
+                usn = start_usn,
+                "✅ Index is already up to date"
+            );
+            return Ok(index);
+        }
+
+        // Read USN changes since our checkpoint
+        let (records, next_usn) = match read_usn_journal(drive, current_info.journal_id, start_usn)
+        {
+            Ok(result) => result,
+            Err(e) => {
+                warn!(
                     drive = %drive,
-                    created = stats.created,
-                    deleted = stats.deleted,
-                    modified = stats.modified,
-                    skipped = stats.skipped,
-                    "📊 USN changes applied"
+                    error = %e,
+                    "⚠️ Failed to read USN Journal - using cached index as-is"
                 );
+                return Ok(index);
+            }
+        };
 
-                // Recompute tree metrics after structural changes
-                debug!(drive = %drive, "🔨 Recomputing tree metrics after USN updates");
-                index.compute_tree_metrics();
+        if records.is_empty() {
+            debug!(
+                drive = %drive,
+                "✅ No USN changes since last cache"
+            );
+            return Ok(index);
+        }
 
-                // Save updated index to cache with new checkpoint
-                let handle = match VolumeHandle::open(drive) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        warn!(
-                            drive = %drive,
-                            error = %e,
-                            "⚠️ Failed to open volume for cache update"
-                        );
-                        return Ok(index);
-                    }
-                };
-                let volume_data = handle.volume_data();
-                let volume_serial = volume_data.volume_serial_number;
+        // Aggregate changes (deduplicate by FRS)
+        let changes_map = aggregate_changes(&records);
+        let changes: Vec<_> = changes_map.into_values().collect();
+        info!(
+            drive = %drive,
+            usn_records = changes.len(),
+            from_usn = start_usn,
+            to_usn = next_usn,
+            "🔧 Applying USN changes"
+        );
 
-                if let Err(e) = save_to_cache(
-                    &index,
-                    drive,
-                    volume_serial,
-                    current_info.journal_id,
-                    next_usn,
-                ) {
-                    warn!(
-                        drive = %drive,
-                        error = %e,
-                        "⚠️ Failed to update cache"
-                    );
-                } else {
-                    debug!(
-                        drive = %drive,
-                        next_usn,
-                        "💾 Cache updated with new USN checkpoint"
-                    );
-                }
+        // Apply changes to index
+        let stats = index.apply_usn_changes(&changes);
+        debug!(
+            drive = %drive,
+            created = stats.created,
+            deleted = stats.deleted,
+            modified = stats.modified,
+            skipped = stats.skipped,
+            "📊 USN changes applied"
+        );
 
-                Ok(index)
-            })
-        })
+        // Recompute tree metrics after structural changes
+        debug!(drive = %drive, "🔨 Recomputing tree metrics after USN updates");
+        index.compute_tree_metrics();
+
+        // Save updated index to cache with new checkpoint
+        let handle = match VolumeHandle::open(drive) {
+            Ok(h) => h,
+            Err(e) => {
+                warn!(
+                    drive = %drive,
+                    error = %e,
+                    "⚠️ Failed to open volume for cache update"
+                );
+                return Ok(index);
+            }
+        };
+        let volume_data = handle.volume_data();
+        let volume_serial = volume_data.volume_serial_number;
+
+        if let Err(e) = save_to_cache(
+            &index,
+            drive,
+            volume_serial,
+            current_info.journal_id,
+            next_usn,
+        ) {
+            warn!(
+                drive = %drive,
+                error = %e,
+                "⚠️ Failed to update cache"
+            );
+        } else {
+            debug!(
+                drive = %drive,
+                next_usn,
+                "💾 Cache updated with new USN checkpoint"
+            );
+        }
+
+        Ok(index)
     }
 }
 
