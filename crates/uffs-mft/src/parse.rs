@@ -744,6 +744,7 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     let mut std_info = ExtendedStandardInfo::default();
     let mut primary = PrimaryNameTracker::default();
     let mut reparse_tag: u32 = 0;
+    let mut reparse_size: u64 = 0; // Size of $REPARSE_POINT attribute (for junctions/symlinks)
 
     // Parse attributes
     let mut offset = header.first_attribute_offset as usize;
@@ -780,19 +781,47 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                     streams.push(stream_info);
                 }
             }
-            Some(AttributeType::ReparsePoint) if attr_header.is_non_resident == 0 => {
-                // Parse $REPARSE_POINT to get the reparse tag (first 4 bytes of value)
-                let value_offset = u16::from_le_bytes(
-                    data.get(offset + 20..offset + 22)
-                        .and_then(|b| b.try_into().ok())
-                        .unwrap_or([0, 0]),
-                ) as usize;
-                let rp_offset = offset + value_offset;
-                if rp_offset + size_of::<ReparsePointHeader>() <= data.len() {
-                    // SAFETY: We've verified the buffer is large enough
-                    let rp_header: ReparsePointHeader =
-                        unsafe { core::ptr::read(data[rp_offset..].as_ptr().cast()) };
-                    reparse_tag = rp_header.reparse_tag;
+            Some(AttributeType::ReparsePoint) => {
+                // Parse $REPARSE_POINT to get the reparse tag and size
+                // C++ handles both resident and non-resident reparse points:
+                // - Resident: ah->Resident.ValueLength
+                // - Non-resident: ah->NonResident.DataSize (rare, but possible)
+                if attr_header.is_non_resident == 0 {
+                    // Resident reparse point (common case)
+                    let value_length = u32::from_le_bytes(
+                        data.get(offset + 16..offset + 20)
+                            .and_then(|b| b.try_into().ok())
+                            .unwrap_or([0, 0, 0, 0]),
+                    ) as u64;
+                    reparse_size = value_length;
+
+                    let value_offset = u16::from_le_bytes(
+                        data.get(offset + 20..offset + 22)
+                            .and_then(|b| b.try_into().ok())
+                            .unwrap_or([0, 0]),
+                    ) as usize;
+                    let rp_offset = offset + value_offset;
+                    if rp_offset + size_of::<ReparsePointHeader>() <= data.len() {
+                        // SAFETY: We've verified the buffer is large enough
+                        let rp_header: ReparsePointHeader =
+                            unsafe { core::ptr::read(data[rp_offset..].as_ptr().cast()) };
+                        reparse_tag = rp_header.reparse_tag;
+                    }
+                } else {
+                    // Non-resident reparse point (rare - large reparse data)
+                    // Use DataSize from non-resident header (at offset+40)
+                    let nr_offset = offset + 16; // After common header
+                    if nr_offset + 48 <= data.len() {
+                        let data_size = i64::from_le_bytes(
+                            data[nr_offset + 40..nr_offset + 48]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        );
+                        reparse_size = data_size.max(0) as u64;
+                    }
+                    // Note: Can't easily read reparse_tag from non-resident
+                    // data without reading the actual data
+                    // runs. Mark as reparse via flags.
                 }
             }
             _ => {}
@@ -816,10 +845,20 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     }
 
     // Calculate primary size from default stream
-    let (size, allocated_size) = streams
-        .iter()
-        .find(|s| s.name.is_empty())
-        .map_or((0, 0), |s| (s.size, s.allocated_size));
+    // For reparse points (junctions/symlinks), use $REPARSE_POINT size if no $DATA
+    // stream
+    let (size, allocated_size) = streams.iter().find(|s| s.name.is_empty()).map_or_else(
+        || {
+            // No default $DATA stream - use reparse_size for junctions/symlinks
+            // C++ uses ah->Resident.ValueLength for reparse points
+            if reparse_tag != 0 {
+                (reparse_size, 0) // Reparse point data is resident, allocated=0
+            } else {
+                (0, 0)
+            }
+        },
+        |s| (s.size, s.allocated_size),
+    );
 
     ParseResult::Base(ParsedRecord {
         frs,
@@ -980,6 +1019,7 @@ pub fn parse_record_forensic(
     let mut std_info = ExtendedStandardInfo::default();
     let mut primary = PrimaryNameTracker::default();
     let mut reparse_tag: u32 = 0;
+    let mut reparse_size: u64 = 0; // Size of $REPARSE_POINT attribute (for junctions/symlinks)
 
     // Parse attributes
     let mut offset = header.first_attribute_offset as usize;
@@ -1014,18 +1054,47 @@ pub fn parse_record_forensic(
                     streams.push(stream_info);
                 }
             }
-            Some(AttributeType::ReparsePoint) if attr_header.is_non_resident == 0 => {
-                let value_offset = u16::from_le_bytes(
-                    data.get(offset + 20..offset + 22)
-                        .and_then(|b| b.try_into().ok())
-                        .unwrap_or([0, 0]),
-                ) as usize;
-                let rp_offset = offset + value_offset;
-                if rp_offset + size_of::<ReparsePointHeader>() <= data.len() {
-                    // SAFETY: Bounds checked above; ReparsePointHeader is repr(C).
-                    let rp_header: ReparsePointHeader =
-                        unsafe { core::ptr::read(data[rp_offset..].as_ptr().cast()) };
-                    reparse_tag = rp_header.reparse_tag;
+            Some(AttributeType::ReparsePoint) => {
+                // Parse $REPARSE_POINT to get the reparse tag and size
+                // C++ handles both resident and non-resident reparse points:
+                // - Resident: ah->Resident.ValueLength
+                // - Non-resident: ah->NonResident.DataSize (rare, but possible)
+                if attr_header.is_non_resident == 0 {
+                    // Resident reparse point (common case)
+                    let value_length = u32::from_le_bytes(
+                        data.get(offset + 16..offset + 20)
+                            .and_then(|b| b.try_into().ok())
+                            .unwrap_or([0, 0, 0, 0]),
+                    ) as u64;
+                    reparse_size = value_length;
+
+                    let value_offset = u16::from_le_bytes(
+                        data.get(offset + 20..offset + 22)
+                            .and_then(|b| b.try_into().ok())
+                            .unwrap_or([0, 0]),
+                    ) as usize;
+                    let rp_offset = offset + value_offset;
+                    if rp_offset + size_of::<ReparsePointHeader>() <= data.len() {
+                        // SAFETY: Bounds checked above; ReparsePointHeader is repr(C).
+                        let rp_header: ReparsePointHeader =
+                            unsafe { core::ptr::read(data[rp_offset..].as_ptr().cast()) };
+                        reparse_tag = rp_header.reparse_tag;
+                    }
+                } else {
+                    // Non-resident reparse point (rare - large reparse data)
+                    // Use DataSize from non-resident header (at offset+40)
+                    let nr_offset = offset + 16; // After common header
+                    if nr_offset + 48 <= data.len() {
+                        let data_size = i64::from_le_bytes(
+                            data[nr_offset + 40..nr_offset + 48]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        );
+                        reparse_size = data_size.max(0) as u64;
+                    }
+                    // Note: Can't easily read reparse_tag from non-resident
+                    // data without reading the actual data
+                    // runs. Mark as reparse via flags.
                 }
             }
             _ => {}
@@ -1048,10 +1117,20 @@ pub fn parse_record_forensic(
     };
 
     // Calculate primary size from default stream
-    let (size, allocated_size) = streams
-        .iter()
-        .find(|s| s.name.is_empty())
-        .map_or((0, 0), |s| (s.size, s.allocated_size));
+    // For reparse points (junctions/symlinks), use $REPARSE_POINT size if no $DATA
+    // stream
+    let (size, allocated_size) = streams.iter().find(|s| s.name.is_empty()).map_or_else(
+        || {
+            // No default $DATA stream - use reparse_size for junctions/symlinks
+            // C++ uses ah->Resident.ValueLength for reparse points
+            if reparse_tag != 0 {
+                (reparse_size, 0) // Reparse point data is resident, allocated=0
+            } else {
+                (0, 0)
+            }
+        },
+        |s| (s.size, s.allocated_size),
+    );
 
     ParseResult::Base(ParsedRecord {
         frs,

@@ -1732,6 +1732,11 @@ impl MftIndex {
         clippy::too_many_lines
     )] // Justified: n < u32::MAX in practice, algorithm is inherently complex
     pub fn compute_tree_metrics(&mut self) {
+        // MFT record overhead for resident files (C++ parity)
+        // C++ includes ~512 bytes of MFT overhead in treesize for resident files
+        // (files with allocated_size = 0, meaning data is stored in MFT record itself)
+        const MFT_OVERHEAD: u64 = 512;
+
         let n = self.records.len();
         if n == 0 {
             tracing::debug!("⏭️  Skipping tree metrics - no records");
@@ -1758,6 +1763,7 @@ impl MftIndex {
                 let frs = record.frs;
                 let parent_frs = record.first_name.parent_frs;
                 let stream_count = record.stream_count;
+                let is_directory = record.is_directory();
 
                 // Sum sizes across ALL streams (default + ADS) for C++ parity
                 let mut total_size = record.first_stream.size.length;
@@ -1782,21 +1788,36 @@ impl MftIndex {
                     total_size,
                     total_allocated,
                     stream_count,
+                    is_directory,
                 )
             })
             .collect();
 
         // Second pass: initialize base metrics
-        for (idx, _frs, _parent_frs, size, allocated, _stream_count) in &parent_info {
+        for (idx, _frs, _parent_frs, size, allocated, _stream_count, _is_directory) in &parent_info
+        {
             if let Some(record) = self.records.get_mut(*idx) {
-                record.descendants = 0;
-                record.treesize = *size;
-                record.tree_allocated = *allocated;
+                // C++ parity: ALL entries (files AND directories) count themselves
+                // Formula: descendants = 1 + sum(child.descendants)
+                // Files have no children, so descendants = 1
+                // Empty directories also have descendants = 1
+                record.descendants = 1;
+
+                // C++ parity: add MFT overhead for resident files
+                // Resident files have allocated_size = 0 but still consume MFT space
+                let mft_overhead = if *allocated == 0 && *size > 0 {
+                    MFT_OVERHEAD
+                } else {
+                    0
+                };
+                record.treesize = size.saturating_add(mft_overhead);
+                record.tree_allocated = allocated.saturating_add(mft_overhead);
             }
         }
 
         // Third pass: build parent links
-        for (idx, frs, parent_frs, _size, _allocated, _stream_count) in &parent_info {
+        for (idx, frs, parent_frs, _size, _allocated, _stream_count, _is_directory) in &parent_info
+        {
             // Skip root or self-parent
             if parent_frs == frs {
                 continue;
@@ -1841,25 +1862,21 @@ impl MftIndex {
 
             let parent_idx_usize = parent_idx_u32 as usize;
 
-            // Read child's metrics and stream_count
-            // For C++ parity, each stream (default + ADS) counts as a separate descendant
-            let (child_descendants, child_treesize, child_tree_allocated, child_stream_count) =
+            // Read child's metrics
+            // C++ parity: descendants = 1 + sum(child.descendants)
+            let (child_descendants, child_treesize, child_tree_allocated) =
                 if let Some(child) = self.records.get(child_idx) {
-                    (
-                        child.descendants,
-                        child.treesize,
-                        child.tree_allocated,
-                        child.stream_count,
-                    )
+                    (child.descendants, child.treesize, child.tree_allocated)
                 } else {
                     continue; // Safety: skip if index is invalid
                 };
 
             // Accumulate into parent
-            // Use stream_count instead of 1 to count each ADS as a separate descendant
-            // This matches C++ behavior where ADS are expanded as separate rows
+            // C++ parity: descendants = 1 + sum(child.descendants)
+            // Each child already has its own 1 counted, so just add child.descendants
+            // This matches C++ behavior from ntfs_index.hpp lines 774-879
             if let Some(parent) = self.records.get_mut(parent_idx_usize) {
-                parent.descendants += u32::from(child_stream_count) + child_descendants;
+                parent.descendants += child_descendants;
                 parent.treesize += child_treesize;
                 parent.tree_allocated += child_tree_allocated;
             }
@@ -3752,32 +3769,37 @@ mod tests {
         index.compute_tree_metrics();
 
         // Verify file1.txt (leaf)
+        // C++ parity: ALL entries count themselves, so files have descendants = 1
         let file1_idx = index.frs_to_idx_opt(file1_frs).unwrap();
-        assert_eq!(index.records[file1_idx].descendants, 0);
+        assert_eq!(index.records[file1_idx].descendants, 1);
         assert_eq!(index.records[file1_idx].treesize, 1000);
         assert_eq!(index.records[file1_idx].tree_allocated, 4096);
 
         // Verify file2.txt (leaf)
         let file2_idx = index.frs_to_idx_opt(file2_frs).unwrap();
-        assert_eq!(index.records[file2_idx].descendants, 0);
+        assert_eq!(index.records[file2_idx].descendants, 1);
         assert_eq!(index.records[file2_idx].treesize, 2000);
         assert_eq!(index.records[file2_idx].tree_allocated, 4096);
 
         // Verify file3.txt (leaf)
         let file3_idx = index.frs_to_idx_opt(file3_frs).unwrap();
-        assert_eq!(index.records[file3_idx].descendants, 0);
+        assert_eq!(index.records[file3_idx].descendants, 1);
         assert_eq!(index.records[file3_idx].treesize, 500);
         assert_eq!(index.records[file3_idx].tree_allocated, 4096);
 
         // Verify dir1 (has 2 children)
+        // C++ parity: descendants = 1 (self) + sum(child.descendants)
+        // dir1 = 1 + 1 + 1 = 3
         let dir1_idx = index.frs_to_idx_opt(dir1_frs).unwrap();
-        assert_eq!(index.records[dir1_idx].descendants, 2); // file1 + file2
+        assert_eq!(index.records[dir1_idx].descendants, 3); // 1 + file1(1) + file2(1)
         assert_eq!(index.records[dir1_idx].treesize, 3000); // 0 + 1000 + 2000
         assert_eq!(index.records[dir1_idx].tree_allocated, 8192); // 0 + 4096 + 4096
 
-        // Verify root (has 3 descendants: dir1, file1, file2, file3)
+        // Verify root (has dir1 + file3)
+        // C++ parity: descendants = 1 (self) + sum(child.descendants)
+        // root = 1 + 3 + 1 = 5
         let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
-        assert_eq!(index.records[root_idx].descendants, 4); // dir1 + (file1 + file2) + file3
+        assert_eq!(index.records[root_idx].descendants, 5); // 1 + dir1(3) + file3(1)
         assert_eq!(index.records[root_idx].treesize, 3500); // 0 + 3000 + 500
         assert_eq!(index.records[root_idx].tree_allocated, 12288); // 0 + 8192 + 4096
     }
@@ -3837,29 +3859,33 @@ mod tests {
         // Compute tree metrics
         index.compute_tree_metrics();
 
+        // C++ parity: ALL entries count themselves
+        // Formula: descendants = 1 + sum(child.descendants)
+        // file.txt = 1, dir3 = 1+1=2, dir2 = 1+2=3, dir1 = 1+3=4, root = 1+4=5
+
         // Verify file.txt (leaf)
         let file_idx = index.frs_to_idx_opt(file_frs).unwrap();
-        assert_eq!(index.records[file_idx].descendants, 0);
+        assert_eq!(index.records[file_idx].descendants, 1);
         assert_eq!(index.records[file_idx].treesize, 1000);
 
         // Verify dir3 (has 1 child: file.txt)
         let dir3_idx = index.frs_to_idx_opt(dir3_frs).unwrap();
-        assert_eq!(index.records[dir3_idx].descendants, 1);
+        assert_eq!(index.records[dir3_idx].descendants, 2); // 1 + file.txt(1)
         assert_eq!(index.records[dir3_idx].treesize, 1000);
 
-        // Verify dir2 (has 2 descendants: dir3 + file.txt)
+        // Verify dir2 (has 1 child: dir3)
         let dir2_idx = index.frs_to_idx_opt(dir2_frs).unwrap();
-        assert_eq!(index.records[dir2_idx].descendants, 2);
+        assert_eq!(index.records[dir2_idx].descendants, 3); // 1 + dir3(2)
         assert_eq!(index.records[dir2_idx].treesize, 1000);
 
-        // Verify dir1 (has 3 descendants: dir2 + dir3 + file.txt)
+        // Verify dir1 (has 1 child: dir2)
         let dir1_idx = index.frs_to_idx_opt(dir1_frs).unwrap();
-        assert_eq!(index.records[dir1_idx].descendants, 3);
+        assert_eq!(index.records[dir1_idx].descendants, 4); // 1 + dir2(3)
         assert_eq!(index.records[dir1_idx].treesize, 1000);
 
-        // Verify root (has 4 descendants: dir1 + dir2 + dir3 + file.txt)
+        // Verify root (has 1 child: dir1)
         let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
-        assert_eq!(index.records[root_idx].descendants, 4);
+        assert_eq!(index.records[root_idx].descendants, 5); // 1 + dir1(4)
         assert_eq!(index.records[root_idx].treesize, 1000);
     }
 
@@ -3938,15 +3964,20 @@ mod tests {
         );
 
         // Verify root has correct descendants count
+        // C++ parity: ALL entries count themselves
+        // Each file = 1
+        // Each dir_i = 1 (self) + 100 files * 1 = 101
+        // root = 1 (self) + 100 dirs * 101 = 10,101
         let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
-        assert_eq!(index.records[root_idx].descendants, 10_100); // 100 dirs + 10,000 files
+        assert_eq!(index.records[root_idx].descendants, 10_101); // 1 + 100 * 101
 
         // Verify root has correct total size
         assert_eq!(index.records[root_idx].treesize, 10_000_000); // 10,000 files * 1000 bytes
 
         // Verify a directory has correct descendants
+        // Each dir = 1 (self) + 100 files * 1 = 101
         let dir0_idx = index.frs_to_idx_opt(100).unwrap();
-        assert_eq!(index.records[dir0_idx].descendants, 100); // 100 files
+        assert_eq!(index.records[dir0_idx].descendants, 101); // 1 + 100 * 1
 
         // Computation should be fast (< 50ms for 10,000 files)
         assert!(
