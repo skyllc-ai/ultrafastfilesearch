@@ -3729,12 +3729,11 @@ impl MultiDriveMftReader {
     where
         F: Fn(char, MftProgress) + Send + Sync + 'static,
     {
-        // Use spawn_blocking because MftReader contains Windows HANDLEs (*mut c_void)
-        // which are not Send. All MFT I/O is blocking anyway.
-        tokio::task::spawn_blocking(move || {
-            // Create a new runtime for the blocking task
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(async {
+        // Use block_in_place to allow blocking I/O within the async runtime.
+        // This temporarily moves the current thread out of the async worker pool,
+        // allowing block_on to work correctly without causing a nested runtime panic.
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
                 let reader = MftReader::open(drive).await?;
 
                 if let Some(cb) = callback {
@@ -3748,8 +3747,6 @@ impl MultiDriveMftReader {
                 }
             })
         })
-        .await
-        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
     }
 
     /// Read all drives and return individual results (for detailed error
@@ -4072,9 +4069,9 @@ impl MultiDriveMftReader {
     where
         F: Fn(char, MftProgress) + Send + Sync + 'static,
     {
-        tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(async {
+        // Use block_in_place to allow blocking I/O within the async runtime.
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
                 let reader = MftReader::open(drive).await?;
 
                 if let Some(cb) = callback {
@@ -4088,8 +4085,6 @@ impl MultiDriveMftReader {
                 }
             })
         })
-        .await
-        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
     }
 
     /// Read a single drive and save to cache.
@@ -4101,9 +4096,9 @@ impl MultiDriveMftReader {
         use crate::platform::VolumeHandle;
         use crate::usn::query_usn_journal;
 
-        tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(async {
+        // Use block_in_place to allow blocking I/O within the async runtime.
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
                 let reader = MftReader::open(drive).await?;
                 let index = reader.read_all_index().await?;
 
@@ -4130,8 +4125,6 @@ impl MultiDriveMftReader {
                 Ok(index)
             })
         })
-        .await
-        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
     }
 
     /// Apply USN Journal updates to a cached index to bring it up to date.
@@ -4153,144 +4146,143 @@ impl MultiDriveMftReader {
         use crate::platform::VolumeHandle;
         use crate::usn::{aggregate_changes, query_usn_journal, read_usn_journal};
 
-        tokio::task::spawn_blocking(move || {
-            // Query current USN Journal state
-            let current_info = match query_usn_journal(drive) {
-                Ok(info) => info,
-                Err(e) => {
-                    warn!(
-                        drive = %drive,
-                        error = %e,
-                        "⚠️ USN Journal unavailable - using cached index as-is"
-                    );
-                    return Ok(index);
-                }
-            };
-
-            // Check if journal ID matches (journal may have been recreated)
-            if header.usn_journal_id != 0 && current_info.journal_id != header.usn_journal_id {
-                info!(
-                    drive = %drive,
-                    cached_journal_id = header.usn_journal_id,
-                    current_journal_id = current_info.journal_id,
-                    "🔄 USN Journal ID changed - rebuilding index"
-                );
-                // Journal was recreated, need full rebuild
-                let rt = tokio::runtime::Handle::current();
-                return rt.block_on(Self::read_and_cache_single_drive(drive));
-            }
-
-            // Check if our checkpoint is still valid (not before first_usn)
-            let start_usn = header.next_usn;
-            if start_usn < current_info.first_usn {
-                info!(
-                    drive = %drive,
-                    cached_usn = start_usn,
-                    first_usn = current_info.first_usn,
-                    "🔄 USN Journal wrapped - rebuilding index"
-                );
-                // Journal wrapped, need full rebuild
-                let rt = tokio::runtime::Handle::current();
-                return rt.block_on(Self::read_and_cache_single_drive(drive));
-            }
-
-            // If we're already at the latest USN, no changes needed
-            if start_usn >= current_info.next_usn {
-                debug!(
-                    drive = %drive,
-                    usn = start_usn,
-                    "✅ Index is already up to date"
-                );
-                return Ok(index);
-            }
-
-            // Read USN changes since our checkpoint
-            let (records, next_usn) =
-                match read_usn_journal(drive, current_info.journal_id, start_usn) {
-                    Ok(result) => result,
+        // Use block_in_place to allow blocking I/O within the async runtime.
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Query current USN Journal state
+                let current_info = match query_usn_journal(drive) {
+                    Ok(info) => info,
                     Err(e) => {
                         warn!(
                             drive = %drive,
                             error = %e,
-                            "⚠️ Failed to read USN Journal - using cached index as-is"
+                            "⚠️ USN Journal unavailable - using cached index as-is"
                         );
                         return Ok(index);
                     }
                 };
 
-            if records.is_empty() {
-                debug!(
-                    drive = %drive,
-                    "✅ No USN changes since last cache"
-                );
-                return Ok(index);
-            }
-
-            // Aggregate changes (deduplicate by FRS)
-            let changes_map = aggregate_changes(&records);
-            let changes: Vec<_> = changes_map.into_values().collect();
-            info!(
-                drive = %drive,
-                usn_records = changes.len(),
-                from_usn = start_usn,
-                to_usn = next_usn,
-                "🔧 Applying USN changes"
-            );
-
-            // Apply changes to index
-            let stats = index.apply_usn_changes(&changes);
-            debug!(
-                drive = %drive,
-                created = stats.created,
-                deleted = stats.deleted,
-                modified = stats.modified,
-                skipped = stats.skipped,
-                "📊 USN changes applied"
-            );
-
-            // Recompute tree metrics after structural changes
-            debug!(drive = %drive, "🔨 Recomputing tree metrics after USN updates");
-            index.compute_tree_metrics();
-
-            // Save updated index to cache with new checkpoint
-            let handle = match VolumeHandle::open(drive) {
-                Ok(h) => h,
-                Err(e) => {
-                    warn!(
+                // Check if journal ID matches (journal may have been recreated)
+                if header.usn_journal_id != 0 && current_info.journal_id != header.usn_journal_id {
+                    info!(
                         drive = %drive,
-                        error = %e,
-                        "⚠️ Failed to open volume for cache update"
+                        cached_journal_id = header.usn_journal_id,
+                        current_journal_id = current_info.journal_id,
+                        "🔄 USN Journal ID changed - rebuilding index"
+                    );
+                    // Journal was recreated, need full rebuild
+                    return Self::read_and_cache_single_drive(drive).await;
+                }
+
+                // Check if our checkpoint is still valid (not before first_usn)
+                let start_usn = header.next_usn;
+                if start_usn < current_info.first_usn {
+                    info!(
+                        drive = %drive,
+                        cached_usn = start_usn,
+                        first_usn = current_info.first_usn,
+                        "🔄 USN Journal wrapped - rebuilding index"
+                    );
+                    // Journal wrapped, need full rebuild
+                    return Self::read_and_cache_single_drive(drive).await;
+                }
+
+                // If we're already at the latest USN, no changes needed
+                if start_usn >= current_info.next_usn {
+                    debug!(
+                        drive = %drive,
+                        usn = start_usn,
+                        "✅ Index is already up to date"
                     );
                     return Ok(index);
                 }
-            };
-            let volume_data = handle.volume_data();
-            let volume_serial = volume_data.volume_serial_number;
 
-            if let Err(e) = save_to_cache(
-                &index,
-                drive,
-                volume_serial,
-                current_info.journal_id,
-                next_usn,
-            ) {
-                warn!(
+                // Read USN changes since our checkpoint
+                let (records, next_usn) =
+                    match read_usn_journal(drive, current_info.journal_id, start_usn) {
+                        Ok(result) => result,
+                        Err(e) => {
+                            warn!(
+                                drive = %drive,
+                                error = %e,
+                                "⚠️ Failed to read USN Journal - using cached index as-is"
+                            );
+                            return Ok(index);
+                        }
+                    };
+
+                if records.is_empty() {
+                    debug!(
+                        drive = %drive,
+                        "✅ No USN changes since last cache"
+                    );
+                    return Ok(index);
+                }
+
+                // Aggregate changes (deduplicate by FRS)
+                let changes_map = aggregate_changes(&records);
+                let changes: Vec<_> = changes_map.into_values().collect();
+                info!(
                     drive = %drive,
-                    error = %e,
-                    "⚠️ Failed to update cache"
+                    usn_records = changes.len(),
+                    from_usn = start_usn,
+                    to_usn = next_usn,
+                    "🔧 Applying USN changes"
                 );
-            } else {
+
+                // Apply changes to index
+                let stats = index.apply_usn_changes(&changes);
                 debug!(
                     drive = %drive,
-                    next_usn,
-                    "💾 Cache updated with new USN checkpoint"
+                    created = stats.created,
+                    deleted = stats.deleted,
+                    modified = stats.modified,
+                    skipped = stats.skipped,
+                    "📊 USN changes applied"
                 );
-            }
 
-            Ok(index)
+                // Recompute tree metrics after structural changes
+                debug!(drive = %drive, "🔨 Recomputing tree metrics after USN updates");
+                index.compute_tree_metrics();
+
+                // Save updated index to cache with new checkpoint
+                let handle = match VolumeHandle::open(drive) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        warn!(
+                            drive = %drive,
+                            error = %e,
+                            "⚠️ Failed to open volume for cache update"
+                        );
+                        return Ok(index);
+                    }
+                };
+                let volume_data = handle.volume_data();
+                let volume_serial = volume_data.volume_serial_number;
+
+                if let Err(e) = save_to_cache(
+                    &index,
+                    drive,
+                    volume_serial,
+                    current_info.journal_id,
+                    next_usn,
+                ) {
+                    warn!(
+                        drive = %drive,
+                        error = %e,
+                        "⚠️ Failed to update cache"
+                    );
+                } else {
+                    debug!(
+                        drive = %drive,
+                        next_usn,
+                        "💾 Cache updated with new USN checkpoint"
+                    );
+                }
+
+                Ok(index)
+            })
         })
-        .await
-        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
     }
 }
 

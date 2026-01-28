@@ -88,6 +88,55 @@ This ensures the stream survives the `named_streams` filter and its size is incl
 
 ## Final CI Run
 
-- **Status**: In Progress
-- **Result**: TBD
+- **Status**: ✅ PASSED
+- **Version**: 0.2.134
+- **Total Time**: 454s
+- **Commit**: `89275bc10` - `chore: development v0.2.134 - comprehensive testing complete [auto-commit]`
+- **Pushed**: Successfully pushed to `main` branch
+
+### Artifacts Built
+- `uffs-windows-x64.exe` (65.55 MB)
+- `uffs_mft-windows-x64.exe`
+- `uffs_tui-windows-x64.exe` (63.22 MB)
+- `uffs_gui-windows-x64.exe`
+
+---
+
+## Runtime Panic Fix: Nested Tokio Runtime
+
+### Error
+```
+thread 'main' panicked at tokio-1.49.0/src/runtime/scheduler/multi_thread/mod.rs:88:9:
+Cannot start a runtime from within a runtime. This happens because a function (like `block_on`)
+attempted to block the current thread while the thread is being used to drive asynchronous tasks.
+```
+
+### Root Cause
+In `crates/uffs-mft/src/reader.rs`, several functions used this incorrect pattern:
+```rust
+tokio::task::spawn_blocking(move || {
+    let rt = tokio::runtime::Handle::current();
+    rt.block_on(async { ... })
+})
+```
+
+This fails because:
+1. `spawn_blocking` moves the closure to a blocking thread pool
+2. Inside that thread, `Handle::current()` gets the handle to the current runtime
+3. `block_on` tries to block the current thread to run the future
+4. But the blocking thread is still part of the tokio runtime, causing the panic
+
+### Fix Applied
+Changed all occurrences to use `block_in_place` which properly handles this case:
+```rust
+tokio::task::block_in_place(|| {
+    tokio::runtime::Handle::current().block_on(async { ... })
+})
+```
+
+`block_in_place` temporarily moves the current thread out of the async worker pool,
+allowing `block_on` to work correctly.
+
+### Files Modified
+- `crates/uffs-mft/src/reader.rs`: Fixed 5 occurrences of the pattern
 
