@@ -4,6 +4,9 @@
 //! All public functions are async where I/O is involved and return
 //! `anyhow::Result`.
 
+// TEMPORARY: Allow eprintln for debugging nested runtime panic
+#![allow(clippy::print_stderr)]
+
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -1259,7 +1262,10 @@ fn execute_index_query(
     // Execute and convert to DataFrame
     eprintln!("[DEBUG] execute_index_query: before query.collect()");
     let results = query.collect();
-    eprintln!("[DEBUG] execute_index_query: after query.collect(), count={}", results.len());
+    eprintln!(
+        "[DEBUG] execute_index_query: after query.collect(), count={}",
+        results.len()
+    );
     eprintln!("[DEBUG] execute_index_query: before results_to_dataframe");
     let df = results_to_dataframe(index, &results, resolve_paths);
     eprintln!("[DEBUG] execute_index_query: after results_to_dataframe");
