@@ -63,6 +63,29 @@ Run CI pipeline and fix any errors that arise.
 
 ---
 
+## Additional Fix: 48-Byte Treesize Parity Gap
+
+### Root Cause
+`$LOGGED_UTILITY_STREAM` (attribute type 0x100) was being parsed and counted as a stream,
+but given an empty synthetic name. Later, the `named_streams` filter in `index.rs` dropped
+empty-named streams, causing the stream's size (typically 48 bytes) to be excluded from
+treesize aggregation while still being counted in `stream_count`.
+
+### Fix Applied
+**File:** `crates/uffs-mft/src/parse.rs`
+
+Added `LoggedUtilityStream` to the synthetic name mapping in both parsing functions:
+1. `parse_record_full` (line ~1087): Added `Some(AttributeType::LoggedUtilityStream) => String::from("$LOGGED_UTILITY_STREAM")`
+2. `parse_record_forensic` (line ~1627): Same fix, plus added `LoggedUtilityStream` to the match arm
+
+This ensures the stream survives the `named_streams` filter and its size is included in aggregation.
+
+### Expected Result
+- Root descendants: unchanged (already matched)
+- Root treesize: should now match C++ exactly (609,898,968 bytes)
+
+---
+
 ## Final CI Run
 
 - **Status**: In Progress
