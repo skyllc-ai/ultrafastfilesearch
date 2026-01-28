@@ -53,8 +53,10 @@ rustflags = [
 # NOTE: Do NOT use embed-bitcode=no here - it's incompatible with LTO (release builds).
 # The xwin-dev profile handles COFF archive size limits for debug builds instead.
 # See: docs/xwin-msvc-rlib-size-root-cause-and-workarounds.md
+#
+# NOTE: Using MSVC link.exe instead of rust-lld to avoid potential lld-specific issues.
 [target.x86_64-pc-windows-msvc]
-linker = "rust-lld"
+linker = "link.exe"
 rustflags = [
     "-C", "target-cpu=x86-64-v3",
     "-C", "link-arg=/OPT:REF",

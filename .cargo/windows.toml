@@ -29,13 +29,13 @@ git-fetch-with-cli = true
 # MSVC Target Optimizations for Ryzen 9 3900XT (Zen 2 / Matisse)
 # =============================================================================
 [target.x86_64-pc-windows-msvc]
-# LLD linker: 2-5x faster than default MSVC linker
-linker = "rust-lld"
+# Using MSVC link.exe instead of rust-lld to avoid potential lld-specific issues
+linker = "link.exe"
 
 rustflags = [
     # Zen 2 (Matisse) specific optimizations - better than generic "native"
     "-C", "target-cpu=znver2",
-    # MSVC linker optimizations (still apply with LLD)
+    # MSVC linker optimizations
     "-C", "link-arg=/OPT:REF",   # Remove unreferenced functions/data
     "-C", "link-arg=/OPT:ICF",   # Fold identical COMDATs
 ]
