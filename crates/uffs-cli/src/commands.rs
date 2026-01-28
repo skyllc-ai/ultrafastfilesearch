@@ -824,7 +824,9 @@ async fn load_and_filter_data(
     if let Some(drive_letter) = effective_drive {
         // Single drive search with proper path resolution
         let t_read = std::time::Instant::now();
-        eprintln!("[DEBUG] search_dataframe: before load_or_build_dataframe_cached drive={drive_letter}");
+        eprintln!(
+            "[DEBUG] search_dataframe: before load_or_build_dataframe_cached drive={drive_letter}"
+        );
 
         // Use cached DataFrame path for performance (Windows only)
         #[cfg(windows)]

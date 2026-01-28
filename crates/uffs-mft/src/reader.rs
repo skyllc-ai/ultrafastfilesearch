@@ -933,19 +933,19 @@ impl MftReader {
         let mode = self.mode;
         let merge_extensions = self.merge_extensions;
         let use_bitmap = self.use_bitmap;
-        let expand_hardlinks = self.expand_hardlinks;
+        let expand_links = self.expand_links;
 
         let result = tokio::task::spawn_blocking(move || {
             eprintln!("[DEBUG] read_all_index: INSIDE spawn_blocking volume={volume}");
             // Create a new reader in the blocking thread
-            let handle = crate::platform::VolumeHandle::open(volume)?;
+            let handle = VolumeHandle::open(volume)?;
             let reader = MftReader {
                 volume,
                 handle,
                 mode,
                 merge_extensions,
                 use_bitmap,
-                expand_hardlinks,
+                expand_links,
             };
             let idx = reader.read_mft_index_internal(None::<fn(MftProgress)>);
             eprintln!("[DEBUG] read_all_index: read_mft_index_internal done");
@@ -1046,18 +1046,18 @@ impl MftReader {
         let mode = self.mode;
         let merge_extensions = self.merge_extensions;
         let use_bitmap = self.use_bitmap;
-        let expand_hardlinks = self.expand_hardlinks;
+        let expand_links = self.expand_links;
 
         tokio::task::spawn_blocking(move || {
             // Create a new reader in the blocking thread
-            let handle = crate::platform::VolumeHandle::open(volume)?;
+            let handle = VolumeHandle::open(volume)?;
             let reader = MftReader {
                 volume,
                 handle,
                 mode,
                 merge_extensions,
                 use_bitmap,
-                expand_hardlinks,
+                expand_links,
             };
             reader.read_mft_index_internal(Some(callback))
         })

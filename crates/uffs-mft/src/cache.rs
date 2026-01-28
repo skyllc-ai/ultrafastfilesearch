@@ -372,9 +372,14 @@ fn load_or_build_dataframe_cached_sync(
     eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: cache MISS, reading MFT fresh");
     tracing::info!(drive = %drive, "📖 Cache miss - reading MFT fresh");
     let reader = MftReader::open_sync(drive)?;
-    eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: reader opened, calling read_all_index_sync");
+    eprintln!(
+        "[DEBUG] load_or_build_dataframe_cached_sync: reader opened, calling read_all_index_sync"
+    );
     let index = reader.read_all_index_sync()?;
-    eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: read_all_index_sync done, records={}", index.len());
+    eprintln!(
+        "[DEBUG] load_or_build_dataframe_cached_sync: read_all_index_sync done, records={}",
+        index.len()
+    );
 
     // Save to cache for next time
     let handle = VolumeHandle::open(drive)?;
