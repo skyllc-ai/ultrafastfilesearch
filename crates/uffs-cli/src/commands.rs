@@ -4,9 +4,6 @@
 //! All public functions are async where I/O is involved and return
 //! `anyhow::Result`.
 
-// TEMPORARY: Allow eprintln for debugging nested runtime panic
-#![allow(clippy::print_stderr)]
-
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -1207,7 +1204,8 @@ fn execute_query(
 ///
 /// This is the fast path for simple queries. Returns results as a `DataFrame`
 /// for compatibility with the output pipeline.
-#[allow(clippy::single_call_fn)]
+// TEMPORARY: print_stderr for debugging nested tokio runtime panic (issue #XXX)
+#[allow(clippy::single_call_fn, clippy::print_stderr)]
 fn execute_index_query(
     index: &uffs_mft::MftIndex,
     filters: &QueryFilters<'_>,
@@ -1280,11 +1278,13 @@ fn execute_index_query(
 ///
 /// TODO: Remove this function and output directly from `SearchResults` +
 /// `MftIndex`.
+// TEMPORARY: print_stderr for debugging nested tokio runtime panic (issue #XXX)
 #[allow(
     clippy::single_call_fn,
     clippy::too_many_lines,
     clippy::min_ident_chars,
-    clippy::option_if_let_else
+    clippy::option_if_let_else,
+    clippy::print_stderr
 )]
 fn results_to_dataframe(
     index: &uffs_mft::MftIndex,
