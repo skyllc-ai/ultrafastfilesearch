@@ -1794,14 +1794,13 @@ impl MftIndex {
             .collect();
 
         // Second pass: initialize base metrics
-        for (idx, _frs, _parent_frs, size, allocated, _stream_count, _is_directory) in &parent_info
-        {
+        for (idx, _frs, _parent_frs, size, allocated, _stream_count, is_directory) in &parent_info {
             if let Some(record) = self.records.get_mut(*idx) {
-                // C++ parity: ALL entries (files AND directories) count themselves
-                // Formula: descendants = 1 + sum(child.descendants)
-                // Files have no children, so descendants = 1
-                // Empty directories also have descendants = 1
-                record.descendants = 1;
+                // C++ parity: Files have descendants = 0, Directories have descendants = 1
+                // Formula: parent.descendants = 1 + sum(max(1, child.descendants))
+                // - Files contribute 1 to parent (even though their own descendants = 0)
+                // - Directories contribute their full descendants count to parent
+                record.descendants = u32::from(*is_directory);
 
                 // C++ parity: add MFT overhead for resident files
                 // Resident files have allocated_size = 0 but still consume MFT space
@@ -1872,11 +1871,13 @@ impl MftIndex {
                 };
 
             // Accumulate into parent
-            // C++ parity: descendants = 1 + sum(child.descendants)
-            // Each child already has its own 1 counted, so just add child.descendants
+            // C++ parity: parent.descendants = 1 + sum(max(1, child.descendants))
+            // - Files have descendants = 0, but contribute 1 to parent
+            // - Directories contribute their full descendants count
             // This matches C++ behavior from ntfs_index.hpp lines 774-879
             if let Some(parent) = self.records.get_mut(parent_idx_usize) {
-                parent.descendants += child_descendants;
+                // max(1, child_descendants) ensures files contribute 1
+                parent.descendants += core::cmp::max(1, child_descendants);
                 parent.treesize += child_treesize;
                 parent.tree_allocated += child_tree_allocated;
             }
@@ -3769,26 +3770,26 @@ mod tests {
         index.compute_tree_metrics();
 
         // Verify file1.txt (leaf)
-        // C++ parity: ALL entries count themselves, so files have descendants = 1
+        // C++ parity: Files have descendants = 0, but contribute 1 to parent
         let file1_idx = index.frs_to_idx_opt(file1_frs).unwrap();
-        assert_eq!(index.records[file1_idx].descendants, 1);
+        assert_eq!(index.records[file1_idx].descendants, 0);
         assert_eq!(index.records[file1_idx].treesize, 1000);
         assert_eq!(index.records[file1_idx].tree_allocated, 4096);
 
         // Verify file2.txt (leaf)
         let file2_idx = index.frs_to_idx_opt(file2_frs).unwrap();
-        assert_eq!(index.records[file2_idx].descendants, 1);
+        assert_eq!(index.records[file2_idx].descendants, 0);
         assert_eq!(index.records[file2_idx].treesize, 2000);
         assert_eq!(index.records[file2_idx].tree_allocated, 4096);
 
         // Verify file3.txt (leaf)
         let file3_idx = index.frs_to_idx_opt(file3_frs).unwrap();
-        assert_eq!(index.records[file3_idx].descendants, 1);
+        assert_eq!(index.records[file3_idx].descendants, 0);
         assert_eq!(index.records[file3_idx].treesize, 500);
         assert_eq!(index.records[file3_idx].tree_allocated, 4096);
 
-        // Verify dir1 (has 2 children)
-        // C++ parity: descendants = 1 (self) + sum(child.descendants)
+        // Verify dir1 (has 2 children: file1 and file2)
+        // C++ parity: descendants = 1 (self) + sum(max(1, child.descendants))
         // dir1 = 1 + 1 + 1 = 3
         let dir1_idx = index.frs_to_idx_opt(dir1_frs).unwrap();
         assert_eq!(index.records[dir1_idx].descendants, 3); // 1 + file1(1) + file2(1)
@@ -3859,18 +3860,19 @@ mod tests {
         // Compute tree metrics
         index.compute_tree_metrics();
 
-        // C++ parity: ALL entries count themselves
-        // Formula: descendants = 1 + sum(child.descendants)
-        // file.txt = 1, dir3 = 1+1=2, dir2 = 1+2=3, dir1 = 1+3=4, root = 1+4=5
+        // C++ parity: Files have descendants = 0, dirs have descendants = 1 +
+        // sum(max(1, child.descendants)) Formula: parent.descendants = 1 +
+        // sum(max(1, child.descendants)) file.txt = 0, dir3 = 1+max(1,0)=2,
+        // dir2 = 1+2=3, dir1 = 1+3=4, root = 1+4=5
 
         // Verify file.txt (leaf)
         let file_idx = index.frs_to_idx_opt(file_frs).unwrap();
-        assert_eq!(index.records[file_idx].descendants, 1);
+        assert_eq!(index.records[file_idx].descendants, 0); // Files have 0
         assert_eq!(index.records[file_idx].treesize, 1000);
 
         // Verify dir3 (has 1 child: file.txt)
         let dir3_idx = index.frs_to_idx_opt(dir3_frs).unwrap();
-        assert_eq!(index.records[dir3_idx].descendants, 2); // 1 + file.txt(1)
+        assert_eq!(index.records[dir3_idx].descendants, 2); // 1 + max(1, file.txt(0)) = 1 + 1 = 2
         assert_eq!(index.records[dir3_idx].treesize, 1000);
 
         // Verify dir2 (has 1 child: dir3)
@@ -3964,9 +3966,9 @@ mod tests {
         );
 
         // Verify root has correct descendants count
-        // C++ parity: ALL entries count themselves
-        // Each file = 1
-        // Each dir_i = 1 (self) + 100 files * 1 = 101
+        // C++ parity: Files have descendants = 0, dirs have descendants = 1 +
+        // sum(max(1, child.descendants)) Each file = 0 (but contributes 1 to
+        // parent) Each dir_i = 1 (self) + 100 files * max(1,0) = 1 + 100 = 101
         // root = 1 (self) + 100 dirs * 101 = 10,101
         let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
         assert_eq!(index.records[root_idx].descendants, 10_101); // 1 + 100 * 101
@@ -3975,9 +3977,9 @@ mod tests {
         assert_eq!(index.records[root_idx].treesize, 10_000_000); // 10,000 files * 1000 bytes
 
         // Verify a directory has correct descendants
-        // Each dir = 1 (self) + 100 files * 1 = 101
+        // Each dir = 1 (self) + 100 files * max(1,0) = 1 + 100 = 101
         let dir0_idx = index.frs_to_idx_opt(100).unwrap();
-        assert_eq!(index.records[dir0_idx].descendants, 101); // 1 + 100 * 1
+        assert_eq!(index.records[dir0_idx].descendants, 101); // 1 + 100 * max(1,0)
 
         // Computation should be fast (< 50ms for 10,000 files)
         assert!(
