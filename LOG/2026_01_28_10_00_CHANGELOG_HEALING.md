@@ -126,17 +126,50 @@ This fails because:
 3. `block_on` tries to block the current thread to run the future
 4. But the blocking thread is still part of the tokio runtime, causing the panic
 
-### Fix Applied
-Changed all occurrences to use `block_in_place` which properly handles this case:
+### First Fix Attempt (v0.2.135) - FAILED
+Changed all occurrences to use `block_in_place`:
 ```rust
 tokio::task::block_in_place(|| {
     tokio::runtime::Handle::current().block_on(async { ... })
 })
 ```
 
-`block_in_place` temporarily moves the current thread out of the async worker pool,
-allowing `block_on` to work correctly.
+This still failed because `Handle::block_on` panics when called from within an async context,
+even when using `block_in_place`. The issue is that `block_in_place` only moves the current
+thread out of the async worker pool temporarily, but `block_on` still detects it's within
+a runtime context.
+
+### Second Fix (v0.2.136) - SUCCESS
+The correct solution is to use `spawn_blocking` with **synchronous** function versions:
+
+1. **Added sync function variants:**
+   - `open_sync(drive)` - synchronous version of `open`
+   - `read_all_sync()` - synchronous version of `read_all`
+   - `read_with_progress_sync(callback)` - synchronous version of `read_with_progress`
+   - `read_all_index_sync()` - synchronous version of `read_all_index`
+   - `read_index_with_progress_sync(callback)` - synchronous version of `read_index_with_progress`
+
+2. **Fixed async wrapper functions to use spawn_blocking with sync versions:**
+   - `read_single_drive` - uses `spawn_blocking` + `open_sync` + `read_all_sync`/`read_with_progress_sync`
+   - `read_single_drive_index` - uses `spawn_blocking` + `open_sync` + `read_all_index_sync`/`read_index_with_progress_sync`
+   - `read_and_cache_single_drive` - uses `spawn_blocking` + `read_and_cache_single_drive_sync`
+   - `apply_usn_updates_to_cached_index` - uses `spawn_blocking` + `apply_usn_updates_to_cached_index_sync`
+
+### Why This Works
+- `spawn_blocking` moves the closure to a dedicated blocking thread pool
+- The sync functions run entirely on that blocking thread without any async/await
+- No `block_on` is called, so no runtime nesting occurs
+- Parallel drive reading is preserved via `JoinSet::spawn` - each drive gets its own blocking thread
 
 ### Files Modified
-- `crates/uffs-mft/src/reader.rs`: Fixed 5 occurrences of the pattern
+- `crates/uffs-mft/src/reader.rs`:
+  - Added 5 sync function variants
+  - Added 2 sync helper functions (`read_and_cache_single_drive_sync`, `apply_usn_updates_to_cached_index_sync`)
+  - Fixed 4 async wrapper functions to use `spawn_blocking` with sync versions
+
+### CI Result
+- **Status**: ✅ PASSED
+- **Version**: 0.2.136
+- **Total Time**: 485s
+- **Commit**: `cdafbae2e` pushed to `main`
 

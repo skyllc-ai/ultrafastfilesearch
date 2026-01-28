@@ -317,8 +317,33 @@ pub fn check_cache_status(drive: char, ttl_seconds: u64) -> CacheStatus {
 /// # Errors
 ///
 /// Returns an error if MFT reading or DataFrame conversion fails.
+///
+/// # Note
+///
+/// This function uses `spawn_blocking` internally to avoid nested tokio runtime
+/// issues. Polars uses tokio internally for some operations, and calling polars
+/// from within a tokio async context can cause "Cannot start a runtime from
+/// within a runtime" panics. By running all MFT reading and polars operations
+/// on a dedicated blocking thread, we avoid this issue.
 #[cfg(windows)]
 pub async fn load_or_build_dataframe_cached(
+    drive: char,
+    ttl_seconds: u64,
+) -> crate::Result<uffs_polars::DataFrame> {
+    // Use spawn_blocking to run all MFT reading and polars operations on a
+    // dedicated blocking thread. This avoids nested tokio runtime issues since
+    // polars uses tokio internally for some operations.
+    tokio::task::spawn_blocking(move || load_or_build_dataframe_cached_sync(drive, ttl_seconds))
+        .await
+        .map_err(|e| crate::MftError::InvalidInput(format!("Task join error: {e}")))?
+}
+
+/// Synchronous version of `load_or_build_dataframe_cached`.
+///
+/// This is the actual implementation that runs on a blocking thread.
+/// It performs all MFT reading and polars operations synchronously.
+#[cfg(windows)]
+fn load_or_build_dataframe_cached_sync(
     drive: char,
     ttl_seconds: u64,
 ) -> crate::Result<uffs_polars::DataFrame> {
@@ -334,8 +359,8 @@ pub async fn load_or_build_dataframe_cached(
 
     // Cache miss - read fresh
     tracing::info!(drive = %drive, "📖 Cache miss - reading MFT fresh");
-    let reader = MftReader::open(drive).await?;
-    let index = reader.read_all_index().await?;
+    let reader = MftReader::open_sync(drive)?;
+    let index = reader.read_all_index_sync()?;
 
     // Save to cache for next time
     let handle = VolumeHandle::open(drive)?;

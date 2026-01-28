@@ -1,59 +1,60 @@
-The tool was not working 100% (trial_run.ps1): (production) ~\GitHub\UltraFastFileSearch on main> .\trial_run.ps1 -Drives F
+The tool was not working 100% (trial_run.ps1): (production) ~\GitHub\UltraFastFileSearch on main> C:\Users\rnio\GitHub\UltraFastFileSearch\docs\architecture\Investigation\trial_run.ps1 -Drives F
 
-╔══════════════════════════════════════════════════════════════╗
-║         UFFS Trial Run - Rust vs C++ Comparison              ║
-╚══════════════════════════════════════════════════════════════╝
+                                               ╔══════════════════════════════════════════════════════════════╗
+                                               ║         UFFS Trial Run - Rust vs C++ Comparison              ║
+                                               ╚══════════════════════════════════════════════════════════════╝
 
-Binaries:
-  uffs.exe (Rust): ✅ C:\Users\rnio\bin\uffs.exe
-  uffs.com (C++):  ✅ C:\Users\rnio\bin\uffs.com
-  uffs_mft.exe:    ✅ C:\Users\rnio\bin\uffs_mft.exe
+                                               Binaries:
+                                                 uffs.exe (Rust): ✅ C:\Users\rnio\bin\uffs.exe
+                                                 uffs.com (C++):  ✅ C:\Users\rnio\bin\uffs.com
+                                                 uffs_mft.exe:    ✅ C:\Users\rnio\bin\uffs_mft.exe
 
-  → uffs --version... ✅ (249 ms)
+                                                 → uffs --version... ✅ (1513 ms)
 
-Name                           Value
-----                           -----
-DurationMs                     249
-ExitCode                       0
-Duration                       00:00:00.2486341
-LineCount                      1
-Status                         OK
+                                               Name                           Value
+                                               ----                           -----
+                                               DurationMs                     1513
+                                               ExitCode                       0
+                                               Duration                       00:00:01.5130473
+                                               LineCount                      1
+                                               Status                         OK
 
-MFT Save Tests (Drive F)...
+                                               MFT Save Tests (Drive F)...
 
-  → uffs_mft save (compressed)... ✅ (9309 ms)
-DurationMs                     9309
-ExitCode                       0
-Duration                       00:00:09.3093514
-LineCount                      25
-Status                         OK
-  → uffs_mft save (no compress)... ✅ (4704 ms)
-DurationMs                     4704
-ExitCode                       0
-Duration                       00:00:04.7035061
-LineCount                      24
-Status                         OK
-  → uffs_mft save (raw)... ✅ (4810 ms)
-DurationMs                     4810
-ExitCode                       0
-Duration                       00:00:04.8101930
-LineCount                      23
-Status                         OK
+                                                 → uffs_mft save (compressed)... ✅ (10654 ms)
+                                               DurationMs                     10654
+                                               ExitCode                       0
+                                               Duration                       00:00:10.6543371
+                                               LineCount                      25
+                                               Status                         OK
+                                                 → uffs_mft save (no compress)... ✅ (5276 ms)
+                                               DurationMs                     5276
+                                               ExitCode                       0
+                                               Duration                       00:00:05.2762685
+                                               LineCount                      24
+                                               Status                         OK
+                                                 → uffs_mft save (raw)... ✅ (5530 ms)
+                                               DurationMs                     5530
+                                               ExitCode                       0
+                                               Duration                       00:00:05.5304088
+                                               LineCount                      23
+                                               Status                         OK
 
-Testing Drive F...
+                                               Testing Drive F...
 
-  → Rust: uffs scan drive F... ❌ (exit: -1073740791)
-  → C++: uffs.com scan drive F... ✅ (40087 ms)
-  ✅ PARITY ACHIEVED for drive F
+                                                 → Rust: uffs scan drive F... ❌ (exit: -1073740791)
+                                                 → C++: uffs.com scan drive F... ✅ (38342 ms)
+                                                 ❌ RUST FAILED for drive F (exit: -1073740791)
 
-📄 Report written: C:\Users\rnio\GitHub\UltraFastFileSearch\trial_run.md
-trial_run.ps1: The property 'Count' cannot be found on this object. Verify that the property exists.
+                                               ❌ Rust scan failed on 1 drive(s) - review trial_run.md for details.
 
-(production) ~\GitHub\UltraFastFileSearch on main>
+                                               📄 Report written: C:\Users\rnio\GitHub\UltraFastFileSearch\trial_run.md
+
+                                               (production) ~\GitHub\UltraFastFileSearch on main>
 
 Here is teh trial_run.md output """ # UFFS Trial Run Report
 
-                                    - **Started:** 2026-01-28T12:45:12.8373319-08:00
+                                    - **Started:** 2026-01-28T13:10:16.4318097-08:00
                                     - **Working dir:** C:\Users\rnio\GitHub\UltraFastFileSearch
                                     - **User:** master-pc\rnio
                                     - **Computer:** MASTER-PC
@@ -79,17 +80,17 @@ Here is teh trial_run.md output """ # UFFS Trial Run Report
                                     "C:\Users\rnio\bin\uffs.exe" --version
                                     ```
 
-                                    **Started:** 2026-01-28T12:45:12.8699492-08:00
+                                    **Started:** 2026-01-28T13:10:16.4641586-08:00
 
-                                    **Ended:** 2026-01-28T12:45:13.1185833-08:00
-                                    **Duration:** 00:00:00.2486341 (249 ms)
+                                    **Ended:** 2026-01-28T13:10:17.9772059-08:00
+                                    **Duration:** 00:00:01.5130473 (1513 ms)
                                     **Exit code:** 0
                                     **Status:** OK
 
                                     **Console output:**
 
                                     ```text
-                                    uffs 0.2.135
+                                    uffs 0.2.136
                                     ```
 
                                     ---
@@ -104,21 +105,21 @@ Here is teh trial_run.md output """ # UFFS Trial Run Report
                                     "C:\Users\rnio\bin\uffs_mft.exe" save --drive F -o F_mft.bin
                                     ```
 
-                                    **Started:** 2026-01-28T12:45:13.1225630-08:00
+                                    **Started:** 2026-01-28T13:10:17.9818784-08:00
 
-                                    **Ended:** 2026-01-28T12:45:22.4319144-08:00
-                                    **Duration:** 00:00:09.3093514 (9309 ms)
+                                    **Ended:** 2026-01-28T13:10:28.6362155-08:00
+                                    **Duration:** 00:00:10.6543371 (10654 ms)
                                     **Exit code:** 0
                                     **Status:** OK
 
                                     **Console output:**
 
                                     ```text
-                                    [2m2026-01-28T20:45:13.2474477Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft[0m[2m:[0m [2mcrates/uffs-mft/src/main.rs[0m[2m:[0m[2m2514:[0m Reading raw MFT from drive [3mdrive[0m[2m=[0mF
-                                    [2m2026-01-28T20:45:13.2491717Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::io[0m[2m:[0m [2mcrates/uffs-mft/src/io.rs[0m[2m:[0m[2m146:[0m ⚠️  MFT is fragmented [3mextents[0m[2m=[0m28 [3msparse_extents[0m[2m=[0m0 [3mtotal_clusters[0m[2m=[0m72756 [3mtotal_records[0m[2m=[0m4656384 [3mmft_size_mb[0m[2m=[0m"4547.25"
-                                    [2m2026-01-28T20:45:13.2492934Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::io[0m[2m:[0m [2mcrates/uffs-mft/src/io.rs[0m[2m:[0m[2m1494:[0m 📊 Read plan generated [3mchunks[0m[2m=[0m28 [3mrecords_to_read[0m[2m=[0m4656384 [3mrecords_skipped[0m[2m=[0m0 [3mskip_percentage[0m[2m=[0m"0.0%"
-                                    [2m2026-01-28T20:45:13.2493149Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::reader[0m[2m:[0m [2mcrates/uffs-mft/src/reader.rs[0m[2m:[0m[2m3088:[0m Streaming save: 28 chunks, 8 MB each, drive type: Nvme
-                                    [2m2026-01-28T20:45:22.4194112Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::reader[0m[2m:[0m [2mcrates/uffs-mft/src/reader.rs[0m[2m:[0m[2m3200:[0m Streaming save complete: 4656384 records, 4768137216 bytes
+                                    [2m2026-01-28T21:10:18.8232408Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft[0m[2m:[0m [2mcrates/uffs-mft/src/main.rs[0m[2m:[0m[2m2514:[0m Reading raw MFT from drive [3mdrive[0m[2m=[0mF
+                                    [2m2026-01-28T21:10:18.8249969Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::io[0m[2m:[0m [2mcrates/uffs-mft/src/io.rs[0m[2m:[0m[2m146:[0m ⚠️  MFT is fragmented [3mextents[0m[2m=[0m28 [3msparse_extents[0m[2m=[0m0 [3mtotal_clusters[0m[2m=[0m72756 [3mtotal_records[0m[2m=[0m4656384 [3mmft_size_mb[0m[2m=[0m"4547.25"
+                                    [2m2026-01-28T21:10:18.8251629Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::io[0m[2m:[0m [2mcrates/uffs-mft/src/io.rs[0m[2m:[0m[2m1494:[0m 📊 Read plan generated [3mchunks[0m[2m=[0m28 [3mrecords_to_read[0m[2m=[0m4656384 [3mrecords_skipped[0m[2m=[0m0 [3mskip_percentage[0m[2m=[0m"0.0%"
+                                    [2m2026-01-28T21:10:18.8251858Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::reader[0m[2m:[0m [2mcrates/uffs-mft/src/reader.rs[0m[2m:[0m[2m3224:[0m Streaming save: 28 chunks, 8 MB each, drive type: Nvme
+                                    [2m2026-01-28T21:10:28.6236641Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::reader[0m[2m:[0m [2mcrates/uffs-mft/src/reader.rs[0m[2m:[0m[2m3336:[0m Streaming save complete: 4656384 records, 4768137216 bytes
                                     ═══════════════════════════════════════════════════════════════
                                                              MFT SAVED
                                                         Drive: F: (NVMe)
@@ -138,7 +139,7 @@ Here is teh trial_run.md output """ # UFFS Trial Run Report
                                       Compression ratio:    9.4%
                                       Space saved:          90.6%
 
-                                    ⏱️  Completed in   9 s  172 ms
+                                    ⏱️  Completed in   9 s  800 ms
                                     ```
 
                                     ## uffs_mft save (no compress)
@@ -149,21 +150,21 @@ Here is teh trial_run.md output """ # UFFS Trial Run Report
                                     "C:\Users\rnio\bin\uffs_mft.exe" save --drive F --output F_mft_no_compress.bin --no-compress
                                     ```
 
-                                    **Started:** 2026-01-28T12:45:22.5235163-08:00
+                                    **Started:** 2026-01-28T13:10:28.6387597-08:00
 
-                                    **Ended:** 2026-01-28T12:45:27.2270224-08:00
-                                    **Duration:** 00:00:04.7035061 (4704 ms)
+                                    **Ended:** 2026-01-28T13:10:33.9150282-08:00
+                                    **Duration:** 00:00:05.2762685 (5276 ms)
                                     **Exit code:** 0
                                     **Status:** OK
 
                                     **Console output:**
 
                                     ```text
-                                    [2m2026-01-28T20:45:22.6456689Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft[0m[2m:[0m [2mcrates/uffs-mft/src/main.rs[0m[2m:[0m[2m2514:[0m Reading raw MFT from drive [3mdrive[0m[2m=[0mF
-                                    [2m2026-01-28T20:45:22.6475015Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::io[0m[2m:[0m [2mcrates/uffs-mft/src/io.rs[0m[2m:[0m[2m146:[0m ⚠️  MFT is fragmented [3mextents[0m[2m=[0m28 [3msparse_extents[0m[2m=[0m0 [3mtotal_clusters[0m[2m=[0m72756 [3mtotal_records[0m[2m=[0m4656384 [3mmft_size_mb[0m[2m=[0m"4547.25"
-                                    [2m2026-01-28T20:45:22.647638Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::io[0m[2m:[0m [2mcrates/uffs-mft/src/io.rs[0m[2m:[0m[2m1494:[0m 📊 Read plan generated [3mchunks[0m[2m=[0m28 [3mrecords_to_read[0m[2m=[0m4656384 [3mrecords_skipped[0m[2m=[0m0 [3mskip_percentage[0m[2m=[0m"0.0%"
-                                    [2m2026-01-28T20:45:22.6476597Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::reader[0m[2m:[0m [2mcrates/uffs-mft/src/reader.rs[0m[2m:[0m[2m3088:[0m Streaming save: 28 chunks, 8 MB each, drive type: Nvme
-                                    [2m2026-01-28T20:45:27.2148571Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::reader[0m[2m:[0m [2mcrates/uffs-mft/src/reader.rs[0m[2m:[0m[2m3200:[0m Streaming save complete: 4656384 records, 4768137216 bytes
+                                    [2m2026-01-28T21:10:28.767684Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft[0m[2m:[0m [2mcrates/uffs-mft/src/main.rs[0m[2m:[0m[2m2514:[0m Reading raw MFT from drive [3mdrive[0m[2m=[0mF
+                                    [2m2026-01-28T21:10:28.7692684Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::io[0m[2m:[0m [2mcrates/uffs-mft/src/io.rs[0m[2m:[0m[2m146:[0m ⚠️  MFT is fragmented [3mextents[0m[2m=[0m28 [3msparse_extents[0m[2m=[0m0 [3mtotal_clusters[0m[2m=[0m72756 [3mtotal_records[0m[2m=[0m4656384 [3mmft_size_mb[0m[2m=[0m"4547.25"
+                                    [2m2026-01-28T21:10:28.7693641Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::io[0m[2m:[0m [2mcrates/uffs-mft/src/io.rs[0m[2m:[0m[2m1494:[0m 📊 Read plan generated [3mchunks[0m[2m=[0m28 [3mrecords_to_read[0m[2m=[0m4656384 [3mrecords_skipped[0m[2m=[0m0 [3mskip_percentage[0m[2m=[0m"0.0%"
+                                    [2m2026-01-28T21:10:28.7693831Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::reader[0m[2m:[0m [2mcrates/uffs-mft/src/reader.rs[0m[2m:[0m[2m3224:[0m Streaming save: 28 chunks, 8 MB each, drive type: Nvme
+                                    [2m2026-01-28T21:10:33.9024937Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::reader[0m[2m:[0m [2mcrates/uffs-mft/src/reader.rs[0m[2m:[0m[2m3336:[0m Streaming save complete: 4656384 records, 4768137216 bytes
                                     ═══════════════════════════════════════════════════════════════
                                                              MFT SAVED
                                                         Drive: F: (NVMe)
@@ -182,7 +183,7 @@ Here is teh trial_run.md output """ # UFFS Trial Run Report
                                       Compression:          none
                                       Volume letter:        F:
 
-                                    ⏱️  Completed in   4 s  569 ms
+                                    ⏱️  Completed in   5 s  134 ms
                                     ```
 
                                     ## uffs_mft save (raw)
@@ -193,21 +194,21 @@ Here is teh trial_run.md output """ # UFFS Trial Run Report
                                     "C:\Users\rnio\bin\uffs_mft.exe" save --drive F -o F_mft.raw --raw
                                     ```
 
-                                    **Started:** 2026-01-28T12:45:27.2293475-08:00
+                                    **Started:** 2026-01-28T13:10:33.9179057-08:00
 
-                                    **Ended:** 2026-01-28T12:45:32.0395405-08:00
-                                    **Duration:** 00:00:04.8101930 (4810 ms)
+                                    **Ended:** 2026-01-28T13:10:39.4483145-08:00
+                                    **Duration:** 00:00:05.5304088 (5530 ms)
                                     **Exit code:** 0
                                     **Status:** OK
 
                                     **Console output:**
 
                                     ```text
-                                    [2m2026-01-28T20:45:27.3417646Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft[0m[2m:[0m [2mcrates/uffs-mft/src/main.rs[0m[2m:[0m[2m2514:[0m Reading raw MFT from drive [3mdrive[0m[2m=[0mF
-                                    [2m2026-01-28T20:45:27.3433257Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::io[0m[2m:[0m [2mcrates/uffs-mft/src/io.rs[0m[2m:[0m[2m146:[0m ⚠️  MFT is fragmented [3mextents[0m[2m=[0m28 [3msparse_extents[0m[2m=[0m0 [3mtotal_clusters[0m[2m=[0m72756 [3mtotal_records[0m[2m=[0m4656384 [3mmft_size_mb[0m[2m=[0m"4547.25"
-                                    [2m2026-01-28T20:45:27.3434184Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::io[0m[2m:[0m [2mcrates/uffs-mft/src/io.rs[0m[2m:[0m[2m1494:[0m 📊 Read plan generated [3mchunks[0m[2m=[0m28 [3mrecords_to_read[0m[2m=[0m4656384 [3mrecords_skipped[0m[2m=[0m0 [3mskip_percentage[0m[2m=[0m"0.0%"
-                                    [2m2026-01-28T20:45:27.3434392Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::reader[0m[2m:[0m [2mcrates/uffs-mft/src/reader.rs[0m[2m:[0m[2m3088:[0m Streaming save: 28 chunks, 8 MB each, drive type: Nvme
-                                    [2m2026-01-28T20:45:32.0258659Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::reader[0m[2m:[0m [2mcrates/uffs-mft/src/reader.rs[0m[2m:[0m[2m3200:[0m Streaming save complete: 4656384 records, 4768137216 bytes
+                                    [2m2026-01-28T21:10:34.0430641Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft[0m[2m:[0m [2mcrates/uffs-mft/src/main.rs[0m[2m:[0m[2m2514:[0m Reading raw MFT from drive [3mdrive[0m[2m=[0mF
+                                    [2m2026-01-28T21:10:34.0447957Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::io[0m[2m:[0m [2mcrates/uffs-mft/src/io.rs[0m[2m:[0m[2m146:[0m ⚠️  MFT is fragmented [3mextents[0m[2m=[0m28 [3msparse_extents[0m[2m=[0m0 [3mtotal_clusters[0m[2m=[0m72756 [3mtotal_records[0m[2m=[0m4656384 [3mmft_size_mb[0m[2m=[0m"4547.25"
+                                    [2m2026-01-28T21:10:34.0449428Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::io[0m[2m:[0m [2mcrates/uffs-mft/src/io.rs[0m[2m:[0m[2m1494:[0m 📊 Read plan generated [3mchunks[0m[2m=[0m28 [3mrecords_to_read[0m[2m=[0m4656384 [3mrecords_skipped[0m[2m=[0m0 [3mskip_percentage[0m[2m=[0m"0.0%"
+                                    [2m2026-01-28T21:10:34.0449684Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::reader[0m[2m:[0m [2mcrates/uffs-mft/src/reader.rs[0m[2m:[0m[2m3224:[0m Streaming save: 28 chunks, 8 MB each, drive type: Nvme
+                                    [2m2026-01-28T21:10:39.4351059Z[0m [32m INFO[0m ThreadId(01) [2muffs_mft::reader[0m[2m:[0m [2mcrates/uffs-mft/src/reader.rs[0m[2m:[0m[2m3336:[0m Streaming save complete: 4656384 records, 4768137216 bytes
                                     ═══════════════════════════════════════════════════════════════
                                                              MFT SAVED
                                                         Drive: F: (NVMe)
@@ -225,7 +226,7 @@ Here is teh trial_run.md output """ # UFFS Trial Run Report
                                       Original size:          4.44 GB
                                       Format:               raw (compatible with other MFT tools)
 
-                                    ⏱️  Completed in   4 s  684 ms
+                                    ⏱️  Completed in   5 s  392 ms
                                     ```
 
                                     ### Generated MFT Files
@@ -248,10 +249,10 @@ Here is teh trial_run.md output """ # UFFS Trial Run Report
                                     "C:\Users\rnio\bin\uffs.exe" "*" --drive F
                                     ```
 
-                                    **Started:** 2026-01-28T12:45:32.0483950-08:00
+                                    **Started:** 2026-01-28T13:10:39.5336690-08:00
 
-                                    **Ended:** 2026-01-28T12:45:39.4310435-08:00
-                                    **Duration:** 00:00:07.3826485 (7383 ms)
+                                    **Ended:** 2026-01-28T13:10:47.4415446-08:00
+                                    **Duration:** 00:00:07.9078756 (7908 ms)
                                     **Exit code:** -1073740791
                                     **Status:** OK
                                     **Output file:** rust_f.txt
@@ -263,7 +264,7 @@ Here is teh trial_run.md output """ # UFFS Trial Run Report
                                     ```text
                                     FRS 5: first_stream.size=0, total_size=0, stream_count=1
                                     System.Management.Automation.RemoteException
-                                    thread 'main' (25456) panicked at /Users/rnio/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/multi_thread/mod.rs:88:9:
+                                    thread 'main' (30656) panicked at /Users/rnio/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/multi_thread/mod.rs:88:9:
                                     Cannot start a runtime from within a runtime. This happens because a function (like `block_on`) attempted to block the current thread while the thread is being used to drive asynchronous tasks.
                                     stack backtrace:
                                     note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
@@ -277,10 +278,10 @@ Here is teh trial_run.md output """ # UFFS Trial Run Report
                                     "C:\Users\rnio\bin\uffs.com" "*" --drives=F
                                     ```
 
-                                    **Started:** 2026-01-28T12:45:39.4339593-08:00
+                                    **Started:** 2026-01-28T13:10:47.4445960-08:00
 
-                                    **Ended:** 2026-01-28T12:46:19.5207680-08:00
-                                    **Duration:** 00:00:40.0868087 (40087 ms)
+                                    **Ended:** 2026-01-28T13:11:25.7864035-08:00
+                                    **Duration:** 00:00:38.3418075 (38342 ms)
                                     **Exit code:** 0
                                     **Status:** OK
                                     **Output file:** cpp_f.txt
@@ -345,11 +346,14 @@ Here is teh trial_run.md output """ # UFFS Trial Run Report
 
                                     ### Comparison: Drive F
 
+                                    **⚠️ Rust scan FAILED (exit code: -1073740791)**
+
                                     | Metric | Rust | C++ | Match |
                                     |--------|------|-----|-------|
+                                    | Exit Code | -1073740791 | 0 | ❌ |
                                     | Lines | 6 | 2369735 | ⚠️ |
-                                    | Root Treesize |  |  | ✅ |
-                                    | Root Descendants | 0 | 0 | ✅ |
+                                    | Root Treesize |  |  | ❌ |
+                                    | Root Descendants | 0 | 0 | ❌ |
 
                                     ---
 
@@ -359,22 +363,34 @@ Here is teh trial_run.md output """ # UFFS Trial Run Report
 
                                     | Test | Duration | Status |
                                     |------|----------|--------|
-                                    | uffs_mft save (compressed) | 9309 ms | ✅ |
-                                    | uffs_mft save (no compress) | 4704 ms | ✅ |
-                                    | uffs_mft save (raw) | 4810 ms | ✅ |
-                                    | Rust: uffs scan drive F | 7383 ms | ❌ |
-                                    | C++: uffs.com scan drive F | 40087 ms | ✅ |
+                                    | uffs_mft save (compressed) | 10654 ms | ✅ |
+                                    | uffs_mft save (no compress) | 5276 ms | ✅ |
+                                    | uffs_mft save (raw) | 5530 ms | ✅ |
+                                    | Rust: uffs scan drive F | 7908 ms | ❌ |
+                                    | C++: uffs.com scan drive F | 38342 ms | ✅ |
 
                                     ## Parity Results
 
-                                    | Drive | Treesize Match | Descendants Match | Overall |
-                                    |-------|----------------|-------------------|---------|
-                                    | F | ✅  vs  | ✅ 0 vs 0 | ✅ PARITY |
+                                    | Drive | Rust Status | Treesize Match | Descendants Match | Overall |
+                                    |-------|-------------|----------------|-------------------|---------|
+                                    | F | ❌ FAILED | ❌  vs  | ❌ 0 vs 0 | ❌ RUST FAILED |
+
+                                    > **❌ Rust scan failed on 1 drive(s) - fix required!**
+
+                                    ---
+                                    **Completed:** 2026-01-28T13:12:40.0988693-08:00
 
 
 """
 _______________________________________
 
-so we fixed the uffs scan issue ... hopefully that works
+The script seems to work ... but we still have the scanning issue:
 
-but this ps1 script seems to have issues too ... adn we shoud fix that
+"""FRS 5: first_stream.size=0, total_size=0, stream_count=1
+   System.Management.Automation.RemoteException
+   thread 'main' (30656) panicked at /Users/rnio/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.49.0/src/runtime/scheduler/multi_thread/mod.rs:88:9:
+   Cannot start a runtime from within a runtime. This happens because a function (like `block_on`) attempted to block the current thread while the thread is being used to drive asynchronous tasks.
+   stack backtrace:
+   note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+"""

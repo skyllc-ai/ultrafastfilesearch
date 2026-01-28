@@ -73,7 +73,9 @@ function Compare-Outputs {
     param(
         [string]$RustFile,
         [string]$CppFile,
-        [string]$Drive
+        [string]$Drive,
+        [int]$RustExitCode = 0,
+        [int]$CppExitCode = 0
     )
 
     $result = @{
@@ -91,6 +93,10 @@ function Compare-Outputs {
         Match = $false
         TreesizeMatch = $false
         DescendantsMatch = $false
+        RustExitCode = $RustExitCode
+        CppExitCode = $CppExitCode
+        RustFailed = ($RustExitCode -ne 0)
+        CppFailed = ($CppExitCode -ne 0)
     }
 
     if ($result.RustExists) {
@@ -111,9 +117,21 @@ function Compare-Outputs {
         }
     }
 
-    $result.TreesizeMatch = ($result.RustTreesize -eq $result.CppTreesize)
-    $result.DescendantsMatch = ($result.RustDescendants -eq $result.CppDescendants)
-    $result.Match = $result.TreesizeMatch -and $result.DescendantsMatch
+    # Only consider it a match if both succeeded and have valid data
+    if ($result.RustFailed -or $result.CppFailed) {
+        $result.TreesizeMatch = $false
+        $result.DescendantsMatch = $false
+        $result.Match = $false
+    } elseif ([string]::IsNullOrEmpty($result.RustTreesize) -or [string]::IsNullOrEmpty($result.CppTreesize)) {
+        # If either has no treesize data, it's not a valid comparison
+        $result.TreesizeMatch = $false
+        $result.DescendantsMatch = $false
+        $result.Match = $false
+    } else {
+        $result.TreesizeMatch = ($result.RustTreesize -eq $result.CppTreesize)
+        $result.DescendantsMatch = ($result.RustDescendants -eq $result.CppDescendants)
+        $result.Match = $result.TreesizeMatch -and $result.DescendantsMatch
+    }
 
     return $result
 }
@@ -362,6 +380,8 @@ try {
 
         $rustFile = "rust_$($drive.ToLower()).txt"
         $cppFile = "cpp_$($drive.ToLower()).txt"
+        $rustExitCode = -1
+        $cppExitCode = -1
 
         # Rust scan
         if ($hasRust) {
@@ -369,6 +389,7 @@ try {
                 -CommandLine ("`"$UffsExe`" `"*`" --drive $drive") `
                 -OutFilePath $rustFile `
                 -RecordTiming
+            $rustExitCode = $rustResult.ExitCode
         }
 
         # C++ scan
@@ -377,19 +398,34 @@ try {
                 -CommandLine ("`"$UffsCom`" `"*`" --drives=$drive") `
                 -OutFilePath $cppFile `
                 -RecordTiming
+            $cppExitCode = $cppResult.ExitCode
         }
 
         # Compare outputs
         if ($hasRust -and $hasCpp -and -not $SkipComparison) {
             $rustPath = Join-Path $WorkDir $rustFile
             $cppPath = Join-Path $WorkDir $cppFile
-            $comparison = Compare-Outputs -RustFile $rustPath -CppFile $cppPath -Drive $drive
+            $comparison = Compare-Outputs -RustFile $rustPath -CppFile $cppPath -Drive $drive `
+                -RustExitCode $rustExitCode -CppExitCode $cppExitCode
             $script:ComparisonResults += $comparison
 
             LogLine "### Comparison: Drive $drive"
             LogLine ""
+
+            # Show failure status if either failed
+            if ($comparison.RustFailed) {
+                LogLine "**⚠️ Rust scan FAILED (exit code: $rustExitCode)**"
+                LogLine ""
+            }
+            if ($comparison.CppFailed) {
+                LogLine "**⚠️ C++ scan FAILED (exit code: $cppExitCode)**"
+                LogLine ""
+            }
+
             LogLine "| Metric | Rust | C++ | Match |"
             LogLine "|--------|------|-----|-------|"
+            LogLine ("| Exit Code | $rustExitCode | $cppExitCode | " +
+                $(if ($rustExitCode -eq 0 -and $cppExitCode -eq 0) { "✅" } else { "❌" }) + " |")
             LogLine ("| Lines | $($comparison.RustLines) | $($comparison.CppLines) | " +
                 $(if ($comparison.RustLines -eq $comparison.CppLines) { "✅" } else { "⚠️" }) + " |")
             LogLine ("| Root Treesize | $($comparison.RustTreesize) | $($comparison.CppTreesize) | " +
@@ -398,7 +434,9 @@ try {
                 $(if ($comparison.DescendantsMatch) { "✅" } else { "❌" }) + " |")
             LogLine ""
 
-            if ($comparison.Match) {
+            if ($comparison.RustFailed) {
+                Write-Host "  ❌ RUST FAILED for drive $drive (exit: $rustExitCode)" -ForegroundColor Red
+            } elseif ($comparison.Match) {
                 Write-Host "  ✅ PARITY ACHIEVED for drive $drive" -ForegroundColor Green
             } else {
                 Write-Host "  ⚠️ Differences detected for drive $drive" -ForegroundColor Yellow
@@ -413,7 +451,7 @@ try {
     LogLine ""
 
     # Timing summary
-    if ($script:TimingResults.Count -gt 0) {
+    if (@($script:TimingResults).Count -gt 0) {
         LogLine "## Timing Results"
         LogLine ""
         LogLine "| Test | Duration | Status |"
@@ -426,21 +464,29 @@ try {
     }
 
     # Comparison summary
-    if ($script:ComparisonResults.Count -gt 0) {
+    if (@($script:ComparisonResults).Count -gt 0) {
         LogLine "## Parity Results"
         LogLine ""
-        LogLine "| Drive | Treesize Match | Descendants Match | Overall |"
-        LogLine "|-------|----------------|-------------------|---------|"
+        LogLine "| Drive | Rust Status | Treesize Match | Descendants Match | Overall |"
+        LogLine "|-------|-------------|----------------|-------------------|---------|"
         foreach ($c in $script:ComparisonResults) {
+            $rustStatus = if ($c.RustFailed) { "❌ FAILED" } else { "✅ OK" }
             $tsIcon = if ($c.TreesizeMatch) { "✅" } else { "❌" }
             $descIcon = if ($c.DescendantsMatch) { "✅" } else { "❌" }
-            $overallIcon = if ($c.Match) { "✅ PARITY" } else { "⚠️ DIFF" }
-            LogLine "| $($c.Drive) | $tsIcon $($c.RustTreesize) vs $($c.CppTreesize) | $descIcon $($c.RustDescendants) vs $($c.CppDescendants) | $overallIcon |"
+            $overallIcon = if ($c.RustFailed) { "❌ RUST FAILED" } elseif ($c.Match) { "✅ PARITY" } else { "⚠️ DIFF" }
+            LogLine "| $($c.Drive) | $rustStatus | $tsIcon $($c.RustTreesize) vs $($c.CppTreesize) | $descIcon $($c.RustDescendants) vs $($c.CppDescendants) | $overallIcon |"
         }
         LogLine ""
 
-        $allMatch = ($script:ComparisonResults | Where-Object { -not $_.Match }).Count -eq 0
-        if ($allMatch) {
+        # Use @() to force array and Measure-Object for reliable counting
+        $failedCount = @($script:ComparisonResults | Where-Object { -not $_.Match }).Count
+        $rustFailedCount = @($script:ComparisonResults | Where-Object { $_.RustFailed }).Count
+
+        if ($rustFailedCount -gt 0) {
+            LogLine "> **❌ Rust scan failed on $rustFailedCount drive(s) - fix required!**"
+            Write-Host ""
+            Write-Host "❌ Rust scan failed on $rustFailedCount drive(s) - review trial_run.md for details." -ForegroundColor Red
+        } elseif ($failedCount -eq 0) {
             LogLine "> **🎉 100% PARITY ACHIEVED across all tested drives!**"
             Write-Host ""
             Write-Host "🎉 100% PARITY ACHIEVED across all tested drives!" -ForegroundColor Green
