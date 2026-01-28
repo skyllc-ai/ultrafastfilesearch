@@ -4337,6 +4337,12 @@ impl MftIndex {
             Vec::with_capacity(n),
             Vec::with_capacity(n),
         );
+        // Tree metrics columns
+        let (mut descendants, mut treesize, mut tree_allocated): (Vec<u32>, Vec<u64>, Vec<u64>) = (
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+        );
         // File type (extension) column - first-class citizen like name, size, etc.
         let mut file_type: Vec<String> = Vec::with_capacity(n);
         let (mut reparse_tag, mut is_resident): (Vec<u32>, Vec<bool>) =
@@ -4403,6 +4409,10 @@ impl MftIndex {
                 is_extension.push(rec.is_extension());
                 base_frs_col.push(rec.base_frs);
             }
+            // Tree metrics (pre-computed via compute_tree_metrics())
+            descendants.push(rec.descendants);
+            treesize.push(rec.treesize);
+            tree_allocated.push(rec.tree_allocated);
             path.push(self.build_path(rec.frs));
         }
         // Build DataFrame
@@ -4471,6 +4481,10 @@ impl MftIndex {
         cols.push(Series::new("flags".into(), flags).into_column());
         cols.push(Series::new("link_count".into(), lnk).into_column());
         cols.push(Series::new("stream_count".into(), str).into_column());
+        // Tree metrics (pre-computed via compute_tree_metrics())
+        cols.push(Series::new("descendants".into(), descendants).into_column());
+        cols.push(Series::new("treesize".into(), treesize).into_column());
+        cols.push(Series::new("tree_allocated".into(), tree_allocated).into_column());
         cols.push(Series::new("path".into(), path).into_column());
 
         uffs_polars::DataFrame::new_infer_height(cols).map_err(crate::MftError::from)
@@ -4552,111 +4566,188 @@ impl MftIndex {
             // mutably)
             let extension_id = index.intern_extension(&parsed.name);
 
-            // Get or create the record
-            let record = index.get_or_create(parsed.frs);
+            // Get or create the record and set all basic fields in a block scope
+            // to end the mutable borrow before adding additional names/streams
+            {
+                let record = index.get_or_create(parsed.frs);
 
-            // Set sequence number, LSN, and namespace (raw MFT fields)
-            record.sequence_number = parsed.sequence_number;
-            record.lsn = parsed.lsn;
-            record.namespace = parsed.namespace;
+                // Set sequence number, LSN, and namespace (raw MFT fields)
+                record.sequence_number = parsed.sequence_number;
+                record.lsn = parsed.lsn;
+                record.namespace = parsed.namespace;
 
-            // Set $FILE_NAME timestamps (often differ from $STANDARD_INFORMATION)
-            record.fn_created = parsed.fn_created;
-            record.fn_modified = parsed.fn_modified;
-            record.fn_accessed = parsed.fn_accessed;
-            record.fn_mft_changed = parsed.fn_mft_changed;
+                // Set $FILE_NAME timestamps (often differ from $STANDARD_INFORMATION)
+                record.fn_created = parsed.fn_created;
+                record.fn_modified = parsed.fn_modified;
+                record.fn_accessed = parsed.fn_accessed;
+                record.fn_mft_changed = parsed.fn_mft_changed;
 
-            // Set $STANDARD_INFORMATION timestamps and flags
-            record.stdinfo.created = parsed.std_info.created;
-            record.stdinfo.modified = parsed.std_info.modified;
-            record.stdinfo.accessed = parsed.std_info.accessed;
-            record.stdinfo.mft_changed = parsed.std_info.mft_changed;
-            record.stdinfo.usn = parsed.std_info.usn;
-            record.stdinfo.security_id = parsed.std_info.security_id;
-            record.stdinfo.owner_id = parsed.std_info.owner_id;
-            record.stdinfo.set_directory(parsed.is_directory);
+                // Set $STANDARD_INFORMATION timestamps and flags
+                record.stdinfo.created = parsed.std_info.created;
+                record.stdinfo.modified = parsed.std_info.modified;
+                record.stdinfo.accessed = parsed.std_info.accessed;
+                record.stdinfo.mft_changed = parsed.std_info.mft_changed;
+                record.stdinfo.usn = parsed.std_info.usn;
+                record.stdinfo.security_id = parsed.std_info.security_id;
+                record.stdinfo.owner_id = parsed.std_info.owner_id;
+                record.stdinfo.set_directory(parsed.is_directory);
 
-            // Set attribute flags from ExtendedStandardInfo
-            if parsed.std_info.is_readonly {
-                record.stdinfo.flags |= StandardInfo::IS_READONLY;
-            }
-            if parsed.std_info.is_archive {
-                record.stdinfo.flags |= StandardInfo::IS_ARCHIVE;
-            }
-            if parsed.std_info.is_system {
-                record.stdinfo.flags |= StandardInfo::IS_SYSTEM;
-            }
-            if parsed.std_info.is_hidden {
-                record.stdinfo.flags |= StandardInfo::IS_HIDDEN;
-            }
-            if parsed.std_info.is_offline {
-                record.stdinfo.flags |= StandardInfo::IS_OFFLINE;
-            }
-            if parsed.std_info.is_not_content_indexed {
-                record.stdinfo.flags |= StandardInfo::IS_NOT_INDEXED;
-            }
-            if parsed.std_info.is_compressed {
-                record.stdinfo.flags |= StandardInfo::IS_COMPRESSED;
-            }
-            if parsed.std_info.is_encrypted {
-                record.stdinfo.flags |= StandardInfo::IS_ENCRYPTED;
-            }
-            if parsed.std_info.is_sparse {
-                record.stdinfo.flags |= StandardInfo::IS_SPARSE;
-            }
-            if parsed.std_info.is_reparse {
-                record.stdinfo.flags |= StandardInfo::IS_REPARSE;
-            }
-            if parsed.std_info.is_temporary {
-                record.stdinfo.flags |= StandardInfo::IS_TEMPORARY;
-            }
-            if parsed.std_info.is_integrity_stream {
-                record.stdinfo.flags |= StandardInfo::IS_INTEGRITY_STREAM;
-            }
-            if parsed.std_info.is_no_scrub_data {
-                record.stdinfo.flags |= StandardInfo::IS_NO_SCRUB_DATA;
-            }
-            if parsed.std_info.is_pinned {
-                record.stdinfo.flags |= StandardInfo::IS_PINNED;
-            }
-            if parsed.std_info.is_unpinned {
-                record.stdinfo.flags |= StandardInfo::IS_UNPINNED;
-            }
-            if parsed.std_info.is_virtual {
-                record.stdinfo.flags |= StandardInfo::IS_VIRTUAL;
-            }
-
-            // Set name info (offset and extension_id were computed before borrowing record)
-            record.first_name.name =
-                IndexNameRef::new(name_offset, name_len, is_ascii, extension_id);
-            record.first_name.parent_frs = parsed.parent_frs;
-            record.name_count = parsed.names.len() as u16;
-
-            // Set reparse tag (0 if not a reparse point)
-            record.reparse_tag = parsed.reparse_tag;
-
-            // Set P3 forensic fields (is_deleted, is_corrupt, is_extension, base_frs)
-            record.set_forensic_flags(parsed.is_deleted, parsed.is_corrupt, parsed.is_extension);
-            record.base_frs = parsed.base_frs;
-
-            // Set size and flags from first (default) stream
-            if let Some(default_stream) = parsed.streams.iter().find(|st| st.name.is_empty()) {
-                record.first_stream.size.length = default_stream.size;
-                record.first_stream.size.allocated = default_stream.allocated_size;
-                record.stream_count = parsed.streams.len() as u16;
-                // Set is_resident flag (bit 1)
-                if default_stream.is_resident {
-                    record.first_stream.flags |= 0x02;
+                // Set attribute flags from ExtendedStandardInfo
+                if parsed.std_info.is_readonly {
+                    record.stdinfo.flags |= StandardInfo::IS_READONLY;
                 }
-                // Set is_sparse flag (bit 0)
-                if default_stream.is_sparse {
-                    record.first_stream.flags |= 0x01;
+                if parsed.std_info.is_archive {
+                    record.stdinfo.flags |= StandardInfo::IS_ARCHIVE;
                 }
-            } else if !parsed.streams.is_empty() {
-                // No default stream, use first available
-                record.first_stream.size.length = parsed.size;
-                record.first_stream.size.allocated = parsed.allocated_size;
-                record.stream_count = parsed.streams.len() as u16;
+                if parsed.std_info.is_system {
+                    record.stdinfo.flags |= StandardInfo::IS_SYSTEM;
+                }
+                if parsed.std_info.is_hidden {
+                    record.stdinfo.flags |= StandardInfo::IS_HIDDEN;
+                }
+                if parsed.std_info.is_offline {
+                    record.stdinfo.flags |= StandardInfo::IS_OFFLINE;
+                }
+                if parsed.std_info.is_not_content_indexed {
+                    record.stdinfo.flags |= StandardInfo::IS_NOT_INDEXED;
+                }
+                if parsed.std_info.is_compressed {
+                    record.stdinfo.flags |= StandardInfo::IS_COMPRESSED;
+                }
+                if parsed.std_info.is_encrypted {
+                    record.stdinfo.flags |= StandardInfo::IS_ENCRYPTED;
+                }
+                if parsed.std_info.is_sparse {
+                    record.stdinfo.flags |= StandardInfo::IS_SPARSE;
+                }
+                if parsed.std_info.is_reparse {
+                    record.stdinfo.flags |= StandardInfo::IS_REPARSE;
+                }
+                if parsed.std_info.is_temporary {
+                    record.stdinfo.flags |= StandardInfo::IS_TEMPORARY;
+                }
+                if parsed.std_info.is_integrity_stream {
+                    record.stdinfo.flags |= StandardInfo::IS_INTEGRITY_STREAM;
+                }
+                if parsed.std_info.is_no_scrub_data {
+                    record.stdinfo.flags |= StandardInfo::IS_NO_SCRUB_DATA;
+                }
+                if parsed.std_info.is_pinned {
+                    record.stdinfo.flags |= StandardInfo::IS_PINNED;
+                }
+                if parsed.std_info.is_unpinned {
+                    record.stdinfo.flags |= StandardInfo::IS_UNPINNED;
+                }
+                if parsed.std_info.is_virtual {
+                    record.stdinfo.flags |= StandardInfo::IS_VIRTUAL;
+                }
+
+                // Set name info (offset and extension_id were computed before borrowing record)
+                record.first_name.name =
+                    IndexNameRef::new(name_offset, name_len, is_ascii, extension_id);
+                record.first_name.parent_frs = parsed.parent_frs;
+                record.name_count = parsed.names.len().max(1) as u16;
+
+                // Set reparse tag (0 if not a reparse point)
+                record.reparse_tag = parsed.reparse_tag;
+
+                // Set P3 forensic fields (is_deleted, is_corrupt, is_extension, base_frs)
+                record.set_forensic_flags(
+                    parsed.is_deleted,
+                    parsed.is_corrupt,
+                    parsed.is_extension,
+                );
+                record.base_frs = parsed.base_frs;
+
+                // Set size and flags from first (default) stream
+                if let Some(default_stream) = parsed.streams.iter().find(|st| st.name.is_empty()) {
+                    record.first_stream.size.length = default_stream.size;
+                    record.first_stream.size.allocated = default_stream.allocated_size;
+                    record.stream_count = parsed.streams.len().max(1) as u16;
+                    // Set is_resident flag (bit 1)
+                    if default_stream.is_resident {
+                        record.first_stream.flags |= 0x02;
+                    }
+                    // Set is_sparse flag (bit 0)
+                    if default_stream.is_sparse {
+                        record.first_stream.flags |= 0x01;
+                    }
+                } else if !parsed.streams.is_empty() {
+                    // No default stream, use first available
+                    record.first_stream.size.length = parsed.size;
+                    record.first_stream.size.allocated = parsed.allocated_size;
+                    record.stream_count = parsed.streams.len().max(1) as u16;
+                }
+            } // End record borrow here
+
+            // Store additional names (hardlinks) in the links vector
+            // Skip the first name (already stored in first_name)
+            if parsed.names.len() > 1 {
+                let mut prev_link_idx = NO_ENTRY;
+                for extra_name in parsed.names.iter().skip(1).rev() {
+                    // Add name to names buffer
+                    let extra_offset = index.add_name(&extra_name.name);
+                    let extra_len = extra_name.name.len() as u16;
+                    let extra_ascii = extra_name.name.is_ascii();
+                    let extra_ext_id = index.intern_extension(&extra_name.name);
+
+                    let link_idx = index.links.len() as u32;
+                    index.links.push(LinkInfo {
+                        next_entry: prev_link_idx,
+                        name: IndexNameRef::new(extra_offset, extra_len, extra_ascii, extra_ext_id),
+                        parent_frs: extra_name.parent_frs,
+                    });
+                    prev_link_idx = link_idx;
+                }
+                // Link first_name to the chain
+                let record = index.get_or_create(parsed.frs);
+                record.first_name.next_entry = prev_link_idx;
+            }
+
+            // Store additional streams (ADS) in the streams vector
+            // Skip the default (unnamed) stream which is stored in first_stream
+            let named_streams: Vec<_> = parsed
+                .streams
+                .iter()
+                .filter(|st| !st.name.is_empty())
+                .collect();
+            if !named_streams.is_empty() {
+                let mut prev_stream_idx = NO_ENTRY;
+                for extra_stream in named_streams.iter().rev() {
+                    // Add stream name to names buffer
+                    let stream_name_offset = index.add_name(&extra_stream.name);
+                    let stream_name_len = extra_stream.name.len() as u16;
+                    let stream_ascii = extra_stream.name.is_ascii();
+                    // Streams don't have extensions, use 0
+                    let stream_ext_id = 0;
+
+                    let stream_idx = index.streams.len() as u32;
+                    let mut flags = 0_u8;
+                    if extra_stream.is_sparse {
+                        flags |= 0x01;
+                    }
+                    if extra_stream.is_resident {
+                        flags |= 0x02;
+                    }
+                    index.streams.push(IndexStreamInfo {
+                        size: SizeInfo {
+                            length: extra_stream.size,
+                            allocated: extra_stream.allocated_size,
+                        },
+                        next_entry: prev_stream_idx,
+                        name: IndexNameRef::new(
+                            stream_name_offset,
+                            stream_name_len,
+                            stream_ascii,
+                            stream_ext_id,
+                        ),
+                        flags,
+                    });
+                    prev_stream_idx = stream_idx;
+                }
+                // Link first_stream to the chain
+                let record = index.get_or_create(parsed.frs);
+                record.first_stream.next_entry = prev_stream_idx;
             }
 
             // Build parent-child relationship

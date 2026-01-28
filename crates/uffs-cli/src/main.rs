@@ -189,8 +189,17 @@ struct Cli {
     drives: Option<Vec<char>>,
 
     /// Use pre-built index file instead of live MFT
-    #[arg(short, long, conflicts_with_all = ["drive", "drives"])]
+    #[arg(short, long, conflicts_with_all = ["drive", "drives", "mft_file"])]
     index: Option<PathBuf>,
+
+    /// Use raw MFT file instead of live MFT (cross-platform debugging)
+    ///
+    /// Load a previously saved raw MFT file (from `uffs save-raw` or `uffs_mft
+    /// save`). Use `--drive` to specify the volume letter for path
+    /// resolution (default: X). Example: `uffs "*" --mft-file G_mft.bin
+    /// --drive G`
+    #[arg(long, conflicts_with_all = ["index", "drives"])]
+    mft_file: Option<PathBuf>,
 
     /// Show only files (exclude directories)
     #[arg(long)]
@@ -466,6 +475,7 @@ async fn run() -> Result<()> {
                     cli.drive,
                     cli.drives,
                     cli.index,
+                    cli.mft_file,
                     cli.files_only,
                     cli.dirs_only,
                     cli.hide_system,

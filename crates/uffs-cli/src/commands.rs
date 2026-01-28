@@ -337,6 +337,7 @@ pub async fn search(
     single_drive: Option<char>,
     multi_drives: Option<Vec<char>>,
     index: Option<PathBuf>,
+    mft_file: Option<PathBuf>,
     files_only: bool,
     dirs_only: bool,
     hide_system: bool,
@@ -403,7 +404,11 @@ pub async fn search(
     // Index path is the default (fast, cached) - DataFrame path is fallback
     let use_index_path = should_use_index_path(mode, index.as_ref(), multi_drives.as_ref());
 
-    let mut results = if use_index_path {
+    // Handle raw MFT file input (cross-platform debugging)
+    let mut results = if let Some(mft_path) = mft_file.as_ref() {
+        info!(path = %mft_path.display(), "📂 Loading from raw MFT file");
+        load_and_filter_from_mft_file(mft_path, single_drive, &filters, needs_paths, profile)?
+    } else if use_index_path {
         info!("🚀 Using fast cached MftIndex query path");
         #[cfg(windows)]
         {
@@ -605,6 +610,56 @@ async fn search_streaming(
         info!(file = out, "Results written to file");
         Ok(())
     }
+}
+
+/// Load and filter search data from a raw MFT file (cross-platform debugging).
+///
+/// This function loads a previously saved raw MFT file and processes it
+/// exactly like a live MFT read, enabling debugging on any platform.
+/// Same pipeline as Windows live read - only the load source differs.
+#[allow(clippy::single_call_fn, clippy::print_stderr)]
+fn load_and_filter_from_mft_file(
+    mft_path: &Path,
+    drive_letter: Option<char>,
+    filters: &QueryFilters<'_>,
+    needs_paths: bool,
+    profile: bool,
+) -> Result<uffs_mft::DataFrame> {
+    use uffs_mft::{LoadRawOptions, MftReader};
+
+    let volume = drive_letter.unwrap_or('X');
+    info!(volume = %volume, path = %mft_path.display(), "Loading raw MFT file");
+
+    // Load raw MFT into MftIndex (same as live read, just from file)
+    let t_load = std::time::Instant::now();
+    let options = LoadRawOptions {
+        volume_letter: Some(volume),
+        ..Default::default()
+    };
+    let index = MftReader::load_raw_to_index_with_options(mft_path, &options)
+        .with_context(|| format!("Failed to load raw MFT: {}", mft_path.display()))?;
+    let load_ms = t_load.elapsed().as_millis();
+
+    // Execute query on index (same as Windows live path)
+    let t_query = std::time::Instant::now();
+    let results = execute_index_query(&index, filters, needs_paths)?;
+    let query_ms = t_query.elapsed().as_millis();
+
+    if profile {
+        let total_ms = load_ms + query_ms;
+        eprintln!("=== RAW MFT FILE TIMING ===");
+        eprintln!(
+            "  Load from file:  {load_ms:>6} ms  ({} records)",
+            index.len()
+        );
+        eprintln!(
+            "  Query/filter:    {query_ms:>6} ms  ({} matches)",
+            results.height()
+        );
+        eprintln!("  TOTAL:           {total_ms:>6} ms");
+    }
+
+    Ok(results)
 }
 
 /// Load and filter search data from index file, multiple drives, single drive,
@@ -1023,7 +1078,6 @@ fn execute_query(
 ///
 /// This is the fast path for simple queries. Returns results as a `DataFrame`
 /// for compatibility with the output pipeline.
-#[cfg(windows)]
 #[allow(clippy::single_call_fn)]
 fn execute_index_query(
     index: &uffs_mft::MftIndex,
@@ -1084,12 +1138,17 @@ fn execute_index_query(
 /// Convert `IndexQuery` results to a `DataFrame` for output compatibility.
 ///
 /// **TEMPORARY**: This function exists only for compatibility with the current
-/// output pipeline which expects a DataFrame. The proper solution is to output
-/// directly from SearchResults without DataFrame conversion.
+/// output pipeline which expects a `DataFrame`. The proper solution is to
+/// output directly from `SearchResults` without `DataFrame` conversion.
 ///
-/// TODO: Remove this function and output directly from SearchResults +
-/// MftIndex.
-#[cfg(windows)]
+/// TODO: Remove this function and output directly from `SearchResults` +
+/// `MftIndex`.
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    clippy::min_ident_chars,
+    clippy::option_if_let_else
+)]
 fn results_to_dataframe(
     index: &uffs_mft::MftIndex,
     results: &[uffs_core::SearchResult],
@@ -1166,7 +1225,7 @@ fn results_to_dataframe(
                         None
                     }
                 })
-                .map(|s| s.to_lowercase())
+                .map(str::to_lowercase)
                 .unwrap_or_default()
         };
         file_types.push(file_type);
