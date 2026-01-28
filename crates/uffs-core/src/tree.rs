@@ -594,16 +594,20 @@ pub fn add_tree_columns(df: &DataFrame, columns: &[TreeColumn]) -> Result<DataFr
 pub fn apply_directory_treesize(df: &DataFrame) -> Result<DataFrame> {
     use uffs_polars::{IntoLazy, col, when};
 
+    // C++ parity: Apply treesize to directories, but NOT to reparse points
+    // (junctions/symlinks) Junctions should keep their original size (the
+    // $REPARSE_POINT ValueLength, typically 48 bytes) Regular directories get
+    // their size replaced with treesize (sum of descendant sizes)
     df.clone()
         .lazy()
         .with_column(
-            when(col("is_directory"))
+            when(col("is_directory").and(col("is_reparse").not()))
                 .then(col("treesize"))
                 .otherwise(col("size"))
                 .alias("size"),
         )
         .with_column(
-            when(col("is_directory"))
+            when(col("is_directory").and(col("is_reparse").not()))
                 .then(col("tree_allocated"))
                 .otherwise(col("allocated_size"))
                 .alias("allocated_size"),

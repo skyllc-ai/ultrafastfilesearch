@@ -1862,22 +1862,36 @@ impl MftIndex {
             let parent_idx_usize = parent_idx_u32 as usize;
 
             // Read child's metrics
-            // C++ parity: descendants = 1 + sum(child.descendants)
-            let (child_descendants, child_treesize, child_tree_allocated) =
+            // C++ parity: descendants = 1 + sum(streams per child)
+            let (child_descendants, child_treesize, child_tree_allocated, child_stream_count) =
                 if let Some(child) = self.records.get(child_idx) {
-                    (child.descendants, child.treesize, child.tree_allocated)
+                    (
+                        child.descendants,
+                        child.treesize,
+                        child.tree_allocated,
+                        u32::from(child.stream_count).max(1), // At least 1 stream
+                    )
                 } else {
                     continue; // Safety: skip if index is invalid
                 };
 
             // Accumulate into parent
-            // C++ parity: parent.descendants = 1 + sum(max(1, child.descendants))
-            // - Files have descendants = 0, but contribute 1 to parent
+            // C++ parity: parent.descendants = 1 + sum(streams per child)
+            // - Files contribute stream_count to parent (1 per stream, including ADS)
             // - Directories contribute their full descendants count
             // This matches C++ behavior from ntfs_index.hpp lines 774-879
+            // C++ loops over ALL streams and adds +1 for each (line 879)
             if let Some(parent) = self.records.get_mut(parent_idx_usize) {
-                // max(1, child_descendants) ensures files contribute 1
-                parent.descendants += core::cmp::max(1, child_descendants);
+                // For files (descendants=0): contribute stream_count (1 per stream)
+                // For directories: contribute their full descendants count
+                let child_contribution = if child_descendants == 0 {
+                    // File: contribute stream_count (each stream = +1)
+                    child_stream_count
+                } else {
+                    // Directory: contribute full descendants count
+                    child_descendants
+                };
+                parent.descendants += child_contribution;
                 parent.treesize += child_treesize;
                 parent.tree_allocated += child_tree_allocated;
             }
@@ -1890,6 +1904,71 @@ impl MftIndex {
                     stack.push(parent_idx_u32);
                 }
             }
+        }
+
+        // Phase 3b: Hardlink pass - add contributions to additional parents
+        // C++ counts hardlinks as children of EACH parent directory they appear in.
+        // The main loop only handled the primary name (first_name.parent_frs).
+        // Now we need to add contributions to additional parents (other hardlinks).
+        let mut hardlink_contributions = 0_usize;
+        for idx in 0..n {
+            let Some(record) = self.records.get(idx) else {
+                continue;
+            };
+
+            // Skip records with only one name (no additional hardlinks)
+            if record.name_count <= 1 {
+                continue;
+            }
+
+            // Get this record's contribution values
+            let is_file = !record.is_directory();
+            let stream_count = u32::from(record.stream_count).max(1);
+            let child_descendants = record.descendants;
+            let child_treesize = record.treesize;
+            let child_tree_allocated = record.tree_allocated;
+            let primary_parent_frs = record.first_name.parent_frs;
+
+            // Calculate contribution (same logic as main loop)
+            let child_contribution = if is_file {
+                stream_count // Files: contribute stream_count
+            } else {
+                child_descendants // Directories: contribute descendants
+            };
+
+            // Iterate over additional names (hardlinks)
+            let mut link_idx = record.first_name.next_entry;
+            while link_idx != NO_ENTRY {
+                let Some(link) = self.links.get(link_idx as usize) else {
+                    break;
+                };
+
+                let additional_parent_frs = link.parent_frs;
+
+                // Skip if same as primary parent (already counted)
+                if additional_parent_frs != primary_parent_frs {
+                    // Find the additional parent's index
+                    if let Some(parent_record_idx) = self.frs_to_idx_opt(additional_parent_frs) {
+                        if let Some(parent) = self.records.get_mut(parent_record_idx) {
+                            if parent.is_directory() {
+                                parent.descendants += child_contribution;
+                                parent.treesize += child_treesize;
+                                parent.tree_allocated += child_tree_allocated;
+                                hardlink_contributions += 1;
+                            }
+                        }
+                    }
+                }
+
+                link_idx = link.next_entry;
+            }
+        }
+
+        if hardlink_contributions > 0 {
+            tracing::debug!(
+                hardlink_contributions,
+                "📎 Added hardlink contributions to additional parents"
+            );
         }
 
         // Phase 4: Defensive corruption detection

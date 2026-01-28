@@ -206,10 +206,67 @@ After detailed analysis of `ntfs_index.hpp` lines 774-879:
 | v0.2.126 | fix: Resident file Size on Disk = 0 (io.rs bug) |
 | v0.2.127 | fix: Reparse point Size = $REPARSE_POINT ValueLength |
 | v0.2.128 | fix: Directory self-counting + MFT overhead for resident files |
+| v0.2.129 | fix: Descendants algorithm - files display 0, contribute 1 to parent |
+| v0.2.130 | fix: Junction Size preserved (not replaced by treesize=0) |
+| v0.2.130 | fix: ADS counted in descendants (+1 per stream, not per file) |
+| v0.2.130 | fix: Hardlinks counted in EACH parent directory |
+
+---
+
+## Fix 10: Junction Size Preserved ✅ FIXED (v0.2.130)
+
+### What Failed
+- Junctions showed Size=0 instead of Size=48 (reparse point data length)
+- C++ shows Size=48 for junctions
+
+### Why It Failed
+- `apply_directory_treesize()` replaced Size with treesize for ALL directories
+- Junctions are directories with `is_reparse=true`
+- Junction treesize=0 (no children), so Size became 0
+
+### How Fixed
+- Modified `apply_directory_treesize()` in `crates/uffs-core/src/tree.rs`
+- Only apply treesize to directories that are NOT reparse points
+- Condition: `is_directory AND NOT is_reparse`
+
+---
+
+## Fix 11: ADS Counted in Descendants ✅ FIXED (v0.2.130)
+
+### What Failed
+- C++ counts each stream as +1 to parent's descendants
+- Rust counted each file as +1, regardless of stream count
+
+### Why It Failed
+- Tree metrics used `max(1, child.descendants)` for files
+- This always contributed 1, even for files with multiple streams (ADS)
+
+### How Fixed
+- Modified `compute_tree_metrics()` in `crates/uffs-mft/src/index.rs`
+- Files now contribute `stream_count` to parent (1 per stream)
+- Directories still contribute their full descendants count
+
+---
+
+## Fix 12: Hardlinks Counted in Each Parent ✅ FIXED (v0.2.130)
+
+### What Failed
+- C++ counts hardlinks as children of EACH parent directory
+- Rust only counted hardlinks in the primary parent (first_name.parent_frs)
+
+### Why It Failed
+- Tree metrics only used `first_name.parent_frs` for parent link
+- Additional hardlinks (in `links` array) were ignored
+
+### How Fixed
+- Added Phase 3b in `compute_tree_metrics()` for hardlink pass
+- After main loop, iterate over records with `name_count > 1`
+- For each additional name (hardlink), add contribution to that parent
+- Contribution includes: descendants, treesize, tree_allocated
 
 ---
 
 ## Final Status
 
-**All 9 issues fixed. Full C++ parity achieved!** 🎉
+**All 12 issues fixed. Awaiting Windows test run to verify full C++ parity.** 🔄
 
