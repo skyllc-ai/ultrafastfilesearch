@@ -1260,6 +1260,35 @@ fn cmp_ascii_case_insensitive(str_a: &str, str_b: &str) -> core::cmp::Ordering {
     }
 }
 
+/// C++ `Accumulator::delta` formula for proportional hardlink size division.
+///
+/// When a file has N hardlinks, each hardlink parent gets a proportional share
+/// of the file's size. This ensures the total size across all parents equals
+/// the file's actual size.
+///
+/// Formula: `value * (i + 1) / n - value * i / n`
+///
+/// # Arguments
+/// * `value` - The size to divide (e.g., file size in bytes)
+/// * `name_info` - Which hardlink this is (0, 1, 2, ..., n-1)
+/// * `total_names` - Total number of hardlinks
+///
+/// # Example
+/// For a 99-byte file with 3 hardlinks:
+/// - Hardlink 0: delta(99, 0, 3) = 99*1/3 - 99*0/3 = 33
+/// - Hardlink 1: delta(99, 1, 3) = 99*2/3 - 99*1/3 = 33
+/// - Hardlink 2: delta(99, 2, 3) = 99*3/3 - 99*2/3 = 33
+/// - Total: 33 + 33 + 33 = 99 ✓
+#[inline]
+fn hardlink_delta(value: u64, name_info: u16, total_names: u16) -> u64 {
+    if total_names <= 1 {
+        return value;
+    }
+    let i = u64::from(name_info);
+    let n = u64::from(total_names);
+    (value * (i + 1) / n) - (value * i / n)
+}
+
 impl MftIndex {
     /// Create a new empty index for the given volume
     #[must_use]
@@ -1570,6 +1599,42 @@ impl MftIndex {
         None
     }
 
+    /// Add a child entry to a parent directory.
+    ///
+    /// This creates a `ChildInfo` entry linking the child to the parent.
+    /// Used for building parent-child relationships for tree metrics.
+    ///
+    /// # Arguments
+    /// * `parent_frs` - FRS of the parent directory
+    /// * `child_frs` - FRS of the child file/directory
+    /// * `name_index` - Which hardlink this is (0 for primary, 1+ for
+    ///   additional)
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn add_child_entry(&mut self, parent_frs: u64, child_frs: u64, name_index: u16) {
+        // Get parent record index
+        let Some(parent_idx) = self.frs_to_idx_opt(parent_frs) else {
+            return;
+        };
+
+        // Get parent record - bounds already validated by frs_to_idx_opt
+        let Some(parent_rec) = self.records.get_mut(parent_idx) else {
+            return;
+        };
+
+        // Create child entry
+        let child_idx = self.children.len() as u32;
+        let old_first_child = parent_rec.first_child;
+
+        // Update parent's first_child before pushing to children
+        parent_rec.first_child = child_idx;
+
+        self.children.push(ChildInfo {
+            next_entry: old_first_child,
+            child_frs,
+            name_index,
+        });
+    }
+
     /// Sort children within each directory by filename (case-insensitive).
     ///
     /// This method sorts the children of each directory in the index by their
@@ -1732,280 +1797,350 @@ impl MftIndex {
         clippy::too_many_lines
     )] // Justified: n < u32::MAX in practice, algorithm is inherently complex
     pub fn compute_tree_metrics(&mut self) {
-        // MFT record overhead for resident files (C++ parity)
-        // C++ includes ~512 bytes of MFT overhead in treesize for resident files
-        // (files with allocated_size = 0, meaning data is stored in MFT record itself)
-        const MFT_OVERHEAD: u64 = 512;
+        self.compute_tree_metrics_impl(false);
+    }
 
+    /// Compute tree metrics with optional debug output.
+    ///
+    /// When `debug` is true, prints detailed information about hardlink
+    /// handling to stdout for debugging purposes.
+    #[allow(clippy::print_stdout)]
+    pub fn compute_tree_metrics_debug(&mut self) {
+        self.compute_tree_metrics_impl(true);
+    }
+
+    /// Internal implementation of tree metrics computation.
+    ///
+    /// This method implements the C++ tree metrics algorithm using a Kahn-style
+    /// leaf-peeling approach. It computes descendants, treesize, and
+    /// `tree_allocated` for each record by processing leaves first and
+    /// propagating values up to parents.
+    ///
+    /// # Arguments
+    /// * `debug` - If true, prints detailed debug information during
+    ///   computation
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cognitive_complexity,
+        clippy::float_arithmetic,
+        clippy::map_unwrap_or,
+        clippy::min_ident_chars,
+        clippy::print_stdout,
+        clippy::too_many_lines,
+        clippy::uninlined_format_args,
+        clippy::unnecessary_sort_by
+    )]
+    fn compute_tree_metrics_impl(&mut self, debug: bool) {
         let n = self.records.len();
         if n == 0 {
             tracing::debug!("⏭️  Skipping tree metrics - no records");
             return;
         }
 
-        tracing::debug!(records = n, "🔨 Computing tree metrics...");
+        if debug {
+            println!("=== TREE METRICS DEBUG ===");
+            println!("Total records: {n}");
+            println!("Total children entries: {}", self.children.len());
+        }
 
-        // Temporary arrays for the algorithm
-        let mut parent_idx = vec![NO_ENTRY; n];
-        let mut pending_children = vec![0_u32; n];
+        tracing::debug!(records = n, "🔨 Computing tree metrics (C++ algorithm)...");
 
-        // Phase 1: Build parent links and count pending children
-        // Also initialize base metrics (each node's own contribution)
-        // First pass: collect parent info and sum ALL streams' sizes (for C++ parity)
-        // C++ counts each ADS as a separate descendant and includes ADS sizes in
-        // treesize
+        // =========================================================================
+        // C++ TREE METRICS ALGORITHM (Q18 answer from C++ team)
+        // =========================================================================
         //
-        // C++ HARDLINK SIZE DIVISION (Q16 answer from C++ team):
-        // When a file has N hardlinks, C++ divides the file's size by N before
-        // adding to each parent's treesize. This is the Accumulator::delta formula.
-        // Example: 99-byte file with 3 hardlinks → 33 bytes to each parent.
-        let parent_info: Vec<_> = self
+        // Key insight: Each hardlink creates a SEPARATE child entry in its parent.
+        // The tree traversal visits each child entry, and each child knows which
+        // hardlink index it represents. The proportional share is calculated using
+        // the delta formula: delta(value, name_info, total_names).
+        //
+        // Algorithm:
+        // 1. Build base metrics for each record (size, allocated, stream_count)
+        // 2. Build pending_children count from the children list
+        // 3. Leaf-peeling: for each child entry, calculate proportional share and add
+        //    to parent
+        // =========================================================================
+
+        // Phase 1: Calculate base metrics for each record
+        // Sum ALL streams' sizes (default + ADS) for C++ parity
+        let base_metrics: Vec<_> = self
             .records
             .iter()
-            .enumerate()
-            .take(n)
-            .map(|(idx, record)| {
-                let frs = record.frs;
-                let parent_frs = record.first_name.parent_frs;
-                let stream_count = record.stream_count;
-                let name_count = record.name_count.max(1); // At least 1 name
+            .map(|record| {
                 let is_directory = record.is_directory();
+                let stream_count = u32::from(record.stream_count).max(1);
+                let name_count = record.name_count.max(1);
 
-                // Sum sizes across ALL streams (default + ADS) for C++ parity
+                // Sum sizes across ALL streams (default + ADS)
                 let mut total_size = record.first_stream.size.length;
                 let mut total_allocated = record.first_stream.size.allocated;
 
-                // Follow the linked list of additional streams
                 let mut next_entry = record.first_stream.next_entry;
+                let mut stream_idx = 0_u32;
                 while next_entry != NO_ENTRY {
                     if let Some(stream) = self.streams.get(next_entry as usize) {
+                        // Debug: log additional streams for FRS 5
+                        if record.frs == 5 {
+                            println!(
+                                "FRS 5: Additional stream {}: size={}, next_entry={}",
+                                stream_idx, stream.size.length, stream.next_entry
+                            );
+                        }
                         total_size = total_size.saturating_add(stream.size.length);
                         total_allocated = total_allocated.saturating_add(stream.size.allocated);
                         next_entry = stream.next_entry;
+                        stream_idx += 1_u32;
                     } else {
                         break;
                     }
                 }
 
+                // Debug: log total size for FRS 5
+                if record.frs == 5 {
+                    println!(
+                        "FRS 5: first_stream.size={}, total_size={}, stream_count={}",
+                        record.first_stream.size.length, total_size, stream_count
+                    );
+                }
+
                 (
-                    idx,
-                    frs,
-                    parent_frs,
-                    total_size,
-                    total_allocated,
+                    is_directory,
                     stream_count,
                     name_count,
-                    is_directory,
+                    total_size,
+                    total_allocated,
                 )
             })
             .collect();
 
-        // Second pass: initialize base metrics
-        // C++ HARDLINK SIZE DIVISION: Divide size by name_count for files with
-        // hardlinks
-        for (idx, _frs, _parent_frs, size, allocated, _stream_count, name_count, is_directory) in
-            &parent_info
-        {
-            if let Some(record) = self.records.get_mut(*idx) {
-                // C++ parity: Files have descendants = 0, Directories have descendants = 1
-                // Formula: parent.descendants = 1 + sum(max(1, child.descendants))
-                // - Files contribute 1 to parent (even though their own descendants = 0)
-                // - Directories contribute their full descendants count to parent
-                record.descendants = u32::from(*is_directory);
+        // Phase 2: Build pending_children count from the children list
+        // Each child entry represents one hardlink, so we count child entries, not
+        // records
+        let mut pending_children = vec![0_u32; n];
 
-                // C++ parity: add MFT overhead for resident files
-                // Resident files have allocated_size = 0 but still consume MFT space
-                let mft_overhead = if *allocated == 0 && *size > 0 {
-                    MFT_OVERHEAD
-                } else {
-                    0
-                };
-
-                // C++ HARDLINK SIZE DIVISION (Q16 answer):
-                // Divide size by name_count so each hardlink parent gets a proportional share.
-                // Example: 99-byte file with 3 hardlinks → 33 bytes to each parent.
-                // Directories don't have hardlinks, so name_count is always 1 for them.
-                let divisor = u64::from(*name_count);
-                let divided_size = size.saturating_add(mft_overhead) / divisor;
-                let divided_allocated = allocated.saturating_add(mft_overhead) / divisor;
-
-                record.treesize = divided_size;
-                record.tree_allocated = divided_allocated;
-            }
-        }
-
-        // Third pass: build parent links
-        for (idx, frs, parent_frs, _size, _allocated, _stream_count, _name_count, _is_directory) in
-            &parent_info
-        {
-            // Skip root or self-parent
-            if parent_frs == frs {
-                continue;
-            }
-
-            // Find parent index
-            if let Some(parent_record_idx) = self.frs_to_idx_opt(*parent_frs) {
-                // Only link to parent if parent is a directory and not self
-                if let Some(parent_record) = self.records.get(parent_record_idx) {
-                    let parent_is_dir = parent_record.is_directory();
-                    if parent_record_idx != *idx && parent_is_dir {
-                        if let Some(parent_slot) = parent_idx.get_mut(*idx) {
-                            *parent_slot = parent_record_idx as u32;
-                        }
-                        if let Some(pending_slot) = pending_children.get_mut(parent_record_idx) {
-                            *pending_slot += 1;
+        // Build pending_children: count children for each parent
+        pending_children.fill(0);
+        for (parent_idx, record) in self.records.iter().enumerate() {
+            let mut child_entry_idx = record.first_child;
+            while child_entry_idx != NO_ENTRY {
+                if let Some(child_entry) = self.children.get(child_entry_idx as usize) {
+                    // Verify the child exists
+                    if self.frs_to_idx_opt(child_entry.child_frs).is_some() {
+                        if let Some(slot) = pending_children.get_mut(parent_idx) {
+                            *slot += 1;
                         }
                     }
+                    child_entry_idx = child_entry.next_entry;
+                } else {
+                    break;
                 }
             }
         }
 
-        // Phase 2: Initialize ready stack with all leaf nodes
-        let mut stack: Vec<u32> = Vec::with_capacity(n);
-        for (idx, &pending_count) in pending_children.iter().enumerate().take(n) {
-            if pending_count == 0 {
-                stack.push(idx as u32);
+        // Phase 3: Initialize records with base metrics
+        // Files: descendants = 0, treesize = own size, tree_allocated = own allocated
+        // Directories: descendants = 1, treesize = own index size, tree_allocated = own
+        // allocated Note: C++ includes ALL records in tree metrics (including
+        // system metafiles). System metafiles are just not output to CSV, but
+        // their sizes ARE included in the root's treesize.
+
+        for (idx, (is_directory, stream_count, _name_count, size, allocated)) in
+            base_metrics.iter().enumerate()
+        {
+            if let Some(record) = self.records.get_mut(idx) {
+                // C++ includes ALL records in tree metrics, including system metafiles.
+                // System metafiles are just not output to CSV, but their sizes ARE
+                // included in the root's treesize. C++ starts from FRS 5 (root) and
+                // visits all children via the child entry tree - no explicit exclusion.
+                //
+                // C++ algorithm (line 879): for each stream, result.treesize += 1
+                // So a directory with stream_count=2 contributes 2 to its own treesize
+                // (plus children's treesize). We initialize descendants to stream_count
+                // for directories to match this behavior.
+                // Directories start with stream_count as descendants (C++ parity)
+                // Files start with 0 descendants
+                record.descendants = if *is_directory { *stream_count } else { 0 };
+                // Both directories and files have their own size in treesize
+                // Directories: size comes from $INDEX_ROOT + $INDEX_ALLOCATION + $BITMAP
+                // Files: size comes from $DATA stream(s)
+                record.treesize = *size;
+                record.tree_allocated = *allocated;
             }
         }
 
-        // Phase 3: Bottom-up accumulation (leaf-peeling)
-        let mut processed = 0_usize;
+        // Phase 4: Build reverse mapping - for each record, which parents have child
+        // entries? This is needed because a record with hardlinks has multiple
+        // parents Structure: child_to_parents[child_idx] = Vec<(parent_idx,
+        // name_index)>
+        let mut child_to_parents: Vec<Vec<(usize, u16)>> = vec![Vec::new(); n];
 
-        while let Some(child_idx_u32) = stack.pop() {
-            let child_idx = child_idx_u32 as usize;
+        for (parent_idx, record) in self.records.iter().enumerate() {
+            let mut child_entry_idx = record.first_child;
+            while child_entry_idx != NO_ENTRY {
+                if let Some(child_entry) = self.children.get(child_entry_idx as usize) {
+                    if let Some(child_record_idx) = self.frs_to_idx_opt(child_entry.child_frs) {
+                        if let Some(parents_list) = child_to_parents.get_mut(child_record_idx) {
+                            parents_list.push((parent_idx, child_entry.name_index));
+                        }
+                    }
+                    child_entry_idx = child_entry.next_entry;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Debug: Show hardlink statistics
+        if debug {
+            let records_with_multiple_parents: usize = child_to_parents
+                .iter()
+                .filter(|parents| parents.len() > 1)
+                .count();
+            let records_with_hardlinks: usize = base_metrics
+                .iter()
+                .filter(|(_, _, name_count, _, _)| *name_count > 1)
+                .count();
+            let total_parent_entries: usize = child_to_parents.iter().map(Vec::len).sum();
+
+            println!();
+            println!("=== HARDLINK STATISTICS ===");
+            println!("Records with name_count > 1: {records_with_hardlinks}");
+            println!("Records with multiple parent entries: {records_with_multiple_parents}");
+            println!("Total parent entries in child_to_parents: {total_parent_entries}");
+            println!("Expected (if all hardlinks have entries): should equal total_parent_entries");
+
+            // Show first 10 records with hardlinks
+            println!();
+            println!("=== SAMPLE HARDLINKS (first 10) ===");
+            let mut shown = 0_u32;
+            for (idx, (_, _, name_count, size, _)) in base_metrics.iter().enumerate() {
+                if *name_count > 1 && shown < 10_u32 {
+                    let Some(parents) = child_to_parents.get(idx) else {
+                        continue;
+                    };
+                    let frs = self.records.get(idx).map_or(0, |rec| rec.frs);
+                    println!(
+                        "  FRS {}: name_count={}, size={}, parent_entries={}",
+                        frs,
+                        name_count,
+                        size,
+                        parents.len()
+                    );
+                    for (parent_i, (parent_idx, name_index)) in parents.iter().enumerate() {
+                        let parent_frs = self.records.get(*parent_idx).map_or(0, |rec| rec.frs);
+                        println!(
+                            "    [{parent_i}] parent_idx={parent_idx} (FRS {parent_frs}), name_index={name_index}"
+                        );
+                    }
+                    shown += 1_u32;
+                }
+            }
+        }
+
+        // Phase 5: Leaf-peeling with proportional share calculation
+        // Start with all leaf nodes (records with no children)
+        let mut stack: Vec<usize> = Vec::with_capacity(n);
+        for (idx, &pending_count) in pending_children.iter().enumerate() {
+            if pending_count == 0 {
+                stack.push(idx);
+            }
+        }
+
+        let mut processed = 0_usize;
+        let mut debug_hardlink_contributions: Vec<(u64, u16, u16, u64, u64)> = Vec::new();
+
+        while let Some(child_idx) = stack.pop() {
             processed += 1;
 
-            let parent_idx_u32 = *parent_idx.get(child_idx).unwrap_or(&NO_ENTRY);
-            if parent_idx_u32 == NO_ENTRY {
-                continue; // Root node or orphan
-            }
-
-            let parent_idx_usize = parent_idx_u32 as usize;
-
-            // Read child's metrics
-            // C++ parity: descendants = 1 + sum(streams per child)
-            let (child_descendants, child_treesize, child_tree_allocated, child_stream_count) =
+            // Get child's metrics (safe: child_idx comes from stack which only contains
+            // valid indices)
+            let Some(&(_is_directory, stream_count, name_count, _size, _allocated)) =
+                base_metrics.get(child_idx)
+            else {
+                continue;
+            };
+            let (child_frs, child_descendants, child_treesize, child_tree_allocated) =
                 if let Some(child) = self.records.get(child_idx) {
                     (
+                        child.frs,
                         child.descendants,
                         child.treesize,
                         child.tree_allocated,
-                        u32::from(child.stream_count).max(1), // At least 1 stream
                     )
                 } else {
-                    continue; // Safety: skip if index is invalid
+                    continue;
                 };
 
-            // Accumulate into parent
-            // C++ parity: parent.descendants = 1 + sum(streams per child)
-            // - Files contribute stream_count to parent (1 per stream, including ADS)
-            // - Directories contribute their full descendants count
-            // This matches C++ behavior from ntfs_index.hpp lines 774-879
-            // C++ loops over ALL streams and adds +1 for each (line 879)
-            if let Some(parent) = self.records.get_mut(parent_idx_usize) {
-                // For files (descendants=0): contribute stream_count (1 per stream)
-                // For directories: contribute their full descendants count
-                let child_contribution = if child_descendants == 0 {
-                    // File: contribute stream_count (each stream = +1)
-                    child_stream_count
-                } else {
-                    // Directory: contribute full descendants count
-                    child_descendants
-                };
-                parent.descendants += child_contribution;
-                parent.treesize += child_treesize;
-                parent.tree_allocated += child_tree_allocated;
-            }
-
-            // Decrement parent's pending count
-            if let Some(pending_slot) = pending_children.get_mut(parent_idx_usize) {
-                *pending_slot = pending_slot.saturating_sub(1);
-
-                if *pending_slot == 0 {
-                    stack.push(parent_idx_u32);
-                }
-            }
-        }
-
-        // Phase 3b: Hardlink pass - add DESCENDANTS ONLY to additional parents
-        // C++ counts hardlinks as children of EACH parent directory they appear in.
-        // The main loop only handled the primary name (first_name.parent_frs).
-        // Now we need to add descendants to additional parents (other hardlinks).
-        //
-        // IMPORTANT (Q16 answer from C++ team):
-        // - C++ DIVIDES file size by name_count, so each parent gets a proportional
-        //   share
-        // - The divided size is already set in record.treesize (from Phase 1)
-        // - We do NOT add treesize to additional parents here because:
-        //   1. The divided size is already the correct per-parent contribution
-        //   2. Phase 3b runs AFTER Phase 3, so ancestors wouldn't get the contribution
-        //   3. Adding here would cause double-counting at the root level
-        // - We ONLY add descendants count to additional parents
-        let mut hardlink_contributions = 0_usize;
-        for idx in 0..n {
-            let Some(record) = self.records.get(idx) else {
-                continue;
-            };
-
-            // Skip records with only one name (no additional hardlinks)
-            if record.name_count <= 1 {
-                continue;
-            }
-
-            // Get this record's contribution values
-            let is_file = !record.is_directory();
-            let stream_count = u32::from(record.stream_count).max(1);
-            let child_descendants = record.descendants;
-            let primary_parent_frs = record.first_name.parent_frs;
-
-            // Calculate contribution (same logic as main loop)
-            let child_contribution = if is_file {
-                stream_count // Files: contribute stream_count
+            // Calculate contribution for descendants
+            // C++ counts each stream as +1 to parent's treesize (line 879)
+            // Files: contribute stream_count (each stream = +1)
+            // Directories: contribute their descendants (which already includes
+            // stream_count)
+            let descendants_contribution = if child_descendants == 0 {
+                stream_count
             } else {
-                child_descendants // Directories: contribute descendants
+                // Directory: descendants already includes stream_count for this directory's
+                // streams
+                child_descendants
             };
 
-            // Iterate over additional names (hardlinks)
-            let mut link_idx = record.first_name.next_entry;
-            while link_idx != NO_ENTRY {
-                let Some(link) = self.links.get(link_idx as usize) else {
-                    break;
-                };
+            // For each parent that has a child entry pointing to this record
+            let Some(parents_list) = child_to_parents.get(child_idx) else {
+                continue;
+            };
+            for &(parent_idx, name_index) in parents_list {
+                // C++ formula: name_info = name_count - 1 - name_index
+                let name_info = name_count.saturating_sub(1).saturating_sub(name_index);
 
-                let additional_parent_frs = link.parent_frs;
+                // Calculate proportional share using delta formula
+                let size_share = hardlink_delta(child_treesize, name_info, name_count);
+                let allocated_share = hardlink_delta(child_tree_allocated, name_info, name_count);
 
-                // Skip if same as primary parent (already counted)
-                if additional_parent_frs != primary_parent_frs {
-                    // Find the additional parent's index
-                    if let Some(parent_record_idx) = self.frs_to_idx_opt(additional_parent_frs) {
-                        if let Some(parent) = self.records.get_mut(parent_record_idx) {
-                            if parent.is_directory() {
-                                // Only add descendants count, NOT treesize!
-                                // Size is already divided and counted via primary parent path
-                                parent.descendants += child_contribution;
-                                // DO NOT add treesize or tree_allocated here!
-                                // parent.treesize += child_treesize;  // REMOVED
-                                // parent.tree_allocated += child_tree_allocated;  // REMOVED
-                                hardlink_contributions += 1;
-                            }
-                        }
+                // Debug: track hardlink contributions
+                if debug && name_count > 1 && debug_hardlink_contributions.len() < 20 {
+                    debug_hardlink_contributions.push((
+                        child_frs,
+                        name_index,
+                        name_count,
+                        size_share,
+                        allocated_share,
+                    ));
+                }
+
+                // Add to parent
+                if let Some(parent) = self.records.get_mut(parent_idx) {
+                    parent.descendants += descendants_contribution;
+                    parent.treesize += size_share;
+                    parent.tree_allocated += allocated_share;
+                }
+
+                // Decrement parent's pending count
+                if let Some(slot) = pending_children.get_mut(parent_idx) {
+                    *slot = slot.saturating_sub(1);
+                    if *slot == 0 {
+                        stack.push(parent_idx);
                     }
                 }
-
-                link_idx = link.next_entry;
             }
         }
 
-        if hardlink_contributions > 0 {
-            tracing::debug!(
-                hardlink_contributions,
-                "📎 Added hardlink descendants to additional parents"
-            );
+        // Debug: Show hardlink contributions
+        if debug && !debug_hardlink_contributions.is_empty() {
+            println!();
+            println!("=== HARDLINK CONTRIBUTIONS (first 20) ===");
+            for (frs, name_index, name_count, size_share, alloc_share) in
+                &debug_hardlink_contributions
+            {
+                let name_info = name_count.saturating_sub(1).saturating_sub(*name_index);
+                println!(
+                    "  FRS {}: name_index={}, name_count={}, name_info={} → size_share={}, alloc_share={}",
+                    frs, name_index, name_count, name_info, size_share, alloc_share
+                );
+            }
         }
 
-        // Phase 4: Defensive corruption detection
-        // If processed != n, there are cycles or broken parent links
-        // We leave partial aggregates and continue (don't panic)
+        // Phase 6: Defensive corruption detection
         if processed == n {
             tracing::debug!(
                 processed,
@@ -2019,6 +2154,75 @@ impl MftIndex {
                 missing = n - processed,
                 "⚠️ Tree metrics computation incomplete - possible cycles or broken parent links"
             );
+        }
+
+        // Debug: Show root directory metrics
+        if debug {
+            // Show size distribution of base metrics
+            let total_size: u64 = base_metrics.iter().map(|(_, _, _, s, _)| *s).sum();
+            let total_alloc: u64 = base_metrics.iter().map(|(_, _, _, _, a)| *a).sum();
+            let file_count = base_metrics
+                .iter()
+                .filter(|(is_dir, _, _, _, _)| !*is_dir)
+                .count();
+            let dir_count = base_metrics
+                .iter()
+                .filter(|(is_dir, _, _, _, _)| *is_dir)
+                .count();
+
+            println!();
+            println!("=== BASE METRICS SUMMARY ===");
+            println!("  Files: {file_count}");
+            println!("  Directories: {dir_count}");
+            println!(
+                "  Total base size: {} ({:.2} MB)",
+                total_size,
+                total_size as f64 / 1_000_000.0_f64
+            );
+            println!(
+                "  Total base allocated: {} ({:.2} MB)",
+                total_alloc,
+                total_alloc as f64 / 1_000_000.0_f64
+            );
+
+            // Show top 10 files by allocated size
+            let mut by_alloc: Vec<_> = base_metrics
+                .iter()
+                .enumerate()
+                .filter(|(_, (is_dir, _, _, _, _))| !*is_dir)
+                .map(|(idx, (_, _, _, size, alloc))| (idx, *size, *alloc))
+                .collect();
+            by_alloc.sort_by(|a, b| b.2.cmp(&a.2));
+
+            println!();
+            println!("=== TOP 10 FILES BY ALLOCATED SIZE ===");
+            for (idx, size, alloc) in by_alloc.iter().take(10) {
+                let frs = self.records.get(*idx).map(|r| r.frs).unwrap_or(0);
+                println!("  FRS {}: size={}, allocated={}", frs, size, alloc);
+            }
+
+            println!();
+            println!("=== ROOT DIRECTORY (FRS 5) ===");
+            if let Some(root_idx) = self.frs_to_idx_opt(5) {
+                if let Some(root) = self.records.get(root_idx) {
+                    println!("  FRS: {}", root.frs);
+                    println!("  Descendants: {}", root.descendants);
+                    println!(
+                        "  Treesize: {} ({:.2} MB)",
+                        root.treesize,
+                        root.treesize as f64 / 1_000_000.0_f64
+                    );
+                    println!(
+                        "  Tree Allocated: {} ({:.2} MB)",
+                        root.tree_allocated,
+                        root.tree_allocated as f64 / 1_000_000.0_f64
+                    );
+                }
+            } else {
+                println!("  Root not found!");
+            }
+            println!();
+            println!("Processed: {processed} / {n} records");
         }
 
         // Debug: Show sample of computed metrics (first 5 directories)
@@ -3877,6 +4081,12 @@ mod tests {
             allocated: 4096,
         };
 
+        // Add child entries (required for tree metrics algorithm)
+        index.add_child_entry(root_frs, dir1_frs, 0);
+        index.add_child_entry(root_frs, file3_frs, 0);
+        index.add_child_entry(dir1_frs, file1_frs, 0);
+        index.add_child_entry(dir1_frs, file2_frs, 0);
+
         // Compute tree metrics
         index.compute_tree_metrics();
 
@@ -3968,6 +4178,12 @@ mod tests {
             allocated: 4096,
         };
 
+        // Add child entries (required for tree metrics algorithm)
+        index.add_child_entry(root_frs, dir1_frs, 0);
+        index.add_child_entry(dir1_frs, dir2_frs, 0);
+        index.add_child_entry(dir2_frs, dir3_frs, 0);
+        index.add_child_entry(dir3_frs, file_frs, 0);
+
         // Compute tree metrics
         index.compute_tree_metrics();
 
@@ -4029,7 +4245,7 @@ mod tests {
         let mut frs_counter = 1000_u64;
 
         // Create 100 directories
-        for dir_idx in 0..100 {
+        for dir_idx in 0..100_u64 {
             let dir_frs = 100 + dir_idx;
             let dir_name = format!("dir{:03}", dir_idx);
             let offset = index.add_name(&dir_name);
@@ -4042,6 +4258,9 @@ mod tests {
                 IndexNameRef::NO_EXTENSION,
             );
             rec.first_name.parent_frs = root_frs;
+
+            // Add child entry for directory
+            index.add_child_entry(root_frs, dir_frs, 0);
 
             // Create 100 files in each directory
             for file_idx in 0..100 {
@@ -4062,6 +4281,9 @@ mod tests {
                     length: 1000,
                     allocated: 4096,
                 };
+
+                // Add child entry for file
+                index.add_child_entry(dir_frs, file_frs, 0);
             }
         }
 
@@ -4691,8 +4913,25 @@ impl MftIndex {
                 );
                 record.base_frs = parsed.base_frs;
 
-                // Set size and flags from first (default) stream
-                if let Some(default_stream) = parsed.streams.iter().find(|st| st.name.is_empty()) {
+                // Set size and flags
+                // For directories, use parsed.size/allocated_size which includes
+                // $INDEX_ROOT + $INDEX_ALLOCATION + $BITMAP (C++ parity)
+                // For files, use the default stream size
+                if parsed.is_directory {
+                    // Directory size comes from index attributes, already in parsed.size
+                    record.first_stream.size.length = parsed.size;
+                    record.first_stream.size.allocated = parsed.allocated_size;
+                    // For directories, stream_count = 1 (directory stream) + additional streams
+                    // The directory stream itself is not in parsed.streams, so we add 1
+                    // But only if there are additional streams (otherwise it's just 1)
+                    record.stream_count = if parsed.streams.is_empty() {
+                        1
+                    } else {
+                        (parsed.streams.len() + 1) as u16
+                    };
+                } else if let Some(default_stream) =
+                    parsed.streams.iter().find(|st| st.name.is_empty())
+                {
                     record.first_stream.size.length = default_stream.size;
                     record.first_stream.size.allocated = default_stream.allocated_size;
                     record.stream_count = parsed.streams.len().max(1) as u16;
@@ -4782,11 +5021,20 @@ impl MftIndex {
                 record.first_stream.next_entry = prev_stream_idx;
             }
 
-            // Build parent-child relationship
-            if parsed.parent_frs != parsed.frs && parsed.parent_frs != u64::from(NO_ENTRY) {
+            // Build parent-child relationship for ALL hardlinks
+            // C++ creates a SEPARATE child entry for EACH $FILE_NAME attribute (hardlink)
+            // This is crucial for correct tree metrics calculation with hardlinks.
+            // Each child entry stores its name_index so we can calculate proportional
+            // shares.
+            for (name_idx, name_info) in parsed.names.iter().enumerate() {
+                let parent_frs = name_info.parent_frs;
+                if parent_frs == parsed.frs || parent_frs == u64::from(NO_ENTRY) {
+                    continue;
+                }
+
                 // Ensure parent exists
                 let parent_idx = {
-                    let parent_frs_usize = parsed.parent_frs as usize;
+                    let parent_frs_usize = parent_frs as usize;
                     if parent_frs_usize >= index.frs_to_idx.len() {
                         index.frs_to_idx.resize(parent_frs_usize + 1, NO_ENTRY);
                     }
@@ -4794,15 +5042,47 @@ impl MftIndex {
                         // Create placeholder parent
                         let new_idx = index.records.len() as u32;
                         index.frs_to_idx[parent_frs_usize] = new_idx;
+                        index.records.push(FileRecord::new(parent_frs));
+                    }
+                    index.frs_to_idx[parent_frs_usize]
+                };
+
+                // Add child entry with name_index for proportional share calculation
+                let child_idx = index.children.len() as u32;
+
+                // Get parent's first_child and update
+                let parent = &mut index.records[parent_idx as usize];
+                let old_first_child = parent.first_child;
+                parent.first_child = child_idx;
+
+                // C++ formula: name_info = name_count - 1 - name_index
+                // We store name_index directly and calculate name_info during traversal
+                index.children.push(ChildInfo {
+                    next_entry: old_first_child,
+                    child_frs: parsed.frs,
+                    name_index: name_idx as u16,
+                });
+            }
+
+            // Handle case where names is empty (shouldn't happen, but be safe)
+            if parsed.names.is_empty()
+                && parsed.parent_frs != parsed.frs
+                && parsed.parent_frs != u64::from(NO_ENTRY)
+            {
+                let parent_idx = {
+                    let parent_frs_usize = parsed.parent_frs as usize;
+                    if parent_frs_usize >= index.frs_to_idx.len() {
+                        index.frs_to_idx.resize(parent_frs_usize + 1, NO_ENTRY);
+                    }
+                    if index.frs_to_idx[parent_frs_usize] == NO_ENTRY {
+                        let new_idx = index.records.len() as u32;
+                        index.frs_to_idx[parent_frs_usize] = new_idx;
                         index.records.push(FileRecord::new(parsed.parent_frs));
                     }
                     index.frs_to_idx[parent_frs_usize]
                 };
 
-                // Add child entry
                 let child_idx = index.children.len() as u32;
-
-                // Get parent's first_child and update
                 let parent = &mut index.records[parent_idx as usize];
                 let old_first_child = parent.first_child;
                 parent.first_child = child_idx;
@@ -4831,6 +5111,12 @@ impl MftIndex {
         index.forensic_mode = has_forensic_records;
 
         index
+    }
+
+    /// Returns the number of child entries in the index.
+    #[must_use]
+    pub fn children_count(&self) -> usize {
+        self.children.len()
     }
 
     /// Merge multiple index fragments into this index.

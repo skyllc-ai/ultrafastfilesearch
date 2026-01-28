@@ -378,6 +378,10 @@ enum Commands {
         #[arg(long)]
         build_index: bool,
 
+        /// Debug tree metrics computation (detailed hardlink handling output)
+        #[arg(long)]
+        debug_tree: bool,
+
         /// Volume letter for path resolution (e.g., C, D, E).
         /// Required for raw NTFS files that don't have this info in header.
         /// For UFFS-MFT format files, this overrides the stored volume letter.
@@ -869,6 +873,7 @@ async fn dispatch_command(command: Commands) -> Result<()> {
             output,
             info_only,
             build_index,
+            debug_tree,
             drive,
             forensic,
         } => cmd_load(
@@ -876,6 +881,7 @@ async fn dispatch_command(command: Commands) -> Result<()> {
             output.as_deref(),
             info_only,
             build_index,
+            debug_tree,
             drive,
             forensic,
         ),
@@ -940,6 +946,7 @@ async fn dispatch_command(command: Commands) -> Result<()> {
             output,
             info_only,
             build_index,
+            debug_tree,
             drive,
             forensic,
         } => cmd_load(
@@ -947,6 +954,7 @@ async fn dispatch_command(command: Commands) -> Result<()> {
             output.as_deref(),
             info_only,
             build_index,
+            debug_tree,
             drive,
             forensic,
         ),
@@ -2632,13 +2640,15 @@ async fn cmd_save(
     clippy::shadow_reuse,
     clippy::min_ident_chars,
     clippy::expect_used,
-    clippy::single_call_fn
+    clippy::single_call_fn,
+    clippy::fn_params_excessive_bools
 )] // CLI output function with complex display logic
 fn cmd_load(
     input: &Path,
     output_path: Option<&Path>,
     info_only: bool,
     build_index: bool,
+    debug_tree: bool,
     drive_override: Option<char>,
     forensic: bool,
 ) -> Result<()> {
@@ -2648,8 +2658,10 @@ fn cmd_load(
     use uffs_mft::{MftReader, load_raw_mft};
 
     // Validate arguments upfront - don't print anything if we're going to fail
-    if !info_only && !build_index && output_path.is_none() {
-        anyhow::bail!("--output is required when not using --info-only or --build-index");
+    if !info_only && !build_index && !debug_tree && output_path.is_none() {
+        anyhow::bail!(
+            "--output is required when not using --info-only, --build-index, or --debug-tree"
+        );
     }
 
     let start_time = Instant::now();
@@ -2877,6 +2889,118 @@ fn cmd_load(
                 format_bytes(root.tree_allocated)
             );
         }
+
+        let elapsed = start_time.elapsed();
+        println!();
+        println!("⏱️  Completed in {}", format_duration(elapsed));
+        return Ok(());
+    }
+
+    // Debug tree metrics computation (detailed hardlink handling)
+    if debug_tree {
+        use uffs_mft::MftIndex;
+        use uffs_mft::parse::{
+            ParseOptions, ParseResult, apply_fixup, parse_record, parse_record_forensic,
+        };
+
+        println!();
+        println!("═══════════════════════════════════════════════════════════════");
+        println!("                    DEBUG TREE METRICS");
+        println!("═══════════════════════════════════════════════════════════════");
+        println!();
+
+        // Load raw MFT data
+        let raw = load_raw_mft(input, &data_load_options)
+            .with_context(|| format!("Failed to load raw MFT from {}", input.display()))?;
+        println!("Raw MFT loaded: {} records", raw.header.record_count);
+
+        // Parse all records
+        let capacity = usize::try_from(raw.header.record_count).unwrap_or(0);
+        let mut parsed_records = Vec::with_capacity(capacity);
+
+        let parse_options = if forensic {
+            ParseOptions::FORENSIC
+        } else {
+            ParseOptions::DEFAULT
+        };
+
+        let mut hardlink_count = 0_usize;
+        let mut max_name_count = 0_u16;
+
+        for (frs, record_data) in raw.iter_records() {
+            let mut record_buf = record_data.to_vec();
+            let fixup_ok = apply_fixup(&mut record_buf);
+
+            if forensic {
+                let result = parse_record_forensic(&record_buf, frs, &parse_options, !fixup_ok);
+                if let ParseResult::Base(parsed) = result {
+                    if parsed.names.len() > 1 {
+                        hardlink_count += 1;
+                        #[allow(clippy::cast_possible_truncation)]
+                        {
+                            max_name_count = max_name_count.max(parsed.names.len() as u16);
+                        }
+                    }
+                    parsed_records.push(parsed);
+                }
+            } else {
+                if !fixup_ok {
+                    continue;
+                }
+                if let Some(parsed) = parse_record(&record_buf, frs) {
+                    if parsed.names.len() > 1 {
+                        hardlink_count += 1;
+                        #[allow(clippy::cast_possible_truncation)]
+                        {
+                            max_name_count = max_name_count.max(parsed.names.len() as u16);
+                        }
+                    }
+                    parsed_records.push(parsed);
+                }
+            }
+        }
+
+        println!("Parsed {} records", parsed_records.len());
+        println!("Records with multiple names (hardlinks): {hardlink_count}");
+        println!("Max name_count: {max_name_count}");
+
+        // Show sample hardlinks
+        println!();
+        println!("=== SAMPLE HARDLINKS (first 10) ===");
+        let mut shown = 0_u32;
+        for parsed in &parsed_records {
+            if parsed.names.len() > 1 && shown < 10_u32 {
+                println!(
+                    "  FRS {}: name_count={}, size={}",
+                    parsed.frs,
+                    parsed.names.len(),
+                    parsed.size
+                );
+                for (idx, name) in parsed.names.iter().enumerate() {
+                    println!(
+                        "    [{idx}] parent_frs={}, name={}",
+                        name.parent_frs, name.name
+                    );
+                }
+                shown += 1_u32;
+            }
+        }
+
+        // Build MftIndex (this computes tree metrics normally)
+        println!();
+        println!("Building MftIndex...");
+        let mut index = MftIndex::from_parsed_records(header.volume_letter, parsed_records);
+
+        println!(
+            "Index built: {} records, {} children entries",
+            index.len(),
+            index.children_count()
+        );
+
+        // Now recompute tree metrics with debug output
+        // (compute_tree_metrics_debug will recompute and print detailed info)
+        println!();
+        index.compute_tree_metrics_debug();
 
         let elapsed = start_time.elapsed();
         println!();

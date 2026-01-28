@@ -217,6 +217,10 @@ struct Cli {
     #[arg(long)]
     profile: bool,
 
+    /// Debug tree metrics computation (prints detailed hardlink handling info)
+    #[arg(long, hide = true)]
+    debug_tree: bool,
+
     /// Benchmark mode: skip output, only measure MFT reading and filtering
     /// Use this for profiling without stdout I/O overhead
     #[arg(long)]
@@ -480,6 +484,7 @@ async fn run() -> Result<()> {
                     cli.dirs_only,
                     cli.hide_system,
                     cli.profile,
+                    cli.debug_tree,
                     cli.benchmark,
                     cli.no_bitmap,
                     cli.no_cache,

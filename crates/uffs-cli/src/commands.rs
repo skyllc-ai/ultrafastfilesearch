@@ -342,6 +342,7 @@ pub async fn search(
     dirs_only: bool,
     hide_system: bool,
     profile: bool,
+    debug_tree: bool,
     benchmark: bool,
     no_bitmap: bool,
     #[cfg_attr(not(windows), allow(unused_variables))] no_cache: bool,
@@ -407,7 +408,14 @@ pub async fn search(
     // Handle raw MFT file input (cross-platform debugging)
     let mut results = if let Some(mft_path) = mft_file.as_ref() {
         info!(path = %mft_path.display(), "📂 Loading from raw MFT file");
-        load_and_filter_from_mft_file(mft_path, single_drive, &filters, needs_paths, profile)?
+        load_and_filter_from_mft_file(
+            mft_path,
+            single_drive,
+            &filters,
+            needs_paths,
+            profile,
+            debug_tree,
+        )?
     } else if use_index_path {
         info!("🚀 Using fast cached MftIndex query path");
         #[cfg(windows)]
@@ -617,13 +625,14 @@ async fn search_streaming(
 /// This function loads a previously saved raw MFT file and processes it
 /// exactly like a live MFT read, enabling debugging on any platform.
 /// Same pipeline as Windows live read - only the load source differs.
-#[allow(clippy::single_call_fn, clippy::print_stderr)]
+#[allow(clippy::single_call_fn, clippy::print_stderr, clippy::print_stdout)]
 fn load_and_filter_from_mft_file(
     mft_path: &Path,
     drive_letter: Option<char>,
     filters: &QueryFilters<'_>,
     needs_paths: bool,
     profile: bool,
+    debug_tree: bool,
 ) -> Result<uffs_mft::DataFrame> {
     use uffs_mft::{LoadRawOptions, MftReader};
 
@@ -636,8 +645,14 @@ fn load_and_filter_from_mft_file(
         volume_letter: Some(volume),
         ..Default::default()
     };
-    let index = MftReader::load_raw_to_index_with_options(mft_path, &options)
-        .with_context(|| format!("Failed to load raw MFT: {}", mft_path.display()))?;
+
+    // If debug_tree is enabled, use the debug loading path
+    let index = if debug_tree {
+        load_raw_mft_with_debug(mft_path, &options)?
+    } else {
+        MftReader::load_raw_to_index_with_options(mft_path, &options)
+            .with_context(|| format!("Failed to load raw MFT: {}", mft_path.display()))?
+    };
     let load_ms = t_load.elapsed().as_millis();
 
     // Execute query on index (same as Windows live path)
@@ -660,6 +675,110 @@ fn load_and_filter_from_mft_file(
     }
 
     Ok(results)
+}
+
+/// Load raw MFT with debug output for tree metrics.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::print_stdout,
+    clippy::single_call_fn
+)]
+fn load_raw_mft_with_debug(
+    mft_path: &Path,
+    options: &uffs_mft::LoadRawOptions,
+) -> Result<uffs_mft::MftIndex> {
+    use uffs_mft::MftIndex;
+    use uffs_mft::parse::{
+        ParseOptions, ParseResult, apply_fixup, parse_record, parse_record_forensic,
+    };
+
+    println!("=== LOADING RAW MFT WITH DEBUG ===");
+    println!("Path: {}", mft_path.display());
+
+    let raw = uffs_mft::raw::load_raw_mft(mft_path, options)?;
+    println!("Raw MFT loaded: {} records", raw.header.record_count);
+
+    // Parse all records into ParsedRecord format
+    let capacity = usize::try_from(raw.header.record_count).unwrap_or(0);
+    let mut parsed_records = Vec::with_capacity(capacity);
+
+    let parse_options = if options.forensic {
+        ParseOptions::FORENSIC
+    } else {
+        ParseOptions::DEFAULT
+    };
+
+    let mut hardlink_count = 0_usize;
+    let mut max_name_count = 0_u16;
+
+    for (frs, record_data) in raw.iter_records() {
+        let mut record_buf = record_data.to_vec();
+        let fixup_ok = apply_fixup(&mut record_buf);
+
+        if options.forensic {
+            let result = parse_record_forensic(&record_buf, frs, &parse_options, !fixup_ok);
+            if let ParseResult::Base(parsed) = result {
+                if parsed.names.len() > 1 {
+                    hardlink_count += 1;
+                    max_name_count = max_name_count.max(parsed.names.len() as u16);
+                }
+                parsed_records.push(parsed);
+            }
+        } else {
+            if !fixup_ok {
+                continue;
+            }
+            if let Some(parsed) = parse_record(&record_buf, frs) {
+                if parsed.names.len() > 1 {
+                    hardlink_count += 1;
+                    max_name_count = max_name_count.max(parsed.names.len() as u16);
+                }
+                parsed_records.push(parsed);
+            }
+        }
+    }
+
+    println!("Parsed {} records", parsed_records.len());
+    println!("Records with multiple names (hardlinks): {hardlink_count}");
+    println!("Max name_count: {max_name_count}");
+
+    // Show sample hardlinks
+    println!();
+    println!("=== SAMPLE HARDLINKS (first 10) ===");
+    let mut shown = 0_u32;
+    for parsed in &parsed_records {
+        if parsed.names.len() > 1 && shown < 10_u32 {
+            println!(
+                "  FRS {}: name_count={}, size={}",
+                parsed.frs,
+                parsed.names.len(),
+                parsed.size
+            );
+            for (idx, name) in parsed.names.iter().enumerate() {
+                println!(
+                    "    [{idx}] parent_frs={}, name={}",
+                    name.parent_frs, name.name
+                );
+            }
+            shown += 1_u32;
+        }
+    }
+
+    // Build MftIndex (this computes tree metrics normally)
+    println!();
+    println!("Building MftIndex...");
+    let mut index = MftIndex::from_parsed_records(raw.header.volume_letter, parsed_records);
+
+    println!(
+        "Index built: {} records, {} children entries",
+        index.len(),
+        index.children_count()
+    );
+
+    // Recompute tree metrics with debug output
+    index.compute_tree_metrics_debug();
+
+    Ok(index)
 }
 
 /// Load and filter search data from index file, multiple drives, single drive,
