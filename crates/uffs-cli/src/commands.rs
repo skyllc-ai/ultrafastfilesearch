@@ -960,9 +960,11 @@ async fn load_and_filter_data_index(
     let load_ms = t_load.elapsed().as_millis();
 
     // Execute query on index
+    eprintln!("[DEBUG] search_single_drive: before execute_index_query");
     let t_query = std::time::Instant::now();
     let results = execute_index_query(&index, filters, needs_paths)?;
     let query_ms = t_query.elapsed().as_millis();
+    eprintln!("[DEBUG] search_single_drive: after execute_index_query");
 
     if profile {
         let total_ms = load_ms + query_ms;
@@ -1255,8 +1257,13 @@ fn execute_index_query(
     query = query.with_resolve_paths(resolve_paths);
 
     // Execute and convert to DataFrame
+    eprintln!("[DEBUG] execute_index_query: before query.collect()");
     let results = query.collect();
-    results_to_dataframe(index, &results, resolve_paths)
+    eprintln!("[DEBUG] execute_index_query: after query.collect(), count={}", results.len());
+    eprintln!("[DEBUG] execute_index_query: before results_to_dataframe");
+    let df = results_to_dataframe(index, &results, resolve_paths);
+    eprintln!("[DEBUG] execute_index_query: after results_to_dataframe");
+    df
 }
 
 /// Convert `IndexQuery` results to a `DataFrame` for output compatibility.
@@ -1464,8 +1471,10 @@ fn results_to_dataframe(
         Series::new("tree_allocated".into(), tree_allocated_values).into_column(),
     ];
 
+    eprintln!("[DEBUG] results_to_dataframe: before DataFrame::new_infer_height");
     let mut df = uffs_mft::DataFrame::new_infer_height(columns)
         .map_err(|err| anyhow::anyhow!("Failed to create DataFrame: {err}"))?;
+    eprintln!("[DEBUG] results_to_dataframe: after DataFrame::new_infer_height");
 
     // Tree metrics are already computed in MftIndex and included in the columns
     // above! No need to recompute them here - this was the missed optimization.
@@ -1473,12 +1482,16 @@ fn results_to_dataframe(
     // Replace size and allocated_size columns with tree metrics for directories
     // (C++ parity) For directories: size = treesize, allocated_size =
     // tree_allocated For files: keep original size and allocated_size
+    eprintln!("[DEBUG] results_to_dataframe: before apply_directory_treesize");
     df = uffs_core::apply_directory_treesize(&df)
         .map_err(|err| anyhow::anyhow!("Failed to apply directory treesize: {err}"))?;
+    eprintln!("[DEBUG] results_to_dataframe: after apply_directory_treesize");
 
     // Add path_only column (directory portion of path)
+    eprintln!("[DEBUG] results_to_dataframe: before add_path_only_column");
     df = uffs_core::add_path_only_column(&df)
         .map_err(|err| anyhow::anyhow!("Failed to add path_only column: {err}"))?;
+    eprintln!("[DEBUG] results_to_dataframe: after add_path_only_column");
 
     Ok(df)
 }
