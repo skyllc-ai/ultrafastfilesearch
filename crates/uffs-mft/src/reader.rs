@@ -915,13 +915,40 @@ impl MftReader {
     /// Use this when you need fast indexing and searching. Convert to DataFrame
     /// later with `MftIndex::to_dataframe()` if you need Polars analytics.
     ///
+    /// # Note
+    ///
+    /// This function uses `spawn_blocking` internally to run MFT reading on a
+    /// dedicated blocking thread. This avoids potential nested tokio runtime
+    /// issues that can occur when dependencies (like polars) try to create
+    /// their own runtime.
+    ///
     /// # Errors
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
-    #[allow(clippy::unused_async)]
     pub async fn read_all_index(&self) -> Result<crate::index::MftIndex> {
-        self.read_mft_index_internal(None::<fn(MftProgress)>)
+        // Capture configuration to recreate reader in blocking thread
+        let volume = self.volume;
+        let mode = self.mode;
+        let merge_extensions = self.merge_extensions;
+        let use_bitmap = self.use_bitmap;
+        let expand_hardlinks = self.expand_hardlinks;
+
+        tokio::task::spawn_blocking(move || {
+            // Create a new reader in the blocking thread
+            let handle = crate::platform::VolumeHandle::open(volume)?;
+            let reader = MftReader {
+                volume,
+                handle,
+                mode,
+                merge_extensions,
+                use_bitmap,
+                expand_hardlinks,
+            };
+            reader.read_mft_index_internal(None::<fn(MftProgress)>)
+        })
+        .await
+        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
     }
 
     /// Read MFT into lean index (non-Windows stub).
@@ -994,16 +1021,42 @@ impl MftReader {
     ///
     /// * `callback` - Function called periodically with progress updates
     ///
+    /// # Note
+    ///
+    /// This function uses `spawn_blocking` internally to run MFT reading on a
+    /// dedicated blocking thread. This avoids potential nested tokio runtime
+    /// issues.
+    ///
     /// # Errors
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
-    #[allow(clippy::unused_async)]
     pub async fn read_index_with_progress<F>(&self, callback: F) -> Result<crate::index::MftIndex>
     where
         F: Fn(MftProgress) + Send + 'static,
     {
-        self.read_mft_index_internal(Some(callback))
+        // Capture configuration to recreate reader in blocking thread
+        let volume = self.volume;
+        let mode = self.mode;
+        let merge_extensions = self.merge_extensions;
+        let use_bitmap = self.use_bitmap;
+        let expand_hardlinks = self.expand_hardlinks;
+
+        tokio::task::spawn_blocking(move || {
+            // Create a new reader in the blocking thread
+            let handle = crate::platform::VolumeHandle::open(volume)?;
+            let reader = MftReader {
+                volume,
+                handle,
+                mode,
+                merge_extensions,
+                use_bitmap,
+                expand_hardlinks,
+            };
+            reader.read_mft_index_internal(Some(callback))
+        })
+        .await
+        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
     }
 
     /// Read MFT into lean index with progress (non-Windows stub).

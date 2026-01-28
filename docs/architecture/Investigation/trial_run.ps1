@@ -19,6 +19,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# Enable full Rust backtraces for debugging panics
+$env:RUST_BACKTRACE = "full"
+
 $WorkDir = Get-Location
 $FinalLog = Join-Path $WorkDir "trial_run.md"
 $TempLog = Join-Path $WorkDir "trial_run.md.tmp"

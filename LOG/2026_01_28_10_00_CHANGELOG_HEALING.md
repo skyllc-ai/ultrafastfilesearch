@@ -173,3 +173,71 @@ The correct solution is to use `spawn_blocking` with **synchronous** function ve
 - **Total Time**: 485s
 - **Commit**: `cdafbae2e` pushed to `main`
 
+---
+
+## Third Fix: Polars Nested Runtime Issue (v0.2.137)
+
+### Problem
+v0.2.136 still failed with the same "Cannot start a runtime from within a runtime" panic.
+The error occurred during `compute_tree_metrics_impl()` execution, but the root cause was
+polars' internal tokio usage.
+
+### Root Cause Analysis
+1. Polars uses tokio internally through `polars-stream` for its streaming engine
+2. When polars operations are called from within a tokio async context, polars may try
+   to create its own runtime or call `block_on`
+3. The `load_or_build_dataframe_cached` function was running directly on the tokio worker
+   thread, and when it called `index.to_dataframe()` (which uses polars), the nested
+   runtime issue occurred
+
+### Evidence
+```bash
+$ cargo tree -p polars-stream 2>/dev/null | grep -i tokio
+│   │   │   │   │   ├── tokio v1.49.0
+│   │   │   │   │   ├── tokio-util v0.7.18
+│   │   │   │   ├── tokio v1.49.0 (*)
+...
+```
+
+### Fix Applied
+**File:** `crates/uffs-mft/src/cache.rs`
+
+Wrapped the entire `load_or_build_dataframe_cached` function body in `spawn_blocking`:
+
+```rust
+#[cfg(windows)]
+pub async fn load_or_build_dataframe_cached(
+    drive: char,
+    ttl_seconds: u64,
+) -> crate::Result<uffs_polars::DataFrame> {
+    // Use spawn_blocking to run all MFT reading and polars operations on a
+    // dedicated blocking thread. This avoids nested tokio runtime issues since
+    // polars uses tokio internally for some operations.
+    tokio::task::spawn_blocking(move || load_or_build_dataframe_cached_sync(drive, ttl_seconds))
+        .await
+        .map_err(|e| crate::MftError::InvalidInput(format!("Task join error: {e}")))?
+}
+
+/// Synchronous version of `load_or_build_dataframe_cached`.
+#[cfg(windows)]
+fn load_or_build_dataframe_cached_sync(
+    drive: char,
+    ttl_seconds: u64,
+) -> crate::Result<uffs_polars::DataFrame> {
+    // ... all MFT reading and polars operations run here on blocking thread
+}
+```
+
+### Why This Works
+- `spawn_blocking` moves the entire operation to a dedicated blocking thread pool
+- The blocking thread is NOT part of the tokio async worker pool
+- When polars tries to create a runtime or call `block_on`, it succeeds because
+  there's no existing runtime context on the blocking thread
+- All MFT reading and polars operations (including `to_dataframe()`) run in isolation
+
+### CI Result
+- **Status**: ✅ PASSED
+- **Version**: 0.2.137
+- **Total Time**: 495s
+- **Commit**: `721add5ef` pushed to `main`
+
