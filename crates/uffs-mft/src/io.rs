@@ -1061,38 +1061,65 @@ fn parse_extension_to_index(
     if record_idx != NO_ENTRY {
         let record = &mut index.records[record_idx as usize];
 
-        // Chain new links to the end of the existing link chain
+        // Add new links to the record
         if !link_indices.is_empty() {
-            // Find the end of the current link chain
-            let last_link_idx = if record.first_name.next_entry != NO_ENTRY {
-                let mut idx = record.first_name.next_entry;
-                while index.links[idx as usize].next_entry != NO_ENTRY {
-                    idx = index.links[idx as usize].next_entry;
+            // Check if base record has no name (first_name is empty)
+            // This happens when the $FILE_NAME attribute is ONLY in extension records
+            if !record.first_name.name.is_valid() {
+                // Copy the first extension name directly into first_name
+                // This matches C++ behavior (ntfs_index.hpp lines 559-567)
+                let first_link = &index.links[link_indices[0] as usize];
+                record.first_name.name = first_link.name;
+                record.first_name.parent_frs = first_link.parent_frs;
+                // Don't increment name_count for the first name (it's already counted as 1)
+
+                // Chain remaining links (if any) to first_name.next_entry
+                if link_indices.len() > 1 {
+                    // Chain the remaining links together
+                    for i in 1..link_indices.len().saturating_sub(1) {
+                        let current_idx = link_indices[i] as usize;
+                        let next_idx = link_indices[i + 1];
+                        index.links[current_idx].next_entry = next_idx;
+                    }
+                    // Attach remaining links to first_name
+                    let record = &mut index.records[record_idx as usize];
+                    record.first_name.next_entry = link_indices[1];
+                    // Update name count for additional links only
+                    record.name_count += (link_indices.len() - 1) as u16;
                 }
-                Some(idx)
             } else {
-                None
-            };
+                // Base record already has a name - chain extension names as additional hard
+                // links Find the end of the current link chain
+                let last_link_idx = if record.first_name.next_entry != NO_ENTRY {
+                    let mut idx = record.first_name.next_entry;
+                    while index.links[idx as usize].next_entry != NO_ENTRY {
+                        idx = index.links[idx as usize].next_entry;
+                    }
+                    Some(idx)
+                } else {
+                    None
+                };
 
-            // Chain the new links together
-            for i in 0..link_indices.len().saturating_sub(1) {
-                let current_idx = link_indices[i] as usize;
-                let next_idx = link_indices[i + 1];
-                index.links[current_idx].next_entry = next_idx;
-            }
+                // Chain the new links together
+                for i in 0..link_indices.len().saturating_sub(1) {
+                    let current_idx = link_indices[i] as usize;
+                    let next_idx = link_indices[i + 1];
+                    index.links[current_idx].next_entry = next_idx;
+                }
 
-            // Attach to the chain
-            if let Some(last_idx) = last_link_idx {
-                index.links[last_idx as usize].next_entry = link_indices[0];
-            } else {
-                // first_name has no next_entry, attach directly
+                // Attach to the chain
+                if let Some(last_idx) = last_link_idx {
+                    index.links[last_idx as usize].next_entry = link_indices[0];
+                } else {
+                    // first_name has no next_entry, attach directly
+                    let record = &mut index.records[record_idx as usize];
+                    record.first_name.next_entry = link_indices[0];
+                }
+
+                // Update name count
                 let record = &mut index.records[record_idx as usize];
-                record.first_name.next_entry = link_indices[0];
+                record.name_count += link_indices.len() as u16;
             }
-
-            // Update name count
-            let record = &mut index.records[record_idx as usize];
-            record.name_count += link_indices.len() as u16;
         }
 
         // Chain new streams to the end of the existing stream chain
@@ -1652,9 +1679,10 @@ fn parse_extension_to_fragment(
         }
     }
 
-    // Get the first_name.next_entry and first_stream.next_entry values
-    // before we start modifying things
+    // Get the first_name.next_entry, first_stream.next_entry, and first_name
+    // validity before we start modifying things
     let record = fragment.get_or_create(base_frs);
+    let first_name_valid = record.first_name.name.is_valid();
     let first_name_next = record.first_name.next_entry;
     let first_stream_next = record.first_stream.next_entry;
 
@@ -1682,14 +1710,38 @@ fn parse_extension_to_fragment(
 
     // Now attach the new links
     if !link_indices.is_empty() {
-        if let Some(end_idx) = link_chain_end {
-            fragment.links[end_idx as usize].next_entry = link_indices[0];
-        } else {
+        // Check if base record has no name (first_name is empty)
+        // This happens when the $FILE_NAME attribute is ONLY in extension records
+        if !first_name_valid {
+            // Copy the first extension name directly into first_name
+            // This matches C++ behavior (ntfs_index.hpp lines 559-567)
+            // Copy values first to avoid borrow conflict
+            let first_link_name = fragment.links[link_indices[0] as usize].name;
+            let first_link_parent = fragment.links[link_indices[0] as usize].parent_frs;
             let record = fragment.get_or_create(base_frs);
-            record.first_name.next_entry = link_indices[0];
+            record.first_name.name = first_link_name;
+            record.first_name.parent_frs = first_link_parent;
+            // Don't increment name_count for the first name (it's already counted as 1)
+
+            // Chain remaining links (if any) to first_name.next_entry
+            if link_indices.len() > 1 {
+                let record = fragment.get_or_create(base_frs);
+                record.first_name.next_entry = link_indices[1];
+                // Update name count for additional links only
+                record.name_count += (link_indices.len() - 1) as u16;
+            }
+        } else {
+            // Base record already has a name - chain extension names as additional hard
+            // links
+            if let Some(end_idx) = link_chain_end {
+                fragment.links[end_idx as usize].next_entry = link_indices[0];
+            } else {
+                let record = fragment.get_or_create(base_frs);
+                record.first_name.next_entry = link_indices[0];
+            }
+            let record = fragment.get_or_create(base_frs);
+            record.name_count += link_indices.len() as u16;
         }
-        let record = fragment.get_or_create(base_frs);
-        record.name_count += link_indices.len() as u16;
     }
 
     // Now attach the new streams

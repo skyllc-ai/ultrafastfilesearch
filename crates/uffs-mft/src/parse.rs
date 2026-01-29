@@ -2847,4 +2847,145 @@ mod tests {
             }
         }
     }
+
+    /// Test that extension records with `$FILE_NAME` are properly merged into
+    /// base records that have no `$FILE_NAME` attribute.
+    #[test]
+    fn test_extension_merge_with_empty_base_name() {
+        // Simulate the case where base record has no $FILE_NAME
+        // and extension record has the $FILE_NAME
+
+        let mut record_merger = MftRecordMerger::with_capacity(10);
+
+        // Add base record with empty name
+        let base = ParsedRecord {
+            frs: 100,
+            sequence_number: 1,
+            lsn: 0,
+            parent_frs: 0,       // Wrong - should be updated from extension
+            name: String::new(), // Empty - should be updated from extension
+            namespace: 255,      // Invalid
+            names: Vec::new(),   // No names in base record
+            streams: Vec::new(),
+            size: 0,
+            allocated_size: 0,
+            std_info: ExtendedStandardInfo::default(),
+            in_use: true,
+            is_directory: true,
+            fn_created: 0,
+            fn_modified: 0,
+            fn_accessed: 0,
+            fn_mft_changed: 0,
+            reparse_tag: 0,
+            is_deleted: false,
+            is_corrupt: false,
+            is_extension: false,
+            base_frs: 0,
+        };
+        record_merger.add_result(ParseResult::Base(base));
+
+        // Add extension record with the actual name
+        let ext = ExtensionAttributes {
+            base_frs: 100,
+            extension_frs: 200,
+            names: vec![NameInfo {
+                name: "test_directory".to_owned(),
+                parent_frs: 5, // Root
+                namespace: 1,  // Win32
+                fn_created: 0,
+                fn_modified: 0,
+                fn_accessed: 0,
+                fn_mft_changed: 0,
+            }],
+            streams: Vec::new(),
+        };
+        record_merger.add_result(ParseResult::Extension(ext));
+
+        // Merge
+        let result = record_merger.merge();
+
+        // Check that the base record now has the name from extension
+        assert_eq!(result.len(), 1, "Should have exactly 1 merged record");
+        let rec = &result[0];
+        assert_eq!(rec.frs, 100);
+        assert_eq!(
+            rec.name, "test_directory",
+            "Name should be merged from extension"
+        );
+        assert_eq!(
+            rec.parent_frs, 5,
+            "parent_frs should be merged from extension"
+        );
+        assert_eq!(
+            rec.namespace, 1,
+            "namespace should be merged from extension"
+        );
+    }
+
+    /// Test that extension records are merged even when processed before base
+    /// record
+    #[test]
+    fn test_extension_before_base_merge() {
+        let mut record_merger = MftRecordMerger::with_capacity(10);
+
+        // Add extension record FIRST (before base record)
+        let ext = ExtensionAttributes {
+            base_frs: 100,
+            extension_frs: 200,
+            names: vec![NameInfo {
+                name: "test_directory".to_owned(),
+                parent_frs: 5,
+                namespace: 1,
+                fn_created: 0,
+                fn_modified: 0,
+                fn_accessed: 0,
+                fn_mft_changed: 0,
+            }],
+            streams: Vec::new(),
+        };
+        record_merger.add_result(ParseResult::Extension(ext));
+
+        // Add base record AFTER extension
+        let base = ParsedRecord {
+            frs: 100,
+            sequence_number: 1,
+            lsn: 0,
+            parent_frs: 0,
+            name: String::new(),
+            namespace: 255,
+            names: Vec::new(),
+            streams: Vec::new(),
+            size: 0,
+            allocated_size: 0,
+            std_info: ExtendedStandardInfo::default(),
+            in_use: true,
+            is_directory: true,
+            fn_created: 0,
+            fn_modified: 0,
+            fn_accessed: 0,
+            fn_mft_changed: 0,
+            reparse_tag: 0,
+            is_deleted: false,
+            is_corrupt: false,
+            is_extension: false,
+            base_frs: 0,
+        };
+        record_merger.add_result(ParseResult::Base(base));
+
+        // Merge
+        let result = record_merger.merge();
+
+        // Check that the base record now has the name from extension
+        assert_eq!(result.len(), 1, "Should have exactly 1 merged record");
+        let rec = &result[0];
+        assert_eq!(rec.frs, 100);
+        assert_eq!(
+            rec.name, "test_directory",
+            "Name should be merged from extension"
+        );
+        assert_eq!(
+            rec.parent_frs, 5,
+            "parent_frs should be merged from extension"
+        );
+    }
 }
