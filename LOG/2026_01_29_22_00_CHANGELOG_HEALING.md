@@ -53,5 +53,9 @@ error[E0502]: cannot borrow `*fragment` as mutable because it is also borrowed a
 ```
 **Fix**: Copy values from `fragment.links[...]` to local variables before calling `fragment.get_or_create()`.
 
-### Run 3 - Pending
+### Run 3 - ✅ PASSED
+- All tests passed
+- Clippy passed
+- Windows cross-compilation succeeded
+- Committed and pushed as v0.2.144
 
