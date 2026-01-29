@@ -59,3 +59,74 @@ error[E0502]: cannot borrow `*fragment` as mutable because it is also borrowed a
 - Windows cross-compilation succeeded
 - Committed and pushed as v0.2.144
 
+---
+
+## Additional Fix - 2026-01-29 (Continued)
+
+### What Failed
+
+After the extension record name merging fix, 99.8% of missing paths were recovered. However, ~120 paths remained different:
+- 50 directories showing as files (no trailing backslash)
+- 94 ADS entries missing
+- 26 files missing
+
+**Root Cause**: When the base record has NO `$FILE_NAME` attribute (it's entirely in the extension record), the base record parsing returned early without storing `stdinfo` (including `is_directory` flag).
+
+This caused:
+1. `is_directory = false` (default) even for directories
+2. No trailing backslash added to directory paths
+3. Timestamps showing as epoch (1969-12-31)
+
+### The Fix
+
+In `parse_record_to_index` and `parse_record_to_fragment`:
+
+**Before**:
+```rust
+// Skip records without a filename
+let (name, parent_frs, _namespace) = match primary_name {
+    Some(n) => n,
+    None => return false,  // <-- BUG: Never stores stdinfo!
+};
+
+// Set directory flag in std_info
+if is_directory {
+    std_info.set_directory(true);
+}
+```
+
+**After**:
+```rust
+// Set directory flag in std_info BEFORE checking for filename
+if is_directory {
+    std_info.set_directory(true);
+}
+
+// Handle records without a filename in the base record
+let (name, parent_frs, _namespace) = match primary_name {
+    Some(n) => n,
+    None => {
+        // No $FILE_NAME in base record - store stdinfo anyway
+        let record = index.get_or_create(frs);
+        record.stdinfo = std_info;
+        record.first_stream.size = SizeInfo {
+            length: default_size,
+            allocated: default_allocated,
+        };
+        return false;
+    }
+};
+```
+
+### Files Changed
+
+- `crates/uffs-mft/src/io.rs`: Fixed `parse_record_to_index` and `parse_record_to_fragment`
+
+### Expected Impact
+
+- Fixes 50 directories showing as files (now have correct `is_directory` flag)
+- Trailing backslash will be added to directory paths
+- Timestamps will be correct (not epoch)
+
+### CI Pipeline Status
+

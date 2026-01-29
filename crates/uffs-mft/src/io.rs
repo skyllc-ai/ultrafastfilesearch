@@ -727,16 +727,29 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         offset += attr_header.length as usize;
     }
 
-    // Skip records without a filename
-    let (name, parent_frs, _namespace) = match primary_name {
-        Some(n) => n,
-        None => return false,
-    };
-
-    // Set directory flag in std_info
+    // Set directory flag in std_info BEFORE checking for filename
+    // This ensures is_directory is set even when $FILE_NAME is in extension record
     if is_directory {
         std_info.set_directory(true);
     }
+
+    // Handle records without a filename in the base record
+    // The $FILE_NAME may be in an extension record - we still need to store stdinfo
+    let (name, parent_frs, _namespace) = match primary_name {
+        Some(n) => n,
+        None => {
+            // No $FILE_NAME in base record - store stdinfo anyway
+            // The extension record will add the name later
+            let record = index.get_or_create(frs);
+            record.stdinfo = std_info;
+            record.first_stream.size = SizeInfo {
+                length: default_size,
+                allocated: default_allocated,
+            };
+            // Leave first_name empty - extension record will fill it
+            return false;
+        }
+    };
 
     // Add primary name to names buffer and get reference
     let name_offset = index.add_name(&name);
@@ -1360,16 +1373,29 @@ pub fn parse_record_to_fragment(
         offset += attr_header.length as usize;
     }
 
-    // Skip records without a filename
-    let (name, parent_frs, _namespace) = match primary_name {
-        Some(n) => n,
-        None => return false,
-    };
-
-    // Set directory flag in std_info
+    // Set directory flag in std_info BEFORE checking for filename
+    // This ensures is_directory is set even when $FILE_NAME is in extension record
     if is_directory {
         std_info.set_directory(true);
     }
+
+    // Handle records without a filename in the base record
+    // The $FILE_NAME may be in an extension record - we still need to store stdinfo
+    let (name, parent_frs, _namespace) = match primary_name {
+        Some(n) => n,
+        None => {
+            // No $FILE_NAME in base record - store stdinfo anyway
+            // The extension record will add the name later
+            let record = fragment.get_or_create(frs);
+            record.stdinfo = std_info;
+            record.first_stream.size = SizeInfo {
+                length: default_size,
+                allocated: default_allocated,
+            };
+            // Leave first_name empty - extension record will fill it
+            return false;
+        }
+    };
 
     // Add primary name to names buffer and get reference
     let name_offset = fragment.add_name(&name);
