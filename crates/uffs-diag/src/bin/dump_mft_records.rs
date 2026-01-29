@@ -3,6 +3,12 @@
 //! Offline, cross-platform tool operating on `uffs_mft`'s raw MFT format
 //! (`*.raw` produced by `uffs_mft save`). This lets us inspect header flags
 //! and basic structure for selected records to compare against C++ behavior.
+//!
+//! Usage:
+//! ```text
+//!   dump_mft_records <raw_path> <frs1> [frs2] ...
+//!   dump_mft_records --test-merge <raw_path> <base_frs> <ext_frs>
+//! ```
 
 // Standalone binary doesn't use all crate dependencies
 #![allow(unused_crate_dependencies)]
@@ -12,6 +18,7 @@ use std::env;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use uffs_mft::parse::{MftRecordMerger, ParseResult, parse_record_full};
 use uffs_mft::raw::{LoadRawOptions, load_raw_mft};
 // This binary intentionally pulls in uffs_polars via the uffs-diag crate
 // dependency set so that offline diagnostics can share the same Polars
@@ -85,8 +92,31 @@ impl FileRecordSegmentHeader {
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
-        eprintln!("Usage: dump_mft_records <mft.raw> <frs1> [frs2 frs3 ...]");
+        eprintln!(
+            "Usage: dump_mft_records <mft.raw> <frs1> [frs2 frs3 ...]\n       dump_mft_records --test-merge <mft.raw> <base_frs> <ext_frs>"
+        );
         std::process::exit(1);
+    }
+
+    // Check for --test-merge mode
+    if args.get(1).map(String::as_str) == Some("--test-merge") {
+        if args.len() < 5 {
+            eprintln!("Usage: dump_mft_records --test-merge <mft.raw> <base_frs> <ext_frs>");
+            std::process::exit(1);
+        }
+        let raw_path = args
+            .get(2)
+            .map(String::as_str)
+            .ok_or_else(|| anyhow::anyhow!("Expected <mft.raw> path argument"))?;
+        let base_frs: u64 = args
+            .get(3)
+            .ok_or_else(|| anyhow::anyhow!("Expected base_frs"))?
+            .parse()?;
+        let ext_frs: u64 = args
+            .get(4)
+            .ok_or_else(|| anyhow::anyhow!("Expected ext_frs"))?
+            .parse()?;
+        return test_merge(raw_path, base_frs, ext_frs);
     }
 
     let raw_path = args.get(1).map(String::as_str).ok_or_else(|| {
@@ -127,10 +157,120 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
+/// Test the merge functionality for a specific base/extension record pair.
+#[allow(
+    clippy::single_call_fn,
+    clippy::use_debug,
+    clippy::similar_names,
+    clippy::cast_possible_truncation
+)]
+fn test_merge(raw_path: &str, base_frs: u64, ext_frs: u64) -> Result<()> {
+    let path = Path::new(raw_path);
+    let raw = load_raw_mft(path, &LoadRawOptions::default())
+        .with_context(|| format!("Failed to load raw MFT from {}", path.display()))?;
+
+    println!(
+        "Loaded raw MFT: {} records, record_size={} bytes",
+        raw.header.record_count, raw.header.record_size
+    );
+
+    // Parse base record
+    println!("\n=== Parsing FRS {base_frs} (base record) ===");
+    if let Some(data) = raw.get_record(base_frs) {
+        match parse_record_full(data, base_frs) {
+            ParseResult::Base(record) => {
+                println!("  Result: Base record");
+                println!("  name: {:?}", record.name);
+                println!("  parent_frs: {}", record.parent_frs);
+                println!("  names.len(): {}", record.names.len());
+                for (idx, name) in record.names.iter().enumerate() {
+                    println!(
+                        "    names[{idx}]: {:?} (parent={})",
+                        name.name, name.parent_frs
+                    );
+                }
+            }
+            ParseResult::Extension(ext) => {
+                println!("  Result: Extension record (base_frs={})", ext.base_frs);
+                println!("  names.len(): {}", ext.names.len());
+            }
+            ParseResult::Skip => {
+                println!("  Result: Skip");
+            }
+        }
+    } else {
+        println!("  Record not found");
+    }
+
+    // Parse extension record
+    println!("\n=== Parsing FRS {ext_frs} (extension record) ===");
+    if let Some(data) = raw.get_record(ext_frs) {
+        match parse_record_full(data, ext_frs) {
+            ParseResult::Base(record) => {
+                println!("  Result: Base record");
+                println!("  name: {:?}", record.name);
+                println!("  names.len(): {}", record.names.len());
+            }
+            ParseResult::Extension(ext) => {
+                println!("  Result: Extension record (base_frs={})", ext.base_frs);
+                println!("  names.len(): {}", ext.names.len());
+                for (idx, name) in ext.names.iter().enumerate() {
+                    println!(
+                        "    names[{idx}]: {:?} (parent={}, ns={})",
+                        name.name, name.parent_frs, name.namespace
+                    );
+                }
+            }
+            ParseResult::Skip => {
+                println!("  Result: Skip");
+            }
+        }
+    } else {
+        println!("  Record not found");
+    }
+
+    // Test the record_merger with all records
+    println!("\n=== Testing MftRecordMerger ===");
+    let num_records = raw.header.record_count as usize;
+    let mut record_merger = MftRecordMerger::with_capacity(num_records);
+
+    for frs in 0..num_records {
+        if let Some(data) = raw.get_record(frs as u64) {
+            let result = parse_record_full(data, frs as u64);
+            record_merger.add_result(result);
+        }
+    }
+
+    println!("  base_count: {}", record_merger.base_count());
+    println!("  extension_count: {}", record_merger.extension_count());
+
+    // Merge and check the base record
+    let merged_records = record_merger.merge();
+    println!("  merged.len(): {}", merged_records.len());
+
+    // Find the base record in merged results
+    if let Some(record) = merged_records.iter().find(|rec| rec.frs == base_frs) {
+        println!("\n=== FRS {base_frs} after merge ===");
+        println!("  name: {:?}", record.name);
+        println!("  parent_frs: {}", record.parent_frs);
+        println!("  names.len(): {}", record.names.len());
+        for (idx, name) in record.names.iter().enumerate() {
+            println!(
+                "    names[{idx}]: {:?} (parent={}, ns={})",
+                name.name, name.parent_frs, name.namespace
+            );
+        }
+    } else {
+        println!("\n=== FRS {base_frs} NOT FOUND in merged results ===");
+    }
+
+    Ok(())
+}
 /// Number of bytes from the start of each record to include in the diagnostic
 /// hex dump. This keeps output manageable while still showing header-adjacent
 /// data for manual inspection.
-const DUMP_BYTES: usize = 64;
+const DUMP_BYTES: usize = 256;
 
 /// Dump a single raw MFT record's header and a small hex preview.
 #[allow(unsafe_code, clippy::single_call_fn)]

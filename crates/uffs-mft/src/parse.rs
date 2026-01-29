@@ -1139,10 +1139,12 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
         });
     }
 
-    // Skip records without a $FILE_NAME attribute (matching C++ behavior)
-    if primary.name.is_empty() {
-        return ParseResult::Skip;
-    }
+    // Note: We do NOT skip records without a $FILE_NAME attribute here.
+    // Some records have their $FILE_NAME attributes in extension records
+    // (when the base record has an $ATTRIBUTE_LIST). These base records
+    // will have their names populated during the merge step.
+    // C++ handles this by processing all records in a single pass and
+    // looking up the base record for each extension record.
 
     // Calculate primary size from default stream
     // For reparse points (junctions/symlinks), use $REPARSE_POINT size if no $DATA
@@ -1651,14 +1653,17 @@ pub fn parse_record_forensic(
     }
 
     // For deleted/extension records without $FILE_NAME, use FRS as name
+    // Note: Normal records without $FILE_NAME may have their names in extension
+    // records (when the base record has an $ATTRIBUTE_LIST). These will be
+    // populated during the merge step.
     let name = if primary.name.is_empty() {
         if is_deleted {
             format!("<DELETED:{frs}>")
         } else if is_extension_record {
             format!("<EXT:{frs}→{base_frs_value}>")
         } else {
-            // Normal record without name - skip (shouldn't happen)
-            return ParseResult::Skip;
+            // Normal record without name - keep as placeholder for merge step
+            String::new()
         }
     } else {
         primary.name
@@ -1922,18 +1927,43 @@ impl MftRecordMerger {
             }
         }
 
-        // Recalculate sizes from merged streams and collect results
+        // Recalculate sizes from merged streams and fix primary name if needed
         let mut result = Vec::with_capacity(self.base_count);
         for record in self.base_records.iter_mut().flatten() {
             if let Some(default_stream) = record.streams.iter().find(|s| s.name.is_empty()) {
                 record.size = default_stream.size;
                 record.allocated_size = default_stream.allocated_size;
             }
+
+            // If base record had no $FILE_NAME but extensions added names,
+            // update the primary name from the first available name.
+            // This handles cases where all $FILE_NAME attributes are in extension records.
+            if record.name.is_empty() && !record.names.is_empty() {
+                // Find the best name (prefer Win32/Win32+DOS namespace)
+                let best_name = record
+                    .names
+                    .iter()
+                    .rfind(|name| matches!(name.namespace, 1 | 3))
+                    .or_else(|| record.names.first());
+                if let Some(name_info) = best_name {
+                    record.name = name_info.name.clone();
+                    record.parent_frs = name_info.parent_frs;
+                    record.namespace = name_info.namespace;
+                    record.fn_created = name_info.fn_created;
+                    record.fn_modified = name_info.fn_modified;
+                    record.fn_accessed = name_info.fn_accessed;
+                    record.fn_mft_changed = name_info.fn_mft_changed;
+                }
+            }
         }
 
-        // Collect non-None records
+        // Collect non-None records that have a name
+        // Records without a name after merging have no $FILE_NAME attributes
+        // (not even in extension records) and should be skipped
         for record in self.base_records.into_iter().flatten() {
-            result.push(record);
+            if !record.name.is_empty() {
+                result.push(record);
+            }
         }
 
         result
@@ -1996,7 +2026,7 @@ impl MftRecordMerger {
             }
         }
 
-        // Recalculate sizes from merged streams
+        // Recalculate sizes from merged streams and fix primary name if needed
         // BUT: Don't overwrite directory sizes - they come from
         // $INDEX_ROOT/$INDEX_ALLOCATION which are already correctly set during
         // parsing
@@ -2005,6 +2035,27 @@ impl MftRecordMerger {
                 if let Some(default_stream) = record.streams.iter().find(|s| s.name.is_empty()) {
                     record.size = default_stream.size;
                     record.allocated_size = default_stream.allocated_size;
+                }
+            }
+
+            // If base record had no $FILE_NAME but extensions added names,
+            // update the primary name from the first available name.
+            // This handles cases where all $FILE_NAME attributes are in extension records.
+            if record.name.is_empty() && !record.names.is_empty() {
+                // Find the best name (prefer Win32/Win32+DOS namespace)
+                let best_name = record
+                    .names
+                    .iter()
+                    .rfind(|name| matches!(name.namespace, 1 | 3))
+                    .or_else(|| record.names.first());
+                if let Some(name_info) = best_name {
+                    record.name = name_info.name.clone();
+                    record.parent_frs = name_info.parent_frs;
+                    record.namespace = name_info.namespace;
+                    record.fn_created = name_info.fn_created;
+                    record.fn_modified = name_info.fn_modified;
+                    record.fn_accessed = name_info.fn_accessed;
+                    record.fn_mft_changed = name_info.fn_mft_changed;
                 }
             }
         }
@@ -2019,8 +2070,13 @@ impl MftRecordMerger {
         };
 
         // Convert directly to ParsedColumns (single pass, no intermediate Vec)
+        // Skip records with empty names - they have no $FILE_NAME attributes
         let mut columns = ParsedColumns::with_capacity(estimated_capacity);
         for record in self.base_records.into_iter().flatten() {
+            // Skip records without a name after merging
+            if record.name.is_empty() {
+                continue;
+            }
             if expand_links {
                 columns.push_record_expanded(&record);
             } else {

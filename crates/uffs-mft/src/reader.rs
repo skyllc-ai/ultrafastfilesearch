@@ -3556,14 +3556,14 @@ impl MftReader {
     ) -> Result<crate::index::MftIndex> {
         use crate::index::MftIndex;
         use crate::parse::{
-            ParseOptions, ParseResult, apply_fixup, parse_record, parse_record_forensic,
+            MftRecordMerger, ParseOptions, ParseResult, apply_fixup, parse_record_forensic,
+            parse_record_full,
         };
 
         let raw = crate::raw::load_raw_mft(path, options)?;
 
         // Parse all records into ParsedRecord format
         let capacity = usize::try_from(raw.header.record_count).unwrap_or(0);
-        let mut parsed_records = Vec::with_capacity(capacity);
 
         // Use forensic parsing if enabled
         let parse_options = if options.forensic {
@@ -3572,38 +3572,47 @@ impl MftReader {
             ParseOptions::DEFAULT
         };
 
-        for (frs, record_data) in raw.iter_records() {
-            let mut record_buf = record_data.to_vec();
-
-            // Apply fixup - in forensic mode, we may want corrupt records
-            let fixup_ok = apply_fixup(&mut record_buf);
-
-            if options.forensic {
-                // Forensic mode: use forensic parser that handles deleted/corrupt/extension
+        if options.forensic {
+            // Forensic mode: use forensic parser that handles deleted/corrupt/extension
+            // Note: In forensic mode, extension records are returned as Base records
+            let mut parsed_records = Vec::with_capacity(capacity);
+            for (frs, record_data) in raw.iter_records() {
+                let mut record_buf = record_data.to_vec();
+                let fixup_ok = apply_fixup(&mut record_buf);
                 let result = parse_record_forensic(&record_buf, frs, &parse_options, !fixup_ok);
                 if let ParseResult::Base(parsed) = result {
                     parsed_records.push(parsed);
                 }
-                // Note: In forensic mode with include_extensions, extension
-                // records are returned as Base records, not
-                // Extension variants
-            } else {
-                // Normal mode: skip corrupt records, use simple parser
-                if !fixup_ok {
+            }
+            Ok(MftIndex::from_parsed_records(
+                raw.header.volume_letter,
+                parsed_records,
+            ))
+        } else {
+            // Normal mode: use MftRecordMerger to properly merge extension records
+            // This is critical for files with $ATTRIBUTE_LIST where $FILE_NAME
+            // attributes are stored in extension records.
+            let mut merger = MftRecordMerger::with_capacity(capacity);
+
+            for (frs, record_data) in raw.iter_records() {
+                let mut record_buf = record_data.to_vec();
+                if !apply_fixup(&mut record_buf) {
                     continue;
                 }
-                if let Some(parsed) = parse_record(&record_buf, frs) {
-                    parsed_records.push(parsed);
-                }
+                let result = parse_record_full(&record_buf, frs);
+                merger.add_result(result);
             }
-        }
 
-        // Build MftIndex from parsed records (includes tree metrics computation)
-        // Use volume letter from header (v2+) or 'X' as fallback for v1 files
-        Ok(MftIndex::from_parsed_records(
-            raw.header.volume_letter,
-            parsed_records,
-        ))
+            // Merge extensions into base records
+            let parsed_records = merger.merge();
+
+            // Build MftIndex from parsed records (includes tree metrics computation)
+            // Use volume letter from header (v2+) or 'X' as fallback for v1 files
+            Ok(MftIndex::from_parsed_records(
+                raw.header.volume_letter,
+                parsed_records,
+            ))
+        }
     }
 
     /// Convert parsed records to DataFrame (legacy AoS path).

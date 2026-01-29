@@ -1877,31 +1877,14 @@ impl MftIndex {
                 let mut total_allocated = record.first_stream.size.allocated;
 
                 let mut next_entry = record.first_stream.next_entry;
-                let mut stream_idx = 0_u32;
                 while next_entry != NO_ENTRY {
                     if let Some(stream) = self.streams.get(next_entry as usize) {
-                        // Debug: log additional streams for FRS 5
-                        if record.frs == 5 {
-                            println!(
-                                "FRS 5: Additional stream {}: size={}, next_entry={}",
-                                stream_idx, stream.size.length, stream.next_entry
-                            );
-                        }
                         total_size = total_size.saturating_add(stream.size.length);
                         total_allocated = total_allocated.saturating_add(stream.size.allocated);
                         next_entry = stream.next_entry;
-                        stream_idx += 1_u32;
                     } else {
                         break;
                     }
-                }
-
-                // Debug: log total size for FRS 5
-                if record.frs == 5 {
-                    println!(
-                        "FRS 5: first_stream.size={}, total_size={}, stream_count={}",
-                        record.first_stream.size.length, total_size, stream_count
-                    );
                 }
 
                 (
@@ -4900,7 +4883,8 @@ impl MftIndex {
                 record.first_name.name =
                     IndexNameRef::new(name_offset, name_len, is_ascii, extension_id);
                 record.first_name.parent_frs = parsed.parent_frs;
-                record.name_count = parsed.names.len().max(1) as u16;
+                // Note: name_count is set AFTER filtering additional names to avoid
+                // counting duplicates. See the code after this block.
 
                 // Set reparse tag (0 if not a reparse point)
                 record.reparse_tag = parsed.reparse_tag;
@@ -4917,24 +4901,17 @@ impl MftIndex {
                 // For directories, use parsed.size/allocated_size which includes
                 // $INDEX_ROOT + $INDEX_ALLOCATION + $BITMAP (C++ parity)
                 // For files, use the default stream size
+                // Note: stream_count is set AFTER filtering named streams to avoid
+                // counting internal Windows streams. See the code after this block.
                 if parsed.is_directory {
                     // Directory size comes from index attributes, already in parsed.size
                     record.first_stream.size.length = parsed.size;
                     record.first_stream.size.allocated = parsed.allocated_size;
-                    // For directories, stream_count = 1 (directory stream) + additional streams
-                    // The directory stream itself is not in parsed.streams, so we add 1
-                    // But only if there are additional streams (otherwise it's just 1)
-                    record.stream_count = if parsed.streams.is_empty() {
-                        1
-                    } else {
-                        (parsed.streams.len() + 1) as u16
-                    };
                 } else if let Some(default_stream) =
                     parsed.streams.iter().find(|st| st.name.is_empty())
                 {
                     record.first_stream.size.length = default_stream.size;
                     record.first_stream.size.allocated = default_stream.allocated_size;
-                    record.stream_count = parsed.streams.len().max(1) as u16;
                     // Set is_resident flag (bit 1)
                     if default_stream.is_resident {
                         record.first_stream.flags |= 0x02;
@@ -4947,15 +4924,27 @@ impl MftIndex {
                     // No default stream, use first available
                     record.first_stream.size.length = parsed.size;
                     record.first_stream.size.allocated = parsed.allocated_size;
-                    record.stream_count = parsed.streams.len().max(1) as u16;
                 }
             } // End record borrow here
 
             // Store additional names (hardlinks) in the links vector
-            // Skip the first name (already stored in first_name)
-            if parsed.names.len() > 1 {
+            // Skip the name that matches first_name (the primary/best name)
+            // Note: parsed.name is the BEST name (selected by PrimaryNameTracker),
+            // which may not be parsed.names[0]. We must filter by matching name+parent.
+            let additional_names: Vec<_> = parsed
+                .names
+                .iter()
+                .filter(|n| !(n.name == parsed.name && n.parent_frs == parsed.parent_frs))
+                .collect();
+
+            // Update name_count to reflect actual stored names (1 primary + additional)
+            // This must be done AFTER filtering to avoid counting duplicates
+            let actual_name_count = (1 + additional_names.len()).max(1) as u16;
+            index.get_or_create(parsed.frs).name_count = actual_name_count;
+
+            if !additional_names.is_empty() {
                 let mut prev_link_idx = NO_ENTRY;
-                for extra_name in parsed.names.iter().skip(1).rev() {
+                for extra_name in additional_names.iter().rev() {
                     // Add name to names buffer
                     let extra_offset = index.add_name(&extra_name.name);
                     let extra_len = extra_name.name.len() as u16;
@@ -4977,11 +4966,32 @@ impl MftIndex {
 
             // Store additional streams (ADS) in the streams vector
             // Skip the default (unnamed) stream which is stored in first_stream
+            // Also filter out internal Windows streams (names starting with $UPPERCASE)
+            // These include $DSC, $REPARSE, $EA, $EA_INFORMATION, $TXF_DATA, $OBJECT_ID
+            // But allow user-visible streams like ${GUID}.Metadata (iCloud)
             let named_streams: Vec<_> = parsed
                 .streams
                 .iter()
-                .filter(|st| !st.name.is_empty())
+                .filter(|st| {
+                    if st.name.is_empty() {
+                        return false;
+                    }
+                    // Filter out internal Windows streams: $UPPERCASE...
+                    // Allow ${...} style streams (iCloud metadata, etc.)
+                    st.name.strip_prefix('$').is_none_or(|rest| {
+                        !rest
+                            .chars()
+                            .next()
+                            .is_some_and(|ch| ch.is_ascii_uppercase())
+                    })
+                })
                 .collect();
+
+            // Update stream_count to reflect actual stored streams (1 default + named)
+            // This must be done AFTER filtering to avoid counting internal Windows streams
+            let actual_stream_count = (1 + named_streams.len()).max(1) as u16;
+            index.get_or_create(parsed.frs).stream_count = actual_stream_count;
+
             if !named_streams.is_empty() {
                 let mut prev_stream_idx = NO_ENTRY;
                 for extra_stream in named_streams.iter().rev() {

@@ -802,9 +802,11 @@ impl<'a> IndexQuery<'a> {
         stream_idx: u16,
         cached_path: Option<String>,
     ) -> SearchResult {
-        let Some(stream) = index.get_stream_at(record, stream_idx) else {
-            return result;
-        };
+        // Get stream info, falling back to first_stream if not found
+        // This handles cases where stream_count is higher than actual stored streams
+        let stream = index
+            .get_stream_at(record, stream_idx)
+            .unwrap_or(&record.first_stream);
 
         // Use cached path for primary name (idx 0), build for hard links
         let mut base_path = if name_idx == 0 {
