@@ -134,3 +134,23 @@ Missing:    0 paths ✅
 The fix correctly preserves extension record data (hard links and ADS) when the base record
 is processed after the extension record in the same parallel parsing fragment.
 
+## CI Pipeline Run 4 - v0.2.155 deployed successfully
+
+Fixed borrow checker error that occurred during Windows cross-compilation:
+- Error: `cannot borrow fragment.streams as mutable more than once at a time`
+- Cause: `record` was borrowed from `fragment.get_or_create(frs)` while also accessing `fragment.streams`
+- Fix: Restructured code to update `fragment.links` and `fragment.streams` BEFORE borrowing `record`
+
+### Final Verification
+
+```
+# v0.2.155 local test (macOS with offline MFT):
+C++ paths:  7,058,029
+Rust paths: 7,058,029
+Missing:    0 paths (only difference is C++ "Drives?" status line)
+
+100% DATA RECORD MATCH ✅
+```
+
+v0.2.155 deployed and pushed to `feature/cpp-tree-algorithm-port` branch.
+
