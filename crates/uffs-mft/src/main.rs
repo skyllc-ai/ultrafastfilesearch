@@ -1977,8 +1977,16 @@ fn average_results(results: &[uffs_mft::BenchmarkResult]) -> uffs_mft::Benchmark
         parse_ms: results.iter().map(|r| r.timings.parse_ms).sum::<u64>() / n,
         merge_ms: results.iter().map(|r| r.timings.merge_ms).sum::<u64>() / n,
         df_build_ms: results.iter().map(|r| r.timings.df_build_ms).sum::<u64>() / n,
-        index_build_ms: results.iter().map(|r| r.timings.index_build_ms).sum::<u64>() / n,
-        tree_metrics_ms: results.iter().map(|r| r.timings.tree_metrics_ms).sum::<u64>() / n,
+        index_build_ms: results
+            .iter()
+            .map(|r| r.timings.index_build_ms)
+            .sum::<u64>()
+            / n,
+        tree_metrics_ms: results
+            .iter()
+            .map(|r| r.timings.tree_metrics_ms)
+            .sum::<u64>()
+            / n,
         total_ms: results.iter().map(|r| r.timings.total_ms).sum::<u64>() / n,
     };
 

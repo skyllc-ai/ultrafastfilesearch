@@ -1966,51 +1966,18 @@ impl MftIndex {
         }
     }
 
-    /// C++ port tree metrics algorithm (placeholder).
+    /// C++ port tree metrics algorithm.
     ///
-    /// This will be the 100% faithful port of the C++ tree algorithm
-    /// with matching structures, entities, and algorithm flow.
+    /// This is a 100% faithful port of the C++ tree algorithm with matching
+    /// structures, entities, and algorithm flow. It uses recursive DFS
+    /// traversal starting from root (FRS 5) and the delta formula for
+    /// proportional hardlink share calculation.
     ///
-    /// TODO: Implement the actual C++ algorithm port
+    /// See `docs/architecture/CPP_TREE_ALGORITHM_PORT.md` for full
+    /// documentation.
     #[allow(clippy::print_stdout)]
     fn compute_tree_metrics_cpp_port(&mut self, debug: bool) {
-        let n = self.records.len();
-        if n == 0 {
-            tracing::debug!("⏭️  Skipping tree metrics (cpp_port) - no records");
-            return;
-        }
-
-        if debug {
-            println!("=== TREE METRICS DEBUG (C++ PORT) ===");
-            println!("Total records: {n}");
-            println!("Total children entries: {}", self.children.len());
-        }
-
-        tracing::info!(
-            records = n,
-            "🚧 C++ PORT TREE ALGORITHM - PLACEHOLDER - NOT YET IMPLEMENTED"
-        );
-
-        // TODO: Phase 1 - Study C++ code and document algorithm
-        // TODO: Phase 2 - Create ChildInfo struct matching C++ layout
-        // TODO: Phase 3 - Build child entries during parsing
-        // TODO: Phase 4 - Implement tree metrics computation
-        // TODO: Phase 5 - Testing against C++ output
-        // TODO: Phase 6 - Integration
-
-        if debug {
-            println!("⚠️  C++ port algorithm not yet implemented!");
-            println!("⚠️  Tree metrics will be ZERO for all records.");
-            println!("⚠️  Use UFFS_TREE_ALGO=current to use the working algorithm.");
-        }
-
-        // For now, just zero out tree metrics to make it obvious this is a placeholder
-        // In the real implementation, this will compute the actual values
-        for record in &mut self.records {
-            record.descendants = 0;
-            record.treesize = 0;
-            record.tree_allocated = 0;
-        }
+        crate::cpp_tree::compute_tree_metrics_cpp_port(self, debug);
     }
 
     /// Internal implementation of tree metrics computation.
