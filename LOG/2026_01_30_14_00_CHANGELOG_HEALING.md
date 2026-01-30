@@ -74,3 +74,63 @@ Key changes:
 - Added backticks around `Vec<(existing_record_idx, discarded_record)>` in doc comment
 - Changed `std::mem::replace` to `core::mem::replace`
 
+## CI Pipeline Run 3 - v0.2.154 deployed but fix didn't work
+
+Trial run on Windows still showed 40 missing paths. The deferred merge fix addressed
+cross-fragment merging but NOT same-fragment ordering issues.
+
+### Deeper Root Cause Analysis
+
+The REAL bug is in `parse_record_to_fragment()` (io.rs lines 1666-1689):
+
+When an extension record is processed BEFORE the base record in the SAME fragment:
+1. `parse_extension_to_fragment()` creates a placeholder for `base_frs`
+2. Extension names/streams are added to this placeholder
+3. Later, `parse_record_to_fragment()` processes the base record
+4. It calls `fragment.get_or_create(frs)` which returns the EXISTING placeholder
+5. **BUG**: It then OVERWRITES `first_name` and `first_stream`, losing extension data:
+
+```rust
+record.first_name = LinkInfo {
+    next_entry: NO_ENTRY,  // <-- OVERWRITES extension links!
+    name: name_ref,
+    parent_frs,
+};
+record.name_count = 1 + additional_count as u16;  // <-- RESETS count!
+```
+
+### Fix (v0.2.155)
+
+Modified `parse_record_to_fragment()` to preserve extension data:
+1. Save existing `first_name` and `first_stream` BEFORE overwriting
+2. After setting base record data, chain extension names/streams to base record's chain
+3. Add extension counts to base record counts instead of resetting
+
+Key changes in io.rs:
+- Save `existing_first_name` (full LinkInfo) before overwriting
+- Save `existing_name_count` and `existing_stream_count`
+- Chain: base first_name → base additional links → extension first_name → extension overflow
+- Chain: base first_stream → base ADS → extension ADS
+- Calculate total counts: base counts + extension counts
+
+### Verification (macOS offline MFT test)
+
+Tested locally on macOS using the offline MFT file (`D_mft.bin`):
+
+```
+# Before fix (v0.2.154):
+C++ paths:  7,058,029
+Rust paths: 7,057,989
+Missing:    40 paths
+
+# After fix:
+C++ paths:  7,058,029
+Rust paths: 7,058,029
+Missing:    0 paths ✅
+```
+
+**100% path match achieved!**
+
+The fix correctly preserves extension record data (hard links and ADS) when the base record
+is processed after the extension record in the same parallel parsing fragment.
+

@@ -1663,7 +1663,33 @@ pub fn parse_record_to_fragment(
     }
 
     // Get or create the record in the fragment
+    // IMPORTANT: The record may already have names/streams from extension records
+    // that were processed BEFORE this base record in the same fragment.
+    // We must preserve those extension names/streams and chain them to base record
+    // data.
     let record = fragment.get_or_create(frs);
+
+    // Save any existing extension data BEFORE overwriting
+    // Copy the entire first_name LinkInfo so we can add it as a link later
+    let existing_first_name = record.first_name;
+    let existing_name_valid = existing_first_name.name.is_valid();
+    let existing_name_count = if existing_name_valid {
+        record.name_count
+    } else if existing_first_name.next_entry != NO_ENTRY {
+        // Has overflow links but no first_name - count those
+        record.name_count.saturating_sub(1)
+    } else {
+        0
+    };
+    let existing_stream_next = record.first_stream.next_entry;
+    let existing_stream_count = if existing_stream_next != NO_ENTRY {
+        // Extension records added ADS - count is stream_count - 1 (exclude default)
+        record.stream_count.saturating_sub(1)
+    } else {
+        0
+    };
+
+    // Now set the base record data
     record.stdinfo = std_info;
     record.first_stream.size = SizeInfo {
         length: default_size,
@@ -1674,32 +1700,92 @@ pub fn parse_record_to_fragment(
         name: name_ref,
         parent_frs,
     };
-    record.name_count = 1 + additional_count as u16;
-    // stream_count = 1 (default) + additional ADS
-    record.stream_count = 1 + additional_stream_count as u16;
 
-    // Chain the additional links
-    if !link_indices.is_empty() {
-        record.first_name.next_entry = link_indices[0];
-    }
-
-    // Chain the additional streams
-    if !stream_indices.is_empty() {
-        record.first_stream.next_entry = stream_indices[0];
-    }
-
+    // Chain the base record's additional links together
     for i in 0..link_indices.len().saturating_sub(1) {
         let current_idx = link_indices[i] as usize;
         let next_idx = link_indices[i + 1];
         fragment.links[current_idx].next_entry = next_idx;
     }
 
-    // Chain the streams together
+    // Chain the base record's additional streams together
     for i in 0..stream_indices.len().saturating_sub(1) {
         let current_idx = stream_indices[i] as usize;
         let next_idx = stream_indices[i + 1];
         fragment.streams[current_idx].next_entry = next_idx;
     }
+
+    // Now chain base record links, then extension links
+    // Extension names become additional hard links after base record's names
+    //
+    // We need to update fragment.links BEFORE borrowing record to avoid borrow conflicts.
+    // Calculate what the first_name.next_entry should be, then set it after.
+    let first_name_next_entry: u32;
+
+    if existing_name_valid {
+        // Extension had first_name set - add it as a new link in the links array
+        let ext_link_idx = fragment.links.len() as u32;
+        fragment.links.push(existing_first_name);
+
+        // Chain: base first_name -> base additional links -> ext first_name -> ext overflow
+        if !link_indices.is_empty() {
+            first_name_next_entry = link_indices[0];
+            let last_base_link = link_indices[link_indices.len() - 1] as usize;
+            fragment.links[last_base_link].next_entry = ext_link_idx;
+        } else {
+            first_name_next_entry = ext_link_idx;
+        }
+    } else if existing_first_name.next_entry != NO_ENTRY {
+        // Extension only had overflow links (no first_name) - chain them
+        if !link_indices.is_empty() {
+            first_name_next_entry = link_indices[0];
+            let last_base_link = link_indices[link_indices.len() - 1] as usize;
+            fragment.links[last_base_link].next_entry = existing_first_name.next_entry;
+        } else {
+            first_name_next_entry = existing_first_name.next_entry;
+        }
+    } else {
+        // No extension names - just chain base's additional links
+        if !link_indices.is_empty() {
+            first_name_next_entry = link_indices[0];
+        } else {
+            first_name_next_entry = NO_ENTRY;
+        }
+    }
+
+    // Now set first_name.next_entry on the record
+    {
+        let record = fragment.get_or_create(frs);
+        record.first_name.next_entry = first_name_next_entry;
+    }
+
+    // Chain streams: base ADS -> extension ADS (must be done before borrowing record)
+    // If base has ADS and extension has ADS, chain them together
+    if !stream_indices.is_empty() && existing_stream_next != NO_ENTRY {
+        let last_base_stream = stream_indices[stream_indices.len() - 1] as usize;
+        fragment.streams[last_base_stream].next_entry = existing_stream_next;
+    }
+
+    // Now get record and update counts and first_stream chain
+    let record = fragment.get_or_create(frs);
+
+    // Calculate total name count
+    // Base: 1 (first_name) + additional_count
+    // Extension: existing_name_count (includes extension's names)
+    record.name_count = 1 + additional_count as u16 + existing_name_count;
+
+    // Set first_stream.next_entry to chain to base ADS or extension ADS
+    if !stream_indices.is_empty() {
+        record.first_stream.next_entry = stream_indices[0];
+    } else if existing_stream_next != NO_ENTRY {
+        // Base has no ADS, but extension had ADS
+        record.first_stream.next_entry = existing_stream_next;
+    }
+
+    // Calculate total stream count
+    // Base: 1 (default $DATA) + additional_stream_count
+    // Extension: existing_stream_count (ADS from extension records)
+    record.stream_count = 1 + additional_stream_count as u16 + existing_stream_count;
 
     // Build parent-child relationship for tree metrics computation
     // This is critical for compute_tree_metrics() to work correctly.
