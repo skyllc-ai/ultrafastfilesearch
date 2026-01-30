@@ -534,7 +534,9 @@ fn is_internal_windows_stream(name: &str) -> bool {
 /// `true` if a record was added to the index, `false` if skipped.
 #[allow(unsafe_code, clippy::too_many_lines, clippy::cast_possible_truncation)]
 pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::MftIndex) -> bool {
-    use crate::index::{IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo};
+    use crate::index::{
+        ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo,
+    };
     #[allow(unused_imports)] // Used in inline parsing mode
     use crate::ntfs::{
         AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
@@ -763,7 +765,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     // &mut record while modifying index
     let additional_count = additional_names.len();
     let mut link_indices: Vec<u32> = Vec::with_capacity(additional_count);
+    // Collect parent FRS values for building children array later
+    let mut additional_parent_frs: SmallVec<[u64; 4]> = SmallVec::with_capacity(additional_count);
     for (link_name, link_parent) in additional_names {
+        additional_parent_frs.push(link_parent);
         let link_offset = index.add_name(&link_name);
         let link_len = link_name.len();
         let link_is_ascii = link_name.is_ascii();
@@ -859,6 +864,52 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         index.streams[current_idx].next_entry = next_idx;
     }
 
+    // Build parent-child relationship for tree metrics computation
+    // This is critical for compute_tree_metrics() to work correctly.
+    // Each name (primary + additional) creates a child entry in its parent.
+    // name_index 0 = primary name, 1+ = additional names (hardlinks)
+
+    // Helper to add a child entry to a parent
+    let add_child_entry = |index: &mut crate::index::MftIndex, p_frs: u64, name_idx: u16| {
+        if p_frs == frs || p_frs == 0 || p_frs == u64::from(NO_ENTRY) {
+            return;
+        }
+        // Ensure parent exists
+        let parent_idx = {
+            let p_frs_usize = p_frs as usize;
+            if p_frs_usize >= index.frs_to_idx.len() {
+                index.frs_to_idx.resize(p_frs_usize + 1, NO_ENTRY);
+            }
+            if index.frs_to_idx[p_frs_usize] == NO_ENTRY {
+                // Create placeholder parent
+                let new_idx = index.records.len() as u32;
+                index.frs_to_idx[p_frs_usize] = new_idx;
+                index.records.push(crate::index::FileRecord::new(p_frs));
+            }
+            index.frs_to_idx[p_frs_usize]
+        };
+
+        // Add child entry
+        let child_idx = index.children.len() as u32;
+        let parent = &mut index.records[parent_idx as usize];
+        let old_first_child = parent.first_child;
+        parent.first_child = child_idx;
+
+        index.children.push(ChildInfo {
+            next_entry: old_first_child,
+            child_frs: frs,
+            name_index: name_idx,
+        });
+    };
+
+    // Add child entry for primary name (name_index = 0)
+    add_child_entry(index, parent_frs, 0);
+
+    // Add child entries for additional names (hardlinks)
+    for (name_idx, &link_parent_frs) in additional_parent_frs.iter().enumerate() {
+        add_child_entry(index, link_parent_frs, (name_idx + 1) as u16);
+    }
+
     true
 }
 
@@ -884,7 +935,7 @@ fn parse_extension_to_index(
     base_frs: u64,
     index: &mut crate::index::MftIndex,
 ) -> bool {
-    use crate::index::{IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo};
+    use crate::index::{ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo};
     use crate::ntfs::{
         AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
     };
@@ -1170,6 +1221,57 @@ fn parse_extension_to_index(
             let record = &mut index.records[record_idx as usize];
             record.stream_count += stream_indices.len() as u16;
         }
+
+        // Build parent-child relationship for names added from extension records
+        // This is critical for compute_tree_metrics() to work correctly.
+        // Get the current name_count to determine the name_index for each new name
+        let record = &index.records[record_idx as usize];
+        let existing_name_count = record.name_count;
+
+        for (name_idx, (_, parent_frs)) in names.iter().enumerate() {
+            let p_frs = *parent_frs;
+            if p_frs == base_frs || p_frs == 0 || p_frs == u64::from(NO_ENTRY) {
+                continue;
+            }
+
+            // Ensure parent exists
+            let parent_idx = {
+                let p_frs_usize = p_frs as usize;
+                if p_frs_usize >= index.frs_to_idx.len() {
+                    index.frs_to_idx.resize(p_frs_usize + 1, NO_ENTRY);
+                }
+                if index.frs_to_idx[p_frs_usize] == NO_ENTRY {
+                    // Create placeholder parent
+                    let new_idx = index.records.len() as u32;
+                    index.frs_to_idx[p_frs_usize] = new_idx;
+                    index.records.push(crate::index::FileRecord::new(p_frs));
+                }
+                index.frs_to_idx[p_frs_usize]
+            };
+
+            // Add child entry
+            // name_index is the position in the combined name list (existing + new)
+            // For extension records, the first name might replace first_name (if empty),
+            // so we need to account for that
+            let effective_name_idx = if existing_name_count == 0 {
+                // First extension name became first_name, so name_index starts at 0
+                name_idx as u16
+            } else {
+                // Extension names are appended after existing names
+                (existing_name_count - 1 + name_idx as u16)
+            };
+
+            let child_idx = index.children.len() as u32;
+            let parent = &mut index.records[parent_idx as usize];
+            let old_first_child = parent.first_child;
+            parent.first_child = child_idx;
+
+            index.children.push(ChildInfo {
+                next_entry: old_first_child,
+                child_frs: base_frs,
+                name_index: effective_name_idx,
+            });
+        }
     }
 
     !names.is_empty() || !streams.is_empty()
@@ -1189,7 +1291,9 @@ pub fn parse_record_to_fragment(
     frs: u64,
     fragment: &mut crate::index::MftIndexFragment,
 ) -> bool {
-    use crate::index::{IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo};
+    use crate::index::{
+        ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo,
+    };
     use crate::ntfs::{
         AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
         StandardInformation, file_reference_to_frs, filetime_to_unix_micros,
@@ -1407,7 +1511,10 @@ pub fn parse_record_to_fragment(
     // Pre-process additional names
     let additional_count = additional_names.len();
     let mut link_indices: Vec<u32> = Vec::with_capacity(additional_count);
+    // Collect parent FRS values for building children array later
+    let mut additional_parent_frs: SmallVec<[u64; 4]> = SmallVec::with_capacity(additional_count);
     for (link_name, link_parent) in additional_names {
+        additional_parent_frs.push(link_parent);
         let link_offset = fragment.add_name(&link_name);
         let link_len = link_name.len();
         let link_is_ascii = link_name.is_ascii();
@@ -1496,6 +1603,53 @@ pub fn parse_record_to_fragment(
         fragment.streams[current_idx].next_entry = next_idx;
     }
 
+    // Build parent-child relationship for tree metrics computation
+    // This is critical for compute_tree_metrics() to work correctly.
+    // Each name (primary + additional) creates a child entry in its parent.
+    // name_index 0 = primary name, 1+ = additional names (hardlinks)
+
+    // Helper to add a child entry to a parent in the fragment
+    let add_child_entry =
+        |fragment: &mut crate::index::MftIndexFragment, p_frs: u64, name_idx: u16| {
+            if p_frs == frs || p_frs == 0 || p_frs == u64::from(NO_ENTRY) {
+                return;
+            }
+            // Ensure parent exists in fragment
+            let parent_idx = {
+                let p_frs_usize = p_frs as usize;
+                if p_frs_usize >= fragment.frs_to_idx.len() {
+                    fragment.frs_to_idx.resize(p_frs_usize + 1, NO_ENTRY);
+                }
+                if fragment.frs_to_idx[p_frs_usize] == NO_ENTRY {
+                    // Create placeholder parent
+                    let new_idx = fragment.records.len() as u32;
+                    fragment.frs_to_idx[p_frs_usize] = new_idx;
+                    fragment.records.push(crate::index::FileRecord::new(p_frs));
+                }
+                fragment.frs_to_idx[p_frs_usize]
+            };
+
+            // Add child entry
+            let child_idx = fragment.children.len() as u32;
+            let parent = &mut fragment.records[parent_idx as usize];
+            let old_first_child = parent.first_child;
+            parent.first_child = child_idx;
+
+            fragment.children.push(ChildInfo {
+                next_entry: old_first_child,
+                child_frs: frs,
+                name_index: name_idx,
+            });
+        };
+
+    // Add child entry for primary name (name_index = 0)
+    add_child_entry(fragment, parent_frs, 0);
+
+    // Add child entries for additional names (hardlinks)
+    for (name_idx, &link_parent_frs) in additional_parent_frs.iter().enumerate() {
+        add_child_entry(fragment, link_parent_frs, (name_idx + 1) as u16);
+    }
+
     true
 }
 
@@ -1519,7 +1673,7 @@ fn parse_extension_to_fragment(
     base_frs: u64,
     fragment: &mut crate::index::MftIndexFragment,
 ) -> bool {
-    use crate::index::{IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo};
+    use crate::index::{ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo};
     use crate::ntfs::{
         AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
     };
@@ -1780,6 +1934,57 @@ fn parse_extension_to_fragment(
         }
         let record = fragment.get_or_create(base_frs);
         record.stream_count += stream_indices.len() as u16;
+    }
+
+    // Build parent-child relationship for names added from extension records
+    // This is critical for compute_tree_metrics() to work correctly.
+    // Get the current name_count to determine the name_index for each new name
+    let record = fragment.get_or_create(base_frs);
+    let existing_name_count = record.name_count;
+
+    for (name_idx, (_, parent_frs)) in names.iter().enumerate() {
+        let p_frs = *parent_frs;
+        if p_frs == base_frs || p_frs == 0 || p_frs == u64::from(NO_ENTRY) {
+            continue;
+        }
+
+        // Ensure parent exists in fragment
+        let parent_idx = {
+            let p_frs_usize = p_frs as usize;
+            if p_frs_usize >= fragment.frs_to_idx.len() {
+                fragment.frs_to_idx.resize(p_frs_usize + 1, NO_ENTRY);
+            }
+            if fragment.frs_to_idx[p_frs_usize] == NO_ENTRY {
+                // Create placeholder parent
+                let new_idx = fragment.records.len() as u32;
+                fragment.frs_to_idx[p_frs_usize] = new_idx;
+                fragment.records.push(crate::index::FileRecord::new(p_frs));
+            }
+            fragment.frs_to_idx[p_frs_usize]
+        };
+
+        // Add child entry
+        // name_index is the position in the combined name list (existing + new)
+        // For extension records, the first name might replace first_name (if empty),
+        // so we need to account for that
+        let effective_name_idx = if existing_name_count == 0 {
+            // First extension name became first_name, so name_index starts at 0
+            name_idx as u16
+        } else {
+            // Extension names are appended after existing names
+            (existing_name_count - 1 + name_idx as u16)
+        };
+
+        let child_idx = fragment.children.len() as u32;
+        let parent = &mut fragment.records[parent_idx as usize];
+        let old_first_child = parent.first_child;
+        parent.first_child = child_idx;
+
+        fragment.children.push(ChildInfo {
+            next_entry: old_first_child,
+            child_frs: base_frs,
+            name_index: effective_name_idx,
+        });
     }
 
     !names.is_empty() || !streams.is_empty()
