@@ -127,7 +127,7 @@ pub use flags::FileFlags;
 // Re-export lean index types
 pub use index::{
     ChildInfo, FileRecord, IndexNameRef, IndexStreamInfo, LinkInfo, MftIndex, NO_ENTRY, ROOT_FRS,
-    SizeInfo, StandardInfo, UsnApplyStats,
+    SizeInfo, StandardInfo, TreeAlgorithm, UsnApplyStats,
 };
 // Re-export I/O types for advanced usage
 #[cfg(windows)]

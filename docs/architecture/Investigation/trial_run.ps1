@@ -103,7 +103,12 @@ function Compare-Outputs {
     }
 
     if ($result.RustExists) {
-        $result.RustLines = (Get-Content -LiteralPath $RustFile | Measure-Object -Line).Lines
+        # FAST line count using find /c /v "" (native Windows, ~100x faster than Get-Content)
+        # This counts lines by counting non-matches of empty string
+        $countOutput = & cmd.exe /c "find /c /v `"`" `"$RustFile`"" 2>$null
+        if ($countOutput -match ': (\d+)') {
+            $result.RustLines = [int]$Matches[1]
+        }
         $rustMetrics = Extract-RootMetrics -FilePath $RustFile
         if ($rustMetrics) {
             $result.RustTreesize = $rustMetrics.Treesize
@@ -112,7 +117,11 @@ function Compare-Outputs {
     }
 
     if ($result.CppExists) {
-        $result.CppLines = (Get-Content -LiteralPath $CppFile | Measure-Object -Line).Lines
+        # FAST line count using find /c /v "" (native Windows, ~100x faster than Get-Content)
+        $countOutput = & cmd.exe /c "find /c /v `"`" `"$CppFile`"" 2>$null
+        if ($countOutput -match ': (\d+)') {
+            $result.CppLines = [int]$Matches[1]
+        }
         $cppMetrics = Extract-RootMetrics -FilePath $CppFile
         if ($cppMetrics) {
             $result.CppTreesize = $cppMetrics.Treesize
@@ -220,7 +229,12 @@ function Invoke-Logged {
         $outPath = Join-Path $WorkDir $OutFilePath
         if (Test-Path -LiteralPath $outPath) {
             $fileInfo = Get-Item -LiteralPath $outPath
-            $lineCount = (Get-Content -LiteralPath $outPath | Measure-Object -Line).Lines
+            # FAST line count using find /c /v "" (native Windows, ~100x faster than Get-Content)
+            $countOutput = & cmd.exe /c "find /c /v `"`" `"$outPath`"" 2>$null
+            $lineCount = 0
+            if ($countOutput -match ': (\d+)') {
+                $lineCount = [int]$Matches[1]
+            }
             LogLine ("**Output file size:** " + (Format-FileSize $fileInfo.Length))
             LogLine ("**Output line count:** " + $lineCount)
         }

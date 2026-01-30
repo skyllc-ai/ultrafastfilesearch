@@ -39,6 +39,85 @@ pub const NO_ENTRY: u32 = u32::MAX;
 pub const ROOT_FRS: u64 = 5;
 
 // ============================================================================
+// Tree Algorithm Selection
+// ============================================================================
+
+/// Selects which tree metrics algorithm to use.
+///
+/// This allows switching between the current Rust implementation and
+/// the new C++ port for testing and comparison.
+///
+/// # Environment Variable
+///
+/// Set `UFFS_TREE_ALGO` to control the default:
+/// - `current` (default): Use the current leaf-peeling algorithm
+/// - `cpp_port`: Use the C++ port algorithm (100% faithful port)
+///
+/// # Example
+///
+/// ```bash
+/// # Use current algorithm (default)
+/// UFFS_TREE_ALGO=current uffs index
+///
+/// # Use C++ port algorithm
+/// UFFS_TREE_ALGO=cpp_port uffs index
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeAlgorithm {
+    /// Current Rust leaf-peeling algorithm (default)
+    Current,
+    /// C++ port algorithm - 100% faithful port of C++ tree algorithm
+    CppPort,
+}
+
+impl Default for TreeAlgorithm {
+    /// Default checks the `UFFS_TREE_ALGO` environment variable.
+    fn default() -> Self {
+        Self::from_env()
+    }
+}
+
+impl TreeAlgorithm {
+    /// Parse from environment variable `UFFS_TREE_ALGO`.
+    ///
+    /// Returns `Current` if not set or unrecognized.
+    #[must_use]
+    pub fn from_env() -> Self {
+        match std::env::var("UFFS_TREE_ALGO")
+            .unwrap_or_default()
+            .to_lowercase()
+            .as_str()
+        {
+            "cpp_port" | "cpp" | "port" => Self::CppPort,
+            _ => Self::Current,
+        }
+    }
+
+    /// Returns the algorithm name for display.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Current => "current (leaf-peeling)",
+            Self::CppPort => "cpp_port (C++ faithful port)",
+        }
+    }
+}
+
+impl core::str::FromStr for TreeAlgorithm {
+    type Err = core::convert::Infallible;
+
+    /// Parse from a string value (for CLI arguments).
+    ///
+    /// Returns `Current` if unrecognized (never fails).
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(match value.to_lowercase().as_str() {
+            "cpp_port" | "cpp" | "port" => Self::CppPort,
+            _ => Self::Current,
+        })
+    }
+}
+
+// ============================================================================
 // StandardInfo - Bit-packed attributes (matches C++ exactly)
 // ============================================================================
 
@@ -1797,7 +1876,7 @@ impl MftIndex {
         clippy::too_many_lines
     )] // Justified: n < u32::MAX in practice, algorithm is inherently complex
     pub fn compute_tree_metrics(&mut self) {
-        self.compute_tree_metrics_impl(false);
+        self.compute_tree_metrics_with_algo(TreeAlgorithm::default(), false);
     }
 
     /// Compute tree metrics with optional debug output.
@@ -1806,7 +1885,70 @@ impl MftIndex {
     /// handling to stdout for debugging purposes.
     #[allow(clippy::print_stdout)]
     pub fn compute_tree_metrics_debug(&mut self) {
-        self.compute_tree_metrics_impl(true);
+        self.compute_tree_metrics_with_algo(TreeAlgorithm::default(), true);
+    }
+
+    /// Compute tree metrics using a specific algorithm.
+    ///
+    /// This allows switching between the current leaf-peeling algorithm
+    /// and the new C++ port algorithm for testing and comparison.
+    ///
+    /// # Arguments
+    /// * `algo` - Which tree algorithm to use
+    /// * `debug` - If true, prints detailed debug information
+    #[allow(clippy::print_stdout)]
+    pub fn compute_tree_metrics_with_algo(&mut self, algo: TreeAlgorithm, debug: bool) {
+        match algo {
+            TreeAlgorithm::Current => self.compute_tree_metrics_impl(debug),
+            TreeAlgorithm::CppPort => self.compute_tree_metrics_cpp_port(debug),
+        }
+    }
+
+    /// C++ port tree metrics algorithm (placeholder).
+    ///
+    /// This will be the 100% faithful port of the C++ tree algorithm
+    /// with matching structures, entities, and algorithm flow.
+    ///
+    /// TODO: Implement the actual C++ algorithm port
+    #[allow(clippy::print_stdout)]
+    fn compute_tree_metrics_cpp_port(&mut self, debug: bool) {
+        let n = self.records.len();
+        if n == 0 {
+            tracing::debug!("⏭️  Skipping tree metrics (cpp_port) - no records");
+            return;
+        }
+
+        if debug {
+            println!("=== TREE METRICS DEBUG (C++ PORT) ===");
+            println!("Total records: {n}");
+            println!("Total children entries: {}", self.children.len());
+        }
+
+        tracing::info!(
+            records = n,
+            "🚧 C++ PORT TREE ALGORITHM - PLACEHOLDER - NOT YET IMPLEMENTED"
+        );
+
+        // TODO: Phase 1 - Study C++ code and document algorithm
+        // TODO: Phase 2 - Create ChildInfo struct matching C++ layout
+        // TODO: Phase 3 - Build child entries during parsing
+        // TODO: Phase 4 - Implement tree metrics computation
+        // TODO: Phase 5 - Testing against C++ output
+        // TODO: Phase 6 - Integration
+
+        if debug {
+            println!("⚠️  C++ port algorithm not yet implemented!");
+            println!("⚠️  Tree metrics will be ZERO for all records.");
+            println!("⚠️  Use UFFS_TREE_ALGO=current to use the working algorithm.");
+        }
+
+        // For now, just zero out tree metrics to make it obvious this is a placeholder
+        // In the real implementation, this will compute the actual values
+        for record in &mut self.records {
+            record.descendants = 0;
+            record.treesize = 0;
+            record.tree_allocated = 0;
+        }
     }
 
     /// Internal implementation of tree metrics computation.
