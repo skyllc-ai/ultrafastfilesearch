@@ -497,6 +497,16 @@ impl SearchResult {
             base_name
         };
 
+        // C++ parity: Only the default stream (stream_idx == 0) gets tree metrics.
+        // ADS streams (stream_idx > 0) have descendants/treesize/tree_allocated = 0.
+        // In C++, each stream has its own treesize field, and only the default stream
+        // accumulates children's treesize (line 4794 in UltraFastFileSearch.cpp).
+        let (descendants, treesize, tree_allocated) = if stream_idx == 0 {
+            (record.descendants, record.treesize, record.tree_allocated)
+        } else {
+            (0, 0, 0)
+        };
+
         Self {
             name,
             path: None,
@@ -508,9 +518,9 @@ impl SearchResult {
             stream_name: stream_name.to_owned(),
             name_index: name_idx,
             stream_index: stream_idx,
-            descendants: record.descendants,
-            treesize: record.treesize,
-            tree_allocated: record.tree_allocated,
+            descendants,
+            treesize,
+            tree_allocated,
         }
     }
 
