@@ -1,28 +1,41 @@
-# trial_run.ps1 - UFFS Three-Way Comparison Tool
-# Compares: Rust (current) vs C++ vs Rust (new tree algo)
+# trial_run.ps1 - UFFS Three-Way Scan Tool
+# Runs: Rust (current) vs C++ vs Rust (new tree algo)
 #
-# This script runs three implementations and compares their output:
+# This script runs three implementations and saves their output:
 #   1. Rust (current) - existing uffs.exe with current tree algorithm
 #   2. C++ - reference uffs.com implementation
 #   3. Rust (new tree algo) - uffs.exe with --tree-algo=cpp flag
+#
+# Output files (in current directory):
+#   - rust_<drive>.txt      - Rust current algorithm output
+#   - cpp_<drive>.txt       - C++ reference output
+#   - rust_new_<drive>.txt  - Rust new tree algorithm output
+#
+# Analysis is done on Mac with: rust-script scripts/analyze_trial_outputs.rs <dir>
 #
 # Usage:
 #   .\trial_run.ps1                    # Test all available NTFS drives
 #   .\trial_run.ps1 -Drives F          # Test only drive F
 #   .\trial_run.ps1 -Drives F,G        # Test drives F and G
 #   .\trial_run.ps1 -SkipMft           # Skip MFT save tests
-#   .\trial_run.ps1 -Verbose           # Show progress on console
+#   .\trial_run.ps1 -DoComparison      # Enable comparison (default: skip, do on Mac)
 
 [CmdletBinding()]
 param(
     [string[]]$Drives = @(),           # Drives to test (empty = auto-detect NTFS drives)
     [switch]$SkipMft,                  # Skip uffs_mft save tests
-    [switch]$SkipComparison,           # Skip Rust vs C++ comparison
+    [bool]$SkipComparison = $true,     # Skip comparison (do analysis on Mac with rust-script instead)
+    [switch]$DoComparison,             # Explicitly enable comparison (overrides SkipComparison)
     [string]$BinDir = ""               # Custom bin directory (default: $HOME\bin)
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# Handle -DoComparison switch (overrides SkipComparison default)
+if ($DoComparison) {
+    $SkipComparison = $false
+}
 
 # Enable full Rust backtraces for debugging panics
 $env:RUST_BACKTRACE = "full"
@@ -68,9 +81,9 @@ function Extract-RootMetrics {
         # Match root entry pattern: "X:\<TAB><DIR><TAB>size<TAB>descendants<TAB>date"
         if ($line -match '^([A-Z]):\\\t<DIR>\t([^\t]+)\t(\d+)\t') {
             return @{
-                Drive = $script:Matches[1]
-                Treesize = $script:Matches[2]
-                Descendants = [int]$script:Matches[3]
+                Drive = $Matches[1]
+                Treesize = $Matches[2]
+                Descendants = [int]$Matches[3]
             }
         }
     }
@@ -112,7 +125,7 @@ function Compare-Outputs {
         # This counts lines by counting non-matches of empty string
         $countOutput = & cmd.exe /c "find /c /v `"`" `"$RustFile`"" 2>$null
         if ($countOutput -and $countOutput -match ': (\d+)') {
-            $result.RustLines = [int]$script:Matches[1]
+            $result.RustLines = [int]$Matches[1]
         }
         $rustMetrics = Extract-RootMetrics -FilePath $RustFile
         if ($rustMetrics) {
@@ -125,7 +138,7 @@ function Compare-Outputs {
         # FAST line count using find /c /v "" (native Windows, ~100x faster than Get-Content)
         $countOutput = & cmd.exe /c "find /c /v `"`" `"$CppFile`"" 2>$null
         if ($countOutput -and $countOutput -match ': (\d+)') {
-            $result.CppLines = [int]$script:Matches[1]
+            $result.CppLines = [int]$Matches[1]
         }
         $cppMetrics = Extract-RootMetrics -FilePath $CppFile
         if ($cppMetrics) {
@@ -238,7 +251,7 @@ function Invoke-Logged {
             $countOutput = & cmd.exe /c "find /c /v `"`" `"$outPath`"" 2>$null
             $lineCount = 0
             if ($countOutput -and $countOutput -match ': (\d+)') {
-                $lineCount = [int]$script:Matches[1]
+                $lineCount = [int]$Matches[1]
             }
             LogLine ("**Output file size:** " + (Format-FileSize $fileInfo.Length))
             LogLine ("**Output line count:** " + $lineCount)
@@ -450,15 +463,15 @@ try {
             $rustLines = 0; $cppLines = 0; $rustNewLines = 0
             if (Test-Path -LiteralPath $rustPath) {
                 $countOutput = & cmd.exe /c "find /c /v `"`" `"$rustPath`"" 2>$null
-                if ($countOutput -and $countOutput -match ': (\d+)') { $rustLines = [int]$script:Matches[1] }
+                if ($countOutput -and $countOutput -match ': (\d+)') { $rustLines = [int]$Matches[1] }
             }
             if (Test-Path -LiteralPath $cppPath) {
                 $countOutput = & cmd.exe /c "find /c /v `"`" `"$cppPath`"" 2>$null
-                if ($countOutput -and $countOutput -match ': (\d+)') { $cppLines = [int]$script:Matches[1] }
+                if ($countOutput -and $countOutput -match ': (\d+)') { $cppLines = [int]$Matches[1] }
             }
             if (Test-Path -LiteralPath $rustNewPath) {
                 $countOutput = & cmd.exe /c "find /c /v `"`" `"$rustNewPath`"" 2>$null
-                if ($countOutput -and $countOutput -match ': (\d+)') { $rustNewLines = [int]$script:Matches[1] }
+                if ($countOutput -and $countOutput -match ': (\d+)') { $rustNewLines = [int]$Matches[1] }
             }
 
             LogLine "### Three-Way Comparison: Drive $drive"
@@ -561,7 +574,7 @@ try {
             if ($cppExitCode -eq 0) {
                 foreach ($line in $cppOutput) {
                     if ($line -match 'Preprocess[:\s]+(\d+)\s*ms') {
-                        $cppPreprocessMs = [int]$script:Matches[1]
+                        $cppPreprocessMs = [int]$Matches[1]
                     }
                 }
                 Write-Host " ✅ Preprocess: $cppPreprocessMs ms" -ForegroundColor Green
@@ -579,7 +592,7 @@ try {
             if ($rustExitCode -eq 0) {
                 foreach ($line in $rustOutput) {
                     if ($line -match 'Avg[:\s]+(\d+)\s*ms') {
-                        $rustTreeMetricsMs = [int]$script:Matches[1]
+                        $rustTreeMetricsMs = [int]$Matches[1]
                     }
                 }
                 Write-Host " ✅ Tree Metrics: $rustTreeMetricsMs ms (avg)" -ForegroundColor Green
