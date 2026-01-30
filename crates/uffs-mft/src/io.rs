@@ -1258,7 +1258,7 @@ fn parse_extension_to_index(
                 name_idx as u16
             } else {
                 // Extension names are appended after existing names
-                (existing_name_count - 1 + name_idx as u16)
+                existing_name_count - 1 + name_idx as u16
             };
 
             let child_idx = index.children.len() as u32;
@@ -1972,7 +1972,7 @@ fn parse_extension_to_fragment(
             name_idx as u16
         } else {
             // Extension names are appended after existing names
-            (existing_name_count - 1 + name_idx as u16)
+            existing_name_count - 1 + name_idx as u16
         };
 
         let child_idx = fragment.children.len() as u32;
