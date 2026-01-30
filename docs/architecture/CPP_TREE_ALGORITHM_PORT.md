@@ -343,6 +343,137 @@ We must:
 
 ---
 
+## 5. Data Flow: Transformer vs Parsing Modification
+
+### 5.1 The Question
+
+Do we need to modify MFT parsing to match C++ data structures, or can we use a transformer?
+
+### 5.2 How C++ Computes `bulkiness`
+
+In C++ (`ntfs_index.hpp` lines 709-718), `bulkiness` is computed DURING MFT parsing:
+
+```cpp
+// For each $DATA attribute run encountered:
+info->allocated += ah->IsNonResident ? ... : 0;
+info->length += ah->IsNonResident ? ... : ah->Resident.ValueLength;
+info->bulkiness += info->allocated;  // ← CUMULATIVE!
+info->treesize = isdir;
+```
+
+**Key insight**: `bulkiness += allocated` runs for EACH attribute run. For fragmented files:
+- Run 1: allocated=100, bulkiness=100
+- Run 2: allocated=200, bulkiness=100+200=300
+- Run 3: allocated=300, bulkiness=300+300=600
+- Final: allocated=300, bulkiness=600 (penalizes fragmentation)
+
+For single-extent files (vast majority): `bulkiness = allocated`
+
+### 5.3 How C++ Uses `treesize`
+
+In C++ (`ntfs_index.hpp` line 879):
+```cpp
+result.treesize += 1;  // For EACH stream in the record
+```
+
+`treesize` counts **streams** in the subtree, not files. Each ADS adds +1.
+
+### 5.4 Two Approaches
+
+#### Option A: Transformer Approach (Recommended to start)
+
+**No changes to MFT parsing.** Create a transformer that:
+
+| Step | Action |
+|------|--------|
+| 1 | Read from existing `MftIndex` structures |
+| 2 | Build `CppSizeInfo { length, allocated, bulkiness: allocated, treesize: is_dir ? 1 : 0 }` |
+| 3 | Build `CppChildInfo { next_entry, record_number: child_frs as u32, name_index }` |
+| 4 | Run C++ tree algorithm |
+| 5 | Write results back to `FileRecord.descendants`, `FileRecord.treesize`, `FileRecord.tree_allocated` |
+
+**Pros**:
+- ✅ Isolated - no risk to existing code
+- ✅ Easy to verify against C++ output
+- ✅ Can switch between algorithms via `TreeAlgorithm` enum
+
+**Cons**:
+- ⚠️ `bulkiness = allocated` is approximate for fragmented files
+- ⚠️ Extra memory for transformed structures
+
+**Accuracy**: For the bulkiness heuristic (filtering files >1% of folder size), the approximation is acceptable. 99%+ of files are single-extent where `bulkiness = allocated` is exact.
+
+#### Option B: Modify MFT Parsing (For exact C++ parity)
+
+Add `bulkiness` computation during parsing:
+
+| Change | Location |
+|--------|----------|
+| Add `bulkiness` field to `SizeInfo` | `crates/uffs-mft/src/index.rs` |
+| Compute `bulkiness += allocated` for each attribute | `crates/uffs-mft/src/io.rs` |
+| Initialize `treesize` per-stream | `crates/uffs-mft/src/io.rs` |
+
+**Pros**:
+- ✅ Exact C++ parity for all files
+- ✅ No transformation overhead
+
+**Cons**:
+- ⚠️ Changes core parsing code
+- ⚠️ Affects all users (not just C++ port)
+- ⚠️ Harder to verify in isolation
+
+### 5.5 Recommendation
+
+**Start with Option A (Transformer)**:
+1. Keeps existing code untouched
+2. Allows isolated verification of C++ algorithm
+3. If exact parity is needed for fragmented files, add Option B later
+
+### 5.6 Transformer Design
+
+```rust
+// crates/uffs-mft/src/cpp_tree.rs
+
+/// Transform MftIndex data for C++ tree algorithm
+pub fn prepare_cpp_tree_input(index: &MftIndex) -> CppTreeInput {
+    let mut input = CppTreeInput::new();
+
+    for record in &index.records {
+        // Transform SizeInfo → CppSizeInfo
+        let cpp_size = CppSizeInfo {
+            length: record.first_stream.size.length,
+            allocated: record.first_stream.size.allocated,
+            bulkiness: record.first_stream.size.allocated,  // Approximate
+            treesize: if record.is_directory() { 1 } else { 0 },
+        };
+
+        // Transform ChildInfo → CppChildInfo (truncate FRS to u32)
+        // ... build child list ...
+
+        input.add_record(record.frs, cpp_size, children);
+    }
+
+    input
+}
+
+/// Run C++ tree algorithm and write results back
+pub fn compute_tree_metrics_cpp(index: &mut MftIndex) {
+    let input = prepare_cpp_tree_input(index);
+    let results = cpp_tree_traverse(&input);
+
+    // Write results back to FileRecord
+    for (frs, metrics) in results {
+        if let Some(record) = index.find_mut(frs) {
+            record.descendants = metrics.descendants;
+            record.treesize = metrics.treesize as u64;
+            record.tree_allocated = metrics.allocated;
+        }
+    }
+}
+```
+
+---
+
 ## 5. Implementation Plan
 
 ### Phase 1: Study C++ Code (2-3 hours) ✅ COMPLETE
