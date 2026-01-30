@@ -360,9 +360,26 @@ pub async fn search(
     pos: &str,
     neg: &str,
     query_mode: &str,
+    tree_algo: &str,
 ) -> Result<()> {
     // Start timing for "Finished in X s" output (C++ compatibility)
     let start_time = std::time::Instant::now();
+
+    // Parse tree algorithm from CLI and set env var so MftIndex uses it
+    // (TreeAlgorithm::default() reads from UFFS_TREE_ALGO)
+    let tree_algorithm: uffs_mft::TreeAlgorithm = tree_algo.parse().unwrap_or_default();
+    if tree_algorithm == uffs_mft::TreeAlgorithm::CppPort {
+        // Set env var before any MFT operations so compute_tree_metrics uses cpp_port.
+        // SAFETY: This runs once at CLI startup in the main thread, before spawning
+        // any worker threads that might read this env var. The env var is only read
+        // by TreeAlgorithm::from_env() during MftIndex building, which happens after
+        // this point in a controlled manner.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("UFFS_TREE_ALGO", "cpp_port");
+        }
+    }
+    info!(?tree_algorithm, "Tree metrics algorithm");
 
     // Parse the pattern to extract drive prefix and pattern type
     let parsed = ParsedPattern::parse(pattern)

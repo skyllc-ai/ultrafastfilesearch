@@ -235,6 +235,13 @@ struct Cli {
     #[arg(long)]
     no_cache: bool,
 
+    /// Tree metrics algorithm: current, cpp (C++ port)
+    ///
+    /// - current: Use current Rust leaf-peeling algorithm (default)
+    /// - cpp: Use C++ port algorithm (100% faithful port of C++ tree algorithm)
+    #[arg(long, default_value = "current")]
+    tree_algo: String,
+
     /// Minimum file size in bytes
     #[arg(long)]
     min_size: Option<u64>,
@@ -502,6 +509,7 @@ async fn run() -> Result<()> {
                     &cli.pos,
                     &cli.neg,
                     &cli.query_mode,
+                    &cli.tree_algo,
                 )
                 .await?;
             } else {
