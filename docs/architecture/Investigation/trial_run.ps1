@@ -1,32 +1,24 @@
 # trial_run.ps1 - UFFS Data Collection (MFT + three scan flows)
-# Purpose: save MFT and run three scan flows per drive; do NOT perform any comparisons or line counts.
+# Strategy:
+#   - Never write binary outputs with Set-Content.
+#   - Capture stdout/stderr to .log files only (text).
+#   - Sequential per physical disk; parallel across physical disks (PS7+).
 [CmdletBinding()]
 param(
-    [string[]]$Drives = @(),      # Drives to test (empty = auto-detect NTFS drives)
-    [switch]$SkipMft,             # Skip uffs_mft save tests
-    [string]$BinDir = "",         # Custom bin directory (default: $HOME\bin)
-    [int]$ThrottleLimit = 2       # Parallelism level (PS7+ only). Keep low to avoid disk contention.
+    [string[]]$Drives = @(),       # Drives to test (empty = auto-detect NTFS drives)
+    [switch]$SkipMft,              # Skip uffs_mft save tests
+    [string]$BinDir = "",          # Custom bin directory (default: $HOME\bin)
+    [int]$ThrottleLimit = 2        # Max physical disks in parallel (PS7+ only)
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# Enable full Rust backtraces for debugging panics
 $env:RUST_BACKTRACE = "full"
 
 $WorkDir  = Get-Location
 $FinalLog = Join-Path $WorkDir "trial_run.md"
 $TempLog  = Join-Path $WorkDir "trial_run.md.tmp"
-
-# Use plain arrays for maximum compatibility (PS 5.1 + PS 7+)
-$script:TimingResults = @()
-
-function Ensure-Array {
-    param($v)
-    if ($null -eq $v) { return @() }
-    if ($v -is [System.Collections.IEnumerable] -and -not ($v -is [string])) { return @($v) }
-    return @([string]$v)
-}
 
 function Format-FileSize {
     param([long]$Bytes)
@@ -42,7 +34,21 @@ function Get-NtfsDrives {
             ForEach-Object { $_.DeviceID.TrimEnd(':') }
 }
 
-# Markdown log writer (main thread only)
+# Best-effort mapping: Drive letter -> Physical disk number
+# Requires Storage module (usually present on Win10/11). If it fails, we return $null for that drive.
+function Get-PhysicalDiskNumberForDrive {
+    param([string]$DriveLetter)
+
+    try {
+        $part = Get-Partition -DriveLetter $DriveLetter -ErrorAction Stop
+        $disk = Get-Disk -Number $part.DiskNumber -ErrorAction Stop
+        return [int]$disk.Number
+    } catch {
+        return $null
+    }
+}
+
+# Simple markdown logger (single writer)
 $fs = New-Object System.IO.FileStream(
 $TempLog,
 [System.IO.FileMode]::Create,
@@ -51,102 +57,47 @@ $TempLog,
 )
 $sw = New-Object System.IO.StreamWriter($fs, [System.Text.Encoding]::UTF8)
 $sw.NewLine = "`r`n"
+function LogLine { param([string]$Line="") $sw.WriteLine($Line); $sw.Flush() }
 
-function LogLine {
-    param([string]$Line = "")
-    $sw.WriteLine($Line)
-    $sw.Flush()
-}
-
-function Invoke-Logged {
+# Run a command and write stdout/stderr to a TEXT log file.
+# Does NOT try to "write output files" itself.
+function Invoke-CmdToLog {
     param(
-        [string]$Title = "",
-        [string]$CommandLine = "",
-        [string]$OutFilePath = ""
+        [string]$Title,
+        [string]$CommandLine,
+        [string]$LogFileName
     )
 
-    LogLine ("## " + $Title)
-    LogLine ""
-    LogLine "**Command:**"
-    LogLine '```text'
-    LogLine $CommandLine
-    LogLine '```'
-    LogLine ""
-
+    $logPath = Join-Path $WorkDir $LogFileName
     $started = Get-Date
-    LogLine ("**Started:** " + $started.ToString("o"))
-    LogLine ""
-
     $exitCode = 0
-    $outputLines = @()
 
     Write-Host "  → $Title..." -NoNewline
 
     try {
-        $raw = @(& cmd.exe /c $CommandLine 2>&1)
+        # Capture cmd.exe output lines, then write to log (text)
+        $lines = @(& cmd.exe /c $CommandLine 2>&1)
         $exitCode = $LASTEXITCODE
-        $outputLines = Ensure-Array $raw
-    }
-    catch {
-        $outputLines = @("PowerShell exception:", $_.Exception.ToString())
-        try { $exitCode = $LASTEXITCODE } catch { $exitCode = -1 }
-    }
-
-    if ($OutFilePath) {
-        $outPath = Join-Path $WorkDir $OutFilePath
-        $outputLines | Set-Content -LiteralPath $outPath -Encoding UTF8
+        $lines | Set-Content -LiteralPath $logPath -Encoding UTF8
+    } catch {
+        $exitCode = -1
+        @("PowerShell exception:", $_.Exception.ToString()) | Set-Content -LiteralPath $logPath -Encoding UTF8
     }
 
     $ended = Get-Date
-    $dur = New-TimeSpan -Start $started -End $ended
-    $durMs = [math]::Round($dur.TotalMilliseconds)
+    $durMs = [math]::Round((New-TimeSpan -Start $started -End $ended).TotalMilliseconds)
 
-    if ($exitCode -eq 0) {
-        Write-Host " ✅ ($durMs ms)" -ForegroundColor Green
-    } else {
-        Write-Host " ❌ (exit: $exitCode)" -ForegroundColor Red
-    }
-
-    LogLine ("**Ended:** " + $ended.ToString("o"))
-    LogLine ("**Duration:** " + $dur.ToString() + " ($durMs ms)")
-    LogLine ("**Exit code:** " + $exitCode)
-
-    if ($OutFilePath) {
-        LogLine ("**Output file:** " + $OutFilePath)
-        $outPath = Join-Path $WorkDir $OutFilePath
-        if (Test-Path -LiteralPath $outPath) {
-            $fileInfo = Get-Item -LiteralPath $outPath
-            LogLine ("**Output file size:** " + (Format-FileSize $fileInfo.Length))
-        } else {
-            LogLine "(output file not found)"
-        }
-    }
-
-    LogLine ""
-    LogLine "**Console output (first 200 lines shown):**"
-    LogLine '```text'
-    $shown = 0
-    foreach ($l in $outputLines) {
-        if ($shown -ge 200) { break }
-        LogLine $l
-        $shown++
-    }
-    if (($outputLines | Measure-Object).Count -gt $shown) { LogLine "... (truncated)" }
-    LogLine '```'
-    LogLine ""
-
-    $script:TimingResults += [pscustomobject]@{
-        Title      = $Title
-        DurationMs = $durMs
-        ExitCode   = $exitCode
-        OutFile    = $OutFilePath
-    }
+    if ($exitCode -eq 0) { Write-Host " ✅ ($durMs ms)" -ForegroundColor Green }
+    else { Write-Host " ❌ (exit: $exitCode)" -ForegroundColor Red }
 
     return [pscustomobject]@{
         Title      = $Title
+        Command    = $CommandLine
+        LogFile    = $LogFileName
+        Started    = $started
+        Ended      = $ended
         DurationMs = $durMs
         ExitCode   = $exitCode
-        OutFile    = $OutFilePath
     }
 }
 
@@ -189,273 +140,248 @@ try {
         $Drives = @(Get-NtfsDrives)
         Write-Host "Auto-detected NTFS drives: $($Drives -join ', ')" -ForegroundColor Yellow
     }
+
     LogLine ("**Drives to test:** " + ($Drives -join ", "))
     LogLine ""
 
+    # Version check
+    $timings = @()
     if ($hasRust) {
-        Invoke-Logged -Title "uffs --version" -CommandLine ("`"$UffsExe`" --version")
+        $timings += Invoke-CmdToLog -Title "uffs --version" `
+            -CommandLine ("`"$UffsExe`" --version") `
+            -LogFileName "uffs_version.log"
+        LogLine "- Version log: `uffs_version.log`"
+        LogLine ""
     }
 
-    # MFT saves once (first drive), serial
+    # MFT saves (only first drive), sequential; binaries write output files themselves.
     if (-not $SkipMft -and $hasMft -and $Drives.Count -gt 0) {
         $mftDrive = $Drives[0]
+        Write-Host "MFT Save (Drive $mftDrive)..." -ForegroundColor Cyan
+
         LogLine "---"
         LogLine ""
         LogLine "# MFT Save (Drive $mftDrive)"
         LogLine ""
 
-        Write-Host "MFT Save (Drive $mftDrive)..." -ForegroundColor Cyan
-
-        $mftBin = "${mftDrive}_mft.bin"
-        $mftRaw = "${mftDrive}_mft.raw"
+        $mftBin        = "${mftDrive}_mft.bin"
         $mftNoCompress = "${mftDrive}_mft_no_compress.bin"
+        $mftRaw        = "${mftDrive}_mft.raw"
 
-        # Note: Do NOT pass -OutFilePath for MFT saves - the tool writes the .bin/.raw file directly.
-        # Invoke-Logged's -OutFilePath is for capturing console output, not the tool's output file.
-        Invoke-Logged -Title "uffs_mft save (compressed)" `
-            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o $mftBin")
+        $timings += Invoke-CmdToLog -Title "uffs_mft save (compressed)" `
+            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o `"$mftBin`"") `
+            -LogFileName "${mftDrive}_mft_save_compressed.log"
 
-        Invoke-Logged -Title "uffs_mft save (no compress)" `
-            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive --output $mftNoCompress --no-compress")
+        $timings += Invoke-CmdToLog -Title "uffs_mft save (no compress)" `
+            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive --output `"$mftNoCompress`" --no-compress") `
+            -LogFileName "${mftDrive}_mft_save_no_compress.log"
 
-        Invoke-Logged -Title "uffs_mft save (raw)" `
-            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o $mftRaw --raw")
+        $timings += Invoke-CmdToLog -Title "uffs_mft save (raw)" `
+            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o `"$mftRaw`" --raw") `
+            -LogFileName "${mftDrive}_mft_save_raw.log"
 
         LogLine "### Generated MFT Files"
         LogLine ""
         LogLine "| File | Size |"
         LogLine "|------|------|"
         foreach ($f in @($mftBin, $mftNoCompress, $mftRaw)) {
-            $fPath = Join-Path $WorkDir $f
-            if (Test-Path -LiteralPath $fPath) {
-                $size = (Get-Item -LiteralPath $fPath).Length
+            $p = Join-Path $WorkDir $f
+            if (Test-Path -LiteralPath $p) {
+                $size = (Get-Item -LiteralPath $p).Length
                 LogLine "| $f | $(Format-FileSize $size) |"
             } else {
                 LogLine "| $f | (missing) |"
             }
         }
         LogLine ""
-    } else {
-        if ($SkipMft) { LogLine "> MFT save skipped by -SkipMft flag." }
-        elseif (-not $hasMft) { LogLine "> uffs_mft.exe not present; skipping MFT saves." }
     }
 
-    # ============================================================
-    # Per-drive scans (parallel across drives in PS7+)
-    # ============================================================
-    LogLine "---"
-    LogLine ""
-    LogLine "# Drive Scans (three flows per drive)"
-    LogLine ""
+    # Group drives by physical disk number (best effort)
+    $driveToDisk = @{}
+    foreach ($d in $Drives) {
+        $driveToDisk[$d] = Get-PhysicalDiskNumberForDrive -DriveLetter $d
+    }
+
+    $allMapped = $true
+    foreach ($d in $Drives) {
+        if ($null -eq $driveToDisk[$d]) { $allMapped = $false; break }
+    }
 
     $isPS7Plus = ($PSVersionTable.PSVersion.Major -ge 7)
-    LogLine ("- **Parallel mode:** " + $(if ($isPS7Plus) { "Enabled (ThrottleLimit=$ThrottleLimit)" } else { "Disabled (PowerShell < 7)" }))
+
+    LogLine "---"
+    LogLine ""
+    LogLine "# Drive Scans"
+    LogLine ""
+    LogLine ("- **PS7+ available:** " + $(if ($isPS7Plus) { "Yes" } else { "No" }))
+    LogLine ("- **Physical disk mapping available:** " + $(if ($allMapped) { "Yes" } else { "No (falling back to sequential)" }))
+    LogLine ("- **Policy:** sequential per physical disk; parallel across disks")
     LogLine ""
 
-    Write-Host ""
-    Write-Host "Running per-drive scans..." -ForegroundColor Cyan
-    if ($isPS7Plus) {
-        Write-Host "Parallel mode ON (ThrottleLimit=$ThrottleLimit)" -ForegroundColor Yellow
-    } else {
-        Write-Host "Parallel mode OFF (PowerShell < 7). Running serial." -ForegroundColor Yellow
+    # Build disk groups: @{ diskNumber = @('D','E') }
+    $diskGroups = @{}
+    if ($allMapped) {
+        foreach ($d in $Drives) {
+            $diskNum = $driveToDisk[$d]
+            if (-not $diskGroups.ContainsKey($diskNum)) { $diskGroups[$diskNum] = @() }
+            $diskGroups[$diskNum] += $d
+        }
     }
-    Write-Host ""
 
-    $driveScanResults = @()
+    # Worker logic (sequential for drives within a disk group)
+    $runDiskGroup = {
+        param(
+            [int]$DiskNumber,
+            [string[]]$GroupDrives,
+            [string]$WorkDir,
+            [string]$UffsExe,
+            [string]$UffsCom,
+            [bool]$HasRust,
+            [bool]$HasCpp
+        )
 
-    if ($isPS7Plus) {
-        # Inline worker logic to avoid function visibility issues inside -Parallel runspaces
-        $driveScanResults = $Drives | ForEach-Object -Parallel {
-            $Drive   = $_
-            $WorkDir = $using:WorkDir
-            $UffsExe = $using:UffsExe
-            $UffsCom = $using:UffsCom
-            $HasRust = $using:hasRust
-            $HasCpp  = $using:hasCpp
+        $groupResults = @()
 
-            function Ensure-ArrayLocal {
-                param($v)
-                if ($null -eq $v) { return @() }
-                if ($v -is [System.Collections.IEnumerable] -and -not ($v -is [string])) { return @($v) }
-                return @([string]$v)
-            }
+        foreach ($Drive in $GroupDrives) {
+            $driveLower = $Drive.ToLower()
 
-            function Run-CmdLocal {
-                param([string]$Title, [string]$CmdLine, [string]$OutFile)
+            $rustOut    = "rust_${driveLower}.txt"
+            $cppOut     = "cpp_${driveLower}.txt"
+            $rustNewOut = "rust_new_${driveLower}.txt"
 
+            $rustLog    = "rust_${driveLower}.log"
+            $cppLog     = "cpp_${driveLower}.log"
+            $rustNewLog = "rust_new_${driveLower}.log"
+
+            function Run-LoggedLocal {
+                param([string]$Title, [string]$CmdLine, [string]$LogFileName)
+
+                $logPath = Join-Path $WorkDir $LogFileName
                 $started = Get-Date
                 $exitCode = 0
-                $outputLines = @()
 
                 try {
-                    $raw = @(& cmd.exe /c $CmdLine 2>&1)
+                    $lines = @(& cmd.exe /c $CmdLine 2>&1)
                     $exitCode = $LASTEXITCODE
-                    $outputLines = Ensure-ArrayLocal $raw
+                    $lines | Set-Content -LiteralPath $logPath -Encoding UTF8
                 } catch {
-                    $outputLines = @("PowerShell exception:", $_.Exception.ToString())
-                    try { $exitCode = $LASTEXITCODE } catch { $exitCode = -1 }
-                }
-
-                if ($OutFile) {
-                    $outPath = Join-Path $WorkDir $OutFile
-                    $outputLines | Set-Content -LiteralPath $outPath -Encoding UTF8
+                    $exitCode = -1
+                    @("PowerShell exception:", $_.Exception.ToString()) | Set-Content -LiteralPath $logPath -Encoding UTF8
                 }
 
                 $ended = Get-Date
-                $dur = New-TimeSpan -Start $started -End $ended
-                $durMs = [math]::Round($dur.TotalMilliseconds)
-
-                $outSize = $null
-                if ($OutFile) {
-                    $outPath = Join-Path $WorkDir $OutFile
-                    if (Test-Path -LiteralPath $outPath) {
-                        $outSize = (Get-Item -LiteralPath $outPath).Length
-                    }
-                }
+                $durMs = [math]::Round((New-TimeSpan -Start $started -End $ended).TotalMilliseconds)
 
                 return [pscustomobject]@{
                     Drive      = $Drive
                     Title      = $Title
                     Command    = $CmdLine
-                    OutFile    = $OutFile
+                    LogFile    = $LogFileName
                     DurationMs = $durMs
                     ExitCode   = $exitCode
-                    OutBytes   = $outSize
                 }
             }
-
-            $driveLower = $Drive.ToLower()
-            $rustFile    = "rust_${driveLower}.txt"
-            $cppFile     = "cpp_${driveLower}.txt"
-            $rustNewFile = "rust_new_${driveLower}.txt"
 
             $runs = @()
 
             if ($HasRust) {
-                $runs += Run-CmdLocal -Title "Rust (current): uffs scan drive $Drive" `
-                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive") `
-                    -OutFile $rustFile
+                $runs += Run-LoggedLocal -Title "Rust (current): drive $Drive" `
+                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive > `"$rustOut`"") `
+                    -LogFileName $rustLog
             } else {
-                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (current)"; Command=""; OutFile=$rustFile; DurationMs=$null; ExitCode=$null; OutBytes=$null }
+                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (current)"; Command=""; LogFile=$rustLog; DurationMs=$null; ExitCode=$null }
             }
 
             if ($HasCpp) {
-                $runs += Run-CmdLocal -Title "C++: uffs.com scan drive $Drive" `
-                    -CmdLine ("`"$UffsCom`" `"*`" --drives=$Drive") `
-                    -OutFile $cppFile
+                $runs += Run-LoggedLocal -Title "C++: drive $Drive" `
+                    -CmdLine ("`"$UffsCom`" `"*`" --drives=$Drive > `"$cppOut`"") `
+                    -LogFileName $cppLog
             } else {
-                $runs += [pscustomobject]@{ Drive=$Drive; Title="C++"; Command=""; OutFile=$cppFile; DurationMs=$null; ExitCode=$null; OutBytes=$null }
+                $runs += [pscustomobject]@{ Drive=$Drive; Title="C++"; Command=""; LogFile=$cppLog; DurationMs=$null; ExitCode=$null }
             }
 
             if ($HasRust) {
-                $runs += Run-CmdLocal -Title "Rust (new tree algo): uffs scan drive $Drive --tree-algo=cpp" `
-                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --tree-algo=cpp") `
-                    -OutFile $rustNewFile
+                $runs += Run-LoggedLocal -Title "Rust (new tree): drive $Drive" `
+                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --tree-algo=cpp > `"$rustNewOut`"") `
+                    -LogFileName $rustNewLog
             } else {
-                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (new tree algo)"; Command=""; OutFile=$rustNewFile; DurationMs=$null; ExitCode=$null; OutBytes=$null }
+                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (new tree)"; Command=""; LogFile=$rustNewLog; DurationMs=$null; ExitCode=$null }
             }
 
-            [pscustomobject]@{
-                Drive = $Drive
-                Files = [pscustomobject]@{ Rust=$rustFile; Cpp=$cppFile; RustNew=$rustNewFile }
-                Runs  = $runs
+            $groupResults += [pscustomobject]@{
+                Disk   = $DiskNumber
+                Drive  = $Drive
+                Files  = [pscustomobject]@{ Rust=$rustOut; Cpp=$cppOut; RustNew=$rustNewOut }
+                Logs   = [pscustomobject]@{ Rust=$rustLog; Cpp=$cppLog; RustNew=$rustNewLog }
+                Runs   = $runs
             }
+        }
+
+        return $groupResults
+    }
+
+    $scanResults = @()
+
+    if (-not $allMapped -or -not $isPS7Plus -or $Drives.Count -le 1) {
+        # Safe fallback: fully sequential
+        Write-Host "Drive scans: running sequential (single drive / PS<7 / mapping unavailable)." -ForegroundColor Yellow
+
+        foreach ($d in $Drives) {
+            # treat each drive as its own "disk group"
+            $scanResults += & $runDiskGroup -DiskNumber -1 -GroupDrives @($d) -WorkDir $WorkDir `
+                -UffsExe $UffsExe -UffsCom $UffsCom -HasRust $hasRust -HasCpp $hasCpp
+        }
+    } else {
+        # Parallel across physical disks; sequential within each disk
+        Write-Host "Drive scans: parallel across physical disks (ThrottleLimit=$ThrottleLimit), sequential within each disk." -ForegroundColor Yellow
+
+        $diskNumbers = @($diskGroups.Keys | Sort-Object)
+        $scanResults = $diskNumbers | ForEach-Object -Parallel {
+            $diskNum = $_
+            $groupDrives = $using:diskGroups[$diskNum]
+            & $using:runDiskGroup -DiskNumber $diskNum -GroupDrives $groupDrives -WorkDir $using:WorkDir `
+                -UffsExe $using:UffsExe -UffsCom $using:UffsCom -HasRust $using:hasRust -HasCpp $using:hasCpp
         } -ThrottleLimit $ThrottleLimit
     }
-    else {
-        # Serial fallback (PS 5.1)
-        foreach ($Drive in $Drives) {
-            $driveLower = $Drive.ToLower()
-            $rustFile    = "rust_${driveLower}.txt"
-            $cppFile     = "cpp_${driveLower}.txt"
-            $rustNewFile = "rust_new_${driveLower}.txt"
 
-            $runs = @()
-
-            if ($hasRust) {
-                $runs += (Invoke-Logged -Title "Rust (current): uffs scan drive $Drive" `
-                    -CommandLine ("`"$UffsExe`" `"*`" --drive $Drive") `
-                    -OutFilePath $rustFile) | Out-Null
-            }
-            if ($hasCpp) {
-                $runs += (Invoke-Logged -Title "C++: uffs.com scan drive $Drive" `
-                    -CommandLine ("`"$UffsCom`" `"*`" --drives=$Drive") `
-                    -OutFilePath $cppFile) | Out-Null
-            }
-            if ($hasRust) {
-                $runs += (Invoke-Logged -Title "Rust (new tree algo): uffs scan drive $Drive --tree-algo=cpp" `
-                    -CommandLine ("`"$UffsExe`" `"*`" --drive $Drive --tree-algo=cpp") `
-                    -OutFilePath $rustNewFile) | Out-Null
-            }
-
-            $driveScanResults += [pscustomobject]@{
-                Drive = $Drive
-                Files = [pscustomobject]@{ Rust=$rustFile; Cpp=$cppFile; RustNew=$rustNewFile }
-                Runs  = @() # already logged in serial path
-            }
-        }
-    }
-
-    # Log per-drive results (main thread only)
-    if ($isPS7Plus) {
-        foreach ($r in $driveScanResults) {
-            $drive = $r.Drive
-            LogLine "---"
-            LogLine ""
-            LogLine "# Drive $drive — Data Collection"
-            LogLine ""
-
-            Write-Host "Drive $drive complete:" -ForegroundColor Cyan
-
-            foreach ($run in $r.Runs) {
-                if ($null -eq $run.ExitCode) {
-                    Write-Host "  - $($run.Title): skipped" -ForegroundColor DarkYellow
-                    LogLine ("- **" + $run.Title + "**: skipped (binary missing)")
-                    continue
-                }
-
-                $ok = ($run.ExitCode -eq 0)
-                $icon = if ($ok) { "✅" } else { "❌" }
-                $sizeStr = if ($null -ne $run.OutBytes) { Format-FileSize $run.OutBytes } else { "N/A" }
-
-                Write-Host ("  - " + $run.Title + " => " + $icon + " " + $run.DurationMs + " ms") -ForegroundColor (if ($ok) { "Green" } else { "Red" })
-                LogLine ("- **" + $run.Title + "**: " + $icon + " (" + $run.DurationMs + " ms), exit=" + $run.ExitCode + ", file=" + $run.OutFile + ", size=" + $sizeStr)
-
-                $script:TimingResults += [pscustomobject]@{
-                Title      = $run.Title
-                DurationMs = $run.DurationMs
-                ExitCode   = $run.ExitCode
-                OutFile    = $run.OutFile
-                }
-            }
-
-            LogLine ""
-            LogLine "Saved files for drive ${drive}:"
-            LogLine ""
-            foreach ($f in @($r.Files.Rust, $r.Files.Cpp, $r.Files.RustNew)) {
-                $fPath = Join-Path $WorkDir $f
-                if (Test-Path -LiteralPath $fPath) {
-                    $size = (Get-Item -LiteralPath $fPath).Length
-                    LogLine "- $f ($(Format-FileSize $size))"
-                } else {
-                    LogLine "- $f (missing)"
-                }
-            }
-            LogLine ""
-        }
-    }
-
-    # Timing summary
+    # Consolidate results into markdown (single thread)
     LogLine "---"
     LogLine ""
-    LogLine "# Timings (per-command)"
+    LogLine "# Scan Outputs"
     LogLine ""
-    LogLine "| Command | Duration (ms) | Exit | OutFile |"
-    LogLine "|---------|---------------:|:----:|--------|"
-    foreach ($t in $script:TimingResults) {
-        LogLine ("| " + ($t.Title -replace '\|','/') + " | " + $t.DurationMs + " | " + $t.ExitCode + " | " + ($t.OutFile -replace '\|','/') + " |")
+
+    foreach ($r in $scanResults) {
+        $drive = $r.Drive
+        $disk  = $r.Disk
+
+        LogLine "## Drive $drive (Disk $disk)"
+        LogLine ""
+
+        LogLine "| Flow | Output file | Size | Log file | Exit | Duration (ms) |"
+        LogLine "|------|-------------|------|----------|------|---------------:|"
+
+        foreach ($run in $r.Runs) {
+            $outFile = ""
+            if ($run.Title -like "Rust (current)*") { $outFile = $r.Files.Rust }
+            elseif ($run.Title -like "C++*") { $outFile = $r.Files.Cpp }
+            elseif ($run.Title -like "Rust (new tree)*") { $outFile = $r.Files.RustNew }
+
+            $outPath = if ($outFile) { Join-Path $WorkDir $outFile } else { $null }
+            $sizeStr = "N/A"
+            if ($outPath -and (Test-Path -LiteralPath $outPath)) {
+                $sizeStr = Format-FileSize (Get-Item -LiteralPath $outPath).Length
+            }
+
+            $exit = if ($null -eq $run.ExitCode) { "skipped" } else { "$($run.ExitCode)" }
+            $dur  = if ($null -eq $run.DurationMs) { "N/A" } else { "$($run.DurationMs)" }
+
+            LogLine "| $($run.Title) | $outFile | $sizeStr | $($run.LogFile) | $exit | $dur |"
+        }
+
+        LogLine ""
     }
-    LogLine ""
+
+    LogLine "---"
     LogLine ("**Completed:** " + (Get-Date -Format o))
 }
 finally {
