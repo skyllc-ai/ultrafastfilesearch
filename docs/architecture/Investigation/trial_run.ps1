@@ -260,6 +260,8 @@ try {
                 $started = Get-Date
                 $exitCode = 0
 
+                Write-Host "  → $Title..." -NoNewline
+
                 try {
                     $lines = @(& cmd.exe /c $CmdLine 2>&1)
                     $exitCode = $LASTEXITCODE
@@ -271,6 +273,12 @@ try {
 
                 $ended = Get-Date
                 $durMs = [math]::Round((New-TimeSpan -Start $started -End $ended).TotalMilliseconds)
+
+                if ($exitCode -eq 0) {
+                    Write-Host " ✅ ($durMs ms)" -ForegroundColor Green
+                } else {
+                    Write-Host " ❌ (exit: $exitCode, $durMs ms)" -ForegroundColor Red
+                }
 
                 return [pscustomobject]@{
                     Drive      = $Drive
