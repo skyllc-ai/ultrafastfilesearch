@@ -422,12 +422,16 @@ Add `bulkiness` computation during parsing:
 - ⚠️ Affects all users (not just C++ port)
 - ⚠️ Harder to verify in isolation
 
-### 5.5 Recommendation
+### 5.5 Decision: Option A (Transformer) First
 
-**Start with Option A (Transformer)**:
-1. Keeps existing code untouched
-2. Allows isolated verification of C++ algorithm
-3. If exact parity is needed for fragmented files, add Option B later
+**We will implement Option A (Transformer) first.**
+
+Rationale:
+1. ✅ Keeps existing code untouched - no risk of breaking current functionality
+2. ✅ Allows isolated verification of C++ algorithm against C++ output
+3. ✅ `bulkiness = allocated` approximation is acceptable for 99%+ of files
+4. ✅ Can switch between algorithms via `TreeAlgorithm` enum for A/B testing
+5. ✅ Once verified working, we can decide whether Option B is needed
 
 ### 5.6 Transformer Design
 
@@ -637,7 +641,8 @@ If the C++ port causes issues:
 ## 9. Open Questions
 
 1. **Stack depth**: C++ uses recursive calls. For very deep trees (50+ levels), should we use an explicit stack in Rust?
-2. **Bulkiness calculation**: C++ has complex bulkiness logic with heap operations. Do we need this for parity?
+2. ~~**Bulkiness calculation**: C++ has complex bulkiness logic with heap operations. Do we need this for parity?~~
+   - ✅ ANSWERED: Yes, we need it. Using `bulkiness = allocated` approximation for Option A (transformer). See Section 5.
 3. **WofCompressedData handling**: C++ has special handling for Windows Overlay Filter compressed files. Is this needed?
 4. **Reserved clusters**: C++ adds `reserved_clusters * cluster_size` at depth 0. Do we have this data?
 
@@ -654,4 +659,119 @@ If the C++ port causes issues:
 | Phase 5: Testing | 2-3 hours |
 | Phase 6: Integration | 1 hour |
 | **Total** | **~10-13 hours** |
+
+---
+
+## 11. Future Enhancements
+
+### 11.1 Option B: Modify MFT Parsing for Exact Parity
+
+If testing reveals that the `bulkiness = allocated` approximation causes significant differences for fragmented files, we can implement Option B:
+
+#### Changes Required:
+
+| File | Change |
+|------|--------|
+| `crates/uffs-mft/src/index.rs` | Add `bulkiness: u64` field to `SizeInfo` |
+| `crates/uffs-mft/src/index.rs` | Add `treesize: u32` field to `IndexStreamInfo` (per-stream) |
+| `crates/uffs-mft/src/io.rs` | Compute `bulkiness += allocated` for each attribute run |
+| `crates/uffs-mft/src/io.rs` | Initialize `treesize = is_directory ? 1 : 0` per-stream |
+| `crates/uffs-mft/src/parse.rs` | Same changes for `parse_record_full()` |
+
+#### Implementation Steps:
+
+1. **Add fields to structures**:
+   ```rust
+   pub struct SizeInfo {
+       pub length: u64,
+       pub allocated: u64,
+       pub bulkiness: u64,  // NEW: accumulated allocated for fragmentation penalty
+   }
+
+   pub struct IndexStreamInfo {
+       pub size: SizeInfo,
+       pub treesize: u32,   // NEW: per-stream (1 for dirs, 0 for files)
+       // ... existing fields ...
+   }
+   ```
+
+2. **Update parsing** (`io.rs` and `parse.rs`):
+   ```rust
+   // For each $DATA attribute run:
+   stream.size.allocated += attribute_allocated;
+   stream.size.bulkiness += stream.size.allocated;  // Cumulative!
+   stream.treesize = if is_directory { 1 } else { 0 };
+   ```
+
+3. **Update serialization** (cache format):
+   - Bump cache version
+   - Add `bulkiness` and per-stream `treesize` to binary format
+
+### 11.2 Merging Isolated Code into Main Codebase
+
+Once the C++ port is verified working and we're confident it's correct:
+
+#### Phase 1: Verification Complete
+- [ ] C++ port matches C++ output 100% for all test volumes
+- [ ] Performance is acceptable (within 2x of current algorithm)
+- [ ] No regressions in existing functionality
+
+#### Phase 2: Deprecate Old Algorithm
+1. Change default from `TreeAlgorithm::Current` to `TreeAlgorithm::CppPort`
+2. Add deprecation warning when `TreeAlgorithm::Current` is used
+3. Update documentation to recommend C++ port
+
+#### Phase 3: Remove Old Algorithm
+1. Remove `TreeAlgorithm::Current` variant
+2. Remove `compute_tree_metrics()` (old algorithm)
+3. Rename `compute_tree_metrics_cpp_port()` to `compute_tree_metrics()`
+4. Remove `TreeAlgorithm` enum entirely (only one algorithm)
+
+#### Phase 4: Merge Structures (if Option B implemented)
+1. Replace `SizeInfo` with `CppSizeInfo` (add `bulkiness`)
+2. Move `treesize` from `FileRecord` to `IndexStreamInfo` (per-stream)
+3. Replace `ChildInfo.child_frs: u64` with `record_number: u32`
+4. Update all callers
+
+#### Phase 5: Cleanup
+1. Remove `cpp_tree.rs` module (merged into `index.rs`)
+2. Remove transformer code (no longer needed)
+3. Update tests to use new structure names
+4. Final documentation update
+
+### 11.3 Migration Checklist
+
+```markdown
+## C++ Port Migration Checklist
+
+### Verification
+- [ ] Root descendants match C++ output
+- [ ] Root treesize match C++ output
+- [ ] All directory metrics match C++ output
+- [ ] Performance benchmarks acceptable
+- [ ] No regressions in search/filter functionality
+
+### Deprecation
+- [ ] Default changed to CppPort
+- [ ] Deprecation warning added
+- [ ] Documentation updated
+
+### Removal
+- [ ] Old algorithm removed
+- [ ] TreeAlgorithm enum removed
+- [ ] Method renamed
+
+### Structure Merge (if Option B)
+- [ ] SizeInfo updated with bulkiness
+- [ ] treesize moved to per-stream
+- [ ] ChildInfo uses u32 record_number
+- [ ] Cache format updated
+- [ ] All callers updated
+
+### Cleanup
+- [ ] cpp_tree.rs merged/removed
+- [ ] Transformer code removed
+- [ ] Tests updated
+- [ ] Documentation finalized
+```
 
