@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(windows)]
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 use uffs_polars::{DataFrame, ParquetReader, ParquetWriter, SerReader};
 
 use crate::error::{MftError, Result};
@@ -927,7 +927,7 @@ impl MftReader {
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
     pub async fn read_all_index(&self) -> Result<crate::index::MftIndex> {
-        eprintln!("[DEBUG] read_all_index: ENTER volume={}", self.volume);
+        trace!(volume = %self.volume, "read_all_index: ENTER");
         // Capture configuration to recreate reader in blocking thread
         let volume = self.volume;
         let mode = self.mode;
@@ -943,7 +943,7 @@ impl MftReader {
         let forensic = self.forensic;
 
         let result = tokio::task::spawn_blocking(move || {
-            eprintln!("[DEBUG] read_all_index: INSIDE spawn_blocking volume={volume}");
+            trace!(volume = %volume, "read_all_index: INSIDE spawn_blocking");
             // Create a new reader in the blocking thread
             let handle = VolumeHandle::open(volume)?;
             let reader = MftReader {
@@ -961,12 +961,12 @@ impl MftReader {
                 forensic,
             };
             let idx = reader.read_mft_index_internal(None::<fn(MftProgress)>);
-            eprintln!("[DEBUG] read_all_index: read_mft_index_internal done");
+            trace!(volume = %volume, "read_all_index: read_mft_index_internal done");
             idx
         })
         .await
         .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?;
-        eprintln!("[DEBUG] read_all_index: EXIT volume={volume}");
+        trace!(volume = %volume, "read_all_index: EXIT");
         result
     }
 

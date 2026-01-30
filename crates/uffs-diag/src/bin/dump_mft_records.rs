@@ -183,11 +183,21 @@ fn test_merge(raw_path: &str, base_frs: u64, ext_frs: u64) -> Result<()> {
                 println!("  Result: Base record");
                 println!("  name: {:?}", record.name);
                 println!("  parent_frs: {}", record.parent_frs);
+                println!("  size: {}", record.size);
+                println!("  allocated_size: {}", record.allocated_size);
+                println!("  is_directory: {}", record.is_directory);
                 println!("  names.len(): {}", record.names.len());
                 for (idx, name) in record.names.iter().enumerate() {
                     println!(
-                        "    names[{idx}]: {:?} (parent={})",
-                        name.name, name.parent_frs
+                        "    names[{idx}]: {:?} (parent={}, ns={})",
+                        name.name, name.parent_frs, name.namespace
+                    );
+                }
+                println!("  streams.len(): {}", record.streams.len());
+                for (idx, stream) in record.streams.iter().enumerate() {
+                    println!(
+                        "    streams[{idx}]: {:?} (size={}, allocated={})",
+                        stream.name, stream.size, stream.allocated_size
                     );
                 }
             }
@@ -254,6 +264,9 @@ fn test_merge(raw_path: &str, base_frs: u64, ext_frs: u64) -> Result<()> {
         println!("\n=== FRS {base_frs} after merge ===");
         println!("  name: {:?}", record.name);
         println!("  parent_frs: {}", record.parent_frs);
+        println!("  size: {}", record.size);
+        println!("  allocated_size: {}", record.allocated_size);
+        println!("  is_directory: {}", record.is_directory);
         println!("  names.len(): {}", record.names.len());
         for (idx, name) in record.names.iter().enumerate() {
             println!(
@@ -261,8 +274,83 @@ fn test_merge(raw_path: &str, base_frs: u64, ext_frs: u64) -> Result<()> {
                 name.name, name.parent_frs, name.namespace
             );
         }
+        println!("  streams.len(): {}", record.streams.len());
+        for (idx, stream) in record.streams.iter().enumerate() {
+            println!(
+                "    streams[{idx}]: {:?} (size={}, allocated={})",
+                stream.name, stream.size, stream.allocated_size
+            );
+        }
     } else {
         println!("\n=== FRS {base_frs} NOT FOUND in merged results ===");
+    }
+
+    // Now build the MftIndex and check the record
+    println!("\n=== Building MftIndex from merged records ===");
+    let index = uffs_mft::index::MftIndex::from_parsed_records('D', merged_records);
+    println!("  records.len(): {}", index.records.len());
+    println!("  children.len(): {}", index.children_count());
+
+    // Find the record in the index
+    if let Some(record) = index.find(base_frs) {
+        println!("\n=== FRS {base_frs} in MftIndex ===");
+        println!("  frs: {}", record.frs);
+        println!("  name: {:?}", index.get_name(&record.first_name.name));
+        println!("  parent_frs: {}", record.first_name.parent_frs);
+        println!("  is_directory: {}", record.is_directory());
+        println!("  name_count: {}", record.name_count);
+        println!("  stream_count: {}", record.stream_count);
+        println!("  first_stream.size: {}", record.first_stream.size.length);
+        println!(
+            "  first_stream.next_entry: {}",
+            record.first_stream.next_entry
+        );
+        println!("  descendants: {}", record.descendants);
+        println!("  treesize: {}", record.treesize);
+        println!("  tree_allocated: {}", record.tree_allocated);
+        println!("  first_child: {}", record.first_child);
+
+        // Check children by iterating through the children list
+        let mut child_count = 0_u32;
+        let mut child_entry_idx = record.first_child;
+        while child_entry_idx != uffs_mft::index::NO_ENTRY {
+            if let Some(child_entry) = index.children.get(child_entry_idx as usize) {
+                child_count += 1_u32;
+                if child_count <= 5_u32 {
+                    println!(
+                        "    child[{}]: frs={}, name_index={}",
+                        child_count - 1_u32,
+                        child_entry.child_frs,
+                        child_entry.name_index
+                    );
+                }
+                child_entry_idx = child_entry.next_entry;
+            } else {
+                break;
+            }
+        }
+        println!("  total children: {child_count}");
+
+        // Check streams by iterating through the streams list
+        let mut stream_count = 0_u32;
+        let mut stream_entry_idx = record.first_stream.next_entry;
+        while stream_entry_idx != uffs_mft::index::NO_ENTRY {
+            if let Some(stream_entry) = index.streams.get(stream_entry_idx as usize) {
+                stream_count += 1_u32;
+                println!(
+                    "    stream[{}]: {:?} (size={})",
+                    stream_count,
+                    index.get_name(&stream_entry.name),
+                    stream_entry.size.length
+                );
+                stream_entry_idx = stream_entry.next_entry;
+            } else {
+                break;
+            }
+        }
+        println!("  total additional streams: {stream_count}");
+    } else {
+        println!("\n=== FRS {base_frs} NOT FOUND in MftIndex ===");
     }
 
     Ok(())

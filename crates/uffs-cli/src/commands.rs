@@ -405,6 +405,17 @@ pub async fn search(
     // Index path is the default (fast, cached) - DataFrame path is fallback
     let use_index_path = should_use_index_path(mode, index.as_ref(), multi_drives.as_ref());
 
+    // Determine drives to search (needed for C++ compatible "Drives?" output)
+    #[cfg(windows)]
+    let drives_to_search: Vec<char> = if let Some(ref drives) = multi_drives {
+        drives.clone()
+    } else if let Some(drive) = single_drive.or_else(|| filters.parsed.drive()) {
+        vec![drive]
+    } else {
+        // No drive specified - search ALL available NTFS drives
+        uffs_mft::detect_ntfs_drives()
+    };
+
     // Handle raw MFT file input (cross-platform debugging)
     let mut results = if let Some(mft_path) = mft_file.as_ref() {
         info!(path = %mft_path.display(), "📂 Loading from raw MFT file");
@@ -420,20 +431,10 @@ pub async fn search(
         info!("🚀 Using fast cached MftIndex query path");
         #[cfg(windows)]
         {
-            // Determine drives to search
-            let drives_to_search: Vec<char> = if let Some(ref drives) = multi_drives {
-                drives.clone()
-            } else if let Some(drive) = single_drive.or_else(|| filters.parsed.drive()) {
-                vec![drive]
-            } else {
-                // No drive specified - search ALL available NTFS drives
-                let all_drives = uffs_mft::detect_ntfs_drives();
-                if all_drives.is_empty() {
-                    bail!("No NTFS drives found on this system");
-                }
-                info!(drives = ?all_drives, "No drive specified - searching all NTFS drives");
-                all_drives
-            };
+            // Use pre-computed drives_to_search
+            if drives_to_search.is_empty() {
+                bail!("No NTFS drives found on this system");
+            }
 
             if drives_to_search.len() == 1 {
                 // Single drive - use existing function
@@ -482,9 +483,32 @@ pub async fn search(
                     no_bitmap,
                 )
                 .await;
-                // Print timing after streaming completes
+
+                // C++ compatibility: Print "Drives?" and "MMMmmm" to stdout AFTER the data
                 let elapsed = start_time.elapsed();
-                eprintln!("Finished in {} s", elapsed.as_secs());
+                let secs = elapsed.as_secs();
+
+                #[allow(clippy::print_stdout)] // Intentional: C++ compatibility requires stdout
+                if !drives_to_search.is_empty() {
+                    let drive_list: String = drives_to_search
+                        .iter()
+                        .map(|d| format!("{d}:"))
+                        .collect::<Vec<_>>()
+                        .join("|");
+                    // C++ format: "\nDrives? \t{count}\t{drive_list}\n\n"
+                    println!("\nDrives? \t{}\t{drive_list}\n", drives_to_search.len());
+                }
+
+                #[allow(clippy::print_stdout)] // Intentional: C++ compatibility requires stdout
+                if secs <= 1 {
+                    println!(
+                        "MMMmmm that was FAST ... maybe your searchstring was wrong?\t{pattern}\n\
+                         Search path. E.g. 'C:/' or 'C:\\Prog**' "
+                    );
+                }
+
+                // C++ compatibility: "Finished in X s" (to stderr)
+                eprintln!("\nFinished \tin {secs} s\n");
                 return result;
             }
         }
@@ -554,8 +578,34 @@ pub async fn search(
         eprintln!("=== TOTAL: {total_ms} ms ===");
     }
 
+    // C++ compatibility: Print "Drives?" and "MMMmmm" to stdout AFTER the data
+    // These go to stdout (not stderr) to match C++ behavior
     let secs = elapsed.as_secs();
-    eprintln!("Finished in {secs} s");
+
+    #[cfg(windows)]
+    #[allow(clippy::print_stdout)] // Intentional: C++ compatibility requires stdout
+    if !drives_to_search.is_empty() {
+        let drive_list: String = drives_to_search
+            .iter()
+            .map(|d| format!("{d}:"))
+            .collect::<Vec<_>>()
+            .join("|");
+        // C++ format: "\nDrives? \t{count}\t{drive_list}\n\n"
+        println!("\nDrives? \t{}\t{drive_list}\n", drives_to_search.len());
+    }
+
+    // C++ compatibility: "MMMmmm that was FAST" message when elapsed <= 1 second
+    // (to stdout)
+    #[allow(clippy::print_stdout)] // Intentional: C++ compatibility requires stdout
+    if secs <= 1 {
+        println!(
+            "MMMmmm that was FAST ... maybe your searchstring was wrong?\t{pattern}\n\
+             Search path. E.g. 'C:/' or 'C:\\Prog**' "
+        );
+    }
+
+    // C++ compatibility: "Finished in X s" (to stderr)
+    eprintln!("\nFinished \tin {secs} s\n");
 
     info!(count = results.height(), "Search complete");
     Ok(())
@@ -824,9 +874,7 @@ async fn load_and_filter_data(
     if let Some(drive_letter) = effective_drive {
         // Single drive search with proper path resolution
         let t_read = std::time::Instant::now();
-        eprintln!(
-            "[DEBUG] search_dataframe: before load_or_build_dataframe_cached drive={drive_letter}"
-        );
+        tracing::trace!(drive = %drive_letter, "search_dataframe: before load_or_build_dataframe_cached");
 
         // Use cached DataFrame path for performance (Windows only)
         #[cfg(windows)]
@@ -835,7 +883,7 @@ async fn load_and_filter_data(
                 .await
                 .with_context(|| format!("Failed to read MFT for drive {drive_letter}:"))?;
 
-        eprintln!("[DEBUG] search_dataframe: after load_or_build_dataframe_cached");
+        tracing::trace!(drive = %drive_letter, "search_dataframe: after load_or_build_dataframe_cached");
 
         // Non-Windows: read directly (no caching)
         #[cfg(not(windows))]

@@ -130,3 +130,70 @@ let (name, parent_frs, _namespace) = match primary_name {
 
 ### CI Pipeline Status
 
+- Run 5: v0.2.145 - PASSED ✅
+
+---
+
+## Fix 3: Remove Debug Prints from Normal Flow
+
+### What Failed
+
+Debug `eprintln!` statements were polluting stdout/stderr during normal operation:
+```
+[DEBUG] read_all_index: ENTER volume=D
+[DEBUG] read_all_index: INSIDE spawn_blocking volume=D
+[DEBUG] read_all_index: read_mft_index_internal done
+[DEBUG] search_dataframe: before load_or_build_dataframe_cached drive=D
+[DEBUG] search_dataframe: after load_or_build_dataframe_cached
+```
+
+These were left over from debugging and should only appear when tracing is enabled.
+
+### The Fix
+
+Converted `eprintln!("[DEBUG] ...")` to proper `tracing::trace!()` calls:
+- `crates/uffs-mft/src/reader.rs`: 4 debug prints in `read_all_index`
+- `crates/uffs-cli/src/commands.rs`: 2 debug prints in `search_dataframe`
+
+---
+
+## Fix 4: Match C++ Output Format Exactly
+
+### What Was Different
+
+The Rust CLI output didn't match C++ output format exactly:
+1. Missing "Drives?" line AFTER the CSV data (not before)
+2. Missing "MMMmmm that was FAST" message when search completes in <= 1 second
+3. "Finished" message format was slightly different
+
+### C++ Output Format (stdout)
+
+```
+"Path","Name","Path Only",...,"Attributes"
+
+"G:\","","G:\",609893968,...
+...
+"G:\last\file.txt",...
+
+Drives? 	1	G:
+
+MMMmmm that was FAST ... maybe your searchstring was wrong?	*
+Search path. E.g. 'C:/' or 'C:\Prog**'
+```
+
+### C++ Output Format (stderr)
+
+```
+Finished 	in 0 s
+
+```
+
+### The Fix
+
+Modified `crates/uffs-cli/src/commands.rs`:
+1. Added "Drives?" line AFTER the CSV data (to stdout, format: `\nDrives? \t{count}\t{drive_list}\n\n`)
+2. Added "MMMmmm that was FAST" message when elapsed <= 1 second (to stdout)
+3. Updated "Finished" message format to match C++ exactly (to stderr: `\nFinished \tin {secs} s\n`)
+
+### CI Pipeline Status
+
