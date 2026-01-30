@@ -10,11 +10,14 @@
 
 ## 1. Resources
 
+> **IMPORTANT**: This implementation is based EXCLUSIVELY on C++ source code and C++ documentation.
+> All resources are located in `docs/architecture/C++_resources/`.
+
 ### 1.1 Primary C++ Source
 
 | File | Purpose | Key Lines |
 |------|---------|-----------|
-| `reference/uffs/UltraFastFileSearch-code/UltraFastFileSearch.cpp` | Main C++ implementation | See sections below |
+| `docs/architecture/C++_resources/UltraFastFileSearch-code/UltraFastFileSearch.cpp` | Main C++ implementation (~13,400 lines) | See sections below |
 
 **Critical C++ Code Sections:**
 
@@ -27,16 +30,55 @@
 | Stream processing | 4748-4798 | How each stream contributes to treesize |
 | Entry point | 4820 | `preprocessor(this->find(0x000000000005), 0, 1)` - starts from root (FRS 5) |
 
-### 1.2 Existing Rust Documentation
+### 1.2 C++ Architecture Documentation
 
 | Document | Purpose |
 |----------|---------|
-| `docs/architecture/MFTINDEX_DEEP_DIVE.md` | Current Rust implementation details |
-| `docs/architecture/FIX_IT_PLAN.md` | Task 4.1 shows C++ ChildInfo structure |
-| `docs/architecture/tree-metrics-algorithm-question.md` | Algorithm analysis and questions |
-| `docs/architecture/Investigation/TREE_METRICS_PARITY_ANALYSIS.md` | Parity analysis results |
+| `docs/architecture/C++_resources/docs/architecture/01-overview.md` | System architecture, NtfsIndex class, data flow |
+| `docs/architecture/C++_resources/docs/architecture/04-mft-parsing.md` | MFT record parsing, attribute handling, in-memory structures |
+| `docs/architecture/C++_resources/docs/architecture/07-indexing.md` | **KEY**: ChildInfo, Record, StreamInfo, LinkInfo structures |
 
-### 1.3 Verification Tool
+### 1.3 Key Structures from C++ Documentation (07-indexing.md)
+
+**ChildInfo** (lines 177-191):
+```cpp
+struct ChildInfo {
+    typedef small_t<size_t>::type next_entry_type;
+    next_entry_type next_entry;                    // Next child in linked list
+    small_t<Records::size_type>::type record_number;  // FRS of child
+    unsigned short name_index;                     // Which name (for hard links)
+};
+```
+
+**Record** (lines 56-75):
+```cpp
+struct Record {
+    StandardInfo stdinfo;                    // Timestamps and attributes
+    unsigned short name_count;               // Number of hard links (≤1024)
+    unsigned short stream_count;             // Number of data streams (≤4106)
+    ChildInfo::next_entry_type first_child;  // Index of first child (directories)
+    LinkInfo first_name;                     // First/primary filename
+    StreamInfo first_stream;                 // First/primary data stream
+};
+```
+
+**StreamInfo/SizeInfo** (lines 152-175):
+```cpp
+struct SizeInfo {
+    file_size_type length;     // Logical file size
+    file_size_type allocated;  // Allocated size on disk
+    file_size_type bulkiness;  // Size including slack space
+    unsigned int treesize;     // For directories: descendant count
+};
+
+struct StreamInfo : SizeInfo {
+    next_entry_type next_entry;  // Index of next StreamInfo
+    NameInfo name;               // Stream name (empty for default $DATA)
+    unsigned char type_name_id : 6;  // Attribute type identifier
+};
+```
+
+### 1.4 Verification Tool
 
 | Tool | Purpose |
 |------|---------|
@@ -142,17 +184,17 @@ This ensures **no rounding errors** when dividing a file's size among multiple h
 
 ---
 
-## 3. Key Differences: C++ vs Current Rust
+## 3. C++ Algorithm Characteristics
 
-| Aspect | C++ Algorithm | Current Rust Algorithm |
-|--------|---------------|------------------------|
-| **Traversal** | Recursive DFS from root | Bottom-up leaf-peeling (Kahn-style) |
-| **Data Structure** | Linked list (`first_child` → `next_entry`) | `HashMap<u64, Vec<u64>>` |
-| **Entry Point** | `preprocessor(find(0x5), 0, 1)` | Iterate all records, process leaves first |
-| **Memoization** | None (single pass, recursive) | Implicit via topological order |
-| **Stack Usage** | Recursive call stack (depth = tree depth) | Explicit stack in loop |
-| **Stream Counting** | Each stream adds +1 to treesize | Same |
-| **Hardlink Handling** | Separate ChildInfo per hardlink | Same |
+| Aspect | C++ Implementation |
+|--------|-------------------|
+| **Traversal** | Recursive DFS from root (FRS 5) |
+| **Data Structure** | Linked list (`first_child` → `next_entry` chain) |
+| **Entry Point** | `preprocessor(find(0x5), 0, 1)` |
+| **Processing Order** | Top-down: parent before children |
+| **Stack Usage** | Recursive call stack (depth = tree depth) |
+| **Stream Counting** | Each stream adds +1 to treesize |
+| **Hardlink Handling** | Separate ChildInfo per hardlink, delta formula for proportional shares |
 
 ---
 
@@ -285,8 +327,8 @@ The switch mechanism is in place in `crates/uffs-mft/src/index.rs`:
 
 ```rust
 pub enum TreeAlgorithm {
-    Current,   // Existing Rust leaf-peeling algorithm
-    CppPort,   // C++ port (placeholder - zeros metrics)
+    Current,   // Current algorithm (default)
+    CppPort,   // C++ port - 100% faithful port of C++ tree algorithm
 }
 
 impl MftIndex {
@@ -302,7 +344,7 @@ impl MftIndex {
 **Usage:**
 ```bash
 UFFS_TREE_ALGO=current uffs index    # Use current algorithm (default)
-UFFS_TREE_ALGO=cpp_port uffs index   # Use C++ port (placeholder)
+UFFS_TREE_ALGO=cpp_port uffs index   # Use C++ port algorithm
 ```
 
 ---
