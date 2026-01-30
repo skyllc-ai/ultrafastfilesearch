@@ -742,12 +742,61 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         None => {
             // No $FILE_NAME in base record - store stdinfo anyway
             // The extension record will add the name later
+            //
+            // IMPORTANT: We must still add ADS streams from the base record!
+            // The $FILE_NAME may be in an extension record, but the ADS are here.
+            // Without this, ADS on files/directories with extension records are lost.
+
+            // Pre-process ADS streams BEFORE creating the record
+            let additional_stream_count = additional_streams.len();
+            let mut stream_indices: Vec<u32> = Vec::with_capacity(additional_stream_count);
+            for (stream_name, stream_size, stream_allocated) in additional_streams {
+                let stream_name_offset = index.add_name(&stream_name);
+                let stream_name_len = stream_name.len();
+                let stream_is_ascii = stream_name.is_ascii();
+                let extension_id = index.intern_extension(&stream_name);
+                let stream_name_ref = IndexNameRef::new(
+                    stream_name_offset,
+                    stream_name_len as u16,
+                    stream_is_ascii,
+                    extension_id,
+                );
+
+                let stream_idx = index.streams.len() as u32;
+                index.streams.push(IndexStreamInfo {
+                    size: SizeInfo {
+                        length: stream_size,
+                        allocated: stream_allocated,
+                    },
+                    next_entry: NO_ENTRY,
+                    name: stream_name_ref,
+                    flags: 0,
+                });
+                stream_indices.push(stream_idx);
+            }
+
+            // Now create the record and set up streams
             let record = index.get_or_create(frs);
             record.stdinfo = std_info;
             record.first_stream.size = SizeInfo {
                 length: default_size,
                 allocated: default_allocated,
             };
+
+            // Chain ADS streams to first_stream
+            if !stream_indices.is_empty() {
+                // Chain the streams together
+                for i in 0..stream_indices.len().saturating_sub(1) {
+                    let current_idx = stream_indices[i] as usize;
+                    let next_idx = stream_indices[i + 1];
+                    index.streams[current_idx].next_entry = next_idx;
+                }
+                // Attach to first_stream
+                let record = index.get_or_create(frs);
+                record.first_stream.next_entry = stream_indices[0];
+                record.stream_count = 1 + additional_stream_count as u16;
+            }
+
             // Leave first_name empty - extension record will fill it
             return false;
         }
@@ -1490,12 +1539,61 @@ pub fn parse_record_to_fragment(
         None => {
             // No $FILE_NAME in base record - store stdinfo anyway
             // The extension record will add the name later
+            //
+            // IMPORTANT: We must still add ADS streams from the base record!
+            // The $FILE_NAME may be in an extension record, but the ADS are here.
+            // Without this, ADS on files/directories with extension records are lost.
+
+            // Pre-process ADS streams BEFORE creating the record
+            let additional_stream_count = additional_streams.len();
+            let mut stream_indices: Vec<u32> = Vec::with_capacity(additional_stream_count);
+            for (stream_name, stream_size, stream_allocated) in additional_streams {
+                let stream_name_offset = fragment.add_name(&stream_name);
+                let stream_name_len = stream_name.len();
+                let stream_is_ascii = stream_name.is_ascii();
+                let extension_id = fragment.intern_extension(&stream_name);
+                let stream_name_ref = IndexNameRef::new(
+                    stream_name_offset,
+                    stream_name_len as u16,
+                    stream_is_ascii,
+                    extension_id,
+                );
+
+                let stream_idx = fragment.streams.len() as u32;
+                fragment.streams.push(IndexStreamInfo {
+                    size: SizeInfo {
+                        length: stream_size,
+                        allocated: stream_allocated,
+                    },
+                    next_entry: NO_ENTRY,
+                    name: stream_name_ref,
+                    flags: 0,
+                });
+                stream_indices.push(stream_idx);
+            }
+
+            // Now create the record and set up streams
             let record = fragment.get_or_create(frs);
             record.stdinfo = std_info;
             record.first_stream.size = SizeInfo {
                 length: default_size,
                 allocated: default_allocated,
             };
+
+            // Chain ADS streams to first_stream
+            if !stream_indices.is_empty() {
+                // Chain the streams together
+                for i in 0..stream_indices.len().saturating_sub(1) {
+                    let current_idx = stream_indices[i] as usize;
+                    let next_idx = stream_indices[i + 1];
+                    fragment.streams[current_idx].next_entry = next_idx;
+                }
+                // Attach to first_stream
+                let record = fragment.get_or_create(frs);
+                record.first_stream.next_entry = stream_indices[0];
+                record.stream_count = 1 + additional_stream_count as u16;
+            }
+
             // Leave first_name empty - extension record will fill it
             return false;
         }
