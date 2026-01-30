@@ -657,8 +657,28 @@ async fn git_commit(ctx: &PipelineContext) -> Result<()> {
 
 async fn git_push(ctx: &PipelineContext) -> Result<()> {
     println!("{}", "🚀 Pushing to remote...".blue());
-    execute_command("Git pull rebase", "git", &["pull", "origin", "main", "--rebase"], ctx).await?;
-    execute_command("Git push", "git", &["push", "origin", "main"], ctx).await?;
+
+    // Get current branch name dynamically
+    let branch_output = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .context("Failed to get current branch")?;
+    let current_branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
+
+    if current_branch.is_empty() || current_branch == "HEAD" {
+        bail!("Could not determine current branch (detached HEAD?)");
+    }
+
+    println!("📌 Current branch: {}", current_branch.cyan());
+
+    execute_command(
+        "Git pull rebase",
+        "git",
+        &["pull", "origin", &current_branch, "--rebase"],
+        ctx,
+    )
+    .await?;
+    execute_command("Git push", "git", &["push", "origin", &current_branch], ctx).await?;
     Ok(())
 }
 
