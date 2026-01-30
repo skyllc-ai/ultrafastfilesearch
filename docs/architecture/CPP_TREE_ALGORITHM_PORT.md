@@ -198,7 +198,95 @@ This ensures **no rounding errors** when dividing a file's size among multiple h
 
 ---
 
-## 4. Implementation Plan
+## 4. Data Structure Comparison: C++ vs Rust
+
+> **Analysis Date**: 2026-01-30
+> **Conclusion**: ✅ All required data is available. The C++ algorithm can be a drop-in replacement.
+
+### 4.1 Structure Mapping Table
+
+| C++ Structure | C++ Field | Rust Structure | Rust Field | Status |
+|---------------|-----------|----------------|------------|--------|
+| **ChildInfo** | `next_entry` (u32) | `ChildInfo` | `next_entry` (u32) | ✅ Identical |
+| **ChildInfo** | `record_number` (u32) | `ChildInfo` | `child_frs` (u64) | ✅ Rust wider for 48-bit FRS |
+| **ChildInfo** | `name_index` (u16) | `ChildInfo` | `name_index` (u16) | ✅ Identical |
+| **SizeInfo** | `length` (6-byte packed) | `SizeInfo` | `length` (u64) | ✅ Rust wider |
+| **SizeInfo** | `allocated` (6-byte packed) | `SizeInfo` | `allocated` (u64) | ✅ Rust wider |
+| **SizeInfo** | `bulkiness` (6-byte packed) | - | - | ⚠️ Not in Rust (not needed for tree metrics) |
+| **SizeInfo** | `treesize` (u32) | `FileRecord` | `treesize` (u64) | ⚠️ Different location, Rust wider |
+| **StreamInfo** | inherits `SizeInfo` | `IndexStreamInfo` | `size: SizeInfo` | ✅ Composition vs inheritance |
+| **StreamInfo** | `next_entry` (u32) | `IndexStreamInfo` | `next_entry` (u32) | ✅ Identical |
+| **StreamInfo** | `name` | `IndexStreamInfo` | `name: IndexNameRef` | ✅ Similar |
+| **StreamInfo** | `is_sparse` (1 bit) | `IndexStreamInfo` | `flags` bit 0 | ✅ Packed differently |
+| **StreamInfo** | `type_name_id` (6 bits) | `IndexStreamInfo` | `flags` bits 2-7 | ✅ Packed differently |
+| **LinkInfo** | `next_entry` (u32) | `LinkInfo` | `next_entry` (u32) | ✅ Identical |
+| **LinkInfo** | `name` | `LinkInfo` | `name: IndexNameRef` | ✅ Similar |
+| **LinkInfo** | `parent` (u32) | `LinkInfo` | `parent_frs` (u64) | ✅ Rust wider for 48-bit FRS |
+| **Record** | `stdinfo` | `FileRecord` | `stdinfo` | ✅ Similar |
+| **Record** | `name_count` (u16) | `FileRecord` | `name_count` (u16) | ✅ Identical |
+| **Record** | `stream_count` (u16) | `FileRecord` | `stream_count` (u16) | ✅ Identical |
+| **Record** | `first_child` (u32) | `FileRecord` | `first_child` (u32) | ✅ Identical |
+| **Record** | `first_name` | `FileRecord` | `first_name` | ✅ Similar |
+| **Record** | `first_stream` | `FileRecord` | `first_stream` | ✅ Similar |
+
+### 4.2 Extra Fields in Rust (Not in C++)
+
+| Rust Structure | Rust Field | Purpose |
+|----------------|------------|---------|
+| `FileRecord` | `frs` (u64) | FRS stored in record (C++ uses lookup table) |
+| `FileRecord` | `sequence_number` (u16) | Forensic: MFT sequence number |
+| `FileRecord` | `namespace` (u8) | Forensic: filename namespace |
+| `FileRecord` | `forensic_flags` (u8) | Forensic: deleted/corrupt/extension flags |
+| `FileRecord` | `lsn` (u64) | Forensic: Log File Sequence Number |
+| `FileRecord` | `reparse_tag` (u32) | Forensic: reparse point type |
+| `FileRecord` | `base_frs` (u64) | Forensic: base record for extensions |
+| `FileRecord` | `fn_created/modified/accessed/mft_changed` (i64) | $FILE_NAME timestamps |
+| `FileRecord` | `descendants` (u32) | Tree metric: count of all descendants |
+| `FileRecord` | `tree_allocated` (u64) | Tree metric: sum of allocated sizes (C++ doesn't have this) |
+
+### 4.3 Key Differences
+
+1. **FRS Width**: Rust uses `u64` for FRS values (C++ uses `u32`). This supports 48-bit NTFS FRS values on very large volumes.
+
+2. **Tree Metrics Location**:
+   - C++ stores `treesize` in `SizeInfo` (per-stream)
+   - Rust stores `descendants`, `treesize`, `tree_allocated` in `FileRecord` (per-record)
+   - This is a design difference but doesn't affect the algorithm
+
+3. **Bulkiness**: C++ has `bulkiness` field for slack space calculation. Rust doesn't have this, but it's not needed for tree metrics.
+
+4. **Extra Forensic Fields**: Rust has many forensic fields not in C++. These don't affect tree metrics.
+
+### 4.4 What the C++ Algorithm Needs
+
+| Requirement | C++ Source | Rust Equivalent | Available? |
+|-------------|------------|-----------------|------------|
+| Directory traversal | `first_child` → `childinfos[]` | `first_child` → `children[]` | ✅ Yes |
+| Child FRS lookup | `ChildInfo.record_number` | `ChildInfo.child_frs` | ✅ Yes |
+| Hardlink name_index | `ChildInfo.name_index` | `ChildInfo.name_index` | ✅ Yes |
+| Name count for delta | `Record.name_count` | `FileRecord.name_count` | ✅ Yes |
+| Stream count | `Record.stream_count` | `FileRecord.stream_count` | ✅ Yes |
+| Stream sizes | `StreamInfo.length/allocated` | `IndexStreamInfo.size.length/allocated` | ✅ Yes |
+| Stream type_name_id | `StreamInfo.type_name_id` | `IndexStreamInfo.type_name_id()` | ✅ Yes |
+| Output: descendants | - | `FileRecord.descendants` | ✅ Yes |
+| Output: treesize | `SizeInfo.treesize` | `FileRecord.treesize` | ✅ Yes |
+| Output: tree_allocated | - | `FileRecord.tree_allocated` | ✅ Yes (bonus) |
+
+### 4.5 Conclusion
+
+**The C++ algorithm can be implemented as a drop-in replacement.** All required data is available in the Rust structures:
+
+- ✅ `ChildInfo` linked list for directory traversal
+- ✅ `name_index` for hardlink proportional share calculation
+- ✅ `name_count` for delta formula
+- ✅ Stream sizes and type information
+- ✅ Output fields for tree metrics
+
+The main differences (wider FRS types, extra forensic fields) are **additive** and don't prevent the C++ algorithm from working.
+
+---
+
+## 5. Implementation Plan
 
 ### Phase 1: Study C++ Code (2-3 hours) ✅ COMPLETE
 
@@ -301,7 +389,7 @@ fn preprocess_recursive(&mut self, idx: usize, name_info: u16, total_names: u16)
 
 ---
 
-## 5. Success Criteria
+## 6. Success Criteria
 
 | Metric | Target |
 |--------|--------|
@@ -319,7 +407,7 @@ cd docs/architecture/Investigation
 
 ---
 
-## 6. Current State
+## 7. Current State
 
 ### Scaffolding Complete
 
@@ -349,7 +437,7 @@ UFFS_TREE_ALGO=cpp_port uffs index   # Use C++ port algorithm
 
 ---
 
-## 7. Rollback Plan
+## 8. Rollback Plan
 
 If the C++ port causes issues:
 1. The original algorithm remains untouched
@@ -358,7 +446,7 @@ If the C++ port causes issues:
 
 ---
 
-## 8. Open Questions
+## 9. Open Questions
 
 1. **Stack depth**: C++ uses recursive calls. For very deep trees (50+ levels), should we use an explicit stack in Rust?
 2. **Bulkiness calculation**: C++ has complex bulkiness logic with heap operations. Do we need this for parity?
@@ -367,7 +455,7 @@ If the C++ port causes issues:
 
 ---
 
-## 9. Estimated Effort
+## 10. Estimated Effort
 
 | Phase | Effort |
 |-------|--------|
