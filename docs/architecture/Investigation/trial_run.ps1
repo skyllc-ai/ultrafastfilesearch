@@ -68,9 +68,9 @@ function Extract-RootMetrics {
         # Match root entry pattern: "X:\<TAB><DIR><TAB>size<TAB>descendants<TAB>date"
         if ($line -match '^([A-Z]):\\\t<DIR>\t([^\t]+)\t(\d+)\t') {
             return @{
-                Drive = $Matches[1]
-                Treesize = $Matches[2]
-                Descendants = [int]$Matches[3]
+                Drive = $script:Matches[1]
+                Treesize = $script:Matches[2]
+                Descendants = [int]$script:Matches[3]
             }
         }
     }
@@ -111,8 +111,8 @@ function Compare-Outputs {
         # FAST line count using find /c /v "" (native Windows, ~100x faster than Get-Content)
         # This counts lines by counting non-matches of empty string
         $countOutput = & cmd.exe /c "find /c /v `"`" `"$RustFile`"" 2>$null
-        if ($countOutput -match ': (\d+)') {
-            $result.RustLines = [int]$Matches[1]
+        if ($countOutput -and $countOutput -match ': (\d+)') {
+            $result.RustLines = [int]$script:Matches[1]
         }
         $rustMetrics = Extract-RootMetrics -FilePath $RustFile
         if ($rustMetrics) {
@@ -124,8 +124,8 @@ function Compare-Outputs {
     if ($result.CppExists) {
         # FAST line count using find /c /v "" (native Windows, ~100x faster than Get-Content)
         $countOutput = & cmd.exe /c "find /c /v `"`" `"$CppFile`"" 2>$null
-        if ($countOutput -match ': (\d+)') {
-            $result.CppLines = [int]$Matches[1]
+        if ($countOutput -and $countOutput -match ': (\d+)') {
+            $result.CppLines = [int]$script:Matches[1]
         }
         $cppMetrics = Extract-RootMetrics -FilePath $CppFile
         if ($cppMetrics) {
@@ -237,8 +237,8 @@ function Invoke-Logged {
             # FAST line count using find /c /v "" (native Windows, ~100x faster than Get-Content)
             $countOutput = & cmd.exe /c "find /c /v `"`" `"$outPath`"" 2>$null
             $lineCount = 0
-            if ($countOutput -match ': (\d+)') {
-                $lineCount = [int]$Matches[1]
+            if ($countOutput -and $countOutput -match ': (\d+)') {
+                $lineCount = [int]$script:Matches[1]
             }
             LogLine ("**Output file size:** " + (Format-FileSize $fileInfo.Length))
             LogLine ("**Output line count:** " + $lineCount)
@@ -450,15 +450,15 @@ try {
             $rustLines = 0; $cppLines = 0; $rustNewLines = 0
             if (Test-Path -LiteralPath $rustPath) {
                 $countOutput = & cmd.exe /c "find /c /v `"`" `"$rustPath`"" 2>$null
-                if ($countOutput -match ': (\d+)') { $rustLines = [int]$Matches[1] }
+                if ($countOutput -and $countOutput -match ': (\d+)') { $rustLines = [int]$script:Matches[1] }
             }
             if (Test-Path -LiteralPath $cppPath) {
                 $countOutput = & cmd.exe /c "find /c /v `"`" `"$cppPath`"" 2>$null
-                if ($countOutput -match ': (\d+)') { $cppLines = [int]$Matches[1] }
+                if ($countOutput -and $countOutput -match ': (\d+)') { $cppLines = [int]$script:Matches[1] }
             }
             if (Test-Path -LiteralPath $rustNewPath) {
                 $countOutput = & cmd.exe /c "find /c /v `"`" `"$rustNewPath`"" 2>$null
-                if ($countOutput -match ': (\d+)') { $rustNewLines = [int]$Matches[1] }
+                if ($countOutput -and $countOutput -match ': (\d+)') { $rustNewLines = [int]$script:Matches[1] }
             }
 
             LogLine "### Three-Way Comparison: Drive $drive"
@@ -561,7 +561,7 @@ try {
             if ($cppExitCode -eq 0) {
                 foreach ($line in $cppOutput) {
                     if ($line -match 'Preprocess[:\s]+(\d+)\s*ms') {
-                        $cppPreprocessMs = [int]$Matches[1]
+                        $cppPreprocessMs = [int]$script:Matches[1]
                     }
                 }
                 Write-Host " ✅ Preprocess: $cppPreprocessMs ms" -ForegroundColor Green
@@ -579,7 +579,7 @@ try {
             if ($rustExitCode -eq 0) {
                 foreach ($line in $rustOutput) {
                     if ($line -match 'Avg[:\s]+(\d+)\s*ms') {
-                        $rustTreeMetricsMs = [int]$Matches[1]
+                        $rustTreeMetricsMs = [int]$script:Matches[1]
                     }
                 }
                 Write-Host " ✅ Tree Metrics: $rustTreeMetricsMs ms (avg)" -ForegroundColor Green
