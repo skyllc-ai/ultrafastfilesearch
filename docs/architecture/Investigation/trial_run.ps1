@@ -278,6 +278,20 @@ try {
                     Write-Host " ✅ ($durMs ms)" -ForegroundColor Green
                 } else {
                     Write-Host " ❌ (exit: $exitCode, $durMs ms)" -ForegroundColor Red
+                    # Show log content on error
+                    Write-Host "    📋 Log ($LogFileName):" -ForegroundColor Yellow
+                    if (Test-Path -LiteralPath $logPath) {
+                        $logContent = Get-Content -LiteralPath $logPath -TotalCount 20
+                        foreach ($line in $logContent) {
+                            Write-Host "       $line" -ForegroundColor DarkYellow
+                        }
+                        $totalLines = (Get-Content -LiteralPath $logPath | Measure-Object -Line).Lines
+                        if ($totalLines -gt 20) {
+                            Write-Host "       ... ($($totalLines - 20) more lines in $LogFileName)" -ForegroundColor DarkYellow
+                        }
+                    } else {
+                        Write-Host "       (log file not found)" -ForegroundColor DarkYellow
+                    }
                 }
 
                 return [pscustomobject]@{
