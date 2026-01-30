@@ -150,7 +150,7 @@ try {
         $timings += Invoke-CmdToLog -Title "uffs --version" `
             -CommandLine ("`"$UffsExe`" --version") `
             -LogFileName "uffs_version.log"
-        LogLine "- Version log: `uffs_version.log`"
+        LogLine "- Version log: ``uffs_version.log``"
         LogLine ""
     }
 
