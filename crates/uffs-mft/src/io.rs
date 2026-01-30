@@ -1718,8 +1718,9 @@ pub fn parse_record_to_fragment(
     // Now chain base record links, then extension links
     // Extension names become additional hard links after base record's names
     //
-    // We need to update fragment.links BEFORE borrowing record to avoid borrow conflicts.
-    // Calculate what the first_name.next_entry should be, then set it after.
+    // We need to update fragment.links BEFORE borrowing record to avoid borrow
+    // conflicts. Calculate what the first_name.next_entry should be, then set
+    // it after.
     let first_name_next_entry: u32;
 
     if existing_name_valid {
@@ -1727,7 +1728,8 @@ pub fn parse_record_to_fragment(
         let ext_link_idx = fragment.links.len() as u32;
         fragment.links.push(existing_first_name);
 
-        // Chain: base first_name -> base additional links -> ext first_name -> ext overflow
+        // Chain: base first_name -> base additional links -> ext first_name -> ext
+        // overflow
         if !link_indices.is_empty() {
             first_name_next_entry = link_indices[0];
             let last_base_link = link_indices[link_indices.len() - 1] as usize;
@@ -1759,8 +1761,8 @@ pub fn parse_record_to_fragment(
         record.first_name.next_entry = first_name_next_entry;
     }
 
-    // Chain streams: base ADS -> extension ADS (must be done before borrowing record)
-    // If base has ADS and extension has ADS, chain them together
+    // Chain streams: base ADS -> extension ADS (must be done before borrowing
+    // record) If base has ADS and extension has ADS, chain them together
     if !stream_indices.is_empty() && existing_stream_next != NO_ENTRY {
         let last_base_stream = stream_indices[stream_indices.len() - 1] as usize;
         fragment.streams[last_base_stream].next_entry = existing_stream_next;
