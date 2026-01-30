@@ -203,86 +203,143 @@ This ensures **no rounding errors** when dividing a file's size among multiple h
 > **Analysis Date**: 2026-01-30
 > **Conclusion**: ✅ All required data is available. The C++ algorithm can be a drop-in replacement.
 
-### 4.1 Structure Mapping Table
+### 4.1 Critical Structure Differences
 
-| C++ Structure | C++ Field | Rust Structure | Rust Field | Status |
-|---------------|-----------|----------------|------------|--------|
-| **ChildInfo** | `next_entry` (u32) | `ChildInfo` | `next_entry` (u32) | ✅ Identical |
-| **ChildInfo** | `record_number` (u32) | `ChildInfo` | `child_frs` (u64) | ✅ Rust wider for 48-bit FRS |
-| **ChildInfo** | `name_index` (u16) | `ChildInfo` | `name_index` (u16) | ✅ Identical |
-| **SizeInfo** | `length` (6-byte packed) | `SizeInfo` | `length` (u64) | ✅ Rust wider |
-| **SizeInfo** | `allocated` (6-byte packed) | `SizeInfo` | `allocated` (u64) | ✅ Rust wider |
-| **SizeInfo** | `bulkiness` (6-byte packed) | - | - | ⚠️ Not in Rust (not needed for tree metrics) |
-| **SizeInfo** | `treesize` (u32) | `FileRecord` | `treesize` (u64) | ⚠️ Different location, Rust wider |
-| **StreamInfo** | inherits `SizeInfo` | `IndexStreamInfo` | `size: SizeInfo` | ✅ Composition vs inheritance |
-| **StreamInfo** | `next_entry` (u32) | `IndexStreamInfo` | `next_entry` (u32) | ✅ Identical |
-| **StreamInfo** | `name` | `IndexStreamInfo` | `name: IndexNameRef` | ✅ Similar |
-| **StreamInfo** | `is_sparse` (1 bit) | `IndexStreamInfo` | `flags` bit 0 | ✅ Packed differently |
-| **StreamInfo** | `type_name_id` (6 bits) | `IndexStreamInfo` | `flags` bits 2-7 | ✅ Packed differently |
-| **LinkInfo** | `next_entry` (u32) | `LinkInfo` | `next_entry` (u32) | ✅ Identical |
-| **LinkInfo** | `name` | `LinkInfo` | `name: IndexNameRef` | ✅ Similar |
-| **LinkInfo** | `parent` (u32) | `LinkInfo` | `parent_frs` (u64) | ✅ Rust wider for 48-bit FRS |
-| **Record** | `stdinfo` | `FileRecord` | `stdinfo` | ✅ Similar |
-| **Record** | `name_count` (u16) | `FileRecord` | `name_count` (u16) | ✅ Identical |
-| **Record** | `stream_count` (u16) | `FileRecord` | `stream_count` (u16) | ✅ Identical |
-| **Record** | `first_child` (u32) | `FileRecord` | `first_child` (u32) | ✅ Identical |
-| **Record** | `first_name` | `FileRecord` | `first_name` | ✅ Similar |
-| **Record** | `first_stream` | `FileRecord` | `first_stream` | ✅ Similar |
+> **⚠️ WARNING**: The current Rust structures are **fundamentally different** from C++.
+> All previous Rust tree algorithm attempts are wrong. This section documents the exact differences.
 
-### 4.2 Extra Fields in Rust (Not in C++)
+#### C++ `SizeInfo` (22 bytes, packed):
+```cpp
+#pragma pack(push, 1)
+struct SizeInfo {
+    file_size_type length;     // 6 bytes (packed 48-bit)
+    file_size_type allocated;  // 6 bytes (packed 48-bit)
+    file_size_type bulkiness;  // 6 bytes (packed 48-bit) ← USED BY TREE ALGO
+    unsigned int treesize;     // 4 bytes ← STORED PER-STREAM
+};
+#pragma pack(pop)
+```
 
-| Rust Structure | Rust Field | Purpose |
-|----------------|------------|---------|
-| `FileRecord` | `frs` (u64) | FRS stored in record (C++ uses lookup table) |
-| `FileRecord` | `sequence_number` (u16) | Forensic: MFT sequence number |
-| `FileRecord` | `namespace` (u8) | Forensic: filename namespace |
-| `FileRecord` | `forensic_flags` (u8) | Forensic: deleted/corrupt/extension flags |
-| `FileRecord` | `lsn` (u64) | Forensic: Log File Sequence Number |
-| `FileRecord` | `reparse_tag` (u32) | Forensic: reparse point type |
-| `FileRecord` | `base_frs` (u64) | Forensic: base record for extensions |
-| `FileRecord` | `fn_created/modified/accessed/mft_changed` (i64) | $FILE_NAME timestamps |
-| `FileRecord` | `descendants` (u32) | Tree metric: count of all descendants |
-| `FileRecord` | `tree_allocated` (u64) | Tree metric: sum of allocated sizes (C++ doesn't have this) |
+#### Current Rust `SizeInfo` (16 bytes) - WRONG:
+```rust
+pub struct SizeInfo {
+    pub length: u64,     // 8 bytes (not packed)
+    pub allocated: u64,  // 8 bytes (not packed)
+    // MISSING: bulkiness ← NEEDED FOR TREE ALGO
+    // MISSING: treesize  ← WRONG LOCATION (in FileRecord instead)
+}
+```
 
-### 4.3 Key Differences
+### 4.2 What is `bulkiness`?
 
-1. **FRS Width**: Rust uses `u64` for FRS values (C++ uses `u32`). This supports 48-bit NTFS FRS values on very large volumes.
+`bulkiness` represents file size **including slack space** (wasted space at end of last cluster).
 
-2. **Tree Metrics Location**:
-   - C++ stores `treesize` in `SizeInfo` (per-stream)
-   - Rust stores `descendants`, `treesize`, `tree_allocated` in `FileRecord` (per-record)
-   - This is a design difference but doesn't affect the algorithm
+Example for a 5KB file on 4KB cluster NTFS:
+- `length` = 5,120 bytes (actual data)
+- `allocated` = 8,192 bytes (2 clusters × 4KB)
+- `bulkiness` = 8,192 bytes (includes ~3KB slack)
 
-3. **Bulkiness**: C++ has `bulkiness` field for slack space calculation. Rust doesn't have this, but it's not needed for tree metrics.
+**The C++ tree algorithm USES `bulkiness`** (see `ntfs_index.hpp` lines 787-810):
+1. Collects each child's `bulkiness` into a scratch heap
+2. Filters out large files (>1% of folder's allocated size)
+3. Small files contribute more "slack waste" proportionally
 
-4. **Extra Forensic Fields**: Rust has many forensic fields not in C++. These don't affect tree metrics.
+This is a **heuristic for accurate disk space accounting**.
 
-### 4.4 What the C++ Algorithm Needs
+### 4.3 Structure Collision Problem
 
-| Requirement | C++ Source | Rust Equivalent | Available? |
-|-------------|------------|-----------------|------------|
-| Directory traversal | `first_child` → `childinfos[]` | `first_child` → `children[]` | ✅ Yes |
-| Child FRS lookup | `ChildInfo.record_number` | `ChildInfo.child_frs` | ✅ Yes |
-| Hardlink name_index | `ChildInfo.name_index` | `ChildInfo.name_index` | ✅ Yes |
-| Name count for delta | `Record.name_count` | `FileRecord.name_count` | ✅ Yes |
-| Stream count | `Record.stream_count` | `FileRecord.stream_count` | ✅ Yes |
-| Stream sizes | `StreamInfo.length/allocated` | `IndexStreamInfo.size.length/allocated` | ✅ Yes |
-| Stream type_name_id | `StreamInfo.type_name_id` | `IndexStreamInfo.type_name_id()` | ✅ Yes |
-| Output: descendants | - | `FileRecord.descendants` | ✅ Yes |
-| Output: treesize | `SizeInfo.treesize` | `FileRecord.treesize` | ✅ Yes |
-| Output: tree_allocated | - | `FileRecord.tree_allocated` | ✅ Yes (bonus) |
+| Issue | Description |
+|-------|-------------|
+| **Wrong `SizeInfo`** | Missing `bulkiness` and `treesize` fields |
+| **Wrong tree metrics location** | Rust stores in `FileRecord`, C++ stores in `SizeInfo` (per-stream) |
+| **Wrong packing** | Rust uses `u64` (8 bytes), C++ uses packed 6-byte `file_size_type` |
+| **Existing wrong algorithm** | Current Rust tree code uses these wrong structures |
 
-### 4.5 Conclusion
+### 4.4 Isolation Strategy
 
-**The C++ algorithm can be implemented as a drop-in replacement.** All required data is available in the Rust structures:
+To avoid collision with existing (wrong) code:
 
-- ✅ `ChildInfo` linked list for directory traversal
-- ✅ `name_index` for hardlink proportional share calculation
-- ✅ `name_count` for delta formula
-- ✅ Stream sizes and type information
-- ✅ Output fields for tree metrics
+1. **Create new module**: `crates/uffs-mft/src/cpp_tree.rs`
+2. **Define C++ port structures** that exactly match C++ layout
+3. **Don't modify existing structures** until C++ port is verified
+4. **Switch via `TreeAlgorithm` enum** - existing code untouched
 
-The main differences (wider FRS types, extra forensic fields) are **additive** and don't prevent the C++ algorithm from working.
+#### New C++ Port Structures (to be created):
+
+```rust
+// crates/uffs-mft/src/cpp_tree.rs
+
+/// C++ file_size_type equivalent (6 bytes packed)
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C, packed)]
+pub struct PackedFileSize {
+    low: u32,   // 4 bytes
+    high: u16,  // 2 bytes
+}
+
+/// C++ SizeInfo equivalent (22 bytes)
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
+pub struct CppSizeInfo {
+    pub length: PackedFileSize,     // 6 bytes
+    pub allocated: PackedFileSize,  // 6 bytes
+    pub bulkiness: PackedFileSize,  // 6 bytes ← INCLUDED
+    pub treesize: u32,              // 4 bytes ← PER-STREAM
+}
+
+/// C++ ChildInfo equivalent
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
+pub struct CppChildInfo {
+    pub next_entry: u32,      // ~0 = end of list
+    pub record_number: u32,   // FRS of child (C++ uses u32)
+    pub name_index: u16,      // Which hardlink
+}
+
+/// Result of preprocessing a subtree (matches C++ PreprocessResult)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PreprocessResult {
+    pub length: u64,
+    pub allocated: u64,
+    pub bulkiness: u64,
+    pub treesize: u32,
+}
+```
+
+### 4.5 Full Structure Mapping
+
+| C++ Structure | C++ Field | C++ Size | Rust Port | Notes |
+|---------------|-----------|----------|-----------|-------|
+| `file_size_type` | low + high | 6 bytes | `PackedFileSize` | Packed 48-bit |
+| `SizeInfo` | length | 6 bytes | `CppSizeInfo.length` | ✅ |
+| `SizeInfo` | allocated | 6 bytes | `CppSizeInfo.allocated` | ✅ |
+| `SizeInfo` | bulkiness | 6 bytes | `CppSizeInfo.bulkiness` | ✅ NOW INCLUDED |
+| `SizeInfo` | treesize | 4 bytes | `CppSizeInfo.treesize` | ✅ PER-STREAM |
+| `ChildInfo` | next_entry | 4 bytes | `CppChildInfo.next_entry` | ✅ |
+| `ChildInfo` | record_number | 4 bytes | `CppChildInfo.record_number` | ✅ u32 like C++ |
+| `ChildInfo` | name_index | 2 bytes | `CppChildInfo.name_index` | ✅ |
+
+### 4.6 What the C++ Algorithm Needs
+
+| Requirement | C++ Source | Available in Rust? | Action |
+|-------------|------------|-------------------|--------|
+| `bulkiness` field | `SizeInfo.bulkiness` | ❌ Missing | Add to `CppSizeInfo` |
+| `treesize` per-stream | `SizeInfo.treesize` | ❌ Wrong location | Add to `CppSizeInfo` |
+| Heap for bulkiness filter | `scratch` vector | ❌ Not implemented | Implement in C++ port |
+| `record_number` as u32 | `ChildInfo.record_number` | ⚠️ Rust uses u64 | Use `CppChildInfo` with u32 |
+| Delta formula | `Accumulator::delta()` | ❌ Not implemented | Implement exactly |
+| Reserved clusters | `reserved_clusters * cluster_size` | ❓ Need to check | May need to add |
+
+### 4.7 Conclusion
+
+**The current Rust structures CANNOT be used for a faithful C++ port.**
+
+We must:
+1. ✅ Create new `cpp_tree.rs` module with exact C++ structures
+2. ✅ Include `bulkiness` field (it IS used by the algorithm)
+3. ✅ Store `treesize` per-stream in `CppSizeInfo`, not per-record
+4. ✅ Implement the heap-based bulkiness filtering algorithm
+5. ✅ Keep existing code isolated until C++ port is verified working
 
 ---
 
