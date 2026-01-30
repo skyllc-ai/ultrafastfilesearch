@@ -500,6 +500,38 @@ enum Commands {
         parse_workers: Option<usize>,
     },
 
+    /// Benchmark tree metrics computation in isolation.
+    ///
+    /// This command measures ONLY the tree metrics computation phase
+    /// (descendants, treesize, tree_allocated), which corresponds to
+    /// the C++ "preprocessing" phase in `--benchmark-index`.
+    ///
+    /// Use this for direct apples-to-apples comparison of tree algorithm
+    /// performance between Rust and C++ implementations.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// uffs_mft benchmark-tree --drive C
+    /// uffs_mft benchmark-tree -d C --iterations 5
+    /// uffs_mft benchmark-tree -d C --no-cache
+    /// ```
+    BenchmarkTree {
+        /// Drive letter (e.g., C, D, E)
+        #[arg(short, long)]
+        drive: char,
+
+        /// Number of iterations to run (for averaging).
+        /// Default: 3
+        #[arg(short, long, default_value = "3")]
+        iterations: usize,
+
+        /// Skip cache and build fresh index from disk.
+        /// By default, uses cached index if available.
+        #[arg(long)]
+        no_cache: bool,
+    },
+
     /// Benchmark multi-volume indexing using single IOCP (M4 optimization).
     ///
     /// Reads MFTs from multiple drives simultaneously using a single I/O
@@ -909,6 +941,11 @@ async fn dispatch_command(command: Commands) -> Result<()> {
             )
             .await
         }
+        Commands::BenchmarkTree {
+            drive,
+            iterations,
+            no_cache,
+        } => cmd_benchmark_tree(drive, iterations, no_cache).await,
         Commands::BenchmarkMultiVolume { drives } => cmd_benchmark_multi_volume(drives).await,
         Commands::UsnInfo { drive } => cmd_usn_info(drive).await,
         Commands::UsnRead {
@@ -969,6 +1006,7 @@ async fn dispatch_command(command: Commands) -> Result<()> {
         | Commands::BenchmarkMft { .. }
         | Commands::BenchmarkIndex { .. }
         | Commands::BenchmarkIndexLean { .. }
+        | Commands::BenchmarkTree { .. }
         | Commands::BenchmarkMultiVolume { .. }
         | Commands::UsnInfo { .. }
         | Commands::UsnRead { .. }
@@ -2001,17 +2039,26 @@ fn print_benchmark_result(result: &uffs_mft::BenchmarkResult, runs: u32) {
         if runs > 1 { " (averaged)" } else { "" }
     );
     println!("   Open:             {:>8} ms", t.open_ms);
-    println!("   Read (I/O):       {:>8} ms  ← estimated", t.read_ms);
-    println!("   Parse (CPU):      {:>8} ms  ← estimated", t.parse_ms);
-    println!("   Merge:            {:>8} ms  ← estimated", t.merge_ms);
+    println!(
+        "   Read (I/O):       {:>8} ms  ← estimated (DataFrame path)",
+        t.read_ms
+    );
+    println!(
+        "   Parse (CPU):      {:>8} ms  ← estimated (DataFrame path)",
+        t.parse_ms
+    );
+    println!(
+        "   Merge:            {:>8} ms  ← estimated (DataFrame path)",
+        t.merge_ms
+    );
     println!("   DataFrame Build:  {:>8} ms", t.df_build_ms);
     println!("   ─────────────────────────────");
     println!("   TOTAL:            {:>8} ms", t.total_ms);
     println!();
 
     // Note about estimates
-    println!("   ⚠️  Read/Parse/Merge are currently estimated (not instrumented).");
-    println!("      Implement M0 instrumentation for accurate phase breakdown.");
+    println!("   ⚠️  Read/Parse/Merge are estimated in DataFrame path.");
+    println!("      Use `benchmark-index-lean` for accurate phase timing.");
     println!();
 
     // Throughput
@@ -3636,8 +3683,8 @@ async fn cmd_benchmark_index_lean(
         reader = reader.with_parse_workers(Some(workers));
     }
 
-    let index = reader
-        .read_all_index()
+    let (index, benchmark) = reader
+        .read_all_index_with_timing()
         .await
         .with_context(|| format!("Failed to read MFT from {}:", drive_upper))?;
 
@@ -3663,6 +3710,49 @@ async fn cmd_benchmark_index_lean(
     println!("Directories: {}", dirs_count);
     println!("Total Entries: {}", total_entries);
     println!("Names Buffer: {} KB", index.names.len() / 1024);
+    println!();
+
+    // =========================================================================
+    // Print Phase Timing Breakdown (for C++ comparison)
+    // =========================================================================
+    println!("=== Phase Timing Breakdown ===");
+    println!("Open/Metadata:    {:>6} ms", benchmark.timings.open_ms);
+    println!(
+        "I/O (read):       {:>6} ms  ✓ accurate",
+        benchmark.timings.read_ms
+    );
+    println!(
+        "Parse:            {:>6} ms  ✓ accurate",
+        benchmark.timings.parse_ms
+    );
+    println!(
+        "Merge:            {:>6} ms  ✓ accurate",
+        benchmark.timings.merge_ms
+    );
+    println!(
+        "Index Build:      {:>6} ms  (record insertion + ext index + sort)",
+        benchmark.timings.index_build_ms
+    );
+    println!(
+        "Tree Metrics:     {:>6} ms  (C++ 'preprocessing' equivalent)",
+        benchmark.timings.tree_metrics_ms
+    );
+    println!("─────────────────────────────────────────");
+    println!("Total:            {:>6} ms", benchmark.timings.total_ms);
+    println!();
+
+    // Show I/O + Parse + Merge subtotal for C++ comparison
+    let io_parse_merge_ms =
+        benchmark.timings.read_ms + benchmark.timings.parse_ms + benchmark.timings.merge_ms;
+    println!("=== C++ Comparison ===");
+    println!(
+        "I/O + Parse + Merge:  {:>6} ms  (compare to C++ 'Read + Parse')",
+        io_parse_merge_ms
+    );
+    println!(
+        "Tree Metrics:         {:>6} ms  (compare to C++ 'Preprocess')",
+        benchmark.timings.tree_metrics_ms
+    );
     println!();
 
     // =========================================================================
@@ -3697,6 +3787,28 @@ async fn cmd_benchmark_index_lean(
     println!();
 
     // =========================================================================
+    // Print C++ Comparison Guide
+    // =========================================================================
+    println!("=== C++ Comparison ===");
+    println!("To compare with C++ uffs.com:");
+    println!("  C++ --benchmark-mft={}:   Raw I/O only", drive_upper);
+    println!(
+        "  C++ --benchmark-index={}: I/O + Parse + Preprocess",
+        drive_upper
+    );
+    println!();
+    println!("Rust equivalent phases:");
+    println!(
+        "  I/O + Parse + Merge = {} ms",
+        benchmark.timings.read_ms + benchmark.timings.parse_ms + benchmark.timings.merge_ms
+    );
+    println!(
+        "  Tree Metrics (Preprocess) = {} ms",
+        benchmark.timings.tree_metrics_ms
+    );
+    println!();
+
+    // =========================================================================
     // Print Summary
     // =========================================================================
     println!("=== Summary ===");
@@ -3704,6 +3816,152 @@ async fn cmd_benchmark_index_lean(
         "Indexed {} items in {:.3} seconds (lean index, mode: {})",
         total_entries, elapsed_secs, mode
     );
+
+    Ok(())
+}
+
+/// Benchmark tree metrics computation in isolation.
+///
+/// This measures ONLY the tree metrics phase (descendants, treesize,
+/// tree_allocated), which corresponds to the C++ "preprocessing" phase. Use
+/// this for direct apples-to-apples comparison of tree algorithm performance.
+#[cfg(windows)]
+async fn cmd_benchmark_tree(drive: char, iterations: usize, no_cache: bool) -> Result<()> {
+    use std::time::Instant;
+
+    use uffs_mft::cache::IndexCache;
+
+    let drive_upper = drive.to_ascii_uppercase();
+
+    println!("=== Tree Metrics Benchmark ===");
+    println!("Drive: {}:", drive_upper);
+    println!("Iterations: {}", iterations);
+    println!("Cache: {}", if no_cache { "disabled" } else { "enabled" });
+    println!();
+    println!("This measures ONLY tree metrics computation (C++ 'preprocessing' equivalent).");
+    println!();
+
+    // Load or build the index
+    let load_start = Instant::now();
+    let mut index = if no_cache {
+        println!("Building fresh index from disk...");
+        let reader = uffs_mft::MftReader::open(drive_upper)
+            .await
+            .with_context(|| format!("Failed to open drive {}:", drive_upper))?;
+        reader
+            .read_all_index()
+            .await
+            .with_context(|| format!("Failed to read MFT from {}:", drive_upper))?
+    } else {
+        println!("Loading index from cache...");
+        let cache = IndexCache::new()?;
+        match cache.get(drive_upper) {
+            Some(cached) => cached,
+            None => {
+                println!("Cache miss - building fresh index...");
+                let reader = uffs_mft::MftReader::open(drive_upper)
+                    .await
+                    .with_context(|| format!("Failed to open drive {}:", drive_upper))?;
+                let idx = reader
+                    .read_all_index()
+                    .await
+                    .with_context(|| format!("Failed to read MFT from {}:", drive_upper))?;
+                // Save to cache for next time
+                let _ = cache.put(drive_upper, &idx);
+                idx
+            }
+        }
+    };
+    let load_ms = load_start.elapsed().as_millis() as u64;
+    println!("Index loaded in {} ms", load_ms);
+    println!();
+
+    // Get index stats
+    let total_entries = index.records.len();
+    let dirs_count = index.records.iter().filter(|r| r.is_directory()).count();
+    let files_count = total_entries.saturating_sub(dirs_count);
+
+    println!("=== Index Statistics ===");
+    println!("Total Entries: {}", total_entries);
+    println!("Files: {}", files_count);
+    println!("Directories: {}", dirs_count);
+    println!();
+
+    // Run tree metrics computation multiple times
+    println!("=== Running {} iterations ===", iterations);
+    let mut times_ms: Vec<u64> = Vec::with_capacity(iterations);
+
+    for i in 0..iterations {
+        // Clear tree metrics before each run
+        for record in &mut index.records {
+            record.descendants = 0;
+            record.treesize = 0;
+            record.tree_allocated = 0;
+        }
+
+        // Time the tree metrics computation
+        let tree_start = Instant::now();
+        index.compute_tree_metrics();
+        let tree_ms = tree_start.elapsed().as_millis() as u64;
+        times_ms.push(tree_ms);
+
+        println!("  Iteration {}: {} ms", i + 1, tree_ms);
+    }
+
+    // Calculate statistics
+    let min_ms = *times_ms.iter().min().unwrap_or(&0);
+    let max_ms = *times_ms.iter().max().unwrap_or(&0);
+    let sum_ms: u64 = times_ms.iter().sum();
+    let avg_ms = if iterations > 0 {
+        sum_ms / iterations as u64
+    } else {
+        0
+    };
+
+    // Calculate median
+    let mut sorted = times_ms.clone();
+    sorted.sort_unstable();
+    let median_ms = if iterations > 0 {
+        if iterations % 2 == 0 {
+            (sorted[iterations / 2 - 1] + sorted[iterations / 2]) / 2
+        } else {
+            sorted[iterations / 2]
+        }
+    } else {
+        0
+    };
+
+    println!();
+    println!("=== Tree Metrics Timing Results ===");
+    println!("Min:    {:>6} ms", min_ms);
+    println!("Max:    {:>6} ms", max_ms);
+    println!("Avg:    {:>6} ms", avg_ms);
+    println!("Median: {:>6} ms", median_ms);
+    println!();
+
+    // Calculate throughput
+    let entries_per_sec = if avg_ms > 0 {
+        (total_entries as u64 * 1000) / avg_ms
+    } else {
+        0
+    };
+
+    println!("=== Throughput ===");
+    println!("Entries processed: {}", total_entries);
+    println!("Throughput: {} entries/sec", entries_per_sec);
+    println!();
+
+    // C++ comparison guide
+    println!("=== C++ Comparison ===");
+    println!("To compare with C++ uffs.com:");
+    println!("  1. Run: uffs.com --benchmark-index={}:", drive_upper);
+    println!("  2. Look for the 'Preprocess' phase timing");
+    println!("  3. Compare with Rust 'Tree Metrics' timing above");
+    println!();
+    println!("Note: C++ 'Preprocess' includes the same tree metrics computation:");
+    println!("  - descendants (recursive child count)");
+    println!("  - treesize (recursive file count per stream)");
+    println!("  - tree_allocated (recursive allocated size)");
 
     Ok(())
 }

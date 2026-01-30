@@ -287,13 +287,15 @@ pub struct CppSizeInfo {
     pub treesize: u32,              // 4 bytes ← PER-STREAM
 }
 
-/// C++ ChildInfo equivalent
+/// C++ ChildInfo equivalent - with 64-bit FRS for NTFS spec compliance
+/// NOTE: C++ uses 32-bit record_number, but Rust uses 64-bit for future-proofing.
+/// See Section 4.8 for detailed rationale.
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct CppChildInfo {
-    pub next_entry: u32,      // ~0 = end of list
-    pub record_number: u32,   // FRS of child (C++ uses u32)
-    pub name_index: u16,      // Which hardlink
+    pub next_entry: u32,       // ~0 = end of list (matches C++)
+    pub record_number: u64,    // FRS of child (64-bit, improved from C++ 32-bit)
+    pub name_index: u16,       // Which hardlink (matches C++)
 }
 
 /// Result of preprocessing a subtree (matches C++ PreprocessResult)
@@ -316,7 +318,7 @@ pub struct PreprocessResult {
 | `SizeInfo` | bulkiness | 6 bytes | `CppSizeInfo.bulkiness` | ✅ NOW INCLUDED |
 | `SizeInfo` | treesize | 4 bytes | `CppSizeInfo.treesize` | ✅ PER-STREAM |
 | `ChildInfo` | next_entry | 4 bytes | `CppChildInfo.next_entry` | ✅ |
-| `ChildInfo` | record_number | 4 bytes | `CppChildInfo.record_number` | ✅ u32 like C++ |
+| `ChildInfo` | record_number | 4 bytes | `CppChildInfo.record_number` | ✅ **u64** (improved from C++ u32, see §4.8) |
 | `ChildInfo` | name_index | 2 bytes | `CppChildInfo.name_index` | ✅ |
 
 ### 4.6 What the C++ Algorithm Needs
@@ -326,7 +328,7 @@ pub struct PreprocessResult {
 | `bulkiness` field | `SizeInfo.bulkiness` | ❌ Missing | Add to `CppSizeInfo` |
 | `treesize` per-stream | `SizeInfo.treesize` | ❌ Wrong location | Add to `CppSizeInfo` |
 | Heap for bulkiness filter | `scratch` vector | ❌ Not implemented | Implement in C++ port |
-| `record_number` as u32 | `ChildInfo.record_number` | ⚠️ Rust uses u64 | Use `CppChildInfo` with u32 |
+| `record_number` as u64 | `ChildInfo.record_number` | ✅ Rust uses u64 | Use `CppChildInfo` with u64 (see §4.8) |
 | Delta formula | `Accumulator::delta()` | ❌ Not implemented | Implement exactly |
 | Reserved clusters | `reserved_clusters * cluster_size` | ❓ Need to check | May need to add |
 
@@ -340,6 +342,101 @@ We must:
 3. ✅ Store `treesize` per-stream in `CppSizeInfo`, not per-record
 4. ✅ Implement the heap-based bulkiness filtering algorithm
 5. ✅ Keep existing code isolated until C++ port is verified working
+
+### 4.8 FRS Representation: C++ (32-bit) vs Rust (64-bit)
+
+> **IMPORTANT**: This section documents a deliberate improvement in the Rust implementation.
+
+#### NTFS Specification
+
+Per the NTFS specification, a **FILE_REFERENCE** is a 64-bit value:
+- **Lower 48 bits**: File Record Segment (FRS) number - index into the MFT
+- **Upper 16 bits**: Sequence number - incremented when FRS is reused
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      FILE_REFERENCE (64 bits)                   │
+├─────────────────────────────────────────────────────────────────┤
+│  Sequence Number (16 bits)  │     FRS Number (48 bits)          │
+│         bits 63-48          │         bits 47-0                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Maximum FRS value**: 2^48 - 1 = 281,474,976,710,655 (281 trillion entries)
+
+#### C++ Implementation (32-bit FRS)
+
+The C++ implementation uses 32-bit `unsigned int` for FRS numbers:
+
+```cpp
+// From ntfs_key_type.hpp
+typedef unsigned int frs_type;  // 32-bit
+
+// From ntfs_record_types.hpp
+struct ChildInfo {
+    small_t<size_t>::type record_number;  // 32-bit unsigned int
+    // ...
+};
+```
+
+**C++ Limitation**: Maximum FRS = 2^32 - 1 = 4,294,967,295 (~4.3 billion entries)
+
+This was acceptable when the C++ code was written, but modern large disks can exceed this:
+- A 100TB drive with 1KB average file size = 100 billion files
+- Enterprise storage arrays can have trillions of files
+
+#### Rust Implementation (64-bit FRS) - CORRECT
+
+The Rust implementation correctly uses 64-bit for FRS numbers:
+
+```rust
+// From crates/uffs-mft/src/ntfs.rs
+pub fn file_reference_to_frs(file_reference: u64) -> u64 {
+    file_reference & 0x0000_FFFF_FFFF_FFFF  // Extract lower 48 bits
+}
+
+// FRS stored as u64 throughout the codebase
+pub struct FileRecord {
+    pub frs: u64,  // 64-bit FRS
+    // ...
+}
+```
+
+**Rust Advantage**: Future-proof for larger disks and storage systems.
+
+#### Impact on Tree Algorithm
+
+**The tree algorithm is NOT affected by the FRS size difference.**
+
+The tree algorithm uses FRS numbers only as:
+1. **HashMap keys** for record lookup (`frs_to_idx: HashMap<u64, usize>`)
+2. **Index values** in `ChildInfo.record_number`
+
+Both operations work identically with 32-bit or 64-bit values. The algorithm logic (delta formula, bulkiness calculation, treesize accumulation) is completely independent of FRS size.
+
+#### Updated CppChildInfo Structure
+
+For the Rust port, we use 64-bit FRS to match Rust's correct representation:
+
+```rust
+/// C++ ChildInfo equivalent - with 64-bit FRS for future-proofing
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
+pub struct CppChildInfo {
+    pub next_entry: u32,       // ~0 = end of list (matches C++)
+    pub record_number: u64,    // FRS of child (64-bit, improved from C++ 32-bit)
+    pub name_index: u16,       // Which hardlink (matches C++)
+}
+```
+
+**Note**: This is a deliberate improvement over C++. The extra 4 bytes per ChildInfo is negligible compared to the benefit of supporting larger volumes.
+
+#### Verification
+
+To verify the tree algorithm produces identical results regardless of FRS size:
+1. All test volumes have FRS values < 2^32, so C++ and Rust use the same values
+2. The algorithm logic is identical - only the storage type differs
+3. Unit tests verify delta formula and accumulation work correctly with u64
 
 ---
 
@@ -490,15 +587,16 @@ pub fn compute_tree_metrics_cpp(index: &mut MftIndex) {
 
 ### Phase 2: Design Rust Structures (1-2 hours)
 
-Create Rust structures that **exactly match** C++ layout:
+Create Rust structures that match C++ layout with 64-bit FRS improvement (see §4.8):
 
 ```rust
-/// C++ ChildInfo equivalent
+/// C++ ChildInfo equivalent - with 64-bit FRS for NTFS spec compliance
+/// NOTE: C++ uses 32-bit record_number, Rust uses 64-bit for future-proofing.
 #[derive(Debug, Clone, Copy)]
 pub struct CppChildInfo {
-    pub next_entry: u32,      // ~0 = end of list
-    pub record_number: u32,   // FRS of child
-    pub name_index: u16,      // Which hardlink
+    pub next_entry: u32,       // ~0 = end of list (matches C++)
+    pub record_number: u64,    // FRS of child (64-bit, improved from C++ 32-bit)
+    pub name_index: u16,       // Which hardlink (matches C++)
 }
 
 /// C++ Record fields needed for tree metrics
@@ -518,7 +616,7 @@ Modify `MftIndex::from_parsed_records()` to build `childinfos` vector:
 let child_index = self.childinfos.len() as u32;
 self.childinfos.push(CppChildInfo {
     next_entry: parent_record.first_child,
-    record_number: frs as u32,
+    record_number: frs,  // u64 - no truncation needed
     name_index: record.name_count,  // BEFORE incrementing
 });
 parent_record.first_child = child_index;
@@ -764,7 +862,7 @@ Once the C++ port is verified working and we're confident it's correct:
 ### Structure Merge (if Option B)
 - [ ] SizeInfo updated with bulkiness
 - [ ] treesize moved to per-stream
-- [ ] ChildInfo uses u32 record_number
+- [ ] ChildInfo uses u64 record_number (NTFS spec compliant)
 - [ ] Cache format updated
 - [ ] All callers updated
 
@@ -774,4 +872,513 @@ Once the C++ port is verified working and we're confident it's correct:
 - [ ] Tests updated
 - [ ] Documentation finalized
 ```
+
+---
+
+## 12. Unit Tests and Validation
+
+> **Goal**: Comprehensive test coverage to ensure the C++ port produces identical results to the C++ implementation.
+
+### 12.1 Delta Formula Tests
+
+The delta formula is the core of proportional hardlink share calculation. Test it exhaustively:
+
+```rust
+#[cfg(test)]
+mod delta_tests {
+    use super::*;
+
+    /// Delta formula: value * (i + 1) / n - value * i / n
+    /// Ensures no rounding errors when dividing among hardlinks
+    fn delta(value: u64, i: u16, n: u16) -> u64 {
+        let n = n as u64;
+        let i = i as u64;
+        value * (i + 1) / n - value * i / n
+    }
+
+    #[test]
+    fn test_delta_single_hardlink() {
+        // Single hardlink: file gets 100% of its size
+        assert_eq!(delta(1000, 0, 1), 1000);
+        assert_eq!(delta(u64::MAX, 0, 1), u64::MAX);
+    }
+
+    #[test]
+    fn test_delta_two_hardlinks_even() {
+        // Two hardlinks, even split: 1000 / 2 = 500 each
+        assert_eq!(delta(1000, 0, 2), 500);  // First hardlink
+        assert_eq!(delta(1000, 1, 2), 500);  // Second hardlink
+        // Verify sum equals original
+        assert_eq!(delta(1000, 0, 2) + delta(1000, 1, 2), 1000);
+    }
+
+    #[test]
+    fn test_delta_two_hardlinks_odd() {
+        // Two hardlinks, odd value: 1001 / 2 = 500 + 501
+        assert_eq!(delta(1001, 0, 2), 500);  // First hardlink
+        assert_eq!(delta(1001, 1, 2), 501);  // Second hardlink (gets extra)
+        // Verify sum equals original
+        assert_eq!(delta(1001, 0, 2) + delta(1001, 1, 2), 1001);
+    }
+
+    #[test]
+    fn test_delta_three_hardlinks() {
+        // Three hardlinks: 100 / 3 = 33 + 33 + 34
+        assert_eq!(delta(100, 0, 3), 33);
+        assert_eq!(delta(100, 1, 3), 33);
+        assert_eq!(delta(100, 2, 3), 34);
+        // Verify sum equals original
+        assert_eq!(delta(100, 0, 3) + delta(100, 1, 3) + delta(100, 2, 3), 100);
+    }
+
+    #[test]
+    fn test_delta_max_hardlinks() {
+        // Maximum hardlinks (1023 per C++ limit)
+        let value = 1_000_000u64;
+        let n = 1023u16;
+        let mut sum = 0u64;
+        for i in 0..n {
+            sum += delta(value, i, n);
+        }
+        assert_eq!(sum, value);  // Sum must equal original
+    }
+
+    #[test]
+    fn test_delta_large_values() {
+        // Large file sizes (petabyte scale)
+        let petabyte = 1_000_000_000_000_000u64;
+        assert_eq!(delta(petabyte, 0, 2) + delta(petabyte, 1, 2), petabyte);
+    }
+}
+```
+
+### 12.2 Bulkiness Algorithm Tests
+
+Test the heap-based bulkiness filtering:
+
+```rust
+#[cfg(test)]
+mod bulkiness_tests {
+    use super::*;
+
+    #[test]
+    fn test_bulkiness_single_file() {
+        // Single file: bulkiness = allocated
+        let allocated = 4096u64;
+        let bulkiness = allocated;  // Single extent
+        assert_eq!(bulkiness, allocated);
+    }
+
+    #[test]
+    fn test_bulkiness_fragmented_file() {
+        // Fragmented file: bulkiness > allocated
+        // Run 1: allocated=100, bulkiness=100
+        // Run 2: allocated=200, bulkiness=100+200=300
+        // Run 3: allocated=300, bulkiness=300+300=600
+        let mut allocated = 0u64;
+        let mut bulkiness = 0u64;
+
+        // Simulate 3 attribute runs
+        allocated = 100; bulkiness += allocated;  // Run 1
+        allocated = 200; bulkiness += allocated;  // Run 2
+        allocated = 300; bulkiness += allocated;  // Run 3
+
+        assert_eq!(allocated, 300);   // Final allocated
+        assert_eq!(bulkiness, 600);   // Cumulative bulkiness
+    }
+
+    #[test]
+    fn test_bulkiness_filter_threshold() {
+        // Files > 1% of folder size are excluded from bulkiness calculation
+        let folder_allocated = 1_000_000u64;
+        let threshold = folder_allocated / 100;  // 1% = 10,000
+
+        let small_file = 5_000u64;   // < 1%, included
+        let large_file = 50_000u64;  // > 1%, excluded
+
+        assert!(small_file < threshold);
+        assert!(large_file > threshold);
+    }
+}
+```
+
+### 12.3 Tree Traversal Tests
+
+Test the recursive DFS traversal:
+
+```rust
+#[cfg(test)]
+mod tree_traversal_tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_directory() {
+        // Empty directory: descendants=0, treesize=1 (just itself)
+        let mut index = create_test_index_empty_dir();
+        index.compute_tree_metrics_cpp_port(false);
+
+        let root = index.find(5).unwrap();
+        assert_eq!(root.descendants, 0);
+        assert_eq!(root.treesize, 1);
+    }
+
+    #[test]
+    fn test_single_file() {
+        // Directory with one file: descendants=1, treesize=2
+        let mut index = create_test_index_single_file();
+        index.compute_tree_metrics_cpp_port(false);
+
+        let root = index.find(5).unwrap();
+        assert_eq!(root.descendants, 1);
+        assert_eq!(root.treesize, 2);  // dir + file
+    }
+
+    #[test]
+    fn test_nested_directories() {
+        // /root/subdir/file.txt
+        // root: descendants=2, treesize=3
+        // subdir: descendants=1, treesize=2
+        let mut index = create_test_index_nested();
+        index.compute_tree_metrics_cpp_port(false);
+
+        let root = index.find(5).unwrap();
+        assert_eq!(root.descendants, 2);
+
+        let subdir = index.find(100).unwrap();
+        assert_eq!(subdir.descendants, 1);
+    }
+
+    #[test]
+    fn test_hardlink_proportional_share() {
+        // File with 2 hardlinks in different directories
+        // Each directory should get 50% of file size
+        let mut index = create_test_index_hardlink();
+        index.compute_tree_metrics_cpp_port(false);
+
+        let dir1 = index.find(100).unwrap();
+        let dir2 = index.find(200).unwrap();
+
+        // File size = 1000, each dir gets 500
+        assert_eq!(dir1.tree_allocated, 500);
+        assert_eq!(dir2.tree_allocated, 500);
+    }
+
+    #[test]
+    fn test_alternate_data_streams() {
+        // File with ADS: each stream adds +1 to treesize
+        let mut index = create_test_index_ads();
+        index.compute_tree_metrics_cpp_port(false);
+
+        let root = index.find(5).unwrap();
+        // dir(1) + file_default_stream(1) + file_ads(1) = 3
+        assert_eq!(root.treesize, 3);
+    }
+}
+```
+
+### 12.4 Comparison Tests Against C++ Output
+
+The ultimate validation is comparing against actual C++ output:
+
+```rust
+#[cfg(test)]
+mod cpp_comparison_tests {
+    use super::*;
+
+    /// Load C++ output from trial_run.ps1 and compare
+    #[test]
+    #[ignore]  // Run manually with: cargo test cpp_comparison -- --ignored
+    fn test_against_cpp_output() {
+        // Load C++ reference data
+        let cpp_data = load_cpp_reference("test_data/cpp_output.json");
+
+        // Run Rust C++ port
+        let mut index = MftIndex::from_cache("test_data/test_volume.cache").unwrap();
+        index.compute_tree_metrics_cpp_port(false);
+
+        // Compare every directory
+        for (frs, cpp_metrics) in cpp_data.directories {
+            let rust_record = index.find(frs).expect(&format!("FRS {} not found", frs));
+
+            assert_eq!(
+                rust_record.descendants, cpp_metrics.descendants,
+                "FRS {}: descendants mismatch (Rust={}, C++={})",
+                frs, rust_record.descendants, cpp_metrics.descendants
+            );
+
+            assert_eq!(
+                rust_record.treesize, cpp_metrics.treesize,
+                "FRS {}: treesize mismatch (Rust={}, C++={})",
+                frs, rust_record.treesize, cpp_metrics.treesize
+            );
+
+            assert_eq!(
+                rust_record.tree_allocated, cpp_metrics.tree_allocated,
+                "FRS {}: tree_allocated mismatch (Rust={}, C++={})",
+                frs, rust_record.tree_allocated, cpp_metrics.tree_allocated
+            );
+        }
+    }
+}
+```
+
+### 12.5 Edge Case Tests
+
+```rust
+#[cfg(test)]
+mod edge_case_tests {
+    use super::*;
+
+    #[test]
+    fn test_root_self_reference() {
+        // Root directory (FRS 5) has parent = itself
+        // Algorithm must skip this to avoid infinite loop
+        let mut index = create_test_index_root_only();
+        index.compute_tree_metrics_cpp_port(false);  // Should not hang
+    }
+
+    #[test]
+    fn test_deep_tree() {
+        // 100-level deep tree (tests stack depth)
+        let mut index = create_test_index_deep(100);
+        index.compute_tree_metrics_cpp_port(false);
+
+        let root = index.find(5).unwrap();
+        assert_eq!(root.descendants, 100);
+    }
+
+    #[test]
+    fn test_wide_tree() {
+        // Directory with 10,000 children
+        let mut index = create_test_index_wide(10_000);
+        index.compute_tree_metrics_cpp_port(false);
+
+        let root = index.find(5).unwrap();
+        assert_eq!(root.descendants, 10_000);
+    }
+
+    #[test]
+    fn test_orphan_files() {
+        // Files with missing parent (orphans)
+        // Should be skipped, not cause panic
+        let mut index = create_test_index_orphans();
+        index.compute_tree_metrics_cpp_port(false);  // Should not panic
+    }
+
+    #[test]
+    fn test_zero_size_file() {
+        // Empty file: length=0, allocated=0
+        let mut index = create_test_index_zero_size();
+        index.compute_tree_metrics_cpp_port(false);
+
+        let root = index.find(5).unwrap();
+        assert_eq!(root.tree_allocated, 0);
+    }
+
+    #[test]
+    fn test_max_frs_value() {
+        // FRS at 48-bit boundary (tests u64 handling)
+        let max_frs = 0x0000_FFFF_FFFF_FFFFu64;  // 48-bit max
+        let mut index = create_test_index_with_frs(max_frs);
+        index.compute_tree_metrics_cpp_port(false);  // Should handle correctly
+    }
+}
+```
+
+### 12.6 Running the Tests
+
+```bash
+# Run all unit tests
+cargo test -p uffs-mft tree
+
+# Run delta formula tests only
+cargo test -p uffs-mft delta_tests
+
+# Run comparison tests against C++ output (requires test data)
+cargo test -p uffs-mft cpp_comparison -- --ignored
+
+# Run with verbose output for debugging
+cargo test -p uffs-mft tree -- --nocapture
+```
+
+### 12.7 Test Data Generation
+
+To generate test data for comparison tests:
+
+```powershell
+# Generate C++ reference output
+cd docs/architecture/Investigation
+.\trial_run.ps1 -Drives G -ExportJson test_data/cpp_output.json
+
+# Generate Rust cache for the same volume
+uffs index --drive G --cache-path test_data/test_volume.cache
+```
+
+### 12.8 Validation Checklist
+
+Before marking the C++ port as complete, verify:
+
+- [ ] All delta formula tests pass
+- [ ] All bulkiness tests pass
+- [ ] All tree traversal tests pass
+- [ ] All edge case tests pass
+- [ ] Comparison test matches C++ output 100% for:
+  - [ ] Root directory descendants
+  - [ ] Root directory treesize
+  - [ ] Root directory tree_allocated
+  - [ ] All subdirectory metrics
+- [ ] Performance is within 2x of current algorithm
+- [ ] No memory leaks (run with `cargo test` under valgrind/ASAN)
+
+---
+
+## 13. Performance Benchmarking
+
+> **Goal**: Measure and compare tree metrics computation performance between C++ and Rust implementations.
+
+### 13.1 Benchmark Commands Overview
+
+| Implementation | Command | What It Measures |
+|----------------|---------|------------------|
+| **C++** | `uffs.com --benchmark-mft=C:` | Raw MFT I/O only |
+| **C++** | `uffs.com --benchmark-index=C:` | I/O + Parse + Preprocess (tree metrics) |
+| **Rust** | `uffs_mft benchmark-mft --drive C` | Raw MFT I/O only |
+| **Rust** | `uffs_mft benchmark-index-lean --drive C` | I/O + Parse + Index Build + Tree Metrics (with phase breakdown) |
+| **Rust** | `uffs_mft benchmark-tree --drive C` | **Isolated tree metrics only** (for direct comparison) |
+
+### 13.2 Apples-to-Apples Comparison
+
+The C++ `--benchmark-index` command measures the full indexing pipeline including the "Preprocess" phase, which computes tree metrics (descendants, treesize, tree_allocated).
+
+To compare tree metrics performance specifically:
+
+#### C++ Tree Metrics Timing
+
+```powershell
+# Run C++ benchmark-index and look for "Preprocess" timing
+C:\Users\$env:USERNAME\bin\uffs.com --benchmark-index=C:
+```
+
+The output includes a line like:
+```
+Preprocess: 123 ms
+```
+
+#### Rust Tree Metrics Timing
+
+```powershell
+# Option 1: Full pipeline with phase breakdown
+uffs_mft benchmark-index-lean --drive C
+# Look for "Tree Metrics: XXX ms" in the output
+
+# Option 2: Isolated tree metrics (recommended for comparison)
+uffs_mft benchmark-tree --drive C --iterations 5
+# Reports min/max/avg/median for tree metrics only
+```
+
+### 13.3 Phase Breakdown (Rust)
+
+The `benchmark-index-lean` command now shows detailed phase timing with **accurate instrumentation**:
+
+```
+=== Phase Timing Breakdown ===
+Open/Metadata:    ...ms
+I/O (read):       ...ms  ✓ accurate
+Parse:            ...ms  ✓ accurate
+Merge:            ...ms  ✓ accurate
+Index Build:      ...ms  (record insertion + ext index + sort)
+Tree Metrics:     ...ms  (C++ 'preprocessing' equivalent)
+─────────────────────────────────────────
+Total:            ...ms
+
+=== C++ Comparison ===
+I/O + Parse + Merge:  ...ms  (compare to C++ 'Read + Parse')
+Tree Metrics:         ...ms  (compare to C++ 'Preprocess')
+```
+
+The **Tree Metrics** line corresponds directly to C++'s **Preprocess** phase.
+
+> **Note**: The I/O, Parse, and Merge timings are now **accurately instrumented** (not estimated). The reader has been refactored to measure each phase separately.
+
+### 13.4 Isolated Tree Metrics Benchmark
+
+For the most accurate comparison, use `benchmark-tree`:
+
+```powershell
+# Run 5 iterations, use cached index
+uffs_mft benchmark-tree --drive C --iterations 5
+
+# Run 3 iterations, build fresh index (no cache)
+uffs_mft benchmark-tree --drive C --no-cache
+```
+
+Output:
+```
+=== Tree Metrics Timing Results ===
+Min:      45 ms
+Max:      52 ms
+Avg:      48 ms
+Median:   47 ms
+
+=== Throughput ===
+Entries processed: 1234567
+Throughput: 25720562 entries/sec
+```
+
+### 13.5 Automated Comparison Script
+
+Use the `benchmark_tree_comparison.ps1` script for automated C++ vs Rust comparison:
+
+```powershell
+# Compare on drive C
+.\benchmark_tree_comparison.ps1 -Drive C
+
+# Compare on multiple drives
+.\benchmark_tree_comparison.ps1 -Drives C,D,E
+
+# Run more iterations for statistical significance
+.\benchmark_tree_comparison.ps1 -Drive C -Iterations 10
+```
+
+The script is located at: `docs/architecture/Investigation/benchmark_tree_comparison.ps1`
+
+### 13.6 Expected Performance Characteristics
+
+| Metric | C++ | Rust | Notes |
+|--------|-----|------|-------|
+| **Raw I/O** | ~500 MB/s | ~500 MB/s | Limited by disk speed |
+| **Parse** | ~1M records/sec | ~1.5M records/sec | Rust slightly faster |
+| **Tree Metrics** | ~20M entries/sec | ~25M entries/sec | Target: within 2x of C++ |
+
+### 13.7 Interpreting Results
+
+When comparing C++ and Rust tree metrics performance:
+
+1. **Same volume**: Always compare on the same drive to eliminate I/O variance
+2. **Warm cache**: Run each benchmark 2-3 times; use the fastest run
+3. **Isolated timing**: Use `benchmark-tree` for Rust to isolate tree metrics from I/O
+4. **Entry count**: Verify both implementations process the same number of entries
+
+#### Example Comparison
+
+```
+C++ --benchmark-index=C:
+  Preprocess: 156 ms
+  Total entries: 1,234,567
+
+Rust benchmark-tree --drive C:
+  Tree Metrics: 142 ms (avg of 5 runs)
+  Entries processed: 1,234,567
+
+Result: Rust is 1.10x faster (156/142 = 1.10)
+```
+
+### 13.8 Troubleshooting
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| Rust much slower | Cold cache | Run `uffs_mft cache-get --drive C` first |
+| Entry count mismatch | Different filtering | Ensure both use same MFT source |
+| High variance | Background I/O | Close other applications, run more iterations |
+| C++ crashes | Large MFT | C++ has 32-bit FRS limit (~4B entries) |
 

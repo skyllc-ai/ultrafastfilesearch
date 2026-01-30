@@ -1,5 +1,10 @@
-# trial_run.ps1 - UFFS Rust vs C++ Comparison Tool
-# Enhanced version with automatic comparison and metrics extraction
+# trial_run.ps1 - UFFS Three-Way Comparison Tool
+# Compares: Rust (current) vs C++ vs Rust (new tree algo)
+#
+# This script runs three implementations and compares their output:
+#   1. Rust (current) - existing uffs.exe with current tree algorithm
+#   2. C++ - reference uffs.com implementation
+#   3. Rust (new tree algo) - uffs.exe with --tree-algo=cpp flag
 #
 # Usage:
 #   .\trial_run.ps1                    # Test all available NTFS drives
@@ -384,32 +389,34 @@ try {
         LogLine ""
     }
 
-    # Test each drive (Rust vs C++ comparison)
+    # Test each drive (Rust vs C++ vs Rust-New comparison)
     foreach ($drive in $Drives) {
         LogLine "---"
         LogLine ""
-        LogLine "# Drive $drive - Scan Comparison"
+        LogLine "# Drive $drive - Three-Way Scan Comparison"
         LogLine ""
 
         Write-Host ""
-        Write-Host "Testing Drive $drive..." -ForegroundColor Cyan
+        Write-Host "Testing Drive $drive (3-way comparison)..." -ForegroundColor Cyan
         Write-Host ""
 
         $rustFile = "rust_$($drive.ToLower()).txt"
         $cppFile = "cpp_$($drive.ToLower()).txt"
+        $rustNewFile = "rust_new_$($drive.ToLower()).txt"
         $rustExitCode = -1
         $cppExitCode = -1
+        $rustNewExitCode = -1
 
-        # Rust scan
+        # Current Rust scan (existing tree algorithm)
         if ($hasRust) {
-            $rustResult = Invoke-Logged -Title "Rust: uffs scan drive $drive" `
+            $rustResult = Invoke-Logged -Title "Rust (current): uffs scan drive $drive" `
                 -CommandLine ("`"$UffsExe`" `"*`" --drive $drive") `
                 -OutFilePath $rustFile `
                 -RecordTiming
             $rustExitCode = $rustResult.ExitCode
         }
 
-        # C++ scan
+        # C++ scan (reference implementation)
         if ($hasCpp) {
             $cppResult = Invoke-Logged -Title "C++: uffs.com scan drive $drive" `
                 -CommandLine ("`"$UffsCom`" `"*`" --drives=$drive") `
@@ -418,48 +425,201 @@ try {
             $cppExitCode = $cppResult.ExitCode
         }
 
-        # Compare outputs
-        if ($hasRust -and $hasCpp -and -not $SkipComparison) {
+        # New Rust scan (with C++ tree algorithm port)
+        # Uses --tree-algo=cpp flag to enable the new algorithm
+        if ($hasRust) {
+            $rustNewResult = Invoke-Logged -Title "Rust (new tree algo): uffs scan drive $drive --tree-algo=cpp" `
+                -CommandLine ("`"$UffsExe`" `"*`" --drive $drive --tree-algo=cpp") `
+                -OutFilePath $rustNewFile `
+                -RecordTiming
+            $rustNewExitCode = $rustNewResult.ExitCode
+        }
+
+        # Compare all three outputs
+        if (-not $SkipComparison) {
             $rustPath = Join-Path $WorkDir $rustFile
             $cppPath = Join-Path $WorkDir $cppFile
-            $comparison = Compare-Outputs -RustFile $rustPath -CppFile $cppPath -Drive $drive `
-                -RustExitCode $rustExitCode -CppExitCode $cppExitCode
+            $rustNewPath = Join-Path $WorkDir $rustNewFile
+
+            # Extract metrics from all three
+            $rustMetrics = if (Test-Path -LiteralPath $rustPath) { Extract-RootMetrics -FilePath $rustPath } else { $null }
+            $cppMetrics = if (Test-Path -LiteralPath $cppPath) { Extract-RootMetrics -FilePath $cppPath } else { $null }
+            $rustNewMetrics = if (Test-Path -LiteralPath $rustNewPath) { Extract-RootMetrics -FilePath $rustNewPath } else { $null }
+
+            # Line counts (fast method)
+            $rustLines = 0; $cppLines = 0; $rustNewLines = 0
+            if (Test-Path -LiteralPath $rustPath) {
+                $countOutput = & cmd.exe /c "find /c /v `"`" `"$rustPath`"" 2>$null
+                if ($countOutput -match ': (\d+)') { $rustLines = [int]$Matches[1] }
+            }
+            if (Test-Path -LiteralPath $cppPath) {
+                $countOutput = & cmd.exe /c "find /c /v `"`" `"$cppPath`"" 2>$null
+                if ($countOutput -match ': (\d+)') { $cppLines = [int]$Matches[1] }
+            }
+            if (Test-Path -LiteralPath $rustNewPath) {
+                $countOutput = & cmd.exe /c "find /c /v `"`" `"$rustNewPath`"" 2>$null
+                if ($countOutput -match ': (\d+)') { $rustNewLines = [int]$Matches[1] }
+            }
+
+            LogLine "### Three-Way Comparison: Drive $drive"
+            LogLine ""
+
+            # Show failure status
+            if ($rustExitCode -ne 0) { LogLine "**⚠️ Rust (current) FAILED (exit code: $rustExitCode)**"; LogLine "" }
+            if ($cppExitCode -ne 0) { LogLine "**⚠️ C++ FAILED (exit code: $cppExitCode)**"; LogLine "" }
+            if ($rustNewExitCode -ne 0) { LogLine "**⚠️ Rust (new) FAILED (exit code: $rustNewExitCode)**"; LogLine "" }
+
+            LogLine "| Metric | Rust (current) | C++ | Rust (new tree) | C++ Match |"
+            LogLine "|--------|----------------|-----|-----------------|-----------|"
+
+            # Exit codes
+            $exitMatch = ($cppExitCode -eq 0 -and $rustNewExitCode -eq 0)
+            LogLine "| Exit Code | $rustExitCode | $cppExitCode | $rustNewExitCode | $(if ($exitMatch) { '✅' } else { '❌' }) |"
+
+            # Line counts
+            $linesMatch = ($cppLines -eq $rustNewLines)
+            LogLine "| Lines | $rustLines | $cppLines | $rustNewLines | $(if ($linesMatch) { '✅' } else { '⚠️' }) |"
+
+            # Treesize
+            $rustTs = if ($rustMetrics) { $rustMetrics.Treesize } else { "N/A" }
+            $cppTs = if ($cppMetrics) { $cppMetrics.Treesize } else { "N/A" }
+            $rustNewTs = if ($rustNewMetrics) { $rustNewMetrics.Treesize } else { "N/A" }
+            $tsMatch = ($cppTs -eq $rustNewTs -and $cppTs -ne "N/A")
+            LogLine "| Root Treesize | $rustTs | $cppTs | $rustNewTs | $(if ($tsMatch) { '✅' } else { '❌' }) |"
+
+            # Descendants
+            $rustDesc = if ($rustMetrics) { $rustMetrics.Descendants } else { 0 }
+            $cppDesc = if ($cppMetrics) { $cppMetrics.Descendants } else { 0 }
+            $rustNewDesc = if ($rustNewMetrics) { $rustNewMetrics.Descendants } else { 0 }
+            $descMatch = ($cppDesc -eq $rustNewDesc -and $cppDesc -gt 0)
+            LogLine "| Root Descendants | $rustDesc | $cppDesc | $rustNewDesc | $(if ($descMatch) { '✅' } else { '❌' }) |"
+
+            LogLine ""
+
+            # Store comparison for summary
+            $comparison = @{
+                Drive = $drive
+                RustExitCode = $rustExitCode
+                CppExitCode = $cppExitCode
+                RustNewExitCode = $rustNewExitCode
+                RustLines = $rustLines
+                CppLines = $cppLines
+                RustNewLines = $rustNewLines
+                RustTreesize = $rustTs
+                CppTreesize = $cppTs
+                RustNewTreesize = $rustNewTs
+                RustDescendants = $rustDesc
+                CppDescendants = $cppDesc
+                RustNewDescendants = $rustNewDesc
+                RustFailed = ($rustExitCode -ne 0)
+                CppFailed = ($cppExitCode -ne 0)
+                RustNewFailed = ($rustNewExitCode -ne 0)
+                TreesizeMatch = $tsMatch
+                DescendantsMatch = $descMatch
+                NewMatchesCpp = ($tsMatch -and $descMatch -and $exitMatch)
+            }
             $script:ComparisonResults += $comparison
 
-            LogLine "### Comparison: Drive $drive"
-            LogLine ""
-
-            # Show failure status if either failed
-            if ($comparison.RustFailed) {
-                LogLine "**⚠️ Rust scan FAILED (exit code: $rustExitCode)**"
-                LogLine ""
-            }
-            if ($comparison.CppFailed) {
-                LogLine "**⚠️ C++ scan FAILED (exit code: $cppExitCode)**"
-                LogLine ""
-            }
-
-            LogLine "| Metric | Rust | C++ | Match |"
-            LogLine "|--------|------|-----|-------|"
-            LogLine ("| Exit Code | $rustExitCode | $cppExitCode | " +
-                $(if ($rustExitCode -eq 0 -and $cppExitCode -eq 0) { "✅" } else { "❌" }) + " |")
-            LogLine ("| Lines | $($comparison.RustLines) | $($comparison.CppLines) | " +
-                $(if ($comparison.RustLines -eq $comparison.CppLines) { "✅" } else { "⚠️" }) + " |")
-            LogLine ("| Root Treesize | $($comparison.RustTreesize) | $($comparison.CppTreesize) | " +
-                $(if ($comparison.TreesizeMatch) { "✅" } else { "❌" }) + " |")
-            LogLine ("| Root Descendants | $($comparison.RustDescendants) | $($comparison.CppDescendants) | " +
-                $(if ($comparison.DescendantsMatch) { "✅" } else { "❌" }) + " |")
-            LogLine ""
-
-            if ($comparison.RustFailed) {
-                Write-Host "  ❌ RUST FAILED for drive $drive (exit: $rustExitCode)" -ForegroundColor Red
-            } elseif ($comparison.Match) {
-                Write-Host "  ✅ PARITY ACHIEVED for drive $drive" -ForegroundColor Green
+            # Console summary
+            if ($comparison.RustNewFailed) {
+                Write-Host "  ❌ RUST (new) FAILED for drive $drive (exit: $rustNewExitCode)" -ForegroundColor Red
+            } elseif ($comparison.NewMatchesCpp) {
+                Write-Host "  ✅ NEW RUST matches C++ for drive $drive" -ForegroundColor Green
             } else {
                 Write-Host "  ⚠️ Differences detected for drive $drive" -ForegroundColor Yellow
             }
         }
     }
+
+    # =========================================================================
+    # Tree Algorithm Performance Benchmark - Timing Comparison
+    # =========================================================================
+    LogLine "---"
+    LogLine ""
+    LogLine "# Tree Algorithm Performance (Timing)"
+    LogLine ""
+    LogLine "Comparing **timing** of C++ 'Preprocess' phase vs Rust 'Tree Metrics' computation."
+    LogLine "This measures how fast each implementation computes tree metrics (treesize, descendants)."
+    LogLine ""
+
+    Write-Host ""
+    Write-Host "Tree Algorithm Performance Benchmark..." -ForegroundColor Cyan
+    Write-Host ""
+
+    $script:TreeBenchResults = @()
+
+    foreach ($drive in $Drives) {
+        $cppPreprocessMs = $null
+        $rustTreeMetricsMs = $null
+
+        # Run C++ benchmark-index to get Preprocess timing
+        if ($hasCpp) {
+            Write-Host "  [C++] benchmark-index=$drive..." -NoNewline
+            $cppOutput = & $UffsCom "--benchmark-index=$drive`:" 2>&1
+            $cppExitCode = $LASTEXITCODE
+
+            if ($cppExitCode -eq 0) {
+                foreach ($line in $cppOutput) {
+                    if ($line -match 'Preprocess[:\s]+(\d+)\s*ms') {
+                        $cppPreprocessMs = [int]$Matches[1]
+                    }
+                }
+                Write-Host " ✅ Preprocess: $cppPreprocessMs ms" -ForegroundColor Green
+            } else {
+                Write-Host " ❌ Failed (exit: $cppExitCode)" -ForegroundColor Red
+            }
+        }
+
+        # Run Rust benchmark-tree to get Tree Metrics timing
+        if ($hasMft) {
+            Write-Host "  [Rust] benchmark-tree --drive $drive..." -NoNewline
+            $rustOutput = & $UffsMftExe benchmark-tree --drive $drive --iterations 3 2>&1
+            $rustExitCode = $LASTEXITCODE
+
+            if ($rustExitCode -eq 0) {
+                foreach ($line in $rustOutput) {
+                    if ($line -match 'Avg[:\s]+(\d+)\s*ms') {
+                        $rustTreeMetricsMs = [int]$Matches[1]
+                    }
+                }
+                Write-Host " ✅ Tree Metrics: $rustTreeMetricsMs ms (avg)" -ForegroundColor Green
+            } else {
+                Write-Host " ❌ Failed (exit: $rustExitCode)" -ForegroundColor Red
+            }
+        }
+
+        # Calculate speedup
+        $speedup = $null
+        $winner = "N/A"
+        if ($cppPreprocessMs -and $rustTreeMetricsMs -and $rustTreeMetricsMs -gt 0) {
+            $speedup = [math]::Round($cppPreprocessMs / $rustTreeMetricsMs, 2)
+            $winner = if ($speedup -gt 1) { "Rust" } elseif ($speedup -lt 1) { "C++" } else { "Tie" }
+        }
+
+        $script:TreeBenchResults += @{
+            Drive = $drive
+            CppPreprocessMs = $cppPreprocessMs
+            RustTreeMetricsMs = $rustTreeMetricsMs
+            Speedup = $speedup
+            Winner = $winner
+        }
+    }
+
+    # Log tree benchmark results
+    LogLine "## Tree Metrics Comparison (C++ Preprocess vs Rust Tree Metrics)"
+    LogLine ""
+    LogLine "| Drive | C++ Preprocess | Rust Tree Metrics | Speedup | Winner |"
+    LogLine "|-------|----------------|-------------------|---------|--------|"
+
+    foreach ($r in $script:TreeBenchResults) {
+        $cppStr = if ($r.CppPreprocessMs) { "$($r.CppPreprocessMs) ms" } else { "N/A" }
+        $rustStr = if ($r.RustTreeMetricsMs) { "$($r.RustTreeMetricsMs) ms" } else { "N/A" }
+        $speedupStr = if ($r.Speedup) { "$($r.Speedup)x" } else { "N/A" }
+        LogLine "| $($r.Drive) | $cppStr | $rustStr | $speedupStr | $($r.Winner) |"
+    }
+    LogLine ""
+    LogLine "> **Note:** Speedup > 1.0 means Rust is faster than C++."
+    LogLine ""
 
     # Summary section
     LogLine "---"
@@ -480,37 +640,53 @@ try {
         LogLine ""
     }
 
-    # Comparison summary
+    # Three-way comparison summary
     if (@($script:ComparisonResults).Count -gt 0) {
-        LogLine "## Parity Results"
+        LogLine "## Three-Way Parity Results"
         LogLine ""
-        LogLine "| Drive | Rust Status | Treesize Match | Descendants Match | Overall |"
-        LogLine "|-------|-------------|----------------|-------------------|---------|"
+        LogLine "Comparing: **Rust (current)** vs **C++** vs **Rust (new tree algo)**"
+        LogLine ""
+        LogLine "| Drive | Rust (current) | C++ | Rust (new) | New vs C++ |"
+        LogLine "|-------|----------------|-----|------------|------------|"
         foreach ($c in $script:ComparisonResults) {
-            $rustStatus = if ($c.RustFailed) { "❌ FAILED" } else { "✅ OK" }
-            $tsIcon = if ($c.TreesizeMatch) { "✅" } else { "❌" }
-            $descIcon = if ($c.DescendantsMatch) { "✅" } else { "❌" }
-            $overallIcon = if ($c.RustFailed) { "❌ RUST FAILED" } elseif ($c.Match) { "✅ PARITY" } else { "⚠️ DIFF" }
-            LogLine "| $($c.Drive) | $rustStatus | $tsIcon $($c.RustTreesize) vs $($c.CppTreesize) | $descIcon $($c.RustDescendants) vs $($c.CppDescendants) | $overallIcon |"
+            $rustStatus = if ($c.RustFailed) { "❌" } else { "✅" }
+            $cppStatus = if ($c.CppFailed) { "❌" } else { "✅" }
+            $rustNewStatus = if ($c.RustNewFailed) { "❌" } else { "✅" }
+            $matchIcon = if ($c.RustNewFailed) { "❌ FAILED" } elseif ($c.NewMatchesCpp) { "✅ MATCH" } else { "⚠️ DIFF" }
+            LogLine "| $($c.Drive) | $rustStatus $($c.RustTreesize) | $cppStatus $($c.CppTreesize) | $rustNewStatus $($c.RustNewTreesize) | $matchIcon |"
         }
         LogLine ""
 
-        # Use @() to force array and Measure-Object for reliable counting
-        $failedCount = @($script:ComparisonResults | Where-Object { -not $_.Match }).Count
-        $rustFailedCount = @($script:ComparisonResults | Where-Object { $_.RustFailed }).Count
+        # Detailed breakdown
+        LogLine "### Detailed Metrics"
+        LogLine ""
+        LogLine "| Drive | Metric | Rust (current) | C++ | Rust (new) |"
+        LogLine "|-------|--------|----------------|-----|------------|"
+        foreach ($c in $script:ComparisonResults) {
+            LogLine "| $($c.Drive) | Treesize | $($c.RustTreesize) | $($c.CppTreesize) | $($c.RustNewTreesize) |"
+            LogLine "| $($c.Drive) | Descendants | $($c.RustDescendants) | $($c.CppDescendants) | $($c.RustNewDescendants) |"
+            LogLine "| $($c.Drive) | Lines | $($c.RustLines) | $($c.CppLines) | $($c.RustNewLines) |"
+        }
+        LogLine ""
 
-        if ($rustFailedCount -gt 0) {
-            LogLine "> **❌ Rust scan failed on $rustFailedCount drive(s) - fix required!**"
+        # Summary counts
+        $newMatchCount = @($script:ComparisonResults | Where-Object { $_.NewMatchesCpp }).Count
+        $newFailedCount = @($script:ComparisonResults | Where-Object { $_.RustNewFailed }).Count
+        $totalDrives = @($script:ComparisonResults).Count
+
+        if ($newFailedCount -gt 0) {
+            LogLine "> **❌ Rust (new tree algo) failed on $newFailedCount drive(s) - fix required!**"
             Write-Host ""
-            Write-Host "❌ Rust scan failed on $rustFailedCount drive(s) - review trial_run.md for details." -ForegroundColor Red
-        } elseif ($failedCount -eq 0) {
-            LogLine "> **🎉 100% PARITY ACHIEVED across all tested drives!**"
+            Write-Host "❌ Rust (new tree algo) failed on $newFailedCount drive(s) - review trial_run.md for details." -ForegroundColor Red
+        } elseif ($newMatchCount -eq $totalDrives) {
+            LogLine "> **🎉 NEW RUST TREE ALGO matches C++ on all $totalDrives drive(s)!**"
             Write-Host ""
-            Write-Host "🎉 100% PARITY ACHIEVED across all tested drives!" -ForegroundColor Green
+            Write-Host "🎉 NEW RUST TREE ALGO matches C++ on all $totalDrives drive(s)!" -ForegroundColor Green
         } else {
-            LogLine "> **⚠️ Some differences detected - review details above.**"
+            $diffCount = $totalDrives - $newMatchCount
+            LogLine "> **⚠️ New Rust tree algo differs from C++ on $diffCount drive(s) - review details above.**"
             Write-Host ""
-            Write-Host "⚠️ Some differences detected - review trial_run.md for details." -ForegroundColor Yellow
+            Write-Host "⚠️ New Rust tree algo differs from C++ on $diffCount drive(s) - review trial_run.md for details." -ForegroundColor Yellow
         }
         LogLine ""
     }

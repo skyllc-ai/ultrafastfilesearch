@@ -126,16 +126,16 @@ pub use error::{MftError, Result};
 pub use flags::FileFlags;
 // Re-export lean index types
 pub use index::{
-    ChildInfo, FileRecord, IndexNameRef, IndexStreamInfo, LinkInfo, MftIndex, NO_ENTRY, ROOT_FRS,
-    SizeInfo, StandardInfo, TreeAlgorithm, UsnApplyStats,
+    ChildInfo, FileRecord, IndexBuildTiming, IndexNameRef, IndexStreamInfo, LinkInfo, MftIndex,
+    NO_ENTRY, ROOT_FRS, SizeInfo, StandardInfo, TreeAlgorithm, UsnApplyStats,
 };
 // Re-export I/O types for advanced usage
 #[cfg(windows)]
 pub use io::{
     AlignedBuffer, BatchMftReader, ExtensionAttributes, MftExtentMap, MftRecordMerger,
     MftRecordReader, ParallelMftReader, ParseResult, ParsedColumns, ParsedRecord,
-    PipelinedMftReader, PrefetchMftReader, ReadChunk, StreamingMftReader, apply_fixup,
-    generate_read_chunks, parse_record_full, parse_record_zero_alloc,
+    PipelinedMftReader, PrefetchMftReader, ReadChunk, ReadParseTiming, StreamingMftReader,
+    apply_fixup, generate_read_chunks, parse_record_full, parse_record_zero_alloc,
 };
 // Re-export NTFS constants
 #[cfg(windows)]
