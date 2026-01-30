@@ -338,7 +338,8 @@ try {
         $diskNumbers = @($diskGroups.Keys | Sort-Object)
         $scanResults = $diskNumbers | ForEach-Object -Parallel {
             $diskNum = $_
-            $groupDrives = $using:diskGroups[$diskNum]
+            $allDiskGroups = $using:diskGroups
+            $groupDrives = $allDiskGroups[$diskNum]
             & $using:runDiskGroup -DiskNumber $diskNum -GroupDrives $groupDrives -WorkDir $using:WorkDir `
                 -UffsExe $using:UffsExe -UffsCom $using:UffsCom -HasRust $using:hasRust -HasCpp $using:hasCpp
         } -ThrottleLimit $ThrottleLimit
