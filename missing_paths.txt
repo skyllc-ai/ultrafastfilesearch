@@ -1,0 +1,40 @@
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5u3hbg8-18y3xwi-working\work-products.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5u3hbg8-18y3xwi-working\query-cache.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5u3hbg8-18y3xwi-working\dep-graph.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5u3cqdw-3w5yag-working\work-products.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5u3cqdw-3w5yag-working\query-cache.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5u3cqdw-3w5yag-working\dep-graph.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5u00rt1-no5iqm-working\work-products.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5u00rt1-no5iqm-working\query-cache.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5u00rt1-no5iqm-working\dep-graph.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working\work-products.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working\query-cache.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working\dep-graph.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzx3rr-73teyj-working\work-products.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzx3rr-73teyj-working\query-cache.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzx3rr-73teyj-working\dep-graph.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzryuc-1n569vv-working\work-products.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzryuc-1n569vv-working\query-cache.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzryuc-1n569vv-working\dep-graph.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzov8x-qpautm-working\work-products.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzov8x-qpautm-working\query-cache.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzov8x-qpautm-working\dep-graph.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working\work-products.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working\query-cache.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working\dep-graph.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf-1unkcerazvq4f\query-cache.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf-1unkcerazvq4f\dep-graph.bin
+D:\Dropbox\DATA\Protect\IMPORTANT\Stanford Patient Record Request ESTHER NIO Doc - Apr 22 2020 - 13-22 #2.pdf:Zone.Identifier
+D:\Dropbox\DATA\Protect\IMPORTANT\Stanford Patient Record Request ESTHER NIO Doc - Apr 22 2020 - 13-22 #1.pdf:Zone.Identifier
+D:\Dropbox\DATA\Protect\IMPORTANT\Stanford Patient Record Request ESTHER NIO Doc - Apr 22 2020 - 13-22.pdf:Zone.Identifier
+D:\Dropbox\DATA\Protect\IMPORTANT\Doc - Mar 2 2020 - 20-02 ESTHER Signed Wage History Report 03-02-2020.pdf:Zone.Identifier
+D:\Dropbox\DATA\Protect\IMPORTANT\Python\deeplearning.ai\deeplearning.ai Sequence Models NOTEBOOKS 04-22-2020\seq.tar.gzaa:Zone.Identifier
+D:\Dropbox\DATA\Protect\IMPORTANT\Python\deeplearning.ai\deeplearning.ai Convolutional Neural Networks NOTEBOOKS 04-21-2020\conv.tar.gzab:Zone.Identifier
+D:\Dropbox\DATA\Protect\IMPORTANT\Python\deeplearning.ai\deeplearning.ai Convolutional Neural Networks NOTEBOOKS 04-21-2020\conv.tar.gzag:Zone.Identifier
+D:\Dropbox\DATA\Protect\IMPORTANT\Python\deeplearning.ai\deeplearning.ai Convolutional Neural Networks NOTEBOOKS 04-21-2020\conv.tar.gzah:Zone.Identifier
+D:\Dropbox\DATA\Protect\IMPORTANT\Python\deeplearning.ai\deeplearning.ai Convolutional Neural Networks NOTEBOOKS 04-21-2020\conv.tar.gzan:Zone.Identifier
+D:\Dropbox\DATA\Protect\IMPORTANT\Python\deeplearning.ai\deeplearning.ai Convolutional Neural Networks NOTEBOOKS 04-21-2020\conv.tar.gzad:Zone.Identifier
+D:\Dropbox\DATA\Protect\IMPORTANT\Python\deeplearning.ai\deeplearning.ai Improving Deep Neural Networks NOTEBOOKS 04-18-2020\workspace.tar.gz:Zone.Identifier
+D:\Dropbox\DATA\Protect\IMPORTANT\Robert Nio\Bewerbung 2023-03-09\Interviews\INTUIT\BeyondIdentity-2.91.0.exe:Zone.Identifier
+D:\Dropbox\DATA\Protect\PDF\Please_DocuSign_UX_Informed_Consent_NA_(Vide ESTHER.pdf:Zone.Identifier
+D:\Dropbox\DATA\SKY LLC\TAX 2018\SKY LLC FY2018 eFile Signed Authorization FED and California 09-11-2019.pdf:Zone.Identifier

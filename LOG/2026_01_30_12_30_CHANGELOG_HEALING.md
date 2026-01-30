@@ -53,5 +53,33 @@ error: usage of an `unsafe` block
 
 **Fix:** Added targeted `#[allow(unsafe_code)]` attribute on the unsafe block with detailed SAFETY comment explaining why it's safe (single-threaded at CLI startup, before any parallel MFT operations).
 
-### Run 3 - Starting...
+### Run 3 - SUCCESS ✅
+
+**Result:** All tests passed, build succeeded, deployed v0.2.153.
+
+**Summary:**
+- 233 tests passed
+- Cross-platform Windows build completed
+- Binary deployed to `dist/v0.2.153/`
+- Pushed to `feature/cpp-tree-algorithm-port` branch
+
+## Final State
+
+The `--tree-algo` CLI flag is now available in `uffs.exe` v0.2.153:
+
+```
+--tree-algo <TREE_ALGO>
+    Tree metrics algorithm: current, cpp (C++ port)
+
+    - current: Use current Rust leaf-peeling algorithm (default)
+    - cpp: Use C++ port algorithm (100% faithful port of C++ tree algorithm)
+
+    [default: current]
+```
+
+Usage:
+```powershell
+uffs.exe --tree-algo=cpp "*.txt"
+uffs.exe --tree-algo=current "*.txt"
+```
 

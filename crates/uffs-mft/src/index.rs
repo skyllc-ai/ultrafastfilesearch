@@ -5421,6 +5421,8 @@ impl MftIndex {
     #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
     fn merge_single_fragment(&mut self, fragment: MftIndexFragment) {
         let name_offset_adjustment = self.names.len() as u32;
+        let link_offset_adjustment = self.links.len() as u32;
+        let stream_offset_adjustment = self.streams.len() as u32;
 
         // Build extension_id remapping table
         let extension_id_map = self.build_extension_id_map(&fragment);
@@ -5428,8 +5430,16 @@ impl MftIndex {
         // Append names buffer
         self.names.push_str(&fragment.names);
 
-        // Merge records
-        self.merge_fragment_records(fragment.records, name_offset_adjustment, &extension_id_map);
+        // Merge records, collecting any that need name/stream merging
+        // Returns: Vec<(existing_record_idx, discarded_record)> for records that need
+        // merging
+        let records_to_merge = self.merge_fragment_records_with_deferred_merge(
+            fragment.records,
+            name_offset_adjustment,
+            link_offset_adjustment,
+            stream_offset_adjustment,
+            &extension_id_map,
+        );
 
         // Merge links (with offset and extension_id adjustment)
         self.merge_fragment_links(fragment.links, name_offset_adjustment, &extension_id_map);
@@ -5439,6 +5449,14 @@ impl MftIndex {
 
         // Merge children (with offset adjustment)
         self.merge_fragment_children(fragment.children);
+
+        // Now merge the deferred names/streams from discarded records
+        // At this point, all links/streams have been added with correct offsets
+        self.apply_deferred_name_merges(
+            records_to_merge,
+            link_offset_adjustment,
+            stream_offset_adjustment,
+        );
     }
 
     /// Build extension ID remapping table from fragment to merged index.
@@ -5474,14 +5492,28 @@ impl MftIndex {
         extension_id_map
     }
 
-    /// Merge records from a fragment into this index.
+    /// Merge records from a fragment into this index, returning records that
+    /// need deferred merging.
+    ///
+    /// When two fragments have records for the same FRS (e.g., base record in
+    /// one fragment, extension record in another), we need to merge their
+    /// names/streams. This function returns the records that were
+    /// "discarded" but have additional names/streams that need to be merged
+    /// after the links/streams arrays are fully populated.
+    ///
+    /// Returns: `Vec<(existing_record_idx, discarded_record)>` for records that
+    /// need merging
     #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
-    fn merge_fragment_records(
+    fn merge_fragment_records_with_deferred_merge(
         &mut self,
         records: Vec<FileRecord>,
         name_offset_adjustment: u32,
+        link_offset_adjustment: u32,
+        stream_offset_adjustment: u32,
         extension_id_map: &[u16],
-    ) {
+    ) -> Vec<(u32, FileRecord)> {
+        let mut deferred_merges: Vec<(u32, FileRecord)> = Vec::new();
+
         for mut record in records {
             let frs = record.frs;
             // FRS values are bounded by MFT size, which is always < 2^32 on real systems
@@ -5499,6 +5531,15 @@ impl MftIndex {
                 extension_id_map,
             );
 
+            // Adjust link/stream indices (they point into fragment's arrays, need
+            // adjustment)
+            if record.first_name.next_entry != NO_ENTRY {
+                record.first_name.next_entry += link_offset_adjustment;
+            }
+            if record.first_stream.next_entry != NO_ENTRY {
+                record.first_stream.next_entry += stream_offset_adjustment;
+            }
+
             // Expand lookup table if needed
             if frs_usize >= self.frs_to_idx.len() {
                 self.frs_to_idx.resize(frs_usize + 1, NO_ENTRY);
@@ -5511,13 +5552,137 @@ impl MftIndex {
                 self.frs_to_idx[frs_usize] = new_idx;
                 self.records.push(record);
             } else {
-                // Record exists - merge (keep the one with more data)
-                let existing = &mut self.records[existing_idx as usize];
-                // If existing is a placeholder (no name), replace with new
+                // Record exists - need to merge
+                let existing = &self.records[existing_idx as usize];
+
+                // Determine which record to keep and which to merge from
                 if !existing.has_name() && record.has_name() {
-                    *existing = record;
+                    // Existing is placeholder, new has name - swap them
+                    // But we still need to merge any names from the placeholder
+                    let placeholder =
+                        core::mem::replace(&mut self.records[existing_idx as usize], record);
+                    // If placeholder had additional names, defer merge
+                    if placeholder.first_name.name.is_valid()
+                        || placeholder.first_name.next_entry != NO_ENTRY
+                    {
+                        deferred_merges.push((existing_idx, placeholder));
+                    }
+                } else {
+                    // Keep existing, merge from new record if it has additional names/streams
+                    if record.first_name.name.is_valid()
+                        || record.first_name.next_entry != NO_ENTRY
+                        || record.first_stream.name.is_valid()
+                        || record.first_stream.next_entry != NO_ENTRY
+                    {
+                        deferred_merges.push((existing_idx, record));
+                    }
                 }
-                // Otherwise keep existing (first wins)
+            }
+        }
+
+        deferred_merges
+    }
+
+    /// Apply deferred name/stream merges from discarded records.
+    ///
+    /// This is called after all links/streams have been merged, so the indices
+    /// are valid.
+    #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+    fn apply_deferred_name_merges(
+        &mut self,
+        deferred_merges: Vec<(u32, FileRecord)>,
+        _link_offset_adjustment: u32,
+        _stream_offset_adjustment: u32,
+    ) {
+        for (existing_idx, discarded) in deferred_merges {
+            let existing = &mut self.records[existing_idx as usize];
+
+            // Merge names from discarded record
+            if discarded.first_name.name.is_valid() || discarded.first_name.next_entry != NO_ENTRY {
+                // Find the end of existing's name chain
+                let last_link_idx = (existing.first_name.next_entry != NO_ENTRY).then(|| {
+                    let mut idx = existing.first_name.next_entry;
+                    while self
+                        .links
+                        .get(idx as usize)
+                        .is_some_and(|link| link.next_entry != NO_ENTRY)
+                    {
+                        idx = self.links[idx as usize].next_entry;
+                    }
+                    idx
+                });
+
+                // Determine what to chain from discarded
+                let chain_start = if discarded.first_name.name.is_valid() {
+                    // Discarded has a first_name - add it as a new link
+                    let new_link_idx = self.links.len() as u32;
+                    self.links.push(LinkInfo {
+                        next_entry: discarded.first_name.next_entry,
+                        name: discarded.first_name.name,
+                        parent_frs: discarded.first_name.parent_frs,
+                    });
+                    Some(new_link_idx)
+                } else {
+                    // Discarded only has overflow links
+                    (discarded.first_name.next_entry != NO_ENTRY)
+                        .then_some(discarded.first_name.next_entry)
+                };
+
+                // Chain the discarded names to existing
+                if let Some(start) = chain_start {
+                    if let Some(last_idx) = last_link_idx {
+                        self.links[last_idx as usize].next_entry = start;
+                    } else if existing.first_name.name.is_valid() {
+                        existing.first_name.next_entry = start;
+                    } else {
+                        // Existing has no name at all - copy discarded's first_name
+                        existing.first_name = discarded.first_name;
+                    }
+                    // Update name count
+                    existing.name_count += discarded.name_count;
+                }
+            }
+
+            // Merge streams from discarded record (similar logic)
+            if discarded.first_stream.name.is_valid()
+                || discarded.first_stream.next_entry != NO_ENTRY
+            {
+                let last_stream_idx = (existing.first_stream.next_entry != NO_ENTRY).then(|| {
+                    let mut idx = existing.first_stream.next_entry;
+                    while self
+                        .streams
+                        .get(idx as usize)
+                        .is_some_and(|stream| stream.next_entry != NO_ENTRY)
+                    {
+                        idx = self.streams[idx as usize].next_entry;
+                    }
+                    idx
+                });
+
+                let chain_start = if discarded.first_stream.name.is_valid() {
+                    let new_stream_idx = self.streams.len() as u32;
+                    self.streams.push(IndexStreamInfo {
+                        next_entry: discarded.first_stream.next_entry,
+                        name: discarded.first_stream.name,
+                        size: discarded.first_stream.size,
+                        flags: discarded.first_stream.flags,
+                    });
+                    Some(new_stream_idx)
+                } else {
+                    (discarded.first_stream.next_entry != NO_ENTRY)
+                        .then_some(discarded.first_stream.next_entry)
+                };
+
+                if let Some(start) = chain_start {
+                    if let Some(last_idx) = last_stream_idx {
+                        self.streams[last_idx as usize].next_entry = start;
+                    } else if existing.first_stream.name.is_valid() {
+                        existing.first_stream.next_entry = start;
+                    } else {
+                        existing.first_stream = discarded.first_stream;
+                    }
+                    existing.stream_count += discarded.stream_count;
+                }
             }
         }
     }

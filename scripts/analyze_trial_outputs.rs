@@ -35,6 +35,39 @@ struct Record {
     descendants: String,
 }
 
+/// Parse a CSV line with quoted fields (handles commas inside quotes)
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                if in_quotes {
+                    // Check for escaped quote ""
+                    if chars.peek() == Some(&'"') {
+                        current.push('"');
+                        chars.next();
+                    } else {
+                        in_quotes = false;
+                    }
+                } else {
+                    in_quotes = true;
+                }
+            }
+            ',' if !in_quotes => {
+                fields.push(current.clone());
+                current.clear();
+            }
+            _ => current.push(c),
+        }
+    }
+    fields.push(current);
+    fields
+}
+
 fn parse_uffs_output(filepath: &Path) -> Vec<Record> {
     let file = match File::open(filepath) {
         Ok(f) => f,
@@ -54,14 +87,23 @@ fn parse_uffs_output(filepath: &Path) -> Vec<Record> {
         if line.is_empty() {
             continue;
         }
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() >= 4 {
+
+        // Skip header line
+        if line.starts_with("\"Path\"") || line.starts_with("Path") {
+            continue;
+        }
+
+        let parts = parse_csv_line(&line);
+
+        // CSV format: Path, Name, Path Only, Size, Size on Disk, Created, Last Written, Last Accessed, Descendants, ...
+        // Index:      0     1     2          3     4             5        6             7              8
+        if parts.len() >= 9 {
             records.push(Record {
                 line_num: line_num + 1,
-                path: parts[0].to_string(),
-                type_field: parts.get(1).unwrap_or(&"").to_string(),
-                size: parts.get(2).unwrap_or(&"").to_string(),
-                descendants: parts.get(3).unwrap_or(&"").to_string(),
+                path: parts[0].clone(),
+                type_field: String::new(), // Not in this format
+                size: parts[3].clone(),
+                descendants: parts[8].clone(),
             });
         }
     }
