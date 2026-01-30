@@ -503,7 +503,7 @@ enum Commands {
     /// Benchmark tree metrics computation in isolation.
     ///
     /// This command measures ONLY the tree metrics computation phase
-    /// (descendants, treesize, tree_allocated), which corresponds to
+    /// (descendants, treesize, `tree_allocated`), which corresponds to
     /// the C++ "preprocessing" phase in `--benchmark-index`.
     ///
     /// Use this for direct apples-to-apples comparison of tree algorithm
@@ -1977,6 +1977,8 @@ fn average_results(results: &[uffs_mft::BenchmarkResult]) -> uffs_mft::Benchmark
         parse_ms: results.iter().map(|r| r.timings.parse_ms).sum::<u64>() / n,
         merge_ms: results.iter().map(|r| r.timings.merge_ms).sum::<u64>() / n,
         df_build_ms: results.iter().map(|r| r.timings.df_build_ms).sum::<u64>() / n,
+        index_build_ms: results.iter().map(|r| r.timings.index_build_ms).sum::<u64>() / n,
+        tree_metrics_ms: results.iter().map(|r| r.timings.tree_metrics_ms).sum::<u64>() / n,
         total_ms: results.iter().map(|r| r.timings.total_ms).sum::<u64>() / n,
     };
 
@@ -3829,7 +3831,7 @@ async fn cmd_benchmark_index_lean(
 async fn cmd_benchmark_tree(drive: char, iterations: usize, no_cache: bool) -> Result<()> {
     use std::time::Instant;
 
-    use uffs_mft::cache::IndexCache;
+    use uffs_mft::cache::{INDEX_TTL_SECONDS, load_cached_index};
 
     let drive_upper = drive.to_ascii_uppercase();
 
@@ -3845,7 +3847,7 @@ async fn cmd_benchmark_tree(drive: char, iterations: usize, no_cache: bool) -> R
     let load_start = Instant::now();
     let mut index = if no_cache {
         println!("Building fresh index from disk...");
-        let reader = uffs_mft::MftReader::open(drive_upper)
+        let reader = MftReader::open(drive_upper)
             .await
             .with_context(|| format!("Failed to open drive {}:", drive_upper))?;
         reader
@@ -3854,21 +3856,17 @@ async fn cmd_benchmark_tree(drive: char, iterations: usize, no_cache: bool) -> R
             .with_context(|| format!("Failed to read MFT from {}:", drive_upper))?
     } else {
         println!("Loading index from cache...");
-        let cache = IndexCache::new()?;
-        match cache.get(drive_upper) {
-            Some(cached) => cached,
+        match load_cached_index(drive_upper, INDEX_TTL_SECONDS) {
+            Some((cached, _header)) => cached,
             None => {
                 println!("Cache miss - building fresh index...");
-                let reader = uffs_mft::MftReader::open(drive_upper)
+                let reader = MftReader::open(drive_upper)
                     .await
                     .with_context(|| format!("Failed to open drive {}:", drive_upper))?;
-                let idx = reader
+                reader
                     .read_all_index()
                     .await
-                    .with_context(|| format!("Failed to read MFT from {}:", drive_upper))?;
-                // Save to cache for next time
-                let _ = cache.put(drive_upper, &idx);
-                idx
+                    .with_context(|| format!("Failed to read MFT from {}:", drive_upper))?
             }
         }
     };

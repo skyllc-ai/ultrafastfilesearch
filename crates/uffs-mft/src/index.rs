@@ -132,7 +132,7 @@ impl core::str::FromStr for TreeAlgorithm {
 /// 1. **Record insertion**: Parsing and inserting records into the index
 /// 2. **Extension index**: Building the extension lookup table
 /// 3. **Sort children**: Sorting directory children for natural ordering
-/// 4. **Tree metrics**: Computing descendants, treesize, tree_allocated
+/// 4. **Tree metrics**: Computing descendants, treesize, `tree_allocated`
 ///
 /// # Example
 ///
@@ -5335,8 +5335,8 @@ impl MftIndex {
     ///
     /// # Returns
     ///
-    /// A tuple of (MftIndex, IndexBuildTiming) with the built index and timing
-    /// breakdown.
+    /// A tuple of (`MftIndex`, `IndexBuildTiming`) with the built index and
+    /// timing breakdown.
     #[must_use]
     pub fn from_parsed_records_with_timing(
         volume: char,
@@ -5355,7 +5355,8 @@ impl MftIndex {
         // just the tree metrics by clearing and recomputing.
         let insert_start = Instant::now();
         let mut index = Self::from_parsed_records(volume, records);
-        let full_build_ms = insert_start.elapsed().as_millis() as u64;
+        // Saturating cast: u128 -> u64 (overflow impossible for realistic durations)
+        let full_build_ms = u64::try_from(insert_start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         // Phase 2: Time tree metrics separately by clearing and recomputing
         // First, clear tree metrics
@@ -5368,9 +5369,9 @@ impl MftIndex {
         // Now time just the tree metrics computation
         let tree_start = Instant::now();
         index.compute_tree_metrics();
-        let tree_metrics_ms = tree_start.elapsed().as_millis() as u64;
+        let tree_metrics_ms = u64::try_from(tree_start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-        let total_ms = total_start.elapsed().as_millis() as u64;
+        let total_ms = u64::try_from(total_start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         // Estimate the other phases based on the full build time minus tree metrics
         // This is approximate but gives a reasonable breakdown

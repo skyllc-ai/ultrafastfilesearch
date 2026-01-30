@@ -220,7 +220,7 @@ pub struct PhaseTimings {
     /// This is the index build time WITHOUT tree metrics.
     pub index_build_ms: u64,
     /// Time spent computing tree metrics (descendants, treesize,
-    /// tree_allocated). This is the "preprocessing" phase in C++
+    /// `tree_allocated`). This is the "preprocessing" phase in C++
     /// terminology.
     pub tree_metrics_ms: u64,
     /// Total wall-clock time.
@@ -1073,7 +1073,7 @@ impl MftReader {
             reader.read_mft_index_with_timing_internal()
         })
         .await
-        .map_err(|e| MftError::IoError(std::io::Error::new(std::io::ErrorKind::Other, e)))??;
+        .map_err(|e| MftError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))??;
 
         Ok(result)
     }
@@ -2676,7 +2676,7 @@ impl MftReader {
     fn read_mft_index_with_timing_internal(
         &self,
     ) -> Result<(crate::index::MftIndex, BenchmarkResult)> {
-        use crate::index::{IndexBuildTiming, MftIndex};
+        use crate::index::MftIndex;
         use crate::io::{MftExtentMap, ParallelMftReader, generate_read_chunks};
         use crate::platform::detect_drive_type;
 
