@@ -210,17 +210,16 @@ try {
         $mftRaw = "${mftDrive}_mft.raw"
         $mftNoCompress = "${mftDrive}_mft_no_compress.bin"
 
+        # Note: Do NOT pass -OutFilePath for MFT saves - the tool writes the .bin/.raw file directly.
+        # Invoke-Logged's -OutFilePath is for capturing console output, not the tool's output file.
         Invoke-Logged -Title "uffs_mft save (compressed)" `
-            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o $mftBin") `
-            -OutFilePath $mftBin
+            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o $mftBin")
 
         Invoke-Logged -Title "uffs_mft save (no compress)" `
-            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive --output $mftNoCompress --no-compress") `
-            -OutFilePath $mftNoCompress
+            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive --output $mftNoCompress --no-compress")
 
         Invoke-Logged -Title "uffs_mft save (raw)" `
-            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o $mftRaw --raw") `
-            -OutFilePath $mftRaw
+            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o $mftRaw --raw")
 
         LogLine "### Generated MFT Files"
         LogLine ""
