@@ -1847,24 +1847,43 @@ impl MftIndex {
     /// * `child_frs` - FRS of the child file/directory
     /// * `name_index` - Which hardlink this is (0 for primary, 1+ for
     ///   additional)
-    #[allow(clippy::cast_possible_truncation)]
+    ///
+    /// # C++ Parity
+    ///
+    /// This method now matches C++ behavior by creating a placeholder parent
+    /// record if it doesn't exist (via `get_or_create()`). This ensures child
+    /// entries are never lost due to out-of-order chunk processing.
+    ///
+    /// See: `ntfs_index.hpp` lines 568-579 where C++ uses `at(frs_parent)` to
+    /// create parent placeholders on-demand.
+    #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
     pub fn add_child_entry(&mut self, parent_frs: u64, child_frs: u64, name_index: u16) {
-        // Get parent record index
-        let Some(parent_idx) = self.frs_to_idx_opt(parent_frs) else {
-            return;
-        };
+        // C++ parity: Create parent placeholder if it doesn't exist
+        // This matches C++ at(frs_parent) behavior in ntfs_index.hpp
+        let parent_frs_usize = parent_frs as usize;
 
-        // Get parent record - bounds already validated by frs_to_idx_opt
-        let Some(parent_rec) = self.records.get_mut(parent_idx) else {
-            return;
+        // Expand lookup table if needed
+        if parent_frs_usize >= self.frs_to_idx.len() {
+            self.frs_to_idx.resize(parent_frs_usize + 1, NO_ENTRY);
+        }
+
+        // Get or create parent record index
+        let parent_idx = if self.frs_to_idx[parent_frs_usize] == NO_ENTRY {
+            // Create placeholder parent record
+            let new_idx = self.records.len() as u32;
+            self.frs_to_idx[parent_frs_usize] = new_idx;
+            self.records.push(FileRecord::new(parent_frs));
+            new_idx as usize
+        } else {
+            self.frs_to_idx[parent_frs_usize] as usize
         };
 
         // Create child entry
         let child_idx = self.children.len() as u32;
-        let old_first_child = parent_rec.first_child;
+        let old_first_child = self.records[parent_idx].first_child;
 
         // Update parent's first_child before pushing to children
-        parent_rec.first_child = child_idx;
+        self.records[parent_idx].first_child = child_idx;
 
         self.children.push(ChildInfo {
             next_entry: old_first_child,
@@ -4975,7 +4994,7 @@ mod tests {
     /// This simulates the scenario where:
     /// - Fragment A processes an extension record with 2 hard links (B, C)
     /// - Fragment B processes the base record with 1 name (A)
-    /// - When merged, all 3 names should be accessible via get_name_at
+    /// - When merged, all 3 names should be accessible via `get_name_at`
     #[test]
     fn test_cross_fragment_merge_multiple_extension_names() {
         // Create Fragment A with extension-only placeholder for FRS 100
@@ -4983,25 +5002,25 @@ mod tests {
         let mut fragment_a = MftIndexFragment::with_capacity(10);
 
         // Add extension names to fragment A
-        let name_b_offset = fragment_a.names.len() as u32;
+        let ext_b_offset = fragment_a.names.len() as u32;
         fragment_a.names.push_str("hardlink_b.txt");
-        let name_b_ref = IndexNameRef::new(name_b_offset, 14, true, 0);
+        let ext_hardlink_b = IndexNameRef::new(ext_b_offset, 14, true, 0);
 
-        let name_c_offset = fragment_a.names.len() as u32;
+        let ext_c_offset = fragment_a.names.len() as u32;
         fragment_a.names.push_str("hardlink_c.txt");
-        let name_c_ref = IndexNameRef::new(name_c_offset, 14, true, 0);
+        let ext_hardlink_c = IndexNameRef::new(ext_c_offset, 14, true, 0);
 
         // Add link C to the links array
         let link_c_idx = fragment_a.links.len() as u32;
         fragment_a.links.push(LinkInfo {
             next_entry: NO_ENTRY,
-            name: name_c_ref,
+            name: ext_hardlink_c,
             parent_frs: 10, // Different parent than B
         });
 
         // Create placeholder record with extension names (no stdinfo)
         let record_a = fragment_a.get_or_create(100);
-        record_a.first_name.name = name_b_ref;
+        record_a.first_name.name = ext_hardlink_b;
         record_a.first_name.parent_frs = 5;
         record_a.first_name.next_entry = link_c_idx; // Chain to link C
         record_a.name_count = 2; // B and C
@@ -5011,13 +5030,13 @@ mod tests {
         let mut fragment_b = MftIndexFragment::with_capacity(10);
 
         // Add base name to fragment B
-        let name_a_offset = fragment_b.names.len() as u32;
+        let base_offset = fragment_b.names.len() as u32;
         fragment_b.names.push_str("original_a.txt");
-        let name_a_ref = IndexNameRef::new(name_a_offset, 14, true, 0);
+        let base_original = IndexNameRef::new(base_offset, 14, true, 0);
 
         // Create base record with real stdinfo
         let record_b = fragment_b.get_or_create(100);
-        record_b.first_name.name = name_a_ref;
+        record_b.first_name.name = base_original;
         record_b.first_name.parent_frs = 5;
         record_b.first_name.next_entry = NO_ENTRY;
         record_b.name_count = 1;
@@ -5033,7 +5052,10 @@ mod tests {
         let record = &index.records[idx];
 
         assert!(record.has_base_data(), "Index should have base data");
-        assert_eq!(record.name_count, 3, "Index should have 3 names (A + B + C)");
+        assert_eq!(
+            record.name_count, 3,
+            "Index should have 3 names (A + B + C)"
+        );
 
         // Verify all 3 names are accessible via get_name_at
         let name_0 = index.get_name_at(record, 0);
@@ -5055,8 +5077,14 @@ mod tests {
 
         // The base name (A) should be first, then extension names (B, C)
         assert_eq!(name_0_str, "original_a.txt", "Name 0 should be base name");
-        assert_eq!(name_1_str, "hardlink_b.txt", "Name 1 should be extension name B");
-        assert_eq!(name_2_str, "hardlink_c.txt", "Name 2 should be extension name C");
+        assert_eq!(
+            name_1_str, "hardlink_b.txt",
+            "Name 1 should be extension name B"
+        );
+        assert_eq!(
+            name_2_str, "hardlink_c.txt",
+            "Name 2 should be extension name C"
+        );
 
         println!("✅ Cross-fragment merge with multiple extension names test passed!");
     }
@@ -5066,20 +5094,20 @@ mod tests {
     /// This simulates the scenario where:
     /// - Fragment A processes the base record with 1 name (A)
     /// - Fragment B processes an extension record with 2 hard links (B, C)
-    /// - When merged, all 3 names should be accessible via get_name_at
+    /// - When merged, all 3 names should be accessible via `get_name_at`
     #[test]
     fn test_cross_fragment_merge_base_first() {
         // Create Fragment A with base record for FRS 100
         let mut fragment_a = MftIndexFragment::with_capacity(10);
 
         // Add base name to fragment A
-        let name_a_offset = fragment_a.names.len() as u32;
+        let base_offset = fragment_a.names.len() as u32;
         fragment_a.names.push_str("original_a.txt");
-        let name_a_ref = IndexNameRef::new(name_a_offset, 14, true, 0);
+        let base_original = IndexNameRef::new(base_offset, 14, true, 0);
 
         // Create base record with real stdinfo
         let record_a = fragment_a.get_or_create(100);
-        record_a.first_name.name = name_a_ref;
+        record_a.first_name.name = base_original;
         record_a.first_name.parent_frs = 5;
         record_a.first_name.next_entry = NO_ENTRY;
         record_a.name_count = 1;
@@ -5091,25 +5119,25 @@ mod tests {
         let mut fragment_b = MftIndexFragment::with_capacity(10);
 
         // Add extension names to fragment B
-        let name_b_offset = fragment_b.names.len() as u32;
+        let ext_b_offset = fragment_b.names.len() as u32;
         fragment_b.names.push_str("hardlink_b.txt");
-        let name_b_ref = IndexNameRef::new(name_b_offset, 14, true, 0);
+        let ext_hardlink_b = IndexNameRef::new(ext_b_offset, 14, true, 0);
 
-        let name_c_offset = fragment_b.names.len() as u32;
+        let ext_c_offset = fragment_b.names.len() as u32;
         fragment_b.names.push_str("hardlink_c.txt");
-        let name_c_ref = IndexNameRef::new(name_c_offset, 14, true, 0);
+        let ext_hardlink_c = IndexNameRef::new(ext_c_offset, 14, true, 0);
 
         // Add link C to the links array
         let link_c_idx = fragment_b.links.len() as u32;
         fragment_b.links.push(LinkInfo {
             next_entry: NO_ENTRY,
-            name: name_c_ref,
+            name: ext_hardlink_c,
             parent_frs: 10, // Different parent than B
         });
 
         // Create placeholder record with extension names (no stdinfo)
         let record_b = fragment_b.get_or_create(100);
-        record_b.first_name.name = name_b_ref;
+        record_b.first_name.name = ext_hardlink_b;
         record_b.first_name.parent_frs = 5;
         record_b.first_name.next_entry = link_c_idx; // Chain to link C
         record_b.name_count = 2; // B and C
@@ -5125,7 +5153,10 @@ mod tests {
         let record = &index.records[idx];
 
         assert!(record.has_base_data(), "Index should have base data");
-        assert_eq!(record.name_count, 3, "Index should have 3 names (A + B + C)");
+        assert_eq!(
+            record.name_count, 3,
+            "Index should have 3 names (A + B + C)"
+        );
 
         // Verify all 3 names are accessible via get_name_at
         let name_0 = index.get_name_at(record, 0);
@@ -5147,8 +5178,14 @@ mod tests {
 
         // The base name (A) should be first, then extension names (B, C)
         assert_eq!(name_0_str, "original_a.txt", "Name 0 should be base name");
-        assert_eq!(name_1_str, "hardlink_b.txt", "Name 1 should be extension name B");
-        assert_eq!(name_2_str, "hardlink_c.txt", "Name 2 should be extension name C");
+        assert_eq!(
+            name_1_str, "hardlink_b.txt",
+            "Name 1 should be extension name B"
+        );
+        assert_eq!(
+            name_2_str, "hardlink_c.txt",
+            "Name 2 should be extension name C"
+        );
 
         println!("✅ Cross-fragment merge (base first) test passed!");
     }
