@@ -4889,6 +4889,190 @@ mod tests {
 
         println!("✅ Cross-fragment merge test passed!");
     }
+
+    /// Test that cross-fragment merge correctly handles MULTIPLE names in
+    /// extension records.
+    ///
+    /// This simulates the scenario where:
+    /// - Fragment A processes an extension record with 2 hard links (B, C)
+    /// - Fragment B processes the base record with 1 name (A)
+    /// - When merged, all 3 names should be accessible via get_name_at
+    #[test]
+    fn test_cross_fragment_merge_multiple_extension_names() {
+        // Create Fragment A with extension-only placeholder for FRS 100
+        // This placeholder has 2 names (B and C) from the extension record
+        let mut fragment_a = MftIndexFragment::with_capacity(10);
+
+        // Add extension names to fragment A
+        let name_b_offset = fragment_a.names.len() as u32;
+        fragment_a.names.push_str("hardlink_b.txt");
+        let name_b_ref = IndexNameRef::new(name_b_offset, 14, true, 0);
+
+        let name_c_offset = fragment_a.names.len() as u32;
+        fragment_a.names.push_str("hardlink_c.txt");
+        let name_c_ref = IndexNameRef::new(name_c_offset, 14, true, 0);
+
+        // Add link C to the links array
+        let link_c_idx = fragment_a.links.len() as u32;
+        fragment_a.links.push(LinkInfo {
+            next_entry: NO_ENTRY,
+            name: name_c_ref,
+            parent_frs: 10, // Different parent than B
+        });
+
+        // Create placeholder record with extension names (no stdinfo)
+        let record_a = fragment_a.get_or_create(100);
+        record_a.first_name.name = name_b_ref;
+        record_a.first_name.parent_frs = 5;
+        record_a.first_name.next_entry = link_c_idx; // Chain to link C
+        record_a.name_count = 2; // B and C
+        // stdinfo remains default (created = 0) - this is the key!
+
+        // Create Fragment B with base record for FRS 100
+        let mut fragment_b = MftIndexFragment::with_capacity(10);
+
+        // Add base name to fragment B
+        let name_a_offset = fragment_b.names.len() as u32;
+        fragment_b.names.push_str("original_a.txt");
+        let name_a_ref = IndexNameRef::new(name_a_offset, 14, true, 0);
+
+        // Create base record with real stdinfo
+        let record_b = fragment_b.get_or_create(100);
+        record_b.first_name.name = name_a_ref;
+        record_b.first_name.parent_frs = 5;
+        record_b.first_name.next_entry = NO_ENTRY;
+        record_b.name_count = 1;
+        record_b.stdinfo.created = 132_456_789_012_345_678; // Real timestamp
+        record_b.stdinfo.modified = 132_456_789_012_345_678;
+
+        // Create main index and merge fragments
+        let mut index = MftIndex::new('D');
+        index.merge_fragments(vec![fragment_a, fragment_b]);
+
+        // Verify index now has base record with all 3 names merged
+        let idx = index.frs_to_idx[100] as usize;
+        let record = &index.records[idx];
+
+        assert!(record.has_base_data(), "Index should have base data");
+        assert_eq!(record.name_count, 3, "Index should have 3 names (A + B + C)");
+
+        // Verify all 3 names are accessible via get_name_at
+        let name_0 = index.get_name_at(record, 0);
+        let name_1 = index.get_name_at(record, 1);
+        let name_2 = index.get_name_at(record, 2);
+
+        assert!(name_0.is_some(), "Name 0 should be accessible");
+        assert!(name_1.is_some(), "Name 1 should be accessible");
+        assert!(name_2.is_some(), "Name 2 should be accessible");
+
+        // Verify the actual names
+        let name_0_str = index.get_name(&name_0.unwrap().name);
+        let name_1_str = index.get_name(&name_1.unwrap().name);
+        let name_2_str = index.get_name(&name_2.unwrap().name);
+
+        println!("Name 0: {name_0_str}");
+        println!("Name 1: {name_1_str}");
+        println!("Name 2: {name_2_str}");
+
+        // The base name (A) should be first, then extension names (B, C)
+        assert_eq!(name_0_str, "original_a.txt", "Name 0 should be base name");
+        assert_eq!(name_1_str, "hardlink_b.txt", "Name 1 should be extension name B");
+        assert_eq!(name_2_str, "hardlink_c.txt", "Name 2 should be extension name C");
+
+        println!("✅ Cross-fragment merge with multiple extension names test passed!");
+    }
+
+    /// Test that cross-fragment merge works when BASE record comes FIRST.
+    ///
+    /// This simulates the scenario where:
+    /// - Fragment A processes the base record with 1 name (A)
+    /// - Fragment B processes an extension record with 2 hard links (B, C)
+    /// - When merged, all 3 names should be accessible via get_name_at
+    #[test]
+    fn test_cross_fragment_merge_base_first() {
+        // Create Fragment A with base record for FRS 100
+        let mut fragment_a = MftIndexFragment::with_capacity(10);
+
+        // Add base name to fragment A
+        let name_a_offset = fragment_a.names.len() as u32;
+        fragment_a.names.push_str("original_a.txt");
+        let name_a_ref = IndexNameRef::new(name_a_offset, 14, true, 0);
+
+        // Create base record with real stdinfo
+        let record_a = fragment_a.get_or_create(100);
+        record_a.first_name.name = name_a_ref;
+        record_a.first_name.parent_frs = 5;
+        record_a.first_name.next_entry = NO_ENTRY;
+        record_a.name_count = 1;
+        record_a.stdinfo.created = 132_456_789_012_345_678; // Real timestamp
+        record_a.stdinfo.modified = 132_456_789_012_345_678;
+
+        // Create Fragment B with extension-only placeholder for FRS 100
+        // This placeholder has 2 names (B and C) from the extension record
+        let mut fragment_b = MftIndexFragment::with_capacity(10);
+
+        // Add extension names to fragment B
+        let name_b_offset = fragment_b.names.len() as u32;
+        fragment_b.names.push_str("hardlink_b.txt");
+        let name_b_ref = IndexNameRef::new(name_b_offset, 14, true, 0);
+
+        let name_c_offset = fragment_b.names.len() as u32;
+        fragment_b.names.push_str("hardlink_c.txt");
+        let name_c_ref = IndexNameRef::new(name_c_offset, 14, true, 0);
+
+        // Add link C to the links array
+        let link_c_idx = fragment_b.links.len() as u32;
+        fragment_b.links.push(LinkInfo {
+            next_entry: NO_ENTRY,
+            name: name_c_ref,
+            parent_frs: 10, // Different parent than B
+        });
+
+        // Create placeholder record with extension names (no stdinfo)
+        let record_b = fragment_b.get_or_create(100);
+        record_b.first_name.name = name_b_ref;
+        record_b.first_name.parent_frs = 5;
+        record_b.first_name.next_entry = link_c_idx; // Chain to link C
+        record_b.name_count = 2; // B and C
+        // stdinfo remains default (created = 0) - placeholder
+
+        // Create main index and merge fragments
+        // Merge fragment A first (base record), then fragment B (extension-only)
+        let mut index = MftIndex::new('D');
+        index.merge_fragments(vec![fragment_a, fragment_b]);
+
+        // Verify index now has base record with all 3 names merged
+        let idx = index.frs_to_idx[100] as usize;
+        let record = &index.records[idx];
+
+        assert!(record.has_base_data(), "Index should have base data");
+        assert_eq!(record.name_count, 3, "Index should have 3 names (A + B + C)");
+
+        // Verify all 3 names are accessible via get_name_at
+        let name_0 = index.get_name_at(record, 0);
+        let name_1 = index.get_name_at(record, 1);
+        let name_2 = index.get_name_at(record, 2);
+
+        assert!(name_0.is_some(), "Name 0 should be accessible");
+        assert!(name_1.is_some(), "Name 1 should be accessible");
+        assert!(name_2.is_some(), "Name 2 should be accessible");
+
+        // Verify the actual names
+        let name_0_str = index.get_name(&name_0.unwrap().name);
+        let name_1_str = index.get_name(&name_1.unwrap().name);
+        let name_2_str = index.get_name(&name_2.unwrap().name);
+
+        println!("Name 0: {name_0_str}");
+        println!("Name 1: {name_1_str}");
+        println!("Name 2: {name_2_str}");
+
+        // The base name (A) should be first, then extension names (B, C)
+        assert_eq!(name_0_str, "original_a.txt", "Name 0 should be base name");
+        assert_eq!(name_1_str, "hardlink_b.txt", "Name 1 should be extension name B");
+        assert_eq!(name_2_str, "hardlink_c.txt", "Name 2 should be extension name C");
+
+        println!("✅ Cross-fragment merge (base first) test passed!");
+    }
 }
 
 // ============================================================================
