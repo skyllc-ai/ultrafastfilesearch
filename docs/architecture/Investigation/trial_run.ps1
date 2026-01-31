@@ -1,8 +1,14 @@
-# trial_run.ps1 - UFFS Data Collection (MFT + three scan flows)
+# trial_run.ps1 - UFFS Data Collection (MFT + four scan flows)
 # Strategy:
 #   - Never write binary outputs with Set-Content.
 #   - Capture stdout/stderr to .log files only (text).
 #   - Sequential per physical disk; parallel across physical disks (PS7+).
+#
+# Scan flows:
+#   1. Rust (current)    - Default Rust implementation
+#   2. C++               - Original C++ implementation (uffs.com)
+#   3. Rust (new tree)   - Rust with C++ tree algorithm port
+#   4. Rust (cpp full)   - Rust with both C++ parsing AND tree algorithm ports
 [CmdletBinding()]
 param(
     [string[]]$Drives = @(),       # Drives to test (empty = auto-detect NTFS drives)
@@ -245,13 +251,15 @@ try {
         foreach ($Drive in $GroupDrives) {
             $driveLower = $Drive.ToLower()
 
-            $rustOut    = "rust_${driveLower}.txt"
-            $cppOut     = "cpp_${driveLower}.txt"
-            $rustNewOut = "rust_new_${driveLower}.txt"
+            $rustOut        = "rust_${driveLower}.txt"
+            $cppOut         = "cpp_${driveLower}.txt"
+            $rustNewOut     = "rust_new_${driveLower}.txt"
+            $rustCppFullOut = "rust_cpp_full_${driveLower}.txt"
 
-            $rustLog    = "rust_${driveLower}.log"
-            $cppLog     = "cpp_${driveLower}.log"
-            $rustNewLog = "rust_new_${driveLower}.log"
+            $rustLog        = "rust_${driveLower}.log"
+            $cppLog         = "cpp_${driveLower}.log"
+            $rustNewLog     = "rust_new_${driveLower}.log"
+            $rustCppFullLog = "rust_cpp_full_${driveLower}.log"
 
             function Run-LoggedLocal {
                 param([string]$Title, [string]$CmdLine, [string]$LogFileName)
@@ -330,11 +338,19 @@ try {
                 $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (new tree)"; Command=""; LogFile=$rustNewLog; DurationMs=$null; ExitCode=$null }
             }
 
+            if ($HasRust) {
+                $runs += Run-LoggedLocal -Title "Rust (cpp full): drive $Drive" `
+                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp > `"$rustCppFullOut`"") `
+                    -LogFileName $rustCppFullLog
+            } else {
+                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (cpp full)"; Command=""; LogFile=$rustCppFullLog; DurationMs=$null; ExitCode=$null }
+            }
+
             $groupResults += [pscustomobject]@{
                 Disk   = $DiskNumber
                 Drive  = $Drive
-                Files  = [pscustomobject]@{ Rust=$rustOut; Cpp=$cppOut; RustNew=$rustNewOut }
-                Logs   = [pscustomobject]@{ Rust=$rustLog; Cpp=$cppLog; RustNew=$rustNewLog }
+                Files  = [pscustomobject]@{ Rust=$rustOut; Cpp=$cppOut; RustNew=$rustNewOut; RustCppFull=$rustCppFullOut }
+                Logs   = [pscustomobject]@{ Rust=$rustLog; Cpp=$cppLog; RustNew=$rustNewLog; RustCppFull=$rustCppFullLog }
                 Runs   = $runs
             }
         }
@@ -388,6 +404,7 @@ try {
             if ($run.Title -like "Rust (current)*") { $outFile = $r.Files.Rust }
             elseif ($run.Title -like "C++*") { $outFile = $r.Files.Cpp }
             elseif ($run.Title -like "Rust (new tree)*") { $outFile = $r.Files.RustNew }
+            elseif ($run.Title -like "Rust (cpp full)*") { $outFile = $r.Files.RustCppFull }
 
             $outPath = if ($outFile) { Join-Path $WorkDir $outFile } else { $null }
             $sizeStr = "N/A"

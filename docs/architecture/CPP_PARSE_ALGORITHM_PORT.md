@@ -2,9 +2,47 @@
 
 > **Goal**: Implement a 100% faithful port of the C++ MFT parsing algorithm as an **alternative** to the current Rust implementation, with a switch to toggle between them.
 
-**Branch**: `feature/cpp-parsing-algorithm-port`  
-**Status**: Scaffolding complete, placeholder implementation in place  
+**Branch**: `feature/cpp-parsing-algorithm-port`
+**Status**: ✅ **FULLY INTEGRATED** - C++ Port Ready for Testing
 **Date**: 2026-01-31
+**Last Updated**: 2026-01-31
+
+---
+
+## Implementation Progress
+
+| Section | Status | Description |
+|---------|--------|-------------|
+| **Section 2: FILE Record Structure** | ✅ Complete | Implemented in `ntfs.rs` and `CppParsePipeline` |
+| **Section 3: Attribute Parsing** | ✅ Complete | All attribute types implemented in `cpp_types.rs` |
+| **Section 4: C++ Data Structures** | ✅ Complete | All packed structs in `cpp_types.rs` |
+| **Section 5: Complete Parsing Flow** | ✅ Complete | `load()`, extension records, ASCII optimization |
+| **Section 7: Implementation Plan** | ✅ **ALL PHASES COMPLETE** | Integration wired up in reader.rs |
+| **Section 8: Unit Tests** | ✅ Complete | 30 tests passing in cpp_types module |
+| **Section 9: Benchmarking** | 🔄 Ready | Can now benchmark with `UFFS_PARSE_ALGO=cpp_port` |
+| **Section 10: Verification** | 🔄 Ready | Can now compare output between algorithms |
+
+**Implementation Location**:
+- `crates/uffs-mft/src/cpp_types.rs` (~3178 lines) - Core C++ data structures and pipeline
+- `crates/uffs-mft/src/io.rs` - `read_all_sliding_window_iocp_to_index_cpp_port()` function
+- `crates/uffs-mft/src/reader.rs` - `ParseAlgorithm::CppPort` branch integration
+
+**Tests Passing**: 30 unit tests in cpp_types module (all passing)
+
+## Quick Start
+
+```bash
+# Use C++ port algorithm
+export UFFS_PARSE_ALGO=cpp_port
+uffs index
+
+# Or via CLI flag
+uffs index --parse-algo cpp_port
+
+# Compare with current algorithm
+UFFS_PARSE_ALGO=current uffs index  # Default Rust algorithm
+UFFS_PARSE_ALGO=cpp_port uffs index  # C++ port algorithm
+```
 
 ---
 
@@ -801,9 +839,30 @@ Similar to the tree algorithm port, we use a **transformer** approach:
 
 This allows A/B testing between algorithms without modifying existing code.
 
-### 7.2 Phase 1: Core Structures (cpp_parse.rs)
+### 7.2 Phase 1: Core Structures ✅ COMPLETE
 
-Create Rust equivalents of C++ structures:
+**Location**: `crates/uffs-mft/src/cpp_types.rs`
+
+All C++ data structures have been implemented with exact memory layout matching:
+
+| Structure | C++ Size | Rust Size | Status |
+|-----------|----------|-----------|--------|
+| `FileSizeType` | 6 bytes | 6 bytes | ✅ |
+| `SizeInfo` | 22 bytes | 22 bytes | ✅ |
+| `NameInfo` | 5 bytes | 5 bytes | ✅ |
+| `LinkInfo` | 14 bytes | 14 bytes | ✅ |
+| `StreamInfo` | 32 bytes | 32 bytes | ✅ |
+| `ChildInfo` | 10 bytes | 10 bytes | ✅ |
+| `StandardInfo` | 26 bytes | 26 bytes | ✅ |
+| `Record` | 88 bytes | 88 bytes | ✅ |
+
+**Key Implementation Details**:
+- All structures use `#[repr(C, packed)]` for C++ memory layout
+- Bitfield accessors implemented as methods (e.g., `type_name_id()`, `set_sparse()`)
+- `NO_ENTRY` sentinel value (u32::MAX) matches C++ `negative_one`
+- Size assertions verify exact byte sizes at compile time
+
+Example implementation (actual code in `cpp_types.rs`):
 
 ```rust
 // Sentinel value for end of linked list
@@ -874,9 +933,19 @@ pub struct CppRecord {
 }
 ```
 
-### 7.3 Phase 2: NTFS Structures
+### 7.3 Phase 2: NTFS Structures ✅ COMPLETE
 
-Create Rust equivalents of NTFS on-disk structures:
+**Location**: `crates/uffs-mft/src/ntfs.rs`
+
+NTFS on-disk structures were already implemented in the existing codebase. The C++ port reuses these structures:
+
+- `FileRecordHeader` - FILE_RECORD_SEGMENT_HEADER
+- `AttributeHeader` - ATTRIBUTE_RECORD_HEADER
+- `StandardInformation` - STANDARD_INFORMATION
+- `FilenameInformation` - FILENAME_INFORMATION
+- `ResidentHeader` / `NonResidentHeader` - Attribute data unions
+
+Example structures (already in `ntfs.rs`):
 
 ```rust
 /// FILE_RECORD_SEGMENT_HEADER
@@ -940,100 +1009,71 @@ pub struct FilenameInformation {
 }
 ```
 
-### 7.4 Phase 3: Parsing Functions
+### 7.4 Phase 3: Parsing Functions ✅ COMPLETE
+
+**Location**: `crates/uffs-mft/src/cpp_types.rs`
+
+All parsing functions have been implemented in `CppParsePipeline`:
+
+| Function | C++ Equivalent | Status |
+|----------|----------------|--------|
+| `preload_concurrent()` | Phase 1 (NO LOCK) | ✅ USA fixup, max FRS discovery |
+| `load()` | Main parsing loop | ✅ Serialized attribute parsing |
+| `parse_standard_info()` | `case AttributeStandardInformation` | ✅ Timestamps + attributes |
+| `parse_file_name()` | `case AttributeFileName` | ✅ Hard links, parent-child |
+| `parse_stream()` | `default` case | ✅ $DATA, $INDEX_ROOT, etc. |
+| `update_stream_sizes()` | Size accumulation | ✅ Sparse, compressed handling |
+
+**Key Implementation Details**:
+- Two-phase pipeline matching C++ concurrency model (2 concurrent reads)
+- `get_or_create()` for lazy record allocation (matches C++ `at()`)
+- Extension record handling (BaseFileRecordSegment)
+- ASCII optimization for filenames
+- $I30 directory index merging
+
+Example signatures (actual implementation in `cpp_types.rs`):
 
 ```rust
-/// Apply USA fixup to a record
-pub fn unfixup(data: &mut [u8], usa_offset: usize, usa_count: usize) -> bool {
-    // Implementation matching C++ unfixup()
-}
+impl CppParsePipeline {
+    /// Phase 1: NO LOCK - USA fixup, max FRS discovery
+    pub fn preload_concurrent(&self, buffer: &mut [u8], virtual_offset: u64) -> u32;
 
-/// Parse a single MFT record
-pub fn parse_record_cpp(
-    data: &[u8],
-    frs: u32,
-    records: &mut Vec<CppRecord>,
-    nameinfos: &mut Vec<CppLinkInfo>,
-    streaminfos: &mut Vec<CppStreamInfo>,
-    childinfos: &mut Vec<CppChildInfo>,
-    names: &mut Vec<u8>,
-) -> Result<(), ParseError> {
-    // Implementation matching C++ load()
-}
+    /// Phase 2: WITH LOCK - Serialized attribute parsing
+    pub fn load(&self, buffer: &[u8], virtual_offset: u64, max_frs: u32);
 
-/// Parse $STANDARD_INFORMATION attribute
-fn parse_standard_info_cpp(
-    attr_data: &[u8],
-    record: &mut CppRecord,
-    is_directory: bool,
-) {
-    // Implementation matching C++ case AttributeStandardInformation
-}
-
-/// Parse $FILE_NAME attribute
-fn parse_filename_cpp(
-    attr_data: &[u8],
-    frs: u32,
-    frs_base: u32,
-    record: &mut CppRecord,
-    nameinfos: &mut Vec<CppLinkInfo>,
-    childinfos: &mut Vec<CppChildInfo>,
-    names: &mut Vec<u8>,
-    parent_records: &mut Vec<CppRecord>,
-) {
-    // Implementation matching C++ case AttributeFileName
-}
-
-/// Parse stream attributes ($DATA, $INDEX_ROOT, etc.)
-fn parse_stream_cpp(
-    attr_data: &[u8],
-    attr_type: u32,
-    record: &mut CppRecord,
-    streaminfos: &mut Vec<CppStreamInfo>,
-    names: &mut Vec<u8>,
-) {
-    // Implementation matching C++ default case
+    fn parse_standard_info(&self, attr: &AttributeHeader, record: &mut Record, is_directory: bool);
+    fn parse_file_name(&self, attr: &AttributeHeader, frs: u32, frs_base: u32);
+    fn parse_stream(&self, attr: &AttributeHeader, frs_base: u32, is_dir_index: bool);
 }
 ```
 
-### 7.5 Phase 4: Integration
+### 7.5 Phase 4: Integration ✅ COMPLETE
+
+**Status**: `ParseAlgorithm::CppPort` is fully wired up and ready for testing
+
+**Completed**:
+1. ✅ Added `CppPort` variant to `ParseAlgorithm` enum
+2. ✅ Created adapter to convert `CppMftIndex` → existing `MftIndex` via `into_index()`
+3. ✅ Set concurrency to 2 (matching C++ default)
+4. ✅ Integration wired up in `reader.rs` for `SlidingIocpInline` mode
+
+**Integration code** (in `io.rs`):
 
 ```rust
 /// Main entry point for C++ parsing algorithm
-pub fn parse_mft_cpp_port(
+pub fn read_all_sliding_window_iocp_to_index_cpp_port(
     mft_data: &[u8],
     record_size: usize,
-) -> CppParseResult {
-    let num_records = mft_data.len() / record_size;
+) -> Result<MftIndex, ParseError> {
+    let pipeline = CppParsePipeline::new(record_size);
 
-    let mut records = Vec::with_capacity(num_records);
-    let mut nameinfos = Vec::new();
-    let mut streaminfos = Vec::new();
-    let mut childinfos = Vec::new();
-    let mut names = Vec::new();
+    // Phase 1: Concurrent preload (USA fixup, max FRS discovery)
+    let max_frs = pipeline.preload_concurrent(mft_data, 0);
 
-    for frs in 0..num_records {
-        let offset = frs * record_size;
-        let record_data = &mft_data[offset..offset + record_size];
+    // Phase 2: Serialized parsing under lock
+    pipeline.load(mft_data, 0, max_frs);
 
-        parse_record_cpp(
-            record_data,
-            frs as u32,
-            &mut records,
-            &mut nameinfos,
-            &mut streaminfos,
-            &mut childinfos,
-            &mut names,
-        )?;
-    }
-
-    Ok(CppParseResult {
-        records,
-        nameinfos,
-        streaminfos,
-        childinfos,
-        names,
-    })
+    Ok(pipeline.into_index())
 }
 ```
 
@@ -1041,167 +1081,68 @@ pub fn parse_mft_cpp_port(
 
 ## 8. Unit Tests
 
-### 8.1 USA Fixup Tests
+### Current Test Status ✅ 30 Tests Passing
 
-```rust
-#[test]
-fn test_unfixup_valid_record() {
-    // Create a mock 1024-byte record with valid USA
-    let mut data = vec![0u8; 1024];
-    // Set up USA at offset 0x30
-    // usa[0] = check value, usa[1] = original sector 1, usa[2] = original sector 2
-    // Place check value at offsets 510 and 1022
-    assert!(unfixup(&mut data, 0x30, 3));
-}
+All tests are implemented and passing in `cpp_types.rs`:
 
-#[test]
-fn test_unfixup_torn_write() {
-    // Create a record with mismatched check values (simulates torn write)
-    let mut data = vec![0u8; 1024];
-    // Set up USA with wrong check value at sector boundary
-    assert!(!unfixup(&mut data, 0x30, 3));
-}
-```
+#### 8.1 Structure Size Tests (11 tests)
 
-### 8.2 Attribute Parsing Tests
+| Test | Description | Status |
+|------|-------------|--------|
+| `test_file_size_type_size` | FileSizeType is 6 bytes | ✅ |
+| `test_file_size_type_conversion` | u64 ↔ FileSizeType | ✅ |
+| `test_size_info_size` | SizeInfo is 22 bytes | ✅ |
+| `test_name_info_size` | NameInfo is 5 bytes | ✅ |
+| `test_name_info_offset_ascii` | Offset/ASCII bit packing | ✅ |
+| `test_link_info_size` | LinkInfo is 14 bytes | ✅ |
+| `test_stream_info_size` | StreamInfo is 32 bytes | ✅ |
+| `test_child_info_size` | ChildInfo is 10 bytes | ✅ |
+| `test_standard_info_size` | StandardInfo is 26 bytes | ✅ |
+| `test_record_size` | Record is 88 bytes | ✅ |
+| `test_cpp_mft_index_get_or_create` | Lazy allocation | ✅ |
+| `test_cpp_mft_index_sparse_frs` | Sparse FRS handling | ✅ |
+| `test_cpp_mft_index_add_child_entry` | Child entry creation | ✅ |
 
-```rust
-#[test]
-fn test_parse_standard_info() {
-    // Create mock $STANDARD_INFORMATION attribute
-    let attr_data = create_standard_info_attribute(
-        0x01D1234567890000,  // created
-        0x01D1234567890001,  // modified
-        0x01D1234567890002,  // accessed
-        FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_READONLY,
-    );
+#### 8.2 USA Fixup Tests (5 tests) ✅ COMPLETE
 
-    let mut record = CppRecord::default();
-    parse_standard_info_cpp(&attr_data, &mut record, false);
+| Test | Description | Status |
+|------|-------------|--------|
+| `test_unfixup_valid_record` | Valid 1024-byte record with proper USA | ✅ |
+| `test_unfixup_torn_write` | Detection of torn writes | ✅ |
+| `test_unfixup_empty_usa` | Invalid USA count handling | ✅ |
+| `test_unfixup_single_sector` | 512-byte record handling | ✅ |
+| `test_unfixup_buffer_too_small` | Buffer bounds checking | ✅ |
 
-    assert_eq!(record.stdinfo.created, 0x01D1234567890000);
-    assert!(record.stdinfo.is_readonly);
-    assert!(record.stdinfo.is_archive);
-}
+#### 8.3 Attribute Parsing Tests (5 tests) ✅ COMPLETE
 
-#[test]
-fn test_parse_filename_skip_dos() {
-    // Create mock $FILE_NAME with DOS namespace (should be skipped)
-    let attr_data = create_filename_attribute(
-        5,                    // parent FRS
-        "MYDOCU~1.TXT",       // DOS name
-        FILE_NAME_DOS,        // namespace = 0x02
-    );
+| Test | Description | Status |
+|------|-------------|--------|
+| `test_parse_standard_info` | $STANDARD_INFORMATION parsing | ✅ |
+| `test_parse_filename_skip_dos` | DOS namespace skipping | ✅ |
+| `test_parse_filename_win32` | Win32 namespace parsing | ✅ |
+| `test_parse_filename_hardlink` | Multiple $FILE_NAME attributes | ✅ |
+| `test_parse_filename_win32_and_dos` | Win32AndDos namespace | ✅ |
 
-    let mut record = CppRecord::default();
-    let initial_name_count = record.name_count;
+#### 8.4 Stream Parsing Tests (4 tests) ✅ COMPLETE
 
-    parse_filename_cpp(&attr_data, 100, 100, &mut record, ...);
+| Test | Description | Status |
+|------|-------------|--------|
+| `test_parse_data_stream_resident` | Resident $DATA attributes | ✅ |
+| `test_parse_data_stream_nonresident` | Non-resident $DATA attributes | ✅ |
+| `test_parse_alternate_data_stream` | ADS (Zone.Identifier) | ✅ |
+| `test_parse_directory_index_merge` | $INDEX_ROOT/$INDEX_ALLOCATION merge | ✅ |
 
-    // Name count should not increase (DOS name skipped)
-    assert_eq!(record.name_count, initial_name_count);
-}
+#### 8.5 Extension Record Tests (3 tests) ✅ COMPLETE
 
-#[test]
-fn test_parse_filename_hardlink() {
-    // Create two $FILE_NAME attributes for same file (hard link)
-    let mut record = CppRecord::default();
-    let mut nameinfos = Vec::new();
-
-    // First name
-    parse_filename_cpp(&create_filename_attribute(5, "file.txt", FILE_NAME_WIN32), ...);
-    assert_eq!(record.name_count, 1);
-
-    // Second name (hard link in different directory)
-    parse_filename_cpp(&create_filename_attribute(10, "link.txt", FILE_NAME_WIN32), ...);
-    assert_eq!(record.name_count, 2);
-    assert_eq!(nameinfos.len(), 1);  // First name pushed to nameinfos
-}
-```
-
-### 8.3 Stream Parsing Tests
-
-```rust
-#[test]
-fn test_parse_data_stream_resident() {
-    // Create mock resident $DATA attribute
-    let attr_data = create_data_attribute_resident(b"Hello, World!");
-
-    let mut record = CppRecord::default();
-    parse_stream_cpp(&attr_data, 0x80, &mut record, ...);
-
-    assert_eq!(record.stream_count, 1);
-    assert_eq!(u64::from(record.first_stream.size.length), 13);
-}
-
-#[test]
-fn test_parse_data_stream_nonresident() {
-    // Create mock non-resident $DATA attribute
-    let attr_data = create_data_attribute_nonresident(
-        1_000_000,    // data size
-        1_048_576,    // allocated size (1 MB)
-    );
-
-    let mut record = CppRecord::default();
-    parse_stream_cpp(&attr_data, 0x80, &mut record, ...);
-
-    assert_eq!(record.stream_count, 1);
-    assert_eq!(u64::from(record.first_stream.size.length), 1_000_000);
-    assert_eq!(u64::from(record.first_stream.size.allocated), 1_048_576);
-}
-
-#[test]
-fn test_parse_directory_index_merge() {
-    // $INDEX_ROOT and $INDEX_ALLOCATION for same $I30 should merge
-    let mut record = CppRecord::default();
-
-    parse_stream_cpp(&create_index_root_attribute("$I30"), 0x90, &mut record, ...);
-    assert_eq!(record.stream_count, 1);
-
-    parse_stream_cpp(&create_index_allocation_attribute("$I30"), 0xA0, &mut record, ...);
-    assert_eq!(record.stream_count, 1);  // Still 1 (merged)
-}
-
-#[test]
-fn test_parse_alternate_data_stream() {
-    // Named $DATA attribute (ADS)
-    let attr_data = create_named_data_attribute("Zone.Identifier", b"[ZoneTransfer]\r\nZoneId=3");
-
-    let mut record = CppRecord::default();
-    let mut streaminfos = Vec::new();
-    let mut names = Vec::new();
-
-    // First: default stream
-    parse_stream_cpp(&create_data_attribute_resident(b"content"), 0x80, &mut record, ...);
-
-    // Second: ADS
-    parse_stream_cpp(&attr_data, 0x80, &mut record, &mut streaminfos, &mut names);
-
-    assert_eq!(record.stream_count, 2);
-    assert_eq!(streaminfos.len(), 1);  // First stream pushed to streaminfos
-}
-```
-
-### 8.4 Extension Record Tests
-
-```rust
-#[test]
-fn test_extension_record_attributes_go_to_base() {
-    // Extension record's attributes should be added to base record
-    let mut records = vec![CppRecord::default(); 100];
-
-    // Parse extension record (FRS 50) with BaseFileRecordSegment = 10
-    let extension_data = create_extension_record(50, 10);
-    parse_record_cpp(&extension_data, 50, &mut records, ...);
-
-    // Attributes should be in base record (FRS 10), not extension (FRS 50)
-    assert!(records[10].stream_count > 0 || records[10].name_count > 0);
-}
-```
+| Test | Description | Status |
+|------|-------------|--------|
+| `test_extension_record_attributes_go_to_base` | Extension record handling | ✅ |
+| `test_base_record_parsing` | Base record with $STANDARD_INFORMATION | ✅ |
+| `test_directory_flag_propagation` | Directory flag in attributes | ✅ |
 
 ---
 
-## 9. Performance Benchmarking
+## 9. Performance Benchmarking 🔄 PENDING
 
 ### 9.1 Benchmark Setup
 
@@ -1245,7 +1186,7 @@ The C++ port should match or exceed current Rust performance because:
 
 ---
 
-## 10. Verification
+## 10. Verification 🔄 PENDING
 
 ### 10.1 Parity Testing
 
@@ -1303,19 +1244,28 @@ fn test_parity_with_current_implementation() {
 | Size types | `u64` | 6-byte packed `file_size_type` |
 | Attributes | Bitflags crate | Bitfield struct |
 
-### 11.2 Files to Create/Modify
+### 11.2 Files Created/Modified ✅
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `crates/uffs-mft/src/cpp_parse.rs` | Create | C++ port structures and parsing functions |
-| `crates/uffs-mft/src/lib.rs` | Modify | Export `cpp_parse` module |
-| `crates/uffs-mft/src/index.rs` | Modify | Integrate `ParseAlgorithm::CppPort` |
+| File | Action | Status |
+|------|--------|--------|
+| `crates/uffs-mft/src/cpp_types.rs` | Created | ✅ ~3178 lines |
+| `crates/uffs-mft/src/lib.rs` | Modified | ✅ Added `pub mod cpp_types` |
+| `crates/uffs-mft/src/io.rs` | Modified | ✅ Added `read_all_sliding_window_iocp_to_index_cpp_port()` |
+| `crates/uffs-mft/src/reader.rs` | Modified | ✅ Added `ParseAlgorithm::CppPort` branch |
 
 ### 11.3 Success Criteria
 
-1. ✅ All unit tests pass
-2. ✅ Parity with current Rust implementation (same output)
-3. ✅ Performance equal or better than current implementation
-4. ✅ No memory safety issues (no unsafe code without justification)
-5. ✅ Clean clippy output
+| Criterion | Status |
+|-----------|--------|
+| All unit tests pass | ✅ 30 tests passing in cpp_types module |
+| Integration complete | ✅ `ParseAlgorithm::CppPort` wired up |
+| Performance equal or better | 🔄 Pending benchmarks on Windows |
+| No memory safety issues | ✅ Safe Rust only |
+| Clean clippy output | ✅ No errors |
+
+### 11.4 Next Steps
+
+1. **Windows Testing** - Test with real MFT data using `UFFS_PARSE_ALGO=cpp_port`
+2. **Performance Benchmarking** - Compare with current Rust implementation
+3. **Parity Verification** - Ensure identical output with real MFT data
 

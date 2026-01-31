@@ -63,5 +63,9 @@ let parent_idx = if self.frs_to_idx[parent_frs_usize] == NO_ENTRY {
 ## CI Pipeline Results
 
 ### Run 1: FAILED - 6 clippy errors in test code (similar_names, doc_markdown)
-### Run 2: [PENDING]
+### Run 2: ✅ PASSED - All tests, linting, and builds successful
+
+**Version**: v0.2.158
+**Commit**: 352af3b44
+**Branch**: feature/cpp-parsing-algorithm-port
 

@@ -7,7 +7,7 @@
 
 // Keep dependencies wired in for version-locking, even though the library
 // portion does not use them directly (the binaries do).
-use {anyhow as _, uffs_mft as _, uffs_polars as _};
+use {anyhow as _, chrono as _, uffs_mft as _, uffs_polars as _};
 
 /// Windows-only helpers for inspecting the full uffs-mft raw->fixup->parse
 /// pipeline for a single FRS.

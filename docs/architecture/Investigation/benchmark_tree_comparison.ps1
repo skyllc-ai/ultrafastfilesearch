@@ -6,6 +6,7 @@
 #   .\benchmark_tree_comparison.ps1 -Drives C,D,E         # Multiple drives
 #   .\benchmark_tree_comparison.ps1 -Drive C -Iterations 10  # More iterations
 #   .\benchmark_tree_comparison.ps1 -Drive C -FullPipeline   # Include I/O+Parse comparison
+#   .\benchmark_tree_comparison.ps1 -Drive C -CppPort        # Use C++ port algorithms (apple-to-apple)
 
 [CmdletBinding()]
 param(
@@ -14,7 +15,8 @@ param(
     [int]$Iterations = 5,               # Number of iterations for Rust benchmark
     [string]$BinDir = "",               # Custom bin directory (default: $HOME\bin)
     [switch]$NoCache,                   # Skip cache, build fresh index
-    [switch]$FullPipeline               # Also run benchmark-index-lean for full comparison
+    [switch]$FullPipeline,              # Also run benchmark-index-lean for full comparison
+    [switch]$CppPort                    # Use C++ port algorithms for Rust (apple-to-apple comparison)
 )
 
 Set-StrictMode -Version Latest
@@ -56,7 +58,16 @@ Write-Host ""
 Write-Host "Drives: $($Drives -join ', ')" -ForegroundColor Yellow
 Write-Host "Iterations: $Iterations" -ForegroundColor Yellow
 Write-Host "Cache: $(if ($NoCache) { 'disabled' } else { 'enabled' })" -ForegroundColor Yellow
+Write-Host "C++ Port: $(if ($CppPort) { 'enabled (apple-to-apple)' } else { 'disabled (default Rust algos)' })" -ForegroundColor Yellow
 Write-Host ""
+
+# Set environment variables for C++ port algorithms if requested
+if ($CppPort) {
+    $env:UFFS_PARSE_ALGO = "cpp_port"
+    $env:UFFS_TREE_ALGO = "cpp_port"
+    Write-Host "Using C++ port algorithms for Rust benchmarks" -ForegroundColor Cyan
+    Write-Host ""
+}
 
 $results = @()
 

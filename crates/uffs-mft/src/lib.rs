@@ -88,6 +88,7 @@ use {
 // ============================================================================
 
 pub mod cpp_tree;
+pub mod cpp_types;
 pub mod error;
 pub mod flags;
 pub mod index;

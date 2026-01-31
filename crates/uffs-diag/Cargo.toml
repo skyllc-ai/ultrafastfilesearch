@@ -14,6 +14,7 @@
 #   - compare_raw_mft: Compare two raw MFT files record-by-record
 #   - inspect_mft_record_flow: Inspect raw->fixup->parse pipeline for FRS
 #   - analyze_diff: Deep comparison of C++ vs Rust UFFS outputs
+#   - compare_scan_parity: Comprehensive C++ vs Rust scan output parity check
 # ============================================================================
 
 [package]
@@ -64,12 +65,19 @@ path = "src/bin/inspect_mft_record_flow.rs"
 name = "analyze_diff"
 path = "src/bin/analyze_diff.rs"
 
+[[bin]]
+name = "compare_scan_parity"
+path = "src/bin/compare_scan_parity.rs"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Dependencies (minimal set for diagnostic tools)
 # ─────────────────────────────────────────────────────────────────────────────
 [dependencies]
 # Error handling (used by all binaries)
 anyhow.workspace = true
+
+# Date/time formatting for reports
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 # MFT reading (for raw file parsing and Windows extent diagnostics)
 uffs-mft.workspace = true
