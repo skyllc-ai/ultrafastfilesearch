@@ -154,3 +154,62 @@ Missing:    0 paths (only difference is C++ "Drives?" status line)
 
 v0.2.155 deployed and pushed to `feature/cpp-tree-algorithm-port` branch.
 
+## v0.2.157 - Cross-Fragment Merge Fix
+
+### Issue
+
+Windows live trial run with v0.2.156 still showed 40 missing paths, even though the offline MFT test
+showed 100% match. This is because:
+
+1. **Offline MFT loading** uses `MftRecordMerger` (in parse.rs) - a completely different code path
+2. **Windows live reading** uses `parse_record_to_fragment` → `merge_fragments` - the parallel parsing path
+
+The v0.2.155 fix addressed the **same-fragment** case (extension before base in same worker thread).
+But the **cross-fragment** case (extension in worker A, base in worker B) was still broken.
+
+### Root Cause
+
+In `merge_fragment_records_with_deferred_merge()` (index.rs), the condition to detect placeholders was:
+
+```rust
+if !existing.has_name() && record.has_name()
+```
+
+But when `parse_extension_to_fragment` processes an extension record for a non-existent base:
+1. It creates a placeholder via `get_or_create(base_frs)`
+2. It copies the first extension name to `first_name.name` (now `is_valid()` = true)
+3. `stdinfo` remains Default (all zeros) - no base record data
+
+So `has_name()` returns TRUE for the placeholder, and the condition fails. The merge logic
+incorrectly keeps the placeholder (with extension name but no stdinfo) and defers the base record.
+
+### Fix
+
+Added `has_base_data()` method to `FileRecord` that checks if `stdinfo.created != 0`:
+- Real base records always have a creation timestamp from `$STANDARD_INFORMATION`
+- Placeholders created by extension processing have `stdinfo = Default` (all zeros)
+
+Updated `merge_fragment_records_with_deferred_merge()` to use:
+
+```rust
+let existing_is_placeholder = !existing.has_base_data();
+let record_has_base = record.has_base_data();
+
+if existing_is_placeholder && record_has_base {
+    // Swap: keep base record, defer merge of placeholder's extension names
+}
+```
+
+### Files Modified
+
+- `crates/uffs-mft/src/index.rs`:
+  - Added `has_base_data()` method to `FileRecord`
+  - Fixed `merge_fragment_records_with_deferred_merge()` to detect extension-only placeholders
+  - Added `test_cross_fragment_merge_extension_placeholder` unit test
+
+### Testing
+
+- All 84 tests pass (83 existing + 1 new cross-fragment merge test)
+- Offline MFT test still shows 100% match
+- Awaiting Windows live trial run to verify the 40 missing paths are now found
+

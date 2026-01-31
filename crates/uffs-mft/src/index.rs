@@ -1128,6 +1128,24 @@ impl FileRecord {
         self.first_name.name.is_valid()
     }
 
+    /// Returns true if this record has base record data (not just extension
+    /// data).
+    ///
+    /// A placeholder created by extension record processing will have a name
+    /// (from the extension) but no stdinfo (created timestamp = 0). A real base
+    /// record will have non-zero timestamps from `$STANDARD_INFORMATION`.
+    ///
+    /// This is used during fragment merging to determine which record to keep
+    /// when both have names.
+    #[inline]
+    #[must_use]
+    pub const fn has_base_data(&self) -> bool {
+        // Real base records always have a creation timestamp from $STANDARD_INFORMATION
+        // Placeholders created by extension processing have stdinfo = Default (all
+        // zeros)
+        self.stdinfo.created != 0
+    }
+
     // ===== P3 Forensic Flag Accessors =====
     // forensic_flags bit layout: bit 0 = is_deleted, bit 1 = is_corrupt, bit 2 =
     // is_extension
@@ -4644,6 +4662,233 @@ mod tests {
             "Total post-processing too slow: {total_time:?}"
         );
     }
+
+    /// Test that extension records processed BEFORE base records in the same
+    /// fragment correctly preserve extension names.
+    ///
+    /// This simulates the scenario where parallel parsing processes an
+    /// extension record before its base record in the same worker thread.
+    #[test]
+    fn test_extension_before_base_in_same_fragment() {
+        // Create a fragment
+        let mut fragment = MftIndexFragment::with_capacity(10);
+
+        // Simulate extension record processing FIRST
+        // Extension has 2 names: name2, name3
+        let name2_offset = fragment.names.len() as u32;
+        fragment.names.push_str("name2.txt");
+        let name2_ref = IndexNameRef::new(name2_offset, 9, true, 0);
+
+        let name3_offset = fragment.names.len() as u32;
+        fragment.names.push_str("name3.txt");
+        let name3_ref = IndexNameRef::new(name3_offset, 9, true, 0);
+
+        // Add links for extension names
+        let link0_idx = fragment.links.len() as u32;
+        fragment.links.push(LinkInfo {
+            next_entry: link0_idx + 1,
+            name: name2_ref,
+            parent_frs: 5, // parent directory
+        });
+        let link1_idx = fragment.links.len() as u32;
+        fragment.links.push(LinkInfo {
+            next_entry: NO_ENTRY,
+            name: name3_ref,
+            parent_frs: 6, // different parent (hard link)
+        });
+
+        // Create placeholder record for base_frs=100
+        let record = fragment.get_or_create(100);
+        // Extension copies first name to first_name (simulating
+        // parse_extension_to_fragment)
+        record.first_name.name = name2_ref;
+        record.first_name.parent_frs = 5;
+        record.first_name.next_entry = link1_idx; // points to name3
+        record.name_count = 2; // 2 extension names
+
+        // Verify extension state before base processing
+        assert!(
+            fragment.get_or_create(100).first_name.name.is_valid(),
+            "Extension should have set first_name"
+        );
+        assert_eq!(
+            fragment.get_or_create(100).name_count,
+            2,
+            "Extension should have 2 names"
+        );
+
+        // Now simulate base record processing AFTER extension
+        // Base has 1 name: name1
+        let name1_offset = fragment.names.len() as u32;
+        fragment.names.push_str("name1.txt");
+        let name1_ref = IndexNameRef::new(name1_offset, 9, true, 0);
+        let base_parent_frs = 5_u64;
+
+        // This is what parse_record_to_fragment does:
+        // 1. Save existing extension data
+        let record = fragment.get_or_create(100);
+        let existing_first_name = record.first_name;
+        let existing_name_valid = existing_first_name.name.is_valid();
+        let existing_name_count = if existing_name_valid {
+            record.name_count
+        } else {
+            0
+        };
+
+        // 2. Overwrite first_name with base name
+        record.first_name = LinkInfo {
+            next_entry: NO_ENTRY,
+            name: name1_ref,
+            parent_frs: base_parent_frs,
+        };
+
+        // 3. Chain extension names after base name
+        let first_name_next_entry = if existing_name_valid {
+            // Push existing_first_name to links
+            let ext_link_idx = fragment.links.len() as u32;
+            fragment.links.push(existing_first_name);
+            ext_link_idx
+        } else {
+            NO_ENTRY
+        };
+
+        // 4. Set first_name.next_entry
+        let record = fragment.get_or_create(100);
+        record.first_name.next_entry = first_name_next_entry;
+
+        // 5. Update name_count
+        record.name_count = 1 + existing_name_count;
+
+        // Verify final state
+        let record = fragment.get_or_create(100);
+        assert_eq!(record.name_count, 3, "Should have 3 names total");
+        assert!(
+            record.first_name.name.is_valid(),
+            "first_name should be valid"
+        );
+
+        // Verify the chain: first_name(name1) -> link[2](name2) -> link[1](name3)
+        let first_next = record.first_name.next_entry;
+        assert_ne!(first_next, NO_ENTRY, "first_name should chain to extension");
+
+        let link2 = &fragment.links[first_next as usize];
+        assert!(link2.name.is_valid(), "link[2] should have valid name");
+        assert_eq!(
+            link2.next_entry, link1_idx,
+            "link[2] should chain to link[1]"
+        );
+
+        let link1 = &fragment.links[link1_idx as usize];
+        assert!(link1.name.is_valid(), "link[1] should have valid name");
+        assert_eq!(link1.next_entry, NO_ENTRY, "link[1] should be end of chain");
+
+        println!("✅ Extension-before-base test passed!");
+    }
+
+    /// Test that cross-fragment merge correctly handles extension-only
+    /// placeholders.
+    ///
+    /// This simulates the scenario where:
+    /// - Fragment A processes an extension record (creates placeholder with
+    ///   extension names)
+    /// - Fragment B processes the base record (has real stdinfo data)
+    /// - When merged, the base record should be kept and extension names merged
+    ///   in
+    #[test]
+    fn test_cross_fragment_merge_extension_placeholder() {
+        // Create Fragment A with extension-only placeholder for FRS 100
+        let mut fragment_a = MftIndexFragment::with_capacity(10);
+
+        // Add extension name to fragment A
+        let ext_name_offset = fragment_a.names.len() as u32;
+        fragment_a.names.push_str("hardlink.txt");
+        let ext_name_ref = IndexNameRef::new(ext_name_offset, 12, true, 0);
+
+        // Create placeholder record with extension name (no stdinfo)
+        let record_a = fragment_a.get_or_create(100);
+        record_a.first_name.name = ext_name_ref;
+        record_a.first_name.parent_frs = 5;
+        record_a.first_name.next_entry = NO_ENTRY;
+        record_a.name_count = 1;
+        // stdinfo remains default (created = 0) - this is the key!
+
+        // Verify fragment A has placeholder with extension name but no base data
+        assert!(
+            fragment_a.get_or_create(100).first_name.name.is_valid(),
+            "Fragment A should have extension name"
+        );
+        assert_eq!(
+            fragment_a.get_or_create(100).stdinfo.created,
+            0,
+            "Fragment A should have no stdinfo (placeholder)"
+        );
+        assert!(
+            !fragment_a.get_or_create(100).has_base_data(),
+            "Fragment A should NOT have base data"
+        );
+
+        // Create Fragment B with base record for FRS 100
+        let mut fragment_b = MftIndexFragment::with_capacity(10);
+
+        // Add base name to fragment B
+        let base_name_offset = fragment_b.names.len() as u32;
+        fragment_b.names.push_str("original.txt");
+        let base_name_ref = IndexNameRef::new(base_name_offset, 12, true, 0);
+
+        // Create base record with real stdinfo
+        let record_b = fragment_b.get_or_create(100);
+        record_b.first_name.name = base_name_ref;
+        record_b.first_name.parent_frs = 5;
+        record_b.first_name.next_entry = NO_ENTRY;
+        record_b.name_count = 1;
+        record_b.stdinfo.created = 132_456_789_012_345_678; // Real timestamp
+        record_b.stdinfo.modified = 132_456_789_012_345_678;
+
+        // Verify fragment B has base record with real data
+        assert!(
+            fragment_b.get_or_create(100).first_name.name.is_valid(),
+            "Fragment B should have base name"
+        );
+        assert_ne!(
+            fragment_b.get_or_create(100).stdinfo.created,
+            0,
+            "Fragment B should have real stdinfo"
+        );
+        assert!(
+            fragment_b.get_or_create(100).has_base_data(),
+            "Fragment B should have base data"
+        );
+
+        // Create main index and merge fragments
+        // Merge fragment A first (extension-only placeholder), then fragment B (base
+        // record) This simulates the cross-fragment scenario where extension is
+        // processed first
+        let mut index = MftIndex::new('D');
+        index.merge_fragments(vec![fragment_a, fragment_b]);
+
+        // Verify index now has base record with extension names merged
+        let idx = index.frs_to_idx[100] as usize;
+        let record = &index.records[idx];
+
+        assert!(
+            record.has_base_data(),
+            "Index should have base data after second merge"
+        );
+        assert_ne!(
+            record.stdinfo.created, 0,
+            "Index should have real stdinfo after merge"
+        );
+        assert!(
+            record.first_name.name.is_valid(),
+            "Index should have valid first_name"
+        );
+        assert_eq!(
+            record.name_count, 2,
+            "Index should have 2 names (base + extension)"
+        );
+
+        println!("✅ Cross-fragment merge test passed!");
+    }
 }
 
 // ============================================================================
@@ -5555,13 +5800,28 @@ impl MftIndex {
                 // Record exists - need to merge
                 let existing = &self.records[existing_idx as usize];
 
-                // Determine which record to keep and which to merge from
-                if !existing.has_name() && record.has_name() {
-                    // Existing is placeholder, new has name - swap them
+                // Determine which record to keep and which to merge from.
+                // Key insight: A placeholder created by extension record processing
+                // will have a name (from extension) but no base data (stdinfo = 0).
+                // We must keep the record with base data and merge names from the other.
+                let existing_is_placeholder = !existing.has_base_data();
+                let record_has_base = record.has_base_data();
+
+                if existing_is_placeholder && record_has_base {
+                    // Existing is placeholder (extension-only), new has base data - swap them
                     // But we still need to merge any names from the placeholder
                     let placeholder =
                         core::mem::replace(&mut self.records[existing_idx as usize], record);
-                    // If placeholder had additional names, defer merge
+                    // If placeholder had names (from extension), defer merge
+                    if placeholder.first_name.name.is_valid()
+                        || placeholder.first_name.next_entry != NO_ENTRY
+                    {
+                        deferred_merges.push((existing_idx, placeholder));
+                    }
+                } else if !existing.has_name() && record.has_name() {
+                    // Fallback: existing has no name at all, new has name - swap them
+                    let placeholder =
+                        core::mem::replace(&mut self.records[existing_idx as usize], record);
                     if placeholder.first_name.name.is_valid()
                         || placeholder.first_name.next_entry != NO_ENTRY
                     {
