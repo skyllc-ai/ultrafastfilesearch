@@ -330,7 +330,8 @@ fn should_use_index_path(
     clippy::fn_params_excessive_bools,
     clippy::print_stderr,
     clippy::too_many_lines,
-    clippy::single_call_fn
+    clippy::single_call_fn,
+    clippy::semicolon_outside_block
 )]
 pub async fn search(
     pattern: &str,
@@ -361,6 +362,7 @@ pub async fn search(
     neg: &str,
     query_mode: &str,
     tree_algo: &str,
+    parse_algo: &str,
 ) -> Result<()> {
     // Start timing for "Finished in X s" output (C++ compatibility)
     let start_time = std::time::Instant::now();
@@ -380,6 +382,24 @@ pub async fn search(
         }
     }
     info!(?tree_algorithm, "Tree metrics algorithm");
+
+    // Parse parsing algorithm from CLI and set env var so MFT parsing uses it
+    // (ParseAlgorithm::default() reads from UFFS_PARSE_ALGO)
+    let parse_algorithm: uffs_mft::ParseAlgorithm = parse_algo.parse().unwrap_or_default();
+    if parse_algorithm == uffs_mft::ParseAlgorithm::CppPort {
+        // Set env var before any MFT operations so parsing uses cpp_port.
+        // SAFETY: This runs once at CLI startup in the main thread, before spawning
+        // any worker threads that might read this env var. The env var is only read
+        // by ParseAlgorithm::from_env() during MFT parsing, which happens after
+        // this point in a controlled manner.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("UFFS_PARSE_ALGO", "cpp_port");
+        }
+        // Log that we're using the C++ parsing algorithm (placeholder for now)
+        info!("🔧 Using C++ parsing algorithm (cpp_port) - implementation pending");
+    }
+    info!(?parse_algorithm, "MFT parsing algorithm");
 
     // Parse the pattern to extract drive prefix and pattern type
     let parsed = ParsedPattern::parse(pattern)

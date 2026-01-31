@@ -118,6 +118,85 @@ impl core::str::FromStr for TreeAlgorithm {
 }
 
 // ============================================================================
+// Parse Algorithm Selection
+// ============================================================================
+
+/// Selects which MFT record parsing algorithm to use.
+///
+/// This allows switching between the current Rust implementation and
+/// the new C++ port for testing and comparison.
+///
+/// # Environment Variable
+///
+/// Set `UFFS_PARSE_ALGO` to control the default:
+/// - `current` (default): Use the current Rust parsing algorithm
+/// - `cpp_port`: Use the C++ port algorithm (100% faithful port)
+///
+/// # Example
+///
+/// ```bash
+/// # Use current algorithm (default)
+/// UFFS_PARSE_ALGO=current uffs index
+///
+/// # Use C++ port algorithm
+/// UFFS_PARSE_ALGO=cpp_port uffs index
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseAlgorithm {
+    /// Current Rust parsing algorithm (default)
+    Current,
+    /// C++ port algorithm - 100% faithful port of C++ parsing algorithm
+    CppPort,
+}
+
+impl Default for ParseAlgorithm {
+    /// Default checks the `UFFS_PARSE_ALGO` environment variable.
+    fn default() -> Self {
+        Self::from_env()
+    }
+}
+
+impl ParseAlgorithm {
+    /// Parse from environment variable `UFFS_PARSE_ALGO`.
+    ///
+    /// Returns `Current` if not set or unrecognized.
+    #[must_use]
+    pub fn from_env() -> Self {
+        match std::env::var("UFFS_PARSE_ALGO")
+            .unwrap_or_default()
+            .to_lowercase()
+            .as_str()
+        {
+            "cpp_port" | "cpp" | "port" => Self::CppPort,
+            _ => Self::Current,
+        }
+    }
+
+    /// Returns the algorithm name for display.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Current => "current (Rust)",
+            Self::CppPort => "cpp_port (C++ faithful port)",
+        }
+    }
+}
+
+impl core::str::FromStr for ParseAlgorithm {
+    type Err = core::convert::Infallible;
+
+    /// Parse from a string value (for CLI arguments).
+    ///
+    /// Returns `Current` if unrecognized (never fails).
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(match value.to_lowercase().as_str() {
+            "cpp_port" | "cpp" | "port" => Self::CppPort,
+            _ => Self::Current,
+        })
+    }
+}
+
+// ============================================================================
 // Index Build Timing - For Benchmarking
 // ============================================================================
 

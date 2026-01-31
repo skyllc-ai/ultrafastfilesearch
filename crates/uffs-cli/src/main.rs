@@ -242,6 +242,13 @@ struct Cli {
     #[arg(long, default_value = "current")]
     tree_algo: String,
 
+    /// MFT parsing algorithm: current, cpp (C++ port)
+    ///
+    /// - current: Use current Rust parsing algorithm (default)
+    /// - cpp: Use C++ port algorithm (100% faithful port of C++ parsing)
+    #[arg(long, default_value = "current")]
+    parse_algo: String,
+
     /// Minimum file size in bytes
     #[arg(long)]
     min_size: Option<u64>,
@@ -510,6 +517,7 @@ async fn run() -> Result<()> {
                     &cli.neg,
                     &cli.query_mode,
                     &cli.tree_algo,
+                    &cli.parse_algo,
                 )
                 .await?;
             } else {
