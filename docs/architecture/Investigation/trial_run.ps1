@@ -316,7 +316,7 @@ try {
 
             if ($HasRust) {
                 $runs += Run-LoggedLocal -Title "Rust (current): drive $Drive" `
-                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive > `"$rustOut`"") `
+                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --no-bitmap > `"$rustOut`"") `
                     -LogFileName $rustLog
             } else {
                 $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (current)"; Command=""; LogFile=$rustLog; DurationMs=$null; ExitCode=$null }
@@ -332,7 +332,7 @@ try {
 
             if ($HasRust) {
                 $runs += Run-LoggedLocal -Title "Rust (new tree): drive $Drive" `
-                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --tree-algo=cpp > `"$rustNewOut`"") `
+                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --tree-algo=cpp --no-bitmap > `"$rustNewOut`"") `
                     -LogFileName $rustNewLog
             } else {
                 $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (new tree)"; Command=""; LogFile=$rustNewLog; DurationMs=$null; ExitCode=$null }
@@ -340,7 +340,7 @@ try {
 
             if ($HasRust) {
                 $runs += Run-LoggedLocal -Title "Rust (cpp full): drive $Drive" `
-                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp > `"$rustCppFullOut`"") `
+                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --no-bitmap > `"$rustCppFullOut`"") `
                     -LogFileName $rustCppFullLog
             } else {
                 $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (cpp full)"; Command=""; LogFile=$rustCppFullLog; DurationMs=$null; ExitCode=$null }
