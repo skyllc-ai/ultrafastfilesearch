@@ -46,6 +46,17 @@ Running CI pipeline after implementing the C++ I/O pipeline port (`CppIoPipeline
 
 ---
 
+## CI Pipeline Run #2
+**Started:** 2026-02-01 ~10:15 UTC
+**Command:** `rust-script scripts/ci-pipeline.rs go -v`
+**Result:** ✅ SUCCESS
+
+- All builds passed (uffs, uffs_mft, uffs_tui, uffs_gui)
+- Binaries deployed to `dist/v0.2.163/`
+- Changes pushed to `feature/cpp-io-pipeline-port` branch
+
+---
+
 ## Summary
-All 4 issues fixed. Re-running CI pipeline to verify.
+All 4 issues fixed and verified. CI pipeline passed successfully.
 
