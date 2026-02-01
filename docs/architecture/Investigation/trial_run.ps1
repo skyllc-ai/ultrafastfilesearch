@@ -1,4 +1,4 @@
-# trial_run.ps1 - UFFS Data Collection (MFT + four scan flows)
+# trial_run.ps1 - UFFS Data Collection (MFT + five scan flows)
 # Strategy:
 #   - Never write binary outputs with Set-Content.
 #   - Capture stdout/stderr to .log files only (text).
@@ -9,6 +9,7 @@
 #   2. C++               - Original C++ implementation (uffs.com)
 #   3. Rust (new tree)   - Rust with C++ tree algorithm port
 #   4. Rust (cpp full)   - Rust with both C++ parsing AND tree algorithm ports
+#   5. Rust (cpp io)     - Rust with C++ parsing, tree, AND I/O pipeline ports
 [CmdletBinding()]
 param(
     [string[]]$Drives = @(),       # Drives to test (empty = auto-detect NTFS drives)
@@ -255,11 +256,13 @@ try {
             $cppOut         = "cpp_${driveLower}.txt"
             $rustNewOut     = "rust_new_${driveLower}.txt"
             $rustCppFullOut = "rust_cpp_full_${driveLower}.txt"
+            $rustCppIoOut   = "rust_cpp_io_${driveLower}.txt"
 
             $rustLog        = "rust_${driveLower}.log"
             $cppLog         = "cpp_${driveLower}.log"
             $rustNewLog     = "rust_new_${driveLower}.log"
             $rustCppFullLog = "rust_cpp_full_${driveLower}.log"
+            $rustCppIoLog   = "rust_cpp_io_${driveLower}.log"
 
             function Run-LoggedLocal {
                 param([string]$Title, [string]$CmdLine, [string]$LogFileName)
@@ -346,11 +349,19 @@ try {
                 $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (cpp full)"; Command=""; LogFile=$rustCppFullLog; DurationMs=$null; ExitCode=$null }
             }
 
+            if ($HasRust) {
+                $runs += Run-LoggedLocal -Title "Rust (cpp io): drive $Drive" `
+                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --io-algo=cpp --no-bitmap > `"$rustCppIoOut`"") `
+                    -LogFileName $rustCppIoLog
+            } else {
+                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (cpp io)"; Command=""; LogFile=$rustCppIoLog; DurationMs=$null; ExitCode=$null }
+            }
+
             $groupResults += [pscustomobject]@{
                 Disk   = $DiskNumber
                 Drive  = $Drive
-                Files  = [pscustomobject]@{ Rust=$rustOut; Cpp=$cppOut; RustNew=$rustNewOut; RustCppFull=$rustCppFullOut }
-                Logs   = [pscustomobject]@{ Rust=$rustLog; Cpp=$cppLog; RustNew=$rustNewLog; RustCppFull=$rustCppFullLog }
+                Files  = [pscustomobject]@{ Rust=$rustOut; Cpp=$cppOut; RustNew=$rustNewOut; RustCppFull=$rustCppFullOut; RustCppIo=$rustCppIoOut }
+                Logs   = [pscustomobject]@{ Rust=$rustLog; Cpp=$cppLog; RustNew=$rustNewLog; RustCppFull=$rustCppFullLog; RustCppIo=$rustCppIoLog }
                 Runs   = $runs
             }
         }
@@ -405,6 +416,7 @@ try {
             elseif ($run.Title -like "C++*") { $outFile = $r.Files.Cpp }
             elseif ($run.Title -like "Rust (new tree)*") { $outFile = $r.Files.RustNew }
             elseif ($run.Title -like "Rust (cpp full)*") { $outFile = $r.Files.RustCppFull }
+            elseif ($run.Title -like "Rust (cpp io)*") { $outFile = $r.Files.RustCppIo }
 
             $outPath = if ($outFile) { Join-Path $WorkDir $outFile } else { $null }
             $sizeStr = "N/A"

@@ -3,23 +3,26 @@
 > **Goal**: Port the C++ I/O pipeline synchronization model to Rust, fixing the ~40 missing files issue caused by incorrect bitmap-based skip range calculation.
 
 **Branch**: `feature/cpp-io-pipeline-port`
-**Status**: 🚧 IN PROGRESS (Scaffolding Complete)
+**Status**: ✅ IMPLEMENTED
 **Date**: 2026-02-01
 **Last Updated**: 2026-02-01
 
 ## Usage
 
-To enable the C++ I/O pipeline (once implemented), use:
+To enable the C++ I/O pipeline, use:
 
 ```bash
 # Via environment variable
-UFFS_IO_ALGO=cpp_port uffs index
+UFFS_IO_ALGO=cpp_port uffs "*" --drive C
 
-# Via CLI flag
-uffs --io-algo cpp *.txt
+# Via CLI flag (full C++ port configuration)
+uffs "*" --drive C --parse-algo=cpp_port --tree-algo=cpp --io-algo=cpp
+
+# For clean output (no logging to stdout), redirect to file:
+uffs "*" --drive C --parse-algo=cpp_port --tree-algo=cpp --io-algo=cpp > output.txt
 ```
 
-Currently, selecting `cpp_port` will print a message indicating the implementation is coming soon.
+The output is logging-free when redirected to a file - all tracing/logging goes to stderr, so stdout contains only the CSV data.
 
 ---
 
@@ -502,26 +505,24 @@ CI pipeline (`rust-script scripts/ci-pipeline.rs go -v`) and document any issues
 
 ## Implementation Phases Checklist
 
-### Phase 1: CppDataChunk ⬜ NOT STARTED
-- [ ] Create `CppDataChunk` struct with atomic skip ranges
-- [ ] Implement `Clone` via atomic loads
-- [ ] Add helper methods for effective ranges
+### Phase 1: CppDataChunk ✅ COMPLETE
+- [x] Create `CppDataChunk` struct with atomic skip ranges
+- [x] Implement `Clone` via atomic loads
+- [x] Add helper methods for effective ranges
 
-### Phase 2: CppBitmapReader ⬜ NOT STARTED
-- [ ] Create `CppBitmapReader` struct
-- [ ] Implement async IOCP bitmap reading
-- [ ] Track chunks_remaining with atomic counter
-- [ ] Accumulate valid_records count
+### Phase 2: Bitmap Reading ✅ COMPLETE
+- [x] Reuse existing `Volume::get_mft_bitmap()` for synchronous bitmap reading
+- [x] Bitmap is fully read before any data chunks are processed
 
-### Phase 3: Synchronization Point ⬜ NOT STARTED
-- [ ] Implement `on_all_chunks_complete()` callback
-- [ ] Recalculate skip ranges for all data chunks
-- [ ] Use atomic stores with Release ordering
+### Phase 3: Synchronization Point ✅ COMPLETE
+- [x] Implement `CppIoPipeline::compute_skip_ranges()` - the sync barrier
+- [x] Recalculate skip ranges for all data chunks after bitmap is complete
+- [x] Use atomic stores with Release ordering
 
-### Phase 4: Integration ⬜ NOT STARTED
-- [ ] Create `CppIoPipeline` orchestrator
-- [ ] Wire up to `read_all_sliding_window_iocp_to_index_cpp_port()`
-- [ ] Add `--io-pipeline cpp_port` flag
+### Phase 4: Integration ✅ COMPLETE
+- [x] Create `CppIoPipeline` orchestrator in `cpp_io_pipeline.rs`
+- [x] Wire up to `read_all_sliding_window_iocp_to_index_cpp_port()` in `io.rs`
+- [x] Add `--io-algo=cpp` CLI flag and `UFFS_IO_ALGO=cpp_port` env var
 
 ---
 
