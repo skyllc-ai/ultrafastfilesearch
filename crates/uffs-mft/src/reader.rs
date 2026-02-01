@@ -3846,11 +3846,15 @@ impl MftReader {
             MftRecordMerger, ParseOptions, ParseResult, apply_fixup, parse_record_forensic,
             parse_record_full,
         };
+        use tracing::info;
 
         let raw = crate::raw::load_raw_mft(path, options)?;
 
         // Parse all records into ParsedRecord format
         let capacity = usize::try_from(raw.header.record_count).unwrap_or(0);
+
+        // Diagnostic counters for offline path
+        let total_records_in_file = capacity;
 
         // Use forensic parsing if enabled
         let parse_options = if options.forensic {
@@ -3863,14 +3867,41 @@ impl MftReader {
             // Forensic mode: use forensic parser that handles deleted/corrupt/extension
             // Note: In forensic mode, extension records are returned as Base records
             let mut parsed_records = Vec::with_capacity(capacity);
+            let mut records_examined: u64 = 0;
+            let mut fixup_success: u64 = 0;
+            let mut fixup_failed: u64 = 0;
+            let mut base_records: u64 = 0;
+
             for (frs, record_data) in raw.iter_records() {
+                records_examined += 1;
                 let mut record_buf = record_data.to_vec();
                 let fixup_ok = apply_fixup(&mut record_buf);
+                if fixup_ok {
+                    fixup_success += 1;
+                } else {
+                    fixup_failed += 1;
+                }
                 let result = parse_record_forensic(&record_buf, frs, &parse_options, !fixup_ok);
                 if let ParseResult::Base(parsed) = result {
+                    base_records += 1;
                     parsed_records.push(parsed);
                 }
             }
+
+            // Log diagnostic summary for forensic mode
+            info!(
+                "📊 OFFLINE PATH PARSE DIAGNOSTICS (Forensic Mode)"
+            );
+            info!(
+                total_records_in_file,
+                records_examined,
+                fixup_success,
+                fixup_failed,
+                base_records_parsed = base_records,
+                final_record_count = parsed_records.len(),
+                "Offline parse pipeline summary"
+            );
+
             Ok(MftIndex::from_parsed_records(
                 raw.header.volume_letter,
                 parsed_records,
@@ -3881,17 +3912,52 @@ impl MftReader {
             // attributes are stored in extension records.
             let mut merger = MftRecordMerger::with_capacity(capacity);
 
+            // Diagnostic counters
+            let mut records_examined: u64 = 0;
+            let mut fixup_success: u64 = 0;
+            let mut fixup_failed: u64 = 0;
+            let mut base_records: u64 = 0;
+            let mut extension_records: u64 = 0;
+            let mut skip_records: u64 = 0;
+
             for (frs, record_data) in raw.iter_records() {
+                records_examined += 1;
                 let mut record_buf = record_data.to_vec();
                 if !apply_fixup(&mut record_buf) {
+                    fixup_failed += 1;
                     continue;
                 }
+                fixup_success += 1;
                 let result = parse_record_full(&record_buf, frs);
+
+                // Count by result type
+                match &result {
+                    ParseResult::Base(_) => base_records += 1,
+                    ParseResult::Extension(_) => extension_records += 1,
+                    ParseResult::Skip => skip_records += 1,
+                }
+
                 merger.add_result(result);
             }
 
             // Merge extensions into base records
             let parsed_records = merger.merge();
+
+            // Log diagnostic summary for normal mode
+            info!(
+                "📊 OFFLINE PATH PARSE DIAGNOSTICS (Normal Mode)"
+            );
+            info!(
+                total_records_in_file,
+                records_examined,
+                fixup_success,
+                fixup_failed,
+                base_records,
+                extension_records,
+                skip_records,
+                final_merged_count = parsed_records.len(),
+                "Offline parse pipeline summary"
+            );
 
             // Build MftIndex from parsed records (includes tree metrics computation)
             // Use volume letter from header (v2+) or 'X' as fallback for v1 files

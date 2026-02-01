@@ -354,6 +354,84 @@ impl CppIoPipeline {
             "Starting C++ I/O pipeline data reads"
         );
 
+        // ========================================================================
+        // DIAGNOSTIC LOGGING: Chunk details for live vs offline comparison
+        // ========================================================================
+        // This logging helps identify differences between live and offline paths.
+        // Enable with RUST_LOG=uffs_mft::cpp_io_pipeline=debug
+        let record_size = pipeline.mft_record_size as u64;
+        debug!(
+            "📊 LIVE PATH CHUNK DIAGNOSTICS (CppIoPipeline)"
+        );
+        debug!(
+            total_data_chunks = self.data_chunks.len(),
+            total_io_ops = total_io_ops,
+            bytes_per_cluster = self.bytes_per_cluster,
+            record_size = record_size,
+            "Chunk generation summary"
+        );
+
+        // Log each data chunk's details
+        for (idx, chunk) in self.data_chunks.iter().enumerate() {
+            let skip_begin = chunk.skip_begin.load(Ordering::Relaxed);
+            let skip_end = chunk.skip_end.load(Ordering::Relaxed);
+            let effective = chunk.effective_cluster_count();
+            let virtual_offset = chunk.virtual_offset(self.bytes_per_cluster);
+            let disk_offset = chunk.disk_offset(self.bytes_per_cluster);
+            let read_size = chunk.read_size(self.bytes_per_cluster);
+
+            // Calculate FRS range for this chunk
+            let first_frs = virtual_offset / record_size;
+            let bytes_in_chunk = effective * self.bytes_per_cluster as u64;
+            let records_in_chunk = bytes_in_chunk / record_size;
+            let last_frs = if records_in_chunk > 0 {
+                first_frs + records_in_chunk - 1
+            } else {
+                first_frs
+            };
+
+            debug!(
+                chunk_idx = idx,
+                vcn = chunk.vcn,
+                lcn = chunk.lcn,
+                cluster_count = chunk.cluster_count,
+                skip_begin = skip_begin,
+                skip_end = skip_end,
+                effective_clusters = effective,
+                disk_offset = disk_offset,
+                virtual_offset = virtual_offset,
+                read_size_bytes = read_size,
+                first_frs = first_frs,
+                last_frs = last_frs,
+                records_in_chunk = records_in_chunk,
+                "Data chunk details"
+            );
+        }
+
+        // Log I/O operations (sub-chunks)
+        debug!(
+            "📋 I/O Operations (sub-chunks of data chunks):"
+        );
+        for (idx, op) in io_ops.iter().enumerate() {
+            let first_frs = op.virtual_offset / record_size;
+            let records_in_op = op.size as u64 / record_size;
+            let last_frs = if records_in_op > 0 {
+                first_frs + records_in_op - 1
+            } else {
+                first_frs
+            };
+            trace!(
+                io_op_idx = idx,
+                disk_offset = op.disk_offset,
+                virtual_offset = op.virtual_offset,
+                size_bytes = op.size,
+                first_frs = first_frs,
+                last_frs = last_frs,
+                records = records_in_op,
+                "I/O operation"
+            );
+        }
+
         // Create IOCP
         let read_start = std::time::Instant::now();
         let iocp = IoCompletionPort::new(0)?;
@@ -532,6 +610,9 @@ impl CppIoPipeline {
             bytes_read_mb = bytes_read_total / (1024 * 1024),
             "C++ I/O pipeline data reads complete"
         );
+
+        // Log diagnostic summary
+        pipeline.log_diagnostics();
 
         // Return the parsed index
         Ok(pipeline.into_index())

@@ -290,6 +290,100 @@ impl core::str::FromStr for IoPipelineAlgorithm {
 }
 
 // ============================================================================
+// Chunk Processing Algorithm Selection
+// ============================================================================
+
+/// Selects which chunk processing algorithm to use.
+///
+/// This allows switching between the current Rust implementation and
+/// a new chunk processing algorithm for testing and comparison.
+///
+/// # Environment Variable
+///
+/// Set `UFFS_CHUNK_ALGO` to control the default:
+/// - `current` (default): Use the current Rust chunk processing
+/// - `cpp_port`: Use the C++ port chunk processing (investigation target)
+///
+/// # Example
+///
+/// ```bash
+/// # Use current algorithm (default)
+/// UFFS_CHUNK_ALGO=current uffs index
+///
+/// # Use C++ port algorithm
+/// UFFS_CHUNK_ALGO=cpp_port uffs index
+/// ```
+///
+/// # Background
+///
+/// Investigation into 40 missing files revealed that offline MFT processing
+/// achieves 100% parity with C++, but live Windows scanning loses 40 files.
+/// This suggests the issue is in the chunk processing/handoff pipeline.
+///
+/// See `reference/Ultra-Fast-File-Search/LIVE_VS_OFFLINE_PARITY_INVESTIGATION.
+/// md`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkAlgorithm {
+    /// Current Rust chunk processing (default)
+    Current,
+    /// C++ port chunk processing - investigation target for 40 missing files
+    CppPort,
+}
+
+impl Default for ChunkAlgorithm {
+    /// Default checks the `UFFS_CHUNK_ALGO` environment variable.
+    fn default() -> Self {
+        Self::from_env()
+    }
+}
+
+impl ChunkAlgorithm {
+    /// Parse from environment variable `UFFS_CHUNK_ALGO`.
+    ///
+    /// Returns `Current` if not set or unrecognized.
+    #[must_use]
+    pub fn from_env() -> Self {
+        match std::env::var("UFFS_CHUNK_ALGO")
+            .unwrap_or_default()
+            .to_lowercase()
+            .as_str()
+        {
+            "cpp_port" | "cpp" | "port" => Self::CppPort,
+            _ => Self::Current,
+        }
+    }
+
+    /// Returns the algorithm name for display.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Current => "current (Rust)",
+            Self::CppPort => "cpp_port (C++ chunk processing - TODO)",
+        }
+    }
+}
+
+impl core::fmt::Display for ChunkAlgorithm {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+impl core::str::FromStr for ChunkAlgorithm {
+    type Err = core::convert::Infallible;
+
+    /// Parse from a string value (for CLI arguments).
+    ///
+    /// Returns `Current` if unrecognized (never fails).
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(match value.to_lowercase().as_str() {
+            "cpp_port" | "cpp" | "port" => Self::CppPort,
+            _ => Self::Current,
+        })
+    }
+}
+
+// ============================================================================
 // Index Build Timing - For Benchmarking
 // ============================================================================
 

@@ -256,6 +256,13 @@ struct Cli {
     #[arg(long, default_value = "current")]
     io_algo: String,
 
+    /// Chunk processing algorithm: current, cpp (C++ port)
+    ///
+    /// - current: Use current Rust chunk processing (default)
+    /// - cpp: Use C++ port chunk processing (investigation target)
+    #[arg(long, default_value = "current")]
+    chunk_algo: String,
+
     /// Minimum file size in bytes
     #[arg(long)]
     min_size: Option<u64>,
@@ -526,6 +533,7 @@ async fn run() -> Result<()> {
                     &cli.tree_algo,
                     &cli.parse_algo,
                     &cli.io_algo,
+                    &cli.chunk_algo,
                 )
                 .await?;
             } else {

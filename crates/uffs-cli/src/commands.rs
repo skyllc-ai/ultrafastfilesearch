@@ -364,6 +364,7 @@ pub async fn search(
     tree_algo: &str,
     parse_algo: &str,
     io_algo: &str,
+    chunk_algo: &str,
 ) -> Result<()> {
     // Start timing for "Finished in X s" output (C++ compatibility)
     let start_time = std::time::Instant::now();
@@ -421,6 +422,26 @@ pub async fn search(
         info!("   See docs/architecture/CPP_IO_PIPELINE_PORT.md for details.");
     }
     info!(?io_algorithm, "I/O pipeline algorithm");
+
+    // Parse chunk processing algorithm from CLI and set env var so MFT chunk
+    // processing uses it (ChunkAlgorithm::default() reads from UFFS_CHUNK_ALGO)
+    let chunk_algorithm: uffs_mft::ChunkAlgorithm = chunk_algo.parse().unwrap_or_default();
+    if chunk_algorithm == uffs_mft::ChunkAlgorithm::CppPort {
+        // Set env var before any MFT operations so chunk processing uses cpp_port.
+        // SAFETY: This runs once at CLI startup in the main thread, before spawning
+        // any worker threads that might read this env var. The env var is only read
+        // by ChunkAlgorithm::from_env() during MFT reading, which happens after
+        // this point in a controlled manner.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("UFFS_CHUNK_ALGO", "cpp_port");
+        }
+        // Log that we're using the C++ chunk processing (not yet implemented)
+        info!("🚧 C++ chunk processing (cpp_port) selected - will be implemented soon!");
+        info!("   Investigation target for 40 missing files issue.");
+        info!("   See reference/Ultra-Fast-File-Search/LIVE_VS_OFFLINE_PARITY_INVESTIGATION.md");
+    }
+    info!(?chunk_algorithm, "Chunk processing algorithm");
 
     // Parse the pattern to extract drive prefix and pattern type
     let parsed = ParsedPattern::parse(pattern)

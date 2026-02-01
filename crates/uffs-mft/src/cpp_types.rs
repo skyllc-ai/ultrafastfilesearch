@@ -1545,6 +1545,22 @@ pub struct CppParsePipeline {
     pub index: Arc<Mutex<CppMftIndex>>,
     /// MFT record size (typically 1024 bytes)
     pub mft_record_size: u32,
+    /// Diagnostic counter: total chunks processed
+    chunks_processed: std::sync::atomic::AtomicU64,
+    /// Diagnostic counter: total records examined (including skipped)
+    records_examined: std::sync::atomic::AtomicU64,
+    /// Diagnostic counter: total records with valid FILE magic
+    records_with_file_magic: std::sync::atomic::AtomicU64,
+    /// Diagnostic counter: total records parsed (in-use base + extension)
+    records_parsed: std::sync::atomic::AtomicU64,
+    /// Diagnostic counter: records skipped at chunk boundaries (partial records)
+    records_skipped_boundary: std::sync::atomic::AtomicU64,
+    /// Diagnostic counter: USA fixup succeeded
+    usa_fixup_success: std::sync::atomic::AtomicU64,
+    /// Diagnostic counter: USA fixup failed (marked as BAAD)
+    usa_fixup_failed: std::sync::atomic::AtomicU64,
+    /// Diagnostic counter: records not in-use (skipped in Phase 2)
+    records_not_in_use: std::sync::atomic::AtomicU64,
 }
 
 impl CppParsePipeline {
@@ -1554,6 +1570,14 @@ impl CppParsePipeline {
         Self {
             index: Arc::new(Mutex::new(CppMftIndex::new())),
             mft_record_size,
+            chunks_processed: std::sync::atomic::AtomicU64::new(0),
+            records_examined: std::sync::atomic::AtomicU64::new(0),
+            records_with_file_magic: std::sync::atomic::AtomicU64::new(0),
+            records_parsed: std::sync::atomic::AtomicU64::new(0),
+            records_skipped_boundary: std::sync::atomic::AtomicU64::new(0),
+            usa_fixup_success: std::sync::atomic::AtomicU64::new(0),
+            usa_fixup_failed: std::sync::atomic::AtomicU64::new(0),
+            records_not_in_use: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -1563,6 +1587,73 @@ impl CppParsePipeline {
         Self {
             index: Arc::new(Mutex::new(CppMftIndex::with_capacity(record_count))),
             mft_record_size,
+            chunks_processed: std::sync::atomic::AtomicU64::new(0),
+            records_examined: std::sync::atomic::AtomicU64::new(0),
+            records_with_file_magic: std::sync::atomic::AtomicU64::new(0),
+            records_parsed: std::sync::atomic::AtomicU64::new(0),
+            records_skipped_boundary: std::sync::atomic::AtomicU64::new(0),
+            usa_fixup_success: std::sync::atomic::AtomicU64::new(0),
+            usa_fixup_failed: std::sync::atomic::AtomicU64::new(0),
+            records_not_in_use: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Log diagnostic summary of processing statistics.
+    ///
+    /// Call this after all chunks have been processed to see the summary.
+    pub fn log_diagnostics(&self) {
+        use std::sync::atomic::Ordering;
+        use tracing::info;
+
+        let chunks = self.chunks_processed.load(Ordering::Relaxed);
+        let examined = self.records_examined.load(Ordering::Relaxed);
+        let file_magic = self.records_with_file_magic.load(Ordering::Relaxed);
+        let parsed = self.records_parsed.load(Ordering::Relaxed);
+        let skipped_boundary = self.records_skipped_boundary.load(Ordering::Relaxed);
+        let usa_success = self.usa_fixup_success.load(Ordering::Relaxed);
+        let usa_failed = self.usa_fixup_failed.load(Ordering::Relaxed);
+        let not_in_use = self.records_not_in_use.load(Ordering::Relaxed);
+
+        info!(
+            "📊 LIVE PATH PARSE DIAGNOSTICS (CppParsePipeline)"
+        );
+        info!(
+            chunks_processed = chunks,
+            records_examined = examined,
+            records_with_file_magic = file_magic,
+            usa_fixup_success = usa_success,
+            usa_fixup_failed = usa_failed,
+            records_parsed = parsed,
+            records_not_in_use = not_in_use,
+            records_skipped_at_boundaries = skipped_boundary,
+            "Parse pipeline summary"
+        );
+
+        // Calculate and log any discrepancies
+        if skipped_boundary > 0 {
+            info!(
+                skipped = skipped_boundary,
+                "⚠️ Records skipped at chunk boundaries (partial records)"
+            );
+        }
+        if usa_failed > 0 {
+            info!(
+                failed = usa_failed,
+                "⚠️ Records with USA fixup failure (marked as BAAD)"
+            );
+        }
+
+        // Log the flow: FILE magic -> USA fixup -> in-use check -> parsed
+        let expected_parsed = usa_success.saturating_sub(not_in_use);
+        if parsed != expected_parsed {
+            info!(
+                file_magic = file_magic,
+                usa_success = usa_success,
+                not_in_use = not_in_use,
+                expected_parsed = expected_parsed,
+                actual_parsed = parsed,
+                "⚠️ Parse count mismatch (expected = usa_success - not_in_use)"
+            );
         }
     }
 
@@ -1580,26 +1671,123 @@ impl CppParsePipeline {
     /// panicked while holding the lock). This is intentional - mutex
     /// poisoning indicates a serious error that should propagate.
     pub fn process_chunk(&self, buffer: &mut [u8], virtual_offset: u64) {
+        use std::sync::atomic::Ordering;
+        use tracing::trace;
+
+        // Increment chunk counter
+        let chunk_num = self.chunks_processed.fetch_add(1, Ordering::Relaxed) + 1;
+
+        // Calculate diagnostic info for this chunk
+        let mft_record_size = self.mft_record_size as usize;
+        let virtual_offset_usize = u64_to_usize(virtual_offset);
+        let start_offset = if virtual_offset_usize & (mft_record_size - 1) != 0 {
+            mft_record_size - (virtual_offset_usize & (mft_record_size - 1))
+        } else {
+            0
+        };
+
+        // Calculate FRS range for this chunk
+        let first_frs = virtual_offset / mft_record_size as u64;
+        let records_in_chunk = if buffer.len() >= start_offset {
+            (buffer.len() - start_offset) / mft_record_size
+        } else {
+            0
+        };
+        let last_frs = if records_in_chunk > 0 {
+            first_frs + records_in_chunk as u64 - 1
+        } else {
+            first_frs
+        };
+
+        // CHUNK HANDOFF LOGGING: Log when chunk is received for processing
+        trace!(
+            chunk_num = chunk_num,
+            virtual_offset = virtual_offset,
+            buffer_size = buffer.len(),
+            first_frs = first_frs,
+            last_frs = last_frs,
+            records_in_chunk = records_in_chunk,
+            start_offset = start_offset,
+            "🔄 CHUNK HANDOFF: Received chunk for processing"
+        );
+
+        // RECORD BOUNDARY LOGGING: Log if partial record at start
+        if start_offset > 0 {
+            self.records_skipped_boundary.fetch_add(1, Ordering::Relaxed);
+            trace!(
+                chunk_num = chunk_num,
+                virtual_offset = virtual_offset,
+                start_offset = start_offset,
+                bytes_skipped = start_offset,
+                "⚠️ RECORD BOUNDARY: Skipping partial record at chunk start"
+            );
+        }
+
+        self.records_examined
+            .fetch_add(records_in_chunk as u64, Ordering::Relaxed);
+
         // PHASE 1: Pre-processing (NO LOCK except for brief pre-allocation)
+        // PRELOAD_CONCURRENT LOGGING: Log before calling preload
+        trace!(
+            chunk_num = chunk_num,
+            virtual_offset = virtual_offset,
+            "📥 PRELOAD_CONCURRENT: Starting Phase 1 (no lock)"
+        );
+
+        let preload_start = std::time::Instant::now();
         let max_frs = self.preload_concurrent(buffer, virtual_offset);
+        let preload_elapsed_us = preload_start.elapsed().as_micros();
+
+        trace!(
+            chunk_num = chunk_num,
+            max_frs_found = max_frs,
+            preload_elapsed_us = preload_elapsed_us,
+            "📥 PRELOAD_CONCURRENT: Phase 1 complete"
+        );
 
         // Pre-allocate records vector if needed (brief lock)
         if max_frs > 0 {
+            // PARALLEL SYNC LOGGING: Log lock acquisition for pre-allocation
+            trace!(
+                chunk_num = chunk_num,
+                max_frs = max_frs,
+                "🔒 PARALLEL SYNC: Acquiring lock for pre-allocation"
+            );
             // Note: Mutex poisoning only occurs if a thread panics while holding the lock.
             // In this context, we want to propagate the panic rather than handle it
             // gracefully.
             #[allow(clippy::unwrap_used)]
             let mut index = self.index.lock().unwrap();
             index.get_or_create(max_frs - 1);
+            trace!(
+                chunk_num = chunk_num,
+                "🔓 PARALLEL SYNC: Released pre-allocation lock"
+            );
         }
 
         // PHASE 2: Parsing (WITH LOCK - serialized)
+        // PARALLEL SYNC LOGGING: Log lock acquisition for parsing
+        trace!(
+            chunk_num = chunk_num,
+            virtual_offset = virtual_offset,
+            "🔒 PARALLEL SYNC: Acquiring lock for Phase 2 (load/parse)"
+        );
         // Note: Mutex poisoning only occurs if a thread panics while holding the lock.
         // In this context, we want to propagate the panic rather than handle it
         // gracefully.
         #[allow(clippy::unwrap_used)]
         let mut index = self.index.lock().unwrap();
+
+        let load_start = std::time::Instant::now();
         self.load(&mut index, buffer, virtual_offset);
+        let load_elapsed_us = load_start.elapsed().as_micros();
+
+        trace!(
+            chunk_num = chunk_num,
+            load_elapsed_us = load_elapsed_us,
+            index_records_count = index.records_data.len(),
+            "🔓 PARALLEL SYNC: Phase 2 complete, releasing lock"
+        );
     }
 
     /// Phase 1: Pre-processing without lock.
@@ -1612,10 +1800,13 @@ impl CppParsePipeline {
     /// # Returns
     /// Maximum FRS + 1 found in this chunk (0 if no valid records)
     fn preload_concurrent(&self, buffer: &mut [u8], virtual_offset: u64) -> u32 {
+        use std::sync::atomic::Ordering;
+
         let mft_record_size = self.mft_record_size as usize;
         let mft_record_size_log2 = mft_record_size.trailing_zeros();
 
         let mut max_frs_plus_one: u32 = 0;
+        let mut file_magic_count: u64 = 0;
 
         // Calculate starting offset (handle partial records at chunk boundary)
         let virtual_offset_usize = u64_to_usize(virtual_offset);
@@ -1624,6 +1815,9 @@ impl CppParsePipeline {
         } else {
             0
         };
+
+        let mut usa_success_count: u64 = 0;
+        let mut usa_failed_count: u64 = 0;
 
         let mut i = start_offset;
         while i + mft_record_size <= buffer.len() {
@@ -1645,17 +1839,21 @@ impl CppParsePipeline {
                 ]);
 
                 if magic == FILE_MAGIC {
+                    file_magic_count += 1;
+
                     // Apply USA fixup - we already checked len >= 8 above
                     let usa_offset = u16::from_le_bytes([record_data[4], record_data[5]]);
                     let usa_count = u16::from_le_bytes([record_data[6], record_data[7]]);
 
                     if apply_usa_fixup(record_data, usa_offset, usa_count) {
+                        usa_success_count += 1;
                         // Get base FRS (for extension records)
                         let frs_base = Self::get_base_frs(record_data, frs);
                         if max_frs_plus_one < frs_base + 1 {
                             max_frs_plus_one = frs_base + 1;
                         }
                     } else {
+                        usa_failed_count += 1;
                         // Mark as corrupt (BAAD)
                         record_data[0] = 0x42; // 'B'
                         record_data[1] = 0x41; // 'A'
@@ -1667,6 +1865,14 @@ impl CppParsePipeline {
 
             i += mft_record_size;
         }
+
+        // Update diagnostic counters
+        self.records_with_file_magic
+            .fetch_add(file_magic_count, Ordering::Relaxed);
+        self.usa_fixup_success
+            .fetch_add(usa_success_count, Ordering::Relaxed);
+        self.usa_fixup_failed
+            .fetch_add(usa_failed_count, Ordering::Relaxed);
 
         max_frs_plus_one
     }
@@ -1710,6 +1916,8 @@ impl CppParsePipeline {
     /// This function is called with the mutex held (serialized parsing).
     #[allow(clippy::too_many_lines)]
     fn load(&self, index: &mut CppMftIndex, buffer: &[u8], virtual_offset: u64) {
+        use std::sync::atomic::Ordering;
+
         let mft_record_size = self.mft_record_size as usize;
         let mft_record_size_log2 = mft_record_size.trailing_zeros();
 
@@ -1721,30 +1929,56 @@ impl CppParsePipeline {
             0
         };
 
+        let mut parsed_count: u64 = 0;
+        let mut not_in_use_count: u64 = 0;
         let mut i = start_offset;
         while i + mft_record_size <= buffer.len() {
             let frs = u64_to_u32((virtual_offset + i as u64) >> mft_record_size_log2);
             let record_data = &buffer[i..i + mft_record_size];
 
-            // Parse this record
-            Self::parse_record(index, record_data, frs);
+            // Check if record has FILE magic but is not in-use
+            // (This helps diagnose the flow: FILE magic -> USA fixup -> in-use check)
+            if record_data.len() >= 48 {
+                let magic = u32::from_le_bytes([
+                    record_data[0],
+                    record_data[1],
+                    record_data[2],
+                    record_data[3],
+                ]);
+                let flags = u16::from_le_bytes([record_data[22], record_data[23]]);
+                if magic == FILE_MAGIC && (flags & FRH_IN_USE) == 0 {
+                    not_in_use_count += 1;
+                }
+            }
+
+            // Parse this record (returns true if record was in-use and parsed)
+            if Self::parse_record(index, record_data, frs) {
+                parsed_count += 1;
+            }
 
             i += mft_record_size;
         }
+
+        // Update diagnostic counters
+        self.records_parsed.fetch_add(parsed_count, Ordering::Relaxed);
+        self.records_not_in_use
+            .fetch_add(not_in_use_count, Ordering::Relaxed);
     }
 
     /// Parse a single MFT record.
     ///
     /// Matches C++ parsing loop (`ntfs_index.hpp` lines 513-728).
+    ///
+    /// Returns `true` if the record was in-use and parsed, `false` otherwise.
     // Separate function for code organization matching C++ structure
     #[allow(clippy::single_call_fn)]
     #[inline]
     #[allow(clippy::too_many_lines, unsafe_code)]
-    fn parse_record(index: &mut CppMftIndex, data: &[u8], frs: u32) {
+    fn parse_record(index: &mut CppMftIndex, data: &[u8], frs: u32) -> bool {
         use core::mem::size_of;
 
         if data.len() < size_of::<FileRecordSegmentHeader>() {
-            return;
+            return false;
         }
 
         // Read header
@@ -1755,7 +1989,7 @@ impl CppParsePipeline {
         let magic = header.multi_sector_header.magic;
         let flags = header.flags;
         if magic != FILE_MAGIC || (flags & FRH_IN_USE) == 0 {
-            return;
+            return false;
         }
 
         // Get base FRS (for extension records)
@@ -1775,7 +2009,7 @@ impl CppParsePipeline {
         let record_end = bytes_in_use.min(data.len());
 
         if first_attr_offset >= record_end {
-            return;
+            return true; // Record was in-use but had no attributes
         }
 
         // Iterate attributes
@@ -1831,6 +2065,8 @@ impl CppParsePipeline {
 
             attr_offset += attr_length;
         }
+
+        true // Record was successfully parsed
     }
 
     /// Parse `$STANDARD_INFORMATION` attribute.
