@@ -1,27 +1,52 @@
-# trial_run.ps1 - UFFS Data Collection (MFT + five scan flows)
+# trial_run.ps1 - UFFS Live Data Collection (Windows only)
+#
+# Purpose:
+#   Collect live MFT data and scan outputs on Windows for offline analysis on Mac.
+#   This script focuses on LIVE data collection only - offline analysis is done on Mac.
+#
 # Strategy:
 #   - Never write binary outputs with Set-Content.
-#   - Capture stdout/stderr to .log files only (text).
+#   - Capture stdout/stderr to .log files (text) with diagnostic logging.
 #   - Sequential per physical disk; parallel across physical disks (PS7+).
+#   - Enable diagnostic logging for live path analysis.
 #
-# Scan flows:
-#   1. Rust (current)    - Default Rust implementation
-#   2. C++               - Original C++ implementation (uffs.com)
-#   3. Rust (new tree)   - Rust with C++ tree algorithm port
-#   4. Rust (cpp full)   - Rust with both C++ parsing AND tree algorithm ports
-#   5. Rust (cpp io)     - Rust with C++ parsing, tree, AND I/O pipeline ports
+# What gets collected:
+#   1. MFT snapshots (compressed .bin files) - for offline analysis on Mac
+#   2. C++ baseline scan output - reference for parity comparison
+#   3. Rust LIVE scan output + diagnostic logs - with chunk/record processing stats
+#
+# Diagnostic logging captures (in .log files):
+#   - Chunk handoff, record boundaries, preload_concurrent timing
+#   - USA fixup success/failure, records parsed, records not in-use
+#   - Parallel sync (lock acquisition), chunk processing order
+#
+# After running this script, transfer all files to Mac for offline analysis using:
+#   - uffs "*" --mft <mft_file> for offline search
+#   - uffs-diag tools for detailed comparison
+#   - See: TESTING_TOOLS_GUIDE.md for full workflow
 [CmdletBinding()]
 param(
     [string[]]$Drives = @(),       # Drives to test (empty = auto-detect NTFS drives)
     [switch]$SkipMft,              # Skip uffs_mft save tests
     [string]$BinDir = "",          # Custom bin directory (default: $HOME\bin)
-    [int]$ThrottleLimit = 2        # Max physical disks in parallel (PS7+ only)
+    [int]$ThrottleLimit = 2,       # Max physical disks in parallel (PS7+ only)
+    [switch]$VerboseLog            # Enable verbose/trace logging (more detail, larger logs)
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $env:RUST_BACKTRACE = "full"
+
+# Enable diagnostic logging for live path analysis
+# info level shows summary diagnostics; debug/trace shows per-chunk details
+if ($VerboseLog) {
+    $env:RUST_LOG = "uffs_mft::cpp_types=trace,uffs_mft::cpp_io_pipeline=debug,uffs_mft::reader=info,info"
+    Write-Host "📋 Verbose logging enabled (trace level)" -ForegroundColor Yellow
+} else {
+    $env:RUST_LOG = "uffs_mft::cpp_types=info,uffs_mft::cpp_io_pipeline=info,uffs_mft::reader=info,info"
+    Write-Host "📋 Standard logging enabled (info level)" -ForegroundColor Yellow
+}
 
 $WorkDir  = Get-Location
 $FinalLog = Join-Path $WorkDir "trial_run.md"
@@ -236,6 +261,7 @@ try {
     }
 
     # Worker logic (sequential for drives within a disk group)
+    # Focus on: C++ baseline, Rust live (cpp io), Rust offline (from saved MFT)
     $runDiskGroup = {
         param(
             [int]$DiskNumber,
@@ -243,8 +269,10 @@ try {
             [string]$WorkDir,
             [string]$UffsExe,
             [string]$UffsCom,
+            [string]$UffsMftExe,
             [bool]$HasRust,
-            [bool]$HasCpp
+            [bool]$HasCpp,
+            [bool]$HasMft
         )
 
         $groupResults = @()
@@ -252,20 +280,21 @@ try {
         foreach ($Drive in $GroupDrives) {
             $driveLower = $Drive.ToLower()
 
-            $rustOut        = "rust_${driveLower}.txt"
+            # Output files
             $cppOut         = "cpp_${driveLower}.txt"
-            $rustNewOut     = "rust_new_${driveLower}.txt"
-            $rustCppFullOut = "rust_cpp_full_${driveLower}.txt"
-            $rustCppIoOut   = "rust_cpp_io_${driveLower}.txt"
+            $rustLiveOut    = "rust_live_${driveLower}.txt"
+            $rustOfflineOut = "rust_offline_${driveLower}.txt"
 
-            $rustLog        = "rust_${driveLower}.log"
+            # Log files (capture stderr with diagnostics)
             $cppLog         = "cpp_${driveLower}.log"
-            $rustNewLog     = "rust_new_${driveLower}.log"
-            $rustCppFullLog = "rust_cpp_full_${driveLower}.log"
-            $rustCppIoLog   = "rust_cpp_io_${driveLower}.log"
+            $rustLiveLog    = "rust_live_${driveLower}.log"
+            $rustOfflineLog = "rust_offline_${driveLower}.log"
+
+            # MFT file for offline comparison
+            $mftBin = "${driveLower}_mft.bin"
 
             function Run-LoggedLocal {
-                param([string]$Title, [string]$CmdLine, [string]$LogFileName)
+                param([string]$Title, [string]$CmdLine, [string]$LogFileName, [string]$OutFileName = "")
 
                 $logPath = Join-Path $WorkDir $LogFileName
                 $started = Get-Date
@@ -274,9 +303,19 @@ try {
                 Write-Host "  → $Title..." -NoNewline
 
                 try {
-                    $lines = @(& cmd.exe /c $CmdLine 2>&1)
-                    $exitCode = $LASTEXITCODE
-                    $lines | Set-Content -LiteralPath $logPath -Encoding UTF8
+                    # Run command with stdout to output file, stderr to log file
+                    # This properly separates scan output from diagnostic logs
+                    if ($OutFileName) {
+                        $outPath = Join-Path $WorkDir $OutFileName
+                        # Use cmd.exe to properly separate stdout (>output) and stderr (2>log)
+                        & cmd.exe /c "$CmdLine > `"$outPath`" 2> `"$logPath`""
+                        $exitCode = $LASTEXITCODE
+                    } else {
+                        # No output file - capture everything to log
+                        $lines = @(& cmd.exe /c $CmdLine 2>&1)
+                        $exitCode = $LASTEXITCODE
+                        $lines | Set-Content -LiteralPath $logPath -Encoding UTF8
+                    }
                 } catch {
                     $exitCode = -1
                     @("PowerShell exception:", $_.Exception.ToString()) | Set-Content -LiteralPath $logPath -Encoding UTF8
@@ -310,6 +349,7 @@ try {
                     Title      = $Title
                     Command    = $CmdLine
                     LogFile    = $LogFileName
+                    OutFile    = $OutFileName
                     DurationMs = $durMs
                     ExitCode   = $exitCode
                 }
@@ -317,51 +357,44 @@ try {
 
             $runs = @()
 
-            if ($HasRust) {
-                $runs += Run-LoggedLocal -Title "Rust (current): drive $Drive" `
-                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --no-bitmap > `"$rustOut`"") `
-                    -LogFileName $rustLog
-            } else {
-                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (current)"; Command=""; LogFile=$rustLog; DurationMs=$null; ExitCode=$null }
-            }
-
+            # 1. C++ baseline (no diagnostics, just output)
             if ($HasCpp) {
-                $runs += Run-LoggedLocal -Title "C++: drive $Drive" `
-                    -CmdLine ("`"$UffsCom`" `"*`" --drives=$Drive > `"$cppOut`"") `
-                    -LogFileName $cppLog
+                $runs += Run-LoggedLocal -Title "C++ (baseline): drive $Drive" `
+                    -CmdLine ("`"$UffsCom`" `"*`" --drives=$Drive") `
+                    -LogFileName $cppLog `
+                    -OutFileName $cppOut
             } else {
-                $runs += [pscustomobject]@{ Drive=$Drive; Title="C++"; Command=""; LogFile=$cppLog; DurationMs=$null; ExitCode=$null }
+                $runs += [pscustomobject]@{ Drive=$Drive; Title="C++ (baseline)"; Command=""; LogFile=$cppLog; OutFile=$cppOut; DurationMs=$null; ExitCode=$null }
             }
 
+            # 2. Rust LIVE scan (with diagnostic logging via RUST_LOG)
             if ($HasRust) {
-                $runs += Run-LoggedLocal -Title "Rust (new tree): drive $Drive" `
-                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --tree-algo=cpp --no-bitmap > `"$rustNewOut`"") `
-                    -LogFileName $rustNewLog
+                $runs += Run-LoggedLocal -Title "Rust LIVE (cpp io): drive $Drive" `
+                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --io-algo=cpp --no-bitmap") `
+                    -LogFileName $rustLiveLog `
+                    -OutFileName $rustLiveOut
             } else {
-                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (new tree)"; Command=""; LogFile=$rustNewLog; DurationMs=$null; ExitCode=$null }
+                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust LIVE (cpp io)"; Command=""; LogFile=$rustLiveLog; OutFile=$rustLiveOut; DurationMs=$null; ExitCode=$null }
             }
 
-            if ($HasRust) {
-                $runs += Run-LoggedLocal -Title "Rust (cpp full): drive $Drive" `
-                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --no-bitmap > `"$rustCppFullOut`"") `
-                    -LogFileName $rustCppFullLog
+            # 3. Rust OFFLINE scan (load from saved MFT file, with diagnostic logging)
+            $mftPath = Join-Path $WorkDir $mftBin
+            if ($HasRust -and (Test-Path -LiteralPath $mftPath)) {
+                $runs += Run-LoggedLocal -Title "Rust OFFLINE (from $mftBin): drive $Drive" `
+                    -CmdLine ("`"$UffsExe`" `"*`" --mft `"$mftPath`"") `
+                    -LogFileName $rustOfflineLog `
+                    -OutFileName $rustOfflineOut
             } else {
-                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (cpp full)"; Command=""; LogFile=$rustCppFullLog; DurationMs=$null; ExitCode=$null }
-            }
-
-            if ($HasRust) {
-                $runs += Run-LoggedLocal -Title "Rust (cpp io): drive $Drive" `
-                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --io-algo=cpp --no-bitmap > `"$rustCppIoOut`"") `
-                    -LogFileName $rustCppIoLog
-            } else {
-                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust (cpp io)"; Command=""; LogFile=$rustCppIoLog; DurationMs=$null; ExitCode=$null }
+                $skipReason = if (-not $HasRust) { "no uffs.exe" } else { "no $mftBin" }
+                Write-Host "  → Rust OFFLINE: skipped ($skipReason)" -ForegroundColor Yellow
+                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust OFFLINE"; Command=""; LogFile=$rustOfflineLog; OutFile=$rustOfflineOut; DurationMs=$null; ExitCode=$null }
             }
 
             $groupResults += [pscustomobject]@{
                 Disk   = $DiskNumber
                 Drive  = $Drive
-                Files  = [pscustomobject]@{ Rust=$rustOut; Cpp=$cppOut; RustNew=$rustNewOut; RustCppFull=$rustCppFullOut; RustCppIo=$rustCppIoOut }
-                Logs   = [pscustomobject]@{ Rust=$rustLog; Cpp=$cppLog; RustNew=$rustNewLog; RustCppFull=$rustCppFullLog; RustCppIo=$rustCppIoLog }
+                Files  = [pscustomobject]@{ Cpp=$cppOut; RustLive=$rustLiveOut; RustOffline=$rustOfflineOut }
+                Logs   = [pscustomobject]@{ Cpp=$cppLog; RustLive=$rustLiveLog; RustOffline=$rustOfflineLog }
                 Runs   = $runs
             }
         }
@@ -378,7 +411,8 @@ try {
         foreach ($d in $Drives) {
             # treat each drive as its own "disk group"
             $scanResults += & $runDiskGroup -DiskNumber -1 -GroupDrives @($d) -WorkDir $WorkDir `
-                -UffsExe $UffsExe -UffsCom $UffsCom -HasRust $hasRust -HasCpp $hasCpp
+                -UffsExe $UffsExe -UffsCom $UffsCom -UffsMftExe $UffsMftExe `
+                -HasRust $hasRust -HasCpp $hasCpp -HasMft $hasMft
         }
     } else {
         # Parallel across physical disks; sequential within each disk
@@ -390,7 +424,8 @@ try {
             $allDiskGroups = $using:diskGroups
             $groupDrives = $allDiskGroups[$diskNum]
             & $using:runDiskGroup -DiskNumber $diskNum -GroupDrives $groupDrives -WorkDir $using:WorkDir `
-                -UffsExe $using:UffsExe -UffsCom $using:UffsCom -HasRust $using:hasRust -HasCpp $using:hasCpp
+                -UffsExe $using:UffsExe -UffsCom $using:UffsCom -UffsMftExe $using:UffsMftExe `
+                -HasRust $using:hasRust -HasCpp $using:hasCpp -HasMft $using:hasMft
         } -ThrottleLimit $ThrottleLimit
     }
 
@@ -411,23 +446,24 @@ try {
         LogLine "|------|-------------|------|----------|------|---------------:|"
 
         foreach ($run in $r.Runs) {
-            $outFile = ""
-            if ($run.Title -like "Rust (current)*") { $outFile = $r.Files.Rust }
-            elseif ($run.Title -like "C++*") { $outFile = $r.Files.Cpp }
-            elseif ($run.Title -like "Rust (new tree)*") { $outFile = $r.Files.RustNew }
-            elseif ($run.Title -like "Rust (cpp full)*") { $outFile = $r.Files.RustCppFull }
-            elseif ($run.Title -like "Rust (cpp io)*") { $outFile = $r.Files.RustCppIo }
-
+            $outFile = $run.OutFile
             $outPath = if ($outFile) { Join-Path $WorkDir $outFile } else { $null }
             $sizeStr = "N/A"
             if ($outPath -and (Test-Path -LiteralPath $outPath)) {
                 $sizeStr = Format-FileSize (Get-Item -LiteralPath $outPath).Length
             }
 
+            $logPath = if ($run.LogFile) { Join-Path $WorkDir $run.LogFile } else { $null }
+            $logSizeStr = ""
+            if ($logPath -and (Test-Path -LiteralPath $logPath)) {
+                $logSize = (Get-Item -LiteralPath $logPath).Length
+                $logSizeStr = " ($(Format-FileSize $logSize))"
+            }
+
             $exit = if ($null -eq $run.ExitCode) { "skipped" } else { "$($run.ExitCode)" }
             $dur  = if ($null -eq $run.DurationMs) { "N/A" } else { "$($run.DurationMs)" }
 
-            LogLine "| $($run.Title) | $outFile | $sizeStr | $($run.LogFile) | $exit | $dur |"
+            LogLine "| $($run.Title) | $outFile | $sizeStr | $($run.LogFile)$logSizeStr | $exit | $dur |"
         }
 
         LogLine ""
