@@ -62,22 +62,38 @@ The issue is in the **live I/O processing pipeline** - somewhere between:
 1. Raw MFT bytes read from disk ✅ (proven: bytes are in saved MFT)
 2. Records parsed and output ❌ (40 files missing)
 
-### Possible Causes (To Investigate)
+### Eliminated Causes
+
+| Cause | Status | Evidence |
+|-------|--------|----------|
+| **Skip Range / Bitmap Filtering** | ❌ Eliminated | All test runs use `--no-bitmap` flag |
+| **Bitmap Sync Timing** | ❌ Eliminated | Bitmap optimization disabled |
+| **MFT Parsing Logic** | ❌ Eliminated | Offline 100% match |
+| **Tree Building Logic** | ❌ Eliminated | Offline 100% match |
+| **ADS Expansion Logic** | ❌ Eliminated | Offline 100% match |
+| **Compressed File Handling** | ❌ Eliminated | Offline 100% match |
+
+> **Note:** The `trial_run.ps1` script runs ALL Rust flows with `--no-bitmap`:
+> ```powershell
+> uffs.exe "*" --drive $Drive --no-bitmap > rust_d.txt
+> uffs.exe "*" --drive $Drive --tree-algo=cpp --no-bitmap > rust_new_d.txt
+> uffs.exe "*" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --no-bitmap > rust_cpp_full_d.txt
+> uffs.exe "*" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --io-algo=cpp --no-bitmap > rust_cpp_io_d.txt
+> ```
+
+### Remaining Possible Causes
 
 1. **Chunk Handoff Issue**
    - Chunks containing those 40 files not properly handed to parser
    - Parallel processing race condition
 
-2. **Skip Range Application**
-   - Live skip ranges incorrectly excluding valid records
-   - Bitmap sync timing issue
-
-3. **Bitmap Filtering**
-   - Live bitmap interpretation marking records as "not in use"
-   - Different bitmap handling between live and offline
-
-4. **Record Boundary Issue**
+2. **Record Boundary Issue**
    - Records spanning chunk boundaries handled differently
+   - Live chunking vs offline complete-file processing
+
+3. **Live-Only Code Path**
+   - Some filtering or processing that only applies during live I/O
+   - Different data flow between live and offline modes
 
 ## Live vs Offline Code Path Differences
 
@@ -93,9 +109,9 @@ The issue is in the **live I/O processing pipeline** - somewhere between:
 
 - [ ] Compare live vs offline code paths in detail
 - [ ] Add diagnostic logging to track the 40 missing FRS numbers
-- [ ] Check if bitmap marks those records as "not in use" during live scan
 - [ ] Verify chunk boundaries don't split those records incorrectly
-- [ ] Compare skip range calculation for those specific records
+- [ ] Check for any live-only filtering or processing logic
+- [ ] Trace the data flow for one of the missing files through both paths
 
 ## Test Data Location
 
