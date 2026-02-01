@@ -377,18 +377,9 @@ try {
                 $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust LIVE (cpp io)"; Command=""; LogFile=$rustLiveLog; OutFile=$rustLiveOut; DurationMs=$null; ExitCode=$null }
             }
 
-            # 3. Rust OFFLINE scan (load from saved MFT file, with diagnostic logging)
-            $mftPath = Join-Path $WorkDir $mftBin
-            if ($HasRust -and (Test-Path -LiteralPath $mftPath)) {
-                $runs += Run-LoggedLocal -Title "Rust OFFLINE (from $mftBin): drive $Drive" `
-                    -CmdLine ("`"$UffsExe`" `"*`" --mft `"$mftPath`"") `
-                    -LogFileName $rustOfflineLog `
-                    -OutFileName $rustOfflineOut
-            } else {
-                $skipReason = if (-not $HasRust) { "no uffs.exe" } else { "no $mftBin" }
-                Write-Host "  → Rust OFFLINE: skipped ($skipReason)" -ForegroundColor Yellow
-                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust OFFLINE"; Command=""; LogFile=$rustOfflineLog; OutFile=$rustOfflineOut; DurationMs=$null; ExitCode=$null }
-            }
+            # 3. Rust OFFLINE scan - SKIPPED on Windows
+            # Offline analysis is done on Mac for faster iteration (see TESTING_TOOLS_GUIDE.md)
+            Write-Host "  → Rust OFFLINE: skipped (offline analysis done on Mac)" -ForegroundColor DarkGray
 
             $groupResults += [pscustomobject]@{
                 Disk   = $DiskNumber
