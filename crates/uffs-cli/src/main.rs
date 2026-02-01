@@ -249,6 +249,13 @@ struct Cli {
     #[arg(long, default_value = "current")]
     parse_algo: String,
 
+    /// I/O pipeline algorithm: current, cpp (C++ port)
+    ///
+    /// - current: Use current Rust I/O pipeline (default)
+    /// - cpp: Use C++ port I/O pipeline (bitmap sync point before data reads)
+    #[arg(long, default_value = "current")]
+    io_algo: String,
+
     /// Minimum file size in bytes
     #[arg(long)]
     min_size: Option<u64>,
@@ -518,6 +525,7 @@ async fn run() -> Result<()> {
                     &cli.query_mode,
                     &cli.tree_algo,
                     &cli.parse_algo,
+                    &cli.io_algo,
                 )
                 .await?;
             } else {

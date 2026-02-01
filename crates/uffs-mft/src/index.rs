@@ -197,6 +197,99 @@ impl core::str::FromStr for ParseAlgorithm {
 }
 
 // ============================================================================
+// I/O Pipeline Algorithm Selection
+// ============================================================================
+
+/// Selects which I/O pipeline algorithm to use.
+///
+/// This allows switching between the current Rust implementation and
+/// the new C++ port for testing and comparison.
+///
+/// # Environment Variable
+///
+/// Set `UFFS_IO_ALGO` to control the default:
+/// - `current` (default): Use the current Rust I/O pipeline
+/// - `cpp_port`: Use the C++ port I/O pipeline (bitmap sync point)
+///
+/// # Example
+///
+/// ```bash
+/// # Use current algorithm (default)
+/// UFFS_IO_ALGO=current uffs index
+///
+/// # Use C++ port algorithm
+/// UFFS_IO_ALGO=cpp_port uffs index
+/// ```
+///
+/// # Background
+///
+/// The C++ implementation uses a two-phase I/O model with a synchronization
+/// point after bitmap reading completes. This ensures skip ranges are
+/// calculated from the complete bitmap, not a partial one.
+///
+/// See `docs/architecture/CPP_IO_PIPELINE_PORT.md` for details.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IoPipelineAlgorithm {
+    /// Current Rust I/O pipeline (default)
+    Current,
+    /// C++ port I/O pipeline - bitmap sync point before data reads
+    CppPort,
+}
+
+impl Default for IoPipelineAlgorithm {
+    /// Default checks the `UFFS_IO_ALGO` environment variable.
+    fn default() -> Self {
+        Self::from_env()
+    }
+}
+
+impl IoPipelineAlgorithm {
+    /// Parse from environment variable `UFFS_IO_ALGO`.
+    ///
+    /// Returns `Current` if not set or unrecognized.
+    #[must_use]
+    pub fn from_env() -> Self {
+        match std::env::var("UFFS_IO_ALGO")
+            .unwrap_or_default()
+            .to_lowercase()
+            .as_str()
+        {
+            "cpp_port" | "cpp" | "port" => Self::CppPort,
+            _ => Self::Current,
+        }
+    }
+
+    /// Returns the algorithm name for display.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Current => "current (Rust)",
+            Self::CppPort => "cpp_port (C++ I/O pipeline port)",
+        }
+    }
+}
+
+impl core::fmt::Display for IoPipelineAlgorithm {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+impl core::str::FromStr for IoPipelineAlgorithm {
+    type Err = core::convert::Infallible;
+
+    /// Parse from a string value (for CLI arguments).
+    ///
+    /// Returns `Current` if unrecognized (never fails).
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(match value.to_lowercase().as_str() {
+            "cpp_port" | "cpp" | "port" => Self::CppPort,
+            _ => Self::Current,
+        })
+    }
+}
+
+// ============================================================================
 // Index Build Timing - For Benchmarking
 // ============================================================================
 

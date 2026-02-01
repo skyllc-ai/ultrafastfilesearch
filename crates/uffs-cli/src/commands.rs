@@ -363,6 +363,7 @@ pub async fn search(
     query_mode: &str,
     tree_algo: &str,
     parse_algo: &str,
+    io_algo: &str,
 ) -> Result<()> {
     // Start timing for "Finished in X s" output (C++ compatibility)
     let start_time = std::time::Instant::now();
@@ -400,6 +401,26 @@ pub async fn search(
         info!("🔧 Using C++ parsing algorithm (cpp_port) - implementation pending");
     }
     info!(?parse_algorithm, "MFT parsing algorithm");
+
+    // Parse I/O pipeline algorithm from CLI and set env var so MFT I/O uses it
+    // (IoPipelineAlgorithm::default() reads from UFFS_IO_ALGO)
+    let io_algorithm: uffs_mft::IoPipelineAlgorithm = io_algo.parse().unwrap_or_default();
+    if io_algorithm == uffs_mft::IoPipelineAlgorithm::CppPort {
+        // Set env var before any MFT operations so I/O pipeline uses cpp_port.
+        // SAFETY: This runs once at CLI startup in the main thread, before spawning
+        // any worker threads that might read this env var. The env var is only read
+        // by IoPipelineAlgorithm::from_env() during MFT reading, which happens after
+        // this point in a controlled manner.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("UFFS_IO_ALGO", "cpp_port");
+        }
+        // Log that we're using the C++ I/O pipeline (not yet implemented)
+        info!("🚧 C++ I/O pipeline (cpp_port) selected - implementation coming soon!");
+        info!("   This will add bitmap synchronization point before data reads.");
+        info!("   See docs/architecture/CPP_IO_PIPELINE_PORT.md for details.");
+    }
+    info!(?io_algorithm, "I/O pipeline algorithm");
 
     // Parse the pattern to extract drive prefix and pattern type
     let parsed = ParsedPattern::parse(pattern)
