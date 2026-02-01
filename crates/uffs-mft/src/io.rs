@@ -5175,7 +5175,7 @@ impl ParallelMftReader {
             }
 
             // Create the parse pipeline
-            let pipeline = crate::cpp_types::CppParsePipeline::with_capacity(
+            let pipeline = CppParsePipeline::with_capacity(
                 record_size as u32,
                 total_records,
             );

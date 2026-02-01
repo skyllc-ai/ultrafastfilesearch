@@ -204,7 +204,7 @@ impl CppIoPipeline {
     /// and will be computed after the bitmap is read.
     #[must_use]
     pub fn from_extent_map(extent_map: &MftExtentMap) -> Self {
-        let mut data_chunks = Vec::with_capacity(extent_map.extents().len());
+        let mut data_chunks = Vec::with_capacity(extent_map.extent_count());
 
         for extent in extent_map.extents() {
             // Each extent becomes one CppDataChunk
@@ -289,7 +289,7 @@ impl CppIoPipeline {
     pub fn run(
         self,
         overlapped_handle: HANDLE,
-        volume: char,
+        _volume: char,
         concurrency: usize,
         io_chunk_size: usize,
         pipeline: CppParsePipeline,

@@ -100,6 +100,9 @@ pub mod parse; // MFT record parsing - cross-platform
 
 // Windows-only modules (I/O operations)
 #[cfg(windows)]
+pub mod cpp_io_pipeline;
+
+#[cfg(windows)]
 pub mod io;
 
 #[cfg(windows)]

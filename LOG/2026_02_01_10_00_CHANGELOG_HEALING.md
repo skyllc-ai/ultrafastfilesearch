@@ -16,13 +16,36 @@ Running CI pipeline after implementing the C++ I/O pipeline port (`CppIoPipeline
 **Command:** `rust-script scripts/ci-pipeline.rs go -v`
 
 ### Errors Found
-(To be filled in after CI run)
+
+1. **Missing module declaration** (`lib.rs`)
+   - `cpp_io_pipeline` module was not declared in `lib.rs`
+   - Error: `use of undeclared crate or module cpp_io_pipeline`
+
+2. **Iterator doesn't have `.len()` method** (`cpp_io_pipeline.rs:207`)
+   - `extent_map.extents().len()` fails because `extents()` returns an iterator, not a slice
+   - Error: `no method named 'len' found for opaque type 'impl Iterator<Item = &MftExtent>'`
+
+3. **Unused variable** (`cpp_io_pipeline.rs:292`)
+   - `volume: char` parameter in `run()` method is unused
+   - Warning: `unused variable: 'volume'`
+
+4. **Unnecessary qualification** (`io.rs:5178`)
+   - `crate::cpp_types::CppParsePipeline` should just be `CppParsePipeline` (already imported)
+   - Warning: `unnecessary qualification`
 
 ### Fixes Applied
-(To be filled in as fixes are made)
+
+1. **Fix #1:** Added `#[cfg(windows)] pub mod cpp_io_pipeline;` to `lib.rs` at line 103
+
+2. **Fix #2:** Changed `extent_map.extents().len()` to `extent_map.extent_count()`
+   - `MftExtentMap` has an `extent_count()` method that returns `usize`
+
+3. **Fix #3:** Renamed `volume: char` to `_volume: char` to indicate intentionally unused
+
+4. **Fix #4:** Changed `crate::cpp_types::CppParsePipeline::with_capacity(` to `CppParsePipeline::with_capacity(`
 
 ---
 
 ## Summary
-(To be filled in after all fixes are complete)
+All 4 issues fixed. Re-running CI pipeline to verify.
 
