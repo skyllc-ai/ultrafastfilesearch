@@ -1605,55 +1605,28 @@ impl CppParsePipeline {
     pub fn log_diagnostics(&self) {
         use core::sync::atomic::Ordering;
 
-        use tracing::info;
+        use tracing::{debug, warn};
 
         let chunks = self.chunks_processed.load(Ordering::Relaxed);
-        let examined = self.records_examined.load(Ordering::Relaxed);
-        let file_magic = self.records_with_file_magic.load(Ordering::Relaxed);
         let parsed = self.records_parsed.load(Ordering::Relaxed);
         let skipped_boundary = self.records_skipped_boundary.load(Ordering::Relaxed);
-        let usa_success = self.usa_fixup_success.load(Ordering::Relaxed);
         let usa_failed = self.usa_fixup_failed.load(Ordering::Relaxed);
-        let not_in_use = self.records_not_in_use.load(Ordering::Relaxed);
 
-        info!("📊 LIVE PATH PARSE DIAGNOSTICS (CppParsePipeline)");
-        info!(
+        debug!(
             chunks_processed = chunks,
-            records_examined = examined,
-            records_with_file_magic = file_magic,
-            usa_fixup_success = usa_success,
-            usa_fixup_failed = usa_failed,
             records_parsed = parsed,
-            records_not_in_use = not_in_use,
-            records_skipped_at_boundaries = skipped_boundary,
-            "Parse pipeline summary"
+            "Parse pipeline complete"
         );
 
-        // Calculate and log any discrepancies
+        // Only log warnings for actual issues
         if skipped_boundary > 0 {
-            info!(
+            warn!(
                 skipped = skipped_boundary,
-                "⚠️ Records skipped at chunk boundaries (partial records)"
+                "Records skipped at chunk boundaries"
             );
         }
         if usa_failed > 0 {
-            info!(
-                failed = usa_failed,
-                "⚠️ Records with USA fixup failure (marked as BAAD)"
-            );
-        }
-
-        // Log the flow: FILE magic -> USA fixup -> in-use check -> parsed
-        let expected_parsed = usa_success.saturating_sub(not_in_use);
-        if parsed != expected_parsed {
-            info!(
-                file_magic = file_magic,
-                usa_success = usa_success,
-                not_in_use = not_in_use,
-                expected_parsed = expected_parsed,
-                actual_parsed = parsed,
-                "⚠️ Parse count mismatch (expected = usa_success - not_in_use)"
-            );
+            warn!(failed = usa_failed, "Records with USA fixup failure");
         }
     }
 
@@ -1673,12 +1646,10 @@ impl CppParsePipeline {
     pub fn process_chunk(&self, buffer: &mut [u8], virtual_offset: u64) {
         use core::sync::atomic::Ordering;
 
-        use tracing::trace;
-
         // Increment chunk counter
-        let chunk_num = self.chunks_processed.fetch_add(1, Ordering::Relaxed) + 1;
+        self.chunks_processed.fetch_add(1, Ordering::Relaxed);
 
-        // Calculate diagnostic info for this chunk
+        // Calculate start offset for partial record handling
         let mft_record_size = self.mft_record_size as usize;
         let virtual_offset_usize = u64_to_usize(virtual_offset);
         let start_offset = if virtual_offset_usize & (mft_record_size - 1) != 0 {
@@ -1687,109 +1658,41 @@ impl CppParsePipeline {
             0
         };
 
-        // Calculate FRS range for this chunk
-        let first_frs = virtual_offset / mft_record_size as u64;
+        // Track partial records at chunk boundaries
+        if start_offset > 0 {
+            self.records_skipped_boundary
+                .fetch_add(1, Ordering::Relaxed);
+        }
+
+        // Calculate records in this chunk
         let records_in_chunk = if buffer.len() >= start_offset {
             (buffer.len() - start_offset) / mft_record_size
         } else {
             0
         };
-        let last_frs = if records_in_chunk > 0 {
-            first_frs + records_in_chunk as u64 - 1
-        } else {
-            first_frs
-        };
-
-        // CHUNK HANDOFF LOGGING: Log when chunk is received for processing
-        trace!(
-            chunk_num = chunk_num,
-            virtual_offset = virtual_offset,
-            buffer_size = buffer.len(),
-            first_frs = first_frs,
-            last_frs = last_frs,
-            records_in_chunk = records_in_chunk,
-            start_offset = start_offset,
-            "🔄 CHUNK HANDOFF: Received chunk for processing"
-        );
-
-        // RECORD BOUNDARY LOGGING: Log if partial record at start
-        if start_offset > 0 {
-            self.records_skipped_boundary
-                .fetch_add(1, Ordering::Relaxed);
-            trace!(
-                chunk_num = chunk_num,
-                virtual_offset = virtual_offset,
-                start_offset = start_offset,
-                bytes_skipped = start_offset,
-                "⚠️ RECORD BOUNDARY: Skipping partial record at chunk start"
-            );
-        }
-
         self.records_examined
             .fetch_add(records_in_chunk as u64, Ordering::Relaxed);
 
         // PHASE 1: Pre-processing (NO LOCK except for brief pre-allocation)
-        // PRELOAD_CONCURRENT LOGGING: Log before calling preload
-        trace!(
-            chunk_num = chunk_num,
-            virtual_offset = virtual_offset,
-            "📥 PRELOAD_CONCURRENT: Starting Phase 1 (no lock)"
-        );
-
-        let preload_start = std::time::Instant::now();
         let max_frs = self.preload_concurrent(buffer, virtual_offset);
-        let preload_elapsed_us = preload_start.elapsed().as_micros();
-
-        trace!(
-            chunk_num = chunk_num,
-            max_frs_found = max_frs,
-            preload_elapsed_us = preload_elapsed_us,
-            "📥 PRELOAD_CONCURRENT: Phase 1 complete"
-        );
 
         // Pre-allocate records vector if needed (brief lock)
         if max_frs > 0 {
-            // PARALLEL SYNC LOGGING: Log lock acquisition for pre-allocation
-            trace!(
-                chunk_num = chunk_num,
-                max_frs = max_frs,
-                "🔒 PARALLEL SYNC: Acquiring lock for pre-allocation"
-            );
             // Note: Mutex poisoning only occurs if a thread panics while holding the lock.
             // In this context, we want to propagate the panic rather than handle it
             // gracefully. Merge lock acquisition with its single usage to avoid
             // holding the lock longer than necessary.
             #[allow(clippy::unwrap_used)]
             self.index.lock().unwrap().get_or_create(max_frs - 1);
-            trace!(
-                chunk_num = chunk_num,
-                "🔓 PARALLEL SYNC: Released pre-allocation lock"
-            );
         }
 
         // PHASE 2: Parsing (WITH LOCK - serialized)
-        // PARALLEL SYNC LOGGING: Log lock acquisition for parsing
-        trace!(
-            chunk_num = chunk_num,
-            virtual_offset = virtual_offset,
-            "🔒 PARALLEL SYNC: Acquiring lock for Phase 2 (load/parse)"
-        );
         // Note: Mutex poisoning only occurs if a thread panics while holding the lock.
         // In this context, we want to propagate the panic rather than handle it
         // gracefully.
         #[allow(clippy::unwrap_used)]
         let mut index = self.index.lock().unwrap();
-
-        let load_start = std::time::Instant::now();
         self.load(&mut index, buffer, virtual_offset);
-        let load_elapsed_us = load_start.elapsed().as_micros();
-
-        trace!(
-            chunk_num = chunk_num,
-            load_elapsed_us = load_elapsed_us,
-            index_records_count = index.records_data.len(),
-            "🔓 PARALLEL SYNC: Phase 2 complete, releasing lock"
-        );
     }
 
     /// Phase 1: Pre-processing without lock.

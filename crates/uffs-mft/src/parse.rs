@@ -2328,8 +2328,14 @@ impl ParsedColumns {
         };
 
         // Create one row per (name × stream) combination
+        // Filter out internal Windows streams ($OBJECT_ID, $EA_INFORMATION, etc.)
+        // to match C++ behavior (ntfs_index.hpp line 1388-1392)
         for name_info in &names {
             for stream_info in &streams {
+                // Skip internal Windows streams (matches C++ match_attributes=false)
+                if crate::ntfs::is_internal_windows_stream(&stream_info.name) {
+                    continue;
+                }
                 self.frs.push(record.frs);
                 self.parent_frs.push(name_info.parent_frs);
                 // C++ parity: directories have empty name

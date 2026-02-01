@@ -21,7 +21,7 @@
 #   - Parallel sync (lock acquisition), chunk processing order
 #
 # After running this script, transfer all files to Mac for offline analysis using:
-#   - uffs "*" --mft <mft_file> for offline search
+#   - uffs "*" --mft-file <mft_file> --drive <letter> for offline search
 #   - uffs-diag tools for detailed comparison
 #   - See: TESTING_TOOLS_GUIDE.md for full workflow
 [CmdletBinding()]

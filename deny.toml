@@ -91,9 +91,6 @@ skip-tree = [
 
     # unicode-width has version fragmentation
     { crate = "unicode-width@0.1", reason = "various deps use different versions" },
-
-    # object crate has version fragmentation (used by backtrace/addr2line)
-    { crate = "object@0.32", reason = "backtrace ecosystem version fragmentation" },
 ]
 
 [sources]

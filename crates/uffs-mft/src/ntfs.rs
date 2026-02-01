@@ -1390,6 +1390,45 @@ const _: () = {
     assert!(size_of::<ReparsePointHeader>() == 8);
 };
 
+// ============================================================================
+// Stream Filtering
+// ============================================================================
+
+/// Checks if a stream name is an internal Windows stream that should be
+/// filtered out during output expansion.
+///
+/// Internal Windows streams start with `$` followed by uppercase letters:
+/// - `$DSC` - Directory Service Cache
+/// - `$REPARSE` - Reparse point data
+/// - `$EA` - Extended Attributes
+/// - `$EA_INFORMATION` - Extended Attributes info
+/// - `$TXF_DATA` - Transactional NTFS data
+/// - `$OBJECT_ID` - Object IDs
+/// - `$LOGGED_UTILITY_STREAM` - Logged utility stream
+///
+/// User-visible streams like `Zone.Identifier`, `com.dropbox.attrs`, etc. do
+/// NOT start with `$`. Streams like `${GUID}.Metadata` (iCloud) start with `${`
+/// and are user-visible.
+///
+/// This matches C++ behavior where non-$DATA attributes are filtered during
+/// output when `match_attributes=false` (`ntfs_index.hpp` line 1388-1392):
+/// ```cpp
+/// bool const is_attribute = k->type_name_id &&
+///     (k->type_name_id << (CHAR_BIT / 2)) != static_cast<int>(ntfs::AttributeTypeCode::AttributeData);
+/// if (!match_attributes && is_attribute) { continue; }
+/// ```
+#[inline]
+#[must_use]
+pub fn is_internal_windows_stream(name: &str) -> bool {
+    // Must start with '$' followed by an uppercase letter (not '{')
+    // This allows `${GUID}.Metadata` style streams through
+    name.strip_prefix('$').is_some_and(|rest| {
+        rest.chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_uppercase())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

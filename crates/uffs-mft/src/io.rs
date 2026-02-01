@@ -486,40 +486,17 @@ impl MftRecordReader {
 
 // Re-export ParsedColumns from parse module (now cross-platform)
 // Re-export placeholder creation helper (also in parse module)
+// ============================================================================
+// Internal Windows Stream Filtering
+// ============================================================================
+
+// Re-use the cross-platform stream filtering function from ntfs module
+use crate::ntfs::is_internal_windows_stream;
 pub use crate::parse::{
     ExtensionAttributes, ParseResult, ParsedColumns, ParsedRecord,
     add_missing_parent_placeholders_to_vec, apply_fixup, create_placeholder_record, parse_record,
     parse_record_full, parse_record_zero_alloc,
 };
-
-// ============================================================================
-// Internal Windows Stream Filtering
-// ============================================================================
-
-/// Checks if a stream name is an internal Windows stream that should be
-/// filtered out.
-///
-/// Internal Windows streams start with `$` followed by uppercase letters:
-/// - `$DSC` - Directory Service Cache
-/// - `$REPARSE` - Reparse point data
-/// - `$EA` - Extended Attributes
-/// - `$EA_INFORMATION` - Extended Attributes info
-/// - `$TXF_DATA` - Transactional NTFS data
-/// - `$OBJECT_ID` - Object IDs
-///
-/// User-visible streams like `Zone.Identifier`, `com.dropbox.attrs`, etc. do
-/// NOT start with `$`. Streams like `${GUID}.Metadata` (iCloud) start with `${`
-/// and are user-visible.
-#[inline]
-fn is_internal_windows_stream(name: &str) -> bool {
-    // Must start with '$' followed by an uppercase letter (not '{')
-    // This allows `${GUID}.Metadata` style streams through
-    if let Some(rest) = name.strip_prefix('$') {
-        rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-    } else {
-        false
-    }
-}
 
 // ============================================================================
 // Windows-Specific Inline Parsing (Direct-to-Index)
