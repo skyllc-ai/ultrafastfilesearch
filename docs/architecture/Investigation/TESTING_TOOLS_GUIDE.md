@@ -28,6 +28,7 @@
    - [compare_outputs.py](#compare_outputspy---python-output-comparison)
    - [diagnose_mft_counts.rs](#diagnose_mft_countsrs---mft-count-diagnostic)
    - [find_missing_paths.rs](#find_missing_pathsrs---missing-path-extractor)
+   - [analyze_parity_differences.rs](#analyze_parity_differencesrs---parity-difference-analyzer)
 6. [Common Workflows](#common-workflows)
 
 ---
@@ -50,7 +51,7 @@ The UFFS project includes a comprehensive suite of testing and analysis tools de
 | **Data Collection** | `trial_run.ps1` | Collect MFT snapshots and scan outputs on Windows |
 | **Main Binaries** | `uffs`, `uffs_mft` | Production binaries with built-in testing/benchmarking |
 | **Diagnostic Tools** | 9 binaries in `uffs-diag` | Offline MFT analysis and comparison |
-| **Analysis Scripts** | 5 scripts in `scripts/` | Lightweight analysis with rust-script and Python |
+| **Analysis Scripts** | 6 scripts in `scripts/` | Lightweight analysis with rust-script and Python |
 
 ---
 
@@ -1144,6 +1145,71 @@ Written to missing_paths.txt
 
 ---
 
+### `analyze_parity_differences.rs` - Parity Difference Analyzer
+
+**Purpose:** Analyze parity differences between C++ and Rust scan outputs with pattern analysis.
+
+**Best For:** Understanding what types of files differ between C++ and Rust outputs, identifying systematic patterns in differences.
+
+#### Usage
+
+```bash
+rust-script scripts/analyze_parity_differences.rs cpp_d.txt rust_d.txt
+```
+
+#### What It Does
+
+- Extracts all paths from both C++ and Rust outputs
+- Finds paths in Rust but NOT in C++ (extra paths)
+- Finds paths in C++ but NOT in Rust (missing paths)
+- Analyzes patterns in the differences:
+  - ADS (Alternate Data Streams) count
+  - Directory vs file breakdown
+  - File type distribution (.bin, .exe, .dll, .txt, Zone.Identifier, etc.)
+  - Path pattern analysis (Rust target dirs, Dropbox paths, system paths)
+
+#### Output
+
+```
+🔍 Analyzing Parity Differences: Rust vs C++ Baseline
+
+📊 Step 1: Extracting paths from both files...
+  This may take a few minutes for 7M+ lines...
+
+  C++ paths:  7,058,031
+  Rust paths: 7,057,991
+
+📊 Step 2: Finding differences...
+
+  Paths in Rust but NOT in C++: 1
+  Paths in C++ but NOT in Rust: 41
+
+🔍 Analyzing: Missing in Rust
+
+📄 First 20 paths:
+  1. d:/rust/target/rls/debug/incremental/.../dep-graph.bin
+  2. d:/rust/target/rls/debug/incremental/.../query-cache.bin
+  ...
+
+📊 Pattern analysis:
+
+  Paths with ':' (potential ADS): 41
+  Paths ending with '/' (directories): 0
+
+  File type breakdown:
+    .bin files: 26
+    .exe files: 1
+    Zone.Identifier: 14
+
+  Path patterns:
+    Rust target dirs: 26
+    Dropbox paths: 40
+```
+
+**Use Case:** Quickly identify systematic patterns in parity differences (e.g., "all missing paths are ADS", "all missing paths are in Rust target directories").
+
+---
+
 ### Other Scripts
 
 **`ci-pipeline.rs`** - Full CI pipeline runner
@@ -1338,12 +1404,14 @@ The UFFS testing toolkit provides comprehensive coverage for:
 **For quick analysis:**
 - Use `compare_outputs.py` or `analyze_trial_outputs.rs` for fast path comparison
 - Use `analyze_cpp_stats.rs` for baseline statistics
+- Use `analyze_parity_differences.rs` for pattern analysis of differences
 
 **For detailed parity testing:**
 - Use `compare_scan_parity` for comprehensive field-by-field analysis with reports
 - Use `diagnose_mft_counts.rs` for count-focused diagnostics
 
 **For debugging specific issues:**
+- Use `analyze_parity_differences.rs` to identify systematic patterns in missing paths (ADS, file types, path patterns)
 - Use `find_missing_paths.rs` to extract full CSV lines for missing paths
 - Use `dump_mft_records` to inspect specific FRS headers
 - Use `inspect_mft_record_flow` to trace parse pipeline for specific records
