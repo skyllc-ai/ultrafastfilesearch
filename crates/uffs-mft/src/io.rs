@@ -38,7 +38,9 @@ use tracing::{debug, info, trace, warn};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
+use crate::cpp_io_pipeline::CppIoPipeline;
 use crate::error::{MftError, Result};
+use crate::index::IoPipelineAlgorithm;
 // Re-export SECTOR_SIZE for use by other modules (e.g., reader.rs streaming save)
 pub use crate::ntfs::SECTOR_SIZE;
 use crate::platform::{MftExtent, VolumeHandle};
@@ -5150,12 +5152,58 @@ impl ParallelMftReader {
         let concurrency = concurrency.unwrap_or(2);
         let io_chunk_size = io_chunk_size.unwrap_or_else(|| self.drive_type.optimal_io_size());
 
+        // Check if we should use the new C++ I/O pipeline
+        let io_algo = IoPipelineAlgorithm::from_env();
+        if matches!(io_algo, IoPipelineAlgorithm::CppPort) {
+            info!(
+                total_records,
+                concurrency,
+                io_size_kb = io_chunk_size / 1024,
+                drive_type = ?self.drive_type,
+                io_algo = %io_algo,
+                "🚀 Starting C++ I/O PIPELINE (bitmap sync point)"
+            );
+
+            // Build the C++ I/O pipeline from extent map
+            let io_pipeline = CppIoPipeline::from_extent_map(&self.extent_map);
+
+            // Compute skip ranges using the complete bitmap (the key sync point!)
+            if let Some(ref bitmap) = self.bitmap {
+                io_pipeline.compute_skip_ranges(bitmap);
+            } else {
+                warn!("No bitmap available - skip ranges will be 0 (reading all records)");
+            }
+
+            // Create the parse pipeline
+            let pipeline = crate::cpp_types::CppParsePipeline::with_capacity(
+                record_size as u32,
+                total_records,
+            );
+
+            // Run the I/O pipeline and get the CppMftIndex
+            let cpp_index = io_pipeline.run(
+                overlapped_handle,
+                volume,
+                concurrency,
+                io_chunk_size,
+                pipeline,
+            )?;
+
+            // Convert CppMftIndex to MftIndex
+            return Ok(cpp_index.into_mft_index(volume));
+        }
+
+        // ========================================================================
+        // FALLBACK: Original implementation (when UFFS_IO_ALGO != cpp_port)
+        // ========================================================================
+
         info!(
             total_records,
             concurrency,
             io_size_kb = io_chunk_size / 1024,
             drive_type = ?self.drive_type,
-            "🚀 Starting C++ PORT parsing (two-phase pipeline)"
+            io_algo = %io_algo,
+            "🚀 Starting C++ PORT parsing (two-phase pipeline, original I/O)"
         );
 
         // Generate read chunks with bitmap skip optimization
