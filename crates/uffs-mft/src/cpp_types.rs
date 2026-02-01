@@ -1546,21 +1546,22 @@ pub struct CppParsePipeline {
     /// MFT record size (typically 1024 bytes)
     pub mft_record_size: u32,
     /// Diagnostic counter: total chunks processed
-    chunks_processed: std::sync::atomic::AtomicU64,
+    pub chunks_processed: core::sync::atomic::AtomicU64,
     /// Diagnostic counter: total records examined (including skipped)
-    records_examined: std::sync::atomic::AtomicU64,
+    pub records_examined: core::sync::atomic::AtomicU64,
     /// Diagnostic counter: total records with valid FILE magic
-    records_with_file_magic: std::sync::atomic::AtomicU64,
+    pub records_with_file_magic: core::sync::atomic::AtomicU64,
     /// Diagnostic counter: total records parsed (in-use base + extension)
-    records_parsed: std::sync::atomic::AtomicU64,
-    /// Diagnostic counter: records skipped at chunk boundaries (partial records)
-    records_skipped_boundary: std::sync::atomic::AtomicU64,
+    pub records_parsed: core::sync::atomic::AtomicU64,
+    /// Diagnostic counter: records skipped at chunk boundaries (partial
+    /// records)
+    pub records_skipped_boundary: core::sync::atomic::AtomicU64,
     /// Diagnostic counter: USA fixup succeeded
-    usa_fixup_success: std::sync::atomic::AtomicU64,
+    pub usa_fixup_success: core::sync::atomic::AtomicU64,
     /// Diagnostic counter: USA fixup failed (marked as BAAD)
-    usa_fixup_failed: std::sync::atomic::AtomicU64,
+    pub usa_fixup_failed: core::sync::atomic::AtomicU64,
     /// Diagnostic counter: records not in-use (skipped in Phase 2)
-    records_not_in_use: std::sync::atomic::AtomicU64,
+    pub records_not_in_use: core::sync::atomic::AtomicU64,
 }
 
 impl CppParsePipeline {
@@ -1570,14 +1571,14 @@ impl CppParsePipeline {
         Self {
             index: Arc::new(Mutex::new(CppMftIndex::new())),
             mft_record_size,
-            chunks_processed: std::sync::atomic::AtomicU64::new(0),
-            records_examined: std::sync::atomic::AtomicU64::new(0),
-            records_with_file_magic: std::sync::atomic::AtomicU64::new(0),
-            records_parsed: std::sync::atomic::AtomicU64::new(0),
-            records_skipped_boundary: std::sync::atomic::AtomicU64::new(0),
-            usa_fixup_success: std::sync::atomic::AtomicU64::new(0),
-            usa_fixup_failed: std::sync::atomic::AtomicU64::new(0),
-            records_not_in_use: std::sync::atomic::AtomicU64::new(0),
+            chunks_processed: core::sync::atomic::AtomicU64::new(0),
+            records_examined: core::sync::atomic::AtomicU64::new(0),
+            records_with_file_magic: core::sync::atomic::AtomicU64::new(0),
+            records_parsed: core::sync::atomic::AtomicU64::new(0),
+            records_skipped_boundary: core::sync::atomic::AtomicU64::new(0),
+            usa_fixup_success: core::sync::atomic::AtomicU64::new(0),
+            usa_fixup_failed: core::sync::atomic::AtomicU64::new(0),
+            records_not_in_use: core::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -1587,14 +1588,14 @@ impl CppParsePipeline {
         Self {
             index: Arc::new(Mutex::new(CppMftIndex::with_capacity(record_count))),
             mft_record_size,
-            chunks_processed: std::sync::atomic::AtomicU64::new(0),
-            records_examined: std::sync::atomic::AtomicU64::new(0),
-            records_with_file_magic: std::sync::atomic::AtomicU64::new(0),
-            records_parsed: std::sync::atomic::AtomicU64::new(0),
-            records_skipped_boundary: std::sync::atomic::AtomicU64::new(0),
-            usa_fixup_success: std::sync::atomic::AtomicU64::new(0),
-            usa_fixup_failed: std::sync::atomic::AtomicU64::new(0),
-            records_not_in_use: std::sync::atomic::AtomicU64::new(0),
+            chunks_processed: core::sync::atomic::AtomicU64::new(0),
+            records_examined: core::sync::atomic::AtomicU64::new(0),
+            records_with_file_magic: core::sync::atomic::AtomicU64::new(0),
+            records_parsed: core::sync::atomic::AtomicU64::new(0),
+            records_skipped_boundary: core::sync::atomic::AtomicU64::new(0),
+            usa_fixup_success: core::sync::atomic::AtomicU64::new(0),
+            usa_fixup_failed: core::sync::atomic::AtomicU64::new(0),
+            records_not_in_use: core::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -1602,7 +1603,8 @@ impl CppParsePipeline {
     ///
     /// Call this after all chunks have been processed to see the summary.
     pub fn log_diagnostics(&self) {
-        use std::sync::atomic::Ordering;
+        use core::sync::atomic::Ordering;
+
         use tracing::info;
 
         let chunks = self.chunks_processed.load(Ordering::Relaxed);
@@ -1614,9 +1616,7 @@ impl CppParsePipeline {
         let usa_failed = self.usa_fixup_failed.load(Ordering::Relaxed);
         let not_in_use = self.records_not_in_use.load(Ordering::Relaxed);
 
-        info!(
-            "📊 LIVE PATH PARSE DIAGNOSTICS (CppParsePipeline)"
-        );
+        info!("📊 LIVE PATH PARSE DIAGNOSTICS (CppParsePipeline)");
         info!(
             chunks_processed = chunks,
             records_examined = examined,
@@ -1671,7 +1671,8 @@ impl CppParsePipeline {
     /// panicked while holding the lock). This is intentional - mutex
     /// poisoning indicates a serious error that should propagate.
     pub fn process_chunk(&self, buffer: &mut [u8], virtual_offset: u64) {
-        use std::sync::atomic::Ordering;
+        use core::sync::atomic::Ordering;
+
         use tracing::trace;
 
         // Increment chunk counter
@@ -1713,7 +1714,8 @@ impl CppParsePipeline {
 
         // RECORD BOUNDARY LOGGING: Log if partial record at start
         if start_offset > 0 {
-            self.records_skipped_boundary.fetch_add(1, Ordering::Relaxed);
+            self.records_skipped_boundary
+                .fetch_add(1, Ordering::Relaxed);
             trace!(
                 chunk_num = chunk_num,
                 virtual_offset = virtual_offset,
@@ -1755,10 +1757,10 @@ impl CppParsePipeline {
             );
             // Note: Mutex poisoning only occurs if a thread panics while holding the lock.
             // In this context, we want to propagate the panic rather than handle it
-            // gracefully.
+            // gracefully. Merge lock acquisition with its single usage to avoid
+            // holding the lock longer than necessary.
             #[allow(clippy::unwrap_used)]
-            let mut index = self.index.lock().unwrap();
-            index.get_or_create(max_frs - 1);
+            self.index.lock().unwrap().get_or_create(max_frs - 1);
             trace!(
                 chunk_num = chunk_num,
                 "🔓 PARALLEL SYNC: Released pre-allocation lock"
@@ -1800,7 +1802,7 @@ impl CppParsePipeline {
     /// # Returns
     /// Maximum FRS + 1 found in this chunk (0 if no valid records)
     fn preload_concurrent(&self, buffer: &mut [u8], virtual_offset: u64) -> u32 {
-        use std::sync::atomic::Ordering;
+        use core::sync::atomic::Ordering;
 
         let mft_record_size = self.mft_record_size as usize;
         let mft_record_size_log2 = mft_record_size.trailing_zeros();
@@ -1916,7 +1918,7 @@ impl CppParsePipeline {
     /// This function is called with the mutex held (serialized parsing).
     #[allow(clippy::too_many_lines)]
     fn load(&self, index: &mut CppMftIndex, buffer: &[u8], virtual_offset: u64) {
-        use std::sync::atomic::Ordering;
+        use core::sync::atomic::Ordering;
 
         let mft_record_size = self.mft_record_size as usize;
         let mft_record_size_log2 = mft_record_size.trailing_zeros();
@@ -1938,17 +1940,20 @@ impl CppParsePipeline {
 
             // Check if record has FILE magic but is not in-use
             // (This helps diagnose the flow: FILE magic -> USA fixup -> in-use check)
-            if record_data.len() >= 48 {
-                let magic = u32::from_le_bytes([
-                    record_data[0],
-                    record_data[1],
-                    record_data[2],
-                    record_data[3],
-                ]);
-                let flags = u16::from_le_bytes([record_data[22], record_data[23]]);
-                if magic == FILE_MAGIC && (flags & FRH_IN_USE) == 0 {
-                    not_in_use_count += 1;
-                }
+            // Assert length before indexing to elide bounds checks
+            assert!(
+                record_data.len() >= 48,
+                "record_data too short for magic/flags check"
+            );
+            let magic = u32::from_le_bytes([
+                record_data[0],
+                record_data[1],
+                record_data[2],
+                record_data[3],
+            ]);
+            let flags = u16::from_le_bytes([record_data[22], record_data[23]]);
+            if magic == FILE_MAGIC && (flags & FRH_IN_USE) == 0 {
+                not_in_use_count += 1;
             }
 
             // Parse this record (returns true if record was in-use and parsed)
@@ -1960,7 +1965,8 @@ impl CppParsePipeline {
         }
 
         // Update diagnostic counters
-        self.records_parsed.fetch_add(parsed_count, Ordering::Relaxed);
+        self.records_parsed
+            .fetch_add(parsed_count, Ordering::Relaxed);
         self.records_not_in_use
             .fetch_add(not_in_use_count, Ordering::Relaxed);
     }

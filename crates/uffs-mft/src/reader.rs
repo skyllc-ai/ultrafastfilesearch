@@ -3841,12 +3841,13 @@ impl MftReader {
         path: P,
         options: &crate::raw::LoadRawOptions,
     ) -> Result<crate::index::MftIndex> {
+        use tracing::info;
+
         use crate::index::MftIndex;
         use crate::parse::{
             MftRecordMerger, ParseOptions, ParseResult, apply_fixup, parse_record_forensic,
             parse_record_full,
         };
-        use tracing::info;
 
         let raw = crate::raw::load_raw_mft(path, options)?;
 
@@ -3889,9 +3890,7 @@ impl MftReader {
             }
 
             // Log diagnostic summary for forensic mode
-            info!(
-                "📊 OFFLINE PATH PARSE DIAGNOSTICS (Forensic Mode)"
-            );
+            info!("📊 OFFLINE PATH PARSE DIAGNOSTICS (Forensic Mode)");
             info!(
                 total_records_in_file,
                 records_examined,
@@ -3944,9 +3943,7 @@ impl MftReader {
             let parsed_records = merger.merge();
 
             // Log diagnostic summary for normal mode
-            info!(
-                "📊 OFFLINE PATH PARSE DIAGNOSTICS (Normal Mode)"
-            );
+            info!("📊 OFFLINE PATH PARSE DIAGNOSTICS (Normal Mode)");
             info!(
                 total_records_in_file,
                 records_examined,

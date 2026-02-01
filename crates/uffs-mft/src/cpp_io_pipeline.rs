@@ -360,9 +360,7 @@ impl CppIoPipeline {
         // This logging helps identify differences between live and offline paths.
         // Enable with RUST_LOG=uffs_mft::cpp_io_pipeline=debug
         let record_size = pipeline.mft_record_size as u64;
-        debug!(
-            "📊 LIVE PATH CHUNK DIAGNOSTICS (CppIoPipeline)"
-        );
+        debug!("📊 LIVE PATH CHUNK DIAGNOSTICS (CppIoPipeline)");
         debug!(
             total_data_chunks = self.data_chunks.len(),
             total_io_ops = total_io_ops,
@@ -409,9 +407,7 @@ impl CppIoPipeline {
         }
 
         // Log I/O operations (sub-chunks)
-        debug!(
-            "📋 I/O Operations (sub-chunks of data chunks):"
-        );
+        debug!("📋 I/O Operations (sub-chunks of data chunks):");
         for (idx, op) in io_ops.iter().enumerate() {
             let first_frs = op.virtual_offset / record_size;
             let records_in_op = op.size as u64 / record_size;
