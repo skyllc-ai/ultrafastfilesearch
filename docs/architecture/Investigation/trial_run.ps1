@@ -27,7 +27,8 @@
 [CmdletBinding()]
 param(
     [string[]]$Drives = @(),       # Drives to test (empty = auto-detect NTFS drives)
-    [switch]$SkipMft,              # Skip uffs_mft save tests
+    [switch]$SkipMft = $true,      # Skip uffs_mft save tests (default: true - MFT collection confirmed OK)
+    [switch]$CollectMft,           # Force MFT collection (overrides SkipMft)
     [string]$BinDir = "",          # Custom bin directory (default: $HOME\bin)
     [int]$ThrottleLimit = 2,       # Max physical disks in parallel (PS7+ only)
     [switch]$VerboseLog            # Enable verbose/trace logging (more detail, larger logs)
@@ -187,7 +188,9 @@ try {
     }
 
     # MFT saves (only first drive), sequential; binaries write output files themselves.
-    if (-not $SkipMft -and $hasMft -and $Drives.Count -gt 0) {
+    # Default: skipped (MFT collection confirmed 100% OK). Use -CollectMft to force collection.
+    $doMftCollection = $CollectMft -or (-not $SkipMft)
+    if ($doMftCollection -and $hasMft -and $Drives.Count -gt 0) {
         $mftDrive = $Drives[0]
         Write-Host "MFT Save (Drive $mftDrive)..." -ForegroundColor Cyan
 

@@ -900,6 +900,24 @@ impl IndexStreamInfo {
     pub const fn type_name_id(&self) -> u8 {
         self.flags >> 2
     }
+
+    /// Returns true if this stream should be included in output.
+    ///
+    /// Matches C++ `match_attributes=false` behavior (`ntfs_index.hpp` line
+    /// 1388-1392).
+    ///
+    /// Only `$DATA` streams (`type_name_id=8`, i.e., `0x80 >> 4`) and directory
+    /// indexes (`type_name_id=0` for `$I30`) are included. Internal attributes
+    /// like `$OBJECT_ID` (`type_name_id=4`), `$EA_INFORMATION`
+    /// (`type_name_id=13`) are filtered out.
+    #[inline]
+    #[must_use]
+    pub const fn is_output_stream(&self) -> bool {
+        let tid = self.type_name_id();
+        // type_name_id == 0: directory index ($I30)
+        // type_name_id == 8: $DATA (0x80 >> 4)
+        tid == 0 || tid == 8
+    }
 }
 
 // ============================================================================

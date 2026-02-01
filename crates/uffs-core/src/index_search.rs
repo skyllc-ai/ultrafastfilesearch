@@ -954,20 +954,27 @@ impl<'a> IndexQuery<'a> {
 
                 (0..name_count).flat_map(move |name_idx| {
                     let inner_cached_path = outer_cached_path.clone();
-                    (0..stream_count).map(move |stream_idx| {
+                    (0..stream_count).filter_map(move |stream_idx| {
+                        // Filter out non-$DATA streams (matches C++ match_attributes=false)
+                        // Only $DATA (type_name_id=8) and $I30 (type_name_id=0) are output
+                        let stream_info = index.get_stream_at(record, stream_idx)?;
+                        if !stream_info.is_output_stream() {
+                            return None;
+                        }
+
                         let result =
                             SearchResult::from_expanded(record, index, name_idx, stream_idx);
                         if resolve_paths {
-                            Self::resolve_result_path(
+                            Some(Self::resolve_result_path(
                                 result,
                                 record,
                                 index,
                                 name_idx,
                                 stream_idx,
                                 inner_cached_path.clone(),
-                            )
+                            ))
                         } else {
-                            result
+                            Some(result)
                         }
                     })
                 })
