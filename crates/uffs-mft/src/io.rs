@@ -2486,8 +2486,22 @@ pub fn generate_read_chunks(
             // 2. Parent directories marked not-in-use are still referenced by children
             // 3. Extension records may be in different chunks than their base records
             let (skip_begin, skip_end) = if let Some(bm) = bitmap {
-                bm.calculate_skip_range(chunk_frs_start, chunk_frs_end)
+                let skip_range = bm.calculate_skip_range(chunk_frs_start, chunk_frs_end);
+                if skip_range.0 > 0 || skip_range.1 > 0 {
+                    debug!(
+                        chunk_frs_start,
+                        chunk_frs_end,
+                        skip_begin = skip_range.0,
+                        skip_end = skip_range.1,
+                        "📊 Bitmap skip range calculated (bitmap is Some)"
+                    );
+                }
+                skip_range
             } else {
+                trace!(
+                    chunk_frs_start,
+                    chunk_frs_end, "📊 No bitmap - skip_begin=0, skip_end=0"
+                );
                 (0, 0)
             };
 
@@ -2546,22 +2560,30 @@ pub fn generate_read_chunks(
         );
     }
 
+    let skip_percentage = if total_records_to_read + total_records_skipped > 0 {
+        (total_records_skipped as f64 / (total_records_to_read + total_records_skipped) as f64)
+            * 100.0
+    } else {
+        0.0
+    };
+
     info!(
         chunks = chunks.len(),
         records_to_read = total_records_to_read,
         records_skipped = total_records_skipped,
-        skip_percentage = format!(
-            "{:.1}%",
-            if total_records_to_read + total_records_skipped > 0 {
-                (total_records_skipped as f64
-                    / (total_records_to_read + total_records_skipped) as f64)
-                    * 100.0
-            } else {
-                0.0
-            }
-        ),
+        skip_percentage = format!("{:.1}%", skip_percentage),
+        bitmap_used = bitmap.is_some(),
         "📊 Read plan generated"
     );
+
+    if total_records_skipped > 0 {
+        warn!(
+            total_records_skipped,
+            skip_percentage = format!("{:.1}%", skip_percentage),
+            "⚠️  {} records will be skipped based on bitmap",
+            total_records_skipped
+        );
+    }
 
     chunks
 }
@@ -3063,7 +3085,14 @@ impl ParallelMftReader {
     {
         info!(
             chunk_size = self.chunk_size,
-            merge_extensions, "Starting parallel MFT read"
+            merge_extensions,
+            bitmap_enabled = self.bitmap.is_some(),
+            "Starting parallel MFT read (bitmap: {})",
+            if self.bitmap.is_some() {
+                "ENABLED"
+            } else {
+                "DISABLED"
+            }
         );
 
         // Generate optimized read chunks
@@ -3153,6 +3182,18 @@ impl ParallelMftReader {
                     let record_size = record_size as usize;
                     let skip_begin = chunk.skip_begin as usize;
                     let effective_count = chunk.effective_record_count() as usize;
+
+                    // Log chunks with non-zero skips
+                    if chunk.skip_begin > 0 || chunk.skip_end > 0 {
+                        debug!(
+                            chunk_start_frs = chunk.start_frs,
+                            chunk_record_count = chunk.record_count,
+                            skip_begin = chunk.skip_begin,
+                            skip_end = chunk.skip_end,
+                            effective_count,
+                            "⚠️  Chunk has skip_begin or skip_end > 0 (parallel mode)"
+                        );
+                    }
 
                     // Pre-allocate for this chunk's results
                     acc.results.reserve(effective_count);
@@ -4275,6 +4316,15 @@ impl ParallelMftReader {
         );
 
         // Generate read chunks with bitmap skip optimization
+        info!(
+            bitmap_enabled = self.bitmap.is_some(),
+            "📊 Generating read chunks (bitmap: {})",
+            if self.bitmap.is_some() {
+                "ENABLED"
+            } else {
+                "DISABLED"
+            }
+        );
         let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
         let mut sorted_chunks: Vec<ReadChunk> = chunks;
         sorted_chunks.sort_by_key(|c| c.disk_offset);
@@ -4288,11 +4338,35 @@ impl ParallelMftReader {
 
         let mut io_ops: VecDeque<IoOp> = VecDeque::new();
         let mut buffer_offset = 0usize;
+        let mut chunks_with_skips = 0usize;
+        let mut total_skipped_records = 0u64;
 
         for chunk in sorted_chunks.iter() {
             let skip_begin_bytes = chunk.skip_begin as usize * record_size;
             let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
+
+            // Log chunks with non-zero skips
+            if chunk.skip_begin > 0 || chunk.skip_end > 0 {
+                chunks_with_skips += 1;
+                total_skipped_records += chunk.skip_begin + chunk.skip_end;
+                debug!(
+                    chunk_start_frs = chunk.start_frs,
+                    chunk_record_count = chunk.record_count,
+                    skip_begin = chunk.skip_begin,
+                    skip_end = chunk.skip_end,
+                    effective_records,
+                    "⚠️  Chunk has skip_begin or skip_end > 0"
+                );
+            }
+
             if effective_records == 0 {
+                warn!(
+                    chunk_start_frs = chunk.start_frs,
+                    chunk_record_count = chunk.record_count,
+                    skip_begin = chunk.skip_begin,
+                    skip_end = chunk.skip_end,
+                    "❌ SKIPPING ENTIRE CHUNK (effective_records = 0)"
+                );
                 continue;
             }
 
@@ -4321,8 +4395,20 @@ impl ParallelMftReader {
         info!(
             io_ops = total_io_ops,
             bytes_to_read_mb = bytes_to_read / (1024 * 1024),
+            chunks_with_skips,
+            total_skipped_records,
             "📊 Generated I/O operations"
         );
+
+        if chunks_with_skips > 0 {
+            warn!(
+                chunks_with_skips,
+                total_skipped_records,
+                "⚠️  {} chunks have skip_begin or skip_end > 0, skipping {} total records",
+                chunks_with_skips,
+                total_skipped_records
+            );
+        }
 
         // Allocate final buffer for all data
         let mut mft_buffer = AlignedBuffer::new(bytes_to_read);
