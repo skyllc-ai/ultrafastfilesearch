@@ -12,29 +12,31 @@
 //! 2. **Synchronization Point** - After ALL bitmap is read:
 //!    - Recalculate skip_begin/skip_end for ALL data chunks
 //!    - Store atomically so data reads use updated values
-//! 3. **Phase 2: Data Reading** - Read $MFT::$DATA chunks with correct skip ranges
+//! 3. **Phase 2: Data Reading** - Read $MFT::$DATA chunks with correct skip
+//!    ranges
 //!
 //! ## Why This Matters
 //!
-//! The current Rust implementation calculates skip ranges during chunk generation
-//! (in `generate_read_chunks`), before the bitmap is fully processed. This causes
-//! ~40 files to be missed compared to C++.
+//! The current Rust implementation calculates skip ranges during chunk
+//! generation (in `generate_read_chunks`), before the bitmap is fully
+//! processed. This causes ~40 files to be missed compared to C++.
 //!
 //! ## C++ Source Reference
 //!
 //! - `mft_reader.hpp` lines 40-63: `RetPtr` struct with atomic skip ranges
-//! - `mft_reader.hpp` lines 245-296: Synchronization point after bitmap completes
+//! - `mft_reader.hpp` lines 245-296: Synchronization point after bitmap
+//!   completes
 //! - `mft_reader.hpp` lines 321-386: `queue_next()` - bitmap first, then data
 
 #![cfg(windows)]
 
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tracing::{debug, info, trace, warn};
-use windows::Win32::Foundation::{HANDLE, ERROR_IO_PENDING, GetLastError};
+use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError, HANDLE};
 use windows::Win32::Storage::FileSystem::ReadFile;
 use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
@@ -165,7 +167,8 @@ impl CppDataChunk {
         self.read_size(cluster_size) / u64::from(record_size)
     }
 
-    /// Returns the first FRS in this chunk (before skipping) - for skip range calculation.
+    /// Returns the first FRS in this chunk (before skipping) - for skip range
+    /// calculation.
     #[must_use]
     pub fn start_frs_raw(&self, cluster_size: u32, record_size: u32) -> u64 {
         (self.vcn * u64::from(cluster_size)) / u64::from(record_size)
@@ -200,8 +203,8 @@ pub struct CppIoPipeline {
 impl CppIoPipeline {
     /// Creates a new pipeline from an MFT extent map.
     ///
-    /// This builds `CppDataChunk`s from the extents. Skip ranges are initially 0
-    /// and will be computed after the bitmap is read.
+    /// This builds `CppDataChunk`s from the extents. Skip ranges are initially
+    /// 0 and will be computed after the bitmap is read.
     #[must_use]
     pub fn from_extent_map(extent_map: &MftExtentMap) -> Self {
         let mut data_chunks = Vec::with_capacity(extent_map.extent_count());
@@ -233,19 +236,21 @@ impl CppIoPipeline {
 
     /// Computes skip ranges for all data chunks using the complete bitmap.
     ///
-    /// This is the **synchronization point** - called after the bitmap is fully read.
-    /// It updates the atomic skip ranges in each `CppDataChunk`.
+    /// This is the **synchronization point** - called after the bitmap is fully
+    /// read. It updates the atomic skip ranges in each `CppDataChunk`.
     pub fn compute_skip_ranges(&self, bitmap: &MftBitmap) {
         let records_per_cluster = self.bytes_per_cluster / self.bytes_per_record;
 
         for chunk in &self.data_chunks {
             // Get the raw (unskipped) record range for this chunk
             let start_frs = chunk.start_frs_raw(self.bytes_per_cluster, self.bytes_per_record);
-            let record_count = chunk.record_count_raw(self.bytes_per_cluster, self.bytes_per_record);
+            let record_count =
+                chunk.record_count_raw(self.bytes_per_cluster, self.bytes_per_record);
             let end_frs = start_frs + record_count;
 
             // Calculate skip ranges in records
-            let (skip_records_begin, skip_records_end) = bitmap.calculate_skip_range(start_frs, end_frs);
+            let (skip_records_begin, skip_records_end) =
+                bitmap.calculate_skip_range(start_frs, end_frs);
 
             // Convert to cluster counts (C++ stores skips in clusters)
             let skip_clusters_begin = skip_records_begin / u64::from(records_per_cluster);
@@ -267,19 +272,27 @@ impl CppIoPipeline {
 
         // Log summary
         let total_clusters: u64 = self.data_chunks.iter().map(|c| c.cluster_count).sum();
-        let effective_clusters: u64 = self.data_chunks.iter().map(|c| c.effective_cluster_count()).sum();
+        let effective_clusters: u64 = self
+            .data_chunks
+            .iter()
+            .map(|c| c.effective_cluster_count())
+            .sum();
         let skipped_clusters = total_clusters - effective_clusters;
 
         info!(
             total_clusters,
             effective_clusters,
             skipped_clusters,
-            skip_pct = format!("{:.1}%", (skipped_clusters as f64 / total_clusters as f64) * 100.0),
+            skip_pct = format!(
+                "{:.1}%",
+                (skipped_clusters as f64 / total_clusters as f64) * 100.0
+            ),
             "Computed skip ranges for all chunks (C++ style sync point)"
         );
     }
 
-    /// Runs the IOCP sliding window I/O loop and parses data using `CppParsePipeline`.
+    /// Runs the IOCP sliding window I/O loop and parses data using
+    /// `CppParsePipeline`.
     ///
     /// This is the main I/O loop that:
     /// 1. Queues data reads using the computed skip ranges
@@ -395,9 +408,9 @@ impl CppIoPipeline {
                     Err(_) => {
                         let last_error = unsafe { GetLastError() };
                         if last_error != ERROR_IO_PENDING {
-                            return Err(crate::error::MftError::Io(std::io::Error::from_raw_os_error(
-                                last_error.0 as i32,
-                            )));
+                            return Err(crate::error::MftError::Io(
+                                std::io::Error::from_raw_os_error(last_error.0 as i32),
+                            ));
                         }
                     }
                 }
@@ -457,10 +470,8 @@ impl CppIoPipeline {
                     completed_count += 1;
 
                     // Recycle buffer and queue next read
-                    let recycled_buffer = std::mem::replace(
-                        &mut op_mut.buffer,
-                        AlignedBuffer::new(0),
-                    );
+                    let recycled_buffer =
+                        std::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
                     buffer_pool.push(recycled_buffer);
 
                     // Queue next read if available
@@ -475,7 +486,8 @@ impl CppIoPipeline {
                         let offset = new_in_flight.op.disk_offset;
                         let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
                         new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                        new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
+                        new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
+                            (offset >> 32) as u32;
 
                         let overlapped_ptr = &mut new_op_mut.overlapped as *mut _;
                         let read_size = new_op_mut.op.size;
@@ -525,4 +537,3 @@ impl CppIoPipeline {
         Ok(pipeline.into_index())
     }
 }
-

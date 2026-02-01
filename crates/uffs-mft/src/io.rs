@@ -5175,10 +5175,7 @@ impl ParallelMftReader {
             }
 
             // Create the parse pipeline
-            let pipeline = CppParsePipeline::with_capacity(
-                record_size as u32,
-                total_records,
-            );
+            let pipeline = CppParsePipeline::with_capacity(record_size as u32, total_records);
 
             // Run the I/O pipeline and get the CppMftIndex
             let cpp_index = io_pipeline.run(
