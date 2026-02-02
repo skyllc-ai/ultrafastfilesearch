@@ -61,6 +61,7 @@
     clippy::too_many_lines
 )]
 
+use core::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::File;
@@ -68,6 +69,7 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use rayon::prelude::*;
 use uffs_polars::{CsvReadOptions, DataFrame, SerReader, StringChunked};
 // Wire in crate dependencies for version-locking
 use {uffs_diag as _, uffs_mft as _};
@@ -143,6 +145,23 @@ impl FieldStats {
         } else {
             self.sum_abs_diff / self.mismatches as f64
         }
+    }
+
+    /// Merge another `FieldStats` into this one
+    fn merge(&mut self, other: Self) {
+        self.total_compared += other.total_compared;
+        self.exact_matches += other.exact_matches;
+        self.mismatches += other.mismatches;
+        self.cpp_only += other.cpp_only;
+        self.rust_only += other.rust_only;
+        self.sum_abs_diff += other.sum_abs_diff;
+        if other.max_abs_diff > self.max_abs_diff {
+            self.max_abs_diff = other.max_abs_diff;
+        }
+        // Keep only first 10 samples total
+        let remaining = 10_usize.saturating_sub(self.diff_samples.len());
+        self.diff_samples
+            .extend(other.diff_samples.into_iter().take(remaining));
     }
 }
 
@@ -455,61 +474,122 @@ fn compare_dataframes(
         .map(|s| s.to_string())
         .collect();
 
-    // Compare fields for common paths
-    println!("\nComparing {} common paths...", common.len());
-    let mut progress = 0;
+    // Compare fields for common paths using parallel iteration
+    println!(
+        "\nComparing {} common paths (using {} threads)...",
+        common.len(),
+        rayon::current_num_threads()
+    );
     let total = common.len();
 
-    for path in &common {
-        progress += 1;
-        if progress % 100_000 == 0 {
-            println!(
-                "  Progress: {}/{} ({:.1}%)",
-                progress,
-                total,
-                100.0 * progress as f64 / total as f64
-            );
-        }
+    // Convert to Vec for parallel iteration
+    let common_paths: Vec<_> = common.into_iter().collect();
 
-        let cpp_idx = cpp_paths[path];
-        let rust_idx = rust_paths[path];
+    // Atomic progress counter for reporting
+    let progress = AtomicUsize::new(0);
 
-        // Compare numeric fields
-        for &field in &numeric_fields {
-            let cpp_col = cpp_col_map
+    // Pre-compute column mappings for each field to avoid repeated lookups
+    // Both C++ and Rust files use the same display column names (e.g., "Size",
+    // "Size on Disk") Tuple is (internal_field_name, cpp_col, rust_col) - we
+    // use cpp_col for both since headers match
+    let numeric_col_mappings: Vec<(&str, &str, &str)> = numeric_fields
+        .iter()
+        .map(|&field| {
+            let display_col = cpp_col_map
                 .iter()
                 .find(|(_, v)| **v == field)
                 .map(|(k, _)| *k)
                 .filter(|c| cpp_cols.contains(*c))
                 .unwrap_or(field);
-            let rust_col = field;
+            (field, display_col, display_col) // Use display name for both C++ and Rust
+        })
+        .collect();
 
-            let cpp_val = get_u64_value(&cpp_df, cpp_col, cpp_idx);
-            let rust_val = get_u64_value(&rust_df, rust_col, rust_idx);
-
-            if let Some(stats) = results.field_stats.get_mut(field) {
-                compare_numeric_field(stats, path, cpp_val, rust_val);
-            }
-        }
-
-        // Compare boolean fields
-        for &field in &bool_fields {
-            let cpp_col = cpp_col_map
+    let bool_col_mappings: Vec<(&str, &str, &str)> = bool_fields
+        .iter()
+        .map(|&field| {
+            let display_col = cpp_col_map
                 .iter()
                 .find(|(_, v)| **v == field)
                 .map(|(k, _)| *k)
                 .filter(|c| cpp_cols.contains(*c))
                 .unwrap_or(field);
-            let rust_col = field;
+            (field, display_col, display_col) // Use display name for both C++ and Rust
+        })
+        .collect();
 
-            let cpp_val = get_bool_value(&cpp_df, cpp_col, cpp_idx);
-            let rust_val = get_bool_value(&rust_df, rust_col, rust_idx);
+    // Parallel comparison with thread-local stats, then reduce
+    let all_field_stats: HashMap<String, FieldStats> = common_paths
+        .par_iter()
+        .fold(
+            || {
+                // Thread-local accumulator: HashMap of field stats
+                let mut local_stats: HashMap<String, FieldStats> = HashMap::new();
+                for field in numeric_fields.iter().chain(bool_fields.iter()) {
+                    local_stats.insert((*field).to_string(), FieldStats::default());
+                }
+                local_stats
+            },
+            |mut local_stats, path| {
+                // Progress reporting (atomic, occasional)
+                let current = progress.fetch_add(1, Ordering::Relaxed);
+                if current % 500_000 == 0 && current > 0 {
+                    println!(
+                        "  Progress: {}/{} ({:.1}%)",
+                        current,
+                        total,
+                        100.0 * current as f64 / total as f64
+                    );
+                }
 
-            if let Some(stats) = results.field_stats.get_mut(field) {
-                compare_bool_field(stats, path, cpp_val, rust_val);
-            }
-        }
-    }
+                let cpp_idx = cpp_paths[path];
+                let rust_idx = rust_paths[path];
+
+                // Compare numeric fields
+                for (field, cpp_col, rust_col) in &numeric_col_mappings {
+                    let cpp_val = get_u64_value(&cpp_df, cpp_col, cpp_idx);
+                    let rust_val = get_u64_value(&rust_df, rust_col, rust_idx);
+
+                    if let Some(stats) = local_stats.get_mut(*field) {
+                        compare_numeric_field(stats, path, cpp_val, rust_val);
+                    }
+                }
+
+                // Compare boolean fields
+                for (field, cpp_col, rust_col) in &bool_col_mappings {
+                    let cpp_val = get_bool_value(&cpp_df, cpp_col, cpp_idx);
+                    let rust_val = get_bool_value(&rust_df, rust_col, rust_idx);
+
+                    if let Some(stats) = local_stats.get_mut(*field) {
+                        compare_bool_field(stats, path, cpp_val, rust_val);
+                    }
+                }
+
+                local_stats
+            },
+        )
+        .reduce(
+            || {
+                // Identity element for reduce
+                let mut stats: HashMap<String, FieldStats> = HashMap::new();
+                for field in numeric_fields.iter().chain(bool_fields.iter()) {
+                    stats.insert((*field).to_string(), FieldStats::default());
+                }
+                stats
+            },
+            |mut acc, local| {
+                // Merge thread-local stats into accumulator
+                for (field, local_stats) in local {
+                    if let Some(acc_stats) = acc.get_mut(&field) {
+                        acc_stats.merge(local_stats);
+                    }
+                }
+                acc
+            },
+        );
+
+    results.field_stats = all_field_stats;
+    println!("  Progress: {}/{} (100.0%)", total, total);
 
     Ok(results)
 }

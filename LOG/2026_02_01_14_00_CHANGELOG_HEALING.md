@@ -61,5 +61,23 @@ pub const fn is_output_stream(&self) -> bool {
 
 ## CI Pipeline Status
 
-- [ ] Initial run pending
+- [x] Initial run: FAILED - unbalanced backticks in doc comment
+- [x] Second run: PASSED ✅ - Version 0.2.167 deployed
+
+### Fix Applied During CI
+
+**Issue:** Doc comment had unbalanced backticks (code block split across lines)
+
+**Fix:** Simplified doc comment to remove inline code block:
+```rust
+// Before (broken):
+/// Matches C++ `match_attributes=false` behavior (`ntfs_index.hpp` line
+/// 1388-1392): ```cpp
+/// is_attribute = type_name_id && (type_name_id << 4) != AttributeData
+/// if (!match_attributes && is_attribute) { continue; }
+/// ```
+
+// After (fixed):
+/// Matches C++ `match_attributes=false` behavior (`ntfs_index.hpp` line 1388-1392).
+```
 

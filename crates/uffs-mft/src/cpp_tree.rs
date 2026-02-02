@@ -174,10 +174,32 @@ impl<'a> CppTreeTraversal<'a> {
         let record = &self.index.records[idx];
         let first_child = record.first_child;
         let is_directory = record.is_directory();
-        let stream_count = record.stream_count;
+        // Use total_stream_count for tree metrics (includes internal streams like
+        // $REPARSE_POINT) This matches C++ behavior where ALL streams
+        // contribute to treesize (line 4788)
+        let stream_count = record.total_stream_count;
         let first_stream_length = record.first_stream.size.length;
         let first_stream_allocated = record.first_stream.size.allocated;
         let record_frs = record.frs;
+
+        // Compute total own size (all streams) for storing in record
+        // This is the record's own size without delta formula
+        let mut own_total_length = first_stream_length;
+        let mut own_total_allocated = first_stream_allocated;
+        if stream_count > 1 {
+            let mut stream_idx = record.first_stream.next_entry;
+            let mut streams_counted = 1_u16;
+            while stream_idx != NO_ENTRY && streams_counted < stream_count {
+                if let Some(stream) = self.index.streams.get(stream_idx as usize) {
+                    own_total_length += stream.size.length;
+                    own_total_allocated += stream.size.allocated;
+                    stream_idx = stream.next_entry;
+                    streams_counted += 1;
+                } else {
+                    break;
+                }
+            }
+        }
 
         // =====================================================================
         // Step 1: Recursively process all children
@@ -268,13 +290,21 @@ impl<'a> CppTreeTraversal<'a> {
         let record_mut = &mut self.index.records[idx];
 
         if is_directory {
-            record_mut.descendants = children_size.descendants;
-            record_mut.treesize = u64::from(children_size.treesize) + u64::from(stream_count);
-            record_mut.tree_allocated = children_size.allocated + first_stream_allocated;
+            // C++ outputs sizeinfo.treesize (stream count) as "Descendants" column.
+            // result.treesize contains the accumulated stream count (children + own
+            // streams). This matches C++ line 885: k->treesize +=
+            // children_size.treesize
+            record_mut.descendants = result.treesize;
+            // C++ stores accumulated length (sum of file sizes) in the default stream's
+            // length field, which becomes the directory's "Size" in output.
+            // We store children's accumulated size + own size (all streams).
+            record_mut.treesize = children_size.length + own_total_length;
+            record_mut.tree_allocated = children_size.allocated + own_total_allocated;
         } else {
             record_mut.descendants = 0;
-            record_mut.treesize = u64::from(stream_count);
-            record_mut.tree_allocated = first_stream_allocated;
+            // Files: treesize = own size (all streams, not stream count)
+            record_mut.treesize = own_total_length;
+            record_mut.tree_allocated = own_total_allocated;
         }
 
         result
@@ -295,6 +325,18 @@ pub fn compute_tree_metrics_cpp_port(index: &mut MftIndex, debug: bool) {
         return;
     }
 
+    // Count files with multiple names (hard links)
+    let multi_name_count = index
+        .records
+        .iter()
+        .filter(|rec| rec.name_count > 1)
+        .count();
+    let total_names: u32 = index
+        .records
+        .iter()
+        .map(|rec| u32::from(rec.name_count.max(1)))
+        .sum();
+
     if debug {
         tracing::info!("=== TREE METRICS DEBUG (C++ PORT) ===");
         tracing::info!(total_records = n, "Total records");
@@ -302,15 +344,35 @@ pub fn compute_tree_metrics_cpp_port(index: &mut MftIndex, debug: bool) {
             children_entries = index.children.len(),
             "Total children entries"
         );
+        tracing::info!(
+            multi_name_files = multi_name_count,
+            total_names = total_names,
+            "Hard link statistics"
+        );
     }
 
     tracing::debug!(
         records = n,
+        children = index.children.len(),
+        multi_name_files = multi_name_count,
         "🔨 Computing tree metrics (C++ port algorithm)..."
     );
 
     let mut traversal = CppTreeTraversal::new(index, debug);
     traversal.run();
+
+    // Debug: show root descendants
+    if let Some(&root_idx) = index.frs_to_idx.get(5) {
+        if root_idx != NO_ENTRY {
+            if let Some(root) = index.records.get(root_idx as usize) {
+                tracing::debug!(
+                    root_descendants = root.descendants,
+                    root_treesize = root.treesize,
+                    "Root directory metrics"
+                );
+            }
+        }
+    }
 
     tracing::debug!(records = n, "✅ Tree metrics computed (C++ port algorithm)");
 }

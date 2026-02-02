@@ -339,10 +339,19 @@ pub struct OutputConfig {
     pub pos: String,
     /// Representation for false/inactive boolean (default: "0").
     pub neg: String,
+    /// Fixed timezone offset in seconds from UTC (computed once at startup).
+    /// This matches C++ behavior where Windows' `FileTimeToLocalFileTime()`
+    /// uses the CURRENT timezone offset for ALL timestamps, ignoring
+    /// historical DST.
+    pub timezone_offset_secs: i32,
 }
 
 impl Default for OutputConfig {
     fn default() -> Self {
+        // Get current timezone offset once, matching C++ behavior where
+        // Windows' FileTimeToLocalFileTime() uses the CURRENT offset for all timestamps
+        let timezone_offset_secs = chrono::Local::now().offset().local_minus_utc();
+
         Self {
             columns: None,
             separator: ",".to_owned(),
@@ -350,6 +359,7 @@ impl Default for OutputConfig {
             header: true,
             pos: "1".to_owned(),
             neg: "0".to_owned(),
+            timezone_offset_secs,
         }
     }
 }
@@ -539,7 +549,7 @@ impl OutputConfig {
     /// Format a single value from a series.
     #[allow(clippy::option_if_let_else, clippy::wildcard_enum_match_arm)]
     fn format_value(&self, series: &Column, row_idx: usize) -> String {
-        use chrono::{Local, TimeZone};
+        use chrono::FixedOffset;
         use uffs_polars::{AnyValue, TimeUnit};
 
         let dtype = series.dtype();
@@ -573,7 +583,10 @@ impl OutputConfig {
                 }
             }
             DataType::Datetime(TimeUnit::Microseconds, _) => {
-                // Convert UTC timestamp to local time (matching C++ output)
+                // Convert UTC timestamp to local time using FIXED offset (matching C++ output).
+                // C++ uses Windows' FileTimeToLocalFileTime() which applies the CURRENT
+                // timezone offset to ALL timestamps, ignoring historical DST transitions.
+                // We match this by using a fixed offset computed once at startup.
                 if let Ok(AnyValue::Datetime(ts, TimeUnit::Microseconds, _)) = series.get(row_idx) {
                     // Use div_euclid/rem_euclid for correct handling of negative timestamps.
                     // rem_euclid(1_000_000) always returns [0, 999_999] for any i64 input.
@@ -582,10 +595,16 @@ impl OutputConfig {
                     // Safe: rem_euclid(1_000_000) is always in [0, 999_999], fits in u32
                     let micros = u32::try_from(micros_i64).unwrap_or(0);
                     if let Some(utc_dt) = chrono::DateTime::from_timestamp(secs, micros * 1000) {
-                        // Convert to local time
-                        let local_dt = Local.from_utc_datetime(&utc_dt.naive_utc());
-                        // Format WITHOUT subseconds to match C++ output exactly
-                        local_dt.format("%Y-%m-%d %H:%M:%S").to_string()
+                        // Apply fixed timezone offset (computed once at startup)
+                        // This matches C++ behavior: same offset for all timestamps
+                        if let Some(fixed_tz) = FixedOffset::east_opt(self.timezone_offset_secs) {
+                            let local_dt = utc_dt.with_timezone(&fixed_tz);
+                            // Format WITHOUT subseconds to match C++ output exactly
+                            local_dt.format("%Y-%m-%d %H:%M:%S").to_string()
+                        } else {
+                            // Fallback: format as UTC if offset is invalid
+                            utc_dt.format("%Y-%m-%d %H:%M:%S").to_string()
+                        }
                     } else {
                         String::new()
                     }

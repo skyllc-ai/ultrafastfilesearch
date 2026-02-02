@@ -1151,6 +1151,26 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     // stream
     // For directories, C++ includes $INDEX_ROOT + $INDEX_ALLOCATION size
     let is_directory = header.is_directory();
+
+    // For directories with $I30 index, add a stream entry so it's counted in
+    // total_stream_count C++ counts the merged $I30 as a stream with
+    // type_name_id=0 (line 4590: info->type_name_id = type_name_id)
+    // This is essential for tree metrics parity - each directory's $I30 contributes
+    // +1 to descendants
+    if is_directory && dir_index_size > 0 {
+        // Add $I30 as the default stream (empty name) for directories
+        // This matches C++ behavior where $I30 is the "default" stream for directories
+        // just like $DATA is the default stream for files
+        streams.push(StreamInfo {
+            name: String::new(), // Empty name = default stream
+            size: dir_index_size,
+            allocated_size: dir_index_allocated,
+            is_sparse: false,
+            is_compressed: false,
+            is_resident: false, // $INDEX_ALLOCATION is typically non-resident
+        });
+    }
+
     let (size, allocated_size) = if is_directory && dir_index_size > 0 {
         // Directory with index allocation - use index size (C++ parity)
         (dir_index_size, dir_index_allocated)
@@ -1674,6 +1694,26 @@ pub fn parse_record_forensic(
     // stream
     // For directories, C++ includes $INDEX_ROOT + $INDEX_ALLOCATION size
     let is_directory = header.is_directory();
+
+    // For directories with $I30 index, add a stream entry so it's counted in
+    // total_stream_count C++ counts the merged $I30 as a stream with
+    // type_name_id=0 (line 4590: info->type_name_id = type_name_id)
+    // This is essential for tree metrics parity - each directory's $I30 contributes
+    // +1 to descendants
+    if is_directory && dir_index_size > 0 {
+        // Add $I30 as the default stream (empty name) for directories
+        // This matches C++ behavior where $I30 is the "default" stream for directories
+        // just like $DATA is the default stream for files
+        streams.push(StreamInfo {
+            name: String::new(), // Empty name = default stream
+            size: dir_index_size,
+            allocated_size: dir_index_allocated,
+            is_sparse: false,
+            is_compressed: false,
+            is_resident: false, // $INDEX_ALLOCATION is typically non-resident
+        });
+    }
+
     let (size, allocated_size) = if is_directory && dir_index_size > 0 {
         // Directory with index allocation - use index size (C++ parity)
         (dir_index_size, dir_index_allocated)

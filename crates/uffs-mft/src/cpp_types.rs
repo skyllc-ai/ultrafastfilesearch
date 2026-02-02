@@ -1258,6 +1258,8 @@ impl CppMftIndex {
                 stdinfo,
                 name_count: cpp_record.name_count,
                 stream_count: cpp_record.stream_count,
+                // C++ stores all streams, so total_stream_count = stream_count
+                total_stream_count: cpp_record.stream_count,
                 first_child: cpp_record.first_child,
                 first_name,
                 first_stream,

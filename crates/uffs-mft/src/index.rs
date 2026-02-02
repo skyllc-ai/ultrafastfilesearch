@@ -1315,7 +1315,7 @@ pub struct ChildInfo {
 
 /// Core file/directory record (matches C++ `Record`).
 ///
-/// Size: ~232 bytes per record (includes sequence number, `$FILE_NAME`
+/// Size: 224 bytes per record (includes sequence number, `$FILE_NAME`
 /// timestamps, forensic fields)
 #[derive(Debug, Clone, Default)]
 #[repr(C)]
@@ -1341,8 +1341,13 @@ pub struct FileRecord {
     pub stdinfo: StandardInfo,
     /// Number of hard links (usually 1)
     pub name_count: u16,
-    /// Number of data streams (usually 1)
+    /// Number of user-visible data streams (usually 1, excludes internal
+    /// Windows streams)
     pub stream_count: u16,
+    /// Total number of ALL streams including internal Windows streams
+    /// (`$REPARSE_POINT`, etc.) Used for tree metrics calculation to match
+    /// C++ behavior.
+    pub total_stream_count: u16,
     /// Index of first child in `MftIndex::children`, or `NO_ENTRY`
     pub first_child: u32,
     /// Primary filename (inline, no allocation)
@@ -1376,8 +1381,9 @@ impl FileRecord {
     pub fn new(frs: u64) -> Self {
         Self {
             frs,
-            name_count: 1,   // Every file has at least one name
-            stream_count: 1, // Every file has at least the default $DATA stream
+            name_count: 1,         // Every file has at least one name
+            stream_count: 1,       // User-visible streams (default $DATA)
+            total_stream_count: 1, // All streams including internal (for tree metrics)
             first_child: NO_ENTRY,
             first_name: LinkInfo {
                 next_entry: NO_ENTRY,
@@ -2361,7 +2367,9 @@ impl MftIndex {
             .iter()
             .map(|record| {
                 let is_directory = record.is_directory();
-                let stream_count = u32::from(record.stream_count).max(1);
+                // Use total_stream_count for tree metrics (includes internal streams)
+                // This matches C++ behavior where ALL streams contribute to treesize
+                let stream_count = u32::from(record.total_stream_count).max(1);
                 let name_count = record.name_count.max(1);
 
                 // Sum sizes across ALL streams (default + ADS)
@@ -2420,7 +2428,7 @@ impl MftIndex {
         // system metafiles). System metafiles are just not output to CSV, but
         // their sizes ARE included in the root's treesize.
 
-        for (idx, (is_directory, stream_count, _name_count, size, allocated)) in
+        for (idx, (is_directory, _stream_count, _name_count, size, allocated)) in
             base_metrics.iter().enumerate()
         {
             if let Some(record) = self.records.get_mut(idx) {
@@ -2429,13 +2437,16 @@ impl MftIndex {
                 // included in the root's treesize. C++ starts from FRS 5 (root) and
                 // visits all children via the child entry tree - no explicit exclusion.
                 //
-                // C++ algorithm (line 879): for each stream, result.treesize += 1
-                // So a directory with stream_count=2 contributes 2 to its own treesize
-                // (plus children's treesize). We initialize descendants to stream_count
-                // for directories to match this behavior.
-                // Directories start with stream_count as descendants (C++ parity)
-                // Files start with 0 descendants
-                record.descendants = if *is_directory { *stream_count } else { 0 };
+                // C++ algorithm (line 4628): info->treesize = isdir;
+                // The default stream's treesize is initialized to 1 for directories ($I30)
+                // and 0 for files ($DATA). During tree traversal:
+                // - Line 4788: result.treesize += 1 for each stream (parent's accumulated)
+                // - Line 4794: k->treesize += children_size.treesize (default stream only)
+                // The output shows the default stream's treesize, not result.treesize.
+                //
+                // So for directories: initial descendants = 1 (the $I30 stream's treesize)
+                // For files: initial descendants = 0 (the $DATA stream's treesize)
+                record.descendants = u32::from(*is_directory);
                 // Both directories and files have their own size in treesize
                 // Directories: size comes from $INDEX_ROOT + $INDEX_ALLOCATION + $BITMAP
                 // Files: size comes from $DATA stream(s)
@@ -2455,8 +2466,13 @@ impl MftIndex {
             while child_entry_idx != NO_ENTRY {
                 if let Some(child_entry) = self.children.get(child_entry_idx as usize) {
                     if let Some(child_record_idx) = self.frs_to_idx_opt(child_entry.child_frs) {
-                        if let Some(parents_list) = child_to_parents.get_mut(child_record_idx) {
-                            parents_list.push((parent_idx, child_entry.name_index));
+                        // C++ parity: Skip if child is the same as parent (root directory
+                        // is the only one that is a child of itself)
+                        // See C++ line 4691: if (fr2 != fr)
+                        if child_record_idx != parent_idx {
+                            if let Some(parents_list) = child_to_parents.get_mut(child_record_idx) {
+                                parents_list.push((parent_idx, child_entry.name_index));
+                            }
                         }
                     }
                     child_entry_idx = child_entry.next_entry;
@@ -2530,7 +2546,7 @@ impl MftIndex {
 
             // Get child's metrics (safe: child_idx comes from stack which only contains
             // valid indices)
-            let Some(&(_is_directory, stream_count, name_count, _size, _allocated)) =
+            let Some(&(is_directory, stream_count, name_count, _size, _allocated)) =
                 base_metrics.get(child_idx)
             else {
                 continue;
@@ -2547,18 +2563,17 @@ impl MftIndex {
                     continue;
                 };
 
-            // Calculate contribution for descendants
-            // C++ counts each stream as +1 to parent's treesize (line 879)
-            // Files: contribute stream_count (each stream = +1)
-            // Directories: contribute their descendants (which already includes
-            // stream_count)
-            let descendants_contribution = if child_descendants == 0 {
-                stream_count
-            } else {
-                // Directory: descendants already includes stream_count for this directory's
-                // streams
-                child_descendants
-            };
+            // Calculate contribution for descendants (C++ parity)
+            // C++ algorithm:
+            // - result.treesize = children_size.treesize + stream_count (line 4726, 4788)
+            // - k->treesize = isdir + children_size.treesize (line 4628, 4794)
+            // So: result.treesize = stream_count + (k->treesize - isdir)
+            //
+            // The contribution to parent is result.treesize, which is:
+            // - stream_count + (child_descendants - isdir)
+            // Where isdir = 1 for directories, 0 for files
+            let isdir = u32::from(is_directory);
+            let descendants_contribution = stream_count + child_descendants.saturating_sub(isdir);
 
             // For each parent that has a child entry pointing to this record
             let Some(parents_list) = child_to_parents.get(child_idx) else {
@@ -3622,14 +3637,14 @@ mod tests {
 
     #[test]
     fn test_file_record_size() {
-        // Verify compact size - should be reasonably compact (< 224 bytes)
+        // Verify compact size - should be reasonably compact (<= 224 bytes)
         // Version 4 added: sequence_number (2), namespace (1), reserved (1),
         // fn_created/modified/accessed/mft_changed (4 × 8 = 32) = 36 bytes extra
         // Version 5 added: lsn (8 bytes) for forensic correlation
         // Version 6 added: reparse_tag (4 bytes)
         // Version 7 added: base_frs (8 bytes) for forensic extension records
         let size = size_of::<FileRecord>();
-        assert!(size < 224, "FileRecord too large: {size} bytes");
+        assert!(size <= 224, "FileRecord too large: {size} bytes");
     }
 
     #[test]
@@ -5908,10 +5923,18 @@ impl MftIndex {
                 })
                 .collect();
 
-            // Update stream_count to reflect actual stored streams (1 default + named)
-            // This must be done AFTER filtering to avoid counting internal Windows streams
+            // Set total_stream_count to include ALL streams (for tree metrics, C++ parity)
+            // This includes internal Windows streams like $REPARSE_POINT, $OBJECT_ID, etc.
+            // C++ counts all streams in tree metrics (line 4788: result.treesize += 1)
+            let total_stream_count = parsed.streams.len().max(1) as u16;
+
+            // Set stream_count to reflect only user-visible stored streams (1 default +
+            // named) This is used for user-facing output (DataFrame export)
             let actual_stream_count = (1 + named_streams.len()).max(1) as u16;
-            index.get_or_create(parsed.frs).stream_count = actual_stream_count;
+
+            let record = index.get_or_create(parsed.frs);
+            record.total_stream_count = total_stream_count;
+            record.stream_count = actual_stream_count;
 
             if !named_streams.is_empty() {
                 let mut prev_stream_idx = NO_ENTRY;
@@ -5948,8 +5971,8 @@ impl MftIndex {
                     prev_stream_idx = stream_idx;
                 }
                 // Link first_stream to the chain
-                let record = index.get_or_create(parsed.frs);
-                record.first_stream.next_entry = prev_stream_idx;
+                let file_record = index.get_or_create(parsed.frs);
+                file_record.first_stream.next_entry = prev_stream_idx;
             }
 
             // Build parent-child relationship for ALL hardlinks
@@ -6447,6 +6470,7 @@ impl MftIndex {
                         existing.first_stream = discarded.first_stream;
                     }
                     existing.stream_count += discarded.stream_count;
+                    existing.total_stream_count += discarded.total_stream_count;
                 }
             }
         }
@@ -6606,7 +6630,8 @@ impl MftIndex {
                         reparse_tag: 0,     // USN doesn't provide reparse tag
                         stdinfo: StandardInfo::default(),
                         name_count: 1,
-                        stream_count: 1, // Every file has at least the default $DATA stream
+                        stream_count: 1,       // User-visible streams
+                        total_stream_count: 1, // All streams (for tree metrics)
                         first_child: NO_ENTRY,
                         first_name: LinkInfo {
                             next_entry: NO_ENTRY,
@@ -6803,7 +6828,8 @@ const INDEX_MAGIC: &[u8; 8] = b"UFFSIDX\0";
 /// `owner_id` Version 6: Added P2 forensic fields: `reparse_tag`, `is_resident`
 /// (in stream flags) Version 7: Added P3 forensic fields: `forensic_flags`
 /// (renamed from reserved), `base_frs` for extension records
-const INDEX_VERSION: u32 = 7;
+/// Version 8: Added `total_stream_count` for C++ tree metrics parity
+const INDEX_VERSION: u32 = 8;
 
 /// Persistent index header stored at the beginning of the index file.
 #[derive(Debug, Clone)]
@@ -6954,6 +6980,8 @@ impl MftIndex {
             // Counts
             buffer.extend_from_slice(&record.name_count.to_le_bytes());
             buffer.extend_from_slice(&record.stream_count.to_le_bytes());
+            // Version 8+: total_stream_count for C++ tree metrics parity
+            buffer.extend_from_slice(&record.total_stream_count.to_le_bytes());
             buffer.extend_from_slice(&record.first_child.to_le_bytes());
             // first_name (LinkInfo)
             buffer.extend_from_slice(&record.first_name.next_entry.to_le_bytes());
@@ -7186,6 +7214,13 @@ impl MftIndex {
             // Counts
             let name_count = read_u16!();
             let rec_stream_count = read_u16!();
+            // Version 8+: total_stream_count for C++ tree metrics parity
+            // For older versions, default to stream_count (user-visible = total)
+            let total_stream_count = if version >= 8 {
+                read_u16!()
+            } else {
+                rec_stream_count
+            };
             let first_child = read_u32!();
             // first_name (LinkInfo)
             let link_next_entry = read_u32!();
@@ -7229,6 +7264,7 @@ impl MftIndex {
                 },
                 name_count,
                 stream_count: rec_stream_count,
+                total_stream_count,
                 first_child,
                 first_name: LinkInfo {
                     next_entry: link_next_entry,
