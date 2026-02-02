@@ -26,5 +26,5 @@ rust-script scripts/ci-pipeline.rs go -v
 ## Status
 - [x] Initial CI run
 - [x] All errors fixed
-- [ ] Final CI validation passed
+- [x] Final CI validation passed (v0.2.168)
 
