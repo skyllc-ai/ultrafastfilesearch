@@ -9,9 +9,10 @@
 #   - Capture stdout/stderr to .log files (text) with diagnostic logging.
 #   - Sequential per physical disk; parallel across physical disks (PS7+).
 #   - Enable diagnostic logging for live path analysis.
+#   - ALWAYS save uncompressed MFT snapshot for each drive (required for offline analysis).
 #
 # What gets collected:
-#   1. MFT snapshots (compressed .bin files) - for offline analysis on Mac
+#   1. MFT snapshots (uncompressed .bin files) - ALWAYS collected for offline analysis on Mac
 #   2. C++ baseline scan output - reference for parity comparison
 #   3. Rust LIVE scan output + diagnostic logs - with chunk/record processing stats
 #
@@ -27,8 +28,7 @@
 [CmdletBinding()]
 param(
     [string[]]$Drives = @(),       # Drives to test (empty = auto-detect NTFS drives)
-    [switch]$SkipMft = $true,      # Skip uffs_mft save tests (default: true - MFT collection confirmed OK)
-    [switch]$CollectMft,           # Force MFT collection (overrides SkipMft)
+    [switch]$SkipMftExtras,        # Skip extra MFT formats (compressed, raw) - uncompressed always saved
     [string]$BinDir = "",          # Custom bin directory (default: $HOME\bin)
     [int]$ThrottleLimit = 2,       # Max physical disks in parallel (PS7+ only)
     [switch]$VerboseLog            # Enable verbose/trace logging (more detail, larger logs)
@@ -187,45 +187,65 @@ try {
         LogLine ""
     }
 
-    # MFT saves (only first drive), sequential; binaries write output files themselves.
-    # Default: skipped (MFT collection confirmed 100% OK). Use -CollectMft to force collection.
-    $doMftCollection = $CollectMft -or (-not $SkipMft)
-    if ($doMftCollection -and $hasMft -and $Drives.Count -gt 0) {
-        $mftDrive = $Drives[0]
-        Write-Host "MFT Save (Drive $mftDrive)..." -ForegroundColor Cyan
-
+    # MFT saves - ALWAYS save uncompressed MFT for each drive (required for offline analysis)
+    # Extra formats (compressed, raw) can be skipped with -SkipMftExtras
+    if ($hasMft -and $Drives.Count -gt 0) {
         LogLine "---"
         LogLine ""
-        LogLine "# MFT Save (Drive $mftDrive)"
+        LogLine "# MFT Snapshots"
         LogLine ""
 
-        $mftBin        = "${mftDrive}_mft.bin"
-        $mftNoCompress = "${mftDrive}_mft_no_compress.bin"
-        $mftRaw        = "${mftDrive}_mft.raw"
+        foreach ($mftDrive in $Drives) {
+            Write-Host "MFT Save (Drive $mftDrive)..." -ForegroundColor Cyan
 
-        $timings += Invoke-CmdToLog -Title "uffs_mft save (compressed)" `
-            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o `"$mftBin`"") `
-            -LogFileName "${mftDrive}_mft_save_compressed.log"
+            $mftNoCompress = "${mftDrive}_mft.bin"  # Uncompressed is the primary format
 
-        $timings += Invoke-CmdToLog -Title "uffs_mft save (no compress)" `
-            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive --output `"$mftNoCompress`" --no-compress") `
-            -LogFileName "${mftDrive}_mft_save_no_compress.log"
+            # Always save uncompressed MFT (required for offline analysis on Mac)
+            $timings += Invoke-CmdToLog -Title "uffs_mft save (uncompressed): drive $mftDrive" `
+                -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive --output `"$mftNoCompress`" --no-compress") `
+                -LogFileName "${mftDrive}_mft_save.log"
 
-        $timings += Invoke-CmdToLog -Title "uffs_mft save (raw)" `
-            -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o `"$mftRaw`" --raw") `
-            -LogFileName "${mftDrive}_mft_save_raw.log"
+            # Extra formats (optional)
+            if (-not $SkipMftExtras) {
+                $mftCompressed = "${mftDrive}_mft_compressed.bin"
+                $mftRaw        = "${mftDrive}_mft.raw"
+
+                $timings += Invoke-CmdToLog -Title "uffs_mft save (compressed): drive $mftDrive" `
+                    -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o `"$mftCompressed`"") `
+                    -LogFileName "${mftDrive}_mft_save_compressed.log"
+
+                $timings += Invoke-CmdToLog -Title "uffs_mft save (raw): drive $mftDrive" `
+                    -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o `"$mftRaw`" --raw") `
+                    -LogFileName "${mftDrive}_mft_save_raw.log"
+            }
+        }
 
         LogLine "### Generated MFT Files"
         LogLine ""
-        LogLine "| File | Size |"
-        LogLine "|------|------|"
-        foreach ($f in @($mftBin, $mftNoCompress, $mftRaw)) {
-            $p = Join-Path $WorkDir $f
+        LogLine "| Drive | File | Size |"
+        LogLine "|-------|------|------|"
+        foreach ($mftDrive in $Drives) {
+            $mftNoCompress = "${mftDrive}_mft.bin"
+            $p = Join-Path $WorkDir $mftNoCompress
             if (Test-Path -LiteralPath $p) {
                 $size = (Get-Item -LiteralPath $p).Length
-                LogLine "| $f | $(Format-FileSize $size) |"
+                LogLine "| $mftDrive | $mftNoCompress | $(Format-FileSize $size) |"
             } else {
-                LogLine "| $f | (missing) |"
+                LogLine "| $mftDrive | $mftNoCompress | (missing) |"
+            }
+
+            if (-not $SkipMftExtras) {
+                $mftCompressed = "${mftDrive}_mft_compressed.bin"
+                $mftRaw        = "${mftDrive}_mft.raw"
+                foreach ($f in @($mftCompressed, $mftRaw)) {
+                    $p = Join-Path $WorkDir $f
+                    if (Test-Path -LiteralPath $p) {
+                        $size = (Get-Item -LiteralPath $p).Length
+                        LogLine "| $mftDrive | $f | $(Format-FileSize $size) |"
+                    } else {
+                        LogLine "| $mftDrive | $f | (missing) |"
+                    }
+                }
             }
         }
         LogLine ""
