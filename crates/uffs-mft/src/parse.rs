@@ -1021,7 +1021,8 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                 | AttributeType::PropertySet
                 | AttributeType::Ea
                 | AttributeType::EaInformation
-                | AttributeType::LoggedUtilityStream,
+                | AttributeType::LoggedUtilityStream
+                | AttributeType::SecurityDescriptor,
             ) => {
                 // Note: LoggedUtilityStream IS counted as a stream in C++ via the default: case
                 // The commented out line 589 just means it's not an explicit case, so it falls
@@ -1091,6 +1092,9 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                         Some(AttributeType::LoggedUtilityStream) => {
                             String::from("$LOGGED_UTILITY_STREAM")
                         }
+                        Some(AttributeType::SecurityDescriptor) => {
+                            String::from("$SECURITY_DESCRIPTOR")
+                        }
                         _ => String::new(),
                     }
                 } else {
@@ -1107,11 +1111,12 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                 });
             }
             // Skip known non-stream attributes silently
+            // Note: SecurityDescriptor (0x50) IS counted as a stream in C++ via the default: case
+            // (line 591 is commented out, so it falls through to default: at line 600)
             Some(
                 AttributeType::StandardInformation
                 | AttributeType::FileName
-                | AttributeType::AttributeList
-                | AttributeType::SecurityDescriptor,
+                | AttributeType::AttributeList,
             ) => {}
             _ => {
                 // Unknown attribute type - log at trace level for debugging
@@ -1589,6 +1594,8 @@ pub fn parse_record_forensic(
             // - $EA (0xE0)
             // - $EA_INFORMATION (0xD0)
             // - $LOGGED_UTILITY_STREAM (0x100) - falls through to default: case in C++
+            // - $SECURITY_DESCRIPTOR (0x50) - falls through to default: case in C++ (line 591
+            //   commented out)
             Some(
                 AttributeType::ObjectId
                 | AttributeType::VolumeName
@@ -1596,7 +1603,8 @@ pub fn parse_record_forensic(
                 | AttributeType::PropertySet
                 | AttributeType::Ea
                 | AttributeType::EaInformation
-                | AttributeType::LoggedUtilityStream,
+                | AttributeType::LoggedUtilityStream
+                | AttributeType::SecurityDescriptor,
             ) => {
                 // Extract attribute name (if any)
                 let attr_name = if attr_header.name_length > 0 {
@@ -1661,6 +1669,9 @@ pub fn parse_record_forensic(
                         Some(AttributeType::EaInformation) => String::from("$EA_INFORMATION"),
                         Some(AttributeType::LoggedUtilityStream) => {
                             String::from("$LOGGED_UTILITY_STREAM")
+                        }
+                        Some(AttributeType::SecurityDescriptor) => {
+                            String::from("$SECURITY_DESCRIPTOR")
                         }
                         _ => String::new(),
                     }
