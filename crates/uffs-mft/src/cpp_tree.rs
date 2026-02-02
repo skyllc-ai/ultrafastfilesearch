@@ -181,15 +181,24 @@ impl<'a> CppTreeTraversal<'a> {
         let first_stream_length = record.first_stream.size.length;
         let first_stream_allocated = record.first_stream.size.allocated;
         let record_frs = record.frs;
+        // Size of internal Windows streams (like $REPARSE_POINT) that are filtered
+        // from storage but need to be included in tree metrics.
+        let internal_streams_size = record.internal_streams_size;
+        let internal_streams_allocated = record.internal_streams_allocated;
 
         // Compute total own size (all streams) for storing in record
         // This is the record's own size without delta formula
-        let mut own_total_length = first_stream_length;
-        let mut own_total_allocated = first_stream_allocated;
+        // Include internal streams size (like $REPARSE_POINT) that are filtered from
+        // storage
+        let mut own_total_length = first_stream_length + internal_streams_size;
+        let mut own_total_allocated = first_stream_allocated + internal_streams_allocated;
         if stream_count > 1 {
             let mut stream_idx = record.first_stream.next_entry;
+            // We've already counted first_stream (1) and internal streams are not stored,
+            // so we only need to iterate through stored additional streams
+            let stored_stream_count = record.stream_count;
             let mut streams_counted = 1_u16;
-            while stream_idx != NO_ENTRY && streams_counted < stream_count {
+            while stream_idx != NO_ENTRY && streams_counted < stored_stream_count {
                 if let Some(stream) = self.index.streams.get(stream_idx as usize) {
                     own_total_length += stream.size.length;
                     own_total_allocated += stream.size.allocated;
@@ -259,16 +268,38 @@ impl<'a> CppTreeTraversal<'a> {
         result.length += length_delta;
         result.allocated += allocated_delta;
         result.bulkiness += allocated_delta;
-        result.treesize += 1;
+
+        // Add internal streams size with delta formula.
+        // C++ iterates through ALL streams (including $REPARSE_POINT, $OBJECT_ID, etc.)
+        // and adds each stream's length to result.length with the delta formula.
+        // Rust filters these internal streams from storage but tracks their sizes in
+        // internal_streams_size/allocated. We need to add them here so they propagate
+        // up to parent directories correctly.
+        if internal_streams_size > 0 {
+            let internal_length_delta = delta(internal_streams_size, name_info, total_names);
+            let internal_allocated_delta =
+                delta(internal_streams_allocated, name_info, total_names);
+            result.length += internal_length_delta;
+            result.allocated += internal_allocated_delta;
+            result.bulkiness += internal_allocated_delta;
+        }
+
+        // Add ALL streams to treesize at once (including filtered internal streams like
+        // $REPARSE). C++ stores all streams and iterates through them, but Rust
+        // filters out internal Windows streams (like $REPARSE, $OBJECT_ID) from
+        // storage. We use stream_count (which is set from parsed.streams.len()
+        // before filtering) to count all streams correctly.
+        result.treesize += u32::from(stream_count);
         result.descendants += 1;
 
-        // Process additional streams (ADS)
+        // Process additional STORED streams (ADS) for SIZE accumulation only.
+        // Note: We don't add to treesize here since we already added stream_count
+        // above.
         if stream_count > 1 {
             let first_stream_idx = self.index.records[idx].first_stream.next_entry;
             let mut stream_idx = first_stream_idx;
-            let mut streams_processed = 1_u16;
 
-            while stream_idx != NO_ENTRY && streams_processed < stream_count {
+            while stream_idx != NO_ENTRY {
                 let stream = &self.index.streams[stream_idx as usize];
 
                 let stream_length_delta = delta(stream.size.length, name_info, total_names);
@@ -277,29 +308,55 @@ impl<'a> CppTreeTraversal<'a> {
                 result.length += stream_length_delta;
                 result.allocated += stream_allocated_delta;
                 result.bulkiness += stream_allocated_delta;
-                result.treesize += 1;
+                // Note: treesize already includes all streams from stream_count above
 
                 stream_idx = stream.next_entry;
-                streams_processed += 1;
             }
         }
 
         // =====================================================================
-        // Step 3: Store results in the record
+        // Step 3: Store results in the record (TWO-CHANNEL MODEL)
         // =====================================================================
+        //
+        // C++ uses a two-channel model for tree metrics:
+        //
+        // Channel A (propagation): values returned by recursion and accumulated into
+        // parents
+        //   - result.treesize = sum(child_returned_treesize) + total_stream_count
+        //   - This includes ALL streams (directory stream + reparse stream for
+        //     junctions)
+        //
+        // Channel B (printed): values stored into the record's directory stream and
+        // printed
+        //   - printed_descendants = 1 + children_size.treesize
+        //   - This only counts the directory stream (type_name_id == 0), not other
+        //     streams
+        //
+        // For a junction with 2 streams (dir + reparse) and no children:
+        //   - Channel A: result.treesize = 2 (propagated to parent)
+        //   - Channel B: printed_descendants = 1 (stored in record)
+        //
+        // This is the key insight from the C++ code (line 885):
+        //   if (!k->type_name_id) {
+        //       k->treesize += children_size.treesize;  // Only directory stream
+        // absorbs children   }
+        //
+        // See docs/architecture/Investigation/MFT_tree_metrics_parity_deep_dive.md
         let record_mut = &mut self.index.records[idx];
 
         if is_directory {
-            // C++ outputs sizeinfo.treesize (stream count) as "Descendants" column.
-            // result.treesize contains the accumulated stream count (children + own
-            // streams). This matches C++ line 885: k->treesize +=
-            // children_size.treesize
-            record_mut.descendants = result.treesize;
-            // C++ stores accumulated length (sum of file sizes) in the default stream's
-            // length field, which becomes the directory's "Size" in output.
-            // We store children's accumulated size + own size (all streams).
-            record_mut.treesize = children_size.length + own_total_length;
-            record_mut.tree_allocated = children_size.allocated + own_total_allocated;
+            // Channel B (printed): directory stream descendants = 1 + children's treesize
+            // This matches C++ where only the directory stream (type_name_id == 0) absorbs
+            // children totals. The directory's own non-directory streams (like
+            // $REPARSE_POINT) are NOT included in the printed descendants.
+            record_mut.descendants = children_size.treesize + 1;
+
+            // C++ stores accumulated length in the directory stream's length field.
+            // For printed output, use only the first stream (directory stream) + children.
+            // Internal streams (like $REPARSE_POINT) propagate via Channel A but don't
+            // appear in the directory's own printed size.
+            record_mut.treesize = children_size.length + first_stream_length;
+            record_mut.tree_allocated = children_size.allocated + first_stream_allocated;
         } else {
             record_mut.descendants = 0;
             // Files: treesize = own size (all streams, not stream count)
@@ -307,6 +364,7 @@ impl<'a> CppTreeTraversal<'a> {
             record_mut.tree_allocated = own_total_allocated;
         }
 
+        // Return Channel A (propagation) values - includes ALL streams
         result
     }
 }

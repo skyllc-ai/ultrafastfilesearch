@@ -1284,6 +1284,9 @@ impl CppMftIndex {
                 descendants: 0,
                 treesize: 0,
                 tree_allocated: 0,
+                // C++ stores all streams, so no internal streams are filtered
+                internal_streams_size: 0,
+                internal_streams_allocated: 0,
             };
 
             // Add to index

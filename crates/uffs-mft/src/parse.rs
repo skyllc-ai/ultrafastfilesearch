@@ -1153,10 +1153,20 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     let is_directory = header.is_directory();
 
     // For directories with $I30 index, add a stream entry so it's counted in
-    // total_stream_count C++ counts the merged $I30 as a stream with
+    // total_stream_count. C++ counts the merged $I30 as a stream with
     // type_name_id=0 (line 4590: info->type_name_id = type_name_id)
     // This is essential for tree metrics parity - each directory's $I30 contributes
-    // +1 to descendants
+    // +1 to descendants.
+    //
+    // IMPORTANT: Junctions/reparse directories ALSO get the $I30 stream counted.
+    // C++ uses a two-channel model:
+    //   - Channel A (propagation): ALL streams count (dir + reparse) -> parents see
+    //     2
+    //   - Channel B (printed): only directory stream -> junction prints
+    //     descendants=1
+    // The cpp_tree.rs algorithm handles this by storing printed_desc = 1 + children
+    // while returning result.treesize = total_stream_count + children for
+    // propagation.
     if is_directory && dir_index_size > 0 {
         // Add $I30 as the default stream (empty name) for directories
         // This matches C++ behavior where $I30 is the "default" stream for directories

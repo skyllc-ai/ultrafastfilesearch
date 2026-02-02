@@ -1373,6 +1373,13 @@ pub struct FileRecord {
     pub treesize: u64,
     /// Sum of allocated disk sizes in subtree (includes this file/directory)
     pub tree_allocated: u64,
+
+    /// Size of internal Windows streams (like `$REPARSE_POINT`) that are
+    /// filtered from user-visible output but need to be included in tree
+    /// metrics. This is used by the tree algorithm to match C++ behavior.
+    pub internal_streams_size: u64,
+    /// Allocated size of internal Windows streams.
+    pub internal_streams_allocated: u64,
 }
 
 impl FileRecord {
@@ -3637,14 +3644,18 @@ mod tests {
 
     #[test]
     fn test_file_record_size() {
-        // Verify compact size - should be reasonably compact (<= 224 bytes)
+        // Verify compact size - should be reasonably compact (<= 240 bytes)
         // Version 4 added: sequence_number (2), namespace (1), reserved (1),
         // fn_created/modified/accessed/mft_changed (4 × 8 = 32) = 36 bytes extra
         // Version 5 added: lsn (8 bytes) for forensic correlation
         // Version 6 added: reparse_tag (4 bytes)
         // Version 7 added: base_frs (8 bytes) for forensic extension records
+        // Version 8 added: total_stream_count (2 bytes, with padding = 4 bytes)
+        //                  internal_streams_size (8 bytes)
+        //                  internal_streams_allocated (8 bytes)
+        //                  = 20 bytes extra for C++ tree metrics parity
         let size = size_of::<FileRecord>();
-        assert!(size <= 224, "FileRecord too large: {size} bytes");
+        assert!(size <= 240, "FileRecord too large: {size} bytes");
     }
 
     #[test]
@@ -5905,6 +5916,13 @@ impl MftIndex {
             // Also filter out internal Windows streams (names starting with $UPPERCASE)
             // These include $DSC, $REPARSE, $EA, $EA_INFORMATION, $TXF_DATA, $OBJECT_ID
             // But allow user-visible streams like ${GUID}.Metadata (iCloud)
+            //
+            // We also compute the total size of filtered internal streams for tree metrics.
+            // C++ stores ALL streams and iterates through them in the tree algorithm,
+            // adding each stream's length to result.length. We filter out internal streams
+            // from storage but need their sizes for tree calculations.
+            let mut internal_streams_size: u64 = 0;
+            let mut internal_streams_allocated: u64 = 0;
             let named_streams: Vec<_> = parsed
                 .streams
                 .iter()
@@ -5912,14 +5930,20 @@ impl MftIndex {
                     if st.name.is_empty() {
                         return false;
                     }
-                    // Filter out internal Windows streams: $UPPERCASE...
+                    // Check if this is an internal Windows stream: $UPPERCASE...
                     // Allow ${...} style streams (iCloud metadata, etc.)
-                    st.name.strip_prefix('$').is_none_or(|rest| {
-                        !rest
-                            .chars()
+                    let is_internal = st.name.strip_prefix('$').is_some_and(|rest| {
+                        rest.chars()
                             .next()
                             .is_some_and(|ch| ch.is_ascii_uppercase())
-                    })
+                    });
+                    if is_internal {
+                        // Accumulate size of filtered internal streams for tree metrics
+                        internal_streams_size += st.size;
+                        internal_streams_allocated += st.allocated_size;
+                        return false;
+                    }
+                    true
                 })
                 .collect();
 
@@ -5935,6 +5959,8 @@ impl MftIndex {
             let record = index.get_or_create(parsed.frs);
             record.total_stream_count = total_stream_count;
             record.stream_count = actual_stream_count;
+            record.internal_streams_size = internal_streams_size;
+            record.internal_streams_allocated = internal_streams_allocated;
 
             if !named_streams.is_empty() {
                 let mut prev_stream_idx = NO_ENTRY;
@@ -6651,6 +6677,8 @@ impl MftIndex {
                         descendants: 0,
                         treesize: 0,
                         tree_allocated: 0,
+                        internal_streams_size: 0,
+                        internal_streams_allocated: 0,
                     };
                     self.records.push(record);
                     stats.created += 1;
@@ -7293,6 +7321,9 @@ impl MftIndex {
                 descendants,
                 treesize,
                 tree_allocated,
+                // Deserialized caches don't have internal streams info (computed during parsing)
+                internal_streams_size: 0,
+                internal_streams_allocated: 0,
             });
         }
 
