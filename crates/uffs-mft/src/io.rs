@@ -5164,7 +5164,23 @@ impl ParallelMftReader {
             )?;
 
             // Convert CppMftIndex to MftIndex
-            return Ok(cpp_index.into_mft_index(volume));
+            let mut index = cpp_index.into_mft_index(volume);
+
+            // Post-processing: compute derived data structures
+            // These are fast O(n) operations that enhance query performance
+            // (Same as other code paths - from_parsed_records, merge_fragments, etc.)
+            debug!("🔨 Building extension index...");
+            index.extension_index = Some(crate::index::ExtensionIndex::build(&index));
+
+            debug!("🔨 Sorting directory children...");
+            index.sort_directory_children();
+
+            debug!("🔨 Computing tree metrics...");
+            index.compute_tree_metrics();
+
+            debug!("✅ Post-processing complete");
+
+            return Ok(index);
         }
 
         // ========================================================================
