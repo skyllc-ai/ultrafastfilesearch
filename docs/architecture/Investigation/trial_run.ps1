@@ -39,14 +39,26 @@ $ErrorActionPreference = "Stop"
 
 $env:RUST_BACKTRACE = "full"
 
-# Enable diagnostic logging for live path analysis
-# info level shows summary diagnostics; debug/trace shows per-chunk details
+# Logging configuration for C++ algorithm parity analysis
+# Modules:
+#   uffs_mft::cpp_tree        - C++ tree metrics algorithm port
+#   uffs_mft::cpp_types       - C++ types and parsing structures
+#   uffs_mft::cpp_io_pipeline - C++ I/O pipeline (bitmap sync, chunk processing)
+#   uffs_mft::parse           - MFT record parsing
+#   uffs_mft::io              - I/O operations
+#   uffs_mft::reader          - MFT reader
+#   uffs_mft::index           - Index building and tree metrics
+#   uffs_cli::commands        - CLI command execution
+#
+# Levels: error < warn < info < debug < trace
 if ($VerboseLog) {
-    $env:RUST_LOG = "uffs_mft::cpp_types=trace,uffs_mft::cpp_io_pipeline=debug,uffs_mft::reader=info,info"
-    Write-Host "📋 Verbose logging enabled (trace level)" -ForegroundColor Yellow
+    # TRACE: Maximum verbosity - all C++ algorithm modules at trace level
+    $env:RUST_LOG = "uffs_mft=trace,uffs_cli=trace,uffs_core=trace"
+    Write-Host "📋 Verbose logging enabled (TRACE level for all uffs modules)" -ForegroundColor Yellow
 } else {
-    $env:RUST_LOG = "uffs_mft::cpp_types=info,uffs_mft::cpp_io_pipeline=info,uffs_mft::reader=info,info"
-    Write-Host "📋 Standard logging enabled (info level)" -ForegroundColor Yellow
+    # Default: No logs (error only) - clean output for parity comparison
+    $env:RUST_LOG = "error"
+    Write-Host "📋 Standard logging (error only - use -VerboseLog for trace)" -ForegroundColor Yellow
 }
 
 $WorkDir  = Get-Location
@@ -306,11 +318,13 @@ try {
             # Output files
             $cppOut         = "cpp_${driveLower}.txt"
             $rustLiveOut    = "rust_live_${driveLower}.txt"
+            $rustLiveTraceOut = "rust_live_trace_${driveLower}.txt"
             $rustOfflineOut = "rust_offline_${driveLower}.txt"
 
             # Log files (capture stderr with diagnostics)
             $cppLog         = "cpp_${driveLower}.log"
             $rustLiveLog    = "rust_live_${driveLower}.log"
+            $rustLiveTraceLog = "rust_live_trace_${driveLower}.log"
             $rustOfflineLog = "rust_offline_${driveLower}.log"
 
             # MFT file for offline comparison
@@ -380,7 +394,15 @@ try {
 
             $runs = @()
 
+            # 0. Clear Rust cache for this drive (ensures fresh MFT read with current algorithms)
+            if ($HasMft) {
+                Write-Host "  → Clearing Rust cache for drive $Drive..." -NoNewline
+                & cmd.exe /c "`"$UffsMftExe`" cache-clear --drive $Drive" 2>&1 | Out-Null
+                Write-Host " ✅" -ForegroundColor Green
+            }
+
             # 1. C++ baseline (no diagnostics, just output)
+            # C++ always reads MFT fresh (no caching)
             if ($HasCpp) {
                 $runs += Run-LoggedLocal -Title "C++ (baseline): drive $Drive" `
                     -CmdLine ("`"$UffsCom`" `"*`" --drives=$Drive") `
@@ -391,13 +413,28 @@ try {
             }
 
             # 2. Rust LIVE scan (with diagnostic logging via RUST_LOG)
+            # --no-cache forces fresh MFT read to ensure tree metrics are computed with current algorithms
             if ($HasRust) {
                 $runs += Run-LoggedLocal -Title "Rust LIVE (cpp io): drive $Drive" `
-                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --io-algo=cpp --no-bitmap") `
+                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --io-algo=cpp --chunk-algo=cpp --no-cache") `
                     -LogFileName $rustLiveLog `
                     -OutFileName $rustLiveOut
             } else {
                 $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust LIVE (cpp io)"; Command=""; LogFile=$rustLiveLog; OutFile=$rustLiveOut; DurationMs=$null; ExitCode=$null }
+            }
+
+            # 2b. Rust LIVE scan with TRACE logging (for debugging C++ algorithm parity)
+            # Temporarily enables trace-level logging to capture detailed diagnostics
+            if ($HasRust) {
+                $savedRustLog = $env:RUST_LOG
+                $env:RUST_LOG = "uffs_mft=trace,uffs_cli=trace,uffs_core=trace"
+                $runs += Run-LoggedLocal -Title "Rust LIVE TRACE: drive $Drive" `
+                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --io-algo=cpp --chunk-algo=cpp --no-cache") `
+                    -LogFileName $rustLiveTraceLog `
+                    -OutFileName $rustLiveTraceOut
+                $env:RUST_LOG = $savedRustLog
+            } else {
+                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust LIVE TRACE"; Command=""; LogFile=$rustLiveTraceLog; OutFile=$rustLiveTraceOut; DurationMs=$null; ExitCode=$null }
             }
 
             # 3. Rust OFFLINE scan - SKIPPED on Windows
@@ -407,8 +444,8 @@ try {
             $groupResults += [pscustomobject]@{
                 Disk   = $DiskNumber
                 Drive  = $Drive
-                Files  = [pscustomobject]@{ Cpp=$cppOut; RustLive=$rustLiveOut; RustOffline=$rustOfflineOut }
-                Logs   = [pscustomobject]@{ Cpp=$cppLog; RustLive=$rustLiveLog; RustOffline=$rustOfflineLog }
+                Files  = [pscustomobject]@{ Cpp=$cppOut; RustLive=$rustLiveOut; RustLiveTrace=$rustLiveTraceOut; RustOffline=$rustOfflineOut }
+                Logs   = [pscustomobject]@{ Cpp=$cppLog; RustLive=$rustLiveLog; RustLiveTrace=$rustLiveTraceLog; RustOffline=$rustOfflineLog }
                 Runs   = $runs
             }
         }
