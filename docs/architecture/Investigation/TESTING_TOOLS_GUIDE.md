@@ -29,6 +29,7 @@
    - [diagnose_mft_counts.rs](#diagnose_mft_countsrs---mft-count-diagnostic)
    - [find_missing_paths.rs](#find_missing_pathsrs---missing-path-extractor)
    - [analyze_parity_differences.rs](#analyze_parity_differencesrs---parity-difference-analyzer)
+   - [analyze_trial_parity.rs](#analyze_trial_parityrs---comprehensive-trial-run-parity-analysis)
 6. [Common Workflows](#common-workflows)
 
 ---
@@ -51,7 +52,7 @@ The UFFS project includes a comprehensive suite of testing and analysis tools de
 | **Data Collection** | `trial_run.ps1` | Collect MFT snapshots and scan outputs on Windows |
 | **Main Binaries** | `uffs`, `uffs_mft` | Production binaries with built-in testing/benchmarking |
 | **Diagnostic Tools** | 9 binaries in `uffs-diag` | Offline MFT analysis and comparison |
-| **Analysis Scripts** | 6 scripts in `scripts/` | Lightweight analysis with rust-script and Python |
+| **Analysis Scripts** | 7 scripts in `scripts/` | Lightweight analysis with rust-script and Python |
 
 ---
 
@@ -1210,6 +1211,121 @@ rust-script scripts/analyze_parity_differences.rs cpp_d.txt rust_d.txt
 
 ---
 
+### `analyze_trial_parity.rs` - Comprehensive Trial Run Parity Analysis
+
+**Purpose:** Automated, comprehensive parity analysis of trial run directories with detailed console output and markdown report generation.
+
+**Best For:** Repeat parity analysis after fixes, analyzing different disks, automated verification of C++ vs Rust parity.
+
+#### Usage
+
+```bash
+# Analyze a trial run directory
+rust-script scripts/analyze_trial_parity.rs docs/trial_runs/g_drive
+
+# Analyze a different disk
+rust-script scripts/analyze_trial_parity.rs docs/trial_runs/d_disk
+```
+
+#### What It Does
+
+1. **Auto-detects files** - Finds `cpp_*.txt` and `rust_*.txt` files in the directory
+2. **Loads and parses CSV** - Custom CSV parser handles quoted fields correctly
+3. **Path matching analysis** - Compares normalized paths between C++ and Rust
+4. **ADS analysis** - Counts and compares Alternate Data Stream entries
+5. **Boolean flag verification** - Checks `is_directory`, `is_archive`, `is_system`, `is_hidden`, `is_reparse`
+6. **Tree metrics comparison** - Compares `size` and `descendants` for directories
+7. **Timestamp validation** - Detects timestamp conversion errors (e.g., year offset issues)
+8. **Report generation** - Creates markdown report in the trial run directory
+
+#### Output
+
+Console output with visual indicators:
+```
+╔══════════════════════════════════════════════════════════════════════╗
+║           UFFS TRIAL RUN PARITY ANALYSIS                             ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+📅 Date: 2026-02-02 05:24:02
+
+📁 Input Files:
+   C++:  docs/trial_runs/g_drive/cpp_g.txt
+   Rust: docs/trial_runs/g_drive/rust_live_g.txt
+
+📂 Loading C++: docs/trial_runs/g_drive/cpp_g.txt
+   Loaded 15063 rows
+📂 Loading Rust: docs/trial_runs/g_drive/rust_live_g.txt
+   Loaded 15063 rows
+
+═══════════════════════════════════════════════════════════════════════
+                         PARITY ANALYSIS RESULTS
+═══════════════════════════════════════════════════════════════════════
+
+🔗 PATH MATCHING
+   Common paths:          15063
+   C++ only:                  0
+   Rust only:                 0
+   Match rate:        100.0000%
+
+📎 ALTERNATE DATA STREAMS (ADS)
+   C++ ADS entries:           8
+   Rust ADS entries:          8
+   Status:           ✅ MATCH
+
+🏷️  BOOLEAN FLAGS
+   is_archive       100.0000% ✅
+   is_directory     100.0000% ✅
+   is_hidden        100.0000% ✅
+   is_reparse       100.0000% ✅
+   is_system        100.0000% ✅
+
+🌳 TREE METRICS (size, descendants)
+   Status:           🔴 ISSUES FOUND (20 directories)
+
+   Sample issues:
+   G:\MFT_TEST\_FRAG_PRE_1\
+      Size: C++=2731149 Rust=0
+      Desc: C++=5001 Rust=0
+
+🕐 TIMESTAMPS
+   Status:           🔴 ISSUES FOUND (10 files)
+
+   Sample issues:
+   G:\MFT_TEST\_FRAG_PRE_1\sfile_009727.tmp
+      C++:  2026-01-21 07:29:25
+      Rust: 6220-07-25 02:54:15 (year diff: 4194)
+
+═══════════════════════════════════════════════════════════════════════
+                              SUMMARY
+═══════════════════════════════════════════════════════════════════════
+
+   🔴 Tree metrics issues detected
+   🔴 Timestamp conversion issues detected
+
+📝 Report written to: docs/trial_runs/g_drive/PARITY_ANALYSIS_2026_02_02.md
+```
+
+#### Generated Report
+
+The script generates a markdown report (`PARITY_ANALYSIS_YYYY_MM_DD.md`) containing:
+- Executive summary table with all metrics
+- Boolean flag match rates
+- ADS entries from both C++ and Rust
+- Tree metrics issues table (if any)
+- Timestamp issues table (if any)
+
+#### Key Features
+
+- **Cross-platform** - Works on Mac/Linux with trial run data collected on Windows
+- **Automated file detection** - No need to specify exact filenames
+- **Visual indicators** - Emojis for quick status scanning (✅, 🔴, ⚠️)
+- **Detailed issue reporting** - Shows sample issues with full context
+- **Markdown report** - Persistent record for tracking progress
+
+**Use Case:** Run after making fixes to verify parity improvements, or when analyzing a new disk's trial run data.
+
+---
+
 ### Other Scripts
 
 **`ci-pipeline.rs`** - Full CI pipeline runner
@@ -1407,6 +1523,7 @@ The UFFS testing toolkit provides comprehensive coverage for:
 - Use `analyze_parity_differences.rs` for pattern analysis of differences
 
 **For detailed parity testing:**
+- Use `analyze_trial_parity.rs` for comprehensive trial run analysis with visual output and markdown reports
 - Use `compare_scan_parity` for comprehensive field-by-field analysis with reports
 - Use `diagnose_mft_counts.rs` for count-focused diagnostics
 
