@@ -1205,6 +1205,7 @@ impl CppMftIndex {
             ChildInfo as RustChildInfo, FileRecord, MftIndex, NO_ENTRY as RUST_NO_ENTRY,
             StandardInfo as RustStandardInfo,
         };
+        use crate::ntfs::filetime_to_unix_micros;
 
         let mut index = MftIndex::with_capacity(volume, self.records_data.len());
 
@@ -1227,11 +1228,15 @@ impl CppMftIndex {
                 .position(|&idx| idx == cpp_record_idx_u32)
                 .unwrap_or(0) as u64;
 
-            // Convert StandardInfo
+            // Convert StandardInfo - MUST convert FILETIME to Unix microseconds
+            // C++ stores raw Windows FILETIME (100ns since 1601-01-01)
+            // Rust MftIndex expects Unix microseconds (μs since 1970-01-01)
             let stdinfo = RustStandardInfo {
-                created: u64_to_i64_filetime(cpp_record.stdinfo.created),
-                modified: u64_to_i64_filetime(cpp_record.stdinfo.written),
-                accessed: u64_to_i64_filetime(cpp_record.stdinfo.accessed()),
+                created: filetime_to_unix_micros(u64_to_i64_filetime(cpp_record.stdinfo.created)),
+                modified: filetime_to_unix_micros(u64_to_i64_filetime(cpp_record.stdinfo.written)),
+                accessed: filetime_to_unix_micros(u64_to_i64_filetime(
+                    cpp_record.stdinfo.accessed(),
+                )),
                 mft_changed: 0, // Not stored in C++ StandardInfo
                 flags: Self::convert_cpp_attributes_to_rust_flags(&cpp_record.stdinfo),
                 usn: 0,         // Not stored in C++ StandardInfo
@@ -1264,9 +1269,16 @@ impl CppMftIndex {
                 first_name,
                 first_stream,
                 // $FILE_NAME timestamps (not stored separately in C++)
-                fn_created: u64_to_i64_filetime(cpp_record.stdinfo.created),
-                fn_modified: u64_to_i64_filetime(cpp_record.stdinfo.written),
-                fn_accessed: u64_to_i64_filetime(cpp_record.stdinfo.accessed()),
+                // Also need FILETIME → Unix microseconds conversion
+                fn_created: filetime_to_unix_micros(u64_to_i64_filetime(
+                    cpp_record.stdinfo.created,
+                )),
+                fn_modified: filetime_to_unix_micros(u64_to_i64_filetime(
+                    cpp_record.stdinfo.written,
+                )),
+                fn_accessed: filetime_to_unix_micros(u64_to_i64_filetime(
+                    cpp_record.stdinfo.accessed(),
+                )),
                 fn_mft_changed: 0,
                 // Tree metrics (computed later)
                 descendants: 0,
