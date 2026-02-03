@@ -1028,11 +1028,16 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                 | AttributeType::Ea
                 | AttributeType::EaInformation
                 | AttributeType::LoggedUtilityStream
-                | AttributeType::SecurityDescriptor,
+                | AttributeType::SecurityDescriptor
+                | AttributeType::AttributeList,
             ) => {
                 // Note: LoggedUtilityStream IS counted as a stream in C++ via the default: case
                 // The commented out line 589 just means it's not an explicit case, so it falls
                 // through
+                // Note: AttributeList (0x20) IS counted as a stream in C++ via the default:
+                // case (line 588 is commented out, so it falls through to
+                // default: at line 600) This is critical for tree metrics
+                // parity - ~60k records have $ATTRIBUTE_LIST
 
                 // Extract attribute name (if any)
                 let attr_name = if attr_header.name_length > 0 {
@@ -1101,6 +1106,7 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                         Some(AttributeType::SecurityDescriptor) => {
                             String::from("$SECURITY_DESCRIPTOR")
                         }
+                        Some(AttributeType::AttributeList) => String::from("$ATTRIBUTE_LIST"),
                         _ => String::new(),
                     }
                 } else {
@@ -1119,11 +1125,7 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
             // Skip known non-stream attributes silently
             // Note: SecurityDescriptor (0x50) IS counted as a stream in C++ via the default: case
             // (line 591 is commented out, so it falls through to default: at line 600)
-            Some(
-                AttributeType::StandardInformation
-                | AttributeType::FileName
-                | AttributeType::AttributeList,
-            ) => {}
+            Some(AttributeType::StandardInformation | AttributeType::FileName) => {}
             _ => {
                 // Unknown attribute type - log at trace level for debugging
                 // Copy fields from packed struct to avoid unaligned reference
@@ -1505,9 +1507,12 @@ pub fn parse_record_forensic(
                     | AttributeType::Ea
                     | AttributeType::EaInformation
                     | AttributeType::LoggedUtilityStream
-                    | AttributeType::SecurityDescriptor,
+                    | AttributeType::SecurityDescriptor
+                    | AttributeType::AttributeList,
                 ) => {
                     // Handle other stream-creating attributes
+                    // Note: AttributeList (0x20) IS counted as a stream in C++ via the default:
+                    // case
                     let attr_name = if attr_header.name_length > 0 {
                         let name_offset = offset + attr_header.name_offset as usize;
                         let name_len = attr_header.name_length as usize;
@@ -1569,6 +1574,7 @@ pub fn parse_record_forensic(
                             Some(AttributeType::SecurityDescriptor) => {
                                 String::from("$SECURITY_DESCRIPTOR")
                             }
+                            Some(AttributeType::AttributeList) => String::from("$ATTRIBUTE_LIST"),
                             _ => String::new(),
                         }
                     } else {
@@ -1841,6 +1847,8 @@ pub fn parse_record_forensic(
             // - $LOGGED_UTILITY_STREAM (0x100) - falls through to default: case in C++
             // - $SECURITY_DESCRIPTOR (0x50) - falls through to default: case in C++ (line 591
             //   commented out)
+            // - $ATTRIBUTE_LIST (0x20) - falls through to default: case in C++ (line 588 commented
+            //   out)
             Some(
                 AttributeType::ObjectId
                 | AttributeType::VolumeName
@@ -1849,7 +1857,8 @@ pub fn parse_record_forensic(
                 | AttributeType::Ea
                 | AttributeType::EaInformation
                 | AttributeType::LoggedUtilityStream
-                | AttributeType::SecurityDescriptor,
+                | AttributeType::SecurityDescriptor
+                | AttributeType::AttributeList,
             ) => {
                 // Extract attribute name (if any)
                 let attr_name = if attr_header.name_length > 0 {
@@ -1918,6 +1927,7 @@ pub fn parse_record_forensic(
                         Some(AttributeType::SecurityDescriptor) => {
                             String::from("$SECURITY_DESCRIPTOR")
                         }
+                        Some(AttributeType::AttributeList) => String::from("$ATTRIBUTE_LIST"),
                         _ => String::new(),
                     }
                 } else {
