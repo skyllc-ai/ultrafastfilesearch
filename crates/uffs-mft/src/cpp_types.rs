@@ -1200,10 +1200,11 @@ impl CppMftIndex {
     /// # Arguments
     /// * `volume` - Volume letter (e.g., 'C')
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn into_mft_index(self, volume: char) -> crate::index::MftIndex {
         use crate::index::{
-            ChildInfo as RustChildInfo, FileRecord, MftIndex, NO_ENTRY as RUST_NO_ENTRY,
-            StandardInfo as RustStandardInfo,
+            ChildInfo as RustChildInfo, FileRecord, InternalStreamInfo, MftIndex,
+            NO_ENTRY as RUST_NO_ENTRY, SizeInfo as RustSizeInfo, StandardInfo as RustStandardInfo,
         };
         use crate::ntfs::filetime_to_unix_micros;
 
@@ -1251,6 +1252,69 @@ impl CppMftIndex {
             let first_stream =
                 self.convert_stream_info_to_index(&cpp_record.first_stream, &mut index);
 
+            // =====================================================================
+            // Build internal stream linked list for per-stream delta distribution
+            // =====================================================================
+            // C++ stores ALL streams (including internal ones like $REPARSE_POINT,
+            // $OBJECT_ID, $SECURITY_DESCRIPTOR). The tree algorithm needs to apply
+            // delta() per internal stream because delta is NOT linear:
+            //     delta(a + b) != delta(a) + delta(b)
+            // So we must identify internal streams and build a linked list.
+            let mut internal_streams_size = 0_u64;
+            let mut internal_streams_allocated = 0_u64;
+
+            // Check if first_stream is internal and build linked list head
+            let (mut first_internal_stream, mut last_internal_stream) = if self
+                .is_internal_stream(&cpp_record.first_stream)
+            {
+                let length = cpp_record.first_stream.size.length.as_u64();
+                let allocated = cpp_record.first_stream.size.allocated.as_u64();
+                internal_streams_size = internal_streams_size.saturating_add(length);
+                internal_streams_allocated = internal_streams_allocated.saturating_add(allocated);
+
+                let new_idx = usize_to_u32(index.internal_streams.len());
+                index.internal_streams.push(InternalStreamInfo {
+                    size: RustSizeInfo { length, allocated },
+                    next_entry: RUST_NO_ENTRY,
+                    flags: 0,
+                });
+                (new_idx, new_idx)
+            } else {
+                (RUST_NO_ENTRY, RUST_NO_ENTRY)
+            };
+
+            // Check overflow streams for this record
+            let mut stream_idx = cpp_record.first_stream.next_entry;
+            while stream_idx != NO_ENTRY {
+                if let Some(cpp_stream) = self.streaminfos.get(stream_idx as usize) {
+                    if self.is_internal_stream(cpp_stream) {
+                        let length = cpp_stream.size.length.as_u64();
+                        let allocated = cpp_stream.size.allocated.as_u64();
+                        internal_streams_size = internal_streams_size.saturating_add(length);
+                        internal_streams_allocated =
+                            internal_streams_allocated.saturating_add(allocated);
+
+                        let new_idx = usize_to_u32(index.internal_streams.len());
+                        index.internal_streams.push(InternalStreamInfo {
+                            size: RustSizeInfo { length, allocated },
+                            next_entry: RUST_NO_ENTRY,
+                            flags: 0,
+                        });
+
+                        if last_internal_stream == RUST_NO_ENTRY {
+                            first_internal_stream = new_idx;
+                        } else {
+                            index.internal_streams[last_internal_stream as usize].next_entry =
+                                new_idx;
+                        }
+                        last_internal_stream = new_idx;
+                    }
+                    stream_idx = cpp_stream.next_entry;
+                } else {
+                    break;
+                }
+            }
+
             // Create FileRecord with all required fields
             let record = FileRecord {
                 frs,
@@ -1265,8 +1329,8 @@ impl CppMftIndex {
                 stream_count: cpp_record.stream_count,
                 // C++ stores all streams, so total_stream_count = stream_count
                 total_stream_count: cpp_record.stream_count,
-                // C++ stores all streams inline, so no internal streams are filtered
-                first_internal_stream: NO_ENTRY,
+                // Internal stream linked list for per-stream delta distribution
+                first_internal_stream,
                 first_child: cpp_record.first_child,
                 first_name,
                 first_stream,
@@ -1286,9 +1350,9 @@ impl CppMftIndex {
                 descendants: 0,
                 treesize: 0,
                 tree_allocated: 0,
-                // C++ stores all streams, so no internal streams are filtered
-                internal_streams_size: 0,
-                internal_streams_allocated: 0,
+                // Internal stream sizes for tree metrics
+                internal_streams_size,
+                internal_streams_allocated,
             };
 
             // Add to index
@@ -1520,6 +1584,54 @@ impl CppMftIndex {
                 .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
                 .collect();
             String::from_utf16_lossy(&u16_chars)
+        }
+    }
+
+    /// Check if a stream is an internal NTFS stream (name starts with `$` +
+    /// uppercase letter).
+    ///
+    /// Internal streams like `$REPARSE_POINT`, `$OBJECT_ID`,
+    /// `$SECURITY_DESCRIPTOR` are filtered from user-visible output but
+    /// must be tracked separately for exact C++ tree-metrics parity
+    /// (per-stream delta distribution).
+    ///
+    /// # Arguments
+    /// * `stream` - The C++ `StreamInfo` to check
+    ///
+    /// # Returns
+    /// `true` if the stream name starts with `$` followed by an uppercase
+    /// letter
+    fn is_internal_stream(&self, stream: &StreamInfo) -> bool {
+        let name_len = usize::from(stream.name.length());
+        if name_len == 0 {
+            return false; // Default stream (no name), not internal
+        }
+
+        let name_offset = stream.name.offset();
+        if name_offset == NO_ENTRY || name_offset as usize >= self.names.len() {
+            return false;
+        }
+
+        let is_ascii = stream.name.ascii();
+        let offset = name_offset as usize;
+
+        if is_ascii {
+            // ASCII: check first two bytes directly
+            if offset + 2 > self.names.len() {
+                return false;
+            }
+            let first_char = self.names[offset];
+            let second_char = self.names[offset + 1];
+            first_char == b'$' && second_char.is_ascii_uppercase()
+        } else {
+            // UTF-16LE: check first two u16 code units
+            if offset + 4 > self.names.len() {
+                return false;
+            }
+            let first_char = u16::from_le_bytes([self.names[offset], self.names[offset + 1]]);
+            let second_char = u16::from_le_bytes([self.names[offset + 2], self.names[offset + 3]]);
+            // '$' is 0x0024, uppercase A-Z are 0x0041-0x005A
+            first_char == 0x0024 && (0x0041..=0x005A).contains(&second_char)
         }
     }
 }
@@ -3612,9 +3724,6 @@ mod extension_record_tests {
         // Verify directory flag was set in attributes
         let stdinfo = parsed.stdinfo;
         let attrs = stdinfo.attributes();
-        assert!(
-            (attrs & 0x10) != 0,
-            "FILE_ATTRIBUTE_DIRECTORY should be set"
-        );
+        assert_ne!(attrs & 0x10, 0, "FILE_ATTRIBUTE_DIRECTORY should be set");
     }
 }
