@@ -186,30 +186,6 @@ impl<'a> CppTreeTraversal<'a> {
         let internal_streams_size = record.internal_streams_size;
         let internal_streams_allocated = record.internal_streams_allocated;
 
-        // Compute total own size (all streams) for storing in record
-        // This is the record's own size without delta formula
-        // Include internal streams size (like $REPARSE_POINT) that are filtered from
-        // storage
-        let mut own_total_length = first_stream_length + internal_streams_size;
-        let mut own_total_allocated = first_stream_allocated + internal_streams_allocated;
-        if stream_count > 1 {
-            let mut stream_idx = record.first_stream.next_entry;
-            // We've already counted first_stream (1) and internal streams are not stored,
-            // so we only need to iterate through stored additional streams
-            let stored_stream_count = record.stream_count;
-            let mut streams_counted = 1_u16;
-            while stream_idx != NO_ENTRY && streams_counted < stored_stream_count {
-                if let Some(stream) = self.index.streams.get(stream_idx as usize) {
-                    own_total_length += stream.size.length;
-                    own_total_allocated += stream.size.allocated;
-                    stream_idx = stream.next_entry;
-                    streams_counted += 1;
-                } else {
-                    break;
-                }
-            }
-        }
-
         // =====================================================================
         // Step 1: Recursively process all children
         // =====================================================================
@@ -277,8 +253,7 @@ impl<'a> CppTreeTraversal<'a> {
         // up to parent directories correctly.
         if internal_streams_size > 0 {
             let internal_length_delta = delta(internal_streams_size, name_info, total_names);
-            let internal_allocated_delta =
-                delta(internal_streams_allocated, name_info, total_names);
+            let internal_allocated_delta = delta(internal_streams_allocated, name_info, total_names);
             result.length += internal_length_delta;
             result.allocated += internal_allocated_delta;
             result.bulkiness += internal_allocated_delta;
@@ -315,56 +290,38 @@ impl<'a> CppTreeTraversal<'a> {
         }
 
         // =====================================================================
-        // Step 3: Store results in the record (TWO-CHANNEL MODEL)
+        // Step 3: Store results in the record (Two-Channel Model)
         // =====================================================================
         //
-        // C++ uses a two-channel model for tree metrics:
+        // C++ has two separate channels:
+        //   * Channel A (propagation): the `PreprocessResult` returned to parents.
+        //     This includes *all* streams (default + ADS + internal) via `result`.
+        //   * Channel B (printed): values stored in the record for output. These
+        //     correspond to the *default stream only*.
         //
-        // Channel A (propagation): values returned by recursion and accumulated into
-        // parents
-        //   - result.treesize = sum(child_returned_treesize) + total_stream_count
-        //   - This includes ALL streams (directory stream + reparse stream for
-        //     junctions)
+        // For directories, C++ stores children aggregates into the directory's
+        // default stream (type_name_id == 0). That means the printed directory
+        // metrics are:
+        //   descendants = children_streams + 1
+        //   size        = children_size + default_stream_length
+        //   allocated   = children_allocated + default_stream_allocated
         //
-        // Channel B (printed): values stored into the record's directory stream and
-        // printed
-        //   - printed_descendants = 1 + children_size.treesize
-        //   - This only counts the directory stream (type_name_id == 0), not other
-        //     streams
-        //
-        // For a junction with 2 streams (dir + reparse) and no children:
-        //   - Channel A: result.treesize = 2 (propagated to parent)
-        //   - Channel B: printed_descendants = 1 (stored in record)
-        //
-        // This is the key insight from the C++ code (line 885):
-        //   if (!k->type_name_id) {
-        //       k->treesize += children_size.treesize;  // Only directory stream
-        // absorbs children   }
-        //
-        // See docs/architecture/Investigation/MFT_tree_metrics_parity_deep_dive.md
+        // Crucially: a directory's *own* non-default streams (ADS/internal like
+        // $REPARSE_POINT, $SECURITY_DESCRIPTOR, etc.) must NOT be added into the
+        // directory's printed size. They only contribute through Channel A to the
+        // directory's parent.
         let record_mut = &mut self.index.records[idx];
 
         if is_directory {
-            // Channel B (printed): directory stream descendants = 1 + children's treesize
-            // This matches C++ where only the directory stream (type_name_id == 0) absorbs
-            // children totals. The directory's own non-directory streams (like
-            // $REPARSE_POINT) are NOT included in the printed descendants.
             record_mut.descendants = children_size.treesize + 1;
-
-            // C++ stores accumulated length in the directory stream's length field.
-            // For printed output, use only the first stream (directory stream) + children.
-            // Internal streams (like $REPARSE_POINT) propagate via Channel A but don't
-            // appear in the directory's own printed size.
             record_mut.treesize = children_size.length + first_stream_length;
             record_mut.tree_allocated = children_size.allocated + first_stream_allocated;
         } else {
             record_mut.descendants = 0;
-            // Files: treesize = own size (all streams, not stream count)
-            record_mut.treesize = own_total_length;
-            record_mut.tree_allocated = own_total_allocated;
+            record_mut.treesize = first_stream_length;
+            record_mut.tree_allocated = first_stream_allocated;
         }
 
-        // Return Channel A (propagation) values - includes ALL streams
         result
     }
 }

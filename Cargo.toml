@@ -39,7 +39,7 @@ exclude = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.2.175"
+version = "0.2.176"
 edition = "2024"
 rust-version = "1.85"
 license = "MPL-2.0 OR LicenseRef-UFFS-Commercial"
@@ -139,7 +139,7 @@ mimalloc = "0.1.48"
 
 # ───── Utilities ─────
 glob = "0.3.3"
-regex = "1.12.2"
+regex = "1.12.3"
 memchr = "2.7.6"
 aho-corasick = "1.1.4"
 globset = "0.4.18"
