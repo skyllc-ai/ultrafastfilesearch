@@ -1265,6 +1265,8 @@ impl CppMftIndex {
                 stream_count: cpp_record.stream_count,
                 // C++ stores all streams, so total_stream_count = stream_count
                 total_stream_count: cpp_record.stream_count,
+                // C++ stores all streams inline, so no internal streams are filtered
+                first_internal_stream: NO_ENTRY,
                 first_child: cpp_record.first_child,
                 first_name,
                 first_stream,

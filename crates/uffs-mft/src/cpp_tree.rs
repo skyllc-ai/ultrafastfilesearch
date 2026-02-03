@@ -186,15 +186,46 @@ impl<'a> CppTreeTraversal<'a> {
         let internal_streams_size = record.internal_streams_size;
         let internal_streams_allocated = record.internal_streams_allocated;
 
+        // Compute total own size (all streams) for storing in record
+        // This is the record's own size without delta formula
+        // Include internal streams size (like $REPARSE_POINT) that are filtered from storage
+        let mut own_total_length = first_stream_length + internal_streams_size;
+        let mut own_total_allocated = first_stream_allocated + internal_streams_allocated;
+        if stream_count > 1 {
+            let mut stream_idx = record.first_stream.next_entry;
+            // We've already counted first_stream (1) and internal streams are not stored,
+            // so we only need to iterate through stored additional streams
+            let stored_stream_count = record.stream_count;
+            let mut streams_counted = 1_u16;
+            while stream_idx != NO_ENTRY && streams_counted < stored_stream_count {
+                if let Some(stream) = self.index.streams.get(stream_idx as usize) {
+                    own_total_length += stream.size.length;
+                    own_total_allocated += stream.size.allocated;
+                    stream_idx = stream.next_entry;
+                    streams_counted += 1;
+                } else {
+                    break;
+                }
+            }
+        }
+
         // =====================================================================
         // Step 1: Recursively process all children
         // =====================================================================
         let mut children_size = PreprocessResult::default();
 
+        // DEBUG: Check if this is MFT_TEST (FRS 53)
+        let is_mft_test = record_frs == 53;
+        let mut mft_test_child_count = 0u32;
+
         let mut child_entry_idx = first_child;
         while child_entry_idx != NO_ENTRY {
             let child_info = self.index.children[child_entry_idx as usize];
             let child_frs = child_info.child_frs;
+
+            if is_mft_test {
+                mft_test_child_count += 1;
+            }
 
             // Skip self-reference (root directory has parent = itself)
             if child_frs == record_frs {
@@ -212,6 +243,7 @@ impl<'a> CppTreeTraversal<'a> {
             if child_idx != NO_ENTRY {
                 let child_record = &self.index.records[child_idx as usize];
                 let child_name_count = child_record.name_count;
+                let child_is_dir = child_record.is_directory();
 
                 // C++ formula: name_info = name_count - 1 - child_info.name_index
                 let child_name_info = if child_name_count > 0 {
@@ -226,10 +258,27 @@ impl<'a> CppTreeTraversal<'a> {
                 let subresult =
                     self.preprocess(child_idx as usize, child_name_info, child_name_count.max(1));
 
+                // DEBUG: Check junctions
+                if child_frs == 300 || child_frs == 308 {
+                    eprintln!(
+                        "DEBUG: Junction FRS {} is_dir={} subresult: treesize={}, length={}, allocated={}",
+                        child_frs, child_is_dir, subresult.treesize, subresult.length, subresult.allocated
+                    );
+                }
+
                 children_size.accumulate(&subresult);
             }
 
             child_entry_idx = child_info.next_entry;
+        }
+
+        if is_mft_test {
+            eprintln!(
+                "DEBUG: MFT_TEST (FRS 53) has {} children, children_size.treesize={}, children_size.descendants={}",
+                mft_test_child_count,
+                children_size.treesize,
+                children_size.descendants
+            );
         }
 
         // =====================================================================
@@ -251,12 +300,24 @@ impl<'a> CppTreeTraversal<'a> {
         // Rust filters these internal streams from storage but tracks their sizes in
         // internal_streams_size/allocated. We need to add them here so they propagate
         // up to parent directories correctly.
-        if internal_streams_size > 0 {
-            let internal_length_delta = delta(internal_streams_size, name_info, total_names);
-            let internal_allocated_delta = delta(internal_streams_allocated, name_info, total_names);
+
+        // Add internal streams size with the delta formula.
+        //
+        // IMPORTANT: The delta() distribution uses integer division, and:
+        //     delta(a + b) != delta(a) + delta(b)
+        // so we must apply delta per internal stream, not to the pre-summed total.
+        let mut internal_idx = record.first_internal_stream;
+        while internal_idx != NO_ENTRY {
+            let st = &index.internal_streams[internal_idx as usize];
+
+            let internal_length_delta = delta(st.size.length, name_info, total_names);
+            let internal_allocated_delta = delta(st.size.allocated, name_info, total_names);
+
             result.length += internal_length_delta;
             result.allocated += internal_allocated_delta;
             result.bulkiness += internal_allocated_delta;
+
+            internal_idx = st.next_entry;
         }
 
         // Add ALL streams to treesize at once (including filtered internal streams like
@@ -290,36 +351,26 @@ impl<'a> CppTreeTraversal<'a> {
         }
 
         // =====================================================================
-        // Step 3: Store results in the record (Two-Channel Model)
+        // Step 3: Store results in the record
         // =====================================================================
-        //
-        // C++ has two separate channels:
-        //   * Channel A (propagation): the `PreprocessResult` returned to parents.
-        //     This includes *all* streams (default + ADS + internal) via `result`.
-        //   * Channel B (printed): values stored in the record for output. These
-        //     correspond to the *default stream only*.
-        //
-        // For directories, C++ stores children aggregates into the directory's
-        // default stream (type_name_id == 0). That means the printed directory
-        // metrics are:
-        //   descendants = children_streams + 1
-        //   size        = children_size + default_stream_length
-        //   allocated   = children_allocated + default_stream_allocated
-        //
-        // Crucially: a directory's *own* non-default streams (ADS/internal like
-        // $REPARSE_POINT, $SECURITY_DESCRIPTOR, etc.) must NOT be added into the
-        // directory's printed size. They only contribute through Channel A to the
-        // directory's parent.
         let record_mut = &mut self.index.records[idx];
 
         if is_directory {
-            record_mut.descendants = children_size.treesize + 1;
-            record_mut.treesize = children_size.length + first_stream_length;
-            record_mut.tree_allocated = children_size.allocated + first_stream_allocated;
+            // C++ outputs sizeinfo.treesize (stream count) as "Descendants" column.
+            // result.treesize contains the accumulated stream count (children + own
+            // streams). This matches C++ line 885: k->treesize +=
+            // children_size.treesize
+            record_mut.descendants = result.treesize;
+            // C++ stores accumulated length (sum of file sizes) in the default stream's
+            // length field, which becomes the directory's "Size" in output.
+            // We store children's accumulated size + own size (all streams).
+            record_mut.treesize = children_size.length + own_total_length;
+            record_mut.tree_allocated = children_size.allocated + own_total_allocated;
         } else {
             record_mut.descendants = 0;
-            record_mut.treesize = first_stream_length;
-            record_mut.tree_allocated = first_stream_allocated;
+            // Files: treesize = own size (all streams, not stream count)
+            record_mut.treesize = own_total_length;
+            record_mut.tree_allocated = own_total_allocated;
         }
 
         result

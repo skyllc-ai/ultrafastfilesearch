@@ -921,6 +921,31 @@ impl IndexStreamInfo {
 }
 
 // ============================================================================
+// ============================================================================
+// InternalStreamInfo - Internal NTFS stream chain entry
+// ============================================================================
+
+/// Internal NTFS attribute stream information.
+///
+/// These correspond to internal attributes that the C++ implementation counts
+/// as streams for tree metrics (e.g. `$REPARSE_POINT`, `$SECURITY_DESCRIPTOR`,
+/// `$OBJECT_ID`, etc) but which UFFS intentionally does not expose as ADS rows.
+///
+/// They are stored separately so the C++ `delta()` hardlink distribution can be
+/// applied per-stream (delta is not additive after integer rounding).
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
+pub struct InternalStreamInfo {
+    /// Size information for the internal stream.
+    pub size: SizeInfo,
+    /// Index of next `InternalStreamInfo` in `MftIndex::internal_streams`, or
+    /// `NO_ENTRY`.
+    pub next_entry: u32,
+    /// Packed flags (`bit0=is_sparse`, `bit1=is_resident`). Other bits are
+    /// reserved.
+    pub flags: u8,
+}
+
 // ExtensionTable - Extension interning and statistics
 // ============================================================================
 
@@ -1348,6 +1373,9 @@ pub struct FileRecord {
     /// (`$REPARSE_POINT`, etc.) Used for tree metrics calculation to match
     /// C++ behavior.
     pub total_stream_count: u16,
+    /// Head of linked list of internal streams for this record (indexes into
+    /// `MftIndex::internal_streams`), or `NO_ENTRY`
+    pub first_internal_stream: u32,
     /// Index of first child in `MftIndex::children`, or `NO_ENTRY`
     pub first_child: u32,
     /// Primary filename (inline, no allocation)
@@ -1391,6 +1419,7 @@ impl FileRecord {
             name_count: 1,         // Every file has at least one name
             stream_count: 1,       // User-visible streams (default $DATA)
             total_stream_count: 1, // All streams including internal (for tree metrics)
+            first_internal_stream: NO_ENTRY,
             first_child: NO_ENTRY,
             first_name: LinkInfo {
                 next_entry: NO_ENTRY,
@@ -1679,6 +1708,9 @@ pub struct MftIndex {
     pub links: Vec<LinkInfo>,
     /// Overflow stream entries (for files with ADS)
     pub streams: Vec<IndexStreamInfo>,
+    /// Internal NTFS streams filtered from user-visible output but required for
+    /// exact C++ tree-metrics parity.
+    pub internal_streams: Vec<InternalStreamInfo>,
     /// Directory child entries
     pub children: Vec<ChildInfo>,
     /// Statistics collected during parsing
@@ -1766,6 +1798,7 @@ impl MftIndex {
             names: String::with_capacity(record_capacity * 20), // ~20 chars avg
             links: Vec::new(),
             streams: Vec::new(),
+            internal_streams: Vec::new(),
             children: Vec::with_capacity(record_capacity),
             stats: MftStats::new(),
             extensions: ExtensionTable::new(),
@@ -5911,41 +5944,62 @@ impl MftIndex {
                 record.first_name.next_entry = prev_link_idx;
             }
 
-            // Store additional streams (ADS) in the streams vector
-            // Skip the default (unnamed) stream which is stored in first_stream
-            // Also filter out internal Windows streams (names starting with $UPPERCASE)
-            // These include $DSC, $REPARSE, $EA, $EA_INFORMATION, $TXF_DATA, $OBJECT_ID
-            // But allow user-visible streams like ${GUID}.Metadata (iCloud)
+            // Store additional streams (ADS) in the streams vector.
             //
-            // We also compute the total size of filtered internal streams for tree metrics.
-            // C++ stores ALL streams and iterates through them in the tree algorithm,
-            // adding each stream's length to result.length. We filter out internal streams
-            // from storage but need their sizes for tree calculations.
-            let mut internal_streams_size: u64 = 0;
-            let mut internal_streams_allocated: u64 = 0;
-            let named_streams: Vec<_> = parsed
-                .streams
-                .iter()
-                .filter(|st| {
-                    if st.name.is_empty() {
-                        return false;
-                    }
-                    // Check if this is an internal Windows stream: $UPPERCASE...
-                    // Allow ${...} style streams (iCloud metadata, etc.)
-                    let is_internal = st.name.strip_prefix('$').is_some_and(|rest| {
-                        rest.chars()
-                            .next()
-                            .is_some_and(|ch| ch.is_ascii_uppercase())
+            // Filter out:
+            //   - Empty name (default stream)
+            //   - Internal Windows streams (names starting with `$UPPERCASE`)
+            //
+            // Internal streams are NOT emitted as ADS rows, but they ARE required for exact
+            // C++ tree-metrics parity. We must keep them as individual stream entries
+            // because the C++ `delta()` distribution uses integer division:
+            //     delta(a + b) != delta(a) + delta(b)
+            // So pre-summing internal stream sizes causes 1-4 byte tree-size skews.
+            let mut internal_streams_size = 0_u64;
+            let mut internal_streams_allocated = 0_u64;
+            let mut first_internal_stream = NO_ENTRY;
+            let mut last_internal_stream = NO_ENTRY;
+
+            let mut named_streams: Vec<_> = Vec::new();
+            for st in &parsed.streams {
+                if st.name.is_empty() {
+                    continue;
+                }
+
+                let is_internal = st
+                    .name
+                    .strip_prefix('$')
+                    .and_then(|rest| rest.chars().next())
+                    .is_some_and(|ch| ch.is_ascii_uppercase());
+
+                if is_internal {
+                    internal_streams_size = internal_streams_size.saturating_add(st.size);
+                    internal_streams_allocated =
+                        internal_streams_allocated.saturating_add(st.allocated_size);
+
+                    let flags = u8::from(st.is_sparse) | (u8::from(st.is_resident) << 1_u8);
+
+                    let new_idx = index.internal_streams.len() as u32;
+                    index.internal_streams.push(InternalStreamInfo {
+                        size: SizeInfo {
+                            length: st.size,
+                            allocated: st.allocated_size,
+                        },
+                        next_entry: NO_ENTRY,
+                        flags,
                     });
-                    if is_internal {
-                        // Accumulate size of filtered internal streams for tree metrics
-                        internal_streams_size += st.size;
-                        internal_streams_allocated += st.allocated_size;
-                        return false;
+
+                    if last_internal_stream == NO_ENTRY {
+                        first_internal_stream = new_idx;
+                    } else {
+                        index.internal_streams[last_internal_stream as usize].next_entry = new_idx;
                     }
-                    true
-                })
-                .collect();
+                    last_internal_stream = new_idx;
+                    continue;
+                }
+
+                named_streams.push(st);
+            }
 
             // Set total_stream_count to include ALL streams (for tree metrics, C++ parity)
             // This includes internal Windows streams like $REPARSE_POINT, $OBJECT_ID, etc.
@@ -5961,6 +6015,7 @@ impl MftIndex {
             record.stream_count = actual_stream_count;
             record.internal_streams_size = internal_streams_size;
             record.internal_streams_allocated = internal_streams_allocated;
+            record.first_internal_stream = first_internal_stream;
 
             if !named_streams.is_empty() {
                 let mut prev_stream_idx = NO_ENTRY;
@@ -6222,6 +6277,7 @@ impl MftIndex {
         let name_offset_adjustment = self.names.len() as u32;
         let link_offset_adjustment = self.links.len() as u32;
         let stream_offset_adjustment = self.streams.len() as u32;
+        let internal_stream_offset_adjustment = self.internal_streams.len() as u32;
 
         // Build extension_id remapping table
         let extension_id_map = self.build_extension_id_map(&fragment);
@@ -6237,6 +6293,7 @@ impl MftIndex {
             name_offset_adjustment,
             link_offset_adjustment,
             stream_offset_adjustment,
+            internal_stream_offset_adjustment,
             &extension_id_map,
         );
 
@@ -6245,6 +6302,8 @@ impl MftIndex {
 
         // Merge streams (with offset and extension_id adjustment)
         self.merge_fragment_streams(fragment.streams, name_offset_adjustment, &extension_id_map);
+        // Merge internal streams (with offset adjustment)
+        self.merge_fragment_internal_streams(fragment.internal_streams);
 
         // Merge children (with offset adjustment)
         self.merge_fragment_children(fragment.children);
@@ -6309,6 +6368,7 @@ impl MftIndex {
         name_offset_adjustment: u32,
         link_offset_adjustment: u32,
         stream_offset_adjustment: u32,
+        internal_stream_offset_adjustment: u32,
         extension_id_map: &[u16],
     ) -> Vec<(u32, FileRecord)> {
         let mut deferred_merges: Vec<(u32, FileRecord)> = Vec::new();
@@ -6337,6 +6397,9 @@ impl MftIndex {
             }
             if record.first_stream.next_entry != NO_ENTRY {
                 record.first_stream.next_entry += stream_offset_adjustment;
+            }
+            if record.first_internal_stream != NO_ENTRY {
+                record.first_internal_stream += internal_stream_offset_adjustment;
             }
 
             // Expand lookup table if needed
@@ -6369,6 +6432,9 @@ impl MftIndex {
                     // If placeholder had names (from extension), defer merge
                     if placeholder.first_name.name.is_valid()
                         || placeholder.first_name.next_entry != NO_ENTRY
+                        || placeholder.first_stream.name.is_valid()
+                        || placeholder.first_stream.next_entry != NO_ENTRY
+                        || placeholder.first_internal_stream != NO_ENTRY
                     {
                         deferred_merges.push((existing_idx, placeholder));
                     }
@@ -6378,6 +6444,9 @@ impl MftIndex {
                         core::mem::replace(&mut self.records[existing_idx as usize], record);
                     if placeholder.first_name.name.is_valid()
                         || placeholder.first_name.next_entry != NO_ENTRY
+                        || placeholder.first_stream.name.is_valid()
+                        || placeholder.first_stream.next_entry != NO_ENTRY
+                        || placeholder.first_internal_stream != NO_ENTRY
                     {
                         deferred_merges.push((existing_idx, placeholder));
                     }
@@ -6387,6 +6456,7 @@ impl MftIndex {
                         || record.first_name.next_entry != NO_ENTRY
                         || record.first_stream.name.is_valid()
                         || record.first_stream.next_entry != NO_ENTRY
+                        || record.first_internal_stream != NO_ENTRY
                     {
                         deferred_merges.push((existing_idx, record));
                     }
@@ -6401,7 +6471,11 @@ impl MftIndex {
     ///
     /// This is called after all links/streams have been merged, so the indices
     /// are valid.
-    #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::indexing_slicing,
+        clippy::too_many_lines
+    )]
     fn apply_deferred_name_merges(
         &mut self,
         deferred_merges: Vec<(u32, FileRecord)>,
@@ -6499,6 +6573,50 @@ impl MftIndex {
                     existing.total_stream_count += discarded.total_stream_count;
                 }
             }
+
+            // Merge internal streams from the discarded record.
+            if discarded.first_internal_stream != NO_ENTRY {
+                let last_internal_idx = (existing.first_internal_stream != NO_ENTRY).then(|| {
+                    let mut idx = existing.first_internal_stream;
+                    while self
+                        .internal_streams
+                        .get(idx as usize)
+                        .is_some_and(|st| st.next_entry != NO_ENTRY)
+                    {
+                        idx = self.internal_streams[idx as usize].next_entry;
+                    }
+                    idx
+                });
+
+                let chain_start = discarded.first_internal_stream;
+
+                if let Some(last_idx) = last_internal_idx {
+                    self.internal_streams[last_idx as usize].next_entry = chain_start;
+                } else {
+                    existing.first_internal_stream = chain_start;
+                }
+
+                existing.internal_streams_size = existing
+                    .internal_streams_size
+                    .saturating_add(discarded.internal_streams_size);
+                existing.internal_streams_allocated = existing
+                    .internal_streams_allocated
+                    .saturating_add(discarded.internal_streams_allocated);
+
+                // If we did NOT merge user-visible streams above, ensure total_stream_count
+                // reflects the internal streams we just chained.
+                let discarded_has_streams = discarded.first_stream.name.is_valid()
+                    || discarded.first_stream.next_entry != NO_ENTRY;
+                if !discarded_has_streams {
+                    let mut count: u16 = 0;
+                    let mut idx = chain_start;
+                    while idx != NO_ENTRY {
+                        count = count.saturating_add(1);
+                        idx = self.internal_streams[idx as usize].next_entry;
+                    }
+                    existing.total_stream_count = existing.total_stream_count.saturating_add(count);
+                }
+            }
         }
     }
 
@@ -6552,6 +6670,18 @@ impl MftIndex {
                 stream.next_entry += stream_offset_adjustment;
             }
             self.streams.push(stream);
+        }
+    }
+
+    /// Merge internal streams from a fragment into this index.
+    #[allow(clippy::cast_possible_truncation)]
+    fn merge_fragment_internal_streams(&mut self, internal_streams: Vec<InternalStreamInfo>) {
+        let internal_offset_adjustment = self.internal_streams.len() as u32;
+        for mut st in internal_streams {
+            if st.next_entry != NO_ENTRY {
+                st.next_entry += internal_offset_adjustment;
+            }
+            self.internal_streams.push(st);
         }
     }
 
@@ -6658,6 +6788,7 @@ impl MftIndex {
                         name_count: 1,
                         stream_count: 1,       // User-visible streams
                         total_stream_count: 1, // All streams (for tree metrics)
+                        first_internal_stream: NO_ENTRY,
                         first_child: NO_ENTRY,
                         first_name: LinkInfo {
                             next_entry: NO_ENTRY,
@@ -6754,6 +6885,9 @@ pub struct MftIndexFragment {
     pub links: Vec<LinkInfo>,
     /// Overflow stream entries
     pub streams: Vec<IndexStreamInfo>,
+    /// Internal stream entries filtered from user-visible output but required
+    /// for exact C++ tree-metrics parity.
+    pub internal_streams: Vec<InternalStreamInfo>,
     /// Directory child entries
     pub children: Vec<ChildInfo>,
     /// Extension interning table (local to this fragment)
@@ -6770,6 +6904,7 @@ impl MftIndexFragment {
             names: String::with_capacity(record_capacity * 20), // ~20 chars avg
             links: Vec::new(),
             streams: Vec::new(),
+            internal_streams: Vec::new(),
             children: Vec::with_capacity(record_capacity / 10), // ~10% are dirs
             extensions: ExtensionTable::new(),
         }
@@ -7293,6 +7428,7 @@ impl MftIndex {
                 name_count,
                 stream_count: rec_stream_count,
                 total_stream_count,
+                first_internal_stream: NO_ENTRY,
                 first_child,
                 first_name: LinkInfo {
                     next_entry: link_next_entry,
@@ -7433,6 +7569,7 @@ impl MftIndex {
             names,
             links,
             streams,
+            internal_streams: Vec::new(), // Not serialized in older versions
             children,
             stats: MftStats::new(),
             extensions,
