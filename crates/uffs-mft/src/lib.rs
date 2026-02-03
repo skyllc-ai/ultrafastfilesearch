@@ -87,7 +87,7 @@ use {
 // Module declarations
 // ============================================================================
 
-pub mod cpp_tree_org;
+pub mod cpp_tree;
 pub mod cpp_types;
 pub mod error;
 pub mod flags;

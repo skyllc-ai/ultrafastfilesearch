@@ -32,8 +32,25 @@ This ensures the tree algorithm's internal stream loop executes correctly for ON
 matching the behavior of the OFFLINE flow.
 
 ## CI Pipeline Status
-- [ ] Running CI pipeline...
+- [x] CI pipeline passed ✅ (v0.2.179)
 
 ## Fixes Applied During CI
-(To be updated if any fixes are needed)
 
+### Clippy lint fix: `useless_let_if_seq`
+**File:** `crates/uffs-mft/src/cpp_types.rs` (lines 1263-1284)
+
+The initial implementation triggered a clippy lint error because we initialized
+`last_internal_stream = RUST_NO_ENTRY` and then conditionally modified it in an if block.
+
+**Fix:** Refactored to use tuple destructuring with an if-else expression:
+```rust
+let (mut first_internal_stream, mut last_internal_stream) =
+    if self.is_internal_stream(&cpp_record.first_stream) {
+        // ... build first entry ...
+        (new_idx, new_idx)
+    } else {
+        (RUST_NO_ENTRY, RUST_NO_ENTRY)
+    };
+```
+
+This is more idiomatic Rust and satisfies the clippy lint while maintaining the same logic.

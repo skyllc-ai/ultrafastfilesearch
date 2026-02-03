@@ -2344,7 +2344,7 @@ impl MftIndex {
     /// documentation.
     #[allow(clippy::print_stdout)]
     fn compute_tree_metrics_cpp_port(&mut self, debug: bool) {
-        crate::cpp_tree_org::compute_tree_metrics_cpp_port(self, debug);
+        crate::cpp_tree::compute_tree_metrics_cpp_port(self, debug);
     }
 
     /// Internal implementation of tree metrics computation.
@@ -7569,7 +7569,7 @@ impl MftIndex {
             names,
             links,
             streams,
-            internal_streams: Vec::new(), // Not serialized in older versions
+            internal_streams: Vec::new(),
             children,
             stats: MftStats::new(),
             extensions,
