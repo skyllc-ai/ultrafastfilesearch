@@ -2143,6 +2143,69 @@ impl MftIndex {
         });
     }
 
+    /// Rebuilds `first_child` linked lists from `FILE_NAME` parent references.
+    ///
+    /// This is a self-heal for LIVE pipelines where child lists may be
+    /// incomplete due to ordering / placeholder timing. It is deterministic
+    /// and based only on already-parsed `parent_frs` links.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Collect `(parent_frs, child_frs, name_index)` edges from all records
+    /// 2. Clear existing children and reset `first_child` pointers
+    /// 3. Rebuild using `add_child_entry()`
+    ///
+    /// # When to Use
+    ///
+    /// Call this as a fallback if tree metrics computation leaves directories
+    /// with `descendants == 0`, which indicates the child graph was incomplete.
+    #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+    pub fn rebuild_children_from_names(&mut self) {
+        let no_entry_frs: u64 = u64::from(NO_ENTRY);
+
+        // Phase 1: collect (parent_frs, child_frs, name_index) edges.
+        // Indexing is safe: child_idx is bounded by 0..self.records.len()
+        let mut edges: Vec<(u64, u64, u16)> =
+            Vec::with_capacity(self.records.len().saturating_mul(2));
+
+        for child_idx in 0..self.records.len() {
+            let child_frs = self.records[child_idx].frs;
+            let name_count = usize::from(self.records[child_idx].name_count);
+
+            // Walk the child's link chain in stored order.
+            let mut current_link = self.records[child_idx].first_name;
+            for name_index in 0..name_count {
+                let parent_frs = current_link.parent_frs;
+
+                // Skip missing/placeholder parents and self-references (root has parent==self).
+                if parent_frs != no_entry_frs && parent_frs != child_frs {
+                    #[allow(clippy::cast_possible_truncation)]
+                    edges.push((parent_frs, child_frs, name_index as u16));
+                }
+
+                if current_link.next_entry == NO_ENTRY {
+                    break;
+                }
+                // Bounds checked via .get() - breaks if out of range
+                if let Some(next_link) = self.links.get(current_link.next_entry as usize) {
+                    current_link = *next_link;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Phase 2: reset child lists and rebuild.
+        self.children.clear();
+        for rec in &mut self.records {
+            rec.first_child = NO_ENTRY;
+        }
+
+        for (parent_frs, child_frs, name_index) in edges {
+            self.add_child_entry(parent_frs, child_frs, name_index);
+        }
+    }
+
     /// Sort children within each directory by filename (case-insensitive).
     ///
     /// This method sorts the children of each directory in the index by their
@@ -2340,11 +2403,41 @@ impl MftIndex {
     /// traversal starting from root (FRS 5) and the delta formula for
     /// proportional hardlink share calculation.
     ///
+    /// # Self-Healing for LIVE Scans
+    ///
+    /// LIVE scans can occasionally produce incomplete child lists due to
+    /// ordering/timing issues. If the first tree pass leaves any directories
+    /// with `descendants == 0`, this method rebuilds the child lists from
+    /// `FILE_NAME` parent references and reruns tree metrics.
+    ///
     /// See `docs/architecture/CPP_TREE_ALGORITHM_PORT.md` for full
     /// documentation.
     #[allow(clippy::print_stdout)]
     fn compute_tree_metrics_cpp_port(&mut self, debug: bool) {
+        // First pass: compute tree metrics
         crate::cpp_tree::compute_tree_metrics_cpp_port(self, debug);
+
+        // Detect "unstamped directory" condition (LIVE scan symptom).
+        // Directories should have descendants >= 1 (at least themselves).
+        let bad_dir_count = self
+            .records
+            .iter()
+            .filter(|rec| rec.stdinfo.is_directory() && rec.descendants == 0)
+            .count();
+
+        if bad_dir_count != 0 {
+            tracing::warn!(
+                bad_dir_count,
+                "[tree] descendants=0 for directories after first pass; \
+                 rebuilding child lists from names and rerunning"
+            );
+
+            // Rebuild child lists from FILE_NAME parent references
+            self.rebuild_children_from_names();
+
+            // Second pass: recompute tree metrics with fixed child lists
+            crate::cpp_tree::compute_tree_metrics_cpp_port(self, debug);
+        }
     }
 
     /// Internal implementation of tree metrics computation.
