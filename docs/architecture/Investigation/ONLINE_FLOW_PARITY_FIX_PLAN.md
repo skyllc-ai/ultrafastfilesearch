@@ -1,7 +1,7 @@
 # ONLINE Flow Tree Metrics Parity Fix Plan
 
-**Date:** 2026-02-03
-**Status:** ✅ FULLY IMPLEMENTED - v0.2.180 deployed
+**Date:** 2026-02-03 (updated 2026-02-04)
+**Status:** ✅ FULLY IMPLEMENTED - v0.2.185 deployed
 **Scope:** C++ algorithm paths only (cpp_port parse, cpp tree, cpp I/O pipeline)
 
 ## Executive Summary
@@ -35,7 +35,7 @@ The OFFLINE MFT processing flow achieves ~100% tree metrics parity with C++. The
 **Solution:** Store Channel B values (directory stream only) for printed metrics while propagating Channel A values (all streams) up the tree.
 
 ### Fix 5: Per-Stream Delta for Internal Streams
-**Files:** `uffs_tree_metrics_parity_remaining_gap_and_fix.md`, `cpp_tree_internal_stream_delta_fix.rs`  
+**Files:** `uffs_tree_metrics_parity_remaining_gap_and_fix.md`, `cpp_tree_internal_stream_delta_fix.rs`
 **Problem:** The `delta()` function uses integer division and is NOT linear:
 ```
 delta(a + b, i, n) != delta(a, i, n) + delta(b, i, n)
@@ -43,6 +43,103 @@ delta(a + b, i, n) != delta(a, i, n) + delta(b, i, n)
 Pre-summing internal stream sizes caused ±1-4 byte tree-size skews.
 
 **Solution:** Added `InternalStreamInfo` struct and `internal_streams` vector to `MftIndex`. Added `first_internal_stream` field to `FileRecord`. The tree algorithm now iterates through internal streams individually and applies `delta()` per stream.
+
+### Fix 6: Delta Function Exact-Match (v0.2.182)
+**Files:** `LIVE_TREE_METRICS_PARITY_EVIDENCE_REPORT.md`, `LIVE_TREE_METRICS_DELTA_EXACT_FIX.md`
+**Problem:** The delta function was using a shortcut formula that is NOT equivalent to the C++ floor-division formula:
+```rust
+// WRONG (shortcut):
+base + if i < rem { 1 } else { 0 }
+
+// CORRECT (C++ floor-division):
+value * (i + 1) / n - value * i / n
+```
+With `n=2`, the extra byte goes to the **second** link in C++, but to the **first** link in the shortcut.
+
+**Solution:** Replaced the delta function with the exact C++ formula:
+```rust
+const fn delta(value: u64, name_info: u32, total_names: u32) -> u64 {
+    if total_names <= 1 { return value; }
+    let n64 = total_names as u64;
+    let i64 = name_info as u64;
+    value * (i64 + 1) / n64 - value * i64 / n64
+}
+```
+
+### Fix 7: Name Info Transformation (v0.2.183)
+**Files:** `last_reply_document.md`
+**Problem:** Off-by-1 tree metrics differences between C++ and Rust:
+- `G:\MFT_TEST\Documents\` - C++ Size: 1291, Rust Size: 1290 (off by -1)
+- `G:\MFT_TEST\Backup\` - C++ Size: 304, Rust Size: 305 (off by +1)
+
+C++ uses `name_info = name_count - 1 - name_index` to reverse the link index order before passing to the delta function. Rust was using `name_index` directly.
+
+**Solution:** Added the transformation formula to `cpp_tree.rs`:
+```rust
+let child_name_info = child_total_names
+    .saturating_sub(1)
+    .saturating_sub(u32::from(child_name_idx));
+```
+
+### Fix 8: Helper Function & Debug Assertions (v0.2.184)
+**Problem:** Need safeguards to prevent regression and catch issues early.
+
+**Solution:** Added two safeguards:
+
+1. **`compute_name_info` helper function** (`cpp_tree.rs`):
+```rust
+#[inline]
+const fn compute_name_info(name_index: u32, total_names: u32) -> u32 {
+    if total_names <= 1 { return 0; }
+    let clamped_index = if name_index >= total_names { total_names - 1 } else { name_index };
+    total_names - 1 - clamped_index
+}
+```
+
+2. **Debug assertions** for directories with `descendants=0`:
+```rust
+#[cfg(debug_assertions)]
+for (idx, rec) in index.records.iter().enumerate() {
+    if rec.stdinfo.is_directory() && rec.descendants == 0 {
+        tracing::warn!(frs = rec.frs, idx = idx, first_child = rec.first_child,
+            name_count = rec.name_count, is_reparse = rec.stdinfo.is_reparse(),
+            reparse_tag = rec.reparse_tag, "[tree] directory has descendants=0");
+    }
+}
+```
+
+### Fix 9: LIVE Scan Self-Healing (v0.2.185)
+**Problem:** LIVE scans can produce incomplete child lists (`first_child` linked lists) due to ordering/timing issues, causing:
+- Root (`G:\`) to have Size=0, Descendants=0
+- Junction directories to have Descendants=0
+
+**Solution:** Two-part fix:
+
+1. **`rebuild_children_from_names()` method** (`index.rs`):
+   Rebuilds `first_child` linked lists from `FILE_NAME` parent references as a self-heal step.
+
+2. **Fallback logic in `compute_tree_metrics_cpp_port()`** (`index.rs`):
+   - Runs the first tree metrics pass
+   - Detects if any directories have `descendants == 0` (the "unstamped directory" symptom)
+   - If detected, logs a warning, calls `rebuild_children_from_names()`, and reruns tree metrics
+
+```rust
+fn compute_tree_metrics_cpp_port(&mut self, debug: bool) {
+    crate::cpp_tree::compute_tree_metrics_cpp_port(self, debug);
+
+    let bad_dir_count = self.records.iter()
+        .filter(|rec| rec.stdinfo.is_directory() && rec.descendants == 0)
+        .count();
+
+    if bad_dir_count != 0 {
+        tracing::warn!(bad_dir_count,
+            "[tree] descendants=0 for directories after first pass; \
+             rebuilding child lists from names and rerunning");
+        self.rebuild_children_from_names();
+        crate::cpp_tree::compute_tree_metrics_cpp_port(self, debug);
+    }
+}
+```
 
 ---
 
@@ -206,10 +303,22 @@ Instead of using the internal stream linked list, modify the tree algorithm to i
    - Set at lines 1354-1355
 
 ### Testing
-- [x] Run CI pipeline to verify compilation and tests pass ✅ v0.2.180
-- [ ] Run `analyze_trial_parity.rs` on LIVE scan to verify tree metrics match
-- [ ] Compare ONLINE vs OFFLINE results for same drive
-- [ ] Verify no regression in OFFLINE flow
+- [x] Run CI pipeline to verify compilation and tests pass ✅ v0.2.185
+- [x] Run `analyze_trial_parity.rs` on LIVE scan to verify tree metrics match
+- [x] Compare ONLINE vs OFFLINE results for same drive
+- [x] Verify no regression in OFFLINE flow
+
+### Additional Changes (2026-02-04)
+8. [x] Replace delta function with exact C++ floor-division formula (v0.2.182)
+   - Changed from shortcut `base + if i < rem { 1 } else { 0 }` to `value * (i + 1) / n - value * i / n`
+9. [x] Add name info transformation (v0.2.183)
+   - Added `name_info = name_count - 1 - name_index` to match C++ link index reversal
+10. [x] Add `compute_name_info` helper function and debug assertions (v0.2.184)
+    - Helper function makes transformation impossible to misuse
+    - Debug assertions catch directories with descendants=0
+11. [x] Add LIVE scan self-healing (v0.2.185)
+    - Added `rebuild_children_from_names()` method to `MftIndex`
+    - Added fallback logic in `compute_tree_metrics_cpp_port()` to detect and fix incomplete child graphs
 
 ---
 
@@ -347,7 +456,7 @@ This same logic needs to be applied in `into_mft_index()` for the ONLINE flow.
 
 ## 8. Summary
 
-| Aspect | OFFLINE Flow | ONLINE Flow (BEFORE) | ONLINE Flow (AFTER v0.2.180) |
+| Aspect | OFFLINE Flow | ONLINE Flow (BEFORE) | ONLINE Flow (AFTER v0.2.185) |
 |--------|--------------|----------------------|------------------------------|
 | **Parsing** | `parse_record_full()` → `ParsedRecord` | `CppParsePipeline` → `CppMftIndex` | `CppParsePipeline` → `CppMftIndex` |
 | **Internal Stream Detection** | ✅ In `from_parsed_records()` | ❌ Missing in `into_mft_index()` | ✅ `is_internal_stream()` helper |
@@ -355,7 +464,10 @@ This same logic needs to be applied in `into_mft_index()` for the ONLINE flow.
 | **Per-Stream Delta** | ✅ Works correctly | ❌ Loop never executes | ✅ Loop executes correctly |
 | **Two-Channel Model** | ✅ Correct | ❌ Single-channel (broken) | ✅ Two-channel (fixed) |
 | **Orphan Sweep** | ✅ All records visited | ❌ Some records unvisited | ✅ Orphan sweep added |
-| **Tree Metrics Parity** | ✅ ~100% | ❌ ROOT=0, Junctions=0 | ✅ Expected ~100% |
+| **Delta Function** | ✅ Correct | ❌ Shortcut formula | ✅ Exact C++ floor-division |
+| **Name Info Transformation** | ✅ Correct | ❌ Missing reversal | ✅ `name_count - 1 - name_index` |
+| **LIVE Self-Healing** | N/A | ❌ Incomplete child lists | ✅ `rebuild_children_from_names()` |
+| **Tree Metrics Parity** | ✅ 100% | ❌ ROOT=0, Junctions=0 | ✅ 100% |
 
 ### Root Causes (ALL FIXED):
 
@@ -365,9 +477,22 @@ This same logic needs to be applied in `into_mft_index()` for the ONLINE flow.
 
 3. **Orphan Sweep (v0.2.180):** LIVE parsing can occasionally yield components not reachable from ROOT, leaving their tree metrics at 0.
 
+4. **Delta Function (v0.2.182):** The delta function was using a shortcut formula that distributes extra bytes differently than C++.
+
+5. **Name Info Transformation (v0.2.183):** C++ reverses the link index order (`name_count - 1 - name_index`) before passing to delta, causing ±1 byte differences.
+
+6. **LIVE Child Graph Incomplete (v0.2.185):** LIVE scans can produce incomplete `first_child` linked lists due to ordering/timing issues, leaving ROOT and junctions with descendants=0.
+
 ### Fixes Applied:
 
 - **v0.2.179:** Added `is_internal_stream()` helper and modified `into_mft_index()` to identify internal streams, build the linked list, and populate `first_internal_stream`, `internal_streams_size`, and `internal_streams_allocated` in each `FileRecord`.
 
 - **v0.2.180:** Complete replacement of `cpp_tree.rs` with fixed implementation featuring two-channel model, per-stream delta distribution, and orphan sweep.
 
+- **v0.2.182:** Replaced delta function with exact C++ floor-division formula: `value * (i + 1) / n - value * i / n`.
+
+- **v0.2.183:** Added name info transformation: `name_info = name_count - 1 - name_index` to match C++ link index reversal.
+
+- **v0.2.184:** Added `compute_name_info` helper function and debug assertions for directories with descendants=0.
+
+- **v0.2.185:** Added `rebuild_children_from_names()` method and fallback logic in `compute_tree_metrics_cpp_port()` to detect and fix incomplete child graphs in LIVE scans.
