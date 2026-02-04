@@ -43,6 +43,10 @@ use crate::index::{InternalStreamInfo, MftIndex, NO_ENTRY};
 ///
 /// Distributes `value` across `total_names` hardlinks, returning the share for
 /// hardlink index `name_info`. This matches the C++ implementation exactly.
+///
+/// **Important**: `name_info` must be the C++ transformed index, NOT the raw
+/// `name_index`. Use [`compute_name_info`] to convert `name_index` to
+/// `name_info`.
 #[inline]
 const fn delta(value: u64, name_info: u32, total_names: u32) -> u64 {
     if total_names <= 1 {
@@ -51,6 +55,36 @@ const fn delta(value: u64, name_info: u32, total_names: u32) -> u64 {
     let n64 = total_names as u64;
     let i64 = name_info as u64;
     value * (i64 + 1) / n64 - value * i64 / n64
+}
+
+/// Computes the C++ `name_info` from a raw `name_index`.
+///
+/// C++ uses: `name_info = name_count - 1 - name_index`
+///
+/// This reverses the order so that the delta distribution matches C++ exactly.
+/// The extra byte from floor-division goes to the *last* link (highest
+/// `name_info`), not the first.
+///
+/// # Example
+/// ```ignore
+/// // For a file with 2 hardlinks:
+/// // name_index=0 -> name_info=1 (gets the extra byte)
+/// // name_index=1 -> name_info=0
+/// let name_info = compute_name_info(0, 2); // returns 1
+/// ```
+#[inline]
+#[allow(clippy::single_call_fn)] // Used in tests and serves as documentation/safety
+const fn compute_name_info(name_index: u32, total_names: u32) -> u32 {
+    if total_names <= 1 {
+        return 0;
+    }
+    // Clamp name_index to valid range to prevent underflow
+    let clamped_index = if name_index >= total_names {
+        total_names - 1
+    } else {
+        name_index
+    };
+    total_names - 1 - clamped_index
 }
 
 /// Aggregated tree metrics returned by recursive traversal.
@@ -151,12 +185,10 @@ impl CppTreeTraversal<'_> {
                 // Resolve child record index from child FRS.
                 if let Some(child_idx) = self.index.frs_to_idx_opt(child_frs) {
                     // Determine which hardlink name of the child this directory entry refers to.
-                    // C++ formula: name_info = name_count - 1 - name_index
-                    // This reverses the order so that the delta distribution matches C++ exactly.
+                    // Use the helper function to compute name_info from name_index.
                     let child_total_names = u32::from(self.index.records[child_idx].name_count);
-                    let child_name_info = child_total_names
-                        .saturating_sub(1)
-                        .saturating_sub(u32::from(child_name_idx));
+                    let child_name_info =
+                        compute_name_info(u32::from(child_name_idx), child_total_names);
 
                     let child_agg =
                         self.preprocess(child_idx, child_name_info, child_total_names.max(1));
@@ -241,6 +273,28 @@ pub fn compute_tree_metrics_cpp_port(index: &mut MftIndex, debug: bool) {
     let seen = vec![false; index.records.len()];
     let mut traversal = CppTreeTraversal { index, seen, debug };
     traversal.run();
+
+    // Debug assertions: every directory should have descendants >= 1 after tree
+    // metrics computation. If we find a directory with descendants == 0, it
+    // means the record was never stamped (traversal bug).
+    #[cfg(debug_assertions)]
+    {
+        for (idx, rec) in index.records.iter().enumerate() {
+            if rec.stdinfo.is_directory() && rec.descendants == 0 {
+                // Log warning instead of panicking - this helps diagnose issues
+                // without crashing production builds.
+                tracing::warn!(
+                    frs = rec.frs,
+                    idx = idx,
+                    first_child = rec.first_child,
+                    name_count = rec.name_count,
+                    is_reparse = rec.stdinfo.is_reparse(),
+                    reparse_tag = rec.reparse_tag,
+                    "[cpp_tree] WARNING: Directory has descendants=0 after tree metrics"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -315,24 +369,23 @@ mod tests {
         assert_eq!(delta(10, 2, 3), 4, "Third link of 10/3 should get 4");
     }
 
-    /// Tests the `name_info` transformation formula.
+    /// Tests the `compute_name_info` helper function.
     ///
     /// C++ uses: `name_info = name_count - 1 - name_index`
     /// This reverses the order so that the delta distribution matches C++
     /// exactly.
     #[test]
-    fn test_name_info_transformation() {
+    fn test_compute_name_info_helper() {
         // For name_count=2:
         // name_index=0 -> name_info = 2-1-0 = 1
         // name_index=1 -> name_info = 2-1-1 = 0
-        let name_count_2: u32 = 2;
         assert_eq!(
-            name_count_2.saturating_sub(1).saturating_sub(0),
+            compute_name_info(0, 2),
             1,
             "name_index=0 should map to name_info=1 for name_count=2"
         );
         assert_eq!(
-            name_count_2.saturating_sub(1).saturating_sub(1),
+            compute_name_info(1, 2),
             0,
             "name_index=1 should map to name_info=0 for name_count=2"
         );
@@ -341,22 +394,30 @@ mod tests {
         // name_index=0 -> name_info = 3-1-0 = 2
         // name_index=1 -> name_info = 3-1-1 = 1
         // name_index=2 -> name_info = 3-1-2 = 0
-        let name_count_3: u32 = 3;
         assert_eq!(
-            name_count_3.saturating_sub(1).saturating_sub(0),
+            compute_name_info(0, 3),
             2,
             "name_index=0 should map to name_info=2 for name_count=3"
         );
         assert_eq!(
-            name_count_3.saturating_sub(1).saturating_sub(1),
+            compute_name_info(1, 3),
             1,
             "name_index=1 should map to name_info=1 for name_count=3"
         );
         assert_eq!(
-            name_count_3.saturating_sub(1).saturating_sub(2),
+            compute_name_info(2, 3),
             0,
             "name_index=2 should map to name_info=0 for name_count=3"
         );
+
+        // Edge cases for compute_name_info
+        // Single hardlink: always returns 0
+        assert_eq!(compute_name_info(0, 1), 0);
+        assert_eq!(compute_name_info(0, 0), 0); // total_names=0 treated as 1
+
+        // Out-of-bounds name_index should be clamped
+        assert_eq!(compute_name_info(5, 2), 0); // 5 >= 2, clamped to 1, result = 2-1-1 = 0
+        assert_eq!(compute_name_info(100, 3), 0); // 100 >= 3, clamped to 2, result = 3-1-2 = 0
     }
 
     /// Tests that the combined transformation + delta gives correct
@@ -374,12 +435,10 @@ mod tests {
         let value: u64 = 5;
         let name_count: u32 = 2;
 
-        let name_index_0: u32 = 0;
-        let name_info_0 = name_count.saturating_sub(1).saturating_sub(name_index_0);
+        let name_info_0 = compute_name_info(0, name_count);
         assert_eq!(delta(value, name_info_0, name_count), 3);
 
-        let name_index_1: u32 = 1;
-        let name_info_1 = name_count.saturating_sub(1).saturating_sub(name_index_1);
+        let name_info_1 = compute_name_info(1, name_count);
         assert_eq!(delta(value, name_info_1, name_count), 2);
 
         // Total should still be 5
@@ -401,5 +460,31 @@ mod tests {
 
         // total_names = 0 is treated as 1 (early return)
         assert_eq!(delta(100, 0, 0), 100);
+    }
+
+    /// Tests that the helper function matches the exact C++ test case from the
+    /// user's analysis document.
+    #[test]
+    fn delta_matches_cpp_and_name_info_mapping() {
+        // Example that distinguishes the "shortcut" from exact C++,
+        // and also distinguishes raw name_index vs reversed name_info.
+        let value = 5_u64;
+        let total_names = 2_u32;
+
+        // C++ delta by i:
+        assert_eq!(delta(value, 0, total_names), 2);
+        assert_eq!(delta(value, 1, total_names), 3);
+
+        // C++ mapping: name_info = (n-1-name_index)
+        // name_index=0 => name_info=1 => gets 3
+        // name_index=1 => name_info=0 => gets 2
+        let name_info0 = compute_name_info(0, total_names);
+        let name_info1 = compute_name_info(1, total_names);
+
+        assert_eq!(name_info0, 1);
+        assert_eq!(name_info1, 0);
+
+        assert_eq!(delta(value, name_info0, total_names), 3);
+        assert_eq!(delta(value, name_info1, total_names), 2);
     }
 }
