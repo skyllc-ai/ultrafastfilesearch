@@ -328,3 +328,118 @@ Added 5 comprehensive unit tests to catch this issue in the future:
 - ✅ Windows binaries deployed to `dist/v0.2.183/`
 - ✅ Changes committed and pushed to remote
 
+---
+
+## Run 13 (v0.2.184) - Helper Function & Debug Assertions
+
+### Context
+User requested additional safeguards to prevent future regressions:
+1. A helper function `compute_name_info()` to encapsulate the transformation
+2. Debug assertions to catch directories with descendants=0 after tree metrics
+
+### Changes Applied
+
+**`cpp_tree.rs`:**
+
+1. **Added `compute_name_info` helper function (lines 60-88):**
+```rust
+/// Computes the C++ `name_info` from a raw `name_index`.
+///
+/// C++ uses: `name_info = name_count - 1 - name_index`
+///
+/// This reverses the order so that the delta distribution matches C++ exactly.
+/// The extra byte from floor-division goes to the *last* link (highest
+/// `name_info`), not the first.
+#[inline]
+#[allow(clippy::single_call_fn)]
+const fn compute_name_info(name_index: u32, total_names: u32) -> u32 {
+    if total_names <= 1 {
+        return 0;
+    }
+    let clamped_index = if name_index >= total_names {
+        total_names - 1
+    } else {
+        name_index
+    };
+    total_names - 1 - clamped_index
+}
+```
+
+2. **Updated call site (lines 189-191):**
+```rust
+let child_name_info =
+    compute_name_info(u32::from(child_name_idx), child_total_names);
+```
+
+3. **Added debug assertions (lines 276-296):**
+```rust
+#[cfg(debug_assertions)]
+{
+    for (idx, rec) in index.records.iter().enumerate() {
+        if rec.stdinfo.is_directory() && rec.descendants == 0 {
+            tracing::warn!(
+                frs = rec.frs,
+                idx = idx,
+                first_child = rec.first_child,
+                name_count = rec.name_count,
+                is_reparse = rec.stdinfo.is_reparse(),
+                reparse_tag = rec.reparse_tag,
+                "[cpp_tree] WARNING: Directory has descendants=0 after tree metrics"
+            );
+        }
+    }
+}
+```
+
+4. **Added new test (lines 467-489):**
+```rust
+#[test]
+fn delta_matches_cpp_and_name_info_mapping() {
+    let value = 5_u64;
+    let total_names = 2_u32;
+    assert_eq!(delta(value, 0, total_names), 2);
+    assert_eq!(delta(value, 1, total_names), 3);
+    let name_info0 = compute_name_info(0, total_names);
+    let name_info1 = compute_name_info(1, total_names);
+    assert_eq!(name_info0, 1);
+    assert_eq!(name_info1, 0);
+    assert_eq!(delta(value, name_info0, total_names), 3);
+    assert_eq!(delta(value, name_info1, total_names), 2);
+}
+```
+
+### Clippy Fixes
+1. Added `#[allow(clippy::single_call_fn)]` to `compute_name_info` (used in tests + documentation)
+2. Renamed `v` → `value` and `n` → `total_names` in test to fix `min_ident_chars`
+
+### Result
+- ✅ **CI Pipeline PASSED**
+- ✅ Version incremented to **v0.2.184**
+- ✅ Windows binaries deployed to `dist/v0.2.184/`
+- ✅ Changes committed and pushed to remote
+
+---
+
+## Investigation: Root/Junction Desc=0 Issue (LIVE scan only)
+
+### Remaining Issues
+After v0.2.184, the OFFLINE scan has **0 mismatches** (perfect parity), but LIVE scan still has 3 issues:
+
+| Path | C++ Size | Live Size | C++ Desc | Live Desc |
+|------|----------|-----------|----------|-----------|
+| `G:\` | 609,893,968 | 0 | 15,106 | 0 |
+| `G:\MFT_TEST\PhotosJunction\` | 48 | 48 | 1 | 0 |
+| `G:\MFT_TEST\ReportsJunction\` | 48 | 48 | 1 | 0 |
+
+### Analysis
+- This is NOT a delta issue - it's a "record didn't get stamped" issue
+- The root (`G:\`) and junctions have Size=0 and Desc=0 in LIVE scans only
+- OFFLINE scans have perfect parity, suggesting the issue is in how LIVE scans build the index
+- Possible causes:
+  1. Root (FRS 5) not being found in `frs_to_idx_opt(5)` during LIVE scans
+  2. Junctions (reparse points) may need special handling during tree traversal
+  3. Timing/ordering issue where tree metrics run before the index is fully built
+  4. "The record being printed is not the record being updated" (duplicate/placeholder merge)
+
+### Status: IN PROGRESS
+
