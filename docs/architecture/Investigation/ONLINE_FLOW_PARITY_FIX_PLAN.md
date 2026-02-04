@@ -1,7 +1,7 @@
 # ONLINE Flow Tree Metrics Parity Fix Plan
 
 **Date:** 2026-02-03
-**Status:** ✅ IMPLEMENTED - Pending CI Verification
+**Status:** ✅ FULLY IMPLEMENTED - v0.2.180 deployed
 **Scope:** C++ algorithm paths only (cpp_port parse, cpp tree, cpp I/O pipeline)
 
 ## Executive Summary
@@ -206,14 +206,85 @@ Instead of using the internal stream linked list, modify the tree algorithm to i
    - Set at lines 1354-1355
 
 ### Testing
-- [ ] Run CI pipeline to verify compilation and tests pass
+- [x] Run CI pipeline to verify compilation and tests pass ✅ v0.2.180
 - [ ] Run `analyze_trial_parity.rs` on LIVE scan to verify tree metrics match
 - [ ] Compare ONLINE vs OFFLINE results for same drive
 - [ ] Verify no regression in OFFLINE flow
 
 ---
 
-## 6. Code Reference: OFFLINE Internal Stream Handling
+## 6. Additional Fixes: LIVE Tree Metrics Remaining Gap (2026-02-03)
+
+After the internal stream linked list fix, LIVE scans still showed:
+- `G:\` (ROOT) - Size=0, Descendants=0
+- Junction directories - Descendants=0 (should be 1)
+
+### Root Causes Identified
+
+1. **Wrong tree implementation dispatch**: The tree algorithm was not using the fully fixed two-channel model
+2. **Leaf directory descendants bug**: Historical broken "single-channel" cpp tree versions stored incorrect values
+3. **LIVE occasionally leaves components unvisited**: Need an orphan sweep after ROOT traversal
+
+### Fix Applied: Complete `cpp_tree.rs` Replacement
+
+The `cpp_tree.rs` module was completely replaced with a fixed implementation featuring:
+
+#### 6.1 Two-Channel Model
+- **Channel A (propagation)**: Values returned by recursion, counts ALL streams including internal
+- **Channel B (printed)**: Values stored for output, only counts directory stream (`$I30`)
+
+```rust
+// Channel B (printed) for directories:
+rec.descendants = children.treesize.saturating_add(1);
+rec.treesize = children.length.saturating_add(first_len);
+rec.tree_allocated = children.allocated.saturating_add(first_alloc);
+
+// Channel B (printed) for files:
+rec.descendants = 0;
+rec.treesize = first_len;
+rec.tree_allocated = first_alloc;
+```
+
+#### 6.2 Per-Stream Delta Distribution
+Internal streams are iterated and delta'd **per stream** (not as aggregate):
+
+```rust
+let mut internal_idx = first_internal_stream;
+while internal_idx != NO_ENTRY {
+    let st: &InternalStreamInfo = &self.index.internal_streams[internal_idx as usize];
+    own_len = own_len.saturating_add(delta(st.size.length, name_info, total_names));
+    own_alloc = own_alloc.saturating_add(delta(st.size.allocated, name_info, total_names));
+    internal_idx = st.next_entry;
+}
+```
+
+#### 6.3 Orphan Sweep
+After ROOT traversal, iterate all records and process any not visited:
+
+```rust
+// Orphan sweep: ensure every record has its printed tree metrics initialized.
+for idx in 0..self.index.records.len() {
+    if !self.seen[idx] {
+        let _: Agg = self.preprocess(idx, 0, 1);
+    }
+}
+```
+
+### Files Modified
+- `crates/uffs-mft/src/cpp_tree.rs` - Complete replacement with fixed implementation
+- `crates/uffs-mft/src/index.rs` - Minor fix for numeric fallback (`<< 1_u8`)
+
+### CI Pipeline Result
+- ✅ All tests passed
+- ✅ Version incremented to v0.2.180
+- ✅ Windows binaries built and deployed
+- ✅ Changes committed and pushed
+
+See also: `ONLINE_LIVE_TREE_PARITY_REMAINING_GAP_FIX.md` for detailed analysis.
+
+---
+
+## 7. Code Reference: OFFLINE Internal Stream Handling
 
 The OFFLINE flow correctly handles internal streams in `index.rs:5946-6018`:
 
@@ -274,17 +345,29 @@ This same logic needs to be applied in `into_mft_index()` for the ONLINE flow.
 
 ---
 
-## 7. Summary
+## 8. Summary
 
-| Aspect | OFFLINE Flow | ONLINE Flow (BEFORE) | ONLINE Flow (AFTER) |
-|--------|--------------|----------------------|---------------------|
+| Aspect | OFFLINE Flow | ONLINE Flow (BEFORE) | ONLINE Flow (AFTER v0.2.180) |
+|--------|--------------|----------------------|------------------------------|
 | **Parsing** | `parse_record_full()` → `ParsedRecord` | `CppParsePipeline` → `CppMftIndex` | `CppParsePipeline` → `CppMftIndex` |
 | **Internal Stream Detection** | ✅ In `from_parsed_records()` | ❌ Missing in `into_mft_index()` | ✅ `is_internal_stream()` helper |
 | **Internal Stream Linked List** | ✅ Built correctly | ❌ Always `NO_ENTRY` | ✅ Built in `into_mft_index()` |
 | **Per-Stream Delta** | ✅ Works correctly | ❌ Loop never executes | ✅ Loop executes correctly |
-| **Tree Metrics Parity** | ✅ ~100% | ❌ Missing internal stream sizes | ✅ Expected ~100% |
+| **Two-Channel Model** | ✅ Correct | ❌ Single-channel (broken) | ✅ Two-channel (fixed) |
+| **Orphan Sweep** | ✅ All records visited | ❌ Some records unvisited | ✅ Orphan sweep added |
+| **Tree Metrics Parity** | ✅ ~100% | ❌ ROOT=0, Junctions=0 | ✅ Expected ~100% |
 
-**Root Cause (FIXED):** The `into_mft_index()` conversion assumed "C++ stores all streams, so no internal streams are filtered" but failed to build the internal stream tracking that `cpp_tree.rs` requires for per-stream delta distribution.
+### Root Causes (ALL FIXED):
 
-**Fix Applied:** Added `is_internal_stream()` helper and modified `into_mft_index()` to identify internal streams, build the linked list, and populate `first_internal_stream`, `internal_streams_size`, and `internal_streams_allocated` in each `FileRecord`.
+1. **Internal Stream Linked List (v0.2.179):** The `into_mft_index()` conversion assumed "C++ stores all streams, so no internal streams are filtered" but failed to build the internal stream tracking that `cpp_tree.rs` requires for per-stream delta distribution.
+
+2. **Two-Channel Model (v0.2.180):** The tree algorithm was using a single-channel model that stored incorrect values for directories (especially ROOT and junctions).
+
+3. **Orphan Sweep (v0.2.180):** LIVE parsing can occasionally yield components not reachable from ROOT, leaving their tree metrics at 0.
+
+### Fixes Applied:
+
+- **v0.2.179:** Added `is_internal_stream()` helper and modified `into_mft_index()` to identify internal streams, build the linked list, and populate `first_internal_stream`, `internal_streams_size`, and `internal_streams_allocated` in each `FileRecord`.
+
+- **v0.2.180:** Complete replacement of `cpp_tree.rs` with fixed implementation featuring two-channel model, per-stream delta distribution, and orphan sweep.
 

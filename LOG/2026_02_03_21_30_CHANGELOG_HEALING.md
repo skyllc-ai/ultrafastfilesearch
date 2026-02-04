@@ -124,9 +124,55 @@ After previous fixes (internal stream linked list in `into_mft_index()`), the OF
 13. Renamed `child_idx` to `resolved_child_idx` to avoid shadow
 14. Fixed index.rs: `<< 1` to `<< 1_u8` for numeric fallback
 
-### Run 6: [PENDING]
+### Run 6: ✅ PASSED
 - Command: `rust-script scripts/ci-pipeline.rs go -v`
-- Status: Starting...
+- Status: All tests, linting, and builds passed
+- Version: Incremented to v0.2.180
+- Windows binaries built and deployed
+- Changes committed and pushed to remote
+
+### Run 7: ❌ FAILED
+- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Status: Build errors in cpp_tree.rs and index.rs
+- Context: User created `LIVE_ONLINE_TREE_METRICS_ROOT_JUNCTION_FIX.md` with drop-in replacements
+
+### Run 8: ❌ FAILED
+- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Status: 9 clippy errors (3 in cpp_tree.rs, 6 in index.rs)
+- Errors:
+  - `let_underscore_untyped`: lines 69, 81 in cpp_tree.rs
+  - `doc_markdown`: line 228 in cpp_tree.rs, line 944 in index.rs
+  - `min_ident_chars`: line 5973 in index.rs (single-char `c`)
+  - `bool_to_int_with_if`: line 5980 in index.rs
+  - `if_not_else`: lines 5993-5997 in index.rs
+  - `too_many_lines`: line 6476 in index.rs (113/100 lines)
+
+### Run 9: 🔄 IN PROGRESS
+- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Fixes applied:
+  - **cpp_tree.rs**:
+    - Added type annotation `let _: Agg = ...` on lines 69, 81
+    - Added backticks around `tree_allocated` in doc comment (line 228)
+  - **index.rs**:
+    - Added backticks around `bit0=is_sparse` and `bit1=is_resident` (line 944)
+    - Renamed `c` to `ch` in closure (line 5973)
+    - Changed `if st.is_sparse { 0x01 } else { 0x00 }` to `u8::from(st.is_sparse)` (line 5980)
+    - Swapped if/else branches to use `==` instead of `!=` (lines 5993-5997)
+    - Added `clippy::too_many_lines` to allow list on `apply_deferred_name_merges` (line 6475)
+- Errors:
+  1. `E0609`: no field `size` on type `&FileRecord` (lines 104-105)
+  2. `E0282`: type annotations needed for `total_stream_count` (line 162)
+  3. `E0063`: missing field `internal_streams` in initializer of `MftIndex` (line 7562)
+  4. Warning: unused import `FileRecord`
+
+### Run 8: 🔄 IN PROGRESS
+- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Status: Running...
+- Fixes Applied:
+  1. `cpp_tree.rs` line 19: Removed unused import `FileRecord`
+  2. `cpp_tree.rs` lines 104-105: `r.size.length/allocated` → `r.first_stream.size.length/allocated`
+  3. `cpp_tree.rs` line 162: `total_stream_count.max(1) as u32` → `(total_stream_count as u32).max(1)`
+  4. `index.rs` line 7562: Added `internal_streams: Vec::new(),` to MftIndex initializer
 
 ---
 
