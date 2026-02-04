@@ -151,8 +151,12 @@ impl CppTreeTraversal<'_> {
                 // Resolve child record index from child FRS.
                 if let Some(child_idx) = self.index.frs_to_idx_opt(child_frs) {
                     // Determine which hardlink name of the child this directory entry refers to.
+                    // C++ formula: name_info = name_count - 1 - name_index
+                    // This reverses the order so that the delta distribution matches C++ exactly.
                     let child_total_names = u32::from(self.index.records[child_idx].name_count);
-                    let child_name_info = u32::from(child_name_idx);
+                    let child_name_info = child_total_names
+                        .saturating_sub(1)
+                        .saturating_sub(u32::from(child_name_idx));
 
                     let child_agg =
                         self.preprocess(child_idx, child_name_info, child_total_names.max(1));
@@ -237,4 +241,165 @@ pub fn compute_tree_metrics_cpp_port(index: &mut MftIndex, debug: bool) {
     let seen = vec![false; index.records.len()];
     let mut traversal = CppTreeTraversal { index, seen, debug };
     traversal.run();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Tests that the delta function correctly distributes values across
+    /// hardlinks.
+    ///
+    /// The C++ formula is: `delta(v, i, n) = floor(v*(i+1)/n) - floor(v*i/n)`
+    /// This ensures the sum of all deltas equals the original value exactly.
+    #[test]
+    fn test_delta_sum_equals_original() {
+        // Test various combinations of value and total_names
+        let test_cases: &[(u64, u32)] = &[
+            (0, 1),
+            (1, 1),
+            (5, 1),
+            (5, 2),
+            (5, 3),
+            (100, 3),
+            (1001, 2),
+            (1000, 7),
+            (999, 10),
+            (1_000_000, 100),
+        ];
+
+        for &(value, total_names) in test_cases {
+            let mut sum = 0_u64;
+            for name_info in 0..total_names {
+                sum += delta(value, name_info, total_names);
+            }
+            assert_eq!(
+                sum, value,
+                "Sum of deltas should equal original value for v={value}, n={total_names}"
+            );
+        }
+    }
+
+    /// Tests specific delta values to ensure C++ parity.
+    ///
+    /// For n=2, the C++ formula gives the extra byte to the SECOND link (i=1),
+    /// not the first. This is critical for parity.
+    #[test]
+    fn test_delta_specific_values() {
+        // For value=5, n=2:
+        // i=0: 5*1/2 - 5*0/2 = 2 - 0 = 2
+        // i=1: 5*2/2 - 5*1/2 = 5 - 2 = 3
+        assert_eq!(delta(5, 0, 2), 2, "First link of 5/2 should get 2");
+        assert_eq!(delta(5, 1, 2), 3, "Second link of 5/2 should get 3");
+
+        // For value=1001, n=2:
+        // i=0: 1001*1/2 - 1001*0/2 = 500 - 0 = 500
+        // i=1: 1001*2/2 - 1001*1/2 = 1001 - 500 = 501
+        assert_eq!(
+            delta(1001, 0, 2),
+            500,
+            "First link of 1001/2 should get 500"
+        );
+        assert_eq!(
+            delta(1001, 1, 2),
+            501,
+            "Second link of 1001/2 should get 501"
+        );
+
+        // For value=10, n=3:
+        // i=0: 10*1/3 - 10*0/3 = 3 - 0 = 3
+        // i=1: 10*2/3 - 10*1/3 = 6 - 3 = 3
+        // i=2: 10*3/3 - 10*2/3 = 10 - 6 = 4
+        assert_eq!(delta(10, 0, 3), 3, "First link of 10/3 should get 3");
+        assert_eq!(delta(10, 1, 3), 3, "Second link of 10/3 should get 3");
+        assert_eq!(delta(10, 2, 3), 4, "Third link of 10/3 should get 4");
+    }
+
+    /// Tests the `name_info` transformation formula.
+    ///
+    /// C++ uses: `name_info = name_count - 1 - name_index`
+    /// This reverses the order so that the delta distribution matches C++
+    /// exactly.
+    #[test]
+    fn test_name_info_transformation() {
+        // For name_count=2:
+        // name_index=0 -> name_info = 2-1-0 = 1
+        // name_index=1 -> name_info = 2-1-1 = 0
+        let name_count_2: u32 = 2;
+        assert_eq!(
+            name_count_2.saturating_sub(1).saturating_sub(0),
+            1,
+            "name_index=0 should map to name_info=1 for name_count=2"
+        );
+        assert_eq!(
+            name_count_2.saturating_sub(1).saturating_sub(1),
+            0,
+            "name_index=1 should map to name_info=0 for name_count=2"
+        );
+
+        // For name_count=3:
+        // name_index=0 -> name_info = 3-1-0 = 2
+        // name_index=1 -> name_info = 3-1-1 = 1
+        // name_index=2 -> name_info = 3-1-2 = 0
+        let name_count_3: u32 = 3;
+        assert_eq!(
+            name_count_3.saturating_sub(1).saturating_sub(0),
+            2,
+            "name_index=0 should map to name_info=2 for name_count=3"
+        );
+        assert_eq!(
+            name_count_3.saturating_sub(1).saturating_sub(1),
+            1,
+            "name_index=1 should map to name_info=1 for name_count=3"
+        );
+        assert_eq!(
+            name_count_3.saturating_sub(1).saturating_sub(2),
+            0,
+            "name_index=2 should map to name_info=0 for name_count=3"
+        );
+    }
+
+    /// Tests that the combined transformation + delta gives correct
+    /// distribution.
+    ///
+    /// This is the critical test: when iterating children in order
+    /// (`name_index` 0, 1, ...), the transformed `name_info` should produce
+    /// the same delta values as C++.
+    #[test]
+    fn test_transformed_delta_distribution() {
+        // For a file with 2 hardlinks and size 5:
+        // C++ iterates name_index 0, 1 and transforms to name_info 1, 0
+        // So the first visited link (name_index=0) gets delta(5, 1, 2) = 3
+        // And the second visited link (name_index=1) gets delta(5, 0, 2) = 2
+        let value: u64 = 5;
+        let name_count: u32 = 2;
+
+        let name_index_0: u32 = 0;
+        let name_info_0 = name_count.saturating_sub(1).saturating_sub(name_index_0);
+        assert_eq!(delta(value, name_info_0, name_count), 3);
+
+        let name_index_1: u32 = 1;
+        let name_info_1 = name_count.saturating_sub(1).saturating_sub(name_index_1);
+        assert_eq!(delta(value, name_info_1, name_count), 2);
+
+        // Total should still be 5
+        assert_eq!(
+            delta(value, name_info_0, name_count) + delta(value, name_info_1, name_count),
+            value
+        );
+    }
+
+    /// Tests edge cases for the delta function.
+    #[test]
+    fn test_delta_edge_cases() {
+        // Single hardlink: should return the full value
+        assert_eq!(delta(100, 0, 1), 100);
+
+        // Zero value: should return 0 for all links
+        assert_eq!(delta(0, 0, 2), 0);
+        assert_eq!(delta(0, 1, 2), 0);
+
+        // total_names = 0 is treated as 1 (early return)
+        assert_eq!(delta(100, 0, 0), 100);
+    }
 }
