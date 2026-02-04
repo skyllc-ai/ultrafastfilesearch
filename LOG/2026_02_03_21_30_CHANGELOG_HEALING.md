@@ -252,7 +252,7 @@ value * (i64 + 1) / n64 - value * i64 / n64
   - `E0282`: type annotation needed for `total_stream_count.max(1)` → explicit type
   - `E0063`: missing `internal_streams` in MftIndex initializer → added field
 
-### Fixes Applied (Run 11b)
+### Fixes Applied (Run 11b-11d)
 1. `cpp_tree.rs` line 51-52: `u64::from(x)` → `x as u64` (const fn compatibility)
 2. `cpp_tree.rs` lines 128-129: `r.size.length/allocated` → `r.first_stream.size.length/allocated`
 3. `cpp_tree.rs` line 138: `usize::from(child_entry_idx)` → `child_entry_idx as usize`
@@ -261,5 +261,31 @@ value * (i64 + 1) / n64 - value * i64 / n64
 6. `cpp_tree.rs` line 185: Added explicit type annotation `let own_stream_count: u32 = ...`
 7. `index.rs` line 7562: Added `internal_streams: Vec::new(),` to MftIndex initializer
 
-- 🔄 Running...
+### Final Clippy Fixes (Run 11e - PASSED)
+**cpp_tree.rs:**
+1. Removed unused import `ChildInfo`
+2. Added doc comments for `Agg` struct and its fields
+3. Added doc comments for `CppTreeTraversal` struct and its fields
+4. Changed lifetime from `impl<'a> CppTreeTraversal<'a>` to `impl CppTreeTraversal<'_>`
+5. Added doc comment for `run` method
+6. Removed useless conversion `usize::from(root_idx_u32)` → use `root_idx` directly
+7. Added doc comment for `preprocess` method
+8. Renamed single-char ident `r` → `rec`
+9. Removed unnecessary cast `child_frs as u64` (already u64)
+10. Removed unnecessary cast `child_idx_u32 as usize` (already usize)
+11. Changed `as u32` to `u32::from()` for lossless casts
+12. Inlined `new` constructor to avoid `single_call_fn` lint
+
+**index.rs:**
+1. Added backticks in doc comment for `bit0=is_sparse` and `bit1=is_resident`
+2. Renamed single-char ident `c` → `ch`
+3. Fixed `bool_to_int_with_if` → `u8::from(st.is_sparse) | (u8::from(st.is_resident) << 1_u8)`
+4. Fixed `if_not_else` → swapped branches to check `== NO_ENTRY` first
+5. Added `clippy::too_many_lines` allow to `apply_deferred_name_merges` function
+
+### Result
+- ✅ **CI Pipeline PASSED**
+- ✅ Version incremented to **v0.2.182**
+- ✅ Windows binaries deployed to `dist/v0.2.182/`
+- ✅ Changes committed and pushed to remote
 
