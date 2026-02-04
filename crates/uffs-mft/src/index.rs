@@ -5546,6 +5546,351 @@ mod tests {
 
         println!("✅ Cross-fragment merge (base first) test passed!");
     }
+
+    // ========================================================================
+    // Fix 9: LIVE Scan Self-Healing Tests (v0.2.185)
+    // ========================================================================
+
+    /// Test that `rebuild_children_from_names()` correctly rebuilds child lists
+    /// from parent references in name attributes when child links are missing.
+    ///
+    /// This simulates the LIVE scan scenario where child lists may be
+    /// incomplete due to ordering/timing issues during parallel parsing.
+    #[test]
+    fn test_rebuild_children_from_names_basic() {
+        let mut index = MftIndex::new('C');
+
+        // Create a simple tree structure with parent references but NO child links:
+        // root (FRS 5)
+        //   ├── dir1 (FRS 100)
+        //   │   └── file1.txt (FRS 200)
+        //   └── file2.txt (FRS 201)
+
+        // Root directory (self-parent)
+        let root_frs = 5_u64;
+        let root_rec = index.get_or_create(root_frs);
+        root_rec.stdinfo.set_directory(true);
+        root_rec.first_name.parent_frs = root_frs; // Self-parent
+        root_rec.first_child = NO_ENTRY; // NO child links!
+
+        // dir1 (child of root)
+        let dir1_frs = 100_u64;
+        let offset = index.add_name("dir1");
+        let rec = index.get_or_create(dir1_frs);
+        rec.stdinfo.set_directory(true);
+        rec.first_name.name = IndexNameRef::new(offset, 4, true, IndexNameRef::NO_EXTENSION);
+        rec.first_name.parent_frs = root_frs; // Parent reference set
+        rec.first_child = NO_ENTRY; // NO child links!
+
+        // file1.txt (child of dir1)
+        let file1_frs = 200_u64;
+        let offset = index.add_name("file1.txt");
+        let rec = index.get_or_create(file1_frs);
+        rec.first_name.name = IndexNameRef::new(offset, 9, true, IndexNameRef::NO_EXTENSION);
+        rec.first_name.parent_frs = dir1_frs; // Parent reference set
+
+        // file2.txt (child of root)
+        let file2_frs = 201_u64;
+        let offset = index.add_name("file2.txt");
+        let rec = index.get_or_create(file2_frs);
+        rec.first_name.name = IndexNameRef::new(offset, 9, true, IndexNameRef::NO_EXTENSION);
+        rec.first_name.parent_frs = root_frs; // Parent reference set
+
+        // Verify NO child links exist before rebuild
+        let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
+        let dir1_idx = index.frs_to_idx_opt(dir1_frs).unwrap();
+        assert_eq!(
+            index.records[root_idx].first_child, NO_ENTRY,
+            "Root should have no children before rebuild"
+        );
+        assert_eq!(
+            index.records[dir1_idx].first_child, NO_ENTRY,
+            "dir1 should have no children before rebuild"
+        );
+        assert!(
+            index.children.is_empty(),
+            "Children vector should be empty before rebuild"
+        );
+
+        // Call rebuild_children_from_names
+        index.rebuild_children_from_names();
+
+        // Verify child links are now present
+        let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
+        let dir1_idx = index.frs_to_idx_opt(dir1_frs).unwrap();
+
+        assert_ne!(
+            index.records[root_idx].first_child, NO_ENTRY,
+            "Root should have children after rebuild"
+        );
+        assert_ne!(
+            index.records[dir1_idx].first_child, NO_ENTRY,
+            "dir1 should have children after rebuild"
+        );
+
+        // Count children of root (should be 2: dir1 and file2)
+        let mut root_child_count = 0;
+        let mut child_idx = index.records[root_idx].first_child;
+        while child_idx != NO_ENTRY {
+            root_child_count += 1;
+            child_idx = index.children[child_idx as usize].next_entry;
+        }
+        assert_eq!(root_child_count, 2, "Root should have 2 children");
+
+        // Count children of dir1 (should be 1: file1)
+        let mut dir1_child_count = 0;
+        let mut child_idx = index.records[dir1_idx].first_child;
+        while child_idx != NO_ENTRY {
+            dir1_child_count += 1;
+            child_idx = index.children[child_idx as usize].next_entry;
+        }
+        assert_eq!(dir1_child_count, 1, "dir1 should have 1 child");
+
+        println!("✅ rebuild_children_from_names basic test passed!");
+    }
+
+    /// Test that `rebuild_children_from_names()` handles hardlinks correctly.
+    ///
+    /// A file with multiple hardlinks should create child entries for each
+    /// parent directory.
+    #[test]
+    fn test_rebuild_children_from_names_hardlinks() {
+        let mut index = MftIndex::new('C');
+
+        // Create structure:
+        // dir1 (FRS 100)
+        //   └── file.txt (FRS 200, hardlink 0)
+        // dir2 (FRS 101)
+        //   └── file.txt (FRS 200, hardlink 1) - same file, different parent
+
+        // dir1
+        let dir1_frs = 100_u64;
+        let offset = index.add_name("dir1");
+        let rec = index.get_or_create(dir1_frs);
+        rec.stdinfo.set_directory(true);
+        rec.first_name.name = IndexNameRef::new(offset, 4, true, IndexNameRef::NO_EXTENSION);
+        rec.first_name.parent_frs = 5; // Root
+        rec.first_child = NO_ENTRY;
+
+        // dir2
+        let dir2_frs = 101_u64;
+        let offset = index.add_name("dir2");
+        let rec = index.get_or_create(dir2_frs);
+        rec.stdinfo.set_directory(true);
+        rec.first_name.name = IndexNameRef::new(offset, 4, true, IndexNameRef::NO_EXTENSION);
+        rec.first_name.parent_frs = 5; // Root
+        rec.first_child = NO_ENTRY;
+
+        // file.txt with 2 hardlinks (different parents)
+        let file_frs = 200_u64;
+        let offset1 = index.add_name("file.txt");
+        let offset2 = index.add_name("link.txt");
+
+        // Add second link to links array
+        let link_idx = index.links.len() as u32;
+        index.links.push(LinkInfo {
+            next_entry: NO_ENTRY,
+            name: IndexNameRef::new(offset2, 8, true, IndexNameRef::NO_EXTENSION),
+            parent_frs: dir2_frs, // Second parent
+        });
+
+        let rec = index.get_or_create(file_frs);
+        rec.first_name.name = IndexNameRef::new(offset1, 8, true, IndexNameRef::NO_EXTENSION);
+        rec.first_name.parent_frs = dir1_frs; // First parent
+        rec.first_name.next_entry = link_idx; // Chain to second link
+        rec.name_count = 2;
+
+        // Rebuild children from names
+        index.rebuild_children_from_names();
+
+        // Verify both directories have the file as a child
+        let dir1_idx = index.frs_to_idx_opt(dir1_frs).unwrap();
+        let dir2_idx = index.frs_to_idx_opt(dir2_frs).unwrap();
+
+        assert_ne!(
+            index.records[dir1_idx].first_child, NO_ENTRY,
+            "dir1 should have children"
+        );
+        assert_ne!(
+            index.records[dir2_idx].first_child, NO_ENTRY,
+            "dir2 should have children"
+        );
+
+        // Verify the child FRS is correct for both
+        let dir1_child_frs = index.children[index.records[dir1_idx].first_child as usize].child_frs;
+        let dir2_child_frs = index.children[index.records[dir2_idx].first_child as usize].child_frs;
+
+        assert_eq!(dir1_child_frs, file_frs, "dir1's child should be file.txt");
+        assert_eq!(dir2_child_frs, file_frs, "dir2's child should be file.txt");
+
+        println!("✅ rebuild_children_from_names hardlinks test passed!");
+    }
+
+    /// Test that `rebuild_children_from_names()` skips self-referencing root.
+    #[test]
+    fn test_rebuild_children_from_names_skips_root_self_reference() {
+        let mut index = MftIndex::new('C');
+
+        // Root with self-parent (should NOT create a child entry for itself)
+        let root_frs = 5_u64;
+        let rec = index.get_or_create(root_frs);
+        rec.stdinfo.set_directory(true);
+        rec.first_name.parent_frs = root_frs; // Self-parent
+        rec.first_child = NO_ENTRY;
+
+        // Rebuild
+        index.rebuild_children_from_names();
+
+        // Root should still have no children (self-reference is skipped)
+        let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
+        assert_eq!(
+            index.records[root_idx].first_child, NO_ENTRY,
+            "Root should not have itself as a child"
+        );
+        assert!(
+            index.children.is_empty(),
+            "No child entries should be created for self-reference"
+        );
+
+        println!("✅ rebuild_children_from_names skips root self-reference test passed!");
+    }
+
+    // ========================================================================
+    // Fix 4/5: Two-Channel Model & Per-Stream Delta Tests
+    // ========================================================================
+
+    /// Test that tree metrics correctly handles empty directories (junctions).
+    ///
+    /// A junction/empty directory should have desc=1 (itself), not 0.
+    /// This is the Two-Channel Model: Channel B (printed) = child treesize + 1.
+    #[test]
+    fn test_tree_metrics_empty_directory_descendants() {
+        let mut index = MftIndex::new('C');
+
+        // Create root with one empty child directory (simulating a junction)
+        let root_frs = 5_u64;
+        let root_rec = index.get_or_create(root_frs);
+        root_rec.stdinfo.set_directory(true);
+        root_rec.first_name.parent_frs = root_frs;
+
+        // Empty directory (like a junction with no children)
+        let empty_dir_frs = 100_u64;
+        let offset = index.add_name("EmptyDir");
+        let rec = index.get_or_create(empty_dir_frs);
+        rec.stdinfo.set_directory(true);
+        rec.first_name.name = IndexNameRef::new(offset, 8, true, IndexNameRef::NO_EXTENSION);
+        rec.first_name.parent_frs = root_frs;
+
+        // Add child entry
+        index.add_child_entry(root_frs, empty_dir_frs, 0);
+
+        // Compute tree metrics
+        index.compute_tree_metrics();
+
+        // Verify empty directory has descendants = 1 (itself)
+        let empty_dir_idx = index.frs_to_idx_opt(empty_dir_frs).unwrap();
+        assert_eq!(
+            index.records[empty_dir_idx].descendants, 1,
+            "Empty directory should have descendants = 1 (itself)"
+        );
+
+        // Verify root has descendants = 2 (itself + empty_dir)
+        let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
+        assert_eq!(
+            index.records[root_idx].descendants, 2,
+            "Root should have descendants = 2 (itself + empty_dir)"
+        );
+
+        println!("✅ Tree metrics empty directory descendants test passed!");
+    }
+
+    /// Test that tree metrics correctly handles directories with internal
+    /// streams.
+    ///
+    /// Internal streams (like security descriptors) should contribute to the
+    /// parent's size via Channel A, but NOT to the directory's own printed size
+    /// (Channel B).
+    #[test]
+    fn test_tree_metrics_internal_streams_two_channel() {
+        use crate::index::InternalStreamInfo;
+
+        let mut index = MftIndex::new('C');
+
+        // Create root
+        let root_frs = 5_u64;
+        let root_rec = index.get_or_create(root_frs);
+        root_rec.stdinfo.set_directory(true);
+        root_rec.first_name.parent_frs = root_frs;
+
+        // Create a directory with an internal stream
+        let dir_frs = 100_u64;
+        let offset = index.add_name("DirWithInternal");
+        let dir_idx_for_internal = {
+            let rec = index.get_or_create(dir_frs);
+            rec.stdinfo.set_directory(true);
+            rec.first_name.name = IndexNameRef::new(offset, 15, true, IndexNameRef::NO_EXTENSION);
+            rec.first_name.parent_frs = root_frs;
+            rec.total_stream_count = 2; // 1 default + 1 internal
+            index.frs_to_idx[dir_frs as usize] as usize
+        };
+
+        // Add internal stream (e.g., security descriptor with 256 bytes)
+        let internal_idx = index.internal_streams.len() as u32;
+        index.internal_streams.push(InternalStreamInfo {
+            next_entry: NO_ENTRY,
+            size: SizeInfo {
+                length: 256,
+                allocated: 512,
+            },
+            flags: 0,
+        });
+        // Set first_internal_stream on the directory record
+        index.records[dir_idx_for_internal].first_internal_stream = internal_idx;
+
+        // Add a file under the directory
+        let file_frs = 200_u64;
+        let offset = index.add_name("file.txt");
+        let rec = index.get_or_create(file_frs);
+        rec.first_name.name = IndexNameRef::new(offset, 8, true, IndexNameRef::NO_EXTENSION);
+        rec.first_name.parent_frs = dir_frs;
+        rec.first_stream.size = SizeInfo {
+            length: 1000,
+            allocated: 4096,
+        };
+
+        // Add child entries
+        index.add_child_entry(root_frs, dir_frs, 0);
+        index.add_child_entry(dir_frs, file_frs, 0);
+
+        // Compute tree metrics using cpp_tree algorithm
+        crate::cpp_tree::compute_tree_metrics_cpp_port(&mut index, false);
+
+        // Verify directory's printed size (Channel B) = children size + first stream
+        // The internal stream should NOT be in the directory's own printed size
+        let dir_idx = index.frs_to_idx_opt(dir_frs).unwrap();
+        assert_eq!(
+            index.records[dir_idx].treesize, 1000,
+            "Directory treesize should be 1000 (file only, no internal stream)"
+        );
+
+        // Verify directory descendants = 2 (itself + file)
+        assert_eq!(
+            index.records[dir_idx].descendants, 2,
+            "Directory should have descendants = 2"
+        );
+
+        // Verify root's size includes the internal stream (via Channel A propagation)
+        // Root treesize = dir's first_stream (0) + file (1000) + internal (256) = 1256
+        // But wait - directory's first_stream is 0, so:
+        // Root treesize = children_length + first_len = (1000 + 256) + 0 = 1256
+        let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
+        assert_eq!(
+            index.records[root_idx].treesize, 1256,
+            "Root treesize should include internal stream from child dir"
+        );
+
+        println!("✅ Tree metrics internal streams two-channel test passed!");
+    }
 }
 
 // ============================================================================
