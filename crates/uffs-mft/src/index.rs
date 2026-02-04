@@ -2162,6 +2162,10 @@ impl MftIndex {
     /// with `descendants == 0`, which indicates the child graph was incomplete.
     #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
     pub fn rebuild_children_from_names(&mut self) {
+        tracing::debug!(
+            records = self.records.len(),
+            "[TRIP] MftIndex::rebuild_children_from_names ENTER"
+        );
         let no_entry_frs: u64 = u64::from(NO_ENTRY);
 
         // Phase 1: collect (parent_frs, child_frs, name_index) edges.
@@ -2196,6 +2200,11 @@ impl MftIndex {
             }
         }
 
+        tracing::debug!(
+            edges_collected = edges.len(),
+            "[TRIP] MftIndex::rebuild_children_from_names -> Phase 1 done"
+        );
+
         // Phase 2: reset child lists and rebuild.
         self.children.clear();
         for rec in &mut self.records {
@@ -2205,6 +2214,10 @@ impl MftIndex {
         for (parent_frs, child_frs, name_index) in edges {
             self.add_child_entry(parent_frs, child_frs, name_index);
         }
+        tracing::debug!(
+            children = self.children.len(),
+            "[TRIP] MftIndex::rebuild_children_from_names EXIT"
+        );
     }
 
     /// Sort children within each directory by filename (case-insensitive).
@@ -2369,7 +2382,9 @@ impl MftIndex {
         clippy::too_many_lines
     )] // Justified: n < u32::MAX in practice, algorithm is inherently complex
     pub fn compute_tree_metrics(&mut self) {
+        tracing::debug!("[TRIP] MftIndex::compute_tree_metrics ENTER (default algo)");
         self.compute_tree_metrics_with_algo(TreeAlgorithm::default(), false);
+        tracing::debug!("[TRIP] MftIndex::compute_tree_metrics EXIT");
     }
 
     /// Compute tree metrics with optional debug output.
@@ -2391,6 +2406,7 @@ impl MftIndex {
     /// * `debug` - If true, prints detailed debug information
     #[allow(clippy::print_stdout)]
     pub fn compute_tree_metrics_with_algo(&mut self, algo: TreeAlgorithm, debug: bool) {
+        tracing::debug!(algo = ?algo, "[TRIP] MftIndex::compute_tree_metrics_with_algo dispatching");
         match algo {
             TreeAlgorithm::Current => self.compute_tree_metrics_impl(debug),
             TreeAlgorithm::CppPort => self.compute_tree_metrics_cpp_port(debug),
@@ -2415,8 +2431,10 @@ impl MftIndex {
     /// documentation.
     #[allow(clippy::print_stdout)]
     fn compute_tree_metrics_cpp_port(&mut self, debug: bool) {
+        tracing::debug!("[TRIP] MftIndex::compute_tree_metrics_cpp_port ENTER (first pass)");
         // First pass: compute tree metrics
         crate::cpp_tree::compute_tree_metrics_cpp_port(self, debug);
+        tracing::debug!("[TRIP] MftIndex::compute_tree_metrics_cpp_port -> first pass done");
 
         // Detect "unstamped directory" condition (LIVE scan symptom).
         // Directories should have descendants >= 1 (at least themselves).
@@ -2435,7 +2453,16 @@ impl MftIndex {
                 root.stdinfo.is_directory() && (root.descendants == 0 || root.treesize == 0)
             });
 
+        tracing::debug!(
+            bad_dir_count,
+            root_looks_bad,
+            "[TRIP] MftIndex::compute_tree_metrics_cpp_port -> self-heal check"
+        );
+
         if bad_dir_count != 0 || root_looks_bad {
+            tracing::debug!(
+                "[TRIP] MftIndex::compute_tree_metrics_cpp_port -> SELF-HEAL TRIGGERED"
+            );
             tracing::warn!(
                 bad_dir_count,
                 root_looks_bad,
@@ -2444,11 +2471,19 @@ impl MftIndex {
             );
 
             // Rebuild child lists from FILE_NAME parent references
+            tracing::debug!(
+                "[TRIP] MftIndex::compute_tree_metrics_cpp_port -> calling rebuild_children_from_names"
+            );
             self.rebuild_children_from_names();
 
             // Second pass: recompute tree metrics with fixed child lists
+            tracing::debug!(
+                "[TRIP] MftIndex::compute_tree_metrics_cpp_port -> second pass (after self-heal)"
+            );
             crate::cpp_tree::compute_tree_metrics_cpp_port(self, debug);
         }
+
+        tracing::debug!("[TRIP] MftIndex::compute_tree_metrics_cpp_port EXIT");
     }
 
     /// Internal implementation of tree metrics computation.
@@ -6181,6 +6216,8 @@ impl MftIndex {
         const SYSTEM_METAFILE_MAX_FRS: u64 = 15;
         const ROOT_FRS_LOCAL: u64 = 5;
 
+        tracing::debug!(volume = %volume, input_records = records.len(), "[TRIP] MftIndex::from_parsed_records ENTER");
+
         let capacity = records.len();
         let mut index = Self::with_capacity(volume, capacity);
         let mut has_forensic_records = false;
@@ -6581,19 +6618,30 @@ impl MftIndex {
 
         // Post-processing: compute derived data structures
         // These are fast O(n) operations that enhance query performance
+        tracing::debug!(
+            records = index.records.len(),
+            "[TRIP] MftIndex::from_parsed_records -> record insertion done, starting post-processing"
+        );
 
         // 1. Build extension index for fast *.ext queries (Phase 2)
+        tracing::debug!("[TRIP] MftIndex::from_parsed_records -> Phase 2: ExtensionIndex::build");
         index.extension_index = Some(ExtensionIndex::build(&index));
 
         // 2. Sort directory children for natural ordering (Phase 4)
+        tracing::debug!("[TRIP] MftIndex::from_parsed_records -> Phase 4: sort_directory_children");
         index.sort_directory_children();
 
         // 3. Compute tree metrics for directory statistics (Phase 5)
+        tracing::debug!("[TRIP] MftIndex::from_parsed_records -> Phase 5: compute_tree_metrics");
         index.compute_tree_metrics();
 
         // 4. Set forensic mode flag if any forensic records were included
         index.forensic_mode = has_forensic_records;
 
+        tracing::debug!(
+            records = index.records.len(),
+            "[TRIP] MftIndex::from_parsed_records EXIT"
+        );
         index
     }
 

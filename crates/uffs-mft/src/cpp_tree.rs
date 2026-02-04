@@ -116,10 +116,17 @@ impl CppTreeTraversal<'_> {
         // Canonical NTFS root directory record number.
         const ROOT_FRS: u64 = 5;
 
+        tracing::debug!("[TRIP] CppTreeTraversal::run ENTER");
+
         // Primary traversal from ROOT (if present).
         if let Some(root_idx) = self.index.frs_to_idx_opt(ROOT_FRS) {
+            tracing::debug!(
+                root_idx,
+                "[TRIP] CppTreeTraversal::run -> starting from ROOT (FRS=5)"
+            );
             // Root has a single visible path entry in output context.
             let _: Agg = self.preprocess(root_idx, 0, 1);
+            tracing::debug!("[TRIP] CppTreeTraversal::run -> ROOT traversal done");
         } else if self.debug {
             tracing::warn!(
                 "[cpp_tree] WARNING: ROOT_FRS=5 not present in frs_to_idx; running orphan sweep only"
@@ -129,11 +136,18 @@ impl CppTreeTraversal<'_> {
         // Orphan sweep: ensure every record has its printed tree metrics initialized.
         // This prevents LIVE scans from leaving some directories with Size/Desc = 0
         // due to transient linkage gaps.
+        tracing::debug!("[TRIP] CppTreeTraversal::run -> starting orphan sweep");
+        let mut orphan_count = 0_usize;
         for idx in 0..self.index.records.len() {
             if !self.seen[idx] {
+                orphan_count += 1;
                 let _: Agg = self.preprocess(idx, 0, 1);
             }
         }
+        tracing::debug!(
+            orphan_count,
+            "[TRIP] CppTreeTraversal::run EXIT (orphan sweep done)"
+        );
     }
 
     /// Recursively computes tree metrics for a record and its children.
@@ -270,10 +284,14 @@ impl CppTreeTraversal<'_> {
 /// Populates `treesize`, `tree_allocated`, and `descendants` for directory
 /// records. If `debug` is true, emits warnings for unexpected index conditions.
 pub fn compute_tree_metrics_cpp_port(index: &mut MftIndex, debug: bool) {
-    tracing::debug!("[cpp_tree] FIXED implementation is running (v0.2.187+)");
+    tracing::debug!(
+        records = index.records.len(),
+        "[TRIP] cpp_tree::compute_tree_metrics_cpp_port ENTER (FIXED v0.2.187+)"
+    );
     let seen = vec![false; index.records.len()];
     let mut traversal = CppTreeTraversal { index, seen, debug };
     traversal.run();
+    tracing::debug!("[TRIP] cpp_tree::compute_tree_metrics_cpp_port -> traversal.run() done");
 
     // Debug assertions: every directory should have descendants >= 1 after tree
     // metrics computation. If we find a directory with descendants == 0, it
@@ -296,6 +314,7 @@ pub fn compute_tree_metrics_cpp_port(index: &mut MftIndex, debug: bool) {
             }
         }
     }
+    tracing::debug!("[TRIP] cpp_tree::compute_tree_metrics_cpp_port EXIT");
 }
 
 #[cfg(test)]

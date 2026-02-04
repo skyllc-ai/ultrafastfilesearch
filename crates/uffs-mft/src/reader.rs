@@ -944,6 +944,7 @@ impl MftReader {
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
     pub async fn read_all_index(&self) -> Result<crate::index::MftIndex> {
+        tracing::debug!(volume = %self.volume, "[TRIP] reader::read_all_index ENTER");
         trace!(volume = %self.volume, "read_all_index: ENTER");
         // Capture configuration to recreate reader in blocking thread
         let volume = self.volume;
@@ -984,6 +985,7 @@ impl MftReader {
         .await
         .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?;
         trace!(volume = %volume, "read_all_index: EXIT");
+        tracing::debug!(volume = %volume, "[TRIP] reader::read_all_index EXIT");
         result
     }
 
@@ -1217,6 +1219,7 @@ impl MftReader {
         use crate::usn::{aggregate_changes, query_usn_journal, read_usn_journal};
 
         let drive = self.volume;
+        tracing::debug!(drive = %drive, ttl_seconds, "[TRIP] reader::read_index_cached ENTER");
 
         // Check cache status
         match check_cache_status(drive, ttl_seconds) {
@@ -1225,6 +1228,7 @@ impl MftReader {
                 header,
                 age_seconds,
             } => {
+                tracing::debug!(drive = %drive, age_seconds, "[TRIP] reader::read_index_cached -> CACHE_HIT path");
                 info!(
                     drive = %drive,
                     age_seconds,
@@ -1332,6 +1336,7 @@ impl MftReader {
                 Ok(index)
             }
             CacheStatus::Stale { age_seconds } => {
+                tracing::debug!(drive = %drive, "[TRIP] reader::read_index_cached -> CACHE_STALE path");
                 info!(
                     drive = %drive,
                     age_seconds = ?age_seconds,
@@ -1340,6 +1345,7 @@ impl MftReader {
                 self.read_and_cache_index().await
             }
             CacheStatus::Missing => {
+                tracing::debug!(drive = %drive, "[TRIP] reader::read_index_cached -> CACHE_MISS path");
                 info!(drive = %drive, "🆕 Cache MISS - building index");
                 self.read_and_cache_index().await
             }
@@ -1368,7 +1374,9 @@ impl MftReader {
         use crate::usn::query_usn_journal;
 
         let drive = self.volume;
+        tracing::debug!(drive = %drive, "[TRIP] reader::read_and_cache_index ENTER");
         let index = self.read_all_index().await?;
+        tracing::debug!(drive = %drive, records = index.len(), "[TRIP] reader::read_and_cache_index -> read_all_index done");
 
         // Get volume info for caching
         let handle = VolumeHandle::open(drive)?;
@@ -1387,6 +1395,7 @@ impl MftReader {
             info!(drive = %drive, records = index.len(), "💾 Saved to cache");
         }
 
+        tracing::debug!(drive = %drive, "[TRIP] reader::read_and_cache_index EXIT");
         Ok(index)
     }
 
@@ -2217,6 +2226,7 @@ impl MftReader {
         use crate::io::{MftExtentMap, ParallelMftReader};
         use crate::platform::detect_drive_type;
 
+        tracing::debug!(volume = %self.volume, "[TRIP] reader::read_mft_index_internal ENTER");
         info!(volume = %self.volume, "Starting MFT read (lean index)");
 
         let start_time = Instant::now();
@@ -2649,6 +2659,11 @@ impl MftReader {
             0.0
         };
 
+        tracing::debug!(
+            volume = %self.volume,
+            records_parsed = records_parsed_count,
+            "[TRIP] reader::read_mft_index_internal -> I/O+parse done, calling MftIndex::from_parsed_records"
+        );
         info!(
             records_parsed = records_parsed_count,
             elapsed_ms = read_elapsed.as_millis(),
@@ -2661,6 +2676,12 @@ impl MftReader {
         let index = MftIndex::from_parsed_records(self.volume, parsed_records);
         let index_elapsed = index_start.elapsed();
 
+        tracing::debug!(
+            volume = %self.volume,
+            records = index.records.len(),
+            index_build_ms = index_elapsed.as_millis(),
+            "[TRIP] reader::read_mft_index_internal -> MftIndex::from_parsed_records done"
+        );
         info!(
             records = index.records.len(),
             names_buffer_kb = index.names.len() / 1024,
@@ -2678,6 +2699,7 @@ impl MftReader {
             });
         }
 
+        tracing::debug!(volume = %self.volume, "[TRIP] reader::read_mft_index_internal EXIT");
         Ok(index)
     }
 
