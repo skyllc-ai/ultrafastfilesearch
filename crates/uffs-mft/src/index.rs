@@ -7570,11 +7570,11 @@ impl MftIndex {
             links,
             streams,
             children,
+            internal_streams: Vec::new(),
             stats: MftStats::new(),
             extensions,
             extension_index: None,
             forensic_mode: false, // Loaded indexes don't have forensic records
-            internal_streams: Vec::new(),
         };
 
         // Compute stats from loaded data

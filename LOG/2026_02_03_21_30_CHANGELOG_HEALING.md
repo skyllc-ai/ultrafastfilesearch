@@ -213,3 +213,53 @@ After previous fixes (internal stream linked list in `into_mft_index()`), the OF
 | 21:50 | Multiple clippy lints | See Run 4 fixes above |
 | 22:00 | 35 clippy errors | See Run 5 fixes above |
 
+---
+
+## Run 11 - Delta Function Exact-Match Fix (2026-02-04)
+
+### Context
+Evidence collection revealed that the delta function was using a shortcut formula
+that is NOT equivalent to the C++ floor-division formula. The checklist explicitly
+warned about this:
+> The common shortcut: `base + if i < rem { 1 } else { 0 }` is NOT equivalent
+> to the C++ formula (e.g. with n=2, the extra byte goes to the *second* link in C++).
+
+### Changes Applied
+User provided drop-in replacement files via `LIVE_TREE_METRICS_DELTA_EXACT_FIX.md`:
+- `cpp_tree.rs`: Updated delta function to use exact C++ formula
+- `index.rs`: Verified dispatch to `crate::cpp_tree`
+
+### Delta Function Fix
+**Before (shortcut - WRONG):**
+```rust
+let base = value / total;
+let rem = value % total;
+base + if (name_info as u64) < rem { 1 } else { 0 }
+```
+
+**After (exact C++ formula - CORRECT):**
+```rust
+let n64 = u64::from(total_names);
+let i64 = u64::from(name_info);
+value * (i64 + 1) / n64 - value * i64 / n64
+```
+
+### CI Pipeline Status
+- Run 11a (FAILED): 11 compilation errors
+  - `E0658/E0282`: `u64::from()` in const fn not allowed → use `as u64`
+  - `E0609`: `r.size.length/allocated` → `r.first_stream.size.length/allocated`
+  - `E0277`: `usize::from(u32)` not implemented → use `as usize`
+  - `E0282`: type annotation needed for `total_stream_count.max(1)` → explicit type
+  - `E0063`: missing `internal_streams` in MftIndex initializer → added field
+
+### Fixes Applied (Run 11b)
+1. `cpp_tree.rs` line 51-52: `u64::from(x)` → `x as u64` (const fn compatibility)
+2. `cpp_tree.rs` lines 128-129: `r.size.length/allocated` → `r.first_stream.size.length/allocated`
+3. `cpp_tree.rs` line 138: `usize::from(child_entry_idx)` → `child_entry_idx as usize`
+4. `cpp_tree.rs` line 168: `usize::from(internal_idx)` → `internal_idx as usize`
+5. `cpp_tree.rs` line 176: `usize::from(stream_idx)` → `stream_idx as usize`
+6. `cpp_tree.rs` line 185: Added explicit type annotation `let own_stream_count: u32 = ...`
+7. `index.rs` line 7562: Added `internal_streams: Vec::new(),` to MftIndex initializer
+
+- 🔄 Running...
+
