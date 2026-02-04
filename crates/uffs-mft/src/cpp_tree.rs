@@ -270,6 +270,7 @@ impl CppTreeTraversal<'_> {
 /// Populates `treesize`, `tree_allocated`, and `descendants` for directory
 /// records. If `debug` is true, emits warnings for unexpected index conditions.
 pub fn compute_tree_metrics_cpp_port(index: &mut MftIndex, debug: bool) {
+    tracing::debug!("[cpp_tree] FIXED implementation is running (v0.2.187+)");
     let seen = vec![false; index.records.len()];
     let mut traversal = CppTreeTraversal { index, seen, debug };
     traversal.run();

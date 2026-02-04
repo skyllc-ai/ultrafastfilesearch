@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cleaned up all TTAPI references from justfile and build scripts
 - Updated justfile header and recipes for UFFS
 
-## [0.2.186] - 2026-01-27
+## [0.2.187] - 2026-01-27
 
 ### Added
 - Baseline CI validation for modernization effort
@@ -46,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Various MFT parsing edge cases
 
-[Unreleased]: https://github.com/githubrobbi/UltraFastFileSearch/compare/v0.2.186...HEAD
-[0.2.186]: https://github.com/githubrobbi/UltraFastFileSearch/compare/v0.2.114...v0.2.186
+[Unreleased]: https://github.com/githubrobbi/UltraFastFileSearch/compare/v0.2.187...HEAD
+[0.2.187]: https://github.com/githubrobbi/UltraFastFileSearch/compare/v0.2.114...v0.2.187
 [0.2.114]: https://github.com/githubrobbi/UltraFastFileSearch/releases/tag/v0.2.114
 

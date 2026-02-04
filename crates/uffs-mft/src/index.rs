@@ -62,25 +62,26 @@ pub const ROOT_FRS: u64 = 5;
 /// # Use C++ port algorithm
 /// UFFS_TREE_ALGO=cpp_port uffs index
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TreeAlgorithm {
-    /// Current Rust leaf-peeling algorithm (default)
+    /// Legacy Rust leaf-peeling algorithm (deprecated)
     Current,
-    /// C++ port algorithm - 100% faithful port of C++ tree algorithm
+    /// C++ port algorithm - 100% faithful port of C++ tree algorithm (default)
+    ///
+    /// This is the default because it has full parity with C++ including:
+    /// - Two-channel model (Channel A for propagation, Channel B for printed)
+    /// - Exact delta formula for hardlink distribution
+    /// - Stream count clamping to max(1) for empty directories
+    /// - LIVE scan self-healing via `rebuild_children_from_names()`
+    #[default]
     CppPort,
-}
-
-impl Default for TreeAlgorithm {
-    /// Default checks the `UFFS_TREE_ALGO` environment variable.
-    fn default() -> Self {
-        Self::from_env()
-    }
 }
 
 impl TreeAlgorithm {
     /// Parse from environment variable `UFFS_TREE_ALGO`.
     ///
-    /// Returns `Current` if not set or unrecognized.
+    /// Returns `CppPort` (default) unless explicitly set to "current" or
+    /// "legacy".
     #[must_use]
     pub fn from_env() -> Self {
         match std::env::var("UFFS_TREE_ALGO")
@@ -88,8 +89,8 @@ impl TreeAlgorithm {
             .to_lowercase()
             .as_str()
         {
-            "cpp_port" | "cpp" | "port" => Self::CppPort,
-            _ => Self::Current,
+            "current" | "legacy" | "leaf_peeling" => Self::Current,
+            _ => Self::CppPort, // Default to CppPort (has all parity fixes)
         }
     }
 
@@ -97,8 +98,8 @@ impl TreeAlgorithm {
     #[must_use]
     pub const fn name(&self) -> &'static str {
         match self {
-            Self::Current => "current (leaf-peeling)",
-            Self::CppPort => "cpp_port (C++ faithful port)",
+            Self::Current => "current (leaf-peeling, legacy)",
+            Self::CppPort => "cpp_port (C++ faithful port, default)",
         }
     }
 }
@@ -2425,10 +2426,20 @@ impl MftIndex {
             .filter(|rec| rec.stdinfo.is_directory() && rec.descendants == 0)
             .count();
 
-        if bad_dir_count != 0 {
+        // Also check root specifically for treesize=0 (belt-and-suspenders).
+        // Root should always have treesize > 0 if there are any files on the volume.
+        let root_looks_bad = self
+            .frs_to_idx_opt(5)
+            .and_then(|root_idx| self.records.get(root_idx))
+            .is_some_and(|root| {
+                root.stdinfo.is_directory() && (root.descendants == 0 || root.treesize == 0)
+            });
+
+        if bad_dir_count != 0 || root_looks_bad {
             tracing::warn!(
                 bad_dir_count,
-                "[tree] descendants=0 for directories after first pass; \
+                root_looks_bad,
+                "[tree] unstamped directories or root after first pass; \
                  rebuilding child lists from names and rerunning"
             );
 
