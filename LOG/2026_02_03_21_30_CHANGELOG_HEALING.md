@@ -289,3 +289,42 @@ value * (i64 + 1) / n64 - value * i64 / n64
 - ✅ Windows binaries deployed to `dist/v0.2.182/`
 - ✅ Changes committed and pushed to remote
 
+---
+
+## Run 12 (v0.2.183) - Name Info Transformation Fix
+
+### Issue
+Off-by-1 tree metrics differences between C++ and Rust implementations:
+- `G:\MFT_TEST\Documents\` - C++ Size: 1291, Rust Size: 1290 (off by -1)
+- `G:\MFT_TEST\Backup\` - C++ Size: 304, Rust Size: 305 (off by +1)
+
+### Root Cause
+The asymmetric +1/-1 pattern indicated the delta function was correct but the link indices were reversed. C++ uses `name_info = name_count - 1 - name_index` to reverse the order before passing to the delta function. The Rust code was using `name_index` directly without this transformation.
+
+### Fix Applied
+
+**`cpp_tree.rs` (line 155):**
+```rust
+// BEFORE (wrong):
+let child_name_info = u32::from(child_name_idx);
+
+// AFTER (correct):
+let child_name_info = child_total_names
+    .saturating_sub(1)
+    .saturating_sub(u32::from(child_name_idx));
+```
+
+### Tests Added
+Added 5 comprehensive unit tests to catch this issue in the future:
+1. `test_delta_sum_equals_original` - Verifies sum of deltas equals original value
+2. `test_delta_specific_values` - Tests specific known values for C++ parity
+3. `test_name_info_transformation` - Tests the transformation formula
+4. `test_transformed_delta_distribution` - Tests combined transformation + delta
+5. `test_delta_edge_cases` - Tests edge cases (zero values, single link)
+
+### Result
+- ✅ **CI Pipeline PASSED**
+- ✅ Version incremented to **v0.2.183**
+- ✅ Windows binaries deployed to `dist/v0.2.183/`
+- ✅ Changes committed and pushed to remote
+
