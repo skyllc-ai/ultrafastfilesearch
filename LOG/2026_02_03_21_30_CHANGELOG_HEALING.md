@@ -147,18 +147,43 @@ After previous fixes (internal stream linked list in `into_mft_index()`), the OF
   - `if_not_else`: lines 5993-5997 in index.rs
   - `too_many_lines`: line 6476 in index.rs (113/100 lines)
 
-### Run 9: 🔄 IN PROGRESS
+### Run 9: ❌ FAILED
 - Command: `rust-script scripts/ci-pipeline.rs go -v`
-- Fixes applied:
+- Status: 1 clippy error remaining
+- Error: `default_numeric_fallback` on line 5980 - `<< 1` needs suffix `<< 1_u8`
+
+### Run 10: ✅ PASSED
+- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Status: All tests and linting passed
+- Fixes applied in this session:
   - **cpp_tree.rs**:
+    - Added module-level docs with `//!` comments
+    - Added `#![allow(clippy::indexing_slicing)]` at module level
+    - Made `delta` function `const` with doc comment
+    - Added doc comments to `Agg` struct and fields
+    - Added doc comments to `CppTreeTraversal` struct and fields
+    - Elided lifetime: `impl CppTreeTraversal<'_>`
+    - Changed `eprintln!` to `tracing::warn!`
+    - Renamed loop variable `i` to `idx` in orphan sweep
+    - Renamed `st` to `ist` for internal stream variable
+    - Used `u32::from()` instead of `as u32` casts for lossless conversion
+    - Removed `new()` constructor, inlined into public function (avoids `single_call_fn`)
+    - Fixed borrow checker: extract child_entry values before preprocess call
+    - Fixed `child_frs` usage (removed unnecessary `as u64` since it's already `u64`)
+    - Removed unused import `ChildInfo`
     - Added type annotation `let _: Agg = ...` on lines 69, 81
     - Added backticks around `tree_allocated` in doc comment (line 228)
   - **index.rs**:
     - Added backticks around `bit0=is_sparse` and `bit1=is_resident` (line 944)
     - Renamed `c` to `ch` in closure (line 5973)
     - Changed `if st.is_sparse { 0x01 } else { 0x00 }` to `u8::from(st.is_sparse)` (line 5980)
+    - Added `<< 1_u8` suffix for numeric fallback (line 5980)
     - Swapped if/else branches to use `==` instead of `!=` (lines 5993-5997)
     - Added `clippy::too_many_lines` to allow list on `apply_deferred_name_merges` (line 6475)
+- Result:
+  - ✅ Version incremented to **v0.2.181**
+  - ✅ Windows binaries built and deployed to `dist/v0.2.181/`
+  - ✅ Changes committed and pushed to remote
 - Errors:
   1. `E0609`: no field `size` on type `&FileRecord` (lines 104-105)
   2. `E0282`: type annotations needed for `total_stream_count` (line 162)
