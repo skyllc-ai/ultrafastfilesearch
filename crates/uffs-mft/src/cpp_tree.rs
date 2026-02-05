@@ -293,25 +293,24 @@ pub fn compute_tree_metrics_cpp_port(index: &mut MftIndex, debug: bool) {
     traversal.run();
     tracing::debug!("[TRIP] cpp_tree::compute_tree_metrics_cpp_port -> traversal.run() done");
 
-    // Debug assertions: every directory should have descendants >= 1 after tree
+    // Diagnostic: every directory should have descendants >= 1 after tree
     // metrics computation. If we find a directory with descendants == 0, it
     // means the record was never stamped (traversal bug).
-    #[cfg(debug_assertions)]
-    {
-        for (idx, rec) in index.records.iter().enumerate() {
-            if rec.stdinfo.is_directory() && rec.descendants == 0 {
-                // Log warning instead of panicking - this helps diagnose issues
-                // without crashing production builds.
-                tracing::warn!(
-                    frs = rec.frs,
-                    idx = idx,
-                    first_child = rec.first_child,
-                    name_count = rec.name_count,
-                    is_reparse = rec.stdinfo.is_reparse(),
-                    reparse_tag = rec.reparse_tag,
-                    "[cpp_tree] WARNING: Directory has descendants=0 after tree metrics"
-                );
-            }
+    // NOTE: This runs in RELEASE mode too for diagnosing LIVE scan issues.
+    // TODO: Remove or gate behind a feature flag once parity is confirmed.
+    for (idx, rec) in index.records.iter().enumerate() {
+        if rec.stdinfo.is_directory() && rec.descendants == 0 {
+            // Log warning instead of panicking - this helps diagnose issues
+            // without crashing production builds.
+            tracing::warn!(
+                frs = rec.frs,
+                idx = idx,
+                first_child = rec.first_child,
+                name_count = rec.name_count,
+                is_reparse = rec.stdinfo.is_reparse(),
+                reparse_tag = rec.reparse_tag,
+                "[cpp_tree] WARNING: Directory has descendants=0 after tree metrics"
+            );
         }
     }
     tracing::debug!("[TRIP] cpp_tree::compute_tree_metrics_cpp_port EXIT");

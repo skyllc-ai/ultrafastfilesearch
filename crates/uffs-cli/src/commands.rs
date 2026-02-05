@@ -1522,10 +1522,29 @@ fn results_to_dataframe(
             flags_values.push(0);
         }
 
-        // Tree metrics are always available from SearchResult
-        descendants_values.push(result.descendants);
-        treesize_values.push(result.treesize);
-        tree_allocated_values.push(result.tree_allocated);
+        // Tree metrics handling with C++ parity fixes (Fix #1, #2, #3):
+        // - Fix #1: Root row (FRS=5) must use the record's tree metrics
+        //   (authoritative).
+        // - Fix #2: Reparse directories (junctions/symlinks) must NOT be "file-ified" -
+        //   they are still directories and should use computed tree metrics. C++ treats
+        //   junctions as directory leaves with Desc=1, not files with Desc=0.
+        // - Fix #3: Use the same tree_metrics() method as OFFLINE path for consistency.
+        //
+        // For directories (including reparse), always prefer the record's tree metrics
+        // to ensure we get the computed values from cpp_tree, not potentially stale
+        // values from SearchResult.
+        let (desc, tsize, talloc) = if let Some(rec) = record {
+            // Use tree_metrics() as the single source of truth (Fix #3)
+            // This method returns the correct values for both directories and files,
+            // ensuring LIVE and OFFLINE paths produce identical output.
+            rec.tree_metrics()
+        } else {
+            // No record found - fall back to SearchResult values
+            (result.descendants, result.treesize, result.tree_allocated)
+        };
+        descendants_values.push(desc);
+        treesize_values.push(tsize);
+        tree_allocated_values.push(talloc);
     }
 
     // Create DataFrame with full schema matching MftIndex::to_dataframe()

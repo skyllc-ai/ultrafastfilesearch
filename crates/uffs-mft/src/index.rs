@@ -1506,6 +1506,27 @@ impl FileRecord {
             | (u8::from(is_corrupt) << 1_u8)
             | (u8::from(is_extension) << 2_u8);
     }
+
+    /// Returns the tree metrics tuple (descendants, treesize,
+    /// `tree_allocated`).
+    ///
+    /// This is the **single source of truth** for tree metrics extraction.
+    /// Both OFFLINE (`MftIndex::to_dataframe`) and LIVE
+    /// (`results_to_dataframe`) paths should use this method to ensure
+    /// consistent behavior.
+    ///
+    /// # C++ Parity Notes
+    ///
+    /// - Directories (including reparse points like junctions/symlinks) always
+    ///   return their computed tree metrics. Junctions are directory leaves
+    ///   with `descendants=1`, not files with `descendants=0`.
+    /// - Files return `descendants=0` and their own size/allocated values.
+    /// - This matches the C++ reference implementation behavior.
+    #[inline]
+    #[must_use]
+    pub const fn tree_metrics(&self) -> (u32, u64, u64) {
+        (self.descendants, self.treesize, self.tree_allocated)
+    }
 }
 
 // ============================================================================
@@ -6199,9 +6220,11 @@ impl MftIndex {
                 base_frs_col.push(rec.base_frs);
             }
             // Tree metrics (pre-computed via compute_tree_metrics())
-            descendants.push(rec.descendants);
-            treesize.push(rec.treesize);
-            tree_allocated.push(rec.tree_allocated);
+            // Use the tree_metrics() method as the single source of truth (Fix #3)
+            let (desc, ts, ta) = rec.tree_metrics();
+            descendants.push(desc);
+            treesize.push(ts);
+            tree_allocated.push(ta);
             path.push(self.build_path(rec.frs));
         }
         // Build DataFrame
