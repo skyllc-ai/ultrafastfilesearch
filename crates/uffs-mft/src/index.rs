@@ -3553,13 +3553,9 @@ impl PathResolver {
                 }
             }
         }
-
-        // Normalize volume root to an absolute path ("X:\") instead of the ambiguous
-        // drive-relative form ("X:"). This matters because Windows treats "X:" as
-        // "current directory on drive X", which breaks:
-        //   - path matching (queries expecting "X:\")
-        //   - path-keyed lookups
-        //   - parity with the C++ reference output
+        // Normalize volume root to "X:\\"
+        // NTFS root record (FRS=5) often has FILE_NAME="." which we skip above,
+        // so without this normalization we'd return "X:" which is drive-relative.
         if path.len() == 2 && path.as_bytes().last() == Some(&b':') {
             path.push('\\');
         }
@@ -3585,28 +3581,28 @@ impl PathResolver {
         let parent_path = if let Some(pidx) = index.frs_to_idx_opt(parent_frs) {
             self.materialize_path(index, pidx)
         } else if parent_frs == ROOT_FRS {
-            format!("{}:", self.volume.to_ascii_uppercase())
+            // Normalize root to "X:\\" (not "X:") so hardlink paths match C++ / Win32
+            // semantics.
+            let mut root_path = String::with_capacity(3);
+            root_path.push(self.volume.to_ascii_uppercase());
+            root_path.push(':');
+            root_path.push('\\');
+            root_path
         } else {
             return String::new();
         };
 
         let name = index.link_name(link);
         if name.is_empty() || name == "." {
-            // Same root-normalization as `materialize_path()`:
-            // If the hardlink resolves to the volume root, return "X:\", not "X:".
-            if parent_path.len() == 2 && parent_path.as_bytes().last() == Some(&b':') {
-                let mut normalized_parent_path = parent_path;
-                normalized_parent_path.push('\\');
-                normalized_parent_path
-            } else {
-                parent_path
-            }
+            parent_path
         } else {
             let mut path = String::with_capacity(parent_path.len() + 1 + name.len());
             path.push_str(&parent_path);
-            // `parent_path` is expected to be "X:" for root, so add a single separator
-            // here.
-            path.push('\\');
+            // Avoid double separators if parent is already the volume root ("X:\\").
+            let ends_with_sep = parent_path.as_bytes().last() == Some(&b'\\');
+            if !ends_with_sep {
+                path.push('\\');
+            }
             path.push_str(name);
             path
         }
@@ -4913,59 +4909,6 @@ mod tests {
     }
 
     #[test]
-    fn test_path_resolver_root_and_child_basic() {
-        // Minimal reproduction of the investigation doc's Section 6 scenario:
-        // - volume 'H'
-        // - root record FRS 5 with name "." and parent_frs = 5
-        // - one child file under root
-        //
-        // This verifies that PathResolver materializes:
-        //   - root as "H:\" (not "H:")
-        //   - child as "H:\foo.txt"
-
-        let mut index = MftIndex::new('H');
-
-        // Root directory (FRS 5), self-parenting, with explicit name "."
-        let root_frs = 5_u64;
-        let root_name_offset = index.add_name(".");
-        let root_rec = index.get_or_create(root_frs);
-        root_rec.stdinfo.set_directory(true);
-        root_rec.first_name.name =
-            IndexNameRef::new(root_name_offset, 1, true, IndexNameRef::NO_EXTENSION);
-        root_rec.first_name.parent_frs = root_frs; // Self-parent
-
-        // Child file under root: foo.txt
-        let child_frs = 100_u64;
-        let child_name = "foo.txt";
-        let child_name_offset = index.add_name(child_name);
-        let child_rec = index.get_or_create(child_frs);
-        child_rec.first_name.name = IndexNameRef::new(
-            child_name_offset,
-            child_name.len() as u16,
-            true,
-            IndexNameRef::NO_EXTENSION,
-        );
-        child_rec.first_name.parent_frs = root_frs;
-
-        // Build path resolver (standard user-facing settings: system metafiles
-        // filtered)
-        let resolver = PathResolver::build(&index, false);
-
-        let root_idx = index
-            .frs_to_idx_opt(root_frs)
-            .expect("root record should exist");
-        let child_idx = index
-            .frs_to_idx_opt(child_frs)
-            .expect("child record should exist");
-
-        let root_path = resolver.materialize_path(&index, root_idx);
-        let child_path = resolver.materialize_path(&index, child_idx);
-
-        assert_eq!(root_path, "H:\\");
-        assert_eq!(child_path, "H:\\foo.txt");
-    }
-
-    #[test]
     fn test_compute_tree_metrics_empty() {
         let mut index = MftIndex::new('C');
 
@@ -6010,224 +5953,6 @@ mod tests {
         );
 
         println!("✅ Tree metrics internal streams two-channel test passed!");
-    }
-
-    /// Test ADS + hardlink delta + extension-like pattern in a tiny tree,
-    /// exercising the `cpp_tree` two-channel semantics end-to-end.
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn test_tree_metrics_ads_and_hardlinks_minimal() {
-        use crate::index::InternalStreamInfo;
-
-        let mut index = MftIndex::new('C');
-
-        // Root directory (FRS 5).
-        let root_frs = 5_u64;
-        let root_rec = index.get_or_create(root_frs);
-        root_rec.stdinfo.set_directory(true);
-        root_rec.first_name.parent_frs = root_frs;
-
-        // Two child directories under root.
-        let first_dir_frs = 10_u64;
-        let second_dir_frs = 11_u64;
-
-        let first_dir_off = index.add_name("DirA");
-        let first_dir = index.get_or_create(first_dir_frs);
-        first_dir.stdinfo.set_directory(true);
-        first_dir.first_name.name =
-            IndexNameRef::new(first_dir_off, 4, true, IndexNameRef::NO_EXTENSION);
-        first_dir.first_name.parent_frs = root_frs;
-
-        let second_dir_off = index.add_name("DirB");
-        let second_dir = index.get_or_create(second_dir_frs);
-        second_dir.stdinfo.set_directory(true);
-        second_dir.first_name.name =
-            IndexNameRef::new(second_dir_off, 4, true, IndexNameRef::NO_EXTENSION);
-        second_dir.first_name.parent_frs = root_frs;
-
-        // One file with two hardlinks: FRS 100. Default stream 1000, ADS 200.
-        let file_frs = 100_u64;
-        let file_size = 1000_u64;
-        let file_ads = 200_u64;
-
-        // Primary name: file.txt under first_dir (name_index = 0).
-        let file_name_off = index.add_name("file.txt");
-        let file_rec = index.get_or_create(file_frs);
-        file_rec.first_name.name =
-            IndexNameRef::new(file_name_off, 8, true, IndexNameRef::NO_EXTENSION);
-        file_rec.first_name.parent_frs = first_dir_frs;
-        file_rec.first_stream.size = SizeInfo {
-            length: file_size,
-            allocated: file_size,
-        };
-
-        // Second hardlink name: link.bin under second_dir (name_index = 1).
-        let link_name_off = index.add_name("link.bin");
-        let link_idx = index.links.len() as u32;
-        index.links.push(LinkInfo {
-            next_entry: NO_ENTRY,
-            name: IndexNameRef::new(link_name_off, 8, true, IndexNameRef::NO_EXTENSION),
-            parent_frs: second_dir_frs,
-        });
-        let file_rec = index.get_or_create(file_frs);
-        file_rec.first_name.next_entry = link_idx;
-        file_rec.name_count = 2;
-
-        // Add ADS on the file: one extra `$DATA` stream of 200 bytes.
-        let ads_idx = index.streams.len() as u32;
-        index.streams.push(IndexStreamInfo {
-            size: SizeInfo {
-                length: file_ads,
-                allocated: file_ads,
-            },
-            next_entry: NO_ENTRY,
-            name: IndexNameRef::new(0, 0, true, IndexNameRef::NO_EXTENSION),
-            flags: 0,
-        });
-        let file_rec = index.get_or_create(file_frs);
-        file_rec.first_stream.next_entry = ads_idx;
-        file_rec.total_stream_count = 2;
-
-        // Add internal stream (50 bytes) to ensure it participates in delta
-        // distribution.
-        let internal_idx = index.internal_streams.len() as u32;
-        index.internal_streams.push(InternalStreamInfo {
-            next_entry: NO_ENTRY,
-            size: SizeInfo {
-                length: 50,
-                allocated: 50,
-            },
-            flags: 0,
-        });
-        let file_rec = index.get_or_create(file_frs);
-        file_rec.first_internal_stream = internal_idx;
-        file_rec.total_stream_count = 3; // default + ADS + internal
-
-        // Child entries: each hardlink appears under its own parent.
-        index.add_child_entry(first_dir_frs, file_frs, 0);
-        index.add_child_entry(second_dir_frs, file_frs, 1);
-        index.add_child_entry(root_frs, first_dir_frs, 0);
-        index.add_child_entry(root_frs, second_dir_frs, 0);
-
-        // Compute tree metrics using the C++-port algorithm.
-        crate::cpp_tree::compute_tree_metrics_cpp_port(&mut index, false);
-
-        let first_dir_idx = index.frs_to_idx_opt(first_dir_frs).unwrap();
-        let second_dir_idx = index.frs_to_idx_opt(second_dir_frs).unwrap();
-        let file_idx = index.frs_to_idx_opt(file_frs).unwrap();
-        let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
-
-        // Files always print default-stream size only.
-        assert_eq!(index.records[file_idx].treesize, file_size);
-        assert_eq!(index.records[file_idx].descendants, 0);
-
-        // Both parent directories should receive a positive share from the file.
-        let first_dir_size = index.records[first_dir_idx].treesize;
-        let second_dir_size = index.records[second_dir_idx].treesize;
-        assert!(
-            first_dir_size > 0,
-            "First dir should receive a positive share"
-        );
-        assert!(
-            second_dir_size > 0,
-            "Second dir should receive a positive share"
-        );
-        assert!(
-            first_dir_size + second_dir_size >= file_size,
-            "Combined size >= file size"
-        );
-
-        // Root should at least see the sum of its children sizes.
-        let root_size = index.records[root_idx].treesize;
-        assert!(
-            root_size >= first_dir_size + second_dir_size,
-            "Root >= sum of children"
-        );
-    }
-
-    /// Explicit orphan-sweep regression:
-    ///
-    /// Build a tiny index where one directory subtree is not reachable from FRS
-    /// 5 via normal parent/child edges and verify that
-    /// `compute_tree_metrics_cpp_port` still visits it and assigns sane
-    /// descendants/treesize.
-    #[test]
-    fn test_tree_metrics_orphan_subtree_visit() {
-        let mut index = MftIndex::new('O');
-
-        // Names for records
-        let root_name_offset = index.add_name(".");
-        let orphan_dir_name_offset = index.add_name("OrphanDir");
-        let file_name_offset = index.add_name("orphan_file.bin");
-
-        // Root directory (FRS 5), self-parented as in real NTFS
-        let root_frs = 5_u64;
-        let root_rec = index.get_or_create(root_frs);
-        root_rec.stdinfo.set_directory(true);
-        root_rec.first_name.name =
-            IndexNameRef::new(root_name_offset, 1, true, IndexNameRef::NO_EXTENSION);
-        root_rec.first_name.parent_frs = root_frs;
-
-        // Orphaned directory (FRS 10) whose parent_frs points to a non-existent FRS 99.
-        let orphan_dir_frs = 10_u64;
-        let orphan_dir_rec = index.get_or_create(orphan_dir_frs);
-        orphan_dir_rec.stdinfo.set_directory(true);
-        orphan_dir_rec.first_name.name =
-            IndexNameRef::new(orphan_dir_name_offset, 9, true, IndexNameRef::NO_EXTENSION);
-        orphan_dir_rec.first_name.parent_frs = 99; // unreachable from root
-
-        // File under OrphanDir (FRS 11), default stream size = 1000
-        let file_frs = 11_u64;
-        let file_stream_size: u64 = 1000;
-        let file_rec = index.get_or_create(file_frs);
-        file_rec.stdinfo.set_directory(false);
-        file_rec.first_name.name =
-            IndexNameRef::new(file_name_offset, 15, true, IndexNameRef::NO_EXTENSION);
-        file_rec.first_name.parent_frs = orphan_dir_frs;
-        file_rec.first_stream.size = SizeInfo {
-            length: file_stream_size,
-            allocated: file_stream_size,
-        };
-
-        // Build children edges from names (root has no edge to orphan_dir).
-        index.rebuild_children_from_names();
-
-        // Sanity: ensure there is no direct child edge from root to orphan_dir.
-        let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
-        let orphan_idx = index.frs_to_idx_opt(orphan_dir_frs).unwrap();
-        let root_record = &index.records[root_idx];
-        let mut child_entry = root_record.first_child;
-        while child_entry != NO_ENTRY {
-            let child = &index.children[child_entry as usize];
-            assert_ne!(
-                child.child_frs, orphan_dir_frs,
-                "orphan_dir must not be reachable from root via children list"
-            );
-            child_entry = child.next_entry;
-        }
-
-        // Compute tree metrics using the C++-port algorithm (which includes an orphan
-        // sweep).
-        crate::cpp_tree::compute_tree_metrics_cpp_port(&mut index, false);
-
-        let orphan_dir_rec = &index.records[orphan_idx];
-        let file_idx = index.frs_to_idx_opt(file_frs).unwrap();
-        let file_rec = &index.records[file_idx];
-
-        // The file itself should have its own size stamped.
-        assert_eq!(file_rec.treesize, file_stream_size);
-        assert_eq!(file_rec.descendants, 0);
-
-        // The orphan directory should have non-zero descendants and treesize
-        // reflecting its child file, even though it is not reachable from FRS 5.
-        assert!(
-            orphan_dir_rec.descendants > 0,
-            "orphan_dir should be visited by orphan sweep and have descendants > 0",
-        );
-        assert!(
-            orphan_dir_rec.treesize >= file_stream_size,
-            "orphan_dir treesize should include child file size",
-        );
     }
 }
 

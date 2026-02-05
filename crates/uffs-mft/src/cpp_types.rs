@@ -1219,32 +1219,15 @@ impl CppMftIndex {
         let max_frs = self.records_lookup.len();
         index.frs_to_idx.resize(max_frs, RUST_NO_ENTRY);
 
-        // -----------------------------------------------------------------
-        // PERF: Precompute record_idx → FRS mapping in O(n)
-        // -----------------------------------------------------------------
-        // The C++ index stores an FRS → record_idx table (`records_lookup`).
-        // We need the inverse mapping during conversion. The previous
-        // implementation used `position()` inside the per-record loop, which
-        // is O(n^2) and becomes catastrophic on real volumes (millions of
-        // records).
-        //
-        // This precomputation makes the conversion O(n) and is critical for
-        // LIVE scan performance (reduces scan window drift and improves
-        // parity stability).
-        let mut record_idx_to_frs: Vec<u64> = vec![0_u64; self.records_data.len()];
-        for (frs, &rec_idx) in self.records_lookup.iter().enumerate() {
-            if rec_idx != NO_ENTRY {
-                let ridx = rec_idx as usize;
-                if ridx < record_idx_to_frs.len() {
-                    record_idx_to_frs[ridx] = frs as u64;
-                }
-            }
-        }
-
         // Convert each record
         for (cpp_record_idx, cpp_record) in self.records_data.iter().enumerate() {
-            // Find the FRS for this record (O(1) via the precomputed inverse map)
-            let frs = *record_idx_to_frs.get(cpp_record_idx).unwrap_or(&0_u64);
+            // Find the FRS for this record
+            let cpp_record_idx_u32 = usize_to_u32(cpp_record_idx);
+            let frs = self
+                .records_lookup
+                .iter()
+                .position(|&idx| idx == cpp_record_idx_u32)
+                .unwrap_or(0) as u64;
 
             // Convert StandardInfo - MUST convert FILETIME to Unix microseconds
             // C++ stores raw Windows FILETIME (100ns since 1601-01-01)
