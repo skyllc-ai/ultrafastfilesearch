@@ -39,7 +39,7 @@ exclude = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.2.192"
+version = "0.2.194"
 edition = "2024"
 rust-version = "1.85"
 license = "MPL-2.0 OR LicenseRef-UFFS-Commercial"
@@ -121,16 +121,16 @@ simplelog = "0.12.2"
 # ───── Time ─────
 # Note: chrono version constrained by Polars git dependency (requires <= 0.4.41)
 chrono = { version = "0.4.41", features = ["serde"] }
-time = { version = "0.3.46", features = ["macros", "formatting"] }
+time = { version = "0.3.47", features = ["macros", "formatting"] }
 
 # ───── Configuration ─────
 toml = "0.9.8"
 dirs-next = "2.0.0"
 
 # ───── Testing & Benchmarking ─────
-criterion = "0.8.1"
+criterion = "0.8.2"
 divan = "0.1.21"
-proptest = "1.9.0"
+proptest = "1.10.0"
 tempfile = "3.24.0"
 
 # ───── Memory Allocator ─────

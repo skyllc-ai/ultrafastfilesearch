@@ -2486,6 +2486,51 @@ impl MftIndex {
             crate::cpp_tree::compute_tree_metrics_cpp_port(self, debug);
         }
 
+        // Post-tree diagnostic: log which directories STILL have descendants==0
+        // after all passes (including self-heal). This runs in RELEASE builds
+        // to help diagnose LIVE scan issues.
+        // Interpretation:
+        // - If bad_dirs is non-empty here → Failure mode A/C (not stamped)
+        // - If bad_dirs is empty here but CSV shows bad rows → Failure mode B (reset
+        //   after compute)
+        let final_bad_dirs: Vec<_> = self
+            .records
+            .iter()
+            .enumerate()
+            .filter(|(_, rec)| rec.stdinfo.is_directory() && rec.descendants == 0)
+            .map(|(idx, rec)| {
+                (
+                    idx,
+                    rec.frs,
+                    rec.first_child,
+                    rec.name_count,
+                    rec.total_stream_count,
+                    rec.stdinfo.is_reparse(),
+                )
+            })
+            .collect();
+
+        if !final_bad_dirs.is_empty() {
+            tracing::warn!(
+                bad_dir_count = final_bad_dirs.len(),
+                "[tree] FINAL: directories with descendants==0 after all tree metrics passes"
+            );
+            // Log first 10 bad directories for debugging
+            for (idx, frs, first_child, name_count, stream_count, is_reparse) in
+                final_bad_dirs.iter().take(10)
+            {
+                tracing::warn!(
+                    idx,
+                    frs,
+                    first_child,
+                    name_count,
+                    stream_count,
+                    is_reparse,
+                    "[tree] FINAL: bad directory details"
+                );
+            }
+        }
+
         tracing::debug!("[TRIP] MftIndex::compute_tree_metrics_cpp_port EXIT");
     }
 

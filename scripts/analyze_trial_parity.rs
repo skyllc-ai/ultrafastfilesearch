@@ -10,6 +10,7 @@
 //! - Timestamp validation
 //! - Boolean flag comparison
 //! - Live vs Offline comparison
+//! - Diagnostic log analysis (tripwire verification, post-tree diagnostics)
 //!
 //! # Usage
 //!
@@ -99,6 +100,21 @@ fn main() {
         None
     };
 
+    // Diagnostic log analysis (if trial directory specified)
+    let diagnostic_analysis = if let Some(ref trial_dir) = config.trial_dir {
+        println!();
+        println!("═══════════════════════════════════════════════════════════════════════");
+        println!("                      DIAGNOSTIC LOG ANALYSIS");
+        println!("═══════════════════════════════════════════════════════════════════════");
+        println!();
+
+        let analysis = parse_diagnostic_log(trial_dir);
+        print_diagnostic_analysis(&analysis);
+        Some(analysis)
+    } else {
+        None
+    };
+
     // Generate comprehensive report
     let report_path = config.report_path.unwrap_or_else(|| {
         let dir = config.trial_dir.as_ref().cloned().unwrap_or_else(|| PathBuf::from("."));
@@ -108,6 +124,7 @@ fn main() {
     write_comprehensive_report(
         &live_results,
         offline_results.as_ref(),
+        diagnostic_analysis.as_ref(),
         &report_path,
         &cpp_file,
         &rust_live_file,
@@ -555,6 +572,121 @@ struct TimestampIssue {
     year_diff: i32,
 }
 
+/// Diagnostic log analysis results
+#[derive(Default)]
+struct DiagnosticLogAnalysis {
+    /// Whether the tripwire string was found (confirms fixed cpp_tree code is running)
+    tripwire_found: bool,
+    /// Whether the post-tree diagnostic was found
+    post_tree_diagnostic_found: bool,
+    /// Number of directories with descendants==0 after all passes
+    final_bad_dir_count: usize,
+    /// Details of bad directories from the log
+    bad_dir_details: Vec<BadDirDetail>,
+    /// Self-heal triggered?
+    self_heal_triggered: bool,
+    /// Orphan sweep count
+    orphan_sweep_count: usize,
+    /// Log file path
+    log_file: Option<PathBuf>,
+}
+
+#[derive(Clone)]
+struct BadDirDetail {
+    idx: usize,
+    frs: u64,
+    first_child: u32,
+    name_count: u32,
+    stream_count: u32,
+    is_reparse: bool,
+}
+
+/// Parse diagnostic log file for tripwire and post-tree diagnostic messages
+fn parse_diagnostic_log(trial_dir: &Path) -> DiagnosticLogAnalysis {
+    let mut analysis = DiagnosticLogAnalysis::default();
+
+    // Find log file (rust_live_*.log or uffs_*.log)
+    let log_file = find_log_file(trial_dir);
+    if log_file.is_none() {
+        return analysis;
+    }
+    let log_file = log_file.unwrap();
+    analysis.log_file = Some(log_file.clone());
+
+    let file = match File::open(&log_file) {
+        Ok(f) => f,
+        Err(_) => return analysis,
+    };
+    let reader = BufReader::new(file);
+
+    for line in reader.lines().filter_map(|l| l.ok()) {
+        // Check for tripwire
+        if line.contains("[TRIP] cpp_tree::compute_tree_metrics_cpp_port ENTER") {
+            analysis.tripwire_found = true;
+        }
+
+        // Check for post-tree diagnostic
+        if line.contains("[tree] FINAL: directories with descendants==0") {
+            analysis.post_tree_diagnostic_found = true;
+            // Parse bad_dir_count from the log line
+            if let Some(count_str) = extract_field(&line, "bad_dir_count=") {
+                analysis.final_bad_dir_count = count_str.parse().unwrap_or(0);
+            }
+        }
+
+        // Check for bad directory details
+        if line.contains("[tree] FINAL: bad directory details") {
+            if let Some(detail) = parse_bad_dir_detail(&line) {
+                analysis.bad_dir_details.push(detail);
+            }
+        }
+
+        // Check for self-heal
+        if line.contains("self-heal triggered") || line.contains("rebuild_children_from_names") {
+            analysis.self_heal_triggered = true;
+        }
+
+        // Check for orphan sweep
+        if line.contains("orphan sweep") || line.contains("orphan_count=") {
+            if let Some(count_str) = extract_field(&line, "orphan_count=") {
+                analysis.orphan_sweep_count = count_str.parse().unwrap_or(0);
+            }
+        }
+    }
+
+    analysis
+}
+
+fn find_log_file(dir: &Path) -> Option<PathBuf> {
+    // Try rust_live_*.log first
+    if let Some(f) = find_file_with_suffix(dir, ".log") {
+        return Some(f);
+    }
+    None
+}
+
+fn extract_field(line: &str, prefix: &str) -> Option<String> {
+    if let Some(pos) = line.find(prefix) {
+        let start = pos + prefix.len();
+        let rest = &line[start..];
+        // Extract until whitespace or comma or end
+        let end = rest.find(|c: char| c.is_whitespace() || c == ',' || c == '}').unwrap_or(rest.len());
+        return Some(rest[..end].to_string());
+    }
+    None
+}
+
+fn parse_bad_dir_detail(line: &str) -> Option<BadDirDetail> {
+    Some(BadDirDetail {
+        idx: extract_field(line, "idx=")?.parse().ok()?,
+        frs: extract_field(line, "frs=")?.parse().ok()?,
+        first_child: extract_field(line, "first_child=")?.parse().ok()?,
+        name_count: extract_field(line, "name_count=")?.parse().ok()?,
+        stream_count: extract_field(line, "stream_count=")?.parse().ok()?,
+        is_reparse: extract_field(line, "is_reparse=")?.parse().ok().unwrap_or(false),
+    })
+}
+
 fn analyze_parity(cpp: &CsvData, rust: &CsvData) -> AnalysisResults {
     let mut results = AnalysisResults::default();
 
@@ -826,9 +958,68 @@ fn print_results(results: &AnalysisResults, label: &str) {
     println!();
 }
 
+fn print_diagnostic_analysis(analysis: &DiagnosticLogAnalysis) {
+    if let Some(ref log_file) = analysis.log_file {
+        println!("📂 Log file: {}", log_file.display());
+    } else {
+        println!("⚠️  No log file found");
+        return;
+    }
+    println!();
+
+    // Tripwire verification
+    println!("🔍 TRIPWIRE VERIFICATION");
+    if analysis.tripwire_found {
+        println!("   ✅ Tripwire found: [TRIP] cpp_tree::compute_tree_metrics_cpp_port ENTER");
+        println!("   → Confirms the fixed cpp_tree code path is executing");
+    } else {
+        println!("   🔴 Tripwire NOT found!");
+        println!("   → The binary may not have the fixed cpp_tree code");
+        println!("   → Rebuild with latest code and verify with: strings uffs.exe | grep TRIP");
+    }
+    println!();
+
+    // Post-tree diagnostic
+    println!("📊 POST-TREE DIAGNOSTIC");
+    if analysis.post_tree_diagnostic_found {
+        println!("   Found: [tree] FINAL: directories with descendants==0");
+        println!("   Bad directories after all passes: {}", analysis.final_bad_dir_count);
+
+        if analysis.final_bad_dir_count == 0 {
+            println!("   ✅ All directories have valid tree metrics");
+        } else if analysis.final_bad_dir_count <= 3 {
+            println!("   ⚠️  Small number of bad directories - likely root + reparse points");
+            println!("   → This is the 'unstamped directory' pattern from the deep-dive");
+        } else {
+            println!("   🔴 Many directories with descendants==0 - investigate!");
+        }
+
+        if !analysis.bad_dir_details.is_empty() {
+            println!();
+            println!("   Bad directory details:");
+            for detail in &analysis.bad_dir_details {
+                println!("     idx={} frs={} first_child={} names={} streams={} reparse={}",
+                    detail.idx, detail.frs, detail.first_child,
+                    detail.name_count, detail.stream_count, detail.is_reparse);
+            }
+        }
+    } else {
+        println!("   ⚠️  Post-tree diagnostic not found in log");
+        println!("   → The binary may not have the diagnostic code");
+    }
+    println!();
+
+    // Self-heal and orphan sweep
+    println!("🔧 SELF-HEAL & ORPHAN SWEEP");
+    println!("   Self-heal triggered: {}", if analysis.self_heal_triggered { "Yes" } else { "No" });
+    println!("   Orphan sweep count: {}", analysis.orphan_sweep_count);
+    println!();
+}
+
 fn write_comprehensive_report(
     live_results: &AnalysisResults,
     offline_results: Option<&(AnalysisResults, PathBuf)>,
+    diagnostic_analysis: Option<&DiagnosticLogAnalysis>,
     path: &Path,
     cpp_file: &Path,
     rust_live_file: &Path,
@@ -903,6 +1094,15 @@ fn write_comprehensive_report(
         writeln!(f, "> This isolates MFT parsing from live I/O issues.").unwrap();
         writeln!(f).unwrap();
         write_analysis_section(&mut f, offline, "Offline");
+    }
+
+    // DIAGNOSTIC LOG SECTION
+    if let Some(diag) = diagnostic_analysis {
+        writeln!(f, "---").unwrap();
+        writeln!(f).unwrap();
+        writeln!(f, "# Part 3: Diagnostic Log Analysis").unwrap();
+        writeln!(f).unwrap();
+        write_diagnostic_section(&mut f, diag, live_results);
     }
 
     // CONCLUSIONS
@@ -1088,4 +1288,95 @@ fn write_analysis_section(f: &mut File, results: &AnalysisResults, label: &str) 
         }
         writeln!(f).unwrap();
     }
+}
+
+/// Write diagnostic log analysis section to report
+fn write_diagnostic_section(f: &mut File, diag: &DiagnosticLogAnalysis, live_results: &AnalysisResults) {
+    writeln!(f, "> Analysis of runtime diagnostic logs to verify correct code paths are executing.").unwrap();
+    writeln!(f).unwrap();
+
+    if let Some(ref log_file) = diag.log_file {
+        writeln!(f, "**Log file:** `{}`", log_file.display()).unwrap();
+    } else {
+        writeln!(f, "⚠️ No log file found in trial directory.").unwrap();
+        return;
+    }
+    writeln!(f).unwrap();
+
+    // Tripwire verification table
+    writeln!(f, "## Tripwire Verification").unwrap();
+    writeln!(f).unwrap();
+    writeln!(f, "| Check | Status | Meaning |").unwrap();
+    writeln!(f, "|-------|--------|---------|").unwrap();
+    writeln!(f, "| cpp_tree tripwire | {} | {} |",
+        if diag.tripwire_found { "✅ Found" } else { "🔴 NOT FOUND" },
+        if diag.tripwire_found { "Fixed cpp_tree code is executing" } else { "Binary may not have fixed code - REBUILD!" }
+    ).unwrap();
+    writeln!(f, "| Post-tree diagnostic | {} | {} |",
+        if diag.post_tree_diagnostic_found { "✅ Found" } else { "⚠️ Not found" },
+        if diag.post_tree_diagnostic_found { "Diagnostic logging is active" } else { "Diagnostic code may be missing" }
+    ).unwrap();
+    writeln!(f).unwrap();
+
+    // Post-tree diagnostic results
+    if diag.post_tree_diagnostic_found {
+        writeln!(f, "## Post-Tree Diagnostic Results").unwrap();
+        writeln!(f).unwrap();
+        writeln!(f, "**Directories with descendants==0 after all passes:** {}", diag.final_bad_dir_count).unwrap();
+        writeln!(f).unwrap();
+
+        // Interpret the pattern
+        if diag.final_bad_dir_count == 0 {
+            writeln!(f, "✅ All directories have valid tree metrics after tree computation.").unwrap();
+        } else {
+            // Check if this matches the "unstamped directory" pattern
+            let zeros_in_csv = live_results.tree_metric_issues.iter()
+                .filter(|i| i.rust_size == 0 && i.rust_descendants == 0)
+                .count();
+
+            if diag.final_bad_dir_count <= 3 && zeros_in_csv <= 3 {
+                writeln!(f, "⚠️ **Unstamped Directory Pattern Detected**").unwrap();
+                writeln!(f).unwrap();
+                writeln!(f, "This matches the pattern from `LIVE_TREE_METRICS_REMAINING_GAP_DEEP_DIVE.md`:").unwrap();
+                writeln!(f, "- Small number of directories (≤3) with Size=0/Descendants=0").unwrap();
+                writeln!(f, "- Typically: root directory + reparse points (junctions/symlinks)").unwrap();
+                writeln!(f).unwrap();
+                writeln!(f, "**Likely cause:** These directories are not being stamped by the tree metrics algorithm.").unwrap();
+            } else if diag.final_bad_dir_count > 0 && zeros_in_csv == 0 {
+                writeln!(f, "⚠️ **Failure Mode B: Reset After Compute**").unwrap();
+                writeln!(f).unwrap();
+                writeln!(f, "The log shows {} bad directories, but CSV shows 0 with zeros.", diag.final_bad_dir_count).unwrap();
+                writeln!(f, "This suggests records are being stamped but then reset/replaced later.").unwrap();
+            } else {
+                writeln!(f, "🔴 **Multiple directories with invalid tree metrics**").unwrap();
+                writeln!(f).unwrap();
+                writeln!(f, "Log shows {} bad directories, CSV shows {} with zeros.", diag.final_bad_dir_count, zeros_in_csv).unwrap();
+            }
+        }
+        writeln!(f).unwrap();
+
+        // Bad directory details
+        if !diag.bad_dir_details.is_empty() {
+            writeln!(f, "### Bad Directory Details").unwrap();
+            writeln!(f).unwrap();
+            writeln!(f, "| idx | FRS | first_child | names | streams | reparse |").unwrap();
+            writeln!(f, "|-----|-----|-------------|-------|---------|---------|").unwrap();
+            for detail in &diag.bad_dir_details {
+                writeln!(f, "| {} | {} | {} | {} | {} | {} |",
+                    detail.idx, detail.frs, detail.first_child,
+                    detail.name_count, detail.stream_count, detail.is_reparse
+                ).unwrap();
+            }
+            writeln!(f).unwrap();
+        }
+    }
+
+    // Self-heal and orphan sweep
+    writeln!(f, "## Self-Heal & Orphan Sweep").unwrap();
+    writeln!(f).unwrap();
+    writeln!(f, "| Mechanism | Status |").unwrap();
+    writeln!(f, "|-----------|--------|").unwrap();
+    writeln!(f, "| Self-heal triggered | {} |", if diag.self_heal_triggered { "Yes" } else { "No" }).unwrap();
+    writeln!(f, "| Orphan sweep count | {} |", diag.orphan_sweep_count).unwrap();
+    writeln!(f).unwrap();
 }

@@ -51,14 +51,19 @@ $env:RUST_BACKTRACE = "full"
 #   uffs_cli::commands        - CLI command execution
 #
 # Levels: error < warn < info < debug < trace
+#
+# IMPORTANT: The post-tree diagnostic for LIVE issues uses tracing::warn!
+# so it will appear even at "warn" level. The tripwire logs use tracing::debug!
+# so they require at least "debug" level to appear.
 if ($VerboseLog) {
     # TRACE: Maximum verbosity - all C++ algorithm modules at trace level
     $env:RUST_LOG = "uffs_mft=trace,uffs_cli=trace,uffs_core=trace"
     Write-Host "📋 Verbose logging enabled (TRACE level for all uffs modules)" -ForegroundColor Yellow
 } else {
-    # Default: No logs (error only) - clean output for parity comparison
-    $env:RUST_LOG = "error"
-    Write-Host "📋 Standard logging (error only - use -VerboseLog for trace)" -ForegroundColor Yellow
+    # Default: warn level - captures post-tree diagnostics for LIVE issues
+    # The "[tree] FINAL: directories with descendants==0" warning will appear here
+    $env:RUST_LOG = "warn"
+    Write-Host "📋 Standard logging (warn level - captures tree diagnostics, use -VerboseLog for trace)" -ForegroundColor Yellow
 }
 
 $WorkDir  = Get-Location
@@ -196,6 +201,47 @@ try {
             -CommandLine ("`"$UffsExe`" --version") `
             -LogFileName "uffs_version.log"
         LogLine "- Version log: ``uffs_version.log``"
+        LogLine ""
+
+        # Tripwire verification: check if the fixed cpp_tree code is in the binary
+        # This is the fastest way to verify the LIVE binary has the correct code path
+        Write-Host "🔍 Verifying tripwire strings in binary..." -NoNewline
+        $tripwireFound = $false
+        $tripwireStrings = @(
+            "[TRIP] cpp_tree::compute_tree_metrics_cpp_port ENTER",
+            "[tree] FINAL: directories with descendants==0"
+        )
+        try {
+            # Use strings.exe if available, otherwise skip
+            $stringsOutput = & strings $UffsExe 2>$null
+            if ($stringsOutput) {
+                $foundStrings = @()
+                foreach ($tw in $tripwireStrings) {
+                    if ($stringsOutput -match [regex]::Escape($tw)) {
+                        $foundStrings += $tw
+                    }
+                }
+                if ($foundStrings.Count -eq $tripwireStrings.Count) {
+                    $tripwireFound = $true
+                    Write-Host " ✅ All tripwires found" -ForegroundColor Green
+                    LogLine "- **Tripwire verification:** ✅ All tripwires found in binary"
+                } else {
+                    Write-Host " ⚠️ Missing tripwires: $($tripwireStrings.Count - $foundStrings.Count)" -ForegroundColor Yellow
+                    LogLine "- **Tripwire verification:** ⚠️ Missing tripwires"
+                    foreach ($tw in $tripwireStrings) {
+                        if ($foundStrings -notcontains $tw) {
+                            LogLine "  - Missing: ``$tw``"
+                        }
+                    }
+                }
+            } else {
+                Write-Host " ⏭️ strings.exe not available" -ForegroundColor DarkGray
+                LogLine "- **Tripwire verification:** skipped (strings.exe not available)"
+            }
+        } catch {
+            Write-Host " ⏭️ skipped (error)" -ForegroundColor DarkGray
+            LogLine "- **Tripwire verification:** skipped (error: $($_.Exception.Message))"
+        }
         LogLine ""
     }
 
