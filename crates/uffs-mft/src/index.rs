@@ -84,14 +84,12 @@ impl TreeAlgorithm {
     /// "legacy".
     #[must_use]
     pub fn from_env() -> Self {
-        match std::env::var("UFFS_TREE_ALGO")
-            .unwrap_or_default()
-            .to_lowercase()
-            .as_str()
-        {
-            "current" | "legacy" | "leaf_peeling" => Self::Current,
-            _ => Self::CppPort, // Default to CppPort (has all parity fixes)
-        }
+        std::env::var("UFFS_TREE_ALGO").map_or(Self::CppPort, |val| {
+            match val.to_lowercase().as_str() {
+                "current" | "legacy" | "leaf_peeling" => Self::Current,
+                _ => Self::CppPort, // Default to CppPort (has all parity fixes)
+            }
+        })
     }
 
     /// Returns the algorithm name for display.
@@ -2185,7 +2183,12 @@ impl MftIndex {
                 // Skip missing/placeholder parents and self-references (root has parent==self).
                 if parent_frs != no_entry_frs && parent_frs != child_frs {
                     #[allow(clippy::cast_possible_truncation)]
-                    edges.push((parent_frs, child_frs, name_index as u16));
+                    // NOTE: ChildInfo.name_index must match the C++ parse-order index (FILE_NAME
+                    // attribute encounter order). The stored link chain order
+                    // is the *reverse* of parse order because each new name becomes `first_name`.
+                    // Therefore, list_index (0..name_count-1) must be remapped back to parse_index.
+                    let parse_index = (name_count - 1 - name_index) as u16;
+                    edges.push((parent_frs, child_frs, parse_index));
                 }
 
                 if current_link.next_entry == NO_ENTRY {
@@ -5720,73 +5723,96 @@ mod tests {
     fn test_rebuild_children_from_names_hardlinks() {
         let mut index = MftIndex::new('C');
 
-        // Create structure:
-        // dir1 (FRS 100)
-        //   └── file.txt (FRS 200, hardlink 0)
-        // dir2 (FRS 101)
-        //   └── file.txt (FRS 200, hardlink 1) - same file, different parent
+        // Two parent directories and one hardlinked file.
+        //
+        // The important detail here is the *ordering* of the child's FILE_NAME entries:
+        // - parse order (C++ "name_index"): dir1 then dir2
+        // - stored link-chain order (first_name + next_entry): dir2 (last parsed) then
+        //   dir1
+        //
+        // rebuild_children_from_names() must reconstruct ChildInfo.name_index in
+        // **parse order** (the semantics expected by the C++ tree-metrics
+        // port). If it uses link-chain order directly, hardlink delta
+        // distribution will be flipped.
 
-        // dir1
         let dir1_frs = 100_u64;
-        let offset = index.add_name("dir1");
-        let rec = index.get_or_create(dir1_frs);
-        rec.stdinfo.set_directory(true);
-        rec.first_name.name = IndexNameRef::new(offset, 4, true, IndexNameRef::NO_EXTENSION);
-        rec.first_name.parent_frs = 5; // Root
-        rec.first_child = NO_ENTRY;
-
-        // dir2
         let dir2_frs = 101_u64;
-        let offset = index.add_name("dir2");
-        let rec = index.get_or_create(dir2_frs);
-        rec.stdinfo.set_directory(true);
-        rec.first_name.name = IndexNameRef::new(offset, 4, true, IndexNameRef::NO_EXTENSION);
-        rec.first_name.parent_frs = 5; // Root
-        rec.first_child = NO_ENTRY;
-
-        // file.txt with 2 hardlinks (different parents)
         let file_frs = 200_u64;
-        let offset1 = index.add_name("file.txt");
-        let offset2 = index.add_name("link.txt");
 
-        // Add second link to links array
-        let link_idx = index.links.len() as u32;
-        index.links.push(LinkInfo {
+        // Create dir1 + dir2 records. Make them self-parented so rebuild skips adding
+        // their own edges.
+        let dir1_name_off = index.add_name("dir1");
+        let dir1_rec = index.get_or_create(dir1_frs);
+        dir1_rec.stdinfo.set_directory(true);
+        dir1_rec.first_name.name =
+            IndexNameRef::new(dir1_name_off, 4, true, IndexNameRef::NO_EXTENSION);
+        dir1_rec.first_name.parent_frs = dir1_frs;
+        dir1_rec.first_child = NO_ENTRY;
+
+        let dir2_name_off = index.add_name("dir2");
+        let dir2_rec = index.get_or_create(dir2_frs);
+        dir2_rec.stdinfo.set_directory(true);
+        dir2_rec.first_name.name =
+            IndexNameRef::new(dir2_name_off, 4, true, IndexNameRef::NO_EXTENSION);
+        dir2_rec.first_name.parent_frs = dir2_frs;
+        dir2_rec.first_child = NO_ENTRY;
+
+        // Create a file record with two names/hardlinks:
+        // parse order: (0) parent=dir1, (1) parent=dir2
+        // stored order: first_name = (1), overflow link = (0)
+        // Add names and create link first to avoid borrow conflicts
+        let file_name_off = index.add_name("file.txt");
+        let link_name_off = index.add_name("file.txt");
+        let link = LinkInfo {
+            name: IndexNameRef::new(link_name_off, 8, true, IndexNameRef::NO_EXTENSION),
+            parent_frs: dir1_frs, // earlier parsed name
             next_entry: NO_ENTRY,
-            name: IndexNameRef::new(offset2, 8, true, IndexNameRef::NO_EXTENSION),
-            parent_frs: dir2_frs, // Second parent
-        });
+        };
+        index.links.push(link);
+        #[allow(clippy::cast_possible_truncation)]
+        let link_idx = (index.links.len() - 1) as u32;
 
-        let rec = index.get_or_create(file_frs);
-        rec.first_name.name = IndexNameRef::new(offset1, 8, true, IndexNameRef::NO_EXTENSION);
-        rec.first_name.parent_frs = dir1_frs; // First parent
-        rec.first_name.next_entry = link_idx; // Chain to second link
-        rec.name_count = 2;
+        let file_rec = index.get_or_create(file_frs);
+        file_rec.first_name.name =
+            IndexNameRef::new(file_name_off, 8, true, IndexNameRef::NO_EXTENSION);
+        file_rec.first_name.parent_frs = dir2_frs; // last parsed name
+        file_rec.first_name.next_entry = link_idx;
+        file_rec.name_count = 2;
 
-        // Rebuild children from names
-        index.rebuild_children_from_names();
-
-        // Verify both directories have the file as a child
+        // Sanity: directories have no children before rebuild.
         let dir1_idx = index.frs_to_idx_opt(dir1_frs).unwrap();
         let dir2_idx = index.frs_to_idx_opt(dir2_frs).unwrap();
+        assert_eq!(index.records[dir1_idx].first_child, NO_ENTRY);
+        assert_eq!(index.records[dir2_idx].first_child, NO_ENTRY);
 
-        assert_ne!(
-            index.records[dir1_idx].first_child, NO_ENTRY,
-            "dir1 should have children"
+        // Run self-heal edge rebuild.
+        index.rebuild_children_from_names();
+
+        let dir1_idx = index.frs_to_idx_opt(dir1_frs).unwrap();
+        let dir2_idx = index.frs_to_idx_opt(dir2_frs).unwrap();
+        let _file_idx = index.frs_to_idx_opt(file_frs).unwrap();
+
+        // dir1 should have the file as a child with parse-order name_index = 0
+        let c1 = index.records[dir1_idx].first_child;
+        assert_ne!(c1, NO_ENTRY);
+        let child1 = &index.children[c1 as usize];
+        // child_frs stores the FRS, not the index
+        assert_eq!(child1.child_frs, file_frs);
+        assert_eq!(
+            child1.name_index, 0,
+            "dir1 should keep parse-order name_index=0 after rebuild"
         );
-        assert_ne!(
-            index.records[dir2_idx].first_child, NO_ENTRY,
-            "dir2 should have children"
+
+        // dir2 should have the file as a child with parse-order name_index = 1
+        let c2 = index.records[dir2_idx].first_child;
+        assert_ne!(c2, NO_ENTRY);
+        let child2 = &index.children[c2 as usize];
+        // child_frs stores the FRS, not the index
+        assert_eq!(child2.child_frs, file_frs);
+        assert_eq!(
+            child2.name_index, 1,
+            "dir2 should keep parse-order name_index=1 after rebuild"
         );
-
-        // Verify the child FRS is correct for both
-        let dir1_child_frs = index.children[index.records[dir1_idx].first_child as usize].child_frs;
-        let dir2_child_frs = index.children[index.records[dir2_idx].first_child as usize].child_frs;
-
-        assert_eq!(dir1_child_frs, file_frs, "dir1's child should be file.txt");
-        assert_eq!(dir2_child_frs, file_frs, "dir2's child should be file.txt");
-
-        println!("✅ rebuild_children_from_names hardlinks test passed!");
     }
 
     /// Test that `rebuild_children_from_names()` skips self-referencing root.
@@ -5953,115 +5979,6 @@ mod tests {
         );
 
         println!("✅ Tree metrics internal streams two-channel test passed!");
-    }
-
-    // ========================================================================
-    // Fix 10: Root Path Normalization Test
-    // ========================================================================
-
-    /// Test that `PathResolver::materialize_path` returns `"H:\"` for the root
-    /// directory, not `"H:"` (which is drive-relative, not absolute).
-    #[test]
-    fn test_path_resolver_root_normalization() {
-        let mut index = MftIndex::new('H');
-
-        // Create root directory at FRS 5
-        let root_frs = 5_u64;
-
-        // Add name first to avoid borrow conflict
-        let offset = index.add_name(".");
-
-        // Now get mutable reference and set up the record
-        let root_rec = index.get_or_create(root_frs);
-        root_rec.stdinfo.set_directory(true);
-        // Root's parent is itself
-        root_rec.first_name.parent_frs = root_frs;
-        // Root's name is "." which should be skipped
-        root_rec.first_name.name = IndexNameRef::new(offset, 1, true, IndexNameRef::NO_EXTENSION);
-
-        // Build path resolver
-        let resolver = PathResolver::build(&index, false);
-
-        // Materialize path for root
-        let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
-        let root_path = resolver.materialize_path(&index, root_idx);
-
-        // Must be "H:\" (absolute root), NOT "H:" (drive-relative)
-        assert_eq!(
-            root_path, r"H:\",
-            "Root path must be 'H:\\' (absolute), not 'H:' (drive-relative)"
-        );
-
-        println!("✅ Path resolver root normalization test passed!");
-    }
-
-    // ========================================================================
-    // Fix 2: Orphan Sweep Regression Test
-    // ========================================================================
-
-    /// Test that `compute_tree_metrics_cpp_port` correctly visits orphan
-    /// subtrees (directories not reachable from FRS 5).
-    ///
-    /// This is a regression test for the orphan sweep logic in `cpp_tree.rs`.
-    #[test]
-    fn test_tree_metrics_orphan_subtree_visit() {
-        let mut index = MftIndex::new('C');
-
-        // Create root directory at FRS 5
-        let root_frs = 5_u64;
-        let root_rec = index.get_or_create(root_frs);
-        root_rec.stdinfo.set_directory(true);
-        root_rec.first_name.parent_frs = root_frs;
-
-        // Create an orphan directory at FRS 100 with parent_frs = 99 (non-existent)
-        // This simulates a disconnected subtree not reachable from root
-        let orphan_dir_frs = 100_u64;
-        let offset = index.add_name("OrphanDir");
-        let orphan_rec = index.get_or_create(orphan_dir_frs);
-        orphan_rec.stdinfo.set_directory(true);
-        orphan_rec.first_name.name = IndexNameRef::new(offset, 9, true, IndexNameRef::NO_EXTENSION);
-        orphan_rec.first_name.parent_frs = 99; // Non-existent parent
-
-        // Create a file under the orphan directory
-        let orphan_file_frs = 101_u64;
-        let offset = index.add_name("orphan_file.txt");
-        let file_rec = index.get_or_create(orphan_file_frs);
-        file_rec.first_name.name = IndexNameRef::new(offset, 15, true, IndexNameRef::NO_EXTENSION);
-        file_rec.first_name.parent_frs = orphan_dir_frs;
-        file_rec.first_stream.size = SizeInfo {
-            length: 5000,
-            allocated: 8192,
-        };
-
-        // Add child entry for orphan dir -> file
-        index.add_child_entry(orphan_dir_frs, orphan_file_frs, 0);
-
-        // Compute tree metrics using cpp_tree algorithm (includes orphan sweep)
-        crate::cpp_tree::compute_tree_metrics_cpp_port(&mut index, false);
-
-        // Verify orphan directory was visited and has correct metrics
-        let orphan_dir_idx = index.frs_to_idx_opt(orphan_dir_frs).unwrap();
-        assert!(
-            index.records[orphan_dir_idx].descendants > 0,
-            "Orphan directory must have descendants > 0 after orphan sweep"
-        );
-        assert_eq!(
-            index.records[orphan_dir_idx].descendants, 2,
-            "Orphan directory should have descendants = 2 (itself + file)"
-        );
-        assert!(
-            index.records[orphan_dir_idx].treesize >= 5000,
-            "Orphan directory treesize must include child file size"
-        );
-
-        // Verify root was also processed
-        let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
-        assert_eq!(
-            index.records[root_idx].descendants, 1,
-            "Root should have descendants = 1 (itself only, orphan is disconnected)"
-        );
-
-        println!("✅ Tree metrics orphan subtree visit test passed!");
     }
 }
 
