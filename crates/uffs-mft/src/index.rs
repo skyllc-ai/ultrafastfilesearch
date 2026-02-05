@@ -5954,6 +5954,115 @@ mod tests {
 
         println!("✅ Tree metrics internal streams two-channel test passed!");
     }
+
+    // ========================================================================
+    // Fix 10: Root Path Normalization Test
+    // ========================================================================
+
+    /// Test that `PathResolver::materialize_path` returns `"H:\"` for the root
+    /// directory, not `"H:"` (which is drive-relative, not absolute).
+    #[test]
+    fn test_path_resolver_root_normalization() {
+        let mut index = MftIndex::new('H');
+
+        // Create root directory at FRS 5
+        let root_frs = 5_u64;
+
+        // Add name first to avoid borrow conflict
+        let offset = index.add_name(".");
+
+        // Now get mutable reference and set up the record
+        let root_rec = index.get_or_create(root_frs);
+        root_rec.stdinfo.set_directory(true);
+        // Root's parent is itself
+        root_rec.first_name.parent_frs = root_frs;
+        // Root's name is "." which should be skipped
+        root_rec.first_name.name = IndexNameRef::new(offset, 1, true, IndexNameRef::NO_EXTENSION);
+
+        // Build path resolver
+        let resolver = PathResolver::build(&index, false);
+
+        // Materialize path for root
+        let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
+        let root_path = resolver.materialize_path(&index, root_idx);
+
+        // Must be "H:\" (absolute root), NOT "H:" (drive-relative)
+        assert_eq!(
+            root_path, r"H:\",
+            "Root path must be 'H:\\' (absolute), not 'H:' (drive-relative)"
+        );
+
+        println!("✅ Path resolver root normalization test passed!");
+    }
+
+    // ========================================================================
+    // Fix 2: Orphan Sweep Regression Test
+    // ========================================================================
+
+    /// Test that `compute_tree_metrics_cpp_port` correctly visits orphan
+    /// subtrees (directories not reachable from FRS 5).
+    ///
+    /// This is a regression test for the orphan sweep logic in `cpp_tree.rs`.
+    #[test]
+    fn test_tree_metrics_orphan_subtree_visit() {
+        let mut index = MftIndex::new('C');
+
+        // Create root directory at FRS 5
+        let root_frs = 5_u64;
+        let root_rec = index.get_or_create(root_frs);
+        root_rec.stdinfo.set_directory(true);
+        root_rec.first_name.parent_frs = root_frs;
+
+        // Create an orphan directory at FRS 100 with parent_frs = 99 (non-existent)
+        // This simulates a disconnected subtree not reachable from root
+        let orphan_dir_frs = 100_u64;
+        let offset = index.add_name("OrphanDir");
+        let orphan_rec = index.get_or_create(orphan_dir_frs);
+        orphan_rec.stdinfo.set_directory(true);
+        orphan_rec.first_name.name = IndexNameRef::new(offset, 9, true, IndexNameRef::NO_EXTENSION);
+        orphan_rec.first_name.parent_frs = 99; // Non-existent parent
+
+        // Create a file under the orphan directory
+        let orphan_file_frs = 101_u64;
+        let offset = index.add_name("orphan_file.txt");
+        let file_rec = index.get_or_create(orphan_file_frs);
+        file_rec.first_name.name = IndexNameRef::new(offset, 15, true, IndexNameRef::NO_EXTENSION);
+        file_rec.first_name.parent_frs = orphan_dir_frs;
+        file_rec.first_stream.size = SizeInfo {
+            length: 5000,
+            allocated: 8192,
+        };
+
+        // Add child entry for orphan dir -> file
+        index.add_child_entry(orphan_dir_frs, orphan_file_frs, 0);
+
+        // Compute tree metrics using cpp_tree algorithm (includes orphan sweep)
+        crate::cpp_tree::compute_tree_metrics_cpp_port(&mut index, false);
+
+        // Verify orphan directory was visited and has correct metrics
+        let orphan_dir_idx = index.frs_to_idx_opt(orphan_dir_frs).unwrap();
+        assert!(
+            index.records[orphan_dir_idx].descendants > 0,
+            "Orphan directory must have descendants > 0 after orphan sweep"
+        );
+        assert_eq!(
+            index.records[orphan_dir_idx].descendants, 2,
+            "Orphan directory should have descendants = 2 (itself + file)"
+        );
+        assert!(
+            index.records[orphan_dir_idx].treesize >= 5000,
+            "Orphan directory treesize must include child file size"
+        );
+
+        // Verify root was also processed
+        let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
+        assert_eq!(
+            index.records[root_idx].descendants, 1,
+            "Root should have descendants = 1 (itself only, orphan is disconnected)"
+        );
+
+        println!("✅ Tree metrics orphan subtree visit test passed!");
+    }
 }
 
 // ============================================================================

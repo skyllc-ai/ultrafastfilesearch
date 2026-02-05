@@ -1219,15 +1219,24 @@ impl CppMftIndex {
         let max_frs = self.records_lookup.len();
         index.frs_to_idx.resize(max_frs, RUST_NO_ENTRY);
 
+        // =====================================================================
+        // O(n) optimization: Precompute inverse map (record_idx -> FRS)
+        // =====================================================================
+        // records_lookup[frs] = record_idx, so we need the inverse:
+        // record_idx_to_frs[record_idx] = frs
+        // This avoids O(n²) .position() calls in the main loop.
+        let mut record_idx_to_frs: Vec<u64> = vec![0; self.records_data.len()];
+        for (frs, &record_idx) in self.records_lookup.iter().enumerate() {
+            let record_idx_usize = record_idx as usize;
+            if record_idx_usize < record_idx_to_frs.len() {
+                record_idx_to_frs[record_idx_usize] = frs as u64;
+            }
+        }
+
         // Convert each record
         for (cpp_record_idx, cpp_record) in self.records_data.iter().enumerate() {
-            // Find the FRS for this record
-            let cpp_record_idx_u32 = usize_to_u32(cpp_record_idx);
-            let frs = self
-                .records_lookup
-                .iter()
-                .position(|&idx| idx == cpp_record_idx_u32)
-                .unwrap_or(0) as u64;
+            // O(1) lookup for FRS using precomputed inverse map
+            let frs = record_idx_to_frs.get(cpp_record_idx).copied().unwrap_or(0);
 
             // Convert StandardInfo - MUST convert FILETIME to Unix microseconds
             // C++ stores raw Windows FILETIME (100ns since 1601-01-01)
