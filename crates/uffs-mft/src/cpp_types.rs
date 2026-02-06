@@ -2501,6 +2501,14 @@ impl CppParsePipeline {
             && name_offset + 8 <= attr_data.len()
             && &attr_data[name_offset..name_offset + 8] == b"$\x00I\x003\x000\x00";
 
+        // Parity Fix #7: C++ does NOT count $I30:$BITMAP toward directory "Size"/tree
+        // metrics. Bitmap is metadata (used/free slots in the directory index),
+        // not part of directory byte size. Skip this attribute entirely to
+        // match C++ behavior.
+        if is_dir_index && type_code == AttributeType::Bitmap as u32 {
+            return;
+        }
+
         // Calculate type_name_id (matches C++ type_name_id = type >> 4)
         // NTFS attribute type codes are 0x10-0xF0, so >> 4 gives 1-15, fits in u8
         let type_name_id = if is_dir_index {

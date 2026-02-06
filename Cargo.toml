@@ -39,7 +39,7 @@ exclude = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.2.198"
+version = "0.2.199"
 edition = "2024"
 rust-version = "1.85"
 license = "MPL-2.0 OR LicenseRef-UFFS-Commercial"
@@ -108,7 +108,7 @@ crossterm = "0.29.0"
 
 # ───── Error Handling ─────
 thiserror = "2.0.18"
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 miette = { version = "7.6.0", features = ["fancy"] }
 
 # ───── Logging & Tracing ─────
