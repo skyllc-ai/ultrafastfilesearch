@@ -308,10 +308,10 @@ impl CppIoPipeline {
     ) -> Result<crate::cpp_types::CppMftIndex> {
         // Build I/O operations from data chunks (respecting skip ranges)
         // IMPORTANT: In live IOCP mode, completions can arrive out-of-order.
-        // To keep parsing deterministic (and match offline / C++), we assign a
-        // sequence number and process buffers strictly in seq order.
+        // To keep parsing deterministic (and match offline / C++), we use the
+        // index into io_ops as the sequence number and process buffers strictly in
+        // order.
         struct IoOp {
-            seq: usize,
             disk_offset: u64,
             virtual_offset: u64,
             size: usize,
@@ -337,9 +337,7 @@ impl CppIoPipeline {
                 let io_size = remaining.min(io_chunk_size);
                 max_io_size = max_io_size.max(io_size);
 
-                let seq = io_ops.len();
                 io_ops.push(IoOp {
-                    seq,
                     disk_offset: disk_offset + offset as u64,
                     virtual_offset: virtual_offset + offset as u64,
                     size: io_size,
@@ -446,7 +444,8 @@ impl CppIoPipeline {
         // strictly in sequence order.
         let total_ops = io_ops.len();
         // Each entry: Option<(buffer, bytes_transferred)>
-        // Note: We use map().collect() instead of vec![None; n] because AlignedBuffer doesn't impl Clone
+        // Note: We use map().collect() instead of vec![None; n] because AlignedBuffer
+        // doesn't impl Clone
         let mut completed_buffers: Vec<Option<(AlignedBuffer, usize)>> =
             (0..total_ops).map(|_| None).collect();
         let mut next_issue: usize = 0; // Next seq to submit
