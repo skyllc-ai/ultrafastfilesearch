@@ -2470,8 +2470,20 @@ impl MftIndex {
             self.rebuild_children_from_names();
         }
 
+        // Fix 5: Skip orphan sweep for parity mode.
+        // Set UFFS_SKIP_ORPHANS=1 to exclude orphans without Win32 paths from
+        // tree aggregation. This matches C++ Win32 enumeration behavior where
+        // only records reachable from ROOT via Win32-visible FILE_NAME edges
+        // are included.
+        let skip_orphans = std::env::var_os("UFFS_SKIP_ORPHANS").is_some();
+        if skip_orphans {
+            tracing::debug!(
+                "[TRIP] compute_tree_metrics_cpp_port -> skip_orphans=true (parity mode via env)"
+            );
+        }
+
         // First pass: compute tree metrics
-        crate::cpp_tree::compute_tree_metrics_cpp_port(self, debug);
+        crate::cpp_tree::compute_tree_metrics_cpp_port(self, debug, skip_orphans);
         tracing::debug!("[TRIP] MftIndex::compute_tree_metrics_cpp_port -> first pass done");
 
         // Detect "unstamped directory" condition (LIVE scan symptom).
@@ -2518,7 +2530,7 @@ impl MftIndex {
             tracing::debug!(
                 "[TRIP] MftIndex::compute_tree_metrics_cpp_port -> second pass (after self-heal)"
             );
-            crate::cpp_tree::compute_tree_metrics_cpp_port(self, debug);
+            crate::cpp_tree::compute_tree_metrics_cpp_port(self, debug, skip_orphans);
         }
 
         // Post-tree diagnostic: log which directories STILL have descendants==0
@@ -6032,14 +6044,20 @@ mod tests {
         index.add_child_entry(dir_frs, file_frs, 0);
 
         // Compute tree metrics using cpp_tree algorithm
-        crate::cpp_tree::compute_tree_metrics_cpp_port(&mut index, false);
+        // skip_orphans=false for tests (include all records)
+        crate::cpp_tree::compute_tree_metrics_cpp_port(&mut index, false, false);
 
-        // Verify directory's printed size (Channel B) = children size + first stream
-        // The internal stream should NOT be in the directory's own printed size
+        // Fix 3 changed behavior: Directory printed size now includes ALL streams
+        // (first + internal + overflow), not just first stream.
+        //
+        // Directory's printed_own_len = own_len - delta(first_len) + first_len
+        //   where own_len = delta(first_len=0) + delta(internal_len=256) = 0 + 256 =
+        // 256   so printed_own_len = 256 - 0 + 0 = 256
+        // Directory treesize = children.length + printed_own_len = 1000 + 256 = 1256
         let dir_idx = index.frs_to_idx_opt(dir_frs).unwrap();
         assert_eq!(
-            index.records[dir_idx].treesize, 1000,
-            "Directory treesize should be 1000 (file only, no internal stream)"
+            index.records[dir_idx].treesize, 1256,
+            "Directory treesize should be 1256 (file 1000 + internal stream 256)"
         );
 
         // Verify directory descendants = 2 (itself + file)
@@ -6048,14 +6066,14 @@ mod tests {
             "Directory should have descendants = 2"
         );
 
-        // Verify root's size includes the internal stream (via Channel A propagation)
-        // Root treesize = dir's first_stream (0) + file (1000) + internal (256) = 1256
-        // But wait - directory's first_stream is 0, so:
-        // Root treesize = children_length + first_len = (1000 + 256) + 0 = 1256
+        // Root's size = children.length + printed_own_len
+        // children.length = directory's Channel A result = 1256
+        // printed_own_len = 0 (root has no streams)
+        // Root treesize = 1256 + 0 = 1256
         let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
         assert_eq!(
             index.records[root_idx].treesize, 1256,
-            "Root treesize should include internal stream from child dir"
+            "Root treesize should be 1256 (same as directory's Channel A output)"
         );
 
         println!("✅ Tree metrics internal streams two-channel test passed!");

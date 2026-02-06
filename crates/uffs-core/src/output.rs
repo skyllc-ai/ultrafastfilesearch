@@ -344,11 +344,9 @@ pub struct OutputConfig {
     /// uses the CURRENT timezone offset for ALL timestamps, ignoring
     /// historical DST.
     pub timezone_offset_secs: i32,
-    /// Optional tripwire string to write at the top of output.
-    /// When set, writes a comment line like `# TRIPWIRE: <value>` before the
-    /// header. This makes the tripwire unmissable for parity harness
-    /// analysis.
-    pub tripwire: Option<String>,
+    // NOTE: Tripwire was removed from OutputConfig (Fix #1).
+    // Tripwire is now logged to stderr/tracing and embedded in binary string table.
+    // See TRIPWIRE constant in uffs-cli/src/commands.rs.
 }
 
 impl Default for OutputConfig {
@@ -365,7 +363,6 @@ impl Default for OutputConfig {
             pos: "1".to_owned(),
             neg: "0".to_owned(),
             timezone_offset_secs,
-            tripwire: None,
         }
     }
 }
@@ -462,15 +459,9 @@ impl OutputConfig {
         self
     }
 
-    /// Set tripwire string for parity harness.
-    ///
-    /// When set, writes a comment line `# TRIPWIRE: <value>` at the top of
-    /// output. This makes the tripwire unmissable for parity analysis.
-    #[must_use]
-    pub fn with_tripwire(mut self, tripwire: String) -> Self {
-        self.tripwire = Some(tripwire);
-        self
-    }
+    // NOTE: with_tripwire() was removed (Fix #1).
+    // Tripwire is now logged to stderr/tracing and embedded in binary string table.
+    // See TRIPWIRE constant in uffs-cli/src/commands.rs.
 
     /// Check if the descendants column is requested.
     #[must_use]
@@ -529,11 +520,10 @@ impl OutputConfig {
             CPP_COLUMN_ORDER
         };
 
-        // Write tripwire comment if set (Fix #5: Make tripwire unmissable)
-        // This ensures the parity harness always finds the tripwire in the output file
-        if let Some(tripwire) = &self.tripwire {
-            writeln!(writer, "# TRIPWIRE: {tripwire}")?;
-        }
+        // NOTE: Tripwire is now logged to stderr/tracing instead of CSV output.
+        // This keeps CSV output strict (header + data rows only) for parity analysis.
+        // The tripwire is also embedded in the binary string table (see TRIPWIRE
+        // constant).
 
         // Write header if enabled
         if self.header {

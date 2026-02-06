@@ -470,6 +470,10 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
 // Intentional separation for error handling - not a candidate for inlining.
 #[allow(clippy::too_many_lines, clippy::single_call_fn)]
 async fn run() -> Result<()> {
+    // Touch tripwire to ensure it's embedded in the binary string table
+    // (Fix #6: tripwire that doesn't break CSV)
+    commands::touch_tripwire();
+
     // Check for -v/--verbose flag early to set log level before initializing
     // logging This allows `uffs -v ...` to show info-level logs without
     // RUST_LOG=info

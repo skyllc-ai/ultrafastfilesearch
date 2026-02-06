@@ -409,8 +409,19 @@ fn load_csv(path: &Path, label: &str) -> CsvData {
 
     let mut lines = reader.lines();
 
-    // Parse header
-    if let Some(Ok(header_line)) = lines.next() {
+    // Parse header - skip comment lines (e.g., "# TRIPWIRE: ...")
+    let mut header_line = String::new();
+    for line in lines.by_ref() {
+        if let Ok(l) = line {
+            if l.starts_with('#') {
+                // Skip comment lines
+                continue;
+            }
+            header_line = l;
+            break;
+        }
+    }
+    if !header_line.is_empty() {
         data.headers = parse_csv_line(&header_line);
     }
 

@@ -147,6 +147,11 @@ struct CppTreeTraversal<'a> {
     seen: Vec<bool>,
     /// Whether to emit debug tracing.
     debug: bool,
+    /// Fix 5: Skip orphan sweep for parity mode.
+    /// When true, only records reachable from ROOT via Win32-visible
+    /// `FILE_NAME` edges are included in tree aggregation. Orphans without
+    /// Win32 paths are excluded to match C++ Win32 enumeration behavior.
+    skip_orphans: bool,
 }
 
 impl CppTreeTraversal<'_> {
@@ -170,6 +175,20 @@ impl CppTreeTraversal<'_> {
             tracing::warn!(
                 "[cpp_tree] WARNING: ROOT_FRS=5 not present in frs_to_idx; running orphan sweep only"
             );
+        }
+
+        // Fix 5: Orphan sweep is skipped in parity mode (skip_orphans=true).
+        // For parity with C++ Win32 enumeration, only records reachable from ROOT
+        // via Win32-visible FILE_NAME edges should be included in tree aggregation.
+        // Orphans without Win32 paths would inflate root Size/Descendants without
+        // producing printable rows.
+        if self.skip_orphans {
+            let orphan_count = self.seen.iter().filter(|&&seen| !seen).count();
+            tracing::debug!(
+                orphan_count,
+                "[TRIP] CppTreeTraversal::run EXIT (orphan sweep SKIPPED for parity mode)"
+            );
+            return;
         }
 
         // Orphan sweep: ensure every record has its printed tree metrics initialized.
@@ -305,12 +324,23 @@ impl CppTreeTraversal<'_> {
                 //   - Use children Channel-A stream-count + 1 (directory itself).
                 rec.descendants = children.treesize.saturating_add(1);
 
-                // Printed directory size/allocated:
-                //   - Children Channel-A size + ONLY the directory's first/default stream size.
-                //   - Excludes the directory's internal streams and overflow streams from its
-                //     *own* row, but they still flow to the parent through `result`.
-                rec.treesize = children.length.saturating_add(first_len);
-                rec.tree_allocated = children.allocated.saturating_add(first_alloc);
+                // Fix 3: Directory printed size includes ALL directory record streams.
+                // - own_len = sum of delta sizes for all streams (first + internal + overflow)
+                // - We want: printed_own_len = own_len - delta(first) + first_len
+                // This keeps the first stream at full size while including other streams
+                // at their delta-shared size.
+                let delta_first_len = delta(first_len, name_info, total_names);
+                let printed_own_len = own_len
+                    .saturating_sub(delta_first_len)
+                    .saturating_add(first_len);
+
+                let delta_first_alloc = delta(first_alloc, name_info, total_names);
+                let printed_own_alloc = own_alloc
+                    .saturating_sub(delta_first_alloc)
+                    .saturating_add(first_alloc);
+
+                rec.treesize = children.length.saturating_add(printed_own_len);
+                rec.tree_allocated = children.allocated.saturating_add(printed_own_alloc);
             } else {
                 // Files print 0 descendants, and size == default stream only.
                 rec.descendants = 0;
@@ -327,13 +357,26 @@ impl CppTreeTraversal<'_> {
 ///
 /// Populates `treesize`, `tree_allocated`, and `descendants` for directory
 /// records. If `debug` is true, emits warnings for unexpected index conditions.
-pub fn compute_tree_metrics_cpp_port(index: &mut MftIndex, debug: bool) {
+///
+/// # Arguments
+/// * `index` - The MFT index to compute tree metrics for
+/// * `debug` - Whether to emit debug tracing
+/// * `skip_orphans` - Fix 5: If true, skip orphan sweep for parity mode. Only
+///   records reachable from ROOT via Win32-visible `FILE_NAME` edges are
+///   included in tree aggregation.
+pub fn compute_tree_metrics_cpp_port(index: &mut MftIndex, debug: bool, skip_orphans: bool) {
     tracing::debug!(
         records = index.records.len(),
+        skip_orphans,
         "[TRIP] cpp_tree::compute_tree_metrics_cpp_port ENTER (FIXED v0.2.187+)"
     );
     let seen = vec![false; index.records.len()];
-    let mut traversal = CppTreeTraversal { index, seen, debug };
+    let mut traversal = CppTreeTraversal {
+        index,
+        seen,
+        debug,
+        skip_orphans,
+    };
     traversal.run();
     tracing::debug!("[TRIP] cpp_tree::compute_tree_metrics_cpp_port -> traversal.run() done");
 

@@ -4,6 +4,21 @@
 //! All public functions are async where I/O is involved and return
 //! `anyhow::Result`.
 
+/// Binary string table tripwire for parity harness verification.
+/// This constant is embedded in the binary and can be found with:
+/// `strings uffs.exe | grep TRIPWIRE`
+///
+/// The `touch_tripwire()` function ensures the constant is not optimized away.
+pub const TRIPWIRE: &str = concat!("TRIPWIRE_UFFS_CPP_TREE_FIX_v", env!("CARGO_PKG_VERSION"));
+
+/// Touch the tripwire to ensure it's not optimized away by the compiler.
+/// Call this from `main()` or early in the program.
+#[inline(never)]
+#[allow(clippy::single_call_fn)] // Intentionally called once from main
+pub fn touch_tripwire() {
+    core::hint::black_box(TRIPWIRE);
+}
+
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -450,21 +465,22 @@ pub async fn search(
     });
     info!(?mode, "Query execution mode");
 
-    // Build output configuration with tripwire for parity harness (Fix #5)
-    // The tripwire is written as a comment at the top of output files so the
-    // parity analyzer can always find it (not dependent on trace logs)
-    let tripwire = format!(
-        "UFFS cpp_tree FIXED v{} tree_metrics_parity",
-        env!("CARGO_PKG_VERSION")
-    );
+    // Tripwire for parity harness verification (Fix #6: don't break CSV)
+    // Log to stderr and tracing instead of embedding in CSV output.
+    // Also embedded in binary string table via TRIPWIRE constant.
+    let tripwire = format!("TRIPWIRE_UFFS_CPP_TREE_FIX_v{}", env!("CARGO_PKG_VERSION"));
+    // Log tripwire to tracing (appears in log files)
+    tracing::info!("[TRIPWIRE] {}", tripwire);
+    // Also emit to stderr for easy verification
+    eprintln!("[TRIPWIRE] {tripwire}");
+
     let output_config = OutputConfig::new()
         .with_columns(columns)
         .with_separator(sep)
         .with_quote(quotes)
         .with_header(header)
         .with_pos(pos)
-        .with_neg(neg)
-        .with_tripwire(tripwire);
+        .with_neg(neg);
 
     // Pass needs_paths so path resolution happens BEFORE filtering loses parent
     // directories (skip path resolution in benchmark mode for speed)

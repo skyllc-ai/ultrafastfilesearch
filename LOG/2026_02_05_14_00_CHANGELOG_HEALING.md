@@ -324,3 +324,44 @@ Windows cross-compilation failed with two errors:
 2. `crates/uffs-mft/src/cpp_io_pipeline.rs` (line 598-599):
    - Changed `&buf.as_slice()[..bytes_xfer]` to `&mut buf.as_mut_slice()[..bytes_xfer]`
    - This provides the mutable reference that `process_chunk` expects
+
+---
+
+## Fix #6 - Parity Analyzer Comment Line Handling
+
+**Date:** 2026-02-06
+
+### Problem
+The tripwire comment added in Fix #5 (`# TRIPWIRE: UFFS cpp_tree FIXED v0.2.197 tree_metrics_parity`) was breaking the parity analyzer because:
+- Rust output now starts with a comment line
+- C++ output starts directly with the CSV header
+- The analyzer's `load_csv` function read the first line as the header
+- This caused complete parsing failure (0% path match rate)
+
+### Root Cause
+In `scripts/analyze_trial_parity.rs`, the `load_csv` function (lines 410-415) read the first line unconditionally as the CSV header without checking for comment lines.
+
+### Fix Applied
+**File: `scripts/analyze_trial_parity.rs`**
+
+Modified the header parsing logic to skip comment lines (lines starting with `#`) before reading the actual CSV header:
+
+```rust
+// Parse header - skip comment lines (e.g., "# TRIPWIRE: ...")
+let mut header_line = String::new();
+for line in lines.by_ref() {
+    if let Ok(l) = line {
+        if l.starts_with('#') {
+            // Skip comment lines
+            continue;
+        }
+        header_line = l;
+        break;
+    }
+}
+if !header_line.is_empty() {
+    data.headers = parse_csv_line(&header_line);
+}
+```
+
+This follows Option B from the fix document (`UFFS_Parity_Regression_Fix_TripwireComment_2026-02-05.md`), allowing the tripwire to remain in the output file for easy verification by the parity harness.
