@@ -471,14 +471,19 @@ try {
 
             # 2b. Rust LIVE scan with TRACE logging (for debugging C++ algorithm parity)
             # Temporarily enables trace-level logging to capture detailed diagnostics
+            # NOTE: cpp_port algorithms require UFFS_EXPERIMENTAL=1 (added in Fix #2)
+            # NOTE: Trace logging can cause stack overflow on deep directory trees - use debug level instead
             if ($HasRust) {
                 $savedRustLog = $env:RUST_LOG
-                $env:RUST_LOG = "uffs_mft=trace,uffs_cli=trace,uffs_core=trace"
+                $savedExperimental = $env:UFFS_EXPERIMENTAL
+                $env:RUST_LOG = "uffs_mft=debug,uffs_cli=debug,uffs_core=debug"
+                $env:UFFS_EXPERIMENTAL = "1"
                 $runs += Run-LoggedLocal -Title "Rust LIVE TRACE: drive $Drive" `
                     -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --io-algo=cpp --chunk-algo=cpp --no-cache") `
                     -LogFileName $rustLiveTraceLog `
                     -OutFileName $rustLiveTraceOut
                 $env:RUST_LOG = $savedRustLog
+                $env:UFFS_EXPERIMENTAL = $savedExperimental
             } else {
                 $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust LIVE TRACE"; Command=""; LogFile=$rustLiveTraceLog; OutFile=$rustLiveTraceOut; DurationMs=$null; ExitCode=$null }
             }
