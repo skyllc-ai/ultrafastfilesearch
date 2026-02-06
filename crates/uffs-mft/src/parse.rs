@@ -896,8 +896,9 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
             Some(
                 AttributeType::IndexRoot | AttributeType::IndexAllocation | AttributeType::Bitmap,
             ) => {
-                // C++ includes $INDEX_ROOT, $INDEX_ALLOCATION, and $BITMAP with name $I30
-                // in directory size (all merged into a single stream)
+                // C++ includes $INDEX_ROOT and $INDEX_ALLOCATION with name $I30
+                // in directory size (merged into a single stream).
+                // NOTE: $I30:$BITMAP is EXCLUDED from directory size (C++ parity).
                 // For non-$I30 indexes (like $SDH, $SII, $O, $Q, $R), C++ counts them as
                 // streams
 
@@ -931,32 +932,45 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                 };
 
                 if is_i30 {
-                    // This is a directory index attribute - accumulate into dir_index_size
-                    if attr_header.is_non_resident == 0 {
-                        // Resident: get size from resident header
-                        let value_length = u32::from_le_bytes(
-                            data.get(offset + 16..offset + 20)
-                                .and_then(|b| b.try_into().ok())
-                                .unwrap_or([0; 4]),
-                        ) as u64;
-                        dir_index_size += value_length;
-                        // Resident attributes have no allocated size
+                    // Parity Fix: C++ does NOT include $I30:$BITMAP in directory size.
+                    // $BITMAP is metadata (used/free slots in the directory index),
+                    // not part of directory byte size. Skip this attribute to match C++.
+                    // Evidence: many tree metric mismatches are exactly +8 or +64,
+                    // which are typical bitmap resident sizes.
+                    if matches!(
+                        AttributeType::from_u32(attr_header.type_code),
+                        Some(AttributeType::Bitmap)
+                    ) {
+                        // Skip $I30:$BITMAP - don't add to dir_index_size
                     } else {
-                        // Non-resident: get sizes from non-resident header
-                        let nr_offset = offset + 16;
-                        if nr_offset + 48 <= data.len() {
-                            let allocated = i64::from_le_bytes(
-                                data[nr_offset + 24..nr_offset + 32]
-                                    .try_into()
-                                    .unwrap_or([0; 8]),
-                            );
-                            let data_size = i64::from_le_bytes(
-                                data[nr_offset + 32..nr_offset + 40]
-                                    .try_into()
-                                    .unwrap_or([0; 8]),
-                            );
-                            dir_index_size += data_size.max(0) as u64;
-                            dir_index_allocated += allocated.max(0) as u64;
+                        // This is a directory index attribute - accumulate into dir_index_size
+                        // Only $INDEX_ROOT and $INDEX_ALLOCATION contribute to directory size
+                        if attr_header.is_non_resident == 0 {
+                            // Resident: get size from resident header
+                            let value_length = u32::from_le_bytes(
+                                data.get(offset + 16..offset + 20)
+                                    .and_then(|b| b.try_into().ok())
+                                    .unwrap_or([0; 4]),
+                            ) as u64;
+                            dir_index_size += value_length;
+                            // Resident attributes have no allocated size
+                        } else {
+                            // Non-resident: get sizes from non-resident header
+                            let nr_offset = offset + 16;
+                            if nr_offset + 48 <= data.len() {
+                                let allocated = i64::from_le_bytes(
+                                    data[nr_offset + 24..nr_offset + 32]
+                                        .try_into()
+                                        .unwrap_or([0; 8]),
+                                );
+                                let data_size = i64::from_le_bytes(
+                                    data[nr_offset + 32..nr_offset + 40]
+                                        .try_into()
+                                        .unwrap_or([0; 8]),
+                                );
+                                dir_index_size += data_size.max(0) as u64;
+                                dir_index_allocated += allocated.max(0) as u64;
+                            }
                         }
                     }
                 } else {
@@ -1722,8 +1736,9 @@ pub fn parse_record_forensic(
             Some(
                 AttributeType::IndexRoot | AttributeType::IndexAllocation | AttributeType::Bitmap,
             ) => {
-                // C++ includes $INDEX_ROOT, $INDEX_ALLOCATION, and $BITMAP with name $I30
-                // in directory size (all merged into a single stream)
+                // C++ includes $INDEX_ROOT and $INDEX_ALLOCATION with name $I30
+                // in directory size (merged into a single stream).
+                // NOTE: $I30:$BITMAP is EXCLUDED from directory size (C++ parity).
                 // For non-$I30 indexes (like $SDH, $SII, $O, $Q, $R), C++ counts them as
                 // streams
 
@@ -1757,32 +1772,45 @@ pub fn parse_record_forensic(
                 };
 
                 if is_i30 {
-                    // This is a directory index attribute - accumulate into dir_index_size
-                    if attr_header.is_non_resident == 0 {
-                        // Resident: get size from resident header
-                        let value_length = u32::from_le_bytes(
-                            data.get(offset + 16..offset + 20)
-                                .and_then(|b| b.try_into().ok())
-                                .unwrap_or([0; 4]),
-                        ) as u64;
-                        dir_index_size += value_length;
-                        // Resident attributes have no allocated size
+                    // Parity Fix: C++ does NOT include $I30:$BITMAP in directory size.
+                    // $BITMAP is metadata (used/free slots in the directory index),
+                    // not part of directory byte size. Skip this attribute to match C++.
+                    // Evidence: many tree metric mismatches are exactly +8 or +64,
+                    // which are typical bitmap resident sizes.
+                    if matches!(
+                        AttributeType::from_u32(attr_header.type_code),
+                        Some(AttributeType::Bitmap)
+                    ) {
+                        // Skip $I30:$BITMAP - don't add to dir_index_size
                     } else {
-                        // Non-resident: get sizes from non-resident header
-                        let nr_offset = offset + 16;
-                        if nr_offset + 48 <= data.len() {
-                            let allocated = i64::from_le_bytes(
-                                data[nr_offset + 24..nr_offset + 32]
-                                    .try_into()
-                                    .unwrap_or([0; 8]),
-                            );
-                            let data_size = i64::from_le_bytes(
-                                data[nr_offset + 32..nr_offset + 40]
-                                    .try_into()
-                                    .unwrap_or([0; 8]),
-                            );
-                            dir_index_size += data_size.max(0) as u64;
-                            dir_index_allocated += allocated.max(0) as u64;
+                        // This is a directory index attribute - accumulate into dir_index_size
+                        // Only $INDEX_ROOT and $INDEX_ALLOCATION contribute to directory size
+                        if attr_header.is_non_resident == 0 {
+                            // Resident: get size from resident header
+                            let value_length = u32::from_le_bytes(
+                                data.get(offset + 16..offset + 20)
+                                    .and_then(|b| b.try_into().ok())
+                                    .unwrap_or([0; 4]),
+                            ) as u64;
+                            dir_index_size += value_length;
+                            // Resident attributes have no allocated size
+                        } else {
+                            // Non-resident: get sizes from non-resident header
+                            let nr_offset = offset + 16;
+                            if nr_offset + 48 <= data.len() {
+                                let allocated = i64::from_le_bytes(
+                                    data[nr_offset + 24..nr_offset + 32]
+                                        .try_into()
+                                        .unwrap_or([0; 8]),
+                                );
+                                let data_size = i64::from_le_bytes(
+                                    data[nr_offset + 32..nr_offset + 40]
+                                        .try_into()
+                                        .unwrap_or([0; 8]),
+                                );
+                                dir_index_size += data_size.max(0) as u64;
+                                dir_index_allocated += allocated.max(0) as u64;
+                            }
                         }
                     }
                 } else {

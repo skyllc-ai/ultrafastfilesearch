@@ -237,7 +237,24 @@ impl CppIoPipeline {
     ///
     /// This is the **synchronization point** - called after the bitmap is fully
     /// read. It updates the atomic skip ranges in each `CppDataChunk`.
+    ///
+    /// # Kill-switch
+    ///
+    /// Set `UFFS_CPP_DISABLE_TRIM=1` to disable cluster trimming entirely.
+    /// This is useful for debugging if trimming is suspected of skipping
+    /// in-use records. With trimming disabled, all clusters are read
+    /// (performance loss but correctness preserved).
     pub fn compute_skip_ranges(&self, bitmap: &MftBitmap) {
+        // Kill-switch: disable trimming for debugging
+        if std::env::var_os("UFFS_CPP_DISABLE_TRIM").is_some() {
+            warn!(
+                "UFFS_CPP_DISABLE_TRIM set: disabling cluster trimming. \
+                 All clusters will be read (slower but safe)."
+            );
+            // Leave all skip ranges at 0 (no trimming)
+            return;
+        }
+
         let records_per_cluster = self.bytes_per_cluster / self.bytes_per_record;
 
         for chunk in &self.data_chunks {

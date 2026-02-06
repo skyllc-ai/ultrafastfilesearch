@@ -159,6 +159,9 @@ impl ParseAlgorithm {
     /// Parse from environment variable `UFFS_PARSE_ALGO`.
     ///
     /// Returns `Current` if not set or unrecognized.
+    ///
+    /// **Note**: `cpp_port` requires `UFFS_EXPERIMENTAL=1` to be set,
+    /// otherwise it falls back to `Current` with a warning.
     #[must_use]
     pub fn from_env() -> Self {
         match std::env::var("UFFS_PARSE_ALGO")
@@ -166,7 +169,18 @@ impl ParseAlgorithm {
             .to_lowercase()
             .as_str()
         {
-            "cpp_port" | "cpp" | "port" => Self::CppPort,
+            "cpp_port" | "cpp" | "port" => {
+                // Require explicit opt-in for experimental cpp_port parse algo
+                if std::env::var_os("UFFS_EXPERIMENTAL").is_some() {
+                    Self::CppPort
+                } else {
+                    tracing::warn!(
+                        "UFFS_PARSE_ALGO=cpp_port ignored (experimental). \
+                         Set UFFS_EXPERIMENTAL=1 to enable. Using current."
+                    );
+                    Self::Current
+                }
+            }
             _ => Self::Current,
         }
     }
@@ -246,6 +260,9 @@ impl IoPipelineAlgorithm {
     /// Parse from environment variable `UFFS_IO_ALGO`.
     ///
     /// Returns `Current` if not set or unrecognized.
+    ///
+    /// **Note**: `cpp_port` requires `UFFS_EXPERIMENTAL=1` to be set,
+    /// otherwise it falls back to `Current` with a warning.
     #[must_use]
     pub fn from_env() -> Self {
         match std::env::var("UFFS_IO_ALGO")
@@ -253,7 +270,18 @@ impl IoPipelineAlgorithm {
             .to_lowercase()
             .as_str()
         {
-            "cpp_port" | "cpp" | "port" => Self::CppPort,
+            "cpp_port" | "cpp" | "port" => {
+                // Require explicit opt-in for experimental cpp_port I/O algo
+                if std::env::var_os("UFFS_EXPERIMENTAL").is_some() {
+                    Self::CppPort
+                } else {
+                    tracing::warn!(
+                        "UFFS_IO_ALGO=cpp_port ignored (experimental). \
+                         Set UFFS_EXPERIMENTAL=1 to enable. Using current."
+                    );
+                    Self::Current
+                }
+            }
             _ => Self::Current,
         }
     }
@@ -340,6 +368,9 @@ impl ChunkAlgorithm {
     /// Parse from environment variable `UFFS_CHUNK_ALGO`.
     ///
     /// Returns `Current` if not set or unrecognized.
+    ///
+    /// **Note**: `cpp_port` requires `UFFS_EXPERIMENTAL=1` to be set,
+    /// otherwise it falls back to `Current` with a warning.
     #[must_use]
     pub fn from_env() -> Self {
         match std::env::var("UFFS_CHUNK_ALGO")
@@ -347,7 +378,18 @@ impl ChunkAlgorithm {
             .to_lowercase()
             .as_str()
         {
-            "cpp_port" | "cpp" | "port" => Self::CppPort,
+            "cpp_port" | "cpp" | "port" => {
+                // Require explicit opt-in for experimental cpp_port chunk algo
+                if std::env::var_os("UFFS_EXPERIMENTAL").is_some() {
+                    Self::CppPort
+                } else {
+                    tracing::warn!(
+                        "UFFS_CHUNK_ALGO=cpp_port ignored (experimental). \
+                         Set UFFS_EXPERIMENTAL=1 to enable. Using current."
+                    );
+                    Self::Current
+                }
+            }
             _ => Self::Current,
         }
     }
@@ -2722,8 +2764,8 @@ impl MftIndex {
                 // For files: initial descendants = 0 (the $DATA stream's treesize)
                 record.descendants = u32::from(*is_directory);
                 // Both directories and files have their own size in treesize
-                // Directories: size comes from $INDEX_ROOT + $INDEX_ALLOCATION + $BITMAP
-                // Files: size comes from $DATA stream(s)
+                // Directories: size comes from $INDEX_ROOT + $INDEX_ALLOCATION (exclude
+                // $BITMAP) Files: size comes from $DATA stream(s)
                 record.treesize = *size;
                 record.tree_allocated = *allocated;
             }
@@ -6508,7 +6550,7 @@ impl MftIndex {
 
                 // Set size and flags
                 // For directories, use parsed.size/allocated_size which includes
-                // $INDEX_ROOT + $INDEX_ALLOCATION + $BITMAP (C++ parity)
+                // $INDEX_ROOT + $INDEX_ALLOCATION (exclude $BITMAP for C++ parity)
                 // For files, use the default stream size
                 // Note: stream_count is set AFTER filtering named streams to avoid
                 // counting internal Windows streams. See the code after this block.

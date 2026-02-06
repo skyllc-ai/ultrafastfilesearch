@@ -543,6 +543,12 @@ struct AnalysisResults {
     rust_only_paths: usize,
     path_match_rate: f64,
 
+    // Composition counts (Fix #3: surface "what's missing" instantly)
+    cpp_dir_count: usize,
+    cpp_file_count: usize,
+    rust_dir_count: usize,
+    rust_file_count: usize,
+
     // ADS
     cpp_ads_count: usize,
     rust_ads_count: usize,
@@ -552,6 +558,7 @@ struct AnalysisResults {
 
     // Tree metrics
     tree_metric_issues: Vec<TreeMetricIssue>,
+    tree_metric_total_count: usize,  // Total count of ALL misaligned entries
     tree_metrics_ok: bool,
 
     // Timestamps
@@ -564,6 +571,9 @@ struct AnalysisResults {
     // Sample differences
     sample_cpp_only: Vec<String>,
     sample_rust_only: Vec<String>,
+
+    // Missing path prefixes histogram (Fix #3)
+    missing_path_prefixes: Vec<(String, usize)>,
 }
 
 #[derive(Clone)]
@@ -586,8 +596,11 @@ struct TimestampIssue {
 /// Diagnostic log analysis results
 #[derive(Default)]
 struct DiagnosticLogAnalysis {
-    /// Whether the tripwire string was found (confirms fixed cpp_tree code is running)
+    /// Whether any tripwire marker was found (confirms fixed code is running)
+    /// Fix #4: Accept ANY [TRIP] marker, not just a specific string
     tripwire_found: bool,
+    /// Sample of tripwire markers found (for diagnostics)
+    tripwire_samples: Vec<String>,
     /// Whether the post-tree diagnostic was found
     post_tree_diagnostic_found: bool,
     /// Number of directories with descendants==0 after all passes
@@ -631,9 +644,23 @@ fn parse_diagnostic_log(trial_dir: &Path) -> DiagnosticLogAnalysis {
     let reader = BufReader::new(file);
 
     for line in reader.lines().filter_map(|l| l.ok()) {
-        // Check for tripwire
-        if line.contains("[TRIP] cpp_tree::compute_tree_metrics_cpp_port ENTER") {
+        // Check for tripwire - accept ANY [TRIP] marker (Fix #4)
+        // This is more flexible than checking for a specific tripwire string
+        if line.contains("[TRIP]") {
             analysis.tripwire_found = true;
+            // Collect up to 5 samples for diagnostics
+            if analysis.tripwire_samples.len() < 5 {
+                // Extract just the [TRIP] portion for brevity
+                if let Some(start) = line.find("[TRIP]") {
+                    let sample = &line[start..];
+                    let sample = if sample.len() > 80 {
+                        format!("{}...", &sample[..80])
+                    } else {
+                        sample.to_string()
+                    };
+                    analysis.tripwire_samples.push(sample);
+                }
+            }
         }
 
         // Check for post-tree diagnostic
@@ -704,6 +731,12 @@ fn analyze_parity(cpp: &CsvData, rust: &CsvData) -> AnalysisResults {
     results.cpp_rows = cpp.rows.len();
     results.rust_rows = rust.rows.len();
 
+    // Composition counts (Fix #3: surface "what's missing" instantly)
+    results.cpp_dir_count = cpp.rows.iter().filter(|r| r.is_directory).count();
+    results.cpp_file_count = cpp.rows.iter().filter(|r| !r.is_directory && !is_ads_path(&r.path)).count();
+    results.rust_dir_count = rust.rows.iter().filter(|r| r.is_directory).count();
+    results.rust_file_count = rust.rows.iter().filter(|r| !r.is_directory && !is_ads_path(&r.path)).count();
+
     // Path matching
     let cpp_paths: HashSet<_> = cpp.path_index.keys().collect();
     let rust_paths: HashSet<_> = rust.path_index.keys().collect();
@@ -724,6 +757,26 @@ fn analyze_parity(cpp: &CsvData, rust: &CsvData) -> AnalysisResults {
     // Sample missing paths
     results.sample_cpp_only = cpp_only.iter().take(10).map(|s| (**s).clone()).collect();
     results.sample_rust_only = rust_only.iter().take(10).map(|s| (**s).clone()).collect();
+
+    // Missing path prefixes histogram (Fix #3)
+    // Group missing C++ paths by top-level prefix to identify patterns
+    if !cpp_only.is_empty() {
+        let mut prefix_counts: HashMap<String, usize> = HashMap::new();
+        for path in cpp_only.iter().take(10000) {
+            // Extract top-level prefix (e.g., "c:/windows" from "c:/windows/system32/foo.dll")
+            let parts: Vec<&str> = path.split('/').collect();
+            let prefix = if parts.len() >= 2 {
+                format!("{}/{}", parts[0], parts[1])
+            } else {
+                parts[0].to_string()
+            };
+            *prefix_counts.entry(prefix).or_insert(0) += 1;
+        }
+        // Sort by count descending
+        let mut sorted: Vec<_> = prefix_counts.into_iter().collect();
+        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        results.missing_path_prefixes = sorted.into_iter().take(10).collect();
+    }
 
     // ADS analysis - collect and sort for comparison
     let mut cpp_ads: Vec<String> = cpp.rows.iter()
@@ -767,12 +820,12 @@ fn analyze_parity(cpp: &CsvData, rust: &CsvData) -> AnalysisResults {
         let cpp_row = &cpp.rows[cpp_idx];
         let rust_row = &rust.rows[rust_idx];
 
-        // Tree metrics (only for directories)
+        // Tree metrics (only for directories) - collect ALL issues
         if cpp_row.is_directory {
             let size_diff = cpp_row.size != rust_row.size;
             let desc_diff = cpp_row.descendants != rust_row.descendants;
 
-            if (size_diff || desc_diff) && results.tree_metric_issues.len() < 20 {
+            if size_diff || desc_diff {
                 results.tree_metric_issues.push(TreeMetricIssue {
                     path: cpp_row.path.clone(),
                     cpp_size: cpp_row.size,
@@ -810,6 +863,7 @@ fn analyze_parity(cpp: &CsvData, rust: &CsvData) -> AnalysisResults {
     }
 
     results.bool_flag_matches = bool_matches;
+    results.tree_metric_total_count = results.tree_metric_issues.len();
     results.tree_metrics_ok = results.tree_metric_issues.is_empty();
     results.timestamps_ok = results.timestamp_issues.is_empty();
 
@@ -854,6 +908,29 @@ fn check_bool_match(matches: &mut HashMap<String, (usize, usize)>, field: &str, 
 // ============================================================================
 
 fn print_results(results: &AnalysisResults, label: &str) {
+    // Composition counts (Fix #3: surface "what's missing" instantly)
+    println!("📊 COMPOSITION COUNTS ({})", label);
+    println!("   C++ total rows:   {:>10}", results.cpp_rows);
+    println!("   C++ directories:  {:>10}", results.cpp_dir_count);
+    println!("   C++ files:        {:>10}", results.cpp_file_count);
+    println!("   C++ ADS:          {:>10}", results.cpp_ads_count);
+    println!();
+    println!("   Rust total rows:  {:>10}", results.rust_rows);
+    println!("   Rust directories: {:>10}", results.rust_dir_count);
+    println!("   Rust files:       {:>10}", results.rust_file_count);
+    println!("   Rust ADS:         {:>10}", results.rust_ads_count);
+    println!();
+
+    // Quick diagnosis: if Rust has ~0 files, it's "directories-only" output
+    if results.rust_file_count == 0 && results.cpp_file_count > 0 {
+        println!("   🔴 DIAGNOSIS: Rust output appears to be DIRECTORIES-ONLY!");
+        println!("      This suggests a bug in file emission, not parsing.");
+        println!();
+    } else if results.rust_file_count < results.cpp_file_count / 2 {
+        println!("   ⚠️  DIAGNOSIS: Rust is missing >50% of files!");
+        println!();
+    }
+
     // Path matching
     println!("🔗 PATH MATCHING ({})", label);
     println!("   Common paths:     {:>10}", results.common_paths);
@@ -861,6 +938,15 @@ fn print_results(results: &AnalysisResults, label: &str) {
     println!("   Rust only:        {:>10}", results.rust_only_paths);
     println!("   Match rate:       {:>9.4}%", results.path_match_rate);
     println!();
+
+    // Missing path prefixes histogram (Fix #3)
+    if !results.missing_path_prefixes.is_empty() {
+        println!("📁 MISSING PATH PREFIXES (top 10 from C++ only paths)");
+        for (prefix, count) in &results.missing_path_prefixes {
+            println!("   {:>6} {}", count, prefix);
+        }
+        println!();
+    }
 
     // ADS
     println!("📎 ALTERNATE DATA STREAMS (ADS)");
@@ -910,13 +996,54 @@ fn print_results(results: &AnalysisResults, label: &str) {
     if results.tree_metrics_ok {
         println!("   Status:           ✅ ALL MATCH");
     } else {
-        println!("   Status:           🔴 ISSUES FOUND ({} directories)", results.tree_metric_issues.len());
+        let total = results.tree_metric_total_count;
         println!();
-        println!("   Sample issues:");
+        println!("   📊 TOTAL MISALIGNED ENTRIES: {}", total);
+        println!("   Status:           🔴 ISSUES FOUND");
+        println!();
+
+        // Show first 5
+        println!("   ── First 5 issues ──");
         for issue in results.tree_metric_issues.iter().take(5) {
             println!("   {} ", issue.path);
             println!("      Size: C++={} Rust={}", issue.cpp_size, issue.rust_size);
             println!("      Desc: C++={} Rust={}", issue.cpp_descendants, issue.rust_descendants);
+        }
+
+        // Show 20 random samples if there are more than 25 total
+        if total > 25 {
+            println!();
+            println!("   ── Random 20 samples (out of {}) ──", total);
+
+            // Simple deterministic shuffle using LCG
+            let mut indices: Vec<usize> = (0..total).collect();
+            let seed = 12345u64;
+            let a = 1103515245u64;
+            let c = 12345u64;
+            let m = 2u64.pow(31);
+            let mut state = seed;
+
+            // Fisher-Yates shuffle with LCG
+            for i in (1..indices.len()).rev() {
+                state = (a.wrapping_mul(state).wrapping_add(c)) % m;
+                let j = (state as usize) % (i + 1);
+                indices.swap(i, j);
+            }
+
+            // Take first 20 from shuffled indices (skip first 5 to avoid duplicates)
+            let random_indices: Vec<usize> = indices.iter()
+                .filter(|&&idx| idx >= 5)  // Skip first 5 already shown
+                .take(20)
+                .copied()
+                .collect();
+
+            for idx in random_indices {
+                if let Some(issue) = results.tree_metric_issues.get(idx) {
+                    println!("   {} ", issue.path);
+                    println!("      Size: C++={} Rust={}", issue.cpp_size, issue.rust_size);
+                    println!("      Desc: C++={} Rust={}", issue.cpp_descendants, issue.rust_descendants);
+                }
+            }
         }
     }
     println!();
@@ -978,14 +1105,20 @@ fn print_diagnostic_analysis(analysis: &DiagnosticLogAnalysis) {
     }
     println!();
 
-    // Tripwire verification
+    // Tripwire verification (Fix #4: accept ANY [TRIP] marker)
     println!("🔍 TRIPWIRE VERIFICATION");
     if analysis.tripwire_found {
-        println!("   ✅ Tripwire found: [TRIP] cpp_tree::compute_tree_metrics_cpp_port ENTER");
-        println!("   → Confirms the fixed cpp_tree code path is executing");
+        println!("   ✅ Tripwire markers found in log");
+        println!("   → Confirms the fixed code paths are executing");
+        if !analysis.tripwire_samples.is_empty() {
+            println!("   Samples:");
+            for sample in &analysis.tripwire_samples {
+                println!("     {}", sample);
+            }
+        }
     } else {
-        println!("   🔴 Tripwire NOT found!");
-        println!("   → The binary may not have the fixed cpp_tree code");
+        println!("   🔴 No [TRIP] markers found in log!");
+        println!("   → The binary may not have the fixed code paths");
         println!("   → Rebuild with latest code and verify with: strings uffs.exe | grep TRIP");
     }
     println!();
@@ -1274,17 +1407,64 @@ fn write_analysis_section(f: &mut File, results: &AnalysisResults, label: &str) 
 
     // Issues
     if !results.tree_metric_issues.is_empty() {
+        let total = results.tree_metric_total_count;
         writeln!(f, "### 🔴 Tree Metrics Issues").unwrap();
+        writeln!(f).unwrap();
+        writeln!(f, "**📊 TOTAL MISALIGNED ENTRIES: {}**", total).unwrap();
+        writeln!(f).unwrap();
+
+        // First 5
+        writeln!(f, "#### First 5 Issues").unwrap();
         writeln!(f).unwrap();
         writeln!(f, "| Path | C++ Size | Rust Size | C++ Desc | Rust Desc |").unwrap();
         writeln!(f, "|------|----------|-----------|----------|-----------|").unwrap();
-        for issue in &results.tree_metric_issues {
+        for issue in results.tree_metric_issues.iter().take(5) {
             writeln!(f, "| `{}` | {} | {} | {} | {} |",
                 issue.path, issue.cpp_size, issue.rust_size,
                 issue.cpp_descendants, issue.rust_descendants
             ).unwrap();
         }
         writeln!(f).unwrap();
+
+        // Random 20 samples if more than 25 total
+        if total > 25 {
+            writeln!(f, "#### Random 20 Samples (out of {})", total).unwrap();
+            writeln!(f).unwrap();
+            writeln!(f, "| Path | C++ Size | Rust Size | C++ Desc | Rust Desc |").unwrap();
+            writeln!(f, "|------|----------|-----------|----------|-----------|").unwrap();
+
+            // Simple deterministic shuffle using LCG
+            let mut indices: Vec<usize> = (0..total).collect();
+            let seed = 12345u64;
+            let a = 1103515245u64;
+            let c = 12345u64;
+            let m = 2u64.pow(31);
+            let mut state = seed;
+
+            // Fisher-Yates shuffle with LCG
+            for i in (1..indices.len()).rev() {
+                state = (a.wrapping_mul(state).wrapping_add(c)) % m;
+                let j = (state as usize) % (i + 1);
+                indices.swap(i, j);
+            }
+
+            // Take first 20 from shuffled indices (skip first 5 to avoid duplicates)
+            let random_indices: Vec<usize> = indices.iter()
+                .filter(|&&idx| idx >= 5)
+                .take(20)
+                .copied()
+                .collect();
+
+            for idx in random_indices {
+                if let Some(issue) = results.tree_metric_issues.get(idx) {
+                    writeln!(f, "| `{}` | {} | {} | {} | {} |",
+                        issue.path, issue.cpp_size, issue.rust_size,
+                        issue.cpp_descendants, issue.rust_descendants
+                    ).unwrap();
+                }
+            }
+            writeln!(f).unwrap();
+        }
     }
 
     if !results.timestamp_issues.is_empty() {
@@ -1314,20 +1494,32 @@ fn write_diagnostic_section(f: &mut File, diag: &DiagnosticLogAnalysis, live_res
     }
     writeln!(f).unwrap();
 
-    // Tripwire verification table
+    // Tripwire verification table (Fix #4: accept ANY [TRIP] marker)
     writeln!(f, "## Tripwire Verification").unwrap();
     writeln!(f).unwrap();
     writeln!(f, "| Check | Status | Meaning |").unwrap();
     writeln!(f, "|-------|--------|---------|").unwrap();
-    writeln!(f, "| cpp_tree tripwire | {} | {} |",
+    writeln!(f, "| [TRIP] markers | {} | {} |",
         if diag.tripwire_found { "✅ Found" } else { "🔴 NOT FOUND" },
-        if diag.tripwire_found { "Fixed cpp_tree code is executing" } else { "Binary may not have fixed code - REBUILD!" }
+        if diag.tripwire_found { "Fixed code paths are executing" } else { "Binary may not have fixed code - REBUILD!" }
     ).unwrap();
     writeln!(f, "| Post-tree diagnostic | {} | {} |",
         if diag.post_tree_diagnostic_found { "✅ Found" } else { "⚠️ Not found" },
         if diag.post_tree_diagnostic_found { "Diagnostic logging is active" } else { "Diagnostic code may be missing" }
     ).unwrap();
     writeln!(f).unwrap();
+
+    // Show tripwire samples if found
+    if diag.tripwire_found && !diag.tripwire_samples.is_empty() {
+        writeln!(f, "**Tripwire samples found:**").unwrap();
+        writeln!(f).unwrap();
+        writeln!(f, "```").unwrap();
+        for sample in &diag.tripwire_samples {
+            writeln!(f, "{}", sample).unwrap();
+        }
+        writeln!(f, "```").unwrap();
+        writeln!(f).unwrap();
+    }
 
     // Post-tree diagnostic results
     if diag.post_tree_diagnostic_found {
