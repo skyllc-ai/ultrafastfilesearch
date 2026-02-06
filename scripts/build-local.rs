@@ -52,8 +52,14 @@ const BINARIES: &[(&str, &str)] = &[
 ];
 
 fn main() {
+    let args: Vec<String> = env::args().collect();
+    let verbose = args.iter().any(|a| a == "-v" || a == "--verbose");
+
     println!("🚀 UFFS Local Build & Install");
     println!("ℹ️  UFFS is Windows-only (requires NTFS MFT access)");
+    if verbose {
+        println!("🔍 Verbose mode enabled");
+    }
 
     // Show build mode (DEV is default, set UFFS_RELEASE_BUILD=1 for release)
     let build_mode = if is_release_build() { "RELEASE (optimized)" } else { "DEV (fast, default)" };
@@ -95,13 +101,29 @@ fn main() {
                 args.push("--release");
             }
 
-            let status = Command::new("cargo")
-                .args(&args)
-                .status()
-                .expect("Failed to execute cargo build");
+            let mut cmd = Command::new("cargo");
+            cmd.args(&args);
 
-            if !status.success() {
+            // In verbose mode, inherit stdio; otherwise capture output
+            if verbose {
+                cmd.stdout(std::process::Stdio::inherit());
+                cmd.stderr(std::process::Stdio::inherit());
+            } else {
+                cmd.stdout(std::process::Stdio::null());
+                cmd.stderr(std::process::Stdio::piped());
+            }
+
+            let output = cmd.output().expect("Failed to execute cargo build");
+
+            if !output.status.success() {
                 eprintln!("❌ Failed to build {}", binary);
+                if !verbose {
+                    // Print stderr on failure even in non-verbose mode
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.is_empty() {
+                        eprintln!("{}", stderr);
+                    }
+                }
                 exit(1);
             }
 

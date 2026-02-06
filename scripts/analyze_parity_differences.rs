@@ -170,12 +170,33 @@ fn analyze_paths(label: &str, paths: &[&String]) {
     println!("🔍 Analyzing: {}", label);
     println!();
 
-    // Show first 20 paths
-    println!("📄 First 20 paths:");
-    for (i, path) in paths.iter().take(20).enumerate() {
+    let total_count = paths.len();
+    println!("📊 TOTAL MISALIGNED ENTRIES: {}", total_count);
+    println!();
+
+    // Show first 5 paths
+    println!("📄 First 5 paths:");
+    for (i, path) in paths.iter().take(5).enumerate() {
         println!("  {}. {}", i + 1, path);
     }
     println!();
+
+    // Show 20 random paths (if we have more than 25 total)
+    if total_count > 25 {
+        println!("🎲 20 Random samples (out of {} total):", total_count);
+        let mut indices: Vec<usize> = (0..total_count).collect();
+        // Simple deterministic shuffle using a basic LCG
+        let mut seed: u64 = 12345;
+        for i in (1..indices.len()).rev() {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let j = (seed as usize) % (i + 1);
+            indices.swap(i, j);
+        }
+        for (i, &idx) in indices.iter().take(20).enumerate() {
+            println!("  {}. {}", i + 1, paths[idx]);
+        }
+        println!();
+    }
 
     // Pattern analysis
     println!("📊 Pattern analysis:");

@@ -4,6 +4,7 @@
 //! anyhow = "1.0"
 //! clap = { version = "4.0", features = ["derive"] }
 //! colored = "2.0"
+//! dirs-next = "2.0"
 //! futures = "0.3"
 //! tokio = { version = "1.0", features = ["full"] }
 //! indicatif = "0.17"
@@ -12,6 +13,7 @@
 //! chrono = { version = "0.4", features = ["serde"] }
 //! uuid = { version = "1.0", features = ["v4"] }
 //! num_cpus = "1.0"
+//! tempfile = "3"
 //! ```
 // =============================================================================
 // scripts/ci-pipeline.rs - UFFS High-Performance CI Pipeline
@@ -31,8 +33,9 @@
 //! - Dependency graph execution
 //! - Smart error handling and recovery
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -113,6 +116,78 @@ fn parse_cargo_config_target_dir() -> Option<PathBuf> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Disk Space Monitoring
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Convert bytes to GiB (binary).
+fn bytes_to_gib(bytes: u64) -> u64 {
+    bytes / 1024 / 1024 / 1024
+}
+
+/// Best-effort free space lookup for the filesystem containing `path`.
+/// Returns bytes free, or None if unavailable.
+/// Uses `df -Pk` on unix-y systems.
+async fn disk_free_bytes(path: &Path) -> Option<u64> {
+    if cfg!(windows) {
+        return None;
+    }
+    let path_str = path.to_str()?;
+    let output = Command::new("df").arg("-Pk").arg(path_str).output().await.ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+    lines.next()?; // header
+    let last = lines.last()?;
+    let cols: Vec<&str> = last.split_whitespace().collect();
+    if cols.len() < 4 {
+        return None;
+    }
+    let avail_k = cols[3].parse::<u64>().ok()?;
+    Some(avail_k * 1024)
+}
+
+/// Best-effort directory size for `path`, in bytes.
+/// Uses `du -sk` on unix-y systems and is time-limited.
+async fn dir_size_bytes(path: &Path, timeout_dur: Duration) -> Option<u64> {
+    if cfg!(windows) {
+        return None;
+    }
+    let path_str = path.to_str()?;
+
+    let child = Command::new("du")
+        .arg("-sk")
+        .arg(path_str)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    // Use timeout wrapper
+    let output = match timeout(timeout_dur, child.wait_with_output()).await {
+        Ok(Ok(out)) => out,
+        Ok(Err(_)) | Err(_) => return None,
+    };
+
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let kb = stdout.split_whitespace().next()?.parse::<u64>().ok()?;
+    Some(kb * 1024)
+}
+
+/// Check if a command exists in PATH
+fn command_exists(cmd: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Workflow State Management
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -128,6 +203,11 @@ pub struct WorkflowState {
     pub last_error: Option<String>,
     pub step_tracker: StepTracker,
     pub version_incremented: bool,
+
+    /// Per-step duration metrics (seconds), keyed by the step id (e.g. `03-coverage-tests`).
+    /// Stored in the workflow-state file so you can compare runs over time.
+    #[serde(default)]
+    pub step_durations_secs: BTreeMap<String, u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -213,6 +293,7 @@ impl WorkflowState {
             last_error: None,
             step_tracker: StepTracker::default(),
             version_incremented: false,
+            step_durations_secs: BTreeMap::new(),
         }
     }
 
@@ -278,6 +359,7 @@ impl Default for WorkflowState {
             last_error: None,
             step_tracker: StepTracker::default(),
             version_incremented: false,
+            step_durations_secs: BTreeMap::new(),
         }
     }
 }
@@ -301,6 +383,35 @@ struct Cli {
     /// Generate coverage report (slower, but comprehensive)
     #[arg(short, long, global = true)]
     coverage_report: bool,
+
+    /// Force a full `cargo clean` at the start (slower, but can recover from stale artifacts)
+    #[arg(long, global = true)]
+    clean: bool,
+
+    /// Force skipping cargo clean even when auto-clean would run (dangerous if disk is tight).
+    #[arg(long, global = true)]
+    no_clean: bool,
+
+    /// Auto-clean if free disk space (GiB) is below this threshold.
+    #[arg(long, global = true, default_value_t = 25)]
+    min_free_gb: u64,
+
+    /// Auto-clean if the cargo target directory exceeds this size (GiB). Best-effort; unix only.
+    #[arg(long, global = true, default_value_t = 120)]
+    max_target_gb: u64,
+
+    /// Override Cargo build parallelism (rustc job count)
+    /// If omitted, defaults to `min(num_cpus, 16)`.
+    #[arg(long, global = true)]
+    jobs: Option<usize>,
+
+    /// Jobs per cargo process during the parallel validation stage (defaults to max(2, jobs/2)).
+    #[arg(long, global = true)]
+    parallel_jobs: Option<usize>,
+
+    /// Disable sccache auto-detection/integration even if it is installed.
+    #[arg(long, global = true)]
+    no_sccache: bool,
 }
 
 #[derive(Subcommand)]
@@ -331,19 +442,71 @@ enum Commands {
 struct PipelineContext {
     start_time: Instant,
     max_parallel_jobs: usize,
+    #[allow(dead_code)] // Reserved for future use with cargo -j flag
+    parallel_jobs: usize,
     timeout_duration: Duration,
     verbose: bool,
     coverage_report: bool,
+    force_clean: bool,
+    force_no_clean: bool,
+    min_free_gb: u64,
+    max_target_gb: u64,
+    /// Whether sccache was auto-detected and enabled.
+    sccache_enabled: bool,
+    /// Global environment variables to set for all cargo commands.
+    global_env: Vec<(String, String)>,
+    /// Log file for capturing output in non-verbose mode.
+    log_file: Option<PathBuf>,
 }
 
 impl PipelineContext {
-    fn new(verbose: bool, coverage_report: bool) -> Self {
+    fn new(
+        verbose: bool,
+        coverage_report: bool,
+        force_clean: bool,
+        force_no_clean: bool,
+        min_free_gb: u64,
+        max_target_gb: u64,
+        jobs: Option<usize>,
+        parallel_jobs: Option<usize>,
+        no_sccache: bool,
+    ) -> Self {
+        let max_jobs = jobs.unwrap_or_else(|| num_cpus::get().min(16));
+        let par_jobs = parallel_jobs.unwrap_or_else(|| (max_jobs / 2).max(2));
+
+        // Build global environment variables
+        let mut global_env: Vec<(String, String)> = Vec::new();
+
+        // Optional sccache integration (massive win in CI and on developer machines).
+        let sccache_available = !no_sccache && command_exists("sccache");
+        if sccache_available {
+            global_env.push(("RUSTC_WRAPPER".into(), "sccache".into()));
+        }
+
+        // Create log file for non-verbose mode
+        let log_file = if !verbose {
+            let log_dir = PathBuf::from("build/logs");
+            let _ = fs::create_dir_all(&log_dir);
+            let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+            Some(log_dir.join(format!("ci-pipeline-{}.log", timestamp)))
+        } else {
+            None
+        };
+
         Self {
             start_time: Instant::now(),
-            max_parallel_jobs: num_cpus::get().min(16),
+            max_parallel_jobs: max_jobs,
+            parallel_jobs: par_jobs,
             timeout_duration: Duration::from_secs(3600), // 60 minutes max
             verbose,
             coverage_report,
+            force_clean,
+            force_no_clean,
+            min_free_gb,
+            max_target_gb,
+            sccache_enabled: sccache_available,
+            global_env,
+            log_file,
         }
     }
 }
@@ -393,20 +556,28 @@ async fn execute_command_with_env(
 
     let mut command = Command::new(cmd);
     command.args(args);
+
+    // Apply global environment variables first
+    for (key, value) in &ctx.global_env {
+        command.env(key, value);
+    }
+
+    // Then apply step-specific environment variables (can override globals)
     for (key, value) in env_vars {
         command.env(key, value);
     }
 
+    // In verbose mode, inherit stdio; otherwise capture to log file
     if ctx.verbose {
         command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     } else {
-        command.stdout(Stdio::null()).stderr(Stdio::null());
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
     }
 
-    let mut child = command.spawn().with_context(|| format!("Failed to spawn command '{}' for step '{}'", cmd, name))?;
+    let child = command.spawn().with_context(|| format!("Failed to spawn command '{}' for step '{}'", cmd, name))?;
     let progress_bar = if !ctx.verbose { Some(create_fillup_spinner(name)) } else { None };
 
-    let result = timeout(ctx.timeout_duration, child.wait())
+    let result = timeout(ctx.timeout_duration, child.wait_with_output())
         .await
         .with_context(|| format!("Command '{}' timed out after {}s", cmd, ctx.timeout_duration.as_secs()))?
         .with_context(|| format!("Failed to wait for command '{}' in step '{}'", cmd, name))?;
@@ -414,12 +585,35 @@ async fn execute_command_with_env(
     if let Some(pb) = progress_bar { pb.finish_and_clear(); }
     let duration = step_start.elapsed();
 
-    if result.success() {
+    // Write output to log file if available
+    if let Some(log_path) = &ctx.log_file {
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
+            let _ = writeln!(file, "\n=== {} ({}) ===", name, cmd);
+            let _ = writeln!(file, "Command: {} {}", cmd, args.join(" "));
+            let _ = writeln!(file, "Duration: {}s", duration.as_secs());
+            if !result.stdout.is_empty() {
+                let _ = writeln!(file, "--- stdout ---");
+                let _ = file.write_all(&result.stdout);
+            }
+            if !result.stderr.is_empty() {
+                let _ = writeln!(file, "--- stderr ---");
+                let _ = file.write_all(&result.stderr);
+            }
+        }
+    }
+
+    if result.status.success() {
         println!("{} {} ({}s)", "✅".green(), name, duration.as_secs());
         Ok(())
     } else {
-        let exit_code = result.code().map_or("unknown".to_string(), |c| c.to_string());
+        let exit_code = result.status.code().map_or("unknown".to_string(), |c| c.to_string());
         println!("{} {} failed (exit code: {})", "❌".red(), name, exit_code);
+
+        // Print stderr on failure even in non-verbose mode
+        if !ctx.verbose && !result.stderr.is_empty() {
+            eprintln!("{}", String::from_utf8_lossy(&result.stderr));
+        }
+
         bail!("Step '{}' failed: command '{}' exited with code {} after {}s", name, cmd, exit_code, duration.as_secs());
     }
 }
@@ -747,7 +941,15 @@ where
         return Ok(());
     }
     state.mark_step_started(step_name)?;
-    match step_fn().await {
+
+    let step_start = Instant::now();
+    let result = step_fn().await;
+    let duration_secs = step_start.elapsed().as_secs();
+
+    // Record step duration regardless of success/failure
+    state.step_durations_secs.insert(step_name.to_string(), duration_secs);
+
+    match result {
         Ok(()) => { state.mark_step_completed(step_name)?; Ok(()) }
         Err(e) => { state.mark_step_failed(step_name, &e.to_string())?; Err(e) }
     }
@@ -829,9 +1031,40 @@ async fn run_enhanced_phase1(state: &mut WorkflowState, ctx: &PipelineContext) -
 
     println!("{}", "📋 Stage 1: Sequential Prerequisites".yellow().bold());
 
-    // Step 1: Clean build artifacts
+    // Step 1: Clean build artifacts (with auto-clean logic)
     execute_step_with_tracking(state, STEP_CLEAN_ARTIFACTS, || async {
-        execute_command("Clean build artifacts", "cargo", &["clean"], ctx).await
+        let target_dir = get_cargo_target_dir();
+
+        // Check disk space and target directory size
+        let free_gb = disk_free_bytes(&target_dir).await.map(bytes_to_gib);
+        let target_gb = dir_size_bytes(&target_dir, Duration::from_secs(30)).await.map(bytes_to_gib);
+
+        if ctx.verbose {
+            if let Some(free) = free_gb {
+                println!("  💾 Free disk space: {} GiB", free);
+            }
+            if let Some(size) = target_gb {
+                println!("  📁 Target directory size: {} GiB", size);
+            }
+        }
+
+        // Determine if we should clean
+        let should_clean = ctx.force_clean
+            || (!ctx.force_no_clean
+                && (free_gb.map(|g| g < ctx.min_free_gb).unwrap_or(false)
+                    || target_gb.map(|g| g > ctx.max_target_gb).unwrap_or(false)));
+
+        if should_clean {
+            if ctx.force_clean {
+                println!("  🧹 Forced clean (--clean flag)");
+            } else {
+                println!("  🧹 Auto-clean triggered (disk space low or target too large)");
+            }
+            execute_command("Clean build artifacts", "cargo", &["clean"], ctx).await
+        } else {
+            println!("  ⏭️  Skipping clean (disk space OK, target size OK)");
+            Ok(())
+        }
     }).await?;
 
     // Step 2: Format code
@@ -997,16 +1230,43 @@ fn print_workflow_status(state: &WorkflowState) {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let ctx = PipelineContext::new(cli.verbose, cli.coverage_report);
+    let ctx = PipelineContext::new(
+        cli.verbose,
+        cli.coverage_report,
+        cli.clean,
+        cli.no_clean,
+        cli.min_free_gb,
+        cli.max_target_gb,
+        cli.jobs,
+        cli.parallel_jobs,
+        cli.no_sccache,
+    );
 
     if ctx.verbose {
         println!("{} Verbose mode enabled", "🔍".blue());
         println!("{} Coverage report: {}", "📊".blue(), if ctx.coverage_report { "enabled" } else { "disabled" });
     }
 
+    // Show sccache status
+    if ctx.sccache_enabled {
+        println!("{} sccache: enabled (RUSTC_WRAPPER=sccache)", "⚡".green());
+    } else if ctx.verbose {
+        println!("{} sccache: disabled (install sccache for big CI wins)", "⚡".yellow());
+    }
+
+    // Show log file location if not verbose
+    if let Some(log_path) = &ctx.log_file {
+        println!("{} Log file: {}", "📝".blue(), log_path.display());
+    }
+
     // Show build mode (DEV is default, set UFFS_RELEASE_BUILD=1 for release)
     let build_mode = if is_release_build() { "RELEASE (optimized)" } else { "DEV (fast, default)" };
     println!("{} Build mode: {}", "🔧".blue(), build_mode);
+
+    // Start sccache server early (no-op if already running). This is safe and fast.
+    if ctx.sccache_enabled {
+        let _ = Command::new("sccache").arg("--start-server").output().await;
+    }
 
     match cli.command {
         Commands::Go => {
@@ -1047,6 +1307,25 @@ async fn main() -> Result<()> {
 
             let total_time = ctx.start_time.elapsed();
             println!("{} Total pipeline time: {}s", "🎉".green(), total_time.as_secs());
+
+            // Show sccache stats if enabled
+            if ctx.sccache_enabled {
+                if let Ok(out) = Command::new("sccache").arg("-s").output().await {
+                    if ctx.verbose {
+                        println!("{} sccache stats:\n{}", "⚡".green(), String::from_utf8_lossy(&out.stdout));
+                    }
+                }
+            }
+
+            // Show step durations if available
+            if !state.step_durations_secs.is_empty() {
+                println!("\n{} Step durations:", "⏱️".blue());
+                for step in ALL_STEPS {
+                    if let Some(secs) = state.step_durations_secs.get(*step) {
+                        println!("   {} {}s", step, secs);
+                    }
+                }
+            }
 
             if !ctx.coverage_report {
                 println!("{} Tip: Use --coverage-report to generate HTML coverage report", "💡".blue());

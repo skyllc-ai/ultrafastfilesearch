@@ -34,6 +34,9 @@ use std::{env, fs};
 
 use sha2::{Digest, Sha256};
 
+/// Host triple for macOS ARM64 (the expected cross-compilation host)
+const HOST_TRIPLE: &str = "aarch64-apple-darwin";
+
 /// UFFS binaries: (binary_name, package_name)
 /// - uffs: Main CLI tool
 /// - uffs_mft: Low-level MFT reading tool
@@ -136,8 +139,28 @@ const TARGETS: &[Target] = &[Target {
 }];
 
 fn main() {
+    let args: Vec<String> = env::args().collect();
+    let verbose = args.iter().any(|a| a == "-v" || a == "--verbose");
+    let native_only = args.iter().any(|a| a == "--native-only");
+
+    // Disk safety:
+    // By default we prune (delete) cross-target build artifacts after copying
+    // binaries into dist/. Each target triple gets its own (potentially huge)
+    // subtree under the cargo target-dir. Keeping all of them quickly explodes
+    // disk usage (e.g. 4 targets => ~4× polars build).
+    //
+    // Use --keep-target-artifacts to opt out.
+    // Use --prune-host to also delete host release artifacts after copying.
+    let prune_cross_targets = !args
+        .iter()
+        .any(|a| a == "--keep-target-artifacts" || a == "--no-prune");
+    let prune_host = args.iter().any(|a| a == "--prune-host");
+
     println!("🚀 UFFS Cross-Platform Build (Windows Only)");
     println!("ℹ️  UFFS is Windows-only (requires NTFS MFT access)");
+    if verbose {
+        println!("🔍 Verbose mode enabled");
+    }
 
     // Show build mode
     let build_mode = get_build_mode();
@@ -158,8 +181,12 @@ fn main() {
     );
 
     // On Windows, just build natively
-    if host_os == "windows" {
-        println!("🎯 Running on Windows - building natively...");
+    if native_only || host_os == "windows" {
+        if native_only {
+            println!("ℹ️  --native-only flag set. Using native-only build.");
+        } else {
+            println!("🎯 Running on Windows - building natively...");
+        }
         build_native_only();
         return;
     }
@@ -175,11 +202,21 @@ fn main() {
 
     let version = read_current_version();
     let target_dir = get_cargo_target_dir();
+
+    // Preflight: remove any leftover cross-target build trees from previous runs.
+    // This prevents starting a new release with disk already consumed.
+    if prune_cross_targets {
+        prune_previous_cross_target_artifacts(&target_dir);
+    }
+
     println!(
         "📦 Version: {}\n📂 Target: {}",
         version,
         target_dir.display()
     );
+
+    // Ensure required tools are present before we start building
+    ensure_required_tools_or_exit();
 
     let available = check_available_targets();
     println!("\n📋 Available targets:");
@@ -187,12 +224,19 @@ fn main() {
         println!("   ✅ {} ({})", t.triple, t.platform_name);
     }
 
-    // Note: We no longer clean cargo-xwin SDK cache here since the windows-targets
-    // version mismatch issue has been fixed by vendoring fs4, errno, stacker, and
-    // winapi-util with updated windows-sys dependencies. The xwin cache is stable
-    // and doesn't need to be cleaned on every run.
+    // Build order: non-host targets first, host last.
+    // This lowers peak disk usage because the host build can be relatively large, and
+    // we don't want it resident while building every other target triple.
+    let mut build_order: Vec<&Target> = available
+        .iter()
+        .filter(|t| t.triple != HOST_TRIPLE)
+        .copied()
+        .collect();
+    if let Some(host) = available.iter().find(|t| t.triple == HOST_TRIPLE) {
+        build_order.push(host);
+    }
 
-    for target in &available {
+    for target in &build_order {
         println!(
             "\n{}\n🎯 Building {} ({})\n{}",
             "═".repeat(60),
@@ -200,7 +244,10 @@ fn main() {
             target.platform_name,
             "═".repeat(60)
         );
-        if !build_for_target(target, &target_dir) {
+
+        print_free_disk(&target_dir, "before build");
+
+        if !build_for_target(target, &target_dir, verbose) {
             eprintln!("\n❌ Build failed for {} - aborting!", target.triple);
             exit(1);
         }
@@ -217,11 +264,24 @@ fn main() {
                 exit(1);
             }
         }
+
+        // Critical disk optimization: delete the *target-specific* build tree after
+        // we've copied the final binaries into dist/.
+        if prune_cross_targets && target.triple != HOST_TRIPLE {
+            prune_target_artifacts_for_triple(&target_dir, target.triple);
+            print_free_disk(&target_dir, "after prune");
+        }
+
+        // Optional: also prune host release artifacts after building it.
+        if prune_host && target.triple == HOST_TRIPLE {
+            prune_host_release_artifacts(&target_dir);
+            print_free_disk(&target_dir, "after host prune");
+        }
     }
 
     // Only update checksums/symlinks/git for release builds
     if build_mode == BuildMode::Release {
-        update_all_checksums(&version, &available);
+        update_all_checksums(&version, &build_order);
         update_latest_symlink(&version);
 
         // Add binaries to git for sharing
@@ -396,7 +456,118 @@ fn cmd_exists(c: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn build_for_target(target: &Target, target_dir: &Path) -> bool {
+// ─────────────────────────────────────────────────────────────────────────────
+// Disk space monitoring and artifact pruning
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns free disk space in GiB for the volume containing `path`.
+fn disk_free_gib(path: &Path) -> f64 {
+    // Use `df` to get free space - works on macOS and Linux
+    let output = Command::new("df")
+        .arg("-k") // 1K blocks
+        .arg(path)
+        .output();
+
+    if let Ok(o) = output {
+        let stdout = String::from_utf8_lossy(&o.stdout);
+        // Parse the second line (first is header)
+        if let Some(line) = stdout.lines().nth(1) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            // df -k output: Filesystem 1K-blocks Used Available Use% Mounted
+            if parts.len() >= 4 {
+                if let Ok(avail_kb) = parts[3].parse::<u64>() {
+                    return avail_kb as f64 / (1024.0 * 1024.0); // KB to GiB
+                }
+            }
+        }
+    }
+    0.0
+}
+
+/// Print free disk space for the volume containing `path`.
+fn print_free_disk(path: &Path, label: &str) {
+    let free = disk_free_gib(path);
+    println!("  💾 Free disk space ({}): {:.1} GiB", label, free);
+}
+
+/// Remove a directory tree, ignoring errors (best-effort cleanup).
+fn remove_dir_best_effort(path: &Path) {
+    if path.exists() {
+        if let Err(e) = fs::remove_dir_all(path) {
+            eprintln!("  ⚠️  Could not remove {}: {}", path.display(), e);
+        }
+    }
+}
+
+/// Preflight cleanup: remove leftover cross-target build trees from previous runs.
+/// This prevents starting a new release with disk already consumed by stale artifacts.
+fn prune_previous_cross_target_artifacts(target_dir: &Path) {
+    println!("\n🧹 Preflight cleanup: removing leftover cross-target artifacts...");
+    let mut removed_any = false;
+
+    for target in TARGETS {
+        // Skip host target - we don't want to remove our own build artifacts
+        if target.triple == HOST_TRIPLE {
+            continue;
+        }
+
+        let triple_dir = target_dir.join(target.triple);
+        if triple_dir.exists() {
+            println!("  🗑️  Removing {}", triple_dir.display());
+            remove_dir_best_effort(&triple_dir);
+            removed_any = true;
+        }
+    }
+
+    if !removed_any {
+        println!("  ✅ No leftover cross-target artifacts found");
+    } else {
+        print_free_disk(target_dir, "after preflight cleanup");
+    }
+}
+
+/// Prune build artifacts for a specific target triple after building.
+fn prune_target_artifacts_for_triple(target_dir: &Path, triple: &str) {
+    let triple_dir = target_dir.join(triple);
+    if triple_dir.exists() {
+        println!("  🗑️  Pruning artifacts for {}", triple);
+        remove_dir_best_effort(&triple_dir);
+    }
+}
+
+/// Prune host release artifacts (optional, for extreme disk savings).
+fn prune_host_release_artifacts(target_dir: &Path) {
+    let release_dir = target_dir.join("release");
+    if release_dir.exists() {
+        println!("  🗑️  Pruning host release artifacts");
+        remove_dir_best_effort(&release_dir);
+    }
+}
+
+/// Ensure required tools are installed before starting the build.
+fn ensure_required_tools_or_exit() {
+    let mut missing = Vec::new();
+
+    // Check for cargo-xwin (required for Windows cross-compilation)
+    if !cmd_exists("cargo-xwin") {
+        missing.push("cargo-xwin (install with: cargo install cargo-xwin)");
+    }
+
+    // Check for LLVM/clang-cl (required for Windows cross-compilation on macOS)
+    if !Path::new("/opt/homebrew/opt/llvm/bin/clang-cl").exists() {
+        missing.push("LLVM clang-cl (install with: brew install llvm)");
+    }
+
+    if !missing.is_empty() {
+        eprintln!("\n❌ Missing required tools:");
+        for tool in &missing {
+            eprintln!("   • {}", tool);
+        }
+        exit(1);
+    }
+}
+
+fn build_for_target(target: &Target, target_dir: &Path, verbose: bool) -> bool {
     let build_mode = get_build_mode();
     let profile = build_profile();
 
@@ -475,9 +646,25 @@ fn build_for_target(target: &Target, target_dir: &Path) -> bool {
             );
         }
 
-        let status = cmd.status().expect("cargo failed");
-        if !status.success() {
+        // In verbose mode, inherit stdio; otherwise capture output
+        if verbose {
+            cmd.stdout(std::process::Stdio::inherit());
+            cmd.stderr(std::process::Stdio::inherit());
+        } else {
+            cmd.stdout(std::process::Stdio::null());
+            cmd.stderr(std::process::Stdio::piped());
+        }
+
+        let output = cmd.output().expect("cargo failed to start");
+        if !output.status.success() {
             eprintln!("  ❌ Failed to build {} for {}", binary, target.triple);
+            if !verbose {
+                // Print stderr on failure even in non-verbose mode
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.is_empty() {
+                    eprintln!("{}", stderr);
+                }
+            }
             return false;
         }
         println!("  ✅ {}", binary);
