@@ -450,14 +450,21 @@ pub async fn search(
     });
     info!(?mode, "Query execution mode");
 
-    // Build output configuration
+    // Build output configuration with tripwire for parity harness (Fix #5)
+    // The tripwire is written as a comment at the top of output files so the
+    // parity analyzer can always find it (not dependent on trace logs)
+    let tripwire = format!(
+        "UFFS cpp_tree FIXED v{} tree_metrics_parity",
+        env!("CARGO_PKG_VERSION")
+    );
     let output_config = OutputConfig::new()
         .with_columns(columns)
         .with_separator(sep)
         .with_quote(quotes)
         .with_header(header)
         .with_pos(pos)
-        .with_neg(neg);
+        .with_neg(neg)
+        .with_tripwire(tripwire);
 
     // Pass needs_paths so path resolution happens BEFORE filtering loses parent
     // directories (skip path resolution in benchmark mode for speed)

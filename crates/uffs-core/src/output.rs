@@ -344,6 +344,11 @@ pub struct OutputConfig {
     /// uses the CURRENT timezone offset for ALL timestamps, ignoring
     /// historical DST.
     pub timezone_offset_secs: i32,
+    /// Optional tripwire string to write at the top of output.
+    /// When set, writes a comment line like `# TRIPWIRE: <value>` before the
+    /// header. This makes the tripwire unmissable for parity harness
+    /// analysis.
+    pub tripwire: Option<String>,
 }
 
 impl Default for OutputConfig {
@@ -360,6 +365,7 @@ impl Default for OutputConfig {
             pos: "1".to_owned(),
             neg: "0".to_owned(),
             timezone_offset_secs,
+            tripwire: None,
         }
     }
 }
@@ -456,6 +462,16 @@ impl OutputConfig {
         self
     }
 
+    /// Set tripwire string for parity harness.
+    ///
+    /// When set, writes a comment line `# TRIPWIRE: <value>` at the top of
+    /// output. This makes the tripwire unmissable for parity analysis.
+    #[must_use]
+    pub fn with_tripwire(mut self, tripwire: String) -> Self {
+        self.tripwire = Some(tripwire);
+        self
+    }
+
     /// Check if the descendants column is requested.
     #[must_use]
     pub fn needs_descendants(&self) -> bool {
@@ -512,6 +528,12 @@ impl OutputConfig {
         } else {
             CPP_COLUMN_ORDER
         };
+
+        // Write tripwire comment if set (Fix #5: Make tripwire unmissable)
+        // This ensures the parity harness always finds the tripwire in the output file
+        if let Some(tripwire) = &self.tripwire {
+            writeln!(writer, "# TRIPWIRE: {tripwire}")?;
+        }
 
         // Write header if enabled
         if self.header {

@@ -73,7 +73,7 @@ const fn delta(value: u64, name_info: u32, total_names: u32) -> u64 {
 /// let name_info = compute_name_info(0, 2); // returns 1
 /// ```
 #[inline]
-#[allow(clippy::single_call_fn)] // Used in tests and serves as documentation/safety
+#[cfg(test)] // Only used in tests now; production uses compute_name_info_checked
 const fn compute_name_info(name_index: u32, total_names: u32) -> u32 {
     if total_names <= 1 {
         return 0;
@@ -85,6 +85,45 @@ const fn compute_name_info(name_index: u32, total_names: u32) -> u32 {
         name_index
     };
     total_names - 1 - clamped_index
+}
+
+/// Computes `name_info` with optional debug logging when clamping occurs.
+///
+/// This is the debug-aware version of [`compute_name_info`] that logs when
+/// `name_index >= total_names`, which indicates a potential parity issue
+/// (two hardlinks mapping to the same `i` can skew totals).
+#[inline]
+#[allow(clippy::single_call_fn)] // Single call site but serves as parity diagnostic
+fn compute_name_info_checked(
+    name_index: u32,
+    total_names: u32,
+    child_frs: u64,
+    debug: bool,
+) -> u32 {
+    if total_names <= 1 {
+        return 0;
+    }
+    // Check for out-of-range name_index (parity risk)
+    if name_index >= total_names {
+        // Always log in release mode too - this is a parity diagnostic
+        tracing::warn!(
+            child_frs,
+            name_index,
+            total_names,
+            "[TRIP] name_index out of range; clamping (parity risk)"
+        );
+        if debug {
+            // Extra verbose output in debug mode
+            tracing::debug!(
+                child_frs,
+                name_index,
+                total_names,
+                "[TRIP] compute_name_info_checked: clamping name_index to total_names-1"
+            );
+        }
+        return 0; // Clamped to total_names-1, result = total_names - 1 - (total_names-1) = 0
+    }
+    total_names - 1 - name_index
 }
 
 /// Aggregated tree metrics returned by recursive traversal.
@@ -199,10 +238,15 @@ impl CppTreeTraversal<'_> {
                 // Resolve child record index from child FRS.
                 if let Some(child_idx) = self.index.frs_to_idx_opt(child_frs) {
                     // Determine which hardlink name of the child this directory entry refers to.
-                    // Use the helper function to compute name_info from name_index.
+                    // Use the checked helper function to compute name_info from name_index.
+                    // This logs when clamping occurs (parity risk indicator).
                     let child_total_names = u32::from(self.index.records[child_idx].name_count);
-                    let child_name_info =
-                        compute_name_info(u32::from(child_name_idx), child_total_names);
+                    let child_name_info = compute_name_info_checked(
+                        u32::from(child_name_idx),
+                        child_total_names,
+                        child_frs,
+                        self.debug,
+                    );
 
                     let child_agg =
                         self.preprocess(child_idx, child_name_info, child_total_names.max(1));

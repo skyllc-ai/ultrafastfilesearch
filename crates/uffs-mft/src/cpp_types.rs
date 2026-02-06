@@ -988,6 +988,7 @@ impl core::fmt::Debug for Record {
 /// - `streaminfos`: Overflow streams (Vec<StreamInfo>)
 /// - `childinfos`: Parent-child relationships (Vec<ChildInfo>)
 /// - `names`: All filenames concatenated (Vec<u8>)
+/// - `parsed_record_seen`: Duplicate parse guard (Vec<bool>)
 #[derive(Default, Debug)]
 pub struct CppMftIndex {
     /// All file records (matches C++ `Records records_data`)
@@ -1006,6 +1007,13 @@ pub struct CppMftIndex {
     /// All filenames concatenated (matches C++ `std::tvstring names`)
     /// ASCII names stored as-is, Unicode names stored as UTF-16LE
     pub names: Vec<u8>,
+    /// Duplicate parse guard: tracks which FRS have been parsed.
+    /// Prevents "double-parse adds sizes twice" bug where the same record
+    /// is parsed multiple times due to IO overlap, retry, or ordering issues.
+    /// Length matches `records_lookup` (indexed by FRS).
+    pub parsed_record_seen: Vec<bool>,
+    /// Diagnostic counter: number of duplicate parse attempts skipped.
+    pub duplicate_parse_skipped: u64,
 }
 
 impl CppMftIndex {
@@ -1025,6 +1033,34 @@ impl CppMftIndex {
             streaminfos: Vec::new(),
             childinfos: Vec::new(),
             names: Vec::new(),
+            parsed_record_seen: Vec::with_capacity(record_count),
+            duplicate_parse_skipped: 0,
+        }
+    }
+
+    /// Check if a record has already been parsed, and mark it as seen.
+    ///
+    /// Returns `true` if this is a duplicate parse (record was already seen),
+    /// `false` if this is the first time seeing this record.
+    ///
+    /// This prevents "double-parse adds sizes twice" bugs where the same record
+    /// is parsed multiple times due to IO overlap, retry, or ordering issues.
+    pub fn mark_record_seen(&mut self, frs: u32) -> bool {
+        let frs_idx = frs as usize;
+
+        // Expand seen table if needed
+        if frs_idx >= self.parsed_record_seen.len() {
+            self.parsed_record_seen.resize(frs_idx + 1, false);
+        }
+
+        if self.parsed_record_seen[frs_idx] {
+            // Already seen - this is a duplicate
+            self.duplicate_parse_skipped += 1;
+            true
+        } else {
+            // First time seeing this record
+            self.parsed_record_seen[frs_idx] = true;
+            false
         }
     }
 
@@ -1967,9 +2003,22 @@ impl CppParsePipeline {
 
         let mut parsed_count: u64 = 0;
         let mut not_in_use_count: u64 = 0;
+        let mut duplicate_skipped: u64 = 0;
         let mut i = start_offset;
         while i + mft_record_size <= buffer.len() {
             let frs = u64_to_u32((virtual_offset + i as u64) >> mft_record_size_log2);
+
+            // Fix #4: Duplicate parse guard - skip if already parsed
+            // This prevents "double-parse adds sizes twice" bugs where the same
+            // record is parsed multiple times due to IO overlap, retry, or ordering.
+            if index.mark_record_seen(frs) {
+                #[cfg(debug_assertions)]
+                tracing::warn!(frs = frs, "[TRIP] duplicate parse of record (skipping)");
+                duplicate_skipped += 1;
+                i += mft_record_size;
+                continue;
+            }
+
             let record_data = &buffer[i..i + mft_record_size];
 
             // Check if record has FILE magic but is not in-use
@@ -1996,6 +2045,15 @@ impl CppParsePipeline {
             }
 
             i += mft_record_size;
+        }
+
+        // Log duplicate skips if any occurred (release mode)
+        if duplicate_skipped > 0 {
+            tracing::debug!(
+                duplicate_skipped = duplicate_skipped,
+                virtual_offset = virtual_offset,
+                "Skipped duplicate record parses in chunk"
+            );
         }
 
         // Update diagnostic counters
@@ -2268,8 +2326,33 @@ impl CppParsePipeline {
         index.records_data[record_idx].name_count += 1;
     }
 
+    /// Check if a stream is the "default" stream that should be primary.
+    ///
+    /// For directories: the directory-index stream (`type_name_id=0`,
+    /// `name_len=0`) For files: unnamed $DATA (`type_name_id=8` which is
+    /// `0x80>>4`, `name_len=0`)
+    ///
+    /// This is used to stabilize primary stream selection - default streams
+    /// should not be evicted by non-default streams, regardless of parse order.
+    #[inline]
+    const fn is_default_stream(is_directory: bool, type_name_id: u8, name_len: u8) -> bool {
+        // $DATA attribute type (0x80) >> 4 = 8
+        const ATTR_DATA_TYPE_NAME_ID: u8 = 0x80 >> 4;
+
+        if is_directory {
+            // Directory index streams are collapsed to type_name_id=0, name_len=0
+            type_name_id == 0 && name_len == 0
+        } else {
+            // For files, detect unnamed $DATA:
+            // type_name_id = attr_type >> 4, so $DATA (0x80) becomes 8
+            // name_len == 0 means unnamed (not an ADS)
+            type_name_id == ATTR_DATA_TYPE_NAME_ID && name_len == 0
+        }
+    }
+
     /// Parse stream attributes (`$DATA`, `$INDEX_ROOT`, etc.).
     #[allow(unsafe_code)]
+    #[allow(clippy::too_many_lines)]
     fn parse_stream(
         index: &mut CppMftIndex,
         attr_data: &[u8],
@@ -2342,10 +2425,75 @@ impl CppParsePipeline {
                 }
             }
 
-            // Push current first_stream to overflow list
-            let first_stream = index.records_data[record_idx].first_stream;
+            // ================================================================
+            // Default stream stability: prevent non-default streams from
+            // evicting the default stream as primary (first_stream).
+            // ================================================================
+            let record_is_dir = index.records_data[record_idx].stdinfo.is_directory();
+            let new_is_default =
+                Self::is_default_stream(record_is_dir, type_name_id, stream_name_length);
+            let first_stream = &index.records_data[record_idx].first_stream;
+            let first_type_name_id = first_stream.type_name_id();
+            let first_name_len = first_stream.name.length();
+            let first_is_default =
+                Self::is_default_stream(record_is_dir, first_type_name_id, first_name_len);
+
+            if !new_is_default && first_is_default {
+                // Keep default stream as primary; stash the new stream in overflow
+                // We need to build the new stream and push it to overflow instead
+                let stream_name_offset = if !is_dir_index && name_length > 0 {
+                    let offset = usize_to_u32(index.names.len());
+                    let name_bytes = name_length * 2;
+                    if name_offset + name_bytes <= attr_data.len() {
+                        let name_data = &attr_data[name_offset..name_offset + name_bytes];
+                        let is_ascii = is_ascii_utf16(name_data);
+                        if is_ascii {
+                            for chunk in name_data.chunks_exact(2) {
+                                index.names.push(chunk[0]);
+                            }
+                        } else {
+                            index.names.extend_from_slice(name_data);
+                        }
+                    }
+                    offset
+                } else {
+                    0
+                };
+
+                // Build new stream info
+                let mut new_stream = StreamInfo::default();
+                new_stream.size.treesize = u32::from(is_dir_index);
+                new_stream.set_type_name_id(type_name_id);
+                new_stream.name.set_offset(stream_name_offset);
+                new_stream.name.set_length(stream_name_length);
+                new_stream.name.set_ascii(!is_dir_index && name_length > 0);
+
+                // Link new stream to current overflow chain
+                new_stream.next_entry = index.records_data[record_idx].first_stream.next_entry;
+
+                // Push new stream to overflow (not first_stream)
+                let stream_idx = usize_to_u32(index.streaminfos.len());
+                index.streaminfos.push(new_stream);
+                index.records_data[record_idx].first_stream.next_entry = stream_idx;
+
+                // Update sizes on the overflow stream we just pushed
+                Self::update_overflow_stream_sizes(
+                    index,
+                    attr_data,
+                    stream_idx as usize,
+                    is_non_resident,
+                );
+
+                // Increment stream count
+                index.records_data[record_idx].stream_count += 1;
+                return;
+            }
+
+            // For all other cases (new_is_default && !first_is_default, or both same):
+            // Push current first_stream to overflow list, new stream becomes first
+            let current_first = index.records_data[record_idx].first_stream;
             let stream_idx = usize_to_u32(index.streaminfos.len());
-            index.streaminfos.push(first_stream);
+            index.streaminfos.push(current_first);
             index.records_data[record_idx].first_stream.next_entry = stream_idx;
         }
 
@@ -2431,6 +2579,52 @@ impl CppParsePipeline {
                 let value_length = u64::from(resident.value_length);
                 let record = &mut index.records_data[record_idx];
                 record.first_stream.size.length += FileSizeType::new(value_length);
+            }
+        }
+    }
+
+    /// Update stream sizes for an overflow stream (not `first_stream`).
+    ///
+    /// This is used when a non-default stream is pushed to overflow instead of
+    /// becoming `first_stream` (to preserve default stream stability).
+    #[allow(unsafe_code)]
+    #[allow(clippy::single_call_fn)]
+    fn update_overflow_stream_sizes(
+        index: &mut CppMftIndex,
+        attr_data: &[u8],
+        stream_idx: usize,
+        is_non_resident: bool,
+    ) {
+        use core::mem::size_of;
+
+        use crate::ntfs::NonResidentAttributeData;
+
+        let header_size = size_of::<AttributeRecordHeader>();
+
+        if is_non_resident {
+            if attr_data.len() >= header_size + size_of::<NonResidentAttributeData>() {
+                // SAFETY: Bounds checked above
+                let non_res: NonResidentAttributeData =
+                    unsafe { core::ptr::read(attr_data[header_size..].as_ptr().cast()) };
+
+                let allocated = i64_to_u64_filetime(non_res.allocated_size);
+                let data_size = i64_to_u64_filetime(non_res.data_size);
+
+                let stream = &mut index.streaminfos[stream_idx];
+                stream.size.allocated += FileSizeType::new(allocated);
+                stream.size.length += FileSizeType::new(data_size);
+                stream.size.bulkiness += FileSizeType::new(allocated);
+            }
+        } else {
+            // Resident attribute
+            if attr_data.len() >= header_size + size_of::<ResidentAttributeData>() {
+                // SAFETY: Bounds checked above
+                let resident: ResidentAttributeData =
+                    unsafe { core::ptr::read(attr_data[header_size..].as_ptr().cast()) };
+
+                let value_length = u64::from(resident.value_length);
+                let stream = &mut index.streaminfos[stream_idx];
+                stream.size.length += FileSizeType::new(value_length);
             }
         }
     }

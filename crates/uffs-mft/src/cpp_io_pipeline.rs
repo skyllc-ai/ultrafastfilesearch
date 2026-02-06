@@ -30,7 +30,6 @@
 
 #![cfg(windows)]
 
-use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -308,13 +307,17 @@ impl CppIoPipeline {
         pipeline: CppParsePipeline,
     ) -> Result<crate::cpp_types::CppMftIndex> {
         // Build I/O operations from data chunks (respecting skip ranges)
+        // IMPORTANT: In live IOCP mode, completions can arrive out-of-order.
+        // To keep parsing deterministic (and match offline / C++), we assign a
+        // sequence number and process buffers strictly in seq order.
         struct IoOp {
+            seq: usize,
             disk_offset: u64,
             virtual_offset: u64,
             size: usize,
         }
 
-        let mut io_ops: VecDeque<IoOp> = VecDeque::new();
+        let mut io_ops: Vec<IoOp> = Vec::new();
         let mut max_io_size = 0usize;
 
         for chunk in &self.data_chunks {
@@ -334,7 +337,9 @@ impl CppIoPipeline {
                 let io_size = remaining.min(io_chunk_size);
                 max_io_size = max_io_size.max(io_size);
 
-                io_ops.push_back(IoOp {
+                let seq = io_ops.len();
+                io_ops.push(IoOp {
+                    seq,
                     disk_offset: disk_offset + offset as u64,
                     virtual_offset: virtual_offset + offset as u64,
                     size: io_size,
@@ -433,11 +438,25 @@ impl CppIoPipeline {
         let iocp = IoCompletionPort::new(0)?;
         iocp.associate(overlapped_handle, 0)?;
 
+        // ========================================================================
+        // DETERMINISTIC ORDERING: Reorder buffer for in-order processing
+        // ========================================================================
+        // IOCP completions can arrive out-of-order. To ensure deterministic parsing
+        // (matching offline / C++), we store completed buffers and process them
+        // strictly in sequence order.
+        let total_ops = io_ops.len();
+        // Each entry: Option<(buffer, bytes_transferred)>
+        // Note: We use map().collect() instead of vec![None; n] because AlignedBuffer doesn't impl Clone
+        let mut completed_buffers: Vec<Option<(AlignedBuffer, usize)>> =
+            (0..total_ops).map(|_| None).collect();
+        let mut next_issue: usize = 0; // Next seq to submit
+        let mut next_process: usize = 0; // Next seq to parse
+
         // Sliding window state
         struct InFlightOp {
             overlapped: windows::Win32::System::IO::OVERLAPPED,
             buffer: AlignedBuffer,
-            op: IoOp,
+            seq: usize, // Sequence number (index into io_ops)
         }
 
         // Allocate buffers
@@ -448,53 +467,59 @@ impl CppIoPipeline {
         let mut in_flight: Vec<Option<Pin<Box<InFlightOp>>>> =
             (0..concurrency).map(|_| None).collect();
 
-        let mut completed_count = 0usize;
         let mut bytes_read_total = 0u64;
+        // Diagnostic counters for out-of-order completions
+        let mut out_of_order_count = 0usize;
+        let mut max_reorder_depth = 0usize;
 
-        // Queue initial reads
+        // Queue initial reads (up to concurrency)
         for slot_id in 0..concurrency {
-            if let Some(op) = io_ops.pop_front() {
-                let buffer = buffer_pool.pop().unwrap();
-                let mut in_flight_op = Box::pin(InFlightOp {
-                    overlapped: unsafe { std::mem::zeroed() },
-                    buffer,
-                    op,
-                });
+            if next_issue >= total_ops {
+                break;
+            }
+            let io_op = &io_ops[next_issue];
+            let buffer = buffer_pool.pop().unwrap();
+            let mut in_flight_op = Box::pin(InFlightOp {
+                overlapped: unsafe { std::mem::zeroed() },
+                buffer,
+                seq: next_issue,
+            });
 
-                let offset = in_flight_op.op.disk_offset;
-                let op_mut = unsafe { in_flight_op.as_mut().get_unchecked_mut() };
-                op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
+            let offset = io_op.disk_offset;
+            let op_mut = unsafe { in_flight_op.as_mut().get_unchecked_mut() };
+            op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
+            op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
 
-                let overlapped_ptr = &mut op_mut.overlapped as *mut _;
-                let read_size = op_mut.op.size;
-                let result = unsafe {
-                    ReadFile(
-                        overlapped_handle,
-                        Some(&mut op_mut.buffer.as_mut_slice()[..read_size]),
-                        None,
-                        Some(overlapped_ptr),
-                    )
-                };
+            let overlapped_ptr = &mut op_mut.overlapped as *mut _;
+            let read_size = io_op.size;
+            let result = unsafe {
+                ReadFile(
+                    overlapped_handle,
+                    Some(&mut op_mut.buffer.as_mut_slice()[..read_size]),
+                    None,
+                    Some(overlapped_ptr),
+                )
+            };
 
-                match result {
-                    Ok(()) => {}
-                    Err(_) => {
-                        let last_error = unsafe { GetLastError() };
-                        if last_error != ERROR_IO_PENDING {
-                            return Err(crate::error::MftError::Io(
-                                std::io::Error::from_raw_os_error(last_error.0 as i32),
-                            ));
-                        }
+            match result {
+                Ok(()) => {}
+                Err(_) => {
+                    let last_error = unsafe { GetLastError() };
+                    if last_error != ERROR_IO_PENDING {
+                        return Err(crate::error::MftError::Io(
+                            std::io::Error::from_raw_os_error(last_error.0 as i32),
+                        ));
                     }
                 }
-
-                in_flight[slot_id] = Some(in_flight_op);
             }
+
+            in_flight[slot_id] = Some(in_flight_op);
+            next_issue += 1;
         }
 
-        // Process completions
-        while completed_count < total_io_ops {
+        // Process completions with deterministic ordering
+        // We continue until all ops have been processed in order
+        while next_process < total_ops {
             let mut bytes_transferred: u32 = 0;
             let mut completion_key: usize = 0;
             let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
@@ -532,45 +557,95 @@ impl CppIoPipeline {
             if let Some(slot_idx) = completed_slot {
                 if let Some(mut completed_op) = in_flight[slot_idx].take() {
                     let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
+                    let seq = op_mut.seq;
 
-                    // Process chunk using C++ two-phase pipeline
-                    let buffer_slice =
-                        &mut op_mut.buffer.as_mut_slice()[..bytes_transferred as usize];
-                    let virtual_offset = op_mut.op.virtual_offset;
+                    // Track out-of-order completions for diagnostics
+                    if seq != next_process {
+                        out_of_order_count += 1;
+                        let depth = seq.saturating_sub(next_process);
+                        max_reorder_depth = max_reorder_depth.max(depth);
+                    }
 
-                    pipeline.process_chunk(buffer_slice, virtual_offset);
-
+                    // Store completed buffer in reorder buffer (don't process yet)
+                    let buffer = std::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
+                    completed_buffers[seq] = Some((buffer, bytes_transferred as usize));
                     bytes_read_total += bytes_transferred as u64;
-                    completed_count += 1;
 
-                    // Recycle buffer and queue next read
-                    let recycled_buffer =
-                        std::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
-                    buffer_pool.push(recycled_buffer);
+                    // Process buffers in order as far as possible
+                    while next_process < total_ops {
+                        let Some((mut buf, bytes_xfer)) = completed_buffers[next_process].take()
+                        else {
+                            break; // Next buffer not ready yet
+                        };
 
-                    // Queue next read if available
-                    if let Some(next_op) = io_ops.pop_front() {
-                        let buffer = buffer_pool.pop().unwrap();
+                        let io_op = &io_ops[next_process];
+
+                        // Fix #4: Alignment assertions for skip slicing
+                        // If any of these fail, it means we are slicing the buffer such that
+                        // record boundaries are broken — a guaranteed source of weirdness.
+                        let bytes_per_record = self.bytes_per_record as u64;
+                        debug_assert!(
+                            io_op.virtual_offset % bytes_per_record == 0,
+                            "virtual_offset {} not aligned to record size {}",
+                            io_op.virtual_offset,
+                            bytes_per_record
+                        );
+                        debug_assert!(
+                            bytes_xfer as u64 % bytes_per_record == 0
+                                || next_process == total_ops - 1,
+                            "buffer size {} not aligned to record size {} (not last chunk)",
+                            bytes_xfer,
+                            bytes_per_record
+                        );
+
+                        let buffer_slice = &mut buf.as_mut_slice()[..bytes_xfer];
+                        pipeline.process_chunk(buffer_slice, io_op.virtual_offset);
+
+                        // Return buffer to pool
+                        buffer_pool.push(buf);
+                        next_process += 1;
+                    }
+
+                    // Refill idle slots, but bound how far ahead we issue reads
+                    // This limits memory usage to at most `concurrency` buffers waiting
+                    for slot in in_flight.iter_mut() {
+                        if next_issue >= total_ops {
+                            break;
+                        }
+                        // Bound: don't issue reads too far ahead of processing
+                        if next_issue >= next_process + concurrency {
+                            break;
+                        }
+
+                        // Skip slots that are still in-flight
+                        if slot.is_some() {
+                            continue;
+                        }
+
+                        let io_op = &io_ops[next_issue];
+                        let buffer = buffer_pool
+                            .pop()
+                            .unwrap_or_else(|| AlignedBuffer::new(max_io_size));
                         let mut new_in_flight = Box::pin(InFlightOp {
                             overlapped: unsafe { std::mem::zeroed() },
                             buffer,
-                            op: next_op,
+                            seq: next_issue,
                         });
 
-                        let offset = new_in_flight.op.disk_offset;
+                        let offset = io_op.disk_offset;
                         let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
                         new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
                         new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
                             (offset >> 32) as u32;
 
-                        let overlapped_ptr = &mut new_op_mut.overlapped as *mut _;
-                        let read_size = new_op_mut.op.size;
+                        let new_overlapped_ptr = &mut new_op_mut.overlapped as *mut _;
+                        let read_size = io_op.size;
                         let result = unsafe {
                             ReadFile(
                                 overlapped_handle,
                                 Some(&mut new_op_mut.buffer.as_mut_slice()[..read_size]),
                                 None,
-                                Some(overlapped_ptr),
+                                Some(new_overlapped_ptr),
                             )
                         };
 
@@ -586,7 +661,8 @@ impl CppIoPipeline {
                             }
                         }
 
-                        in_flight[slot_idx] = Some(new_in_flight);
+                        *slot = Some(new_in_flight);
+                        next_issue += 1;
                     }
                 }
             }
@@ -604,7 +680,9 @@ impl CppIoPipeline {
             read_ms,
             throughput_mbps,
             bytes_read_mb = bytes_read_total / (1024 * 1024),
-            "C++ I/O pipeline data reads complete"
+            out_of_order_completions = out_of_order_count,
+            max_reorder_depth = max_reorder_depth,
+            "C++ I/O pipeline data reads complete (deterministic ordering)"
         );
 
         // Log diagnostic summary

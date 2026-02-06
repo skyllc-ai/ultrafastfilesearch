@@ -2456,6 +2456,20 @@ impl MftIndex {
     #[allow(clippy::print_stdout)]
     fn compute_tree_metrics_cpp_port(&mut self, debug: bool) {
         tracing::debug!("[TRIP] MftIndex::compute_tree_metrics_cpp_port ENTER (first pass)");
+
+        // Parity-first: rebuild directory children from name graph unconditionally.
+        // This removes any parse-order artifacts from live mode and stabilizes
+        // name_index mapping.
+        //
+        // Gate this behind env var so production fast-path is preserved.
+        // Set UFFS_REBUILD_CHILDREN_ALWAYS=1 for parity validation runs.
+        if std::env::var_os("UFFS_REBUILD_CHILDREN_ALWAYS").is_some() {
+            tracing::debug!(
+                "[TRIP] compute_tree_metrics_cpp_port -> rebuilding children from names (forced via env)"
+            );
+            self.rebuild_children_from_names();
+        }
+
         // First pass: compute tree metrics
         crate::cpp_tree::compute_tree_metrics_cpp_port(self, debug);
         tracing::debug!("[TRIP] MftIndex::compute_tree_metrics_cpp_port -> first pass done");
