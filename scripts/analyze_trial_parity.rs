@@ -644,22 +644,19 @@ fn parse_diagnostic_log(trial_dir: &Path) -> DiagnosticLogAnalysis {
     let reader = BufReader::new(file);
 
     for line in reader.lines().filter_map(|l| l.ok()) {
-        // Check for tripwire - accept ANY [TRIP] marker (Fix #4)
-        // This is more flexible than checking for a specific tripwire string
-        if line.contains("[TRIP]") {
+        // Check for tripwire - accept [TRIPWIRE] or TRIPWIRE_ markers (Fix #4)
+        // The log format is: [TRIPWIRE] TRIPWIRE_UFFS_CPP_TREE_FIX_v0.2.xxx
+        if line.contains("[TRIPWIRE]") || line.contains("TRIPWIRE_") {
             analysis.tripwire_found = true;
             // Collect up to 5 samples for diagnostics
             if analysis.tripwire_samples.len() < 5 {
-                // Extract just the [TRIP] portion for brevity
-                if let Some(start) = line.find("[TRIP]") {
-                    let sample = &line[start..];
-                    let sample = if sample.len() > 80 {
-                        format!("{}...", &sample[..80])
-                    } else {
-                        sample.to_string()
-                    };
-                    analysis.tripwire_samples.push(sample);
-                }
+                // Extract the tripwire line for display
+                let sample = if line.len() > 80 {
+                    format!("{}...", &line[..80])
+                } else {
+                    line.clone()
+                };
+                analysis.tripwire_samples.push(sample);
             }
         }
 
@@ -696,9 +693,38 @@ fn parse_diagnostic_log(trial_dir: &Path) -> DiagnosticLogAnalysis {
 }
 
 fn find_log_file(dir: &Path) -> Option<PathBuf> {
-    // Try rust_live_*.log first
-    if let Some(f) = find_file_with_suffix(dir, ".log") {
-        return Some(f);
+    // Priority order for log files:
+    // 1. rust_live_*.log (contains tripwire markers from LIVE scan)
+    // 2. Any other .log file
+    if let Ok(entries) = fs::read_dir(dir) {
+        let mut logs: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .ends_with(".log")
+            })
+            .map(|e| e.path())
+            .collect();
+
+        // Sort to prioritize rust_live_*.log files
+        logs.sort_by(|a, b| {
+            let a_name = a.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+            let b_name = b.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+            let a_is_rust_live = a_name.starts_with("rust_live");
+            let b_is_rust_live = b_name.starts_with("rust_live");
+            // rust_live_*.log files come first (but not rust_live_trace_*.log)
+            let a_is_trace = a_name.contains("trace");
+            let b_is_trace = b_name.contains("trace");
+            match (a_is_rust_live && !a_is_trace, b_is_rust_live && !b_is_trace) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a_name.cmp(&b_name),
+            }
+        });
+
+        return logs.into_iter().next();
     }
     None
 }
@@ -1117,9 +1143,9 @@ fn print_diagnostic_analysis(analysis: &DiagnosticLogAnalysis) {
             }
         }
     } else {
-        println!("   🔴 No [TRIP] markers found in log!");
+        println!("   🔴 No [TRIPWIRE] markers found in log!");
         println!("   → The binary may not have the fixed code paths");
-        println!("   → Rebuild with latest code and verify with: strings uffs.exe | grep TRIP");
+        println!("   → Rebuild with latest code and verify with: strings uffs.exe | grep TRIPWIRE");
     }
     println!();
 
@@ -1499,7 +1525,7 @@ fn write_diagnostic_section(f: &mut File, diag: &DiagnosticLogAnalysis, live_res
     writeln!(f).unwrap();
     writeln!(f, "| Check | Status | Meaning |").unwrap();
     writeln!(f, "|-------|--------|---------|").unwrap();
-    writeln!(f, "| [TRIP] markers | {} | {} |",
+    writeln!(f, "| [TRIPWIRE] markers | {} | {} |",
         if diag.tripwire_found { "✅ Found" } else { "🔴 NOT FOUND" },
         if diag.tripwire_found { "Fixed code paths are executing" } else { "Binary may not have fixed code - REBUILD!" }
     ).unwrap();
