@@ -37,7 +37,7 @@
 // here.
 #[cfg(not(windows))]
 use core::future::Future;
-use std::io::stdout;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -793,9 +793,10 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     // Timer format
     let timer = UtcTime::rfc_3339();
 
-    // Terminal layer (with ANSI colors, file/line info, thread IDs)
+    // Terminal layer (to stderr to avoid corrupting output when redirecting stdout,
+    // with ANSI colors, file/line info, thread IDs)
     let terminal_layer = tracing_subscriber::fmt::layer()
-        .with_writer(stdout)
+        .with_writer(io::stderr)
         .with_timer(timer.clone())
         .with_ansi(true)
         .with_file(true)

@@ -460,11 +460,15 @@ try {
 
             # 2. Rust LIVE scan (with diagnostic logging via RUST_LOG)
             # --no-cache forces fresh MFT read to ensure tree metrics are computed with current algorithms
+            # NOTE: cpp_port algorithms require UFFS_EXPERIMENTAL=1 (added in Fix #2)
             if ($HasRust) {
+                $savedExperimental = $env:UFFS_EXPERIMENTAL
+                $env:UFFS_EXPERIMENTAL = "1"
                 $runs += Run-LoggedLocal -Title "Rust LIVE (cpp io): drive $Drive" `
                     -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --io-algo=cpp --chunk-algo=cpp --no-cache") `
                     -LogFileName $rustLiveLog `
                     -OutFileName $rustLiveOut
+                $env:UFFS_EXPERIMENTAL = $savedExperimental
             } else {
                 $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust LIVE (cpp io)"; Command=""; LogFile=$rustLiveLog; OutFile=$rustLiveOut; DurationMs=$null; ExitCode=$null }
             }
