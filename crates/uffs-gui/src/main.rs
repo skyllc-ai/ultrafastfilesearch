@@ -17,13 +17,6 @@
 //! - `RUST_LOG_FILE`: File log level (default: `info`)
 //! - `UFFS_LOG_DIR`: Log directory (default: `~/bin/uffs/logs`)
 
-// Suppress lints for GUI binary - these are intentional for GUI apps
-#![allow(clippy::print_stdout)]
-#![allow(clippy::print_stderr)]
-#![allow(clippy::use_debug)]
-#![allow(clippy::single_call_fn)]
-#![allow(clippy::missing_docs_in_private_items)]
-#![allow(unused_crate_dependencies)]
 
 use std::io;
 use std::path::PathBuf;
@@ -111,7 +104,7 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     // Combine layers
     let subscriber = Registry::default().with(terminal_layer).with(file_layer);
 
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used, reason = "panic is correct if global subscriber setup fails")]
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set global tracing subscriber");
 
