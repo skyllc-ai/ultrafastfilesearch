@@ -532,7 +532,7 @@ fn compare_dataframes(
                 .filter(|c| cpp_cols.contains(*c))
                 .unwrap_or(field);
             (field, display_col, display_col) // Use display name for both C++
-                                              // and Rust
+            // and Rust
         })
         .collect();
 
@@ -546,7 +546,7 @@ fn compare_dataframes(
                 .filter(|c| cpp_cols.contains(*c))
                 .unwrap_or(field);
             (field, display_col, display_col) // Use display name for both C++
-                                              // and Rust
+            // and Rust
         })
         .collect();
 

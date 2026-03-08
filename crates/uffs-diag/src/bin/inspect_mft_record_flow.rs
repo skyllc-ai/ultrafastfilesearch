@@ -20,7 +20,7 @@ use std::env;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use uffs_mft::{load_raw_mft, LoadRawOptions, RawMftData};
+use uffs_mft::{LoadRawOptions, RawMftData, load_raw_mft};
 // Keep uffs_polars dependency wired in for version-locking, even though this
 // binary does not use it directly.
 #[expect(

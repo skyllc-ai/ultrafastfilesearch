@@ -24,8 +24,8 @@ use std::env;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use uffs_mft::parse::{parse_record_full, MftRecordMerger, ParseResult};
-use uffs_mft::raw::{load_raw_mft, LoadRawOptions};
+use uffs_mft::parse::{MftRecordMerger, ParseResult, parse_record_full};
+use uffs_mft::raw::{LoadRawOptions, load_raw_mft};
 // This binary intentionally pulls in uffs_polars via the uffs-diag crate
 // dependency set so that offline diagnostics can share the same Polars
 // facade version as the main CLI, even though this specific tool does not

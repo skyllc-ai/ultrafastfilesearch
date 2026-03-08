@@ -25,7 +25,7 @@ use std::io::{BufReader, Read};
 use std::path::Path;
 use std::time::Instant;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// Header size in bytes (matches `uffs-mft::raw`).
 const HEADER_SIZE: usize = 64;
