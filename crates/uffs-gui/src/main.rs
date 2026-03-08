@@ -22,9 +22,8 @@
     reason = "uffs-core, uffs-mft, uffs-polars, tokio, and anyhow are declared for future GUI implementation"
 )]
 
-use std::fs;
-use std::io;
 use std::path::PathBuf;
+use std::{fs, io};
 
 use clap::Parser;
 use tracing::info;
@@ -50,7 +49,10 @@ struct Cli {
 /// If `verbose` is true and `RUST_LOG` is not set, uses `info` level for
 /// terminal. Otherwise, terminal logging is controlled by `RUST_LOG` (default:
 /// `error`). File logging is controlled by `RUST_LOG_FILE` (default: `info`).
-#[expect(clippy::single_call_fn, reason = "logging setup is logically separate from main")]
+#[expect(
+    clippy::single_call_fn,
+    reason = "logging setup is logically separate from main"
+)]
 fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     // Get log directory (default: ~/bin/uffs/logs)
     let log_dir = std::env::var("UFFS_LOG_DIR").map_or_else(
@@ -108,7 +110,10 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     // Combine layers
     let subscriber = Registry::default().with(terminal_layer).with(file_layer);
 
-    #[expect(clippy::expect_used, reason = "panic is correct if global subscriber setup fails")]
+    #[expect(
+        clippy::expect_used,
+        reason = "panic is correct if global subscriber setup fails"
+    )]
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set global tracing subscriber");
 
@@ -116,7 +121,10 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
 }
 
 /// Entry point: prints a placeholder banner and exits.
-#[expect(clippy::print_stderr, reason = "placeholder banner intentionally prints to stderr")]
+#[expect(
+    clippy::print_stderr,
+    reason = "placeholder banner intentionally prints to stderr"
+)]
 fn main() -> std::process::ExitCode {
     // Check for -v/--verbose flag early
     let verbose = std::env::args().any(|arg| arg == "-v" || arg == "--verbose");

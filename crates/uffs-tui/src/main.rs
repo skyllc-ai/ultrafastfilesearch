@@ -14,7 +14,10 @@
 //! - `RUST_LOG_FILE`: File log level (default: `info`)
 //! - `UFFS_LOG_DIR`: Log directory (default: `~/bin/uffs/logs`)
 
-#![expect(unused_crate_dependencies, reason = "tokio is a transitive runtime dependency not directly referenced")]
+#![expect(
+    unused_crate_dependencies,
+    reason = "tokio is a transitive runtime dependency not directly referenced"
+)]
 
 use std::io;
 use std::path::PathBuf;
@@ -66,7 +69,10 @@ struct Cli {
 /// If `verbose` is true and `RUST_LOG` is not set, uses `info` level for
 /// terminal. Otherwise, terminal logging is controlled by `RUST_LOG` (default:
 /// `error`). File logging is controlled by `RUST_LOG_FILE` (default: `info`).
-#[expect(clippy::single_call_fn, reason = "separated from main for readability; logging setup is a distinct concern")]
+#[expect(
+    clippy::single_call_fn,
+    reason = "separated from main for readability; logging setup is a distinct concern"
+)]
 fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     use std::fs;
 
@@ -128,7 +134,10 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     // Combine layers
     let subscriber = Registry::default().with(terminal_layer).with(file_layer);
 
-    #[expect(clippy::expect_used, reason = "global subscriber must be set once at startup; failure is unrecoverable")]
+    #[expect(
+        clippy::expect_used,
+        reason = "global subscriber must be set once at startup; failure is unrecoverable"
+    )]
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set global tracing subscriber");
 
@@ -178,8 +187,14 @@ fn main() -> Result<()> {
     terminal.show_cursor()?;
 
     if let Err(err) = res {
-        #[expect(clippy::print_stderr, reason = "terminal is restored at this point; stderr is appropriate for error reporting")]
-        #[expect(clippy::use_debug, reason = "Debug format provides full error chain for diagnostics")]
+        #[expect(
+            clippy::print_stderr,
+            reason = "terminal is restored at this point; stderr is appropriate for error reporting"
+        )]
+        #[expect(
+            clippy::use_debug,
+            reason = "Debug format provides full error chain for diagnostics"
+        )]
         {
             eprintln!("Error: {err:?}");
         }
@@ -189,8 +204,14 @@ fn main() -> Result<()> {
 }
 
 /// Run the TUI event loop, handling key input and rendering.
-#[expect(clippy::single_call_fn, reason = "separated from main for readability; event loop is a distinct concern")]
-#[expect(clippy::wildcard_enum_match_arm, reason = "only specific keys are handled; wildcard is idiomatic for key dispatch")]
+#[expect(
+    clippy::single_call_fn,
+    reason = "separated from main for readability; event loop is a distinct concern"
+)]
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "only specific keys are handled; wildcard is idiomatic for key dispatch"
+)]
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
 where
     <B as ratatui::backend::Backend>::Error: Send + Sync + 'static,
@@ -217,10 +238,22 @@ where
 }
 
 /// Render the TUI layout: search bar, status, results list, and help bar.
-#[expect(clippy::single_call_fn, reason = "separated from run_app for readability; UI rendering is a distinct concern")]
-#[expect(clippy::indexing_slicing, reason = "layout split guarantees exactly 4 chunks matching the 4 constraints")]
-#[expect(clippy::missing_asserts_for_indexing, reason = "layout split guarantees exactly 4 chunks matching the 4 constraints")]
-#[expect(clippy::option_if_let_else, reason = "if-let is more readable for widget construction with different layouts per branch")]
+#[expect(
+    clippy::single_call_fn,
+    reason = "separated from run_app for readability; UI rendering is a distinct concern"
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "layout split guarantees exactly 4 chunks matching the 4 constraints"
+)]
+#[expect(
+    clippy::missing_asserts_for_indexing,
+    reason = "layout split guarantees exactly 4 chunks matching the 4 constraints"
+)]
+#[expect(
+    clippy::option_if_let_else,
+    reason = "if-let is more readable for widget construction with different layouts per branch"
+)]
 fn ui(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -306,9 +339,18 @@ fn ui(frame: &mut Frame, app: &App) {
 }
 
 /// Format file size in human-readable format.
-#[expect(clippy::single_call_fn, reason = "separated for testability and readability")]
-#[expect(clippy::cast_precision_loss, reason = "f64 provides sufficient precision for human-readable file sizes")]
-#[expect(clippy::float_arithmetic, reason = "float division is needed for human-readable size formatting")]
+#[expect(
+    clippy::single_call_fn,
+    reason = "separated for testability and readability"
+)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "f64 provides sufficient precision for human-readable file sizes"
+)]
+#[expect(
+    clippy::float_arithmetic,
+    reason = "float division is needed for human-readable size formatting"
+)]
 fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;

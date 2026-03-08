@@ -22,7 +22,10 @@ pub struct SearchResult {
 }
 
 /// Application state.
-#[expect(clippy::partial_pub_fields, reason = "dataframe is intentionally private; accessed only through methods")]
+#[expect(
+    clippy::partial_pub_fields,
+    reason = "dataframe is intentionally private; accessed only through methods"
+)]
 pub struct App {
     /// Current search input.
     pub input: String,
@@ -73,7 +76,10 @@ impl App {
     }
 
     /// Load an index from a Parquet file.
-    #[expect(dead_code, reason = "public API for runtime index loading; not yet wired to a keybinding")]
+    #[expect(
+        dead_code,
+        reason = "public API for runtime index loading; not yet wired to a keybinding"
+    )]
     pub fn load_index(&mut self, path: &std::path::Path) -> Result<(), String> {
         match MftReader::load_parquet(path) {
             Ok(df) => {
@@ -177,7 +183,10 @@ impl Default for App {
 }
 
 /// Convert a `DataFrame` to a vector of `SearchResult`.
-#[expect(clippy::single_call_fn, reason = "separated from search method for readability")]
+#[expect(
+    clippy::single_call_fn,
+    reason = "separated from search method for readability"
+)]
 fn dataframe_to_results(df: &DataFrame) -> Vec<SearchResult> {
     let mut results = Vec::with_capacity(df.height());
 
