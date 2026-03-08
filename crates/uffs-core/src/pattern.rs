@@ -25,11 +25,6 @@
 //! assert_eq!(parsed.drive(), None);
 //! ```
 
-// Allow single-call functions for clarity and testability
-#![allow(clippy::single_call_fn)]
-// Allow shadowing for pattern parsing (input -> trimmed input)
-#![allow(clippy::shadow_reuse)]
-
 use crate::error::{CoreError, Result};
 
 /// Type of search pattern.
@@ -70,6 +65,10 @@ impl ParsedPattern {
     /// # Errors
     ///
     /// Returns an error if the pattern is empty or invalid.
+    #[expect(
+        clippy::shadow_reuse,
+        reason = "rebinding input to trimmed version is idiomatic"
+    )]
     pub fn parse(input: &str) -> Result<Self> {
         let input = input.trim();
 
@@ -100,6 +99,10 @@ impl ParsedPattern {
     }
 
     /// Parse a REGEX pattern (after stripping the `>` prefix).
+    #[expect(
+        clippy::shadow_reuse,
+        reason = "rebinding pattern to stripped version is idiomatic"
+    )]
     fn parse_regex(pattern: &str) -> Result<Self> {
         // Strip surrounding quotes if present
         let pattern = pattern.trim().trim_matches('"').trim_matches('\'');

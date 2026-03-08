@@ -9,39 +9,70 @@
 //!
 //! Run with: `cargo bench --bench search_benchmarks`
 
-// =============================================================================
-// Benchmark-specific lint exceptions
-// =============================================================================
-// These are acceptable in benchmark code because:
-// 1. Benchmark functions are called once by criterion_group! macro by design
-// 2. Benchmarks intentionally discard results to measure pure computation time
-// 3. Benchmarks use std types directly for simplicity
-// 4. Benchmarks use unwrap/expect on controlled test data that cannot fail
-// 5. Benchmarks may have similar variable names for different sizes
-// 6. Benchmarks reuse variable names in loops for clarity
-// 7. Benchmarks don't need full documentation
-// =============================================================================
-#![allow(clippy::single_call_fn)]
-#![allow(clippy::let_underscore_must_use)]
-#![allow(clippy::let_underscore_untyped)]
-#![allow(clippy::std_instead_of_core)]
-#![allow(clippy::std_instead_of_alloc)]
-#![allow(clippy::unwrap_used)]
-#![allow(clippy::expect_used)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::missing_docs_in_private_items)]
-#![allow(clippy::missing_panics_doc)]
-#![allow(clippy::shadow_reuse)]
-#![allow(clippy::shadow_same)]
-#![allow(clippy::semicolon_if_nothing_returned)]
-#![allow(clippy::semicolon_inside_block)]
-#![allow(clippy::semicolon_outside_block)]
-#![allow(clippy::needless_pass_by_value)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::indexing_slicing)]
-#![allow(clippy::min_ident_chars)]
-// uffs-mft is a dependency of uffs-core but not directly used in benchmarks
-#![allow(unused_crate_dependencies)]
+// Benchmark-specific lint exceptions: benchmark code uses unwrap/expect on controlled data,
+// discards results, uses std types directly, and doesn't need full documentation.
+#![expect(
+    clippy::single_call_fn,
+    reason = "benchmark functions called once by criterion_group! macro"
+)]
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "benchmarks discard results to measure computation"
+)]
+#![expect(clippy::let_underscore_untyped, reason = "benchmarks discard results")]
+#![expect(
+    clippy::std_instead_of_core,
+    reason = "benchmark code uses std for simplicity"
+)]
+#![expect(
+    clippy::std_instead_of_alloc,
+    reason = "benchmark code uses std for simplicity"
+)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "benchmark code unwraps controlled test data"
+)]
+#![expect(
+    clippy::expect_used,
+    reason = "benchmark code expects on controlled test data"
+)]
+#![expect(
+    clippy::similar_names,
+    reason = "benchmark variable names for different sizes"
+)]
+#![expect(clippy::missing_docs_in_private_items, reason = "benchmark code")]
+#![expect(clippy::missing_panics_doc, reason = "benchmark code")]
+#![expect(
+    clippy::shadow_reuse,
+    reason = "benchmarks reuse variable names in loops"
+)]
+#![expect(
+    clippy::shadow_same,
+    reason = "benchmarks reuse variable names in loops"
+)]
+#![expect(clippy::semicolon_if_nothing_returned, reason = "benchmark code")]
+#![expect(clippy::semicolon_inside_block, reason = "benchmark code")]
+#![expect(clippy::semicolon_outside_block, reason = "benchmark code")]
+#![expect(
+    clippy::needless_pass_by_value,
+    reason = "criterion API requires owned values"
+)]
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "benchmark data fits in target types"
+)]
+#![expect(
+    clippy::indexing_slicing,
+    reason = "benchmark code indexes known-valid positions"
+)]
+#![expect(
+    clippy::min_ident_chars,
+    reason = "benchmark code uses short loop variables"
+)]
+#![expect(
+    unused_crate_dependencies,
+    reason = "uffs-mft is a transitive dependency not directly used"
+)]
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use uffs_core::pattern::ParsedPattern;

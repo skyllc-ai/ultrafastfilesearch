@@ -39,7 +39,6 @@
 
 #![forbid(unsafe_code)]
 #![warn(clippy::all, clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
 
 // Suppress unused crate warnings for dev-dependencies (used in benchmarks/tests
 // only)
@@ -78,7 +77,10 @@ pub use index_search::{
     IndexPattern, IndexQuery, QueryComplexity, QueryFeatures, QueryMode, SearchResult, TypeFilter,
     analyze_pattern_complexity, compile_extensions, compile_index_pattern, compile_parsed_pattern,
 };
-#[allow(deprecated)]
+#[expect(
+    deprecated,
+    reason = "re-exporting deprecated function for backward compatibility"
+)]
 pub use path_resolver::add_path_column_multi_drive;
 pub use path_resolver::{
     FastPathResolver, FastPathResolverMultiDrive, FastPathResolverStats, NameArena, PathResolver,

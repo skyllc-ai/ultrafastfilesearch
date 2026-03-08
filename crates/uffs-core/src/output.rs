@@ -7,8 +7,6 @@
 //! - Boolean representation (pos/neg)
 //! - Header control
 
-#![allow(clippy::single_call_fn)]
-
 use std::io::Write;
 
 use uffs_polars::{Column, DataFrame, DataType};
@@ -17,7 +15,10 @@ use crate::error::Result;
 
 /// Available output columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(clippy::missing_docs_in_private_items)]
+#[expect(
+    clippy::missing_docs_in_private_items,
+    reason = "variants are self-documenting via display_name()"
+)]
 pub enum OutputColumn {
     /// Full path including filename.
     Path,
@@ -266,7 +267,10 @@ impl OutputColumn {
 
     /// Convert to a tree column if applicable.
     #[must_use]
-    #[allow(clippy::wildcard_enum_match_arm)] // Intentional: only tree columns convert
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "intentional: only tree columns convert"
+    )]
     pub const fn to_tree_column(&self) -> Option<crate::tree::TreeColumn> {
         match self {
             Self::Descendants => Some(crate::tree::TreeColumn::Descendants),
@@ -378,7 +382,10 @@ impl OutputConfig {
     ///
     /// Special value "all" returns None (meaning all columns).
     #[must_use]
-    #[allow(clippy::shadow_reuse)]
+    #[expect(
+        clippy::shadow_reuse,
+        reason = "rebinding input to trimmed+lowered version is clearer than a new name"
+    )]
     pub fn parse_columns(input: &str) -> Option<Vec<OutputColumn>> {
         let input = input.trim().to_lowercase();
         if input == "all" {
@@ -511,7 +518,10 @@ impl OutputConfig {
     /// # Errors
     ///
     /// Returns an error if writing fails.
-    #[allow(clippy::option_if_let_else)]
+    #[expect(
+        clippy::option_if_let_else,
+        reason = "if-let-else is clearer for control flow with early return"
+    )]
     pub fn write<W: Write>(&self, df: &DataFrame, mut writer: W) -> Result<()> {
         // Determine columns to output - use CPP_COLUMN_ORDER when "all" is specified
         let output_cols: &[OutputColumn] = if let Some(cols) = &self.columns {
@@ -559,7 +569,14 @@ impl OutputConfig {
     }
 
     /// Format a single value from a series.
-    #[allow(clippy::option_if_let_else, clippy::wildcard_enum_match_arm)]
+    #[expect(
+        clippy::option_if_let_else,
+        reason = "if-let-else is clearer for match on dtype"
+    )]
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "intentional catch-all for remaining dtypes"
+    )]
     fn format_value(&self, series: &Column, row_idx: usize) -> String {
         use chrono::FixedOffset;
         use uffs_polars::{AnyValue, TimeUnit};
@@ -666,7 +683,18 @@ pub fn add_descendants_column(df: &DataFrame) -> Result<DataFrame> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test code uses unwrap on controlled data"
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "test code indexes known-valid positions"
+)]
+#[expect(
+    clippy::expect_used,
+    reason = "test code uses expect on controlled data"
+)]
 mod tests {
     use super::*;
 

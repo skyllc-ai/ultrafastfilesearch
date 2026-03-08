@@ -48,12 +48,11 @@ impl NameArena {
     /// # Panics
     ///
     /// Panics if the buffer exceeds 4GB (`u32::MAX` bytes).
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "buffer <4GB in practice; name len clamped to u16::MAX"
+    )]
     pub fn add(&mut self, name: &str) -> (u32, u16) {
-        // Intentionally truncating for memory efficiency.
-        // Buffer size is checked to not exceed u32::MAX in practice.
-        // Name length is clamped to u16::MAX (65535 chars) which is reasonable for
-        // filenames.
         let offset = self.buffer.len() as u32;
         let len = name.len().min(usize::from(u16::MAX)) as u16;
         self.buffer.push_str(name);
@@ -149,7 +148,10 @@ impl FastPathResolver {
     /// # Errors
     ///
     /// Returns an error if required columns are missing.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "u64 FRS fits in usize on 64-bit platforms"
+    )]
     pub fn build(df: &DataFrame, volume: char) -> Result<Self> {
         let frs_col = df.column("frs")?.u64()?;
         let parent_col = df.column("parent_frs")?.u64()?;
@@ -218,7 +220,10 @@ impl FastPathResolver {
     /// Caches the result for future lookups.
     pub fn resolve_cached(&mut self, frs: u64) -> String {
         // Check cache first
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "u64 FRS fits in usize on 64-bit platforms"
+        )]
         let frs_idx = frs as usize;
         if let Some(Some(cached)) = self.path_cache.get(frs_idx) {
             return cached.clone();
@@ -236,7 +241,10 @@ impl FastPathResolver {
     }
 
     /// Get a cached path if available.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "u64 FRS fits in usize on 64-bit platforms"
+    )]
     fn get_cached(&self, frs: u64) -> Option<&str> {
         self.path_cache
             .get(frs as usize)
@@ -286,7 +294,10 @@ impl FastPathResolver {
     }
 
     /// Format a partial path when resolution fails midway.
-    #[allow(clippy::single_call_fn)]
+    #[expect(
+        clippy::single_call_fn,
+        reason = "extracted for clarity from build_path"
+    )]
     fn format_partial_path(components: &[&str], missing_frs: u64) -> String {
         if components.is_empty() {
             return format!("<unknown:{missing_frs}>");
@@ -304,7 +315,10 @@ impl FastPathResolver {
 
     /// Get an entry by FRS (O(1) lookup).
     #[inline]
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "u64 FRS fits in usize on 64-bit platforms"
+    )]
     fn get_entry(&self, frs: u64) -> Option<&FastEntry> {
         self.entries.get(frs as usize).and_then(Option::as_ref)
     }

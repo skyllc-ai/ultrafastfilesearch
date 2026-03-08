@@ -34,8 +34,11 @@
 use std::collections::HashSet;
 
 use aho_corasick::AhoCorasick;
-// memchr is used by aho-corasick internally; we keep it for future SIMD optimizations
-#[allow(unused_imports)]
+// memchr is used by aho-corasick internally; kept for future SIMD optimizations
+#[expect(
+    unused_imports,
+    reason = "memchr used by aho-corasick; kept for future SIMD work"
+)]
 use memchr as _;
 use rayon::prelude::*;
 use regex::Regex;
@@ -562,7 +565,10 @@ pub enum TypeFilter {
 
 /// Query options for `IndexQuery`.
 #[derive(Debug, Clone, Copy)]
-#[allow(clippy::struct_excessive_bools)] // Configuration struct with boolean flags
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "configuration struct with independent boolean flags"
+)]
 pub struct QueryOptions {
     /// Type filter (files, dirs, or both).
     pub type_filter: TypeFilter,
@@ -766,7 +772,10 @@ impl<'a> IndexQuery<'a> {
     /// otherwise.
     ///
     /// Extracted to reduce line count of `collect` method.
-    #[allow(clippy::single_call_fn)] // Extracted to satisfy clippy::too_many_lines
+    #[expect(
+        clippy::single_call_fn,
+        reason = "extracted from collect() to satisfy too_many_lines"
+    )]
     fn build_extension_filter_indices(
         pattern: Option<&IndexPattern>,
         index: &MftIndex,
@@ -803,7 +812,10 @@ impl<'a> IndexQuery<'a> {
     /// needed.
     ///
     /// Extracted to reduce line count of `collect` method.
-    #[allow(clippy::single_call_fn)] // Extracted to satisfy clippy::too_many_lines
+    #[expect(
+        clippy::single_call_fn,
+        reason = "extracted from collect() to satisfy too_many_lines"
+    )]
     fn resolve_result_path(
         result: SearchResult,
         record: &FileRecord,
@@ -1166,7 +1178,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
+    #[expect(clippy::unwrap_used, reason = "test code — unwrap on controlled data")]
     fn test_pattern_any() {
         let pattern = compile_index_pattern("*").unwrap();
         assert!(pattern.matches("anything", true));
@@ -1174,7 +1186,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
+    #[expect(clippy::unwrap_used, reason = "test code — unwrap on controlled data")]
     fn test_pattern_exact() {
         let pattern = compile_index_pattern("foo.txt").unwrap();
         assert!(pattern.matches("foo.txt", true));
@@ -1184,7 +1196,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
+    #[expect(clippy::unwrap_used, reason = "test code — unwrap on controlled data")]
     fn test_pattern_prefix() {
         let pattern = compile_index_pattern("foo*").unwrap();
         assert!(pattern.matches("foo", true));
@@ -1194,7 +1206,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
+    #[expect(clippy::unwrap_used, reason = "test code — unwrap on controlled data")]
     fn test_pattern_suffix() {
         let pattern = compile_index_pattern("*.txt").unwrap();
         assert!(pattern.matches("foo.txt", true));
@@ -1204,7 +1216,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
+    #[expect(clippy::unwrap_used, reason = "test code — unwrap on controlled data")]
     fn test_pattern_contains() {
         let pattern = compile_index_pattern("*needle*").unwrap();
         assert!(pattern.matches("needle", true));
@@ -1214,7 +1226,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
+    #[expect(clippy::unwrap_used, reason = "test code — unwrap on controlled data")]
     fn test_pattern_prefix_suffix() {
         let pattern = compile_index_pattern("foo*bar").unwrap();
         assert!(pattern.matches("foobar", true));
@@ -1233,7 +1245,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
+    #[expect(clippy::unwrap_used, reason = "test code — unwrap on controlled data")]
     fn test_extension_index_integration() {
         use uffs_mft::index::{IndexNameRef, MftIndex, ROOT_FRS, SizeInfo};
 
@@ -1350,7 +1362,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test code - unwrap is acceptable
+    #[expect(clippy::unwrap_used, reason = "test code — unwrap on controlled data")]
     fn test_analyze_pattern_complexity() {
         let any = compile_index_pattern("*").unwrap();
         assert_eq!(analyze_pattern_complexity(&any), QueryComplexity::Simple);
