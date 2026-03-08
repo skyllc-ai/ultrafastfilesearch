@@ -1,0 +1,327 @@
+#!/usr/bin/env rust-script
+//! Drive-agnostic SHA256 parity verification for UFFS.
+//!
+//! Runs uffs with cpp_port algorithms against an MFT file, then compares
+//! the sorted output (SHA256) against the C++ reference.
+//!
+//! # Usage
+//!
+//! ```bash
+//! # D-drive (files directly in data_dir)
+//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data D
+//!
+//! # S-drive (files in data_dir/drive_s/)
+//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data/drive_s S
+//! ```
+//!
+//! # Output structure
+//!
+//! Output files have 2 header lines (CSV header + blank), data rows in the
+//! middle, and 4 footer lines (2 blank + "Drives?" + blank). This script
+//! sorts ONLY the data rows, preserving header and footer in place, then
+//! computes SHA256 over the reassembled content.
+//!
+//! ```cargo
+//! [dependencies]
+//! sha2 = "0.10"
+//! ```
+
+use sha2::{Sha256, Digest};
+use std::env;
+use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const HEADER_LINES: usize = 2;
+const FOOTER_LINES: usize = 4;
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 3 {
+        eprintln!("Usage: {} <data_dir> <drive_letter>", args[0]);
+        eprintln!();
+        eprintln!("Examples:");
+        eprintln!("  {} /Users/rnio/uffs_data D", args[0]);
+        eprintln!("  {} /Users/rnio/uffs_data/drive_s S", args[0]);
+        std::process::exit(1);
+    }
+
+    let data_dir = PathBuf::from(&args[1]);
+    let drive_letter = args[2].to_uppercase();
+    let drive_lower = drive_letter.to_lowercase();
+
+    println!("=== UFFS SHA256 Parity Verification ===");
+    println!("Data dir:     {}", data_dir.display());
+    println!("Drive letter: {}", drive_letter);
+    println!();
+
+    // --- Locate files ---
+    let mft_file = data_dir.join(format!("{}_mft.bin", drive_letter));
+    let cpp_file = data_dir.join(format!("cpp_{}.txt", drive_lower));
+
+    if !mft_file.exists() {
+        eprintln!("ERROR: MFT file not found: {}", mft_file.display());
+        std::process::exit(1);
+    }
+    if !cpp_file.exists() {
+        eprintln!("ERROR: C++ reference file not found: {}", cpp_file.display());
+        std::process::exit(1);
+    }
+
+    println!("MFT file:     {}", mft_file.display());
+    println!("C++ reference: {}", cpp_file.display());
+
+    // --- Locate uffs binary ---
+    let uffs_bin = find_uffs_binary();
+    println!("UFFS binary:  {}", uffs_bin.display());
+    println!();
+
+    // --- Run uffs to generate Rust output ---
+    let rust_output = data_dir.join(format!("verify_rust_{}.txt", drive_lower));
+    println!("Running uffs scan (cpp_port algorithms)...");
+
+    // Force PST timezone (UTC-8) to match C++ reference generated pre-DST
+    let status = Command::new(&uffs_bin)
+        .env("UFFS_EXPERIMENTAL", "1")
+        .env("TZ", "PST8")
+        .args([
+            "*",
+            "--mft-file", &mft_file.to_string_lossy(),
+            "--drive", &drive_letter,
+            "--parse-algo", "cpp_port",
+            "--tree-algo", "cpp",
+            "--io-algo", "cpp",
+            "--chunk-algo", "cpp",
+            "--out", &rust_output.to_string_lossy(),
+        ])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => println!("  uffs scan completed successfully."),
+        Ok(s) => {
+            eprintln!("ERROR: uffs exited with status {}", s);
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("ERROR: Failed to run uffs: {}", e);
+            std::process::exit(1);
+        }
+    }
+    println!();
+
+    // --- Compute sorted SHA256 for both files ---
+    println!("Computing SHA256 of sorted output...");
+    let (cpp_hash, cpp_rows) = sorted_sha256(&cpp_file);
+    let (rust_hash, rust_rows) = sorted_sha256(&rust_output);
+
+    println!();
+    println!("C++ reference:  {} ({} data rows)", cpp_hash, cpp_rows);
+    println!("Rust output:    {} ({} data rows)", rust_hash, rust_rows);
+    println!();
+
+    // --- Verdict ---
+    if cpp_hash == rust_hash {
+        println!("RESULT: SHA256 MATCH");
+        println!("  Parity verified for drive {}.", drive_letter);
+
+        // Clean up temporary file
+        let _ = fs::remove_file(&rust_output);
+
+        std::process::exit(0);
+    } else {
+        println!("RESULT: SHA256 MISMATCH");
+        println!("  C++:  {}", cpp_hash);
+        println!("  Rust: {}", rust_hash);
+        println!("  Row count diff: {} (C++) vs {} (Rust)", cpp_rows, rust_rows);
+        println!();
+        println!("  Rust output kept at: {}", rust_output.display());
+
+        // Show first few differing lines
+        show_first_diffs(&cpp_file, &rust_output);
+
+        std::process::exit(1);
+    }
+}
+
+/// Find the uffs binary. Checks the literal `~` path from .cargo/config.toml.
+fn find_uffs_binary() -> PathBuf {
+    // The workspace root is the directory containing this script's parent
+    // We look for the binary relative to the workspace root with a literal ~ directory
+    let workspace_root = find_workspace_root();
+
+    // Check release first, then debug
+    let release = workspace_root
+        .join("~")
+        .join("Library")
+        .join("Caches")
+        .join("uffs")
+        .join("target")
+        .join("release")
+        .join("uffs");
+    if release.exists() {
+        return release;
+    }
+
+    let debug = workspace_root
+        .join("~")
+        .join("Library")
+        .join("Caches")
+        .join("uffs")
+        .join("target")
+        .join("debug")
+        .join("uffs");
+    if debug.exists() {
+        return debug;
+    }
+
+    // Fallback: try PATH
+    if let Ok(output) = Command::new("which").arg("uffs").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return PathBuf::from(path);
+            }
+        }
+    }
+
+    eprintln!("ERROR: Could not find uffs binary.");
+    eprintln!("  Checked: {}", release.display());
+    eprintln!("  Checked: {}", debug.display());
+    eprintln!("  Also checked PATH.");
+    std::process::exit(1);
+}
+
+/// Find the workspace root by looking for Cargo.toml starting from the script location.
+fn find_workspace_root() -> PathBuf {
+    // Try current working directory first
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut dir = cwd.as_path();
+    loop {
+        if dir.join("Cargo.toml").exists() && dir.join(".cargo").exists() {
+            return dir.to_path_buf();
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => break,
+        }
+    }
+
+    // Fallback to cwd
+    cwd
+}
+
+/// Read a file, split into header/data/footer, sort data rows, compute SHA256
+/// over the reassembled content. Returns (hex hash, data row count).
+fn sorted_sha256(path: &Path) -> (String, usize) {
+    let file = fs::File::open(path)
+        .unwrap_or_else(|e| panic!("Failed to open {}: {}", path.display(), e));
+    let reader = BufReader::new(file);
+
+    let all_lines: Vec<String> = reader.lines()
+        .map(|l| l.expect("Failed to read line"))
+        .collect();
+
+    let total = all_lines.len();
+
+    if total <= HEADER_LINES + FOOTER_LINES {
+        eprintln!("WARNING: File {} has only {} lines (expected > {})",
+            path.display(), total, HEADER_LINES + FOOTER_LINES);
+        // Hash all content as-is
+        let mut hasher = Sha256::new();
+        for line in &all_lines {
+            hasher.update(line.as_bytes());
+            hasher.update(b"\n");
+        }
+        let hash = format!("{:x}", hasher.finalize());
+        return (hash, 0);
+    }
+
+    let header = &all_lines[..HEADER_LINES];
+    let footer = &all_lines[total - FOOTER_LINES..];
+    let mut data: Vec<&str> = all_lines[HEADER_LINES..total - FOOTER_LINES]
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+
+    let data_count = data.len();
+    data.sort_unstable();
+
+    // Compute SHA256 of header + sorted data + footer
+    let mut hasher = Sha256::new();
+    for line in header {
+        hasher.update(line.as_bytes());
+        hasher.update(b"\n");
+    }
+    for line in &data {
+        hasher.update(line.as_bytes());
+        hasher.update(b"\n");
+    }
+    for line in footer {
+        hasher.update(line.as_bytes());
+        hasher.update(b"\n");
+    }
+
+    (format!("{:x}", hasher.finalize()), data_count)
+}
+
+/// Show first few differences between sorted data rows of two files.
+fn show_first_diffs(file_a: &Path, file_b: &Path) {
+    let lines_a = read_sorted_data(file_a);
+    let lines_b = read_sorted_data(file_b);
+
+    println!("First 5 differences in sorted data rows:");
+    let mut diff_count = 0;
+
+    let max_len = lines_a.len().max(lines_b.len());
+    let mut ia = 0;
+    let mut ib = 0;
+
+    while ia < lines_a.len() && ib < lines_b.len() && diff_count < 5 {
+        if lines_a[ia] == lines_b[ib] {
+            ia += 1;
+            ib += 1;
+        } else if lines_a[ia] < lines_b[ib] {
+            println!("  C++ only: {}", truncate(&lines_a[ia], 120));
+            ia += 1;
+            diff_count += 1;
+        } else {
+            println!("  Rust only: {}", truncate(&lines_b[ib], 120));
+            ib += 1;
+            diff_count += 1;
+        }
+    }
+
+    while ia < lines_a.len() && diff_count < 5 {
+        println!("  C++ only: {}", truncate(&lines_a[ia], 120));
+        ia += 1;
+        diff_count += 1;
+    }
+
+    while ib < lines_b.len() && diff_count < 5 {
+        println!("  Rust only: {}", truncate(&lines_b[ib], 120));
+        ib += 1;
+        diff_count += 1;
+    }
+}
+
+fn read_sorted_data(path: &Path) -> Vec<String> {
+    let file = fs::File::open(path).expect("Failed to open file");
+    let reader = BufReader::new(file);
+    let all_lines: Vec<String> = reader.lines().map(|l| l.unwrap()).collect();
+    let total = all_lines.len();
+    if total <= HEADER_LINES + FOOTER_LINES {
+        return vec![];
+    }
+    let mut data: Vec<String> = all_lines[HEADER_LINES..total - FOOTER_LINES].to_vec();
+    data.sort_unstable();
+    data
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max])
+    }
+}
