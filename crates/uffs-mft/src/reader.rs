@@ -2561,51 +2561,14 @@ impl MftReader {
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
-                // Check if C++ port algorithm is requested
-                let parse_algorithm = crate::index::ParseAlgorithm::from_env();
-
-                let result = match parse_algorithm {
-                    crate::index::ParseAlgorithm::CppPort => {
-                        // Use C++ port parsing algorithm (two-phase pipeline)
-                        info!("🚀 Using C++ PORT parsing algorithm");
-                        parallel_reader
-                            .read_all_sliding_window_iocp_to_index_cpp_port::<fn(u64, u64)>(
-                                overlapped_handle,
-                                self.volume,
-                                self.concurrency,
-                                self.io_size,
-                                None,
-                            )
-                    }
-                    crate::index::ParseAlgorithm::Current => {
-                        // Determine if we should use parallel parsing (M3 optimization)
-                        let use_parallel = self.parallel_parse.unwrap_or_else(|| {
-                            // Auto-detect: enable for NVMe where I/O is faster than parsing
-                            drive_type.benefits_from_parallel_parsing()
-                        });
-
-                        if use_parallel {
-                            info!("🚀 Using PARALLEL parsing (M3 optimization)");
-                            parallel_reader
-                                .read_all_sliding_window_iocp_to_index_parallel::<fn(u64, u64)>(
-                                    overlapped_handle,
-                                    self.volume,
-                                    self.concurrency,
-                                    self.io_size,
-                                    self.parse_workers,
-                                    None,
-                                )
-                        } else {
-                            parallel_reader.read_all_sliding_window_iocp_to_index::<fn(u64, u64)>(
-                                overlapped_handle,
-                                self.volume,
-                                self.concurrency,
-                                self.io_size,
-                                None,
-                            )
-                        }
-                    }
-                };
+                let result = parallel_reader
+                    .read_all_sliding_window_iocp_to_index_cpp_port::<fn(u64, u64)>(
+                        overlapped_handle,
+                        self.volume,
+                        self.concurrency,
+                        self.io_size,
+                        None,
+                    );
 
                 // Close the overlapped handle
                 #[allow(unsafe_code)]

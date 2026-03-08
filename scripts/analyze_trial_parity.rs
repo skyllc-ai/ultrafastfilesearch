@@ -262,10 +262,6 @@ fn generate_offline_scan(mft_file: &Path, drive_letter: &str, output_file: &Path
             "*",
             "--mft-file", &mft_file.to_string_lossy(),
             "--drive", drive_letter,
-            "--parse-algo", "cpp_port",
-            "--tree-algo", "cpp",
-            "--io-algo", "cpp",
-            "--chunk-algo", "cpp",
             "--out", &output_file.to_string_lossy(),
         ])
         .output();

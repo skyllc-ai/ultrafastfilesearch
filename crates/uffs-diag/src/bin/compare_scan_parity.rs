@@ -32,7 +32,7 @@
 //!
 //! Supports CSV outputs from:
 //! - C++ `uffs.com` (Windows `trial_run.ps1`)
-//! - Rust uffs with `--parse-algo=cpp_port --tree-algo=cpp`
+//! - Rust uffs (C++ port algorithms are now the default)
 //! - Rust uffs running on Mac with cached MFT data
 
 // Diagnostic tool - allow common CLI patterns

@@ -131,9 +131,8 @@ pub use error::{MftError, Result};
 pub use flags::FileFlags;
 // Re-export lean index types
 pub use index::{
-    ChildInfo, ChunkAlgorithm, FileRecord, IndexBuildTiming, IndexNameRef, IndexStreamInfo,
-    IoPipelineAlgorithm, LinkInfo, MftIndex, NO_ENTRY, ParseAlgorithm, ROOT_FRS, SizeInfo,
-    StandardInfo, TreeAlgorithm, UsnApplyStats,
+    ChildInfo, FileRecord, IndexBuildTiming, IndexNameRef, IndexStreamInfo, LinkInfo, MftIndex,
+    NO_ENTRY, ROOT_FRS, SizeInfo, StandardInfo, UsnApplyStats,
 };
 // Re-export I/O types for advanced usage
 #[cfg(windows)]

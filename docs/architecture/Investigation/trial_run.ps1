@@ -459,35 +459,27 @@ try {
             }
 
             # 2. Rust LIVE scan (with diagnostic logging via RUST_LOG)
-            # --no-cache forces fresh MFT read to ensure tree metrics are computed with current algorithms
-            # NOTE: cpp_port algorithms require UFFS_EXPERIMENTAL=1 (added in Fix #2)
+            # --no-cache forces fresh MFT read to ensure tree metrics are computed
             if ($HasRust) {
-                $savedExperimental = $env:UFFS_EXPERIMENTAL
-                $env:UFFS_EXPERIMENTAL = "1"
-                $runs += Run-LoggedLocal -Title "Rust LIVE (cpp io): drive $Drive" `
-                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --io-algo=cpp --chunk-algo=cpp --no-cache") `
+                $runs += Run-LoggedLocal -Title "Rust LIVE: drive $Drive" `
+                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --no-cache") `
                     -LogFileName $rustLiveLog `
                     -OutFileName $rustLiveOut
-                $env:UFFS_EXPERIMENTAL = $savedExperimental
             } else {
-                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust LIVE (cpp io)"; Command=""; LogFile=$rustLiveLog; OutFile=$rustLiveOut; DurationMs=$null; ExitCode=$null }
+                $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust LIVE"; Command=""; LogFile=$rustLiveLog; OutFile=$rustLiveOut; DurationMs=$null; ExitCode=$null }
             }
 
-            # 2b. Rust LIVE scan with TRACE logging (for debugging C++ algorithm parity)
-            # Temporarily enables trace-level logging to capture detailed diagnostics
-            # NOTE: cpp_port algorithms require UFFS_EXPERIMENTAL=1 (added in Fix #2)
+            # 2b. Rust LIVE scan with DEBUG logging (for detailed diagnostics)
+            # Temporarily enables debug-level logging to capture detailed diagnostics
             # NOTE: Trace logging can cause stack overflow on deep directory trees - use debug level instead
             if ($HasRust) {
                 $savedRustLog = $env:RUST_LOG
-                $savedExperimental = $env:UFFS_EXPERIMENTAL
                 $env:RUST_LOG = "uffs_mft=debug,uffs_cli=debug,uffs_core=debug"
-                $env:UFFS_EXPERIMENTAL = "1"
                 $runs += Run-LoggedLocal -Title "Rust LIVE TRACE: drive $Drive" `
-                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --io-algo=cpp --chunk-algo=cpp --no-cache") `
+                    -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --no-cache") `
                     -LogFileName $rustLiveTraceLog `
                     -OutFileName $rustLiveTraceOut
                 $env:RUST_LOG = $savedRustLog
-                $env:UFFS_EXPERIMENTAL = $savedExperimental
             } else {
                 $runs += [pscustomobject]@{ Drive=$Drive; Title="Rust LIVE TRACE"; Command=""; LogFile=$rustLiveTraceLog; OutFile=$rustLiveTraceOut; DurationMs=$null; ExitCode=$null }
             }

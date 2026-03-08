@@ -1,7 +1,7 @@
 //! C++-port tree metrics computation.
 //!
 //! This module implements the tree-metrics algorithm used for parity with the
-//! C++ reference implementation when `--tree-algo=cpp` is selected.
+//! C++ reference implementation. This is the sole tree-metrics code path.
 //!
 //! Key properties:
 //! - **Two-channel model**: Channel A is used for propagation up the tree

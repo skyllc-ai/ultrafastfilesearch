@@ -235,34 +235,6 @@ struct Cli {
     #[arg(long)]
     no_cache: bool,
 
-    /// Tree metrics algorithm: current, cpp (C++ port)
-    ///
-    /// - current: Use current Rust leaf-peeling algorithm (default)
-    /// - cpp: Use C++ port algorithm (100% faithful port of C++ tree algorithm)
-    #[arg(long, default_value = "current")]
-    tree_algo: String,
-
-    /// MFT parsing algorithm: current, cpp (C++ port)
-    ///
-    /// - current: Use current Rust parsing algorithm (default)
-    /// - cpp: Use C++ port algorithm (100% faithful port of C++ parsing)
-    #[arg(long, default_value = "current")]
-    parse_algo: String,
-
-    /// I/O pipeline algorithm: current, cpp (C++ port)
-    ///
-    /// - current: Use current Rust I/O pipeline (default)
-    /// - cpp: Use C++ port I/O pipeline (bitmap sync point before data reads)
-    #[arg(long, default_value = "current")]
-    io_algo: String,
-
-    /// Chunk processing algorithm: current, cpp (C++ port)
-    ///
-    /// - current: Use current Rust chunk processing (default)
-    /// - cpp: Use C++ port chunk processing (investigation target)
-    #[arg(long, default_value = "current")]
-    chunk_algo: String,
-
     /// Minimum file size in bytes
     #[arg(long)]
     min_size: Option<u64>,
@@ -535,10 +507,6 @@ async fn run() -> Result<()> {
                     &cli.pos,
                     &cli.neg,
                     &cli.query_mode,
-                    &cli.tree_algo,
-                    &cli.parse_algo,
-                    &cli.io_algo,
-                    &cli.chunk_algo,
                 )
                 .await?;
             } else {

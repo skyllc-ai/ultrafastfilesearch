@@ -332,59 +332,6 @@ fn should_use_index_path(
 /// Search for files matching a pattern.
 ///
 /// Supports:
-/// Configure algorithm environment variables.
-///
-/// This helper function extracts the algorithm configuration logic from
-/// `search()` to reduce cognitive complexity. It parses each algorithm string,
-/// sets the corresponding environment variable if `cpp_port` is selected, and
-/// logs the configuration.
-#[allow(
-    unsafe_code,
-    clippy::single_call_fn,
-    clippy::semicolon_inside_block,
-    clippy::semicolon_outside_block
-)]
-fn configure_algorithms(tree_algo: &str, parse_algo: &str, io_algo: &str, chunk_algo: &str) {
-    // Parse tree algorithm from CLI and set env var so MftIndex uses it
-    let tree_algorithm: uffs_mft::TreeAlgorithm = tree_algo.parse().unwrap_or_default();
-    if tree_algorithm == uffs_mft::TreeAlgorithm::CppPort {
-        // SAFETY: Called once at CLI startup in main thread before spawning workers.
-        unsafe { std::env::set_var("UFFS_TREE_ALGO", "cpp_port") };
-    }
-    info!(?tree_algorithm, "Tree metrics algorithm");
-
-    // Parse parsing algorithm from CLI and set env var so MFT parsing uses it
-    let parse_algorithm: uffs_mft::ParseAlgorithm = parse_algo.parse().unwrap_or_default();
-    if parse_algorithm == uffs_mft::ParseAlgorithm::CppPort {
-        // SAFETY: Called once at CLI startup in main thread before spawning workers.
-        unsafe { std::env::set_var("UFFS_PARSE_ALGO", "cpp_port") };
-        info!("🔧 Using C++ parsing algorithm (cpp_port) - implementation pending");
-    }
-    info!(?parse_algorithm, "MFT parsing algorithm");
-
-    // Parse I/O pipeline algorithm from CLI and set env var so MFT I/O uses it
-    let io_algorithm: uffs_mft::IoPipelineAlgorithm = io_algo.parse().unwrap_or_default();
-    if io_algorithm == uffs_mft::IoPipelineAlgorithm::CppPort {
-        // SAFETY: Called once at CLI startup in main thread before spawning workers.
-        unsafe { std::env::set_var("UFFS_IO_ALGO", "cpp_port") };
-        info!("🚧 C++ I/O pipeline (cpp_port) selected - implementation coming soon!");
-        info!("   This will add bitmap synchronization point before data reads.");
-        info!("   See docs/architecture/CPP_IO_PIPELINE_PORT.md for details.");
-    }
-    info!(?io_algorithm, "I/O pipeline algorithm");
-
-    // Parse chunk processing algorithm from CLI and set env var
-    let chunk_algorithm: uffs_mft::ChunkAlgorithm = chunk_algo.parse().unwrap_or_default();
-    if chunk_algorithm == uffs_mft::ChunkAlgorithm::CppPort {
-        // SAFETY: Called once at CLI startup in main thread before spawning workers.
-        unsafe { std::env::set_var("UFFS_CHUNK_ALGO", "cpp_port") };
-        info!("🚧 C++ chunk processing (cpp_port) selected - will be implemented soon!");
-        info!("   Investigation target for 40 missing files issue.");
-        info!("   See reference/Ultra-Fast-File-Search/LIVE_VS_OFFLINE_PARITY_INVESTIGATION.md");
-    }
-    info!(?chunk_algorithm, "Chunk processing algorithm");
-}
-
 /// - Drive prefix in pattern: `c:/pro*` extracts drive C
 /// - REGEX patterns: `>C:\\Temp.*` (starts with `>`)
 /// - Glob patterns: `*.txt`, `**/*.rs`
@@ -429,17 +376,9 @@ pub async fn search(
     pos: &str,
     neg: &str,
     query_mode: &str,
-    tree_algo: &str,
-    parse_algo: &str,
-    io_algo: &str,
-    chunk_algo: &str,
 ) -> Result<()> {
     // Start timing for "Finished in X s" output (C++ compatibility)
     let start_time = std::time::Instant::now();
-
-    // Configure algorithm environment variables (extracted to reduce cognitive
-    // complexity)
-    configure_algorithms(tree_algo, parse_algo, io_algo, chunk_algo);
 
     // Parse the pattern to extract drive prefix and pattern type
     let parsed = ParsedPattern::parse(pattern)

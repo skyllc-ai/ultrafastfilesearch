@@ -40,7 +40,6 @@ use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx
 
 use crate::cpp_io_pipeline::CppIoPipeline;
 use crate::error::{MftError, Result};
-use crate::index::IoPipelineAlgorithm;
 // Re-export SECTOR_SIZE for use by other modules (e.g., reader.rs streaming save)
 pub use crate::ntfs::SECTOR_SIZE;
 use crate::platform::{MftExtent, VolumeHandle};
@@ -5238,312 +5237,42 @@ impl ParallelMftReader {
         let concurrency = concurrency.unwrap_or(2);
         let io_chunk_size = io_chunk_size.unwrap_or_else(|| self.drive_type.optimal_io_size());
 
-        // Check if we should use the new C++ I/O pipeline
-        let io_algo = IoPipelineAlgorithm::from_env();
-        if matches!(io_algo, IoPipelineAlgorithm::CppPort) {
-            info!(
-                total_records,
-                concurrency,
-                io_size_kb = io_chunk_size / 1024,
-                drive_type = ?self.drive_type,
-                io_algo = %io_algo,
-                "🚀 Starting C++ I/O PIPELINE (bitmap sync point)"
-            );
-
-            // Build the C++ I/O pipeline from extent map
-            let io_pipeline = CppIoPipeline::from_extent_map(&self.extent_map);
-
-            // Compute skip ranges using the complete bitmap (the key sync point!)
-            if let Some(ref bitmap) = self.bitmap {
-                io_pipeline.compute_skip_ranges(bitmap);
-            } else {
-                warn!("No bitmap available - skip ranges will be 0 (reading all records)");
-            }
-
-            // Create the parse pipeline
-            let pipeline = CppParsePipeline::with_capacity(record_size as u32, total_records);
-
-            // Run the I/O pipeline and get the CppMftIndex
-            let cpp_index = io_pipeline.run(
-                overlapped_handle,
-                volume,
-                concurrency,
-                io_chunk_size,
-                pipeline,
-            )?;
-
-            // Convert CppMftIndex to MftIndex
-            let mut index = cpp_index.into_mft_index(volume);
-
-            // Post-processing: compute derived data structures
-            // These are fast O(n) operations that enhance query performance
-            // (Same as other code paths - from_parsed_records, merge_fragments, etc.)
-            debug!("🔨 Building extension index...");
-            index.extension_index = Some(crate::index::ExtensionIndex::build(&index));
-
-            debug!("🔨 Sorting directory children...");
-            index.sort_directory_children();
-
-            debug!("🔨 Computing tree metrics...");
-            index.compute_tree_metrics();
-
-            debug!("✅ Post-processing complete");
-
-            return Ok(index);
-        }
-
-        // ========================================================================
-        // FALLBACK: Original implementation (when UFFS_IO_ALGO != cpp_port)
-        // ========================================================================
-
         info!(
             total_records,
             concurrency,
             io_size_kb = io_chunk_size / 1024,
             drive_type = ?self.drive_type,
-            io_algo = %io_algo,
-            "🚀 Starting C++ PORT parsing (two-phase pipeline, original I/O)"
+            "🚀 Starting C++ I/O PIPELINE (bitmap sync point)"
         );
 
-        // Generate read chunks with bitmap skip optimization
-        let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
-        let mut sorted_chunks: Vec<ReadChunk> = chunks;
-        sorted_chunks.sort_by_key(|c| c.disk_offset);
+        // Build the C++ I/O pipeline from extent map
+        let io_pipeline = CppIoPipeline::from_extent_map(&self.extent_map);
 
-        // Break chunks into I/O operations
-        struct IoOp {
-            disk_offset: u64,
-            virtual_offset: u64, // Byte offset in MFT (for FRS calculation)
-            size: usize,
-        }
-
-        let mut io_ops: VecDeque<IoOp> = VecDeque::new();
-        let mut max_io_size = 0usize;
-
-        for chunk in &sorted_chunks {
-            let chunk_bytes = chunk.record_count as usize * record_size;
-            let virtual_offset = chunk.start_frs * record_size as u64;
-            let mut offset = 0usize;
-
-            while offset < chunk_bytes {
-                let remaining = chunk_bytes - offset;
-                let io_size = remaining.min(io_chunk_size);
-                max_io_size = max_io_size.max(io_size);
-
-                io_ops.push_back(IoOp {
-                    disk_offset: chunk.disk_offset + offset as u64,
-                    virtual_offset: virtual_offset + offset as u64,
-                    size: io_size,
-                });
-                offset += io_size;
-            }
-        }
-
-        let total_io_ops = io_ops.len();
-        let total_bytes_to_read: u64 = io_ops.iter().map(|op| op.size as u64).sum();
-        let estimated_records = total_records;
-
-        info!(
-            io_ops = total_io_ops,
-            estimated_records,
-            bytes_to_read_mb = total_bytes_to_read / (1024 * 1024),
-            max_io_size_kb = max_io_size / 1024,
-            "📊 Generated I/O operations for C++ port parsing"
-        );
-
-        // Create the C++ pipeline with pre-allocated capacity
-        let pipeline = CppParsePipeline::with_capacity(record_size as u32, estimated_records);
-
-        // Create IOCP
-        let read_start = std::time::Instant::now();
-        let iocp = IoCompletionPort::new(0)?;
-        iocp.associate(overlapped_handle, 0)?;
-
-        // Sliding window state
-        struct InFlightOp {
-            overlapped: windows::Win32::System::IO::OVERLAPPED,
-            buffer: AlignedBuffer,
-            op: IoOp,
-        }
-
-        // Allocate buffers sized for the max I/O operation
-        let mut buffer_pool: Vec<AlignedBuffer> = (0..concurrency)
-            .map(|_| AlignedBuffer::new(max_io_size))
-            .collect();
-
-        let mut in_flight: Vec<Option<Pin<Box<InFlightOp>>>> =
-            (0..concurrency).map(|_| None).collect();
-
-        let mut completed_count = 0usize;
-        let mut bytes_read_total = 0u64;
-
-        // Queue initial reads
-        for slot_id in 0..concurrency {
-            if let Some(op) = io_ops.pop_front() {
-                let buffer = buffer_pool.pop().unwrap();
-                let mut in_flight_op = Box::pin(InFlightOp {
-                    overlapped: unsafe { std::mem::zeroed() },
-                    buffer,
-                    op,
-                });
-
-                let offset = in_flight_op.op.disk_offset;
-                let op_mut = unsafe { in_flight_op.as_mut().get_unchecked_mut() };
-                op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
-
-                let overlapped_ptr = &mut op_mut.overlapped as *mut _;
-                let read_size = op_mut.op.size;
-                let result = unsafe {
-                    ReadFile(
-                        overlapped_handle,
-                        Some(&mut op_mut.buffer.as_mut_slice()[..read_size]),
-                        None,
-                        Some(overlapped_ptr),
-                    )
-                };
-
-                match result {
-                    Ok(_) => {}
-                    Err(_) => {
-                        let last_error = unsafe { GetLastError() };
-                        if last_error != ERROR_IO_PENDING {
-                            return Err(MftError::Io(std::io::Error::from_raw_os_error(
-                                last_error.0 as i32,
-                            )));
-                        }
-                    }
-                }
-
-                in_flight[slot_id] = Some(in_flight_op);
-            }
-        }
-
-        // Process completions with C++ pipeline parsing
-        while completed_count < total_io_ops {
-            let mut bytes_transferred: u32 = 0;
-            let mut completion_key: usize = 0;
-            let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
-                std::ptr::null_mut();
-
-            let result = unsafe {
-                GetQueuedCompletionStatus(
-                    iocp.handle,
-                    &mut bytes_transferred,
-                    &mut completion_key,
-                    &mut overlapped_ptr,
-                    u32::MAX,
-                )
-            };
-
-            if result.is_err() {
-                let err = std::io::Error::last_os_error();
-                warn!(error = %err, "GetQueuedCompletionStatus failed");
-                continue;
-            }
-
-            // Find completed slot
-            let mut completed_slot = None;
-            for (idx, slot) in in_flight.iter().enumerate() {
-                if let Some(op) = slot {
-                    let op_overlapped_ptr =
-                        &op.overlapped as *const _ as *mut windows::Win32::System::IO::OVERLAPPED;
-                    if op_overlapped_ptr == overlapped_ptr {
-                        completed_slot = Some(idx);
-                        break;
-                    }
-                }
-            }
-
-            if let Some(slot_idx) = completed_slot {
-                if let Some(mut completed_op) = in_flight[slot_idx].take() {
-                    let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
-
-                    // C++ PORT PARSING: Use CppParsePipeline to process the chunk
-                    let buffer_slice =
-                        &mut op_mut.buffer.as_mut_slice()[..bytes_transferred as usize];
-                    let virtual_offset = op_mut.op.virtual_offset;
-
-                    // Process chunk using C++ two-phase pipeline
-                    pipeline.process_chunk(buffer_slice, virtual_offset);
-
-                    bytes_read_total += bytes_transferred as u64;
-                    completed_count += 1;
-
-                    // Recycle buffer and queue next read
-                    let recycled_buffer = std::mem::replace(
-                        &mut op_mut.buffer,
-                        AlignedBuffer::new(0), // Placeholder
-                    );
-                    buffer_pool.push(recycled_buffer);
-
-                    // Queue next read if available
-                    if let Some(next_op) = io_ops.pop_front() {
-                        let buffer = buffer_pool.pop().unwrap();
-                        let mut new_in_flight = Box::pin(InFlightOp {
-                            overlapped: unsafe { std::mem::zeroed() },
-                            buffer,
-                            op: next_op,
-                        });
-
-                        let offset = new_in_flight.op.disk_offset;
-                        let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
-                        new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                        new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
-                            (offset >> 32) as u32;
-
-                        let overlapped_ptr = &mut new_op_mut.overlapped as *mut _;
-                        let read_size = new_op_mut.op.size;
-                        let result = unsafe {
-                            ReadFile(
-                                overlapped_handle,
-                                Some(&mut new_op_mut.buffer.as_mut_slice()[..read_size]),
-                                None,
-                                Some(overlapped_ptr),
-                            )
-                        };
-
-                        match result {
-                            Ok(_) => {}
-                            Err(_) => {
-                                let last_error = unsafe { GetLastError() };
-                                if last_error != ERROR_IO_PENDING {
-                                    return Err(MftError::Io(std::io::Error::from_raw_os_error(
-                                        last_error.0 as i32,
-                                    )));
-                                }
-                            }
-                        }
-
-                        in_flight[slot_idx] = Some(new_in_flight);
-                    }
-                }
-            }
-        }
-
-        let read_elapsed = read_start.elapsed();
-        let read_ms = read_elapsed.as_millis();
-        let throughput_mbps = if read_ms > 0 {
-            (bytes_read_total as u128 * 1000) / (read_ms * 1024 * 1024)
+        // Compute skip ranges using the complete bitmap (the key sync point!)
+        if let Some(ref bitmap) = self.bitmap {
+            io_pipeline.compute_skip_ranges(bitmap);
         } else {
-            0
-        };
+            warn!("No bitmap available - skip ranges will be 0 (reading all records)");
+        }
 
-        // Convert C++ index to Rust MftIndex
-        let cpp_index = pipeline.into_index();
-        let records_parsed = cpp_index.records_data.len();
+        // Create the parse pipeline
+        let pipeline = CppParsePipeline::with_capacity(record_size as u32, total_records);
+
+        // Run the I/O pipeline and get the CppMftIndex
+        let cpp_index = io_pipeline.run(
+            overlapped_handle,
+            volume,
+            concurrency,
+            io_chunk_size,
+            pipeline,
+        )?;
+
+        // Convert CppMftIndex to MftIndex
         let mut index = cpp_index.into_mft_index(volume);
 
-        info!(
-            read_ms,
-            throughput_mbps,
-            records_parsed,
-            index_entries = index.records.len(),
-            names_kb = index.names.len() / 1024,
-            "✅ C++ PORT parsing complete"
-        );
-
         // Post-processing: compute derived data structures
+        // These are fast O(n) operations that enhance query performance
+        // (Same as other code paths - from_parsed_records, merge_fragments, etc.)
         debug!("🔨 Building extension index...");
         index.extension_index = Some(crate::index::ExtensionIndex::build(&index));
 
