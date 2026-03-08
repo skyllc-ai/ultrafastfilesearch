@@ -376,6 +376,7 @@ pub async fn search(
     pos: &str,
     neg: &str,
     query_mode: &str,
+    tz_offset: Option<i32>,
 ) -> Result<()> {
     // Start timing for "Finished in X s" output (C++ compatibility)
     let start_time = std::time::Instant::now();
@@ -413,13 +414,17 @@ pub async fn search(
     // Also emit to stderr for easy verification
     eprintln!("[TRIPWIRE] {tripwire}");
 
-    let output_config = OutputConfig::new()
+    let mut output_config = OutputConfig::new()
         .with_columns(columns)
         .with_separator(sep)
         .with_quote(quotes)
         .with_header(header)
         .with_pos(pos)
         .with_neg(neg);
+    if let Some(hours) = tz_offset {
+        output_config = output_config.with_tz_offset_hours(hours);
+        info!(hours, "Timezone offset overridden via --tz-offset");
+    }
 
     // Pass needs_paths so path resolution happens BEFORE filtering loses parent
     // directories (skip path resolution in benchmark mode for speed)

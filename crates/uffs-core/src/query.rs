@@ -225,7 +225,7 @@ impl MftQuery {
 
         // Use is_in for O(1) hash lookup on the ext column
         let series = Series::new(PlSmallStr::EMPTY, &ext_list);
-        let expr = col("ext").is_in(lit(series).implode(), false);
+        let expr = col("ext").is_in(lit(series).implode(true), false);
 
         Self {
             lazy: self.lazy.filter(expr),

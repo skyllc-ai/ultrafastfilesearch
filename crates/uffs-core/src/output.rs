@@ -459,6 +459,19 @@ impl OutputConfig {
         self
     }
 
+    /// Override the timezone offset used for timestamp display.
+    ///
+    /// Accepts offset in hours from UTC (e.g., `-8` for PST, `-7` for PDT,
+    /// `1` for CET). This overrides the auto-detected local timezone offset.
+    ///
+    /// Useful for reproducible parity testing when the reference output was
+    /// generated in a different DST period than the current one.
+    #[must_use]
+    pub fn with_tz_offset_hours(mut self, hours: i32) -> Self {
+        self.timezone_offset_secs = hours * 3600;
+        self
+    }
+
     // NOTE: with_tripwire() was removed (Fix #1).
     // Tripwire is now logged to stderr/tracing and embedded in binary string table.
     // See TRIPWIRE constant in uffs-cli/src/commands.rs.

@@ -22,11 +22,9 @@
 //! the C++ reference. This is the safe mode since both files were generated
 //! in the same timezone/DST period.
 //!
-//! **--regenerate**: Runs uffs with cpp_port algorithms to produce fresh Rust
-//! output, then compares. WARNING: timestamps use the current local timezone
-//! offset. If DST has changed since the C++ reference was generated, timestamps
-//! will differ by 1 hour and SHA256 won't match. This is expected behavior
-//! (both C++ and Rust capture timezone at startup).
+//! **--regenerate**: Runs uffs with `--tz-offset -8` (PST) to produce fresh
+//! Rust output matching the C++ reference timezone, then compares. This
+//! ensures SHA256 parity regardless of the current local DST state.
 //!
 //! # Output structure
 //!
@@ -145,9 +143,7 @@ fn print_usage(prog: &str) {
 
 fn regenerate_rust_output(data_dir: &Path, drive_letter: &str, drive_lower: &str) -> PathBuf {
     println!("Mode: --regenerate");
-    println!("WARNING: Timestamps will use current local timezone offset.");
-    println!("         If DST has changed since C++ reference was generated,");
-    println!("         timestamps will differ by 1 hour (expected behavior).");
+    println!("Using --tz-offset -8 (PST) to match C++ reference timezone.");
     println!();
 
     // Locate MFT file
@@ -168,15 +164,11 @@ fn regenerate_rust_output(data_dir: &Path, drive_letter: &str, drive_lower: &str
     println!("Running uffs scan (cpp_port algorithms)...");
 
     let status = Command::new(&uffs_bin)
-        .env("UFFS_EXPERIMENTAL", "1")
         .args([
             "*",
             "--mft-file", &mft_file.to_string_lossy(),
             "--drive", drive_letter,
-            "--parse-algo", "cpp_port",
-            "--tree-algo", "cpp",
-            "--io-algo", "cpp",
-            "--chunk-algo", "cpp",
+            "--tz-offset", "-8",
             "--out", &rust_output.to_string_lossy(),
         ])
         .status();

@@ -296,6 +296,16 @@ struct Cli {
     /// - dataframe: Force Polars `DataFrame` path (full features)
     #[arg(long, default_value = "auto")]
     query_mode: String,
+
+    /// Override timezone offset for timestamp display (hours from UTC).
+    ///
+    /// By default, timestamps are displayed in the current local timezone.
+    /// Use this to force a specific offset, e.g. for reproducible parity
+    /// testing when the reference was generated in a different DST period.
+    ///
+    /// Examples: -8 (PST), -7 (PDT), 0 (UTC), 1 (CET), 9 (JST)
+    #[arg(long, allow_hyphen_values = true)]
+    tz_offset: Option<i32>,
 }
 
 /// Available CLI subcommands.
@@ -507,6 +517,7 @@ async fn run() -> Result<()> {
                     &cli.pos,
                     &cli.neg,
                     &cli.query_mode,
+                    cli.tz_offset,
                 )
                 .await?;
             } else {

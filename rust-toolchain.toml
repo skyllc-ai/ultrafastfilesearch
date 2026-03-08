@@ -6,10 +6,8 @@
 # and prevents issues caused by switching between stable/nightly toolchains
 
 [toolchain]
-# Using nightly-2025-12-15 which is known to work with Polars git dependency
-# Recent nightlies (2026-01-*) have compiler panics and SIMD breaking changes
-# TODO: Update to latest nightly once Polars is compatible
-channel = "nightly-2025-12-15"
+# Use latest nightly - Polars main branch requires recent nightly for SIMD support
+channel = "nightly"
 
 # Specify components that should always be available
 components = [

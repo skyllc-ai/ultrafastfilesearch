@@ -73,11 +73,11 @@ pub enum CompiledPattern {
     },
 
     /// Multiple exact matches: `col.is_in([...])`.
-    /// Lowers to: `col.is_in(lit(series).implode(), false)` (Polars 2.0+)
+    /// Lowers to: `col.is_in(lit(series).implode(true), false)` (Polars 2.0+)
     ExactSet(Vec<String>),
 
     /// Multiple literal substrings: `col.str().contains_any([...])`.
-    /// Lowers to: `col.str().contains_any(lit(series).implode(),
+    /// Lowers to: `col.str().contains_any(lit(series).implode(true),
     /// ascii_case_insensitive)` (Polars 2.0+)
     ContainsAny(Vec<String>),
 
@@ -116,8 +116,8 @@ impl CompiledPattern {
     ///
     /// # Polars 2.0+ API Notes
     ///
-    /// - `is_in` requires `.implode()` to wrap values as `List` type
-    /// - `contains_any` requires `.implode()` for the patterns series
+    /// - `is_in` requires `.implode(true)` to wrap values as `List` type
+    /// - `contains_any` requires `.implode(true)` for the patterns series
     ///
     /// # Example
     ///
@@ -209,7 +209,7 @@ impl CompiledPattern {
             Self::ExactSet(values) => {
                 if case_sensitive {
                     let series = Series::new(PlSmallStr::EMPTY, values);
-                    col_expr.is_in(lit(series).implode(), false)
+                    col_expr.is_in(lit(series).implode(true), false)
                 } else {
                     // For case-insensitive, lowercase both column and values
                     let lower_values: Vec<String> =
@@ -218,7 +218,7 @@ impl CompiledPattern {
                     col_expr
                         .str()
                         .to_lowercase()
-                        .is_in(lit(series).implode(), false)
+                        .is_in(lit(series).implode(true), false)
                 }
             }
 
@@ -226,11 +226,11 @@ impl CompiledPattern {
             Self::ContainsAny(patterns) => {
                 if case_sensitive {
                     let series = Series::new(PlSmallStr::EMPTY, patterns);
-                    col_expr.str().contains_any(lit(series).implode(), false)
+                    col_expr.str().contains_any(lit(series).implode(true), false)
                 } else {
                     // Use ascii_case_insensitive=true for case-insensitive matching
                     let series = Series::new(PlSmallStr::EMPTY, patterns);
-                    col_expr.str().contains_any(lit(series).implode(), true)
+                    col_expr.str().contains_any(lit(series).implode(true), true)
                 }
             }
 

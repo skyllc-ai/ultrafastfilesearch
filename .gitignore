@@ -147,3 +147,10 @@ bundles/
 
 # Profile data (temporary, not for git)
 docs/profiles/
+
+# Personal/private files in LOG (keep CHANGELOG_HEALING.md files)
+LOG/mental_health
+LOG/projected_assessment_progression.md
+
+# Vendor submodule dirty state (local build artifacts)
+# The submodules themselves are tracked, but local modifications within them are ignored
