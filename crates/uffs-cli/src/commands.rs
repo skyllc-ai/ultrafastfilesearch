@@ -501,6 +501,18 @@ pub async fn search(
         uffs_mft::detect_ntfs_drives()
     };
 
+    // Determine drives for C++ compatible footer in output file
+    // (computed before data loading since multi_drives may be consumed)
+    let footer_drives: Vec<char> = if let Some(drive) = single_drive {
+        vec![drive]
+    } else if let Some(ref drives) = multi_drives {
+        drives.clone()
+    } else if let Some(drive) = filters.parsed.drive() {
+        vec![drive]
+    } else {
+        vec![]
+    };
+
     // Handle raw MFT file input (cross-platform debugging)
     let mut results = if let Some(mft_path) = mft_file.as_ref() {
         info!(path = %mft_path.display(), "📂 Loading from raw MFT file");
@@ -635,7 +647,7 @@ pub async fn search(
     // Output results (skip in benchmark mode)
     let t_output = std::time::Instant::now();
     if !benchmark {
-        write_results(&results, format, out, &output_config)?;
+        write_results(&results, format, out, &output_config, &footer_drives)?;
     }
     let output_ms = t_output.elapsed().as_millis();
 
@@ -1453,6 +1465,8 @@ fn results_to_dataframe(
     let mut descendants_values: Vec<u32> = Vec::with_capacity(height);
     let mut treesize_values: Vec<u64> = Vec::with_capacity(height);
     let mut tree_allocated_values: Vec<u64> = Vec::with_capacity(height);
+    // Stream name column (for ADS detection in apply_directory_treesize)
+    let mut stream_names: Vec<String> = Vec::with_capacity(height);
 
     for result in results {
         // Look up the full record from the index to get all attributes
@@ -1463,6 +1477,7 @@ fn results_to_dataframe(
         names.push(result.name.clone());
         paths.push(result.path.clone().unwrap_or_default());
         sizes.push(result.size);
+        stream_names.push(result.stream_name.clone());
 
         // File type (extension) - lookup from index's ExtensionTable or extract from
         // name
@@ -1556,7 +1571,12 @@ fn results_to_dataframe(
         // For directories (including reparse), always prefer the record's tree metrics
         // to ensure we get the computed values from cpp_tree, not potentially stale
         // values from SearchResult.
-        let (desc, tsize, talloc) = if let Some(rec) = record {
+        // C++ parity: ADS entries (stream_index > 0) have descendants/treesize/tree_allocated = 0.
+        // Only the default stream (stream_index == 0) gets tree metrics.
+        let (desc, tsize, talloc) = if result.stream_index > 0 {
+            // ADS stream: no tree metrics
+            (0_u32, 0_u64, 0_u64)
+        } else if let Some(rec) = record {
             // Use tree_metrics() as the single source of truth (Fix #3)
             // This method returns the correct values for both directories and files,
             // ensuring LIVE and OFFLINE paths produce identical output.
@@ -1617,6 +1637,8 @@ fn results_to_dataframe(
         Series::new("descendants".into(), descendants_values).into_column(),
         Series::new("treesize".into(), treesize_values).into_column(),
         Series::new("tree_allocated".into(), tree_allocated_values).into_column(),
+        // Stream name (for ADS detection in apply_directory_treesize)
+        Series::new("stream_name".into(), stream_names).into_column(),
     ];
 
     let mut df = uffs_mft::DataFrame::new_infer_height(columns)
@@ -1643,12 +1665,16 @@ fn results_to_dataframe(
 }
 
 /// Write search results to console or file.
+///
+/// When `drives` is non-empty, appends a C++ compatible footer after the data:
+/// `\r\n\r\nDrives? \t{count}\t{drive_list}\r\n\r\n`
 #[allow(clippy::single_call_fn)] // Extracted to reduce search() line count below clippy::too_many_lines limit
 fn write_results(
     results: &uffs_mft::DataFrame,
     format: &str,
     out: &str,
     output_config: &OutputConfig,
+    drives: &[char],
 ) -> Result<()> {
     let is_console = matches!(
         out.to_lowercase().as_str(),
@@ -1666,13 +1692,29 @@ fn write_results(
     } else {
         let file =
             File::create(out).with_context(|| format!("Failed to create output file: {out}"))?;
-        let writer = BufWriter::new(file);
+        let mut writer = BufWriter::new(file);
 
         match format {
-            "json" => export_json(results, writer)?,
-            "csv" => export_csv(results, writer)?,
-            _ => output_config.write(results, writer)?,
+            "json" => export_json(results, &mut writer)?,
+            "csv" => export_csv(results, &mut writer)?,
+            _ => output_config.write(results, &mut writer)?,
         }
+
+        // Append C++ compatible footer: "Drives?" line with CRLF line endings
+        if !drives.is_empty() {
+            let drive_list: String = drives
+                .iter()
+                .map(|d| format!("{d}:"))
+                .collect::<Vec<_>>()
+                .join("|");
+            write!(
+                writer,
+                "\r\n\r\nDrives? \t{}\t{drive_list}\r\n\r\n",
+                drives.len()
+            )?;
+            writer.flush()?;
+        }
+
         info!(file = out, "Results written to file");
     }
 

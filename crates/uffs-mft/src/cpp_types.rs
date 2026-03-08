@@ -1691,12 +1691,14 @@ const FRH_IN_USE: u16 = 0x0001;
 const FRH_DIRECTORY: u16 = 0x0002;
 
 /// NTFS `FILE_NAME` namespace: Win32 (case-insensitive, visible in Explorer).
+#[allow(dead_code)]
 const FILE_NAME_WIN32: u8 = 0x01;
 /// NTFS `FILE_NAME` namespace: DOS-only (8.3 short name, not visible
 /// standalone).
 #[allow(dead_code)]
 const FILE_NAME_DOS: u8 = 0x02;
 /// NTFS `FILE_NAME` namespace: Win32+DOS combined (visible in Explorer).
+#[allow(dead_code)]
 const FILE_NAME_WIN32_DOS: u8 = 0x03;
 
 /// FILE record magic number ('FILE' in little-endian = 'ELIF')
@@ -2155,8 +2157,14 @@ impl CppParsePipeline {
                     | AttributeType::Ea
                     | AttributeType::EaInformation
                     | AttributeType::ObjectId
-                    | AttributeType::PropertySet,
+                    | AttributeType::PropertySet
+                    | AttributeType::AttributeList,
                 ) => {
+                    // C++ parity: $ATTRIBUTE_LIST (0x20) is commented out as an explicit
+                    // case in C++ (ntfs_index.hpp line 588), so it falls through to the
+                    // default: case (line 600) and is treated as a stream-creating
+                    // attribute. Its resident value_length is added to stream size, and
+                    // it increments stream_count. This fixes ~152 byte size gaps.
                     Self::parse_stream(index, attr_data, frs_base, &attr_header);
                 }
                 _ => {
@@ -2253,10 +2261,11 @@ impl CppParsePipeline {
         let fn_attr: FileNameAttribute =
             unsafe { core::ptr::read(attr_data[value_offset..].as_ptr().cast()) };
 
-        // Fix 4: Only accept Win32-visible namespaces (0x01 Win32, 0x03 Win32+DOS).
-        // Skip POSIX (0x00) and DOS-only (0x02) to match C++ Win32 enumeration.
+        // C++ parity: skip only DOS-only (0x02) namespace.
+        // C++ code: `if (fn->Flags != 0x02 /*FILE_NAME_DOS */)` (ntfs_index.hpp line 550)
+        // Accepts POSIX (0x00), Win32 (0x01), and Win32+DOS (0x03).
         let namespace = fn_attr.file_name_namespace;
-        if namespace != FILE_NAME_WIN32 && namespace != FILE_NAME_WIN32_DOS {
+        if namespace == FILE_NAME_DOS {
             return;
         }
 
@@ -2279,16 +2288,10 @@ impl CppParsePipeline {
         // Get current record
         let record_idx = index.records_lookup[frs_base as usize] as usize;
 
-        // Fix 4: Deduplicate (parent, name) pairs within a record.
-        // This prevents duplicate paths when both 0x01 and 0x03 carry the same Win32
-        // name.
+        // C++ parity: no deduplication. If record already has a name, push
+        // current first_name to overflow list (matches C++ ntfs_index.hpp lines 552-557).
         let current_name_count = index.records_data[record_idx].name_count;
         if current_name_count > 0 {
-            // Check if this (parent, name) already exists in the record
-            if Self::record_has_name(index, record_idx, frs_parent, name_data, is_ascii) {
-                return; // Skip duplicate
-            }
-
             // Push current first_name to overflow list
             let first_name = index.records_data[record_idx].first_name;
             let link_idx = usize_to_u32(index.nameinfos.len());
@@ -2339,96 +2342,6 @@ impl CppParsePipeline {
 
         // Increment name count
         index.records_data[record_idx].name_count += 1;
-    }
-
-    /// Check if a record already has a name with the given (parent, name) pair.
-    ///
-    /// Fix 4: Used to deduplicate names when both Win32 (0x01) and Win32+DOS
-    /// (0x03) namespaces carry the same name string.
-    #[allow(clippy::single_call_fn)] // Helper function for readability
-    fn record_has_name(
-        index: &CppMftIndex,
-        record_idx: usize,
-        parent_frs: u32,
-        name_data: &[u8],
-        is_ascii: bool,
-    ) -> bool {
-        let record = &index.records_data[record_idx];
-        if record.name_count == 0 {
-            return false;
-        }
-
-        // Check first_name
-        if record.first_name.parent == parent_frs
-            && Self::name_matches(index, record.first_name.name, name_data, is_ascii)
-        {
-            return true;
-        }
-
-        // Check overflow names chain
-        let mut next = record.first_name.next_entry;
-        while next != NO_ENTRY {
-            let ni = &index.nameinfos[next as usize];
-            if ni.parent == parent_frs && Self::name_matches(index, ni.name, name_data, is_ascii) {
-                return true;
-            }
-            next = ni.next_entry;
-        }
-
-        false
-    }
-
-    /// Check if a stored name matches the given name data.
-    #[inline]
-    fn name_matches(
-        index: &CppMftIndex,
-        stored_name: NameInfo,
-        name_data: &[u8],
-        new_is_ascii: bool,
-    ) -> bool {
-        let stored_offset = stored_name.offset() as usize;
-        let stored_len = stored_name.length() as usize;
-        let stored_is_ascii = stored_name.ascii();
-
-        // Both ASCII: compare directly
-        if stored_is_ascii && new_is_ascii {
-            // new name_data is UTF-16LE, extract ASCII bytes
-            let new_ascii: Vec<u8> = name_data.chunks_exact(2).map(|ch| ch[0]).collect();
-            if stored_len != new_ascii.len() {
-                return false;
-            }
-            let stored_bytes = &index.names[stored_offset..stored_offset + stored_len];
-            return stored_bytes == new_ascii.as_slice();
-        }
-
-        // Both UTF-16: compare directly
-        if !stored_is_ascii && !new_is_ascii {
-            let stored_byte_len = stored_len * 2;
-            if stored_byte_len != name_data.len() {
-                return false;
-            }
-            let stored_bytes = &index.names[stored_offset..stored_offset + stored_byte_len];
-            return stored_bytes == name_data;
-        }
-
-        // Mixed: convert to compare
-        // stored is ASCII, new is UTF-16
-        if stored_is_ascii && !new_is_ascii {
-            let new_ascii: Vec<u8> = name_data.chunks_exact(2).map(|ch| ch[0]).collect();
-            // Check if new is actually ASCII-compatible
-            if !is_ascii_utf16(name_data) {
-                return false;
-            }
-            if stored_len != new_ascii.len() {
-                return false;
-            }
-            let stored_bytes = &index.names[stored_offset..stored_offset + stored_len];
-            return stored_bytes == new_ascii.as_slice();
-        }
-
-        // stored is UTF-16, new is ASCII
-        // This shouldn't happen in practice (new is always from raw UTF-16LE)
-        false
     }
 
     /// Check if a stream is the "default" stream that should be primary.
@@ -2501,13 +2414,9 @@ impl CppParsePipeline {
             && name_offset + 8 <= attr_data.len()
             && &attr_data[name_offset..name_offset + 8] == b"$\x00I\x003\x000\x00";
 
-        // Parity Fix #7: C++ does NOT count $I30:$BITMAP toward directory "Size"/tree
-        // metrics. Bitmap is metadata (used/free slots in the directory index),
-        // not part of directory byte size. Skip this attribute entirely to
-        // match C++ behavior.
-        if is_dir_index && type_code == AttributeType::Bitmap as u32 {
-            return;
-        }
+        // C++ INCLUDES $I30:$BITMAP in directory stream sizes (length, allocated,
+        // bulkiness). The bitmap is merged into the single directory stream just
+        // like $INDEX_ROOT and $INDEX_ALLOCATION. Do NOT skip or exclude it.
 
         // Calculate type_name_id (matches C++ type_name_id = type >> 4)
         // NTFS attribute type codes are 0x10-0xF0, so >> 4 gives 1-15, fits in u8
@@ -2540,6 +2449,7 @@ impl CppParsePipeline {
                         is_non_resident,
                         type_code,
                         is_dir_index,
+                        attr_header.flags,
                     );
                     return;
                 }
@@ -2604,6 +2514,7 @@ impl CppParsePipeline {
                     is_non_resident,
                     type_code,
                     is_dir_index,
+                    attr_header.flags,
                 );
 
                 // Increment stream count
@@ -2663,6 +2574,7 @@ impl CppParsePipeline {
             is_non_resident,
             type_code,
             is_dir_index,
+            attr_header.flags,
         );
 
         // Increment stream count
@@ -2671,30 +2583,33 @@ impl CppParsePipeline {
 
     /// Update stream sizes from attribute data.
     ///
-    /// # Fix 2: `$I30` directory index size semantics
-    /// - For `$I30` `IndexAllocation` (0xA0): use `allocated_size` for length
-    ///   (not `data_size`)
-    /// - For `$I30` Bitmap (0xB0): exclude from length (add 0), but keep
-    ///   allocated/bulkiness
+    /// C++ accumulates sizes uniformly for all stream attributes:
+    ///   `info->length += IsNonResident ? DataSize : ValueLength`
+    ///   `info->allocated += IsNonResident ? AllocatedSize : 0`
+    ///   `info->bulkiness += info->allocated`
+    /// No special cases for $I30 Bitmap or IndexAllocation.
     #[allow(unsafe_code)]
     fn update_stream_sizes(
         index: &mut CppMftIndex,
         attr_data: &[u8],
         frs_base: u32,
         is_non_resident: bool,
-        type_code: u32,
-        is_dir_index: bool,
+        _type_code: u32,
+        _is_dir_index: bool,
+        attr_flags: u16,
     ) {
         use core::mem::size_of;
 
         use crate::ntfs::NonResidentAttributeData;
 
-        // NTFS attribute type codes for $I30 components
-        const ATTR_INDEX_ALLOCATION: u32 = 0xA0;
-        const ATTR_BITMAP: u32 = 0xB0;
-
         let record_idx = index.records_lookup[frs_base as usize] as usize;
         let header_size = size_of::<AttributeRecordHeader>();
+
+        // C++: bool const is_sparse = !!(ah->Flags & 0x8000);
+        // if (is_sparse) info->is_sparse |= 0x1;
+        if attr_flags & 0x8000 != 0 {
+            index.records_data[record_idx].first_stream.set_sparse(true);
+        }
 
         if is_non_resident {
             if attr_data.len() >= header_size + size_of::<NonResidentAttributeData>() {
@@ -2702,51 +2617,56 @@ impl CppParsePipeline {
                 let non_res: NonResidentAttributeData =
                     unsafe { core::ptr::read(attr_data[header_size..].as_ptr().cast()) };
 
-                let allocated = i64_to_u64_filetime(non_res.allocated_size);
+                // C++: Use CompressedSize when CompressionUnit > 0, else AllocatedSize
+                let allocated = if non_res.compression_unit > 0 {
+                    // CompressedSize is an optional i64 right after NonResidentAttributeData
+                    // (at offset header_size + 48 from start of attr_data)
+                    let compressed_offset = header_size + size_of::<NonResidentAttributeData>();
+                    if attr_data.len() >= compressed_offset + 8 {
+                        let bytes: [u8; 8] = [
+                            attr_data[compressed_offset],
+                            attr_data[compressed_offset + 1],
+                            attr_data[compressed_offset + 2],
+                            attr_data[compressed_offset + 3],
+                            attr_data[compressed_offset + 4],
+                            attr_data[compressed_offset + 5],
+                            attr_data[compressed_offset + 6],
+                            attr_data[compressed_offset + 7],
+                        ];
+                        i64_to_u64_filetime(i64::from_le_bytes(bytes))
+                    } else {
+                        i64_to_u64_filetime(non_res.allocated_size)
+                    }
+                } else {
+                    i64_to_u64_filetime(non_res.allocated_size)
+                };
                 let data_size = i64_to_u64_filetime(non_res.data_size);
 
                 let record = &mut index.records_data[record_idx];
                 record.first_stream.size.allocated += FileSizeType::new(allocated);
                 record.first_stream.size.bulkiness += FileSizeType::new(allocated);
-
-                // Fix 2: For $I30 IndexAllocation, use allocated_size for length
-                // This matches C++ behavior where directory index "Size" reflects
-                // the allocated space, not the logical data size.
-                if is_dir_index && type_code == ATTR_INDEX_ALLOCATION {
-                    record.first_stream.size.length += FileSizeType::new(allocated);
-                } else {
-                    record.first_stream.size.length += FileSizeType::new(data_size);
-                }
+                record.first_stream.size.length += FileSizeType::new(data_size);
             }
         } else {
-            // Resident attribute
+            // Resident attribute: length += ValueLength, allocated += 0
             if attr_data.len() >= header_size + size_of::<ResidentAttributeData>() {
                 // SAFETY: Bounds checked above
                 let resident: ResidentAttributeData =
                     unsafe { core::ptr::read(attr_data[header_size..].as_ptr().cast()) };
 
                 let value_length = u64::from(resident.value_length);
-
-                // Fix 2: Exclude $I30 Bitmap from "Size" (length), but keep it
-                // in allocated/bulkiness for disk-usage correctness.
-                // C++ excludes the 8-byte bitmap from directory Size.
-                if is_dir_index && type_code == ATTR_BITMAP {
-                    // Don't add to length - bitmap excluded from Size
-                } else {
-                    let record = &mut index.records_data[record_idx];
-                    record.first_stream.size.length += FileSizeType::new(value_length);
-                }
+                let record = &mut index.records_data[record_idx];
+                record.first_stream.size.length += FileSizeType::new(value_length);
             }
         }
     }
 
     /// Update stream sizes for an overflow stream (not `first_stream`).
     ///
-    /// This is used when a non-default stream is pushed to overflow instead of
-    /// becoming `first_stream` (to preserve default stream stability).
-    ///
-    /// # Fix 2: $I30 directory index size semantics
-    /// Same semantics as `update_stream_sizes` for consistency.
+    /// Same uniform accumulation as `update_stream_sizes`, matching C++:
+    ///   `info->length += IsNonResident ? DataSize : ValueLength`
+    ///   `info->allocated += IsNonResident ? AllocatedSize : 0`
+    ///   `info->bulkiness += info->allocated`
     #[allow(unsafe_code)]
     #[allow(clippy::single_call_fn)]
     fn update_overflow_stream_sizes(
@@ -2754,18 +2674,21 @@ impl CppParsePipeline {
         attr_data: &[u8],
         stream_idx: usize,
         is_non_resident: bool,
-        type_code: u32,
-        is_dir_index: bool,
+        _type_code: u32,
+        _is_dir_index: bool,
+        attr_flags: u16,
     ) {
         use core::mem::size_of;
 
         use crate::ntfs::NonResidentAttributeData;
 
-        // NTFS attribute type codes for $I30 components
-        const ATTR_INDEX_ALLOCATION: u32 = 0xA0;
-        const ATTR_BITMAP: u32 = 0xB0;
-
         let header_size = size_of::<AttributeRecordHeader>();
+
+        // C++: bool const is_sparse = !!(ah->Flags & 0x8000);
+        // if (is_sparse) info->is_sparse |= 0x1;
+        if attr_flags & 0x8000 != 0 {
+            index.streaminfos[stream_idx].set_sparse(true);
+        }
 
         if is_non_resident {
             if attr_data.len() >= header_size + size_of::<NonResidentAttributeData>() {
@@ -2773,36 +2696,44 @@ impl CppParsePipeline {
                 let non_res: NonResidentAttributeData =
                     unsafe { core::ptr::read(attr_data[header_size..].as_ptr().cast()) };
 
-                let allocated = i64_to_u64_filetime(non_res.allocated_size);
+                // C++: Use CompressedSize when CompressionUnit > 0, else AllocatedSize
+                let allocated = if non_res.compression_unit > 0 {
+                    let compressed_offset = header_size + size_of::<NonResidentAttributeData>();
+                    if attr_data.len() >= compressed_offset + 8 {
+                        let bytes: [u8; 8] = [
+                            attr_data[compressed_offset],
+                            attr_data[compressed_offset + 1],
+                            attr_data[compressed_offset + 2],
+                            attr_data[compressed_offset + 3],
+                            attr_data[compressed_offset + 4],
+                            attr_data[compressed_offset + 5],
+                            attr_data[compressed_offset + 6],
+                            attr_data[compressed_offset + 7],
+                        ];
+                        i64_to_u64_filetime(i64::from_le_bytes(bytes))
+                    } else {
+                        i64_to_u64_filetime(non_res.allocated_size)
+                    }
+                } else {
+                    i64_to_u64_filetime(non_res.allocated_size)
+                };
                 let data_size = i64_to_u64_filetime(non_res.data_size);
 
                 let stream = &mut index.streaminfos[stream_idx];
                 stream.size.allocated += FileSizeType::new(allocated);
                 stream.size.bulkiness += FileSizeType::new(allocated);
-
-                // Fix 2: For $I30 IndexAllocation, use allocated_size for length
-                if is_dir_index && type_code == ATTR_INDEX_ALLOCATION {
-                    stream.size.length += FileSizeType::new(allocated);
-                } else {
-                    stream.size.length += FileSizeType::new(data_size);
-                }
+                stream.size.length += FileSizeType::new(data_size);
             }
         } else {
-            // Resident attribute
+            // Resident attribute: length += ValueLength, allocated += 0
             if attr_data.len() >= header_size + size_of::<ResidentAttributeData>() {
                 // SAFETY: Bounds checked above
                 let resident: ResidentAttributeData =
                     unsafe { core::ptr::read(attr_data[header_size..].as_ptr().cast()) };
 
                 let value_length = u64::from(resident.value_length);
-
-                // Fix 2: Exclude $I30 Bitmap from "Size" (length)
-                if is_dir_index && type_code == ATTR_BITMAP {
-                    // Don't add to length - bitmap excluded from Size
-                } else {
-                    let stream = &mut index.streaminfos[stream_idx];
-                    stream.size.length += FileSizeType::new(value_length);
-                }
+                let stream = &mut index.streaminfos[stream_idx];
+                stream.size.length += FileSizeType::new(value_length);
             }
         }
     }

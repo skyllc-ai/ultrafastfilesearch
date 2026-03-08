@@ -481,20 +481,22 @@ impl SearchResult {
             .unwrap_or(&record.first_stream);
         let is_directory = record.is_directory();
 
-        // Get base filename
-        let base_name = if is_directory {
-            String::new()
-        } else {
-            index.get_name(&name_info.name).to_owned()
-        };
-
-        // C++ parity: ADS entries include stream name in Name column
-        // e.g., "readme.txt:Zone.Identifier" instead of just "readme.txt"
+        // Get base filename and stream name
         let stream_name = index.stream_name(stream_info);
-        let name = if !stream_name.is_empty() && !is_directory {
+        let has_ads = !stream_name.is_empty();
+
+        // C++ parity: directories have empty Name for default stream,
+        // but ADS entries get "dirname:streamname" format (same as files)
+        let name = if is_directory && !has_ads {
+            // Default directory stream: empty Name
+            String::new()
+        } else if has_ads {
+            // ADS entry (file or directory): "filename:streamname"
+            let base_name = index.get_name(&name_info.name).to_owned();
             format!("{base_name}:{stream_name}")
         } else {
-            base_name
+            // Default file stream: just the filename
+            index.get_name(&name_info.name).to_owned()
         };
 
         // C++ parity: Only the default stream (stream_idx == 0) gets tree metrics.

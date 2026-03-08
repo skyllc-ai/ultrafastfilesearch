@@ -511,6 +511,7 @@ pub use crate::parse::{
 /// # Returns
 ///
 /// `true` if a record was added to the index, `false` if skipped.
+#[deprecated(note = "Use parse_record_full() + MftRecordMerger + from_parsed_records() instead")]
 #[allow(unsafe_code, clippy::too_many_lines, clippy::cast_possible_truncation)]
 pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::MftIndex) -> bool {
     use crate::index::{
@@ -555,8 +556,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 
     // Temporary storage for parsed data
     let mut std_info = StandardInfo::default();
-    let mut primary_name: Option<(String, u64, u8)> = None; // (name, parent_frs, namespace)
-    let mut additional_names: SmallVec<[(String, u64); 4]> = SmallVec::new();
+    let mut primary_name: Option<(String, u64, u8, u16)> = None; // (name, parent_frs, namespace, parse_index)
+    let mut additional_names: SmallVec<[(String, u64, u16); 4]> = SmallVec::new();
+    let mut name_parse_counter: u16 = 0;
     let mut default_size = 0u64;
     let mut default_allocated = 0u64;
     // ADS: (stream_name, size, allocated)
@@ -622,6 +624,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 
                             // Skip DOS-only names (namespace 2)
                             if namespace != 2 {
+                                let parse_idx = name_parse_counter;
+                                name_parse_counter += 1;
                                 let is_better = match namespace {
                                     1 | 3 => true,               // Win32 or Win32+DOS
                                     0 => primary_name.is_none(), // POSIX only if no name yet
@@ -629,12 +633,12 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                                 };
                                 if is_better || primary_name.is_none() {
                                     // Move old primary to additional if exists
-                                    if let Some((old_name, old_parent, _)) = primary_name.take() {
-                                        additional_names.push((old_name, old_parent));
+                                    if let Some((old_name, old_parent, _, old_parse_idx)) = primary_name.take() {
+                                        additional_names.push((old_name, old_parent, old_parse_idx));
                                     }
-                                    primary_name = Some((name, parent_frs, namespace));
+                                    primary_name = Some((name, parent_frs, namespace, parse_idx));
                                 } else {
-                                    additional_names.push((name, parent_frs));
+                                    additional_names.push((name, parent_frs, parse_idx));
                                 }
                             }
                         }
@@ -642,6 +646,30 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 }
             }
             Some(AttributeType::Data) => {
+                // C++ parity: Only primary attributes (LowestVCN == 0) count as streams.
+                // Continuation extents (LowestVCN > 0) are skipped. See ntfs_index_load.hpp:358
+                let is_primary = if attr_header.is_non_resident == 0 {
+                    true // Resident attributes are always primary
+                } else {
+                    let nr_offset = offset + 16;
+                    if nr_offset + 8 <= data.len() {
+                        let lowest_vcn = i64::from_le_bytes(
+                            data[nr_offset..nr_offset + 8]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        );
+                        lowest_vcn == 0
+                    } else {
+                        false // Can't verify, skip to be safe
+                    }
+                };
+
+                if !is_primary {
+                    // Skip continuation extents - they don't count as new streams
+                    offset += attr_header.length as usize;
+                    continue;
+                }
+
                 // Parse $DATA - track both default stream and ADS
                 let name_len = attr_header.name_length as usize;
                 let (size, allocated) = if attr_header.is_non_resident != 0 {
@@ -716,7 +744,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 
     // Handle records without a filename in the base record
     // The $FILE_NAME may be in an extension record - we still need to store stdinfo
-    let (name, parent_frs, _namespace) = match primary_name {
+    let (name, parent_frs, _namespace, primary_parse_index) = match primary_name {
         Some(n) => n,
         None => {
             // No $FILE_NAME in base record - store stdinfo anyway
@@ -794,9 +822,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let additional_count = additional_names.len();
     let mut link_indices: Vec<u32> = Vec::with_capacity(additional_count);
     // Collect parent FRS values for building children array later
-    let mut additional_parent_frs: SmallVec<[u64; 4]> = SmallVec::with_capacity(additional_count);
-    for (link_name, link_parent) in additional_names {
-        additional_parent_frs.push(link_parent);
+    let mut additional_parent_frs: SmallVec<[(u64, u16); 4]> = SmallVec::with_capacity(additional_count);
+    for (link_name, link_parent, link_parse_idx) in additional_names {
+        additional_parent_frs.push((link_parent, link_parse_idx));
         let link_offset = index.add_name(&link_name);
         let link_len = link_name.len();
         let link_is_ascii = link_name.is_ascii();
@@ -930,12 +958,12 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         });
     };
 
-    // Add child entry for primary name (name_index = 0)
-    add_child_entry(index, parent_frs, 0);
+    // Add child entry for primary name (using C++ parse-order index)
+    add_child_entry(index, parent_frs, primary_parse_index);
 
     // Add child entries for additional names (hardlinks)
-    for (name_idx, &link_parent_frs) in additional_parent_frs.iter().enumerate() {
-        add_child_entry(index, link_parent_frs, (name_idx + 1) as u16);
+    for &(link_parent_frs, link_parse_idx) in additional_parent_frs.iter() {
+        add_child_entry(index, link_parent_frs, link_parse_idx);
     }
 
     true
@@ -957,6 +985,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 /// # Returns
 ///
 /// `true` if any names/streams were added, `false` otherwise.
+#[deprecated(note = "Use parse_record_full() + MftRecordMerger instead")]
 #[allow(unsafe_code, clippy::cast_possible_truncation)]
 fn parse_extension_to_index(
     data: &[u8],
@@ -1026,6 +1055,30 @@ fn parse_extension_to_index(
                 }
             }
             Some(AttributeType::Data) => {
+                // C++ parity: Only primary attributes (LowestVCN == 0) count as streams.
+                // Continuation extents (LowestVCN > 0) are skipped. See ntfs_index_load.hpp:358
+                let is_primary = if attr_header.is_non_resident == 0 {
+                    true // Resident attributes are always primary
+                } else {
+                    let nr_offset = offset + 16;
+                    if nr_offset + 8 <= data.len() {
+                        let lowest_vcn = i64::from_le_bytes(
+                            data[nr_offset..nr_offset + 8]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        );
+                        lowest_vcn == 0
+                    } else {
+                        false // Can't verify, skip to be safe
+                    }
+                };
+
+                if !is_primary {
+                    // Skip continuation extents - they don't count as new streams
+                    offset += attr_header.length as usize;
+                    continue;
+                }
+
                 // Parse $DATA attribute (ADS only - named streams)
                 let name_len = attr_header.name_length as usize;
                 if name_len > 0 {
@@ -1248,6 +1301,7 @@ fn parse_extension_to_index(
             // Update stream count
             let record = &mut index.records[record_idx as usize];
             record.stream_count += stream_indices.len() as u16;
+            record.total_stream_count += stream_indices.len() as u16;
         }
 
         // Build parent-child relationship for names added from extension records
@@ -1313,6 +1367,7 @@ fn parse_extension_to_index(
 /// # Returns
 ///
 /// `true` if a record was added to the fragment, `false` if skipped.
+#[deprecated(note = "Use parse_record_full() + MftRecordMerger + from_parsed_records() instead")]
 #[allow(unsafe_code, clippy::too_many_lines, clippy::cast_possible_truncation)]
 pub fn parse_record_to_fragment(
     data: &[u8],
@@ -1359,8 +1414,9 @@ pub fn parse_record_to_fragment(
 
     // Temporary storage for parsed data
     let mut std_info = StandardInfo::default();
-    let mut primary_name: Option<(String, u64, u8)> = None;
-    let mut additional_names: SmallVec<[(String, u64); 4]> = SmallVec::new();
+    let mut primary_name: Option<(String, u64, u8, u16)> = None; // (name, parent_frs, namespace, parse_index)
+    let mut additional_names: SmallVec<[(String, u64, u16); 4]> = SmallVec::new();
+    let mut name_parse_counter: u16 = 0;
     let mut default_size = 0u64;
     let mut default_allocated = 0u64;
     // ADS: (stream_name, size, allocated)
@@ -1422,18 +1478,20 @@ pub fn parse_record_to_fragment(
                             let namespace = fn_attr.file_name_namespace;
 
                             if namespace != 2 {
+                                let parse_idx = name_parse_counter;
+                                name_parse_counter += 1;
                                 let is_better = match namespace {
                                     1 | 3 => true,
                                     0 => primary_name.is_none(),
                                     _ => false,
                                 };
                                 if is_better || primary_name.is_none() {
-                                    if let Some((old_name, old_parent, _)) = primary_name.take() {
-                                        additional_names.push((old_name, old_parent));
+                                    if let Some((old_name, old_parent, _, old_parse_idx)) = primary_name.take() {
+                                        additional_names.push((old_name, old_parent, old_parse_idx));
                                     }
-                                    primary_name = Some((name, parent_frs, namespace));
+                                    primary_name = Some((name, parent_frs, namespace, parse_idx));
                                 } else {
-                                    additional_names.push((name, parent_frs));
+                                    additional_names.push((name, parent_frs, parse_idx));
                                 }
                             }
                         }
@@ -1441,6 +1499,30 @@ pub fn parse_record_to_fragment(
                 }
             }
             Some(AttributeType::Data) => {
+                // C++ parity: Only primary attributes (LowestVCN == 0) count as streams.
+                // Continuation extents (LowestVCN > 0) are skipped. See ntfs_index_load.hpp:358
+                let is_primary = if attr_header.is_non_resident == 0 {
+                    true // Resident attributes are always primary
+                } else {
+                    let nr_offset = offset + 16;
+                    if nr_offset + 8 <= data.len() {
+                        let lowest_vcn = i64::from_le_bytes(
+                            data[nr_offset..nr_offset + 8]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        );
+                        lowest_vcn == 0
+                    } else {
+                        false // Can't verify, skip to be safe
+                    }
+                };
+
+                if !is_primary {
+                    // Skip continuation extents - they don't count as new streams
+                    offset += attr_header.length as usize;
+                    continue;
+                }
+
                 // Parse $DATA - track both default stream and ADS
                 let name_len = attr_header.name_length as usize;
                 let (size, allocated) = if attr_header.is_non_resident != 0 {
@@ -1513,7 +1595,7 @@ pub fn parse_record_to_fragment(
 
     // Handle records without a filename in the base record
     // The $FILE_NAME may be in an extension record - we still need to store stdinfo
-    let (name, parent_frs, _namespace) = match primary_name {
+    let (name, parent_frs, _namespace, primary_parse_index) = match primary_name {
         Some(n) => n,
         None => {
             // No $FILE_NAME in base record - store stdinfo anyway
@@ -1589,9 +1671,9 @@ pub fn parse_record_to_fragment(
     let additional_count = additional_names.len();
     let mut link_indices: Vec<u32> = Vec::with_capacity(additional_count);
     // Collect parent FRS values for building children array later
-    let mut additional_parent_frs: SmallVec<[u64; 4]> = SmallVec::with_capacity(additional_count);
-    for (link_name, link_parent) in additional_names {
-        additional_parent_frs.push(link_parent);
+    let mut additional_parent_frs: SmallVec<[(u64, u16); 4]> = SmallVec::with_capacity(additional_count);
+    for (link_name, link_parent, link_parse_idx) in additional_names {
+        additional_parent_frs.push((link_parent, link_parse_idx));
         let link_offset = fragment.add_name(&link_name);
         let link_len = link_name.len();
         let link_is_ascii = link_name.is_ascii();
@@ -1807,12 +1889,12 @@ pub fn parse_record_to_fragment(
             });
         };
 
-    // Add child entry for primary name (name_index = 0)
-    add_child_entry(fragment, parent_frs, 0);
+    // Add child entry for primary name (using C++ parse-order index)
+    add_child_entry(fragment, parent_frs, primary_parse_index);
 
     // Add child entries for additional names (hardlinks)
-    for (name_idx, &link_parent_frs) in additional_parent_frs.iter().enumerate() {
-        add_child_entry(fragment, link_parent_frs, (name_idx + 1) as u16);
+    for &(link_parent_frs, link_parse_idx) in additional_parent_frs.iter() {
+        add_child_entry(fragment, link_parent_frs, link_parse_idx);
     }
 
     true
@@ -1832,6 +1914,7 @@ pub fn parse_record_to_fragment(
 /// # Returns
 ///
 /// `true` if any names/streams were added, `false` otherwise.
+#[deprecated(note = "Use parse_record_full() + MftRecordMerger instead")]
 #[allow(unsafe_code, clippy::cast_possible_truncation)]
 fn parse_extension_to_fragment(
     data: &[u8],
@@ -1899,6 +1982,30 @@ fn parse_extension_to_fragment(
                 }
             }
             Some(AttributeType::Data) => {
+                // C++ parity: Only primary attributes (LowestVCN == 0) count as streams.
+                // Continuation extents (LowestVCN > 0) are skipped. See ntfs_index_load.hpp:358
+                let is_primary = if attr_header.is_non_resident == 0 {
+                    true // Resident attributes are always primary
+                } else {
+                    let nr_offset = offset + 16;
+                    if nr_offset + 8 <= data.len() {
+                        let lowest_vcn = i64::from_le_bytes(
+                            data[nr_offset..nr_offset + 8]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        );
+                        lowest_vcn == 0
+                    } else {
+                        false // Can't verify, skip to be safe
+                    }
+                };
+
+                if !is_primary {
+                    // Skip continuation extents - they don't count as new streams
+                    offset += attr_header.length as usize;
+                    continue;
+                }
+
                 let name_len = attr_header.name_length as usize;
                 if name_len > 0 {
                     let (size, allocated) = if attr_header.is_non_resident != 0 {
@@ -2099,6 +2206,7 @@ fn parse_extension_to_fragment(
         }
         let record = fragment.get_or_create(base_frs);
         record.stream_count += stream_indices.len() as u16;
+        record.total_stream_count += stream_indices.len() as u16;
     }
 
     // Build parent-child relationship for names added from extension records
@@ -4869,8 +4977,8 @@ impl ParallelMftReader {
             "📊 Generated I/O operations for inline parsing"
         );
 
-        // Create the index with pre-allocated capacity
-        let mut index = MftIndex::with_capacity(volume, estimated_records);
+        // Create merger to accumulate parsed records (unified pipeline)
+        let mut merger = MftRecordMerger::with_capacity(total_records);
 
         // Create IOCP
         let read_start = std::time::Instant::now();
@@ -4980,7 +5088,7 @@ impl ParallelMftReader {
                 if let Some(mut completed_op) = in_flight[slot_idx].take() {
                     let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
 
-                    // INLINE PARSING: Parse directly into index
+                    // UNIFIED PIPELINE: parse_record_full() → MftRecordMerger
                     let buffer_slice =
                         &mut op_mut.buffer.as_mut_slice()[..bytes_transferred as usize];
                     let records_in_buffer = bytes_transferred as usize / record_size;
@@ -5003,10 +5111,12 @@ impl ParallelMftReader {
                             continue;
                         }
 
-                        // Parse and add to index inline
-                        if parse_record_to_index(record_slice, frs, &mut index) {
+                        // Parse using unified pipeline and accumulate in merger
+                        let result = parse_record_full(record_slice, frs);
+                        if !matches!(result, ParseResult::Skip) {
                             records_parsed += 1;
                         }
+                        merger.add_result(result);
                     }
 
                     bytes_read_total += bytes_transferred as u64;
@@ -5058,29 +5168,28 @@ impl ParallelMftReader {
             }
         }
 
+        let io_ms = read_start.elapsed().as_millis();
+        info!(
+            io_ms,
+            bytes_mb = bytes_read_total / (1024 * 1024),
+            records_parsed,
+            base_records = merger.base_count(),
+            extensions = merger.extension_count(),
+            "✅ Sliding window IOCP I/O + parse complete, merging..."
+        );
+
+        // Merge extensions and build index using unified pipeline
+        let parsed_records = merger.merge();
+        let index = MftIndex::from_parsed_records(volume, parsed_records);
+
         let total_ms = read_start.elapsed().as_millis();
         info!(
             total_ms,
-            bytes_mb = bytes_read_total / (1024 * 1024),
-            records_parsed,
+            io_ms,
+            merge_ms = total_ms - io_ms,
             index_entries = index.records.len(),
-            names_kb = index.names.len() / 1024,
-            "✅ Sliding window IOCP with inline parsing complete"
+            "✅ Sliding window IOCP with unified pipeline complete"
         );
-
-        // Post-processing: compute derived data structures
-        // These are fast O(n) operations that enhance query performance
-        // (Same as from_parsed_records and merge_fragments)
-        debug!("🔨 Building extension index...");
-        index.extension_index = Some(crate::index::ExtensionIndex::build(&index));
-
-        debug!("🔨 Sorting directory children...");
-        index.sort_directory_children();
-
-        debug!("🔨 Computing tree metrics...");
-        index.compute_tree_metrics();
-
-        debug!("✅ Post-processing complete");
 
         Ok(index)
     }
@@ -5453,8 +5562,8 @@ impl ParallelMftReader {
     ///
     /// This method uses a producer-consumer pattern:
     /// - IOCP thread reads data and sends buffers to a channel
-    /// - Worker threads parse buffers into local `MftIndexFragment`s
-    /// - After all I/O completes, fragments are merged into final index
+    /// - Worker threads parse buffers using `parse_record_full()` (unified pipeline)
+    /// - After all I/O completes, results are merged via `MftRecordMerger` into final index
     ///
     /// This is beneficial for NVMe drives where I/O is faster than parsing.
     /// For HDD, use `read_all_sliding_window_iocp_to_index` (inline parsing).
@@ -5492,7 +5601,7 @@ impl ParallelMftReader {
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
-        use crate::index::{MftIndex, MftIndexFragment};
+        use crate::index::MftIndex;
 
         let record_size = self.extent_map.bytes_per_record as usize;
         let total_records = self.extent_map.total_records() as usize;
@@ -5648,7 +5757,7 @@ impl ParallelMftReader {
             let record_size = record_size;
 
             let handle = std::thread::spawn(move || {
-                let mut fragment = MftIndexFragment::with_capacity(records_per_worker);
+                let mut results: Vec<ParseResult> = Vec::with_capacity(records_per_worker);
                 let mut local_parsed = 0usize;
 
                 // Process buffers until channel closes
@@ -5676,9 +5785,11 @@ impl ParallelMftReader {
                             continue;
                         }
 
-                        // Parse from the fixed-up slice
-                        if parse_record_to_fragment(record_slice, frs, &mut fragment) {
+                        // Parse using unified pipeline
+                        let result = parse_record_full(record_slice, frs);
+                        if !matches!(result, ParseResult::Skip) {
                             local_parsed += 1;
+                            results.push(result);
                         }
                     }
                 }
@@ -5688,11 +5799,11 @@ impl ParallelMftReader {
                 tracing::debug!(
                     worker_id,
                     local_parsed,
-                    fragment_records = fragment.len(),
+                    parse_results = results.len(),
                     "Worker complete"
                 );
 
-                fragment
+                results
             });
 
             worker_handles.push(handle);
@@ -5882,13 +5993,17 @@ impl ParallelMftReader {
         }
         drop(tx);
 
-        // Collect fragments from workers
+        // Collect parse results from workers and merge using unified pipeline
         let merge_start = std::time::Instant::now();
-        let mut fragments: Vec<MftIndexFragment> = Vec::with_capacity(num_workers);
+        let mut merger = MftRecordMerger::with_capacity(total_records);
 
         for handle in worker_handles {
             match handle.join() {
-                Ok(fragment) => fragments.push(fragment),
+                Ok(results) => {
+                    for result in results {
+                        merger.add_result(result);
+                    }
+                }
                 Err(e) => {
                     warn!("Worker thread panicked: {:?}", e);
                 }
@@ -5897,9 +6012,9 @@ impl ParallelMftReader {
 
         let total_parsed = records_parsed.load(Ordering::Relaxed);
 
-        // Merge fragments into final index
-        let mut index = MftIndex::with_capacity(volume, estimated_records);
-        index.merge_fragments(fragments);
+        // Build index from merged records
+        let parsed_records = merger.merge();
+        let index = MftIndex::from_parsed_records(volume, parsed_records);
 
         let merge_ms = merge_start.elapsed().as_millis();
         let total_ms = read_start.elapsed().as_millis();
@@ -5912,7 +6027,7 @@ impl ParallelMftReader {
             records_parsed = total_parsed,
             index_entries = index.records.len(),
             names_kb = index.names.len() / 1024,
-            "✅ Parallel parsing IOCP complete"
+            "✅ Parallel parsing IOCP with unified pipeline complete"
         );
 
         Ok(index)
@@ -7669,8 +7784,8 @@ pub struct VolumeState {
     pub max_concurrency: usize,
     /// I/O chunk size for this volume
     pub io_chunk_size: usize,
-    /// The MftIndex being built for this volume
-    pub index: crate::index::MftIndex,
+    /// Record merger accumulating parsed records (unified pipeline)
+    pub merger: crate::parse::MftRecordMerger,
     /// Queue of pending I/O operations
     pub io_queue: std::collections::VecDeque<MultiVolumeIoOp>,
     /// Next I/O operation index to issue
@@ -7906,7 +8021,7 @@ impl MultiVolumeIocpReader {
             total_pending -= 1;
             bytes_read_total += bytes_transferred as u64;
 
-            // Parse the completed buffer into the volume's index
+            // Parse the completed buffer using unified pipeline
             let buffer_slice = &completed_op.buffer.as_slice()[..bytes_transferred as usize];
             let records_in_buffer = bytes_transferred as usize / record_size;
             let mut current_frs = completed_op.op.start_frs;
@@ -7919,7 +8034,8 @@ impl MultiVolumeIocpReader {
                 }
 
                 let record_data = &buffer_slice[record_start..record_end];
-                parse_record_to_index(record_data, current_frs, &mut vol.index);
+                let result = parse_record_full(record_data, current_frs);
+                vol.merger.add_result(result);
                 current_frs += 1;
             }
 
@@ -7985,7 +8101,8 @@ impl MultiVolumeIocpReader {
         for vol in &self.volumes {
             info!(
                 volume = %vol.drive_letter,
-                records = vol.index.len(),
+                base_records = vol.merger.base_count(),
+                extensions = vol.merger.extension_count(),
                 completed_ops = vol.completed_io_ops,
                 total_ops = vol.total_io_ops,
                 "✅ Volume read complete"
@@ -7995,11 +8112,18 @@ impl MultiVolumeIocpReader {
         info!(
             volumes = self.volumes.len(),
             total_bytes = bytes_read_total,
-            "✅ Multi-volume IOCP read complete"
+            "✅ Multi-volume IOCP read complete, merging..."
         );
 
-        // Extract indices from volumes
-        Ok(self.volumes.drain(..).map(|v| v.index).collect())
+        // Merge extensions and build index for each volume using unified pipeline
+        Ok(self
+            .volumes
+            .drain(..)
+            .map(|v| {
+                let parsed_records = v.merger.merge();
+                crate::index::MftIndex::from_parsed_records(v.drive_letter, parsed_records)
+            })
+            .collect())
     }
 }
 
@@ -8068,7 +8192,7 @@ pub fn prepare_volume_state(
         pending_ops: 0,
         max_concurrency,
         io_chunk_size,
-        index: crate::index::MftIndex::with_capacity(drive_letter, estimated_records),
+        merger: crate::parse::MftRecordMerger::with_capacity(total_records),
         io_queue,
         next_io_idx: 0,
         total_io_ops,

@@ -605,14 +605,28 @@ impl StandardInfo {
         if self.is_readonly() {
             attrs |= 0x0001;
         }
-        if self.is_archive() {
-            attrs |= 0x0020;
+        if self.is_hidden() {
+            attrs |= 0x0002;
         }
         if self.is_system() {
             attrs |= 0x0004;
         }
-        if self.is_hidden() {
-            attrs |= 0x0002;
+        if self.is_directory() {
+            attrs |= 0x0010;
+        }
+        if self.is_archive() {
+            attrs |= 0x0020;
+        }
+        // Note: TEMPORARY (0x0100) is intentionally NOT included here.
+        // C++ does not output FILE_ATTRIBUTE_TEMPORARY in its attributes() method.
+        if self.is_sparse() {
+            attrs |= 0x0200;
+        }
+        if self.is_reparse() {
+            attrs |= 0x0400;
+        }
+        if self.is_compressed() {
+            attrs |= 0x0800;
         }
         if self.is_offline() {
             attrs |= 0x1000;
@@ -620,23 +634,20 @@ impl StandardInfo {
         if self.is_not_indexed() {
             attrs |= 0x2000;
         }
-        if self.is_directory() {
-            attrs |= 0x0010;
-        }
-        if self.is_compressed() {
-            attrs |= 0x0800;
-        }
         if self.is_encrypted() {
             attrs |= 0x4000;
         }
-        if self.is_sparse() {
-            attrs |= 0x0200;
+        if self.is_integrity_stream() {
+            attrs |= 0x8000;
         }
-        if self.is_reparse() {
-            attrs |= 0x0400;
+        if self.is_no_scrub_data() {
+            attrs |= 0x0002_0000;
         }
-        if self.is_temporary() {
-            attrs |= 0x0100;
+        if self.is_pinned() {
+            attrs |= 0x0008_0000;
+        }
+        if self.is_unpinned() {
+            attrs |= 0x0010_0000;
         }
         attrs
     }
@@ -6089,17 +6100,14 @@ mod tests {
         // skip_orphans=false for tests (include all records)
         crate::cpp_tree::compute_tree_metrics_cpp_port(&mut index, false, false);
 
-        // Fix 3 changed behavior: Directory printed size now includes ALL streams
-        // (first + internal + overflow), not just first stream.
-        //
-        // Directory's printed_own_len = own_len - delta(first_len) + first_len
-        //   where own_len = delta(first_len=0) + delta(internal_len=256) = 0 + 256 =
-        // 256   so printed_own_len = 256 - 0 + 0 = 256
-        // Directory treesize = children.length + printed_own_len = 1000 + 256 = 1256
+        // C++ behavior: children are only added to the first/default stream,
+        // not all internal streams. The directory's own internal stream (256 bytes)
+        // does NOT contribute to treesize — only the child file's 1000 bytes.
+        // Directory treesize = children.length + 0 = 1000
         let dir_idx = index.frs_to_idx_opt(dir_frs).unwrap();
         assert_eq!(
-            index.records[dir_idx].treesize, 1256,
-            "Directory treesize should be 1256 (file 1000 + internal stream 256)"
+            index.records[dir_idx].treesize, 1000,
+            "Directory treesize should be 1000 (file 1000, internal stream excluded per C++ behavior)"
         );
 
         // Verify directory descendants = 2 (itself + file)
@@ -6108,14 +6116,13 @@ mod tests {
             "Directory should have descendants = 2"
         );
 
-        // Root's size = children.length + printed_own_len
-        // children.length = directory's Channel A result = 1256
-        // printed_own_len = 0 (root has no streams)
-        // Root treesize = 1256 + 0 = 1256
+        // Root's size = children.length (Channel A from directory) + root's first_len (0)
+        // Channel A from directory = file_delta(1000) + internal_stream_delta(256) = 1256
+        // Root treesize (Channel B) = 1256 + 0 = 1256
         let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
         assert_eq!(
             index.records[root_idx].treesize, 1256,
-            "Root treesize should be 1256 (same as directory's Channel A output)"
+            "Root treesize should be 1256 (directory Channel A includes internal stream propagation)"
         );
 
         println!("✅ Tree metrics internal streams two-channel test passed!");

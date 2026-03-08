@@ -2042,6 +2042,7 @@ impl MftReader {
                         fn_modified: parsed.fn_modified,
                         fn_accessed: parsed.fn_accessed,
                         fn_mft_changed: parsed.fn_mft_changed,
+                        source_frs: parsed.frs,
                     }]
                 } else {
                     parsed.names.clone()
@@ -3871,7 +3872,7 @@ impl MftReader {
             parse_record_full,
         };
 
-        let raw = crate::raw::load_raw_mft(path, options)?;
+        let mut raw = crate::raw::load_raw_mft(path, options)?;
 
         // Parse all records into ParsedRecord format
         let capacity = usize::try_from(raw.header.record_count).unwrap_or(0);
@@ -3931,59 +3932,141 @@ impl MftReader {
             // Normal mode: use MftRecordMerger to properly merge extension records
             // This is critical for files with $ATTRIBUTE_LIST where $FILE_NAME
             // attributes are stored in extension records.
-            let mut merger = MftRecordMerger::with_capacity(capacity);
 
-            // Diagnostic counters
-            let mut records_examined: u64 = 0;
-            let mut fixup_success: u64 = 0;
-            let mut fixup_failed: u64 = 0;
-            let mut base_records: u64 = 0;
-            let mut extension_records: u64 = 0;
-            let mut skip_records: u64 = 0;
+            let record_size = raw.header.record_size as usize;
+            let single_thread = std::env::var("UFFS_SINGLE_THREAD").is_ok();
 
-            for (frs, record_data) in raw.iter_records() {
-                records_examined += 1;
-                let mut record_buf = record_data.to_vec();
-                if !apply_fixup(&mut record_buf) {
-                    fixup_failed += 1;
-                    continue;
+            let parse_start = std::time::Instant::now();
+
+            if single_thread {
+                // Sequential fallback (for debugging)
+                let mut merger = MftRecordMerger::with_capacity(capacity);
+                let mut fixup_success: u64 = 0;
+                let mut fixup_failed: u64 = 0;
+                let mut base_records: u64 = 0;
+                let mut extension_records: u64 = 0;
+                let mut skip_records: u64 = 0;
+
+                for (frs, record_data) in raw.iter_records() {
+                    let mut record_buf = record_data.to_vec();
+                    if !apply_fixup(&mut record_buf) {
+                        fixup_failed += 1;
+                        continue;
+                    }
+                    fixup_success += 1;
+                    let result = parse_record_full(&record_buf, frs);
+                    match &result {
+                        ParseResult::Base(_) => base_records += 1,
+                        ParseResult::Extension(_) => extension_records += 1,
+                        ParseResult::Skip => skip_records += 1,
+                    }
+                    merger.add_result(result);
                 }
-                fixup_success += 1;
-                let result = parse_record_full(&record_buf, frs);
 
-                // Count by result type
-                match &result {
-                    ParseResult::Base(_) => base_records += 1,
-                    ParseResult::Extension(_) => extension_records += 1,
-                    ParseResult::Skip => skip_records += 1,
+                let parsed_records = merger.merge();
+
+                info!(
+                    total_records_in_file,
+                    parse_ms = parse_start.elapsed().as_millis(),
+                    fixup_success,
+                    fixup_failed,
+                    base_records,
+                    extension_records,
+                    skip_records,
+                    final_merged_count = parsed_records.len(),
+                    "Offline parse complete (sequential)"
+                );
+
+                Ok(MftIndex::from_parsed_records(
+                    raw.header.volume_letter,
+                    parsed_records,
+                ))
+            } else {
+                // Parallel parsing using rayon (same pattern as io.rs)
+                use rayon::prelude::*;
+
+                let records_per_chunk = 4096usize;
+                let bytes_per_chunk = records_per_chunk * record_size;
+                let buffer_slice = raw.data.as_mut_slice();
+
+                let results: Vec<(Vec<ParseResult>, u64, u64, u64, u64, u64)> = buffer_slice
+                    .par_chunks_mut(bytes_per_chunk)
+                    .enumerate()
+                    .map(|(chunk_idx, chunk)| {
+                        let mut results = Vec::new();
+                        let mut fixup_ok = 0u64;
+                        let mut fixup_fail = 0u64;
+                        let mut bases = 0u64;
+                        let mut extensions = 0u64;
+                        let mut skips = 0u64;
+
+                        let start_frs = chunk_idx * records_per_chunk;
+                        let records_in_chunk = chunk.len() / record_size;
+
+                        for i in 0..records_in_chunk {
+                            let offset = i * record_size;
+                            let record_slice = &mut chunk[offset..offset + record_size];
+
+                            if !apply_fixup(record_slice) {
+                                fixup_fail += 1;
+                                continue;
+                            }
+                            fixup_ok += 1;
+
+                            let frs = (start_frs + i) as u64;
+                            let result = parse_record_full(record_slice, frs);
+                            match &result {
+                                ParseResult::Base(_) => bases += 1,
+                                ParseResult::Extension(_) => extensions += 1,
+                                ParseResult::Skip => skips += 1,
+                            }
+                            if !matches!(result, ParseResult::Skip) {
+                                results.push(result);
+                            }
+                        }
+                        (results, fixup_ok, fixup_fail, bases, extensions, skips)
+                    })
+                    .collect();
+
+                // Combine results in chunk order (preserves FRS ordering)
+                let mut merger = MftRecordMerger::with_capacity(capacity);
+                let mut fixup_success: u64 = 0;
+                let mut fixup_failed: u64 = 0;
+                let mut base_records: u64 = 0;
+                let mut extension_records: u64 = 0;
+                let mut skip_records: u64 = 0;
+
+                for (chunk_results, ok, fail, bases, exts, skips) in results {
+                    fixup_success += ok;
+                    fixup_failed += fail;
+                    base_records += bases;
+                    extension_records += exts;
+                    skip_records += skips;
+                    for result in chunk_results {
+                        merger.add_result(result);
+                    }
                 }
 
-                merger.add_result(result);
+                let parsed_records = merger.merge();
+
+                info!(
+                    total_records_in_file,
+                    parse_ms = parse_start.elapsed().as_millis(),
+                    fixup_success,
+                    fixup_failed,
+                    base_records,
+                    extension_records,
+                    skip_records,
+                    final_merged_count = parsed_records.len(),
+                    threads = rayon::current_num_threads(),
+                    "Offline parse complete (parallel)"
+                );
+
+                Ok(MftIndex::from_parsed_records(
+                    raw.header.volume_letter,
+                    parsed_records,
+                ))
             }
-
-            // Merge extensions into base records
-            let parsed_records = merger.merge();
-
-            // Log diagnostic summary for normal mode
-            info!("📊 OFFLINE PATH PARSE DIAGNOSTICS (Normal Mode)");
-            info!(
-                total_records_in_file,
-                records_examined,
-                fixup_success,
-                fixup_failed,
-                base_records,
-                extension_records,
-                skip_records,
-                final_merged_count = parsed_records.len(),
-                "Offline parse pipeline summary"
-            );
-
-            // Build MftIndex from parsed records (includes tree metrics computation)
-            // Use volume letter from header (v2+) or 'X' as fallback for v1 files
-            Ok(MftIndex::from_parsed_records(
-                raw.header.volume_letter,
-                parsed_records,
-            ))
         }
     }
 

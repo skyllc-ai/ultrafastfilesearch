@@ -324,23 +324,15 @@ impl CppTreeTraversal<'_> {
                 //   - Use children Channel-A stream-count + 1 (directory itself).
                 rec.descendants = children.treesize.saturating_add(1);
 
-                // Fix 3: Directory printed size includes ALL directory record streams.
-                // - own_len = sum of delta sizes for all streams (first + internal + overflow)
-                // - We want: printed_own_len = own_len - delta(first) + first_len
-                // This keeps the first stream at full size while including other streams
-                // at their delta-shared size.
-                let delta_first_len = delta(first_len, name_info, total_names);
-                let printed_own_len = own_len
-                    .saturating_sub(delta_first_len)
-                    .saturating_add(first_len);
-
-                let delta_first_alloc = delta(first_alloc, name_info, total_names);
-                let printed_own_alloc = own_alloc
-                    .saturating_sub(delta_first_alloc)
-                    .saturating_add(first_alloc);
-
-                rec.treesize = children.length.saturating_add(printed_own_len);
-                rec.tree_allocated = children.allocated.saturating_add(printed_own_alloc);
+                // C++ parity: The printed treesize for a directory is:
+                //   default_stream.length + children.length
+                // In C++, only the default stream (type_name_id==0) gets children sizes added
+                // (ntfs_index_load.hpp line 677: k->length += children_size.length).
+                // Non-default streams (ADS) keep their original length.
+                // So the directory's printed size = first_len + children.length,
+                // NOT including ADS stream sizes.
+                rec.treesize = children.length.saturating_add(first_len);
+                rec.tree_allocated = children.allocated.saturating_add(first_alloc);
             } else {
                 // Files print 0 descendants, and size == default stream only.
                 rec.descendants = 0;

@@ -747,11 +747,14 @@ pub const fn filetime_to_unix_micros(filetime: i64) -> i64 {
     // Difference is 11644473600 seconds = 116444736000000000 * 100ns
     const FILETIME_UNIX_DIFF: i64 = 116_444_736_000_000_000;
 
-    if filetime < FILETIME_UNIX_DIFF {
+    // C++ parity: allow negative Unix timestamps (pre-1970 dates).
+    // C++ uses FileTimeToLocalFileTime() which handles all valid FILETIME values.
+    // Only clamp for filetime == 0 (unset/null timestamp).
+    if filetime == 0 {
         return 0;
     }
 
-    // Convert from 100ns to microseconds
+    // Convert from 100ns to microseconds (works for both positive and negative offsets)
     (filetime - FILETIME_UNIX_DIFF) / 10
 }
 
@@ -1197,6 +1200,9 @@ pub struct NameInfo {
     pub fn_accessed: i64,
     /// MFT change time from `$FILE_NAME` (Unix microseconds).
     pub fn_mft_changed: i64,
+    /// FRS of the MFT record this name was parsed from (base or extension).
+    /// Used to sort merged names by encounter order to match C++ behavior.
+    pub source_frs: u64,
 }
 
 /// Information about a single data stream.

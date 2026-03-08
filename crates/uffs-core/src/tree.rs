@@ -592,22 +592,29 @@ pub fn add_tree_columns(df: &DataFrame, columns: &[TreeColumn]) -> Result<DataFr
 /// Returns an error if required columns are missing or the transformation
 /// fails.
 pub fn apply_directory_treesize(df: &DataFrame) -> Result<DataFrame> {
-    use uffs_polars::{IntoLazy, col, when};
+    use uffs_polars::{IntoLazy, col, lit, when};
 
-    // C++ parity: Apply treesize to directories, but NOT to reparse points
-    // (junctions/symlinks) Junctions should keep their original size (the
-    // $REPARSE_POINT ValueLength, typically 48 bytes) Regular directories get
-    // their size replaced with treesize (sum of descendant sizes)
+    // C++ parity: Apply treesize to ALL directories (including reparse points).
+    // ADS entries keep the stream-specific size (not the parent's treesize).
+    let has_stream_name = df.column("stream_name").is_ok();
+
+    let is_default_dir = if has_stream_name {
+        col("is_directory")
+            .and(col("stream_name").eq(lit("")))
+    } else {
+        col("is_directory")
+    };
+
     df.clone()
         .lazy()
         .with_column(
-            when(col("is_directory").and(col("is_reparse").not()))
+            when(is_default_dir.clone())
                 .then(col("treesize"))
                 .otherwise(col("size"))
                 .alias("size"),
         )
         .with_column(
-            when(col("is_directory").and(col("is_reparse").not()))
+            when(is_default_dir)
                 .then(col("tree_allocated"))
                 .otherwise(col("allocated_size"))
                 .alias("allocated_size"),
