@@ -153,11 +153,7 @@ pub fn u64_to_usize(value: u64) -> usize {
     reason = "negative values are handled by returning 0"
 )]
 pub const fn i64_to_u64_filetime(value: i64) -> u64 {
-    if value < 0 {
-        0
-    } else {
-        value as u64
-    }
+    if value < 0 { 0 } else { value as u64 }
 }
 
 /// Convert `u64` to `i64` for Windows FILETIME values.
@@ -1265,7 +1261,7 @@ impl CppMftIndex {
     pub fn into_mft_index(self, volume: char) -> crate::index::MftIndex {
         use crate::index::{
             ChildInfo as RustChildInfo, FileRecord, InternalStreamInfo, MftIndex,
-            SizeInfo as RustSizeInfo, StandardInfo as RustStandardInfo, NO_ENTRY as RUST_NO_ENTRY,
+            NO_ENTRY as RUST_NO_ENTRY, SizeInfo as RustSizeInfo, StandardInfo as RustStandardInfo,
         };
         use crate::ntfs::filetime_to_unix_micros;
 
@@ -1712,8 +1708,8 @@ use alloc::sync::Arc;
 use std::sync::Mutex;
 
 use crate::ntfs::{
-    apply_usa_fixup, file_reference_to_frs, AttributeRecordHeader, AttributeType,
-    FileNameAttribute, FileRecordSegmentHeader, ResidentAttributeData, StandardInformation,
+    AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
+    ResidentAttributeData, StandardInformation, apply_usa_fixup, file_reference_to_frs,
 };
 
 /// File record header flag: record is in use.

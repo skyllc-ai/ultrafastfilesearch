@@ -36,7 +36,7 @@ use std::mem::size_of;
 use smallvec::SmallVec;
 use tracing::{debug, info, trace, warn};
 use windows::Win32::Foundation::HANDLE;
-use windows::Win32::Storage::FileSystem::{ReadFile, SetFilePointerEx, FILE_BEGIN};
+use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
 use crate::cpp_io_pipeline::CppIoPipeline;
 use crate::error::{MftError, Result};
@@ -496,9 +496,9 @@ impl MftRecordReader {
 // Re-use the cross-platform stream filtering function from ntfs module
 use crate::ntfs::is_internal_windows_stream;
 pub use crate::parse::{
+    ExtensionAttributes, ParseResult, ParsedColumns, ParsedRecord,
     add_missing_parent_placeholders_to_vec, apply_fixup, create_placeholder_record, parse_record,
-    parse_record_full, parse_record_zero_alloc, ExtensionAttributes, ParseResult, ParsedColumns,
-    ParsedRecord,
+    parse_record_full, parse_record_zero_alloc,
 };
 
 // ============================================================================
@@ -528,12 +528,12 @@ pub use crate::parse::{
 )]
 pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::MftIndex) -> bool {
     use crate::index::{
-        ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, SizeInfo, StandardInfo, NO_ENTRY,
+        ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo,
     };
     #[expect(unused_imports, reason = "used in inline parsing mode")]
     use crate::ntfs::{
-        file_reference_to_frs, filetime_to_unix_micros, AttributeRecordHeader, AttributeType,
-        FileNameAttribute, FileRecordSegmentHeader, StandardInformation,
+        AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
+        StandardInformation, file_reference_to_frs, filetime_to_unix_micros,
     };
 
     if data.len() < size_of::<FileRecordSegmentHeader>() {
@@ -984,7 +984,7 @@ fn parse_extension_to_index(
     base_frs: u64,
     index: &mut crate::index::MftIndex,
 ) -> bool {
-    use crate::index::{ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, SizeInfo, NO_ENTRY};
+    use crate::index::{ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo};
     use crate::ntfs::{
         AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
     };
@@ -1352,11 +1352,11 @@ pub fn parse_record_to_fragment(
     fragment: &mut crate::index::MftIndexFragment,
 ) -> bool {
     use crate::index::{
-        ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, SizeInfo, StandardInfo, NO_ENTRY,
+        ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo,
     };
     use crate::ntfs::{
-        file_reference_to_frs, filetime_to_unix_micros, AttributeRecordHeader, AttributeType,
-        FileNameAttribute, FileRecordSegmentHeader, StandardInformation,
+        AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
+        StandardInformation, file_reference_to_frs, filetime_to_unix_micros,
     };
 
     if data.len() < size_of::<FileRecordSegmentHeader>() {
@@ -1877,7 +1877,7 @@ fn parse_extension_to_fragment(
     base_frs: u64,
     fragment: &mut crate::index::MftIndexFragment,
 ) -> bool {
-    use crate::index::{ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, SizeInfo, NO_ENTRY};
+    use crate::index::{ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo};
     use crate::ntfs::{
         AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
     };
@@ -2381,8 +2381,8 @@ impl BatchMftReader {
 // Parallel MFT Reader
 // ============================================================================
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rayon::prelude::*;
 
@@ -2521,8 +2521,7 @@ pub fn generate_read_chunks(
             } else {
                 trace!(
                     chunk_frs_start,
-                    chunk_frs_end,
-                    "📊 No bitmap - skip_begin=0, skip_end=0"
+                    chunk_frs_end, "📊 No bitmap - skip_begin=0, skip_end=0"
                 );
                 (0, 0)
             };
@@ -3906,7 +3905,7 @@ impl ParallelMftReader {
         use std::pin::Pin;
 
         use rayon::prelude::*;
-        use windows::Win32::Foundation::{GetLastError, ERROR_IO_PENDING};
+        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
         let record_size = self.extent_map.bytes_per_record as usize;
@@ -4061,8 +4060,8 @@ impl ParallelMftReader {
 
         // Wait for all completions using multiple worker threads (C++ approach)
         // This keeps the I/O pipeline full by processing completions in parallel
-        use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
         let bytes_read_total = Arc::new(AtomicU64::new(0));
         let completed = Arc::new(AtomicUsize::new(0));
@@ -4318,7 +4317,7 @@ impl ParallelMftReader {
         use std::collections::VecDeque;
         use std::pin::Pin;
 
-        use windows::Win32::Foundation::{GetLastError, ERROR_IO_PENDING};
+        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
@@ -4788,7 +4787,7 @@ impl ParallelMftReader {
         use std::collections::VecDeque;
         use std::pin::Pin;
 
-        use windows::Win32::Foundation::{GetLastError, ERROR_IO_PENDING};
+        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
@@ -5173,7 +5172,7 @@ impl ParallelMftReader {
         use std::collections::VecDeque;
         use std::pin::Pin;
 
-        use windows::Win32::Foundation::{GetLastError, ERROR_IO_PENDING};
+        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
@@ -5549,11 +5548,11 @@ impl ParallelMftReader {
     {
         use std::collections::VecDeque;
         use std::pin::Pin;
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
-        use crossbeam_channel::{bounded, Sender};
-        use windows::Win32::Foundation::{GetLastError, ERROR_IO_PENDING};
+        use crossbeam_channel::{Sender, bounded};
+        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
@@ -6818,7 +6817,7 @@ impl PipelinedMftReader {
     {
         use std::thread;
 
-        use crossbeam_channel::{bounded, Receiver, Sender};
+        use crossbeam_channel::{Receiver, Sender, bounded};
 
         let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
         let record_size = self.extent_map.bytes_per_record;
@@ -7004,7 +7003,7 @@ impl PipelinedMftReader {
     {
         use std::thread;
 
-        use crossbeam_channel::{bounded, Receiver, Sender};
+        use crossbeam_channel::{Receiver, Sender, bounded};
 
         let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
         let record_size = self.extent_map.bytes_per_record;
@@ -7503,7 +7502,7 @@ impl IocpMftReader {
         use std::collections::VecDeque;
         use std::pin::Pin;
 
-        use windows::Win32::Foundation::{GetLastError, ERROR_IO_PENDING};
+        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
@@ -7845,7 +7844,7 @@ impl MultiVolumeIocpReader {
     pub fn read_all_volumes(&mut self) -> Result<Vec<crate::index::MftIndex>> {
         use std::pin::Pin;
 
-        use windows::Win32::Foundation::{GetLastError, ERROR_IO_PENDING, HANDLE};
+        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError, HANDLE};
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 

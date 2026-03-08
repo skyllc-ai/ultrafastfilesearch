@@ -1250,7 +1250,7 @@ impl MftReader {
     pub async fn read_index_cached(&self, ttl_seconds: u64) -> Result<crate::index::MftIndex> {
         use tracing::{debug, info, warn};
 
-        use crate::cache::{check_cache_status, save_to_cache, CacheStatus};
+        use crate::cache::{CacheStatus, check_cache_status, save_to_cache};
         use crate::platform::VolumeHandle;
         use crate::usn::{aggregate_changes, query_usn_journal, read_usn_journal};
 
@@ -2764,7 +2764,7 @@ impl MftReader {
         &self,
     ) -> Result<(crate::index::MftIndex, BenchmarkResult)> {
         use crate::index::MftIndex;
-        use crate::io::{generate_read_chunks, MftExtentMap, ParallelMftReader};
+        use crate::io::{MftExtentMap, ParallelMftReader, generate_read_chunks};
         use crate::platform::detect_drive_type;
 
         let total_start = Instant::now();
@@ -2939,7 +2939,7 @@ impl MftReader {
         &self,
         skip_df_build: bool,
     ) -> Result<(Option<DataFrame>, BenchmarkResult)> {
-        use crate::io::{generate_read_chunks, MftExtentMap, ParallelMftReader};
+        use crate::io::{MftExtentMap, ParallelMftReader, generate_read_chunks};
         use crate::platform::detect_drive_type;
 
         let total_start = Instant::now();
@@ -3552,7 +3552,7 @@ impl MftReader {
     /// handling, sector alignment, and dynamic buffer sizing.
     #[cfg(windows)]
     fn read_raw_internal(&self) -> Result<(Vec<u8>, u32)> {
-        use crate::io::{generate_read_chunks, MftExtentMap, ParallelMftReader};
+        use crate::io::{MftExtentMap, ParallelMftReader, generate_read_chunks};
         use crate::platform::detect_drive_type;
 
         let record_size = self.handle.file_record_size();
@@ -3643,11 +3643,11 @@ impl MftReader {
     ) -> Result<crate::raw::RawMftHeader> {
         use std::thread;
 
-        use crossbeam_channel::{bounded, Receiver, Sender};
+        use crossbeam_channel::{Receiver, Sender, bounded};
         use windows::Win32::Foundation::HANDLE;
-        use windows::Win32::Storage::FileSystem::{ReadFile, SetFilePointerEx, FILE_BEGIN};
+        use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
-        use crate::io::{generate_read_chunks, AlignedBuffer, MftExtentMap, SECTOR_SIZE};
+        use crate::io::{AlignedBuffer, MftExtentMap, SECTOR_SIZE, generate_read_chunks};
         use crate::platform::detect_drive_type;
         use crate::raw::StreamingRawMftWriter;
 
@@ -3866,7 +3866,7 @@ impl MftReader {
         path: P,
         options: &crate::raw::LoadRawOptions,
     ) -> Result<DataFrame> {
-        use crate::parse::{apply_fixup, parse_record_full, MftRecordMerger};
+        use crate::parse::{MftRecordMerger, apply_fixup, parse_record_full};
 
         let raw = crate::raw::load_raw_mft(path, options)?;
 
@@ -3940,8 +3940,8 @@ impl MftReader {
 
         use crate::index::MftIndex;
         use crate::parse::{
-            apply_fixup, parse_record_forensic, parse_record_full, MftRecordMerger, ParseOptions,
-            ParseResult,
+            MftRecordMerger, ParseOptions, ParseResult, apply_fixup, parse_record_forensic,
+            parse_record_full,
         };
 
         let raw = crate::raw::load_raw_mft(path, options)?;
@@ -4308,7 +4308,7 @@ impl MultiDriveMftReader {
         use std::sync::Arc;
 
         use tokio::task::JoinSet;
-        use uffs_polars::{col, lit, IntoLazy};
+        use uffs_polars::{IntoLazy, col, lit};
 
         if self.drives.is_empty() {
             return Err(MftError::InvalidInput("No drives specified".into()));
@@ -4578,7 +4578,7 @@ impl MultiDriveMftReader {
         use tokio::task::JoinSet;
         use tracing::info;
 
-        use crate::cache::{check_cache_status, CacheStatus};
+        use crate::cache::{CacheStatus, check_cache_status};
 
         if self.drives.is_empty() {
             return Err(MftError::InvalidInput("No drives specified".into()));

@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_NO_BUFFERING,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_OVERLAPPED, FILE_FLAG_SEQUENTIAL_SCAN,
+    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_NO_BUFFERING, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_FLAG_OVERLAPPED, FILE_FLAG_SEQUENTIAL_SCAN, FILE_FLAGS_AND_ATTRIBUTES,
     FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     SYNCHRONIZE,
 };
@@ -25,11 +25,11 @@ use windows::Win32::Storage::FileSystem::{
 /// FILE_READ_DATA access right (0x0001) - required to read data from a
 /// file/volume
 const FILE_READ_DATA: u32 = 0x0001;
-use windows::core::PCWSTR;
 use windows::Win32::System::Ioctl::{
     FSCTL_GET_NTFS_VOLUME_DATA, FSCTL_GET_RETRIEVAL_POINTERS, NTFS_VOLUME_DATA_BUFFER,
     STARTING_VCN_INPUT_BUFFER,
 };
+use windows::core::PCWSTR;
 
 use crate::error::{MftError, Result};
 use crate::ntfs::NtfsBootSector;
@@ -322,7 +322,7 @@ impl VolumeHandle {
         reason = "FFI: windows API and ptr::read for packed struct"
     )]
     pub fn read_boot_sector(&self) -> Result<NtfsBootSector> {
-        use windows::Win32::Storage::FileSystem::{ReadFile, SetFilePointerEx, FILE_BEGIN};
+        use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
         // Seek to the beginning of the volume
         let mut new_position = 0_i64;
@@ -446,7 +446,7 @@ impl VolumeHandle {
     )]
     fn get_mft_bitmap_internal(&self, verbose: bool) -> Result<MftBitmap> {
         use windows::Win32::Storage::FileSystem::{
-            GetFileSizeEx, ReadFile, SetFilePointerEx, FILE_BEGIN, SYNCHRONIZE,
+            FILE_BEGIN, GetFileSizeEx, ReadFile, SYNCHRONIZE, SetFilePointerEx,
         };
 
         // Open the $MFT::$BITMAP stream to get retrieval pointers and size
@@ -1134,7 +1134,7 @@ impl Iterator for InUseClusterRangeIterator<'_> {
 )]
 pub fn is_elevated() -> bool {
     use windows::Win32::Security::{
-        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+        GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
     };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 

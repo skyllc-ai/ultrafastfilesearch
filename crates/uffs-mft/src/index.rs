@@ -5067,7 +5067,7 @@ mod tests {
         assert_eq!(index.records[root_idx].descendants, 5); // 1 + dir1(3) + file3(1)
         assert_eq!(index.records[root_idx].treesize, 3500); // 0 + 3000 + 500
         assert_eq!(index.records[root_idx].tree_allocated, 12288); // 0 + 8192 +
-                                                                   // 4096
+        // 4096
     }
 
     #[test]
@@ -5701,7 +5701,7 @@ mod tests {
         record_a.first_name.parent_frs = 5;
         record_a.first_name.next_entry = link_c_idx; // Chain to link C
         record_a.name_count = 2; // B and C
-                                 // stdinfo remains default (created = 0) - this is the key!
+        // stdinfo remains default (created = 0) - this is the key!
 
         // Create Fragment B with base record for FRS 100
         let mut fragment_b = MftIndexFragment::with_capacity(10);
@@ -5818,7 +5818,7 @@ mod tests {
         record_b.first_name.parent_frs = 5;
         record_b.first_name.next_entry = link_c_idx; // Chain to link C
         record_b.name_count = 2; // B and C
-                                 // stdinfo remains default (created = 0) - placeholder
+        // stdinfo remains default (created = 0) - placeholder
 
         // Create main index and merge fragments
         // Merge fragment A first (base record), then fragment B (extension-only)
@@ -7993,7 +7993,7 @@ impl MftIndex {
             buffer.extend_from_slice(&record.sequence_number.to_le_bytes());
             buffer.push(record.namespace);
             buffer.push(record.forensic_flags); // Version 7: renamed from reserved
-                                                // Version 5+: LSN (Log File Sequence Number)
+            // Version 5+: LSN (Log File Sequence Number)
             buffer.extend_from_slice(&record.lsn.to_le_bytes());
             // Version 6+: reparse_tag
             buffer.extend_from_slice(&record.reparse_tag.to_le_bytes());
@@ -8240,7 +8240,7 @@ impl MftIndex {
             let sequence_number = if version >= 4 { read_u16!() } else { 0 };
             let namespace = if version >= 4 { read_u8!() } else { 1 }; // Default: Win32
             let forensic_flags = if version >= 4 { read_u8!() } else { 0 }; // Version 7: renamed from reserved
-                                                                            // Version 5+: LSN (Log File Sequence Number)
+            // Version 5+: LSN (Log File Sequence Number)
             let lsn = if version >= 5 { read_u64!() } else { 0 };
             // Version 6+: reparse_tag
             let reparse_tag = if version >= 6 { read_u32!() } else { 0 };

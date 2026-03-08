@@ -52,8 +52,8 @@ use core::mem::size_of;
 use tracing::{debug, info, warn};
 
 use crate::ntfs::{
-    ExtendedStandardInfo, MultiSectorHeader, NameInfo, ReparsePointHeader, StreamInfo,
-    FILE_RECORD_MAGIC, SECTOR_SIZE,
+    ExtendedStandardInfo, FILE_RECORD_MAGIC, MultiSectorHeader, NameInfo, ReparsePointHeader,
+    SECTOR_SIZE, StreamInfo,
 };
 
 // Thread-local buffer for record processing to avoid per-record allocations.
@@ -489,8 +489,8 @@ fn parse_standard_info_full(data: &[u8], attr_offset: usize, result: &mut Extend
     use core::mem::size_of;
 
     use crate::ntfs::{
-        filetime_to_unix_micros, StandardInformation, StandardInformationExtended,
-        STANDARD_INFO_SIZE_V12, STANDARD_INFO_SIZE_V30,
+        STANDARD_INFO_SIZE_V12, STANDARD_INFO_SIZE_V30, StandardInformation,
+        StandardInformationExtended, filetime_to_unix_micros,
     };
 
     // Get value offset and length (resident attribute)
@@ -552,7 +552,7 @@ fn parse_file_name_full(data: &[u8], attr_offset: usize) -> Option<NameInfo> {
 
     use smallvec::SmallVec;
 
-    use crate::ntfs::{file_reference_to_frs, filetime_to_unix_micros, FileNameAttribute};
+    use crate::ntfs::{FileNameAttribute, file_reference_to_frs, filetime_to_unix_micros};
 
     // Get value offset (resident attribute)
     let value_offset_bytes = &data[attr_offset + 20..attr_offset + 22];
@@ -797,7 +797,7 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     use core::mem::size_of;
 
     use crate::ntfs::{
-        file_reference_to_frs, AttributeRecordHeader, AttributeType, FileRecordSegmentHeader,
+        AttributeRecordHeader, AttributeType, FileRecordSegmentHeader, file_reference_to_frs,
     };
 
     if data.len() < size_of::<FileRecordSegmentHeader>() {
@@ -1272,7 +1272,7 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                 // C++ uses ah->Resident.ValueLength for reparse points
                 if reparse_tag != 0 {
                     (reparse_size, 0) // Reparse point data is resident,
-                                      // allocated=0
+                // allocated=0
                 } else {
                     (0, 0)
                 }
@@ -1346,7 +1346,7 @@ pub fn parse_record_forensic(
     use core::mem::size_of;
 
     use crate::ntfs::{
-        file_reference_to_frs, AttributeRecordHeader, AttributeType, FileRecordSegmentHeader,
+        AttributeRecordHeader, AttributeType, FileRecordSegmentHeader, file_reference_to_frs,
     };
 
     // Handle corrupt records
@@ -2089,7 +2089,7 @@ pub fn parse_record_forensic(
                 // C++ uses ah->Resident.ValueLength for reparse points
                 if reparse_tag != 0 {
                     (reparse_size, 0) // Reparse point data is resident,
-                                      // allocated=0
+                // allocated=0
                 } else {
                     (0, 0)
                 }

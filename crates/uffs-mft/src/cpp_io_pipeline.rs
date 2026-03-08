@@ -31,11 +31,11 @@
 #![cfg(windows)]
 
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tracing::{debug, info, trace, warn};
-use windows::Win32::Foundation::{GetLastError, ERROR_IO_PENDING, HANDLE};
+use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError, HANDLE};
 use windows::Win32::Storage::FileSystem::ReadFile;
 use windows::Win32::System::IO::GetQueuedCompletionStatus;
 

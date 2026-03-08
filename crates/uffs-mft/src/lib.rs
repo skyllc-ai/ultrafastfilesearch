@@ -125,55 +125,56 @@ mod reader;
 #[cfg(windows)]
 pub use cache::load_or_build_dataframe_cached;
 pub use cache::{
-    cache_age_seconds, cache_dir, cache_file_path, check_cache_status, check_multi_drive_cache,
-    cleanup_expired_cache, is_cache_fresh, load_cached_index, remove_all_cached_indices,
-    remove_cached_index, save_to_cache, CacheStatus, MultiDriveCacheStatus, INDEX_TTL_SECONDS,
+    CacheStatus, INDEX_TTL_SECONDS, MultiDriveCacheStatus, cache_age_seconds, cache_dir,
+    cache_file_path, check_cache_status, check_multi_drive_cache, cleanup_expired_cache,
+    is_cache_fresh, load_cached_index, remove_all_cached_indices, remove_cached_index,
+    save_to_cache,
 };
 pub use error::{MftError, Result};
 pub use flags::FileFlags;
 // Re-export lean index types
 pub use index::{
     ChildInfo, ChunkAlgorithm, FileRecord, IndexBuildTiming, IndexNameRef, IndexStreamInfo,
-    IoPipelineAlgorithm, LinkInfo, MftIndex, ParseAlgorithm, SizeInfo, StandardInfo, TreeAlgorithm,
-    UsnApplyStats, NO_ENTRY, ROOT_FRS,
+    IoPipelineAlgorithm, LinkInfo, MftIndex, NO_ENTRY, ParseAlgorithm, ROOT_FRS, SizeInfo,
+    StandardInfo, TreeAlgorithm, UsnApplyStats,
 };
 // Re-export I/O types for advanced usage
 #[cfg(windows)]
 pub use io::{
-    apply_fixup, generate_read_chunks, parse_record_full, parse_record_zero_alloc, AlignedBuffer,
-    BatchMftReader, ExtensionAttributes, MftExtentMap, MftRecordMerger, MftRecordReader,
-    ParallelMftReader, ParseResult, ParsedColumns, ParsedRecord, PipelinedMftReader,
-    PrefetchMftReader, ReadChunk, ReadParseTiming, StreamingMftReader,
+    AlignedBuffer, BatchMftReader, ExtensionAttributes, MftExtentMap, MftRecordMerger,
+    MftRecordReader, ParallelMftReader, ParseResult, ParsedColumns, ParsedRecord,
+    PipelinedMftReader, PrefetchMftReader, ReadChunk, ReadParseTiming, StreamingMftReader,
+    apply_fixup, generate_read_chunks, parse_record_full, parse_record_zero_alloc,
 };
 // Re-export NTFS constants
 #[cfg(windows)]
 pub use ntfs::SECTOR_SIZE;
 #[cfg(windows)]
 pub use ntfs::{
-    apply_usa_fixup, extract_data_runs_from_attribute, fixup_file_record, parse_data_runs,
     AttributeIterator, AttributeListEntry, AttributeRecordHeader, AttributeRef, AttributeType,
     DataRun, ExtendedStandardInfo, FileNameAttribute, FileRecordSegmentHeader, IndexHeader,
     IndexRoot, NameInfo, NonResidentAttributeData, NtfsBootSector, ReparseMountPointBuffer,
     ReparsePointHeader, ReparseTag, ResidentAttributeData, StandardInformation, StreamInfo,
+    apply_usa_fixup, extract_data_runs_from_attribute, fixup_file_record, parse_data_runs,
 };
 // Re-export platform types
 #[cfg(windows)]
 pub use platform::{
-    detect_drive_type, detect_ntfs_drives, infer_drive_from_path, is_elevated, is_volume_read_only,
-    DriveType, MftBitmap, MftExtent, NtfsVolumeData, VolumeHandle,
+    DriveType, MftBitmap, MftExtent, NtfsVolumeData, VolumeHandle, detect_drive_type,
+    detect_ntfs_drives, infer_drive_from_path, is_elevated, is_volume_read_only,
 };
 pub use raw::{
-    load_raw_mft, load_raw_mft_header, save_raw_mft, LoadRawOptions, RawMftData, RawMftHeader,
-    SaveRawOptions,
+    LoadRawOptions, RawMftData, RawMftHeader, SaveRawOptions, load_raw_mft, load_raw_mft_header,
+    save_raw_mft,
 };
 pub use reader::{
     BenchmarkResult, DriveCharacteristics, DriveReadResult, MftProgress, MftReadMode, MftReader,
     MftStats, MultiDriveMftReader, PhaseTimings,
 };
 // Re-export Polars types for convenience
-pub use uffs_polars::{col, lit, DataFrame, IntoLazy, LazyFrame};
+pub use uffs_polars::{DataFrame, IntoLazy, LazyFrame, col, lit};
 // Re-export USN Journal types
 pub use usn::{
-    aggregate_changes, query_usn_journal, read_usn_journal, reason, ChangeType, FileChange,
-    UsnJournalInfo, UsnRecord,
+    ChangeType, FileChange, UsnJournalInfo, UsnRecord, aggregate_changes, query_usn_journal,
+    read_usn_journal, reason,
 };

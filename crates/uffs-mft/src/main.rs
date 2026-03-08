@@ -1121,7 +1121,7 @@ async fn cmd_read(
         .with_mode(mode)
         .with_merge_extensions(full)
         .with_expand_links(!unique); // unique=true means don't expand
-                                     // Note: forensic mode is not yet supported for live reads (see warning above)
+    // Note: forensic mode is not yet supported for live reads (see warning above)
 
     info!(
         drive = %drive_upper,
@@ -1195,7 +1195,7 @@ async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: bool) -> Res
     use std::time::Instant;
 
     use tracing::debug;
-    use uffs_mft::platform::{detect_drive_type, VolumeHandle};
+    use uffs_mft::platform::{VolumeHandle, detect_drive_type};
 
     let start_time = Instant::now();
     let drive_upper = drive.to_ascii_uppercase();
@@ -1704,7 +1704,7 @@ async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: bool) -> Res
 #[cfg(windows)]
 async fn cmd_drives() -> Result<()> {
     use tracing::debug;
-    use uffs_mft::platform::{detect_drive_type, detect_ntfs_drives, VolumeHandle};
+    use uffs_mft::platform::{VolumeHandle, detect_drive_type, detect_ntfs_drives};
 
     info!("🔍 Detecting NTFS drives...");
 
@@ -1865,8 +1865,8 @@ fn get_volume_label(drive: char) -> Option<String> {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
 
-    use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::GetVolumeInformationW;
+    use windows::core::PCWSTR;
 
     let root_path: Vec<u16> = format!("{}:\\", drive)
         .encode_utf16()
@@ -2607,7 +2607,7 @@ async fn cmd_save(
 ) -> Result<()> {
     use std::time::Instant;
 
-    use uffs_mft::platform::{detect_drive_type, VolumeHandle};
+    use uffs_mft::platform::{VolumeHandle, detect_drive_type};
     use uffs_mft::{MftReader, SaveRawOptions};
 
     let start_time = Instant::now();
@@ -2787,7 +2787,7 @@ fn cmd_load(
     use std::time::Instant;
 
     use uffs_mft::raw::LoadRawOptions;
-    use uffs_mft::{load_raw_mft, MftReader};
+    use uffs_mft::{MftReader, load_raw_mft};
 
     // Validate arguments upfront - don't print anything if we're going to fail
     if !info_only && !build_index && !debug_tree && output_path.is_none() {
@@ -3044,10 +3044,10 @@ fn cmd_load(
 
     // Debug tree metrics computation (detailed hardlink handling)
     if debug_tree {
-        use uffs_mft::parse::{
-            apply_fixup, parse_record, parse_record_forensic, ParseOptions, ParseResult,
-        };
         use uffs_mft::MftIndex;
+        use uffs_mft::parse::{
+            ParseOptions, ParseResult, apply_fixup, parse_record, parse_record_forensic,
+        };
 
         println!();
         println!("═══════════════════════════════════════════════════════════════");
@@ -3274,7 +3274,7 @@ async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     use uffs_mft::io::AlignedBuffer;
     use uffs_mft::platform::VolumeHandle;
     use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::Storage::FileSystem::{ReadFile, SetFilePointerEx, FILE_BEGIN};
+    use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
     let drive_upper = drive.to_ascii_uppercase();
 
@@ -3937,7 +3937,7 @@ async fn cmd_benchmark_index_lean(
 async fn cmd_benchmark_tree(drive: char, iterations: usize, no_cache: bool) -> Result<()> {
     use std::time::Instant;
 
-    use uffs_mft::cache::{load_cached_index, INDEX_TTL_SECONDS};
+    use uffs_mft::cache::{INDEX_TTL_SECONDS, load_cached_index};
 
     let drive_upper = drive.to_ascii_uppercase();
 
@@ -4075,8 +4075,8 @@ async fn cmd_benchmark_tree(drive: char, iterations: usize, no_cache: bool) -> R
 async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> {
     use std::time::Instant;
 
-    use uffs_mft::io::{prepare_volume_state, MultiVolumeIocpReader};
-    use uffs_mft::platform::{detect_drive_type, MftExtent, VolumeHandle};
+    use uffs_mft::io::{MultiVolumeIocpReader, prepare_volume_state};
+    use uffs_mft::platform::{MftExtent, VolumeHandle, detect_drive_type};
 
     if drives.is_empty() {
         anyhow::bail!("No drives specified. Use --drives C,D,S");
@@ -4478,8 +4478,8 @@ async fn cmd_index_load(input: &Path) -> Result<()> {
 #[cfg(windows)]
 async fn cmd_cache_status(clean: bool, purge: bool) -> Result<()> {
     use uffs_mft::cache::{
-        cache_age_seconds, cache_dir, cleanup_expired_cache, list_cached_drives,
-        remove_all_cached_indices, INDEX_TTL_SECONDS,
+        INDEX_TTL_SECONDS, cache_age_seconds, cache_dir, cleanup_expired_cache, list_cached_drives,
+        remove_all_cached_indices,
     };
 
     let dir = cache_dir();
@@ -4539,7 +4539,7 @@ async fn cmd_cache_status(clean: bool, purge: bool) -> Result<()> {
 async fn cmd_cache_get(drive: char, force: bool, ttl: Option<u64>) -> Result<()> {
     use std::time::Instant;
 
-    use uffs_mft::cache::{check_cache_status, save_to_cache, CacheStatus, INDEX_TTL_SECONDS};
+    use uffs_mft::cache::{CacheStatus, INDEX_TTL_SECONDS, check_cache_status, save_to_cache};
     use uffs_mft::usn::query_usn_journal;
     use uffs_mft::{MftReader, VolumeHandle};
 
@@ -4674,10 +4674,10 @@ async fn cmd_cache_clear(drive: Option<char>, all: bool) -> Result<()> {
 async fn cmd_index_update(drive: char, force_full: bool, ttl: Option<u64>) -> Result<()> {
     use std::time::Instant;
 
-    use uffs_mft::cache::{check_cache_status, save_to_cache, CacheStatus, INDEX_TTL_SECONDS};
+    use uffs_mft::VolumeHandle;
+    use uffs_mft::cache::{CacheStatus, INDEX_TTL_SECONDS, check_cache_status, save_to_cache};
     use uffs_mft::platform::is_volume_read_only;
     use uffs_mft::usn::{aggregate_changes, query_usn_journal, read_usn_journal};
-    use uffs_mft::VolumeHandle;
 
     let ttl_seconds = ttl.unwrap_or(INDEX_TTL_SECONDS);
     let start = Instant::now();
@@ -4907,7 +4907,7 @@ async fn do_full_index_build(drive: char) -> Result<()> {
 async fn cmd_index_all(drives: Option<Vec<char>>, no_cache: bool, ttl: u64) -> Result<()> {
     use std::time::Instant;
 
-    use uffs_mft::{detect_ntfs_drives, MultiDriveMftReader};
+    use uffs_mft::{MultiDriveMftReader, detect_ntfs_drives};
 
     let start = Instant::now();
 
@@ -4955,7 +4955,7 @@ async fn cmd_index_all(drives: Option<Vec<char>>, no_cache: bool, ttl: u64) -> R
     let indices = if no_cache {
         println!("🔨 Building fresh indices (will save to cache)...");
         reader.read_all_index_cached(0).await? // TTL=0 forces rebuild but still
-                                               // saves
+    // saves
     } else {
         println!("📦 Reading indices (with cache)...");
         reader.read_all_index_cached(ttl).await?

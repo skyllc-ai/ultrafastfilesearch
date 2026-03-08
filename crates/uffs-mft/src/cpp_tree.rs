@@ -128,7 +128,7 @@ fn compute_name_info_checked(
             );
         }
         return 0; // Clamped to total_names-1, result = total_names - 1 -
-                  // (total_names-1) = 0
+        // (total_names-1) = 0
     }
     total_names - 1 - name_index
 }
@@ -531,7 +531,7 @@ mod tests {
         // Out-of-bounds name_index should be clamped
         assert_eq!(compute_name_info(5, 2), 0); // 5 >= 2, clamped to 1, result = 2-1-1 = 0
         assert_eq!(compute_name_info(100, 3), 0); // 100 >= 3, clamped to 2,
-                                                  // result = 3-1-2 = 0
+        // result = 3-1-2 = 0
     }
 
     /// Tests that the combined transformation + delta gives correct
