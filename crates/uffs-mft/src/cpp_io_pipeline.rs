@@ -31,11 +31,11 @@
 #![cfg(windows)]
 
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use tracing::{debug, info, trace, warn};
-use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError, HANDLE};
+use windows::Win32::Foundation::{GetLastError, ERROR_IO_PENDING, HANDLE};
 use windows::Win32::Storage::FileSystem::ReadFile;
 use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
@@ -314,7 +314,14 @@ impl CppIoPipeline {
     /// 1. Queues data reads using the computed skip ranges
     /// 2. Processes completions and feeds data to the parse pipeline
     /// 3. Returns the parsed index
-    #[allow(unsafe_code, clippy::too_many_lines)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: windows IOCP API (ReadFile, GetQueuedCompletionStatus)"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "IOCP sliding-window loop is inherently complex"
+    )]
     pub fn run(
         self,
         overlapped_handle: HANDLE,

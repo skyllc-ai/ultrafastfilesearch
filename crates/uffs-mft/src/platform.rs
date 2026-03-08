@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_NO_BUFFERING, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_FLAG_OVERLAPPED, FILE_FLAG_SEQUENTIAL_SCAN, FILE_FLAGS_AND_ATTRIBUTES,
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_NO_BUFFERING,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_OVERLAPPED, FILE_FLAG_SEQUENTIAL_SCAN,
     FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     SYNCHRONIZE,
 };
@@ -25,11 +25,11 @@ use windows::Win32::Storage::FileSystem::{
 /// FILE_READ_DATA access right (0x0001) - required to read data from a
 /// file/volume
 const FILE_READ_DATA: u32 = 0x0001;
+use windows::core::PCWSTR;
 use windows::Win32::System::Ioctl::{
     FSCTL_GET_NTFS_VOLUME_DATA, FSCTL_GET_RETRIEVAL_POINTERS, NTFS_VOLUME_DATA_BUFFER,
     STARTING_VCN_INPUT_BUFFER,
 };
-use windows::core::PCWSTR;
 
 use crate::error::{MftError, Result};
 use crate::ntfs::NtfsBootSector;
@@ -56,9 +56,15 @@ pub struct VolumeHandle {
 // to a kernel object that the OS manages. Multiple threads can safely read
 // from the same handle (though we don't do that - each task has its own
 // handle). This is required for tokio::spawn to work with MftReader.
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "windows file handles are thread-safe kernel objects"
+)]
 unsafe impl Send for VolumeHandle {}
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "windows file handles are thread-safe kernel objects"
+)]
 unsafe impl Sync for VolumeHandle {}
 
 /// NTFS volume data retrieved from `FSCTL_GET_NTFS_VOLUME_DATA`.
@@ -112,7 +118,7 @@ impl VolumeHandle {
     ///
     /// This function opens a raw volume handle which requires Administrator
     /// privileges.
-    #[allow(unsafe_code)] // Required: Windows FFI (CreateFileW)
+    #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
     pub fn open(volume: char) -> Result<Self> {
         let volume = volume.to_ascii_uppercase();
 
@@ -179,7 +185,7 @@ impl VolumeHandle {
     }
 
     /// Retrieves NTFS volume data using `FSCTL_GET_NTFS_VOLUME_DATA`.
-    #[allow(unsafe_code)] // Required: Windows FFI (DeviceIoControl)
+    #[expect(unsafe_code, reason = "FFI: windows API (DeviceIoControl)")]
     fn get_ntfs_volume_data(handle: HANDLE, volume: char) -> Result<NtfsVolumeData> {
         use windows::Win32::System::IO::DeviceIoControl;
 
@@ -254,7 +260,7 @@ impl VolumeHandle {
     /// # Errors
     ///
     /// Returns an error if the volume cannot be opened.
-    #[allow(unsafe_code)] // Required: Windows FFI (CreateFileW)
+    #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
     pub fn open_overlapped_handle(&self) -> Result<HANDLE> {
         use windows::core::PCWSTR;
 
@@ -311,9 +317,12 @@ impl VolumeHandle {
     /// # Errors
     ///
     /// Returns an error if the boot sector cannot be read.
-    #[allow(unsafe_code)] // Required: Windows FFI and ptr::read for packed struct
+    #[expect(
+        unsafe_code,
+        reason = "FFI: windows API and ptr::read for packed struct"
+    )]
     pub fn read_boot_sector(&self) -> Result<NtfsBootSector> {
-        use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
+        use windows::Win32::Storage::FileSystem::{ReadFile, SetFilePointerEx, FILE_BEGIN};
 
         // Seek to the beginning of the volume
         let mut new_position = 0_i64;
@@ -357,7 +366,10 @@ impl VolumeHandle {
     ///
     /// Returns an error if the MFT file cannot be opened or the extents
     /// cannot be retrieved.
-    #[allow(unsafe_code)] // Required: Windows FFI (CreateFileW, DeviceIoControl, CloseHandle)
+    #[expect(
+        unsafe_code,
+        reason = "FFI: windows API (CreateFileW, DeviceIoControl, CloseHandle)"
+    )]
     pub fn get_mft_extents(&self) -> Result<Vec<MftExtent>> {
         // Open the $MFT file
         // Use path format "F:\$MFT" (not "\\.\F:\$MFT") to match C++ behavior
@@ -411,21 +423,30 @@ impl VolumeHandle {
     /// # Errors
     ///
     /// Returns an error if the bitmap cannot be read.
-    #[allow(unsafe_code)] // Required: Windows FFI for CreateFileW, GetFileSizeEx, ReadFile
+    #[expect(
+        unsafe_code,
+        reason = "FFI: windows API (CreateFileW, GetFileSizeEx, ReadFile)"
+    )]
     pub fn get_mft_bitmap(&self) -> Result<MftBitmap> {
         self.get_mft_bitmap_internal(false)
     }
 
     /// Gets the MFT bitmap with optional verbose diagnostic output.
-    #[allow(unsafe_code)] // Required: Windows FFI for CreateFileW, GetFileSizeEx, ReadFile
+    #[expect(
+        unsafe_code,
+        reason = "FFI: windows API (CreateFileW, GetFileSizeEx, ReadFile)"
+    )]
     pub fn get_mft_bitmap_verbose(&self) -> Result<MftBitmap> {
         self.get_mft_bitmap_internal(true)
     }
 
-    #[allow(unsafe_code)] // Required: Windows FFI for CreateFileW, GetFileSizeEx, ReadFile
+    #[expect(
+        unsafe_code,
+        reason = "FFI: windows API (CreateFileW, GetFileSizeEx, ReadFile)"
+    )]
     fn get_mft_bitmap_internal(&self, verbose: bool) -> Result<MftBitmap> {
         use windows::Win32::Storage::FileSystem::{
-            FILE_BEGIN, GetFileSizeEx, ReadFile, SYNCHRONIZE, SetFilePointerEx,
+            GetFileSizeEx, ReadFile, SetFilePointerEx, FILE_BEGIN, SYNCHRONIZE,
         };
 
         // Open the $MFT::$BITMAP stream to get retrieval pointers and size
@@ -634,7 +655,7 @@ impl VolumeHandle {
 struct HandleGuard(HANDLE);
 
 impl Drop for HandleGuard {
-    #[allow(unsafe_code)] // Required: Windows FFI for CloseHandle
+    #[expect(unsafe_code, reason = "FFI: windows API (CloseHandle)")]
     fn drop(&mut self) {
         if !self.0.is_invalid() {
             unsafe {
@@ -679,7 +700,10 @@ impl MftExtent {
 }
 
 /// Retrieves the extent map for a file using `FSCTL_GET_RETRIEVAL_POINTERS`.
-#[allow(unsafe_code)] // Required: Windows FFI (DeviceIoControl) and mem::zeroed
+#[expect(
+    unsafe_code,
+    reason = "FFI: windows API (DeviceIoControl) and mem::zeroed"
+)]
 fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
     use windows::Win32::System::IO::DeviceIoControl;
 
@@ -797,7 +821,7 @@ fn parse_retrieval_pointers(buffer: &[u8], size: usize, extents: &mut Vec<MftExt
 }
 
 impl Drop for VolumeHandle {
-    #[allow(unsafe_code)] // Required: Windows FFI for CloseHandle
+    #[expect(unsafe_code, reason = "FFI: windows API (CloseHandle)")]
     fn drop(&mut self) {
         if !self.handle.is_invalid() {
             unsafe {
@@ -1104,10 +1128,13 @@ impl Iterator for InUseClusterRangeIterator<'_> {
 ///
 /// MFT reading requires Administrator privileges or `SE_BACKUP_PRIVILEGE`.
 #[must_use]
-#[allow(unsafe_code)] // Required: Windows FFI (OpenProcessToken, GetTokenInformation)
+#[expect(
+    unsafe_code,
+    reason = "FFI: windows API (OpenProcessToken, GetTokenInformation)"
+)]
 pub fn is_elevated() -> bool {
     use windows::Win32::Security::{
-        GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
     };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -1218,7 +1245,7 @@ pub fn infer_drive_from_path(path: &Path) -> Option<char> {
 /// // Output: Found NTFS drives: ['C', 'D', 'E']
 /// ```
 #[must_use]
-#[allow(unsafe_code)] // Required: Windows FFI (GetLogicalDrives)
+#[expect(unsafe_code, reason = "FFI: windows API (GetLogicalDrives)")]
 pub fn detect_ntfs_drives() -> Vec<char> {
     use windows::Win32::Storage::FileSystem::GetLogicalDrives;
 
@@ -1250,7 +1277,10 @@ pub fn detect_ntfs_drives() -> Vec<char> {
 ///
 /// Uses `GetVolumeInformationW` to check the filesystem name, which doesn't
 /// require elevated privileges.
-#[allow(unsafe_code)] // Required: Windows FFI (GetDriveTypeW, GetVolumeInformationW)
+#[expect(
+    unsafe_code,
+    reason = "FFI: windows API (GetDriveTypeW, GetVolumeInformationW)"
+)]
 fn is_ntfs_volume(drive_letter: char) -> bool {
     use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetVolumeInformationW};
 
@@ -1309,7 +1339,7 @@ fn is_ntfs_volume(drive_letter: char) -> bool {
 /// `true` if the volume is read-only, `false` otherwise (or on error).
 #[cfg(windows)]
 #[must_use]
-#[allow(unsafe_code)] // Required: Windows FFI (GetVolumeInformationW)
+#[expect(unsafe_code, reason = "FFI: windows API (GetVolumeInformationW)")]
 pub fn is_volume_read_only(drive_letter: char) -> bool {
     use windows::Win32::Storage::FileSystem::GetVolumeInformationW;
 
@@ -1503,7 +1533,7 @@ impl DriveType {
 ///
 /// The detected drive type, or `DriveType::Unknown` if detection fails.
 #[must_use]
-#[allow(unsafe_code)] // Required: Windows FFI (DeviceIoControl)
+#[expect(unsafe_code, reason = "FFI: windows API (DeviceIoControl)")]
 pub fn detect_drive_type(drive_letter: char) -> DriveType {
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -1663,7 +1693,10 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
 }
 
 /// Fallback detection using TRIM support (SSDs support TRIM).
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "FFI: windows API (DeviceIoControl) for trim detection"
+)]
 fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,

@@ -112,11 +112,11 @@ impl NtfsBootSector {
     #[must_use]
     pub fn file_record_size(&self) -> u32 {
         if self.clusters_per_file_record >= 0 {
-            #[allow(clippy::cast_sign_loss)]
+            #[expect(clippy::cast_sign_loss, reason = "checked positive above")]
             let clusters = self.clusters_per_file_record as u32;
             clusters * self.cluster_size()
         } else {
-            #[allow(clippy::cast_sign_loss)]
+            #[expect(clippy::cast_sign_loss, reason = "negated negative value is positive")]
             let shift = (-self.clusters_per_file_record) as u32;
             1_u32 << shift
         }
@@ -125,7 +125,10 @@ impl NtfsBootSector {
     /// Returns the byte offset of the MFT on the volume.
     #[must_use]
     pub fn mft_byte_offset(&self) -> u64 {
-        #[allow(clippy::cast_sign_loss)]
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "MFT start LCN is always non-negative"
+        )]
         let lcn = self.mft_start_lcn as u64;
         lcn * u64::from(self.cluster_size())
     }
@@ -189,7 +192,7 @@ impl MultiSectorHeader {
 /// This function does not panic - it performs bounds checking and returns
 /// `false` if the buffer is too small.
 #[must_use]
-#[allow(clippy::indexing_slicing)] // Bounds are checked before each access
+#[expect(clippy::indexing_slicing, reason = "bounds checked before each access")]
 pub fn apply_usa_fixup(buffer: &mut [u8], usa_offset: u16, usa_count: u16) -> bool {
     let usa_offset_usize = usize::from(usa_offset);
 
@@ -244,7 +247,7 @@ pub fn apply_usa_fixup(buffer: &mut [u8], usa_offset: u16, usa_count: u16) -> bo
 /// `true` if fixup was successful, `false` if the record is invalid
 /// or corrupted.
 #[must_use]
-#[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
+#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
 pub fn fixup_file_record(buffer: &mut [u8]) -> bool {
     if buffer.len() < size_of::<MultiSectorHeader>() {
         return false;
@@ -579,7 +582,10 @@ impl FileNameAttribute {
     /// Returns the parent directory sequence number (upper 16 bits).
     #[must_use]
     pub const fn parent_sequence(&self) -> u16 {
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "extracting upper 16 bits into u16"
+        )]
         let seq = (self.parent_directory >> 48_i32) as u16;
         seq
     }
@@ -681,7 +687,10 @@ impl AttributeListEntry {
     /// Returns the sequence number of the target record.
     #[must_use]
     pub const fn target_sequence(&self) -> u16 {
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "extracting upper 16 bits into u16"
+        )]
         let seq = (self.file_reference >> 48_i32) as u16;
         seq
     }
@@ -768,7 +777,10 @@ pub const fn file_reference_to_frs(file_reference: u64) -> u64 {
 /// The upper 16 bits contain the sequence number.
 #[must_use]
 pub const fn file_reference_to_sequence(file_reference: u64) -> u16 {
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "extracting upper 16 bits into u16"
+    )]
     let seq = (file_reference >> 48_i32) as u16;
     seq
 }
@@ -799,7 +811,8 @@ impl<'a> AttributeIterator<'a> {
     ///
     /// `None` if the buffer is too small or doesn't contain a valid record.
     #[must_use]
-    #[allow(unsafe_code, clippy::missing_const_for_fn)] // Required: ptr::read for packed NTFS struct; can't be const due to unsafe
+    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
+    #[expect(clippy::missing_const_for_fn, reason = "can't be const due to unsafe")]
     pub fn new(record: &'a [u8]) -> Option<Self> {
         if record.len() < size_of::<FileRecordSegmentHeader>() {
             return None;
@@ -853,7 +866,8 @@ impl<'a> AttributeRef<'a> {
 
     /// Returns the resident attribute value, if this is a resident attribute.
     #[must_use]
-    #[allow(unsafe_code, clippy::indexing_slicing)] // Required: ptr::read for packed NTFS struct; bounds checked
+    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
+    #[expect(clippy::indexing_slicing, reason = "bounds checked before access")]
     pub fn resident_value(&self) -> Option<&'a [u8]> {
         if self.is_non_resident() {
             return None;
@@ -881,7 +895,8 @@ impl<'a> AttributeRef<'a> {
     /// Returns the non-resident attribute data, if this is a non-resident
     /// attribute.
     #[must_use]
-    #[allow(unsafe_code, clippy::indexing_slicing)] // Required: ptr::read for packed NTFS struct; bounds checked
+    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
+    #[expect(clippy::indexing_slicing, reason = "bounds checked before access")]
     pub fn non_resident_data(&self) -> Option<NonResidentAttributeData> {
         if !self.is_non_resident() {
             return None;
@@ -908,7 +923,7 @@ impl<'a> AttributeRef<'a> {
 
     /// Returns the attribute name, if present.
     #[must_use]
-    #[allow(clippy::indexing_slicing)] // Bounds checked before access
+    #[expect(clippy::indexing_slicing, reason = "bounds checked before access")]
     pub fn name(&self) -> Option<&'a [u16]> {
         if self.header.name_length == 0 {
             return None;
@@ -945,7 +960,8 @@ impl<'a> AttributeRef<'a> {
 impl<'a> Iterator for AttributeIterator<'a> {
     type Item = AttributeRef<'a>;
 
-    #[allow(unsafe_code, clippy::indexing_slicing)] // Required: ptr::read for packed NTFS struct; bounds checked
+    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
+    #[expect(clippy::indexing_slicing, reason = "bounds checked before access")]
     fn next(&mut self) -> Option<Self::Item> {
         // Check if we've reached the end
         if self.offset + size_of::<AttributeRecordHeader>() > self.max_offset {
@@ -1005,7 +1021,7 @@ impl DataRun {
 
     /// Returns the byte offset of this run on the volume.
     #[must_use]
-    #[allow(clippy::cast_sign_loss)] // lcn is checked to be positive before cast
+    #[expect(clippy::cast_sign_loss, reason = "lcn is checked positive before cast")]
     pub fn byte_offset(&self, bytes_per_cluster: u32) -> u64 {
         if self.lcn <= 0 {
             0
@@ -1037,7 +1053,11 @@ impl DataRun {
 ///
 /// A vector of `DataRun` entries describing the physical layout.
 #[must_use]
-#[allow(clippy::similar_names, clippy::indexing_slicing)] // vcn and lcn are standard NTFS terms; bounds checked
+#[expect(clippy::similar_names, reason = "vcn and lcn are standard NTFS terms")]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "bounds checked in while loop condition"
+)]
 pub fn parse_data_runs(data: &[u8], lowest_vcn: i64) -> Vec<DataRun> {
     let mut runs = Vec::new();
     let mut offset = 0;
@@ -1084,7 +1104,10 @@ pub fn parse_data_runs(data: &[u8], lowest_vcn: i64) -> Vec<DataRun> {
         });
 
         // run_length is u64, cast to i64 is safe for reasonable cluster counts
-        #[allow(clippy::cast_possible_wrap)]
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "cluster counts are small enough to fit in i64"
+        )]
         {
             current_vcn += run_length as i64;
         }
@@ -1094,7 +1117,10 @@ pub fn parse_data_runs(data: &[u8], lowest_vcn: i64) -> Vec<DataRun> {
 }
 
 /// Parses a variable-length unsigned integer (little-endian).
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted for clarity alongside parse_variable_length_signed"
+)]
 fn parse_variable_length_unsigned(data: &[u8]) -> u64 {
     let mut value: u64 = 0;
     for (i, &byte) in data.iter().enumerate() {
@@ -1104,8 +1130,14 @@ fn parse_variable_length_unsigned(data: &[u8]) -> u64 {
 }
 
 /// Parses a variable-length signed integer (little-endian, sign-extended).
-#[allow(clippy::single_call_fn)]
-#[allow(clippy::indexing_slicing)] // data.is_empty() check ensures data.len() >= 1
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted for clarity alongside parse_variable_length_unsigned"
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "data.is_empty() check ensures data.len() >= 1"
+)]
 fn parse_variable_length_signed(data: &[u8]) -> i64 {
     if data.is_empty() {
         return 0;
@@ -1139,7 +1171,8 @@ fn parse_variable_length_signed(data: &[u8]) -> i64 {
 ///
 /// A vector of `DataRun` entries, or an empty vector if parsing fails.
 #[must_use]
-#[allow(unsafe_code, clippy::indexing_slicing)] // Required: ptr::read for packed NTFS struct; bounds checked
+#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
+#[expect(clippy::indexing_slicing, reason = "bounds checked before access")]
 pub fn extract_data_runs_from_attribute(attr_data: &[u8]) -> Vec<DataRun> {
     if attr_data.len() < size_of::<AttributeRecordHeader>() {
         return Vec::new();
@@ -1226,7 +1259,10 @@ pub struct StreamInfo {
 /// for easier querying in Polars. Also includes NTFS 3.0+ extended
 /// fields (`usn`, `security_id`, `owner_id`) for forensic analysis.
 #[derive(Debug, Clone, Copy, Default)]
-#[allow(clippy::struct_excessive_bools)] // NTFS has many boolean flags, this is intentional
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "NTFS has many boolean attribute flags"
+)]
 pub struct ExtendedStandardInfo {
     /// File creation time (Unix microseconds).
     pub created: i64,
@@ -1311,7 +1347,10 @@ impl ExtendedStandardInfo {
 
     /// Returns the raw flags as u32.
     #[must_use]
-    #[allow(clippy::missing_const_for_fn)] // Can't be const due to if statements
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "can't be const due to if statements"
+    )]
     pub fn to_raw_flags(&self) -> u32 {
         let mut flags = 0_u32;
         if self.is_readonly {
@@ -1376,7 +1415,10 @@ impl ExtendedStandardInfo {
 // Size assertions
 // ============================================================================
 
-#[allow(clippy::missing_assert_message)] // These are compile-time size checks, messages not needed
+#[expect(
+    clippy::missing_assert_message,
+    reason = "compile-time size checks; messages not needed"
+)]
 const _: () = {
     // Verify struct sizes match expected on-disk sizes
     assert!(size_of::<NtfsBootSector>() == 512);

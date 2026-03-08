@@ -187,7 +187,14 @@ impl MftStats {
     /// percentage. Float arithmetic is unavoidable here since percentages are
     /// inherently fractional values (e.g., 45.67%).
     #[must_use]
-    #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "precision loss acceptable for progress display"
+    )]
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "float arithmetic required for percentage calculation"
+    )]
     pub fn slack_percentage(&self) -> f64 {
         if self.total_allocated_size > 0 {
             (self.slack_space() as f64 / self.total_allocated_size as f64) * 100.0
@@ -243,7 +250,10 @@ impl PhaseTimings {
 
     /// Returns the overhead (total - sum of phases).
     #[must_use]
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "overhead can be negative; u64 values are bounded by total runtime"
+    )]
     pub const fn overhead_ms(&self) -> i64 {
         self.total_ms as i64 - self.sum_phases() as i64
     }
@@ -364,7 +374,14 @@ pub struct MftProgress {
 impl MftProgress {
     /// Returns the percentage complete (0.0 to 100.0), if total is known.
     #[must_use]
-    #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "precision loss acceptable for progress display"
+    )]
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "float arithmetic required for percentage calculation"
+    )]
     pub fn percentage(&self) -> Option<f64> {
         self.total_records
             .map(|total| (self.records_read as f64 / total as f64) * 100.0_f64)
@@ -372,7 +389,14 @@ impl MftProgress {
 
     /// Returns the read speed in MB/s.
     #[must_use]
-    #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "precision loss acceptable for progress display"
+    )]
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "float arithmetic required for speed calculation"
+    )]
     pub fn speed_mbps(&self) -> f64 {
         let secs = self.elapsed.as_secs_f64();
         if secs > 0.0 {
@@ -412,7 +436,10 @@ impl MftProgress {
 /// }
 /// ```
 #[derive(Debug)]
-#[allow(clippy::struct_excessive_bools)] // Builder pattern with boolean options
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "builder pattern with boolean options"
+)]
 pub struct MftReader {
     /// The volume letter (e.g., 'C').
     volume: char,
@@ -506,7 +533,10 @@ impl MftReader {
     ///
     /// This function is only available on Windows.
     #[cfg(windows)]
-    #[allow(clippy::unused_async)]
+    #[expect(
+        clippy::unused_async,
+        reason = "async for API consistency across platforms"
+    )]
     pub async fn open(volume: char) -> Result<Self> {
         // Open the volume handle (validates NTFS and privileges)
         let handle = VolumeHandle::open(volume)?;
@@ -540,7 +570,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn open(_volume: char) -> Result<Self> {
         Err(MftError::PlatformNotSupported)
     }
@@ -824,7 +854,10 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
-    #[allow(clippy::unused_async)]
+    #[expect(
+        clippy::unused_async,
+        reason = "async for API consistency across platforms"
+    )]
     pub async fn read_all(&self) -> Result<DataFrame> {
         self.read_mft_internal(None::<fn(MftProgress)>)
     }
@@ -836,7 +869,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_all(&self) -> Result<DataFrame> {
         Err(MftError::PlatformNotSupported)
     }
@@ -851,7 +884,10 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
-    #[allow(clippy::unused_async)]
+    #[expect(
+        clippy::unused_async,
+        reason = "async for API consistency across platforms"
+    )]
     pub async fn read_with_progress<F>(&self, callback: F) -> Result<DataFrame>
     where
         F: Fn(MftProgress) + Send + 'static,
@@ -866,7 +902,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_with_progress<F>(&self, _callback: F) -> Result<DataFrame>
     where
         F: Fn(MftProgress) + Send + 'static,
@@ -996,7 +1032,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_all_index(&self) -> Result<crate::index::MftIndex> {
         Err(MftError::PlatformNotSupported)
     }
@@ -1087,7 +1123,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_all_index_with_timing(
         &self,
     ) -> Result<(crate::index::MftIndex, BenchmarkResult)> {
@@ -1185,7 +1221,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_index_with_progress<F>(&self, _callback: F) -> Result<crate::index::MftIndex>
     where
         F: Fn(MftProgress) + Send + 'static,
@@ -1214,7 +1250,7 @@ impl MftReader {
     pub async fn read_index_cached(&self, ttl_seconds: u64) -> Result<crate::index::MftIndex> {
         use tracing::{debug, info, warn};
 
-        use crate::cache::{CacheStatus, check_cache_status, save_to_cache};
+        use crate::cache::{check_cache_status, save_to_cache, CacheStatus};
         use crate::platform::VolumeHandle;
         use crate::usn::{aggregate_changes, query_usn_journal, read_usn_journal};
 
@@ -1359,7 +1395,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_index_cached(&self, _ttl_seconds: u64) -> Result<crate::index::MftIndex> {
         Err(MftError::PlatformNotSupported)
     }
@@ -1421,7 +1457,10 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
-    #[allow(clippy::unused_async)]
+    #[expect(
+        clippy::unused_async,
+        reason = "async for API consistency across platforms"
+    )]
     pub async fn read_with_timing(
         &self,
         skip_df_build: bool,
@@ -1436,7 +1475,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_with_timing(
         &self,
         _skip_df_build: bool,
@@ -1744,7 +1783,7 @@ impl MftReader {
 
                 // Close the overlapped handle
                 // SAFETY: overlapped_handle is a valid handle opened by open_overlapped_handle
-                #[allow(unsafe_code)]
+                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 }
@@ -1815,7 +1854,7 @@ impl MftReader {
                 };
 
                 // Close the overlapped handle
-                #[allow(unsafe_code)]
+                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 }
@@ -1857,7 +1896,7 @@ impl MftReader {
                 };
 
                 // Close the overlapped handle
-                #[allow(unsafe_code)]
+                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 }
@@ -1901,7 +1940,7 @@ impl MftReader {
                 };
 
                 // Close the overlapped handle
-                #[allow(unsafe_code)]
+                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 }
@@ -2217,7 +2256,10 @@ impl MftReader {
     /// Uses the same I/O and parsing as `read_mft_internal`, but builds
     /// a compact `MftIndex` instead of a Polars DataFrame.
     #[cfg(windows)]
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "sequential I/O pipeline with mode-specific branches cannot be meaningfully split"
+    )]
     fn read_mft_index_internal<F>(&self, callback: Option<F>) -> Result<crate::index::MftIndex>
     where
         F: Fn(MftProgress),
@@ -2432,7 +2474,7 @@ impl MftReader {
 
                 // Close the overlapped handle
                 // SAFETY: overlapped_handle is a valid handle opened by open_overlapped_handle
-                #[allow(unsafe_code)]
+                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 }
@@ -2503,7 +2545,7 @@ impl MftReader {
                 };
 
                 // Close the overlapped handle
-                #[allow(unsafe_code)]
+                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 }
@@ -2545,7 +2587,7 @@ impl MftReader {
                 };
 
                 // Close the overlapped handle
-                #[allow(unsafe_code)]
+                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 }
@@ -2607,7 +2649,7 @@ impl MftReader {
                 };
 
                 // Close the overlapped handle
-                #[allow(unsafe_code)]
+                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 }
@@ -2714,12 +2756,15 @@ impl MftReader {
     ///
     /// A tuple of (MftIndex, BenchmarkResult) with detailed timing breakdown.
     #[cfg(windows)]
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "sequential I/O pipeline with per-phase timing cannot be meaningfully split"
+    )]
     fn read_mft_index_with_timing_internal(
         &self,
     ) -> Result<(crate::index::MftIndex, BenchmarkResult)> {
         use crate::index::MftIndex;
-        use crate::io::{MftExtentMap, ParallelMftReader, generate_read_chunks};
+        use crate::io::{generate_read_chunks, MftExtentMap, ParallelMftReader};
         use crate::platform::detect_drive_type;
 
         let total_start = Instant::now();
@@ -2886,12 +2931,15 @@ impl MftReader {
     ///
     /// This method measures each phase separately for benchmarking purposes.
     #[cfg(windows)]
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "sequential I/O pipeline with per-phase timing cannot be meaningfully split"
+    )]
     fn read_mft_with_timing_internal(
         &self,
         skip_df_build: bool,
     ) -> Result<(Option<DataFrame>, BenchmarkResult)> {
-        use crate::io::{MftExtentMap, ParallelMftReader, generate_read_chunks};
+        use crate::io::{generate_read_chunks, MftExtentMap, ParallelMftReader};
         use crate::platform::detect_drive_type;
 
         let total_start = Instant::now();
@@ -3085,7 +3133,10 @@ impl MftReader {
     /// which uses the SoA path and avoids the AoS→SoA transpose. Kept for
     /// reference and potential fallback use.
     #[cfg(windows)]
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "kept as fallback for AoS path; superseded by build_dataframe_from_columns"
+    )]
     fn build_dataframe_from_records(
         parsed_records: Vec<crate::io::ParsedRecord>,
     ) -> Result<DataFrame> {
@@ -3194,7 +3245,11 @@ impl MftReader {
     /// Builds a `DataFrame` from the collected vectors (legacy 8-column
     /// schema).
     #[cfg(windows)]
-    #[allow(clippy::too_many_arguments, dead_code)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one parameter per dataframe column in legacy 8-column schema"
+    )]
+    #[expect(dead_code, reason = "kept as fallback for legacy 8-column schema")]
     fn build_dataframe(
         frs_vec: Vec<u64>,
         parent_frs_vec: Vec<u64>,
@@ -3229,7 +3284,10 @@ impl MftReader {
 
     /// Builds a `DataFrame` with full C++ parity schema (23 columns).
     #[cfg(windows)]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one parameter per dataframe column in full 23-column schema"
+    )]
     fn build_dataframe_full(
         frs_vec: Vec<u64>,
         parent_frs_vec: Vec<u64>,
@@ -3324,7 +3382,7 @@ impl MftReader {
     /// # Platform
     ///
     /// Cross-platform - works on all platforms.
-    #[allow(clippy::single_call_fn)]
+    #[expect(clippy::single_call_fn, reason = "extracted for clarity")]
     fn build_dataframe_from_columns(columns: crate::parse::ParsedColumns) -> Result<DataFrame> {
         use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
 
@@ -3422,7 +3480,7 @@ impl MftReader {
     }
 
     /// Create an empty `DataFrame` with the MFT schema.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "utility for tests and potential future use")]
     fn create_empty_dataframe() -> Result<DataFrame> {
         use uffs_polars::{Column, DataType, TimeUnit};
 
@@ -3468,7 +3526,10 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
-    #[allow(clippy::unused_async)]
+    #[expect(
+        clippy::unused_async,
+        reason = "async for API consistency across platforms"
+    )]
     pub async fn read_raw(&self) -> Result<(Vec<u8>, u32)> {
         self.read_raw_internal()
     }
@@ -3480,7 +3541,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_raw(&self) -> Result<(Vec<u8>, u32)> {
         Err(MftError::PlatformNotSupported)
     }
@@ -3491,7 +3552,7 @@ impl MftReader {
     /// handling, sector alignment, and dynamic buffer sizing.
     #[cfg(windows)]
     fn read_raw_internal(&self) -> Result<(Vec<u8>, u32)> {
-        use crate::io::{MftExtentMap, ParallelMftReader, generate_read_chunks};
+        use crate::io::{generate_read_chunks, MftExtentMap, ParallelMftReader};
         use crate::platform::detect_drive_type;
 
         let record_size = self.handle.file_record_size();
@@ -3554,7 +3615,10 @@ impl MftReader {
     ///
     /// Returns an error if reading or saving fails.
     #[cfg(windows)]
-    #[allow(clippy::unused_async)]
+    #[expect(
+        clippy::unused_async,
+        reason = "async for API consistency across platforms"
+    )]
     pub async fn save_raw_to_file<P: AsRef<Path>>(
         &self,
         path: P,
@@ -3568,7 +3632,10 @@ impl MftReader {
     /// Uses double-buffering with a dedicated reader thread to overlap
     /// disk reads with file writes for maximum throughput.
     #[cfg(windows)]
-    #[allow(unsafe_code)] // Required: Windows FFI (ReadFile, SetFilePointerEx)
+    #[expect(
+        unsafe_code,
+        reason = "FFI: windows ReadFile, SetFilePointerEx for raw MFT streaming"
+    )]
     fn save_raw_streaming<P: AsRef<Path>>(
         &self,
         path: P,
@@ -3576,11 +3643,11 @@ impl MftReader {
     ) -> Result<crate::raw::RawMftHeader> {
         use std::thread;
 
-        use crossbeam_channel::{Receiver, Sender, bounded};
+        use crossbeam_channel::{bounded, Receiver, Sender};
         use windows::Win32::Foundation::HANDLE;
-        use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
+        use windows::Win32::Storage::FileSystem::{ReadFile, SetFilePointerEx, FILE_BEGIN};
 
-        use crate::io::{AlignedBuffer, MftExtentMap, SECTOR_SIZE, generate_read_chunks};
+        use crate::io::{generate_read_chunks, AlignedBuffer, MftExtentMap, SECTOR_SIZE};
         use crate::platform::detect_drive_type;
         use crate::raw::StreamingRawMftWriter;
 
@@ -3741,7 +3808,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn save_raw_to_file<P: AsRef<Path>>(
         &self,
         _path: P,
@@ -3767,7 +3834,10 @@ impl MftReader {
     ///
     /// Cross-platform - works on all platforms. Uses cross-platform
     /// `MftRecordMerger` from parse module.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "record_count is u64 but MFT sizes are bounded by disk size, always fits in usize"
+    )]
     pub fn load_raw_to_dataframe<P: AsRef<Path>>(path: P) -> Result<DataFrame> {
         Self::load_raw_to_dataframe_with_options(path, &crate::raw::LoadRawOptions::default())
     }
@@ -3788,12 +3858,15 @@ impl MftReader {
     /// # Platform
     ///
     /// Cross-platform - works on all platforms.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "record_count is u64 but MFT sizes are bounded by disk size, always fits in usize"
+    )]
     pub fn load_raw_to_dataframe_with_options<P: AsRef<Path>>(
         path: P,
         options: &crate::raw::LoadRawOptions,
     ) -> Result<DataFrame> {
-        use crate::parse::{MftRecordMerger, apply_fixup, parse_record_full};
+        use crate::parse::{apply_fixup, parse_record_full, MftRecordMerger};
 
         let raw = crate::raw::load_raw_mft(path, options)?;
 
@@ -3867,8 +3940,8 @@ impl MftReader {
 
         use crate::index::MftIndex;
         use crate::parse::{
-            MftRecordMerger, ParseOptions, ParseResult, apply_fixup, parse_record_forensic,
-            parse_record_full,
+            apply_fixup, parse_record_forensic, parse_record_full, MftRecordMerger, ParseOptions,
+            ParseResult,
         };
 
         let raw = crate::raw::load_raw_mft(path, options)?;
@@ -3993,7 +4066,10 @@ impl MftReader {
     /// which uses the SoA path and avoids the AoS→SoA transpose. Kept for
     /// reference.
     #[cfg(windows)]
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "kept as reference for legacy AoS path; superseded by build_dataframe_from_columns"
+    )]
     fn parsed_records_to_dataframe(
         parsed_records: Vec<crate::io::ParsedRecord>,
     ) -> Result<DataFrame> {
@@ -4184,7 +4260,7 @@ impl MultiDriveMftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_all(&self) -> Result<DataFrame> {
         Err(MftError::PlatformNotSupported)
     }
@@ -4215,7 +4291,7 @@ impl MultiDriveMftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_with_progress<F>(&self, _callback: F) -> Result<DataFrame>
     where
         F: Fn(char, MftProgress) + Send + Sync + Clone + 'static,
@@ -4232,7 +4308,7 @@ impl MultiDriveMftReader {
         use std::sync::Arc;
 
         use tokio::task::JoinSet;
-        use uffs_polars::{IntoLazy, col, lit};
+        use uffs_polars::{col, lit, IntoLazy};
 
         if self.drives.is_empty() {
             return Err(MftError::InvalidInput("No drives specified".into()));
@@ -4402,7 +4478,7 @@ impl MultiDriveMftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_all_detailed(&self) -> Result<Vec<DriveReadResult>> {
         Err(MftError::PlatformNotSupported)
     }
@@ -4436,7 +4512,7 @@ impl MultiDriveMftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_all_index(&self) -> Result<Vec<crate::index::MftIndex>> {
         Err(MftError::PlatformNotSupported)
     }
@@ -4466,7 +4542,7 @@ impl MultiDriveMftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_all_index_with_progress<F>(
         &self,
         _callback: F,
@@ -4502,7 +4578,7 @@ impl MultiDriveMftReader {
         use tokio::task::JoinSet;
         use tracing::info;
 
-        use crate::cache::{CacheStatus, check_cache_status};
+        use crate::cache::{check_cache_status, CacheStatus};
 
         if self.drives.is_empty() {
             return Err(MftError::InvalidInput("No drives specified".into()));
@@ -4588,7 +4664,7 @@ impl MultiDriveMftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[allow(clippy::unused_async)]
+    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_all_index_cached(
         &self,
         _ttl_seconds: u64,

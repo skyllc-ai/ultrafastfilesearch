@@ -233,7 +233,10 @@ pub fn cleanup_expired_cache(ttl_seconds: u64) {
 /// Result of a cache check operation.
 // The Fresh variant is intentionally large as it contains the loaded index.
 // Boxing would add indirection overhead for the common case.
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Fresh variant is intentionally large; boxing would add indirection overhead"
+)]
 #[derive(Debug)]
 pub enum CacheStatus {
     /// Cache is fresh and ready to use.
@@ -353,9 +356,9 @@ fn load_or_build_dataframe_cached_sync(
     drive: char,
     ttl_seconds: u64,
 ) -> crate::Result<uffs_polars::DataFrame> {
-    use crate::VolumeHandle;
     use crate::reader::MftReader;
     use crate::usn::query_usn_journal;
+    use crate::VolumeHandle;
 
     eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: ENTER drive={drive}");
 

@@ -15,14 +15,33 @@
 //! # Platform Support
 
 // Allow pedantic lints for low-level parsing code that works with raw NTFS structures
-#![allow(
-    clippy::indexing_slicing,      // Justified: bounds checked before indexing
-    clippy::cast_sign_loss,         // Justified: NTFS uses signed for some fields, we validate non-negative
-    clippy::cast_lossless,          // Justified: explicit casts for clarity
-    clippy::min_ident_chars,        // Justified: 's' for stream is idiomatic in closures
-    clippy::assigning_clones,       // Justified: clone() is clearer than clone_from() in this context
-    clippy::map_unwrap_or,          // Justified: map().unwrap_or() is more readable than map_or()
-    clippy::wildcard_enum_match_arm // Justified: catch-all for Skip/Extension is intentional
+#![expect(
+    clippy::indexing_slicing,
+    reason = "bounds checked before indexing in NTFS parser"
+)]
+#![expect(
+    clippy::cast_sign_loss,
+    reason = "NTFS uses signed fields; we validate non-negative before cast"
+)]
+#![expect(
+    clippy::cast_lossless,
+    reason = "explicit casts for clarity in NTFS struct parsing"
+)]
+#![expect(
+    clippy::min_ident_chars,
+    reason = "'s' for stream is idiomatic in closures"
+)]
+#![expect(
+    clippy::assigning_clones,
+    reason = "clone() is clearer than clone_from() here"
+)]
+#![expect(
+    clippy::map_unwrap_or,
+    reason = "map().unwrap_or() is more readable than map_or()"
+)]
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "catch-all for Skip/Extension is intentional"
 )]
 //! All functions in this module are cross-platform and can be used to parse
 //! saved MFT files on macOS, Linux, or Windows.
@@ -33,8 +52,8 @@ use core::mem::size_of;
 use tracing::{debug, info, warn};
 
 use crate::ntfs::{
-    ExtendedStandardInfo, FILE_RECORD_MAGIC, MultiSectorHeader, NameInfo, ReparsePointHeader,
-    SECTOR_SIZE, StreamInfo,
+    ExtendedStandardInfo, MultiSectorHeader, NameInfo, ReparsePointHeader, StreamInfo,
+    FILE_RECORD_MAGIC, SECTOR_SIZE,
 };
 
 // Thread-local buffer for record processing to avoid per-record allocations.
@@ -58,7 +77,10 @@ thread_local! {
 /// - Log File Sequence Number (LSN) for journal correlation
 /// - `$FILE_NAME` timestamps (often differ from `$STANDARD_INFORMATION`)
 #[derive(Debug, Clone, Default)]
-#[allow(clippy::struct_excessive_bools)] // Forensic fields require multiple bool flags
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "forensic fields require multiple bool flags"
+)]
 pub struct ParsedRecord {
     /// File Record Segment number.
     pub frs: u64,
@@ -117,14 +139,20 @@ pub struct ParsedRecord {
 impl ParsedRecord {
     /// Returns the number of hard links (names).
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)] // Names count is always < 65536
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "names count is always < 65536"
+    )]
     pub fn name_count(&self) -> u16 {
         self.names.len() as u16
     }
 
     /// Returns the number of data streams.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)] // Stream count is always < 65536
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "stream count is always < 65536"
+    )]
     pub fn stream_count(&self) -> u16 {
         self.streams.len() as u16
     }
@@ -263,7 +291,7 @@ impl ParseOptions {
 /// # Returns
 ///
 /// `true` if the fixup was successful, `false` if the record is corrupted.
-#[allow(unsafe_code)] // Required: ptr::read for packed NTFS struct
+#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
 pub fn apply_fixup(data: &mut [u8]) -> bool {
     if data.len() < size_of::<MultiSectorHeader>() {
         return false;
@@ -452,13 +480,17 @@ pub fn add_missing_parent_placeholders_to_vec(records: &mut Vec<ParsedRecord>) -
 ///
 /// Handles both NTFS 1.2 (36 bytes) and NTFS 3.0+ (72 bytes) formats.
 /// For NTFS 3.0+, also extracts `usn`, `security_id`, and `owner_id`.
-#[allow(unsafe_code, clippy::single_call_fn)] // Required: ptr::read for packed NTFS struct
+#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted for clarity and encapsulation"
+)]
 fn parse_standard_info_full(data: &[u8], attr_offset: usize, result: &mut ExtendedStandardInfo) {
     use core::mem::size_of;
 
     use crate::ntfs::{
-        STANDARD_INFO_SIZE_V12, STANDARD_INFO_SIZE_V30, StandardInformation,
-        StandardInformationExtended, filetime_to_unix_micros,
+        filetime_to_unix_micros, StandardInformation, StandardInformationExtended,
+        STANDARD_INFO_SIZE_V12, STANDARD_INFO_SIZE_V30,
     };
 
     // Get value offset and length (resident attribute)
@@ -510,13 +542,17 @@ fn parse_standard_info_full(data: &[u8], attr_offset: usize, result: &mut Extend
 }
 
 /// Parses `$FILE_NAME` and returns a `NameInfo` with timestamps.
-#[allow(unsafe_code, clippy::single_call_fn)] // Required: ptr::read for packed NTFS struct
+#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted for clarity and encapsulation"
+)]
 fn parse_file_name_full(data: &[u8], attr_offset: usize) -> Option<NameInfo> {
     use core::mem::size_of;
 
     use smallvec::SmallVec;
 
-    use crate::ntfs::{FileNameAttribute, file_reference_to_frs, filetime_to_unix_micros};
+    use crate::ntfs::{file_reference_to_frs, filetime_to_unix_micros, FileNameAttribute};
 
     // Get value offset (resident attribute)
     let value_offset_bytes = &data[attr_offset + 20..attr_offset + 22];
@@ -540,7 +576,10 @@ fn parse_file_name_full(data: &[u8], attr_offset: usize) -> Option<NameInfo> {
 
     let name_bytes = &data[name_offset..name_offset + name_len * 2];
     // Use SmallVec to avoid heap allocation for typical file names (< 128 chars)
-    #[allow(clippy::missing_asserts_for_indexing)] // chunks_exact(2) guarantees chunk.len() == 2
+    #[expect(
+        clippy::missing_asserts_for_indexing,
+        reason = "chunks_exact(2) guarantees chunk.len() == 2"
+    )]
     let name_u16: SmallVec<[u16; 128]> = name_bytes
         .chunks_exact(2)
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
@@ -565,7 +604,10 @@ fn parse_file_name_full(data: &[u8], attr_offset: usize) -> Option<NameInfo> {
 /// The `$BadClus` file (FRS 8) has a `$Bad` stream that is a sparse file
 /// spanning the entire volume. C++ uses `InitializedSize` instead of `DataSize`
 /// for this stream to avoid reporting the full volume size.
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted for clarity and encapsulation"
+)]
 fn parse_data_attribute_full(
     data: &[u8],
     attr_offset: usize,
@@ -583,8 +625,10 @@ fn parse_data_attribute_full(
             return None;
         }
         let name_bytes = &data[name_offset..name_offset + name_len * 2];
-        #[allow(clippy::missing_asserts_for_indexing)]
-        // chunks_exact(2) guarantees chunk.len() == 2
+        #[expect(
+            clippy::missing_asserts_for_indexing,
+            reason = "chunks_exact(2) guarantees chunk.len() == 2"
+        )]
         let name_u16: SmallVec<[u16; 64]> = name_bytes
             .chunks_exact(2)
             .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
@@ -740,12 +784,20 @@ impl Default for PrimaryNameTracker {
 #[must_use]
 // Required: ptr::read for packed NTFS structs
 // 101 lines: just over limit due to P2 reparse_tag extraction; splitting would hurt readability
-#[allow(unsafe_code, clippy::cognitive_complexity, clippy::too_many_lines)]
+#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS structs")]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "NTFS attribute dispatch is inherently complex"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "splitting would hurt readability of sequential NTFS parsing"
+)]
 pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     use core::mem::size_of;
 
     use crate::ntfs::{
-        AttributeRecordHeader, AttributeType, FileRecordSegmentHeader, file_reference_to_frs,
+        file_reference_to_frs, AttributeRecordHeader, AttributeType, FileRecordSegmentHeader,
     };
 
     if data.len() < size_of::<FileRecordSegmentHeader>() {
@@ -1219,7 +1271,8 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                 // No default $DATA stream - use reparse_size for junctions/symlinks
                 // C++ uses ah->Resident.ValueLength for reparse points
                 if reparse_tag != 0 {
-                    (reparse_size, 0) // Reparse point data is resident, allocated=0
+                    (reparse_size, 0) // Reparse point data is resident,
+                                      // allocated=0
                 } else {
                     (0, 0)
                 }
@@ -1275,7 +1328,15 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
 /// `ParseResult::Base` for all records matching options, or
 /// `ParseResult::Skip`.
 #[must_use]
-#[allow(unsafe_code, clippy::too_many_lines, clippy::cognitive_complexity)]
+#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS structs")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "forensic parser handles many attribute types sequentially"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "forensic mode has many conditional paths"
+)]
 pub fn parse_record_forensic(
     data: &[u8],
     frs: u64,
@@ -1285,7 +1346,7 @@ pub fn parse_record_forensic(
     use core::mem::size_of;
 
     use crate::ntfs::{
-        AttributeRecordHeader, AttributeType, FileRecordSegmentHeader, file_reference_to_frs,
+        file_reference_to_frs, AttributeRecordHeader, AttributeType, FileRecordSegmentHeader,
     };
 
     // Handle corrupt records
@@ -2027,7 +2088,8 @@ pub fn parse_record_forensic(
                 // No default $DATA stream - use reparse_size for junctions/symlinks
                 // C++ uses ah->Resident.ValueLength for reparse points
                 if reparse_tag != 0 {
-                    (reparse_size, 0) // Reparse point data is resident, allocated=0
+                    (reparse_size, 0) // Reparse point data is resident,
+                                      // allocated=0
                 } else {
                     (0, 0)
                 }
@@ -2221,7 +2283,14 @@ impl MftRecordMerger {
     /// # Performance
     ///
     /// O(1) insertion - direct index assignment, no hashing.
-    #[allow(clippy::indexing_slicing, clippy::cast_possible_truncation)] // bounds checked; FRS fits in usize
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "bounds checked: resize ensures FRS < len"
+    )]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
     pub fn add_result(&mut self, result: ParseResult) {
         match result {
             ParseResult::Base(record) => {
@@ -2244,7 +2313,14 @@ impl MftRecordMerger {
 
     /// Merges all extensions into their base records and returns the result.
     #[must_use]
-    #[allow(clippy::indexing_slicing, clippy::cast_possible_truncation)] // bounds checked; FRS fits in usize
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "bounds checked: base_frs < base_records.len()"
+    )]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
     pub fn merge(mut self) -> Vec<ParsedRecord> {
         // Merge all extensions into their base records
         for ext in self.extensions {
@@ -2380,7 +2456,10 @@ impl MftRecordMerger {
     }
 
     /// Internal implementation for `merge_into_columns`.
-    #[allow(clippy::indexing_slicing)]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "bounds checked: base_frs < base_records.len()"
+    )]
     fn merge_into_columns_internal(mut self, expand_links: bool) -> ParsedColumns {
         // Merge all extensions into their base records
         for ext in self.extensions {
@@ -3029,7 +3108,10 @@ mod tests {
         data[40..42].copy_from_slice(&1_u16.to_le_bytes());
 
         // FRS number (at offset 44 in modern NTFS) - truncate to u32 for test data
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "test FRS values are small constants"
+        )]
         let frs_u32 = frs as u32;
         data[44..48].copy_from_slice(&frs_u32.to_le_bytes());
 

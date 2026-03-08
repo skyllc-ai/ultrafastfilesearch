@@ -16,7 +16,10 @@
 //! Notes:
 //! - This code intentionally uses indexed access into internal vectors; indices
 //!   are produced by the index builder and are expected to be valid.
-#![allow(clippy::indexing_slicing)]
+#![expect(
+    clippy::indexing_slicing,
+    reason = "C++ port: indices are validated at entry points, not on every access"
+)]
 
 // AUTO-GENERATED DROP-IN REPLACEMENT
 // This file fixes LIVE/ONLINE parity gaps by ensuring the C++-port tree
@@ -93,7 +96,10 @@ const fn compute_name_info(name_index: u32, total_names: u32) -> u32 {
 /// `name_index >= total_names`, which indicates a potential parity issue
 /// (two hardlinks mapping to the same `i` can skew totals).
 #[inline]
-#[allow(clippy::single_call_fn)] // Single call site but serves as parity diagnostic
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted for C++ parity diagnostic logging"
+)]
 fn compute_name_info_checked(
     name_index: u32,
     total_names: u32,
@@ -121,7 +127,8 @@ fn compute_name_info_checked(
                 "[TRIP] compute_name_info_checked: clamping name_index to total_names-1"
             );
         }
-        return 0; // Clamped to total_names-1, result = total_names - 1 - (total_names-1) = 0
+        return 0; // Clamped to total_names-1, result = total_names - 1 -
+                  // (total_names-1) = 0
     }
     total_names - 1 - name_index
 }
@@ -523,7 +530,8 @@ mod tests {
 
         // Out-of-bounds name_index should be clamped
         assert_eq!(compute_name_info(5, 2), 0); // 5 >= 2, clamped to 1, result = 2-1-1 = 0
-        assert_eq!(compute_name_info(100, 3), 0); // 100 >= 3, clamped to 2, result = 3-1-2 = 0
+        assert_eq!(compute_name_info(100, 3), 0); // 100 >= 3, clamped to 2,
+                                                  // result = 3-1-2 = 0
     }
 
     /// Tests that the combined transformation + delta gives correct

@@ -1056,7 +1056,7 @@ impl ExtensionTable {
         }
 
         // Add new extension
-        #[allow(clippy::cast_possible_truncation)] // Checked: id < u16::MAX
+        #[expect(clippy::cast_possible_truncation, reason = "checked: id < u16::MAX")]
         let id = self.names.len() as u16;
         if id == u16::MAX {
             // Overflow protection: return 0 (no extension) if we hit the limit
@@ -1128,7 +1128,10 @@ impl ExtensionTable {
     /// }
     /// ```
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)] // Justified: extension count < u16::MAX
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "extension count < u16::MAX"
+    )]
     pub fn top_by_bytes(&self, limit: usize) -> Vec<(u16, &str, u64, u32)> {
         let mut entries: Vec<(u16, &str, u64, u32)> = (0..self.names.len())
             .filter_map(|idx| {
@@ -1153,7 +1156,10 @@ impl ExtensionTable {
     /// Returns a vector of (`extension_id`, `extension_str`, count, bytes)
     /// tuples sorted by count in descending order.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)] // Justified: extension count < u16::MAX
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "extension count < u16::MAX"
+    )]
     pub fn top_by_count(&self, limit: usize) -> Vec<(u16, &str, u32, u64)> {
         let mut entries: Vec<(u16, &str, u32, u64)> = (0..self.names.len())
             .filter_map(|idx| {
@@ -1269,7 +1275,7 @@ impl ExtensionIndex {
         // Use a temporary array to track current write position for each extension
         let mut write_pos = offsets.clone();
 
-        #[allow(clippy::cast_possible_truncation)] // Justified: record count < u32::MAX
+        #[expect(clippy::cast_possible_truncation, reason = "record count < u32::MAX")]
         for (record_idx, record) in index.records.iter().enumerate() {
             // Add primary name
             let ext_id = record.first_name.name.extension_id() as usize;
@@ -1705,7 +1711,11 @@ impl MftStats {
     /// Uses heuristic: depth ≈ log2(dirs) + 2.
     /// Typical NTFS volumes have depth 5-15.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(clippy::cast_possible_truncation, reason = "log2 result fits in usize")]
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "log2 of positive count is non-negative"
+    )]
     pub fn estimated_avg_depth(&self) -> usize {
         if self.dir_count == 0 {
             return 5; // Default for empty/small volumes
@@ -1719,7 +1729,10 @@ impl MftStats {
     ///
     /// Formula: (name bytes / records) × depth
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "average name length fits in usize"
+    )]
     pub fn estimated_avg_path_bytes(&self) -> usize {
         if self.record_count == 0 {
             return 50; // Default
@@ -1963,7 +1976,14 @@ impl MftIndex {
     ///
     /// Returns a mutable reference to the record. Creates a new record if
     /// one doesn't exist for the given FRS.
-    #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "bounds checked: resize ensures frs_usize < len"
+    )]
     pub fn get_or_create(&mut self, frs: u64) -> &mut FileRecord {
         let frs_usize = frs as usize;
 
@@ -2052,7 +2072,10 @@ impl MftIndex {
 
     /// Get a filename from the names buffer
     #[must_use]
-    #[allow(clippy::string_slice)] // Names are stored as valid UTF-8 at known boundaries
+    #[expect(
+        clippy::string_slice,
+        reason = "names are stored as valid UTF-8 at known boundaries"
+    )]
     pub fn get_name(&self, info: &IndexNameRef) -> &str {
         if !info.is_valid() {
             return "";
@@ -2169,7 +2192,11 @@ impl MftIndex {
     ///
     /// See: `ntfs_index.hpp` lines 568-579 where C++ uses `at(frs_parent)` to
     /// create parent placeholders on-demand.
-    #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
+    #[expect(clippy::indexing_slicing, reason = "bounds checked via get_or_create")]
     pub fn add_child_entry(&mut self, parent_frs: u64, child_frs: u64, name_index: u16) {
         // C++ parity: Create parent placeholder if it doesn't exist
         // This matches C++ at(frs_parent) behavior in ntfs_index.hpp
@@ -2221,7 +2248,14 @@ impl MftIndex {
     ///
     /// Call this as a fallback if tree metrics computation leaves directories
     /// with `descendants == 0`, which indicates the child graph was incomplete.
-    #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "indices validated by frs_to_idx lookup"
+    )]
     pub fn rebuild_children_from_names(&mut self) {
         tracing::debug!(
             records = self.records.len(),
@@ -2245,7 +2279,10 @@ impl MftIndex {
 
                 // Skip missing/placeholder parents and self-references (root has parent==self).
                 if parent_frs != no_entry_frs && parent_frs != child_frs {
-                    #[allow(clippy::cast_possible_truncation)]
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "FRS fits in usize on 64-bit"
+                    )]
                     // NOTE: ChildInfo.name_index must match the C++ parse-order index (FILE_NAME
                     // attribute encounter order). The stored link chain order
                     // is the *reverse* of parse order because each new name becomes `first_name`.
@@ -2309,7 +2346,10 @@ impl MftIndex {
     /// // ... parse MFT records ...
     /// index.sort_directory_children(); // Sort all directory children
     /// ```
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
     pub fn sort_directory_children(&mut self) {
         // Temporary buffer for collecting children (reused across directories)
         let mut child_indices: Vec<u32> = Vec::new();
@@ -2442,11 +2482,15 @@ impl MftIndex {
     /// // ... parse MFT records ...
     /// index.compute_tree_metrics(); // Compute tree metrics for all directories
     /// ```
-    #[allow(
-        clippy::cast_possible_truncation,
+    #[expect(clippy::cast_possible_truncation, reason = "n < u32::MAX in practice")]
+    #[expect(
         clippy::cognitive_complexity,
-        clippy::too_many_lines
-    )] // Justified: n < u32::MAX in practice, algorithm is inherently complex
+        reason = "tree algorithm is inherently complex"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "tree traversal with hardlink handling"
+    )]
     pub fn compute_tree_metrics(&mut self) {
         tracing::debug!("[TRIP] MftIndex::compute_tree_metrics ENTER (default algo)");
         self.compute_tree_metrics_with_algo(TreeAlgorithm::default(), false);
@@ -2457,7 +2501,10 @@ impl MftIndex {
     ///
     /// When `debug` is true, prints detailed information about hardlink
     /// handling to stdout for debugging purposes.
-    #[allow(clippy::print_stdout)]
+    #[expect(
+        clippy::print_stdout,
+        reason = "intentional: diagnostic output to stdout"
+    )]
     pub fn compute_tree_metrics_debug(&mut self) {
         self.compute_tree_metrics_with_algo(TreeAlgorithm::default(), true);
     }
@@ -2470,7 +2517,10 @@ impl MftIndex {
     /// # Arguments
     /// * `algo` - Which tree algorithm to use
     /// * `debug` - If true, prints detailed debug information
-    #[allow(clippy::print_stdout)]
+    #[expect(
+        clippy::print_stdout,
+        reason = "intentional: diagnostic output to stdout"
+    )]
     pub fn compute_tree_metrics_with_algo(&mut self, algo: TreeAlgorithm, debug: bool) {
         tracing::debug!(algo = ?algo, "[TRIP] MftIndex::compute_tree_metrics_with_algo dispatching");
         match algo {
@@ -2495,7 +2545,10 @@ impl MftIndex {
     ///
     /// See `docs/architecture/CPP_TREE_ALGORITHM_PORT.md` for full
     /// documentation.
-    #[allow(clippy::print_stdout)]
+    #[expect(
+        clippy::print_stdout,
+        reason = "intentional: diagnostic output to stdout"
+    )]
     fn compute_tree_metrics_cpp_port(&mut self, debug: bool) {
         tracing::debug!("[TRIP] MftIndex::compute_tree_metrics_cpp_port ENTER (first pass)");
 
@@ -2633,18 +2686,28 @@ impl MftIndex {
     /// # Arguments
     /// * `debug` - If true, prints detailed debug information during
     ///   computation
-    #[allow(
-        clippy::cast_possible_truncation,
+    #[expect(clippy::cast_possible_truncation, reason = "index counts fit in usize")]
+    #[expect(
         clippy::cast_precision_loss,
-        clippy::cognitive_complexity,
-        clippy::float_arithmetic,
-        clippy::map_unwrap_or,
-        clippy::min_ident_chars,
-        clippy::print_stdout,
-        clippy::too_many_lines,
-        clippy::uninlined_format_args,
-        clippy::unnecessary_sort_by
+        reason = "precision loss acceptable for progress display"
     )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "tree algorithm is inherently complex"
+    )]
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "used for progress percentage display"
+    )]
+    #[expect(clippy::map_unwrap_or, reason = "map().unwrap_or() is more readable")]
+    #[expect(clippy::min_ident_chars, reason = "'n' for count is idiomatic")]
+    #[expect(clippy::print_stdout, reason = "intentional: debug output to stdout")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "tree traversal with hardlink handling"
+    )]
+    #[expect(clippy::uninlined_format_args, reason = "readability in debug prints")]
+    #[expect(clippy::unnecessary_sort_by, reason = "explicit sort_by is clearer")]
     fn compute_tree_metrics_impl(&mut self, debug: bool) {
         let n = self.records.len();
         if n == 0 {
@@ -3059,13 +3122,20 @@ impl MftIndex {
     /// ```rust,ignore
     /// index.display_stats();
     /// ```
-    #[allow(
+    #[expect(
         clippy::print_stdout,
-        clippy::cast_precision_loss,
-        clippy::too_many_lines,
-        clippy::float_arithmetic,
-        clippy::min_ident_chars
+        reason = "intentional: user-facing stats display"
     )]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "precision loss acceptable for display"
+    )]
+    #[expect(clippy::too_many_lines, reason = "stats display has many fields")]
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "used for percentage and size formatting"
+    )]
+    #[expect(clippy::min_ident_chars, reason = "'n' for count is idiomatic")]
     pub fn display_stats(&self) {
         use std::io::Write;
 
@@ -3350,7 +3420,10 @@ impl MftIndex {
     /// Most files have only one name (the primary), but files with hard links
     /// will have multiple entries. Each name has its own parent directory.
     #[must_use]
-    #[allow(clippy::missing_const_for_fn)] // Iterator construction is not const-compatible
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "iterator construction is not const-compatible"
+    )]
     pub fn iter_names<'a>(&'a self, record: &'a FileRecord) -> NameIter<'a> {
         NameIter {
             index: self,
@@ -3365,7 +3438,10 @@ impl MftIndex {
     /// Most files have only the default `$DATA` stream, but files with
     /// Alternate Data Streams (ADS) will have multiple entries.
     #[must_use]
-    #[allow(clippy::missing_const_for_fn)] // Iterator construction is not const-compatible
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "iterator construction is not const-compatible"
+    )]
     pub fn iter_streams<'a>(&'a self, record: &'a FileRecord) -> StreamIter<'a> {
         StreamIter {
             index: self,
@@ -3640,7 +3716,10 @@ impl PathResolver {
     #[must_use]
     // Loop has 4 distinct break conditions: record not found, reached root,
     // self-reference, parent not in index. Cannot be simplified to while_let.
-    #[allow(clippy::while_let_loop)]
+    #[expect(
+        clippy::while_let_loop,
+        reason = "explicit loop with break is clearer here"
+    )]
     pub fn materialize_path(&self, index: &MftIndex, idx: usize) -> String {
         let mut chain: smallvec::SmallVec<[usize; 16]> = smallvec::SmallVec::new();
         let mut current_idx = idx;
@@ -3938,20 +4017,45 @@ impl<'a> PathCache<'a> {
 }
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
+    reason = "test constants fit in target types"
+)]
+#[expect(
     clippy::cast_sign_loss,
+    reason = "test code with known non-negative values"
+)]
+#[expect(
     clippy::collection_is_never_read,
+    reason = "test assertions verify internal state"
+)]
+#[expect(
     clippy::default_numeric_fallback,
+    reason = "test code — explicit types not needed"
+)]
+#[expect(
     clippy::indexing_slicing,
-    clippy::print_stdout,
+    reason = "test code with known valid indices"
+)]
+#[expect(clippy::print_stdout, reason = "test diagnostics output")]
+#[expect(
     clippy::shadow_unrelated,
-    clippy::std_instead_of_core,
+    reason = "test code — variable reuse for setup"
+)]
+#[expect(clippy::std_instead_of_core, reason = "test code uses std types")]
+#[expect(
     clippy::str_to_string,
-    clippy::uninlined_format_args,
-    clippy::use_debug,
-    clippy::unwrap_used, // Test code - unwrap is acceptable
-    clippy::expect_used  // Test code - expect is acceptable
+    reason = "test code — String conversion is fine"
+)]
+#[expect(clippy::uninlined_format_args, reason = "test code readability")]
+#[expect(clippy::use_debug, reason = "test code uses Debug for assertions")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test code — panicking on failure is acceptable"
+)]
+#[expect(
+    clippy::expect_used,
+    reason = "test code — panicking on failure is acceptable"
 )]
 mod tests {
     use super::*;
@@ -4094,7 +4198,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::indexing_slicing)] // Test code with known valid indices
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "test code with known valid indices"
+    )]
     fn test_extension_table_serialization() {
         // Create an index with some extensions
         let mut index = MftIndex::new('C');
@@ -4246,7 +4353,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::indexing_slicing)] // Test code with known valid indices
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "test code with known valid indices"
+    )]
     fn test_extension_index_with_hard_links() {
         let mut index = MftIndex::new('C');
 
@@ -4352,7 +4462,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::indexing_slicing)] // Test code with known valid indices
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "test code with known valid indices"
+    )]
     fn test_extension_table_top_by_bytes() {
         let mut index = MftIndex::new('C');
 
@@ -4404,7 +4517,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::indexing_slicing)] // Test code with known valid indices
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "test code with known valid indices"
+    )]
     fn test_extension_table_top_by_count() {
         let mut index = MftIndex::new('C');
 
@@ -4950,7 +5066,8 @@ mod tests {
         let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
         assert_eq!(index.records[root_idx].descendants, 5); // 1 + dir1(3) + file3(1)
         assert_eq!(index.records[root_idx].treesize, 3500); // 0 + 3000 + 500
-        assert_eq!(index.records[root_idx].tree_allocated, 12288); // 0 + 8192 + 4096
+        assert_eq!(index.records[root_idx].tree_allocated, 12288); // 0 + 8192 +
+                                                                   // 4096
     }
 
     #[test]
@@ -5189,7 +5306,10 @@ mod tests {
     /// Run with: `cargo test --release --
     /// test_extension_index_query_performance --nocapture`
     #[test]
-    #[allow(clippy::indexing_slicing)] // Test code with known valid indices
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "test code with known valid indices"
+    )]
     fn test_extension_index_query_performance() {
         use std::time::Instant;
 
@@ -5581,7 +5701,7 @@ mod tests {
         record_a.first_name.parent_frs = 5;
         record_a.first_name.next_entry = link_c_idx; // Chain to link C
         record_a.name_count = 2; // B and C
-        // stdinfo remains default (created = 0) - this is the key!
+                                 // stdinfo remains default (created = 0) - this is the key!
 
         // Create Fragment B with base record for FRS 100
         let mut fragment_b = MftIndexFragment::with_capacity(10);
@@ -5698,7 +5818,7 @@ mod tests {
         record_b.first_name.parent_frs = 5;
         record_b.first_name.next_entry = link_c_idx; // Chain to link C
         record_b.name_count = 2; // B and C
-        // stdinfo remains default (created = 0) - placeholder
+                                 // stdinfo remains default (created = 0) - placeholder
 
         // Create main index and merge fragments
         // Merge fragment A first (base record), then fragment B (extension-only)
@@ -5903,7 +6023,10 @@ mod tests {
             next_entry: NO_ENTRY,
         };
         index.links.push(link);
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "FRS fits in usize on 64-bit"
+        )]
         let link_idx = (index.links.len() - 1) as u32;
 
         let file_rec = index.get_or_create(file_frs);
@@ -6157,7 +6280,11 @@ impl MftIndex {
     /// # Errors
     ///
     /// Returns an error if `DataFrame` construction fails.
-    #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
+    #[expect(clippy::cast_possible_truncation, reason = "index counts fit in usize")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "DataFrame construction has many columns"
+    )]
     pub fn to_dataframe(&self) -> crate::Result<uffs_polars::DataFrame> {
         use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
         let n = self.records.len();
@@ -6390,11 +6517,21 @@ impl MftIndex {
     /// Works on all platforms - uses cross-platform `ParsedRecord` from parse
     /// module.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::cognitive_complexity,
+        reason = "record conversion has many attribute paths"
+    )]
+    #[expect(
         clippy::too_many_lines,
+        reason = "sequential field mapping from ParsedRecord"
+    )]
+    #[expect(
         clippy::cast_possible_truncation,
-        clippy::indexing_slicing
+        reason = "FRS fits in usize on 64-bit"
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "indices validated by get_or_create"
     )]
     pub fn from_parsed_records(volume: char, records: Vec<crate::parse::ParsedRecord>) -> Self {
         /// System metafiles are FRS 0-15 (except root at FRS 5)
@@ -6912,7 +7049,14 @@ impl MftIndex {
     /// - Deduplication of records (same FRS from different fragments)
     /// - Name buffer concatenation with offset adjustment
     /// - Link/stream/child list merging
-    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "fragment merge logic has many cases"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "multi-step merge: records, names, links, streams"
+    )]
     pub fn merge_fragments(&mut self, fragments: Vec<MftIndexFragment>) {
         use tracing::debug;
 
@@ -6954,7 +7098,14 @@ impl MftIndex {
     }
 
     /// Merge a single fragment into this index.
-    #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "offset adjustments fit in u32"
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "indices validated by frs_to_idx lookup"
+    )]
     fn merge_single_fragment(&mut self, fragment: MftIndexFragment) {
         let name_offset_adjustment = self.names.len() as u32;
         let link_offset_adjustment = self.links.len() as u32;
@@ -7000,7 +7151,10 @@ impl MftIndex {
     }
 
     /// Build extension ID remapping table from fragment to merged index.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
     fn build_extension_id_map(&mut self, fragment: &MftIndexFragment) -> Vec<u16> {
         let mut extension_id_map: Vec<u16> = Vec::with_capacity(fragment.extensions.len());
 
@@ -7043,7 +7197,14 @@ impl MftIndex {
     ///
     /// Returns: `Vec<(existing_record_idx, discarded_record)>` for records that
     /// need merging
-    #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "offset adjustments fit in u32"
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "indices validated by frs_to_idx lookup"
+    )]
     fn merge_fragment_records_with_deferred_merge(
         &mut self,
         records: Vec<FileRecord>,
@@ -7153,11 +7314,12 @@ impl MftIndex {
     ///
     /// This is called after all links/streams have been merged, so the indices
     /// are valid.
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
-        clippy::indexing_slicing,
-        clippy::too_many_lines
+        reason = "offset adjustments fit in u32"
     )]
+    #[expect(clippy::indexing_slicing, reason = "indices validated before access")]
+    #[expect(clippy::too_many_lines, reason = "name/stream merge has many steps")]
     fn apply_deferred_name_merges(
         &mut self,
         deferred_merges: Vec<(u32, FileRecord)>,
@@ -7320,7 +7482,10 @@ impl MftIndex {
     }
 
     /// Merge links from a fragment into this index.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
     fn merge_fragment_links(
         &mut self,
         links: Vec<LinkInfo>,
@@ -7338,7 +7503,10 @@ impl MftIndex {
     }
 
     /// Merge streams from a fragment into this index.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
     fn merge_fragment_streams(
         &mut self,
         streams: Vec<IndexStreamInfo>,
@@ -7356,7 +7524,10 @@ impl MftIndex {
     }
 
     /// Merge internal streams from a fragment into this index.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
     fn merge_fragment_internal_streams(&mut self, internal_streams: Vec<InternalStreamInfo>) {
         let internal_offset_adjustment = self.internal_streams.len() as u32;
         for mut st in internal_streams {
@@ -7368,7 +7539,10 @@ impl MftIndex {
     }
 
     /// Merge children from a fragment into this index.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
     fn merge_fragment_children(&mut self, children: Vec<ChildInfo>) {
         let child_offset_adjustment = self.children.len() as u32;
         for mut child in children {
@@ -7413,7 +7587,10 @@ impl MftIndex {
     /// For full accuracy on creates/renames, a selective MFT read would be
     /// needed. This implementation provides a fast approximation that's
     /// sufficient for most search use cases.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
     pub fn apply_usn_changes(&mut self, changes: &[crate::usn::FileChange]) -> UsnApplyStats {
         // DELETED flag uses bit 31 of the u32 flags field
         const DELETED_FLAG: u32 = 0x8000_0000;
@@ -7613,7 +7790,14 @@ impl MftIndexFragment {
     }
 
     /// Get or create a record for the given FRS.
-    #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "bounds checked: resize ensures frs_usize < len"
+    )]
     pub fn get_or_create(&mut self, frs: u64) -> &mut FileRecord {
         let frs_usize = frs as usize;
 
@@ -7763,7 +7947,10 @@ impl MftIndex {
     /// * `usn_journal_id` - USN Journal ID at time of serialization
     /// * `next_usn` - Next USN to read from (checkpoint)
     #[must_use]
-    #[allow(clippy::too_many_lines)] // Binary serialization requires many field writes
+    #[expect(
+        clippy::too_many_lines,
+        reason = "binary serialization requires many field writes"
+    )]
     pub fn serialize(&self, volume_serial: u64, usn_journal_id: u64, next_usn: i64) -> Vec<u8> {
         let header = IndexHeader::new(self, volume_serial, usn_journal_id, next_usn);
 
@@ -7806,7 +7993,7 @@ impl MftIndex {
             buffer.extend_from_slice(&record.sequence_number.to_le_bytes());
             buffer.push(record.namespace);
             buffer.push(record.forensic_flags); // Version 7: renamed from reserved
-            // Version 5+: LSN (Log File Sequence Number)
+                                                // Version 5+: LSN (Log File Sequence Number)
             buffer.extend_from_slice(&record.lsn.to_le_bytes());
             // Version 6+: reparse_tag
             buffer.extend_from_slice(&record.reparse_tag.to_le_bytes());
@@ -7881,13 +8068,19 @@ impl MftIndex {
 
         // Write ExtensionTable
         // Extension count (u32)
-        #[allow(clippy::cast_possible_truncation)] // Extension count is limited by u16 max
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "extension count is limited by u16::MAX"
+        )]
         let ext_count = self.extensions.len() as u32;
         buffer.extend_from_slice(&ext_count.to_le_bytes());
 
         // For each extension (starting from index 1, since 0 is NO_EXTENSION)
         for i in 1..self.extensions.len() {
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "FRS fits in usize on 64-bit"
+            )]
             // i is bounded by extensions.len() which is u16-based
             let ext_id = i as u16;
             if let Some(ext_str) = self.extensions.get_extension(ext_id) {
@@ -7896,7 +8089,10 @@ impl MftIndex {
                 let bytes = self.extensions.get_bytes(ext_id);
 
                 // String length (u32)
-                #[allow(clippy::cast_possible_truncation)] // Extension strings are short
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "extension strings are short"
+                )]
                 let str_len = ext_bytes.len() as u32;
                 buffer.extend_from_slice(&str_len.to_le_bytes());
                 // String bytes
@@ -7921,10 +8117,14 @@ impl MftIndex {
     // and make the binary format harder to follow.
     // The u64->usize casts are safe: this is a 64-bit Windows NTFS tool.
     // Cognitive complexity is high due to version-conditional field reads (v3/v4/v5/v6).
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
-        clippy::cast_possible_truncation,
-        clippy::cognitive_complexity
+        reason = "binary deserialization has many sequential field reads"
+    )]
+    #[expect(clippy::cast_possible_truncation, reason = "u64→usize safe on 64-bit")]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "version-conditional fields (v3/v4/v5/v6)"
     )]
     pub fn deserialize(data: &[u8]) -> Result<(Self, IndexHeader), &'static str> {
         if data.len() < 96 {
@@ -8040,7 +8240,7 @@ impl MftIndex {
             let sequence_number = if version >= 4 { read_u16!() } else { 0 };
             let namespace = if version >= 4 { read_u8!() } else { 1 }; // Default: Win32
             let forensic_flags = if version >= 4 { read_u8!() } else { 0 }; // Version 7: renamed from reserved
-            // Version 5+: LSN (Log File Sequence Number)
+                                                                            // Version 5+: LSN (Log File Sequence Number)
             let lsn = if version >= 5 { read_u64!() } else { 0 };
             // Version 6+: reparse_tag
             let reparse_tag = if version >= 6 { read_u32!() } else { 0 };

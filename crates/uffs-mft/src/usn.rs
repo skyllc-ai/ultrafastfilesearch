@@ -151,7 +151,10 @@ impl UsnRecord {
 /// Aggregated changes for a single file (consolidates multiple USN records).
 // These bools represent independent change flags from USN journal records.
 // Using a bitflags pattern would add complexity without benefit for this DTO.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent change flags from USN journal records"
+)]
 #[derive(Debug, Clone, Default)]
 pub struct FileChange {
     /// File Reference Number
@@ -202,21 +205,24 @@ pub fn aggregate_changes(records: &[UsnRecord]) -> HashMap<u64, FileChange> {
 pub use windows_impl::{query_usn_journal, read_usn_journal};
 
 #[cfg(windows)]
-#[allow(unsafe_code)] // Required: Windows FFI (CreateFileW, DeviceIoControl, CloseHandle)
+#[expect(
+    unsafe_code,
+    reason = "FFI: Windows API calls (CreateFileW, DeviceIoControl, CloseHandle)"
+)]
 mod windows_impl {
     use core::mem::size_of;
     use core::ptr;
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
+    use windows::core::PCWSTR;
     use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE};
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ,
         FILE_SHARE_WRITE, OPEN_EXISTING,
     };
-    use windows::Win32::System::IO::DeviceIoControl;
     use windows::Win32::System::Ioctl::{FSCTL_QUERY_USN_JOURNAL, FSCTL_READ_USN_JOURNAL};
-    use windows::core::PCWSTR;
+    use windows::Win32::System::IO::DeviceIoControl;
 
     use super::*;
 
