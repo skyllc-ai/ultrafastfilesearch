@@ -10,8 +10,8 @@
 
 use std::fmt::Write as _;
 
-use uffs_mft::RawMftData;
 use uffs_mft::io::{apply_fixup, parse_record_full};
+use uffs_mft::RawMftData;
 
 /// Run `apply_fixup` + `parse_record_full` for a single FRS from a
 /// `RawMftData`, printing a compact diagnostic line.

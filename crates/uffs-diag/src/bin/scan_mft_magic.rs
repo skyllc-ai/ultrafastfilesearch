@@ -6,13 +6,14 @@
 //! We then aggregate counts by FRS bucket to locate where valid FILE records
 //! stop and other data (e.g. RCRD/zeros) begin.
 
-// Standalone binary doesn't use all crate dependencies
-#![allow(unused_crate_dependencies)]
-#![allow(
+#![expect(
+    unused_crate_dependencies,
+    reason = "standalone binary doesn't use all crate dependencies"
+)]
+#![expect(
     clippy::print_stdout,
     clippy::print_stderr,
-    clippy::too_many_lines,
-    clippy::std_instead_of_alloc
+    reason = "diagnostic tool — stdout/stderr output is intentional"
 )]
 
 use std::collections::BTreeMap;
@@ -20,12 +21,15 @@ use std::env;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use uffs_mft::raw::{LoadRawOptions, load_raw_mft};
+use uffs_mft::raw::{load_raw_mft, LoadRawOptions};
 // This binary intentionally pulls in uffs_polars via the uffs-diag crate
 // dependency set so that offline diagnostics can share the same Polars
 // facade version as the main CLI, even though this specific tool does not
 // use it directly.
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "version-locks uffs_polars with diagnostic crate"
+)]
 use uffs_polars as _;
 
 /// Local copy of the NTFS multi-sector header so this tool can run on
@@ -47,9 +51,10 @@ struct MultiSectorHeader {
 }
 
 /// Classify the 4-byte NTFS magic as one of the known record types.
-#[allow(clippy::single_call_fn)]
-// Kept as a small, focused helper that mirrors the magic classification used in
-// the core NTFS reader, even though it is currently only called from `main`.
+#[expect(
+    clippy::single_call_fn,
+    reason = "focused helper mirroring core NTFS magic classification"
+)]
 const fn classify_magic(magic: u32) -> &'static str {
     match magic {
         // "FILE" in little-endian (matches FILE_RECORD_MAGIC in ntfs.rs)
@@ -126,7 +131,10 @@ fn main() -> Result<()> {
             }
 
             // SAFETY: We've checked that the buffer is large enough for the header.
-            #[allow(unsafe_code)]
+            #[expect(
+                unsafe_code,
+                reason = "ptr::read from validated buffer for packed struct"
+            )]
             let header: MultiSectorHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
             let magic = header.magic;
             let class = classify_magic(magic);

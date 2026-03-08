@@ -13,9 +13,15 @@
 //!
 //! (Pass the drive letter without a colon.)
 
-// Standalone binary doesn't use all crate dependencies
-#![allow(unused_crate_dependencies)]
-#![allow(clippy::print_stdout, clippy::print_stderr, clippy::too_many_lines)]
+#![expect(
+    unused_crate_dependencies,
+    reason = "standalone binary doesn't use all crate dependencies"
+)]
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "diagnostic tool — stdout/stderr output is intentional"
+)]
 
 // This binary is Windows-only in terms of real functionality, but is compiled
 // on all targets so the workspace stays consistent. We cfg-gate Windows-only

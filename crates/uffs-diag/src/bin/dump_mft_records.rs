@@ -10,21 +10,30 @@
 //!   dump_mft_records --test-merge <raw_path> <base_frs> <ext_frs>
 //! ```
 
-// Standalone binary doesn't use all crate dependencies
-#![allow(unused_crate_dependencies)]
-#![allow(clippy::print_stdout, clippy::print_stderr, clippy::too_many_lines)]
+#![expect(
+    unused_crate_dependencies,
+    reason = "standalone binary doesn't use all crate dependencies"
+)]
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "diagnostic tool — stdout/stderr output is intentional"
+)]
 
 use std::env;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use uffs_mft::parse::{MftRecordMerger, ParseResult, parse_record_full};
-use uffs_mft::raw::{LoadRawOptions, load_raw_mft};
+use uffs_mft::parse::{parse_record_full, MftRecordMerger, ParseResult};
+use uffs_mft::raw::{load_raw_mft, LoadRawOptions};
 // This binary intentionally pulls in uffs_polars via the uffs-diag crate
 // dependency set so that offline diagnostics can share the same Polars
 // facade version as the main CLI, even though this specific tool does not
 // use it directly.
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "version-locks uffs_polars with diagnostic crate"
+)]
 use uffs_polars as _;
 
 /// Local copy of `MultiSectorHeader` layout so this tool can run on
@@ -159,11 +168,25 @@ fn main() -> Result<()> {
 }
 
 /// Test the merge functionality for a specific base/extension record pair.
-#[allow(
+#[expect(
     clippy::single_call_fn,
+    reason = "encapsulates merge-test mode, called once from main"
+)]
+#[expect(
     clippy::use_debug,
+    reason = "diagnostic tool — Debug output is intentional for inspection"
+)]
+#[expect(
     clippy::similar_names,
-    clippy::cast_possible_truncation
+    reason = "base_frs/ext_frs naming mirrors NTFS terminology"
+)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "record_count fits in usize on all supported platforms"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "sequential diagnostic dump — splitting would reduce clarity"
 )]
 fn test_merge(raw_path: &str, base_frs: u64, ext_frs: u64) -> Result<()> {
     let path = Path::new(raw_path);
@@ -361,10 +384,14 @@ fn test_merge(raw_path: &str, base_frs: u64, ext_frs: u64) -> Result<()> {
 const DUMP_BYTES: usize = 256;
 
 /// Dump a single raw MFT record's header and a small hex preview.
-#[allow(unsafe_code, clippy::single_call_fn)]
-// This helper is intentionally kept separate from `main` because it
-// encapsulates a focused, unsafe-heavy dump routine that may be reused from
-// tests or future diagnostics, even though it currently has a single call site.
+#[expect(
+    unsafe_code,
+    reason = "ptr::read from validated buffer for packed NTFS struct"
+)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "encapsulates unsafe dump routine, kept separate for clarity"
+)]
 fn dump_record(frs: u64, data: &[u8]) {
     use core::mem::size_of;
 

@@ -35,30 +35,60 @@
 //! - Rust uffs with `--parse-algo=cpp_port --tree-algo=cpp`
 //! - Rust uffs running on Mac with cached MFT data
 
-// Diagnostic tool - allow common CLI patterns
-#![allow(
+#![expect(
     clippy::print_stdout,
     clippy::print_stderr,
     clippy::use_debug,
-    clippy::indexing_slicing,
+    reason = "diagnostic tool — stdout/stderr/debug output is intentional"
+)]
+#![expect(
+    clippy::missing_docs_in_private_items,
+    reason = "diagnostic tool — internal items are self-documenting"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "diagnostic analysis functions are inherently long sequential pipelines"
+)]
+#![expect(
+    clippy::float_arithmetic,
+    clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    clippy::uninlined_format_args,
-    clippy::str_to_string,
-    clippy::min_ident_chars,
-    clippy::single_call_fn,
-    clippy::missing_docs_in_private_items,
+    clippy::cast_lossless,
     clippy::default_numeric_fallback,
-    clippy::float_arithmetic,
-    clippy::cast_precision_loss,
+    reason = "statistical comparison tool — arithmetic casts are pervasive and reviewed"
+)]
+#![expect(
+    clippy::indexing_slicing,
+    reason = "indices are validated by HashMap lookup or bounds-checked iterators"
+)]
+#![expect(
+    clippy::single_call_fn,
+    reason = "functions factored for readability in this analysis tool"
+)]
+#![expect(
+    clippy::shadow_reuse,
+    reason = "idiomatic DataFrame transformation pipeline"
+)]
+#![expect(
+    clippy::str_to_string,
+    clippy::string_slice,
+    reason = "string operations on normalized ASCII paths are safe"
+)]
+#![expect(
+    clippy::min_ident_chars,
+    reason = "short names (f, c, r, i) are conventional in statistical code"
+)]
+#![expect(
     clippy::iter_over_hash_type,
+    reason = "iteration order is irrelevant for statistical aggregation"
+)]
+#![expect(
     clippy::option_if_let_else,
     clippy::redundant_closure_for_method_calls,
-    clippy::string_slice,
-    clippy::shadow_reuse,
-    clippy::cast_lossless,
-    clippy::too_many_lines
+    clippy::uninlined_format_args,
+    reason = "style lints — current form is clearer in this context"
 )]
 
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -79,7 +109,7 @@ use {uffs_diag as _, uffs_mft as _};
 // ============================================================================
 
 /// Map C++ column names to normalized internal names
-#[allow(dead_code)]
+#[expect(dead_code, reason = "utility for future column normalization")]
 fn normalize_column_name(name: &str) -> &'static str {
     match name.to_lowercase().replace(' ', "_").as_str() {
         "path" => "path",
@@ -138,7 +168,7 @@ impl FieldStats {
         }
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "available for detailed reporting")]
     fn mean_diff(&self) -> f64 {
         if self.mismatches == 0 {
             0.0
@@ -245,7 +275,7 @@ fn is_ads_path(path: &str) -> bool {
 }
 
 /// Extract drive letter from path
-#[allow(dead_code)]
+#[expect(dead_code, reason = "utility for future drive-level analysis")]
 fn extract_drive(path: &str) -> Option<char> {
     path.chars().next().filter(char::is_ascii_alphabetic)
 }
@@ -268,7 +298,7 @@ fn build_path_map(df: &DataFrame) -> Result<HashMap<String, usize>> {
 }
 
 /// Get string value from `DataFrame` at row index
-#[allow(dead_code)]
+#[expect(dead_code, reason = "utility for future field comparison")]
 fn get_str_value(df: &DataFrame, col: &str, idx: usize) -> Option<String> {
     df.column(col)
         .ok()
@@ -501,7 +531,8 @@ fn compare_dataframes(
                 .map(|(k, _)| *k)
                 .filter(|c| cpp_cols.contains(*c))
                 .unwrap_or(field);
-            (field, display_col, display_col) // Use display name for both C++ and Rust
+            (field, display_col, display_col) // Use display name for both C++
+                                              // and Rust
         })
         .collect();
 
@@ -514,7 +545,8 @@ fn compare_dataframes(
                 .map(|(k, _)| *k)
                 .filter(|c| cpp_cols.contains(*c))
                 .unwrap_or(field);
-            (field, display_col, display_col) // Use display name for both C++ and Rust
+            (field, display_col, display_col) // Use display name for both C++
+                                              // and Rust
         })
         .collect();
 

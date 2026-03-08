@@ -18,28 +18,42 @@
 //! - Missing path analysis by drive and parent directory
 //! - Pattern analysis for system files and unknown paths
 
-// This is a CLI analysis/debugging tool where:
-// - stdout/stderr output is intentional and required for user interaction
-// - Debug formatting is needed to display Polars DataFrames and collections
-// - Floating-point arithmetic is acceptable for percentage calculations
-// - Shadow reuse is idiomatic when transforming DataFrames through a pipeline
-// - String slicing on normalized paths (ASCII only) is safe
-// - The main function is intentionally long as a sequential analysis script
-// - Unused crate dependencies come from the parent Cargo.toml
-#![allow(
+#![expect(
+    unused_crate_dependencies,
+    reason = "standalone binary doesn't use all crate dependencies"
+)]
+#![expect(
     clippy::print_stdout,
     clippy::print_stderr,
     clippy::use_debug,
+    reason = "diagnostic tool — stdout/stderr/debug output is intentional"
+)]
+#![expect(
     clippy::float_arithmetic,
     clippy::cast_precision_loss,
-    clippy::min_ident_chars,
-    clippy::single_call_fn,
-    clippy::shadow_reuse,
-    clippy::string_slice,
-    clippy::too_many_lines,
-    clippy::indexing_slicing,
     clippy::default_numeric_fallback,
-    unused_crate_dependencies
+    reason = "percentage calculations and statistics use floating-point"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "sequential analysis script — splitting main would reduce clarity"
+)]
+#![expect(
+    clippy::shadow_reuse,
+    reason = "idiomatic DataFrame transformation pipeline"
+)]
+#![expect(
+    clippy::string_slice,
+    clippy::indexing_slicing,
+    reason = "slicing on normalized ASCII paths is safe and bounds-checked"
+)]
+#![expect(
+    clippy::min_ident_chars,
+    reason = "short names are conventional in data analysis code"
+)]
+#![expect(
+    clippy::single_call_fn,
+    reason = "functions factored for readability in this analysis tool"
 )]
 
 use core::cmp::Reverse;
@@ -462,7 +476,10 @@ fn main() -> Result<()> {
     println!("  - Match rate (no ADS): {match_rate_no_ads:.2}%");
 
     println!("\nLikely Issues:");
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "ADS counts are small enough that i64 wrapping cannot occur"
+    )]
     let ads_diff = cpp_ads_count as i64 - rust_ads_count as i64;
     println!(
         "  1. ADS entries: {cpp_ads_count} in C++, {rust_ads_count} in Rust (diff: {ads_diff})"

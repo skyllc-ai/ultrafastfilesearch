@@ -6,18 +6,27 @@
 //! where a record is being dropped (fixup vs parse) compared to the reference
 //! CSV.
 
-// Standalone binary doesn't use all crate dependencies
-#![allow(unused_crate_dependencies)]
-#![allow(clippy::print_stdout, clippy::print_stderr, clippy::too_many_lines)]
+#![expect(
+    unused_crate_dependencies,
+    reason = "standalone binary doesn't use all crate dependencies"
+)]
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "diagnostic tool — stdout/stderr output is intentional"
+)]
 
 use std::env;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use uffs_mft::{LoadRawOptions, RawMftData, load_raw_mft};
+use uffs_mft::{load_raw_mft, LoadRawOptions, RawMftData};
 // Keep uffs_polars dependency wired in for version-locking, even though this
 // binary does not use it directly.
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "version-locks uffs_polars with diagnostic crate"
+)]
 use uffs_polars as _;
 
 /// Local copy of `FileRecordSegmentHeader` so this binary can run on
@@ -119,7 +128,14 @@ fn main() -> Result<()> {
 
 /// Inspect a single FRS end-to-end from raw bytes through parsed header
 /// (and, on Windows, full fixup + `parse_record_full`).
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "encapsulates the full record inspection pipeline"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "sequential diagnostic dump — splitting would reduce clarity"
+)]
 fn inspect_record_flow(raw: &RawMftData, frs: u64) {
     use core::mem::size_of;
 
@@ -187,7 +203,18 @@ fn inspect_record_flow(raw: &RawMftData, frs: u64) {
 }
 
 /// Interpret the leading bytes of a record as a `FileRecordSegmentHeader`.
-#[allow(unsafe_code, clippy::missing_const_for_fn, clippy::single_call_fn)]
+#[expect(
+    unsafe_code,
+    reason = "ptr::read from validated buffer for packed NTFS struct"
+)]
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "unsafe block prevents const evaluation"
+)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "encapsulates unsafe header read for clarity"
+)]
 fn read_header(record: &[u8]) -> FileRecordSegmentHeader {
     // SAFETY: Caller has checked that `record` is large enough for the header.
     unsafe { core::ptr::read(record.as_ptr().cast()) }

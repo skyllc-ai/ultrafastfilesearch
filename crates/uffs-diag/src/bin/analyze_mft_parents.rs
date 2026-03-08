@@ -17,15 +17,14 @@
 //! analyze_mft_parents docs/trial_runs/f_mft.parquet
 //! ```
 
-// Standalone binary doesn't use all crate dependencies
-#![allow(unused_crate_dependencies)]
-#![allow(
+#![expect(
+    unused_crate_dependencies,
+    reason = "standalone binary doesn't use all crate dependencies"
+)]
+#![expect(
     clippy::print_stdout,
     clippy::print_stderr,
-    clippy::cast_precision_loss,
-    clippy::shadow_reuse,
-    clippy::too_many_lines,
-    clippy::std_instead_of_alloc
+    reason = "diagnostic tool — stdout/stderr output is intentional"
 )]
 
 use core::cmp::Reverse;
@@ -39,7 +38,10 @@ use anyhow::{Context, Result};
 // This binary intentionally depends on uffs_mft via the uffs-diag crate
 // workspace, even though it does not use its types directly. This keeps
 // diagnostic tooling version-locked to the core MFT reader.
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "version-locks uffs_mft with diagnostic crate"
+)]
 use uffs_mft as _;
 use uffs_polars::{BooleanChunked, DataFrame, SerReader, UInt64Chunked};
 
@@ -78,9 +80,10 @@ fn main() -> Result<()> {
 }
 
 /// Load an MFT Parquet file into a [`DataFrame`].
-#[allow(clippy::single_call_fn)]
-// This helper is intentionally kept separate from `main` for clarity and
-// focused error context, even though it currently has a single call site.
+#[expect(
+    clippy::single_call_fn,
+    reason = "intentionally separate for clarity and focused error context"
+)]
 fn load_parquet(path: &Path) -> Result<DataFrame> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("Failed to open Parquet file: {}", path.display()))?;
@@ -91,9 +94,10 @@ fn load_parquet(path: &Path) -> Result<DataFrame> {
 }
 
 /// Analyze parent/child coverage and print summary statistics.
-#[allow(clippy::single_call_fn)]
-// This encapsulates the main analysis pipeline and is kept as a standalone
-// helper for readability, even though it currently has a single call site.
+#[expect(
+    clippy::single_call_fn,
+    reason = "encapsulates analysis pipeline for readability"
+)]
 fn analyze_parents(df: &DataFrame) -> Result<()> {
     // Basic schema validation
     for required_column in &["frs", "parent_frs"] {
@@ -195,10 +199,10 @@ fn analyze_parents(df: &DataFrame) -> Result<()> {
 
 /// Print detailed statistics about missing parents, including bucketed counts
 /// and the most-referenced missing parents.
-#[allow(clippy::single_call_fn)]
-// This reporting helper is intentionally factored out of `analyze_parents` to
-// keep the core analysis logic focused, even though it currently has a single
-// call site.
+#[expect(
+    clippy::single_call_fn,
+    reason = "factored out of analyze_parents for readability"
+)]
 fn print_missing_parent_details(missing_parents: &[u64], parent_col: &UInt64Chunked) {
     if missing_parents.is_empty() {
         println!("No missing parents detected.\n");
