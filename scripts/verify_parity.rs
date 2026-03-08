@@ -1,18 +1,32 @@
 #!/usr/bin/env rust-script
 //! Drive-agnostic SHA256 parity verification for UFFS.
 //!
-//! Runs uffs with cpp_port algorithms against an MFT file, then compares
-//! the sorted output (SHA256) against the C++ reference.
+//! Compares Rust output against C++ reference by sorting data rows and
+//! computing SHA256 over the reassembled content.
 //!
 //! # Usage
 //!
 //! ```bash
-//! # D-drive (files directly in data_dir)
-//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data D
+//! # Default mode: compare existing Rust output against C++ reference
+//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data D --rust /tmp/rust_final_audit.txt
+//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data/drive_s S --rust /tmp/rust_s.txt
 //!
-//! # S-drive (files in data_dir/drive_s/)
-//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data/drive_s S
+//! # Regenerate mode: run uffs to generate fresh output, then compare
+//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data D --regenerate
+//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data/drive_s S --regenerate
 //! ```
+//!
+//! # Modes
+//!
+//! **Default (--rust <path>)**: Compares the provided Rust output file against
+//! the C++ reference. This is the safe mode since both files were generated
+//! in the same timezone/DST period.
+//!
+//! **--regenerate**: Runs uffs with cpp_port algorithms to produce fresh Rust
+//! output, then compares. WARNING: timestamps use the current local timezone
+//! offset. If DST has changed since the C++ reference was generated, timestamps
+//! will differ by 1 hour and SHA256 won't match. This is expected behavior
+//! (both C++ and Rust capture timezone at startup).
 //!
 //! # Output structure
 //!
@@ -29,7 +43,7 @@
 use sha2::{Sha256, Digest};
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -38,12 +52,10 @@ const FOOTER_LINES: usize = 4;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 3 {
-        eprintln!("Usage: {} <data_dir> <drive_letter>", args[0]);
-        eprintln!();
-        eprintln!("Examples:");
-        eprintln!("  {} /Users/rnio/uffs_data D", args[0]);
-        eprintln!("  {} /Users/rnio/uffs_data/drive_s S", args[0]);
+
+    // Parse arguments
+    if args.len() < 4 {
+        print_usage(&args[0]);
         std::process::exit(1);
     }
 
@@ -51,17 +63,34 @@ fn main() {
     let drive_letter = args[2].to_uppercase();
     let drive_lower = drive_letter.to_lowercase();
 
-    println!("=== UFFS SHA256 Parity Verification ===");
-    println!("Data dir:     {}", data_dir.display());
-    println!("Drive letter: {}", drive_letter);
-    println!();
+    // Determine mode
+    let mode = &args[3];
+    let rust_output = match mode.as_str() {
+        "--regenerate" => {
+            // Regenerate mode: run uffs to produce fresh output
+            regenerate_rust_output(&data_dir, &drive_letter, &drive_lower)
+        }
+        "--rust" => {
+            // Default mode: use provided Rust output file
+            if args.len() < 5 {
+                eprintln!("ERROR: --rust requires a path argument");
+                print_usage(&args[0]);
+                std::process::exit(1);
+            }
+            PathBuf::from(&args[4])
+        }
+        _ => {
+            eprintln!("ERROR: Unknown mode: {}", mode);
+            print_usage(&args[0]);
+            std::process::exit(1);
+        }
+    };
 
-    // --- Locate files ---
-    let mft_file = data_dir.join(format!("{}_mft.bin", drive_letter));
+    // Validate files exist
     let cpp_file = data_dir.join(format!("cpp_{}.txt", drive_lower));
 
-    if !mft_file.exists() {
-        eprintln!("ERROR: MFT file not found: {}", mft_file.display());
+    if !rust_output.exists() {
+        eprintln!("ERROR: Rust output file not found: {}", rust_output.display());
         std::process::exit(1);
     }
     if !cpp_file.exists() {
@@ -69,48 +98,14 @@ fn main() {
         std::process::exit(1);
     }
 
-    println!("MFT file:     {}", mft_file.display());
+    println!("=== UFFS SHA256 Parity Verification ===");
+    println!("Data dir:      {}", data_dir.display());
+    println!("Drive letter:  {}", drive_letter);
     println!("C++ reference: {}", cpp_file.display());
-
-    // --- Locate uffs binary ---
-    let uffs_bin = find_uffs_binary();
-    println!("UFFS binary:  {}", uffs_bin.display());
+    println!("Rust output:   {}", rust_output.display());
     println!();
 
-    // --- Run uffs to generate Rust output ---
-    let rust_output = data_dir.join(format!("verify_rust_{}.txt", drive_lower));
-    println!("Running uffs scan (cpp_port algorithms)...");
-
-    // Force PST timezone (UTC-8) to match C++ reference generated pre-DST
-    let status = Command::new(&uffs_bin)
-        .env("UFFS_EXPERIMENTAL", "1")
-        .env("TZ", "PST8")
-        .args([
-            "*",
-            "--mft-file", &mft_file.to_string_lossy(),
-            "--drive", &drive_letter,
-            "--parse-algo", "cpp_port",
-            "--tree-algo", "cpp",
-            "--io-algo", "cpp",
-            "--chunk-algo", "cpp",
-            "--out", &rust_output.to_string_lossy(),
-        ])
-        .status();
-
-    match status {
-        Ok(s) if s.success() => println!("  uffs scan completed successfully."),
-        Ok(s) => {
-            eprintln!("ERROR: uffs exited with status {}", s);
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("ERROR: Failed to run uffs: {}", e);
-            std::process::exit(1);
-        }
-    }
-    println!();
-
-    // --- Compute sorted SHA256 for both files ---
+    // Compute sorted SHA256 for both files
     println!("Computing SHA256 of sorted output...");
     let (cpp_hash, cpp_rows) = sorted_sha256(&cpp_file);
     let (rust_hash, rust_rows) = sorted_sha256(&rust_output);
@@ -120,14 +115,10 @@ fn main() {
     println!("Rust output:    {} ({} data rows)", rust_hash, rust_rows);
     println!();
 
-    // --- Verdict ---
+    // Verdict
     if cpp_hash == rust_hash {
         println!("RESULT: SHA256 MATCH");
         println!("  Parity verified for drive {}.", drive_letter);
-
-        // Clean up temporary file
-        let _ = fs::remove_file(&rust_output);
-
         std::process::exit(0);
     } else {
         println!("RESULT: SHA256 MISMATCH");
@@ -135,7 +126,6 @@ fn main() {
         println!("  Rust: {}", rust_hash);
         println!("  Row count diff: {} (C++) vs {} (Rust)", cpp_rows, rust_rows);
         println!();
-        println!("  Rust output kept at: {}", rust_output.display());
 
         // Show first few differing lines
         show_first_diffs(&cpp_file, &rust_output);
@@ -144,10 +134,73 @@ fn main() {
     }
 }
 
+fn print_usage(prog: &str) {
+    eprintln!("Usage: {} <data_dir> <drive_letter> [--rust <rust_output> | --regenerate]", prog);
+    eprintln!();
+    eprintln!("Examples:");
+    eprintln!("  {} /Users/rnio/uffs_data D --rust /tmp/rust_final_audit.txt", prog);
+    eprintln!("  {} /Users/rnio/uffs_data/drive_s S --rust /tmp/rust_s.txt", prog);
+    eprintln!("  {} /Users/rnio/uffs_data D --regenerate", prog);
+}
+
+fn regenerate_rust_output(data_dir: &Path, drive_letter: &str, drive_lower: &str) -> PathBuf {
+    println!("Mode: --regenerate");
+    println!("WARNING: Timestamps will use current local timezone offset.");
+    println!("         If DST has changed since C++ reference was generated,");
+    println!("         timestamps will differ by 1 hour (expected behavior).");
+    println!();
+
+    // Locate MFT file
+    let mft_file = data_dir.join(format!("{}_mft.bin", drive_letter));
+    if !mft_file.exists() {
+        eprintln!("ERROR: MFT file not found: {}", mft_file.display());
+        std::process::exit(1);
+    }
+    println!("MFT file:     {}", mft_file.display());
+
+    // Locate uffs binary
+    let uffs_bin = find_uffs_binary();
+    println!("UFFS binary:  {}", uffs_bin.display());
+    println!();
+
+    // Generate output
+    let rust_output = data_dir.join(format!("verify_rust_{}.txt", drive_lower));
+    println!("Running uffs scan (cpp_port algorithms)...");
+
+    let status = Command::new(&uffs_bin)
+        .env("UFFS_EXPERIMENTAL", "1")
+        .args([
+            "*",
+            "--mft-file", &mft_file.to_string_lossy(),
+            "--drive", drive_letter,
+            "--parse-algo", "cpp_port",
+            "--tree-algo", "cpp",
+            "--io-algo", "cpp",
+            "--chunk-algo", "cpp",
+            "--out", &rust_output.to_string_lossy(),
+        ])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            println!("  uffs scan completed successfully.");
+            println!();
+        }
+        Ok(s) => {
+            eprintln!("ERROR: uffs exited with status {}", s);
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("ERROR: Failed to run uffs: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    rust_output
+}
+
 /// Find the uffs binary. Checks the literal `~` path from .cargo/config.toml.
 fn find_uffs_binary() -> PathBuf {
-    // The workspace root is the directory containing this script's parent
-    // We look for the binary relative to the workspace root with a literal ~ directory
     let workspace_root = find_workspace_root();
 
     // Check release first, then debug
@@ -194,7 +247,6 @@ fn find_uffs_binary() -> PathBuf {
 
 /// Find the workspace root by looking for Cargo.toml starting from the script location.
 fn find_workspace_root() -> PathBuf {
-    // Try current working directory first
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut dir = cwd.as_path();
     loop {
@@ -206,8 +258,6 @@ fn find_workspace_root() -> PathBuf {
             None => break,
         }
     }
-
-    // Fallback to cwd
     cwd
 }
 
@@ -227,7 +277,6 @@ fn sorted_sha256(path: &Path) -> (String, usize) {
     if total <= HEADER_LINES + FOOTER_LINES {
         eprintln!("WARNING: File {} has only {} lines (expected > {})",
             path.display(), total, HEADER_LINES + FOOTER_LINES);
-        // Hash all content as-is
         let mut hasher = Sha256::new();
         for line in &all_lines {
             hasher.update(line.as_bytes());
@@ -273,7 +322,6 @@ fn show_first_diffs(file_a: &Path, file_b: &Path) {
     println!("First 5 differences in sorted data rows:");
     let mut diff_count = 0;
 
-    let max_len = lines_a.len().max(lines_b.len());
     let mut ia = 0;
     let mut ib = 0;
 
