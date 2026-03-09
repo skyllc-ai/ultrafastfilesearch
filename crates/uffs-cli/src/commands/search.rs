@@ -1,0 +1,978 @@
+//! Search command implementation.
+
+#[cfg(windows)]
+use std::fs::File;
+#[cfg(windows)]
+use std::io::{BufWriter, Write};
+use std::path::PathBuf;
+#[cfg(windows)]
+use std::sync::Arc;
+
+use anyhow::{Context, Result, bail};
+#[cfg(windows)]
+use indicatif::ProgressBar;
+use tracing::info;
+use uffs_core::QueryMode;
+use uffs_core::output::OutputConfig;
+use uffs_core::pattern::ParsedPattern;
+use uffs_core::tree::add_tree_columns;
+
+#[cfg(windows)]
+use super::output::StreamingWriter;
+use super::output::write_results;
+#[cfg(windows)]
+use super::raw_io::{
+    OwnedQueryFilters, load_and_filter_data_index, load_and_filter_data_index_multi,
+};
+use super::raw_io::{QueryFilters, load_and_filter_data, load_and_filter_from_mft_file};
+#[cfg(windows)]
+use super::{add_drive_progress, create_multi_progress};
+
+/// Determine if we should use the fast `MftIndex` query path.
+///
+/// Returns `true` if:
+/// - `QueryMode::ForceIndex` is set, OR
+/// - `QueryMode::Auto` is set and query can use the fast path
+///
+/// Returns `false` if:
+/// - `QueryMode::ForceDataFrame` is set, OR
+/// - Query requires features only available in `DataFrame` path
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted for clarity and testability"
+)]
+fn should_use_index_path(
+    mode: QueryMode,
+    parquet_index: Option<&PathBuf>,
+    multi_drives: Option<&Vec<char>>,
+) -> bool {
+    match mode {
+        QueryMode::ForceIndex => {
+            if parquet_index.is_some() {
+                info!("⚠️ --query-mode=index ignored: using parquet index file");
+                return false;
+            }
+            if multi_drives.is_some() {
+                info!("⚠️ --query-mode=index: multi-drive not yet supported, using single drive");
+            }
+            true
+        }
+        QueryMode::ForceDataFrame => false,
+        QueryMode::Auto => {
+            if parquet_index.is_some() {
+                return false;
+            }
+            true
+        }
+    }
+}
+
+/// Search for files matching a pattern.
+///
+/// Supports:
+/// - Drive prefix in pattern: `c:/pro*` extracts drive C
+/// - REGEX patterns: `>C:\Temp.*` (starts with `>`)
+/// - Glob patterns: `*.txt`, `**/*.rs`
+/// - Literal search: `readme` (no wildcards)
+/// - Multi-drive search: `--drives C,D,E`
+/// - Extension filtering: `--ext pictures,mp4,pdf`
+/// - Output customization: `--out`, `--columns`, `--sep`, `--quotes`,
+///   `--header`, `--pos`, `--neg`
+#[expect(
+    clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools,
+    reason = "CLI entry point passes through all parsed args"
+)]
+#[expect(
+    clippy::print_stderr,
+    reason = "intentional user-facing output to stderr"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "top-level search orchestrator — splitting further would obscure control flow"
+)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "public CLI entry point called from main dispatch"
+)]
+pub async fn search(
+    pattern: &str,
+    single_drive: Option<char>,
+    multi_drives: Option<Vec<char>>,
+    index: Option<PathBuf>,
+    mft_file: Option<PathBuf>,
+    files_only: bool,
+    dirs_only: bool,
+    hide_system: bool,
+    profile: bool,
+    debug_tree: bool,
+    benchmark: bool,
+    no_bitmap: bool,
+    no_cache: bool,
+    min_size: Option<u64>,
+    max_size: Option<u64>,
+    limit: u32,
+    format: &str,
+    case_sensitive: bool,
+    ext_filter: Option<&str>,
+    out: &str,
+    columns: &str,
+    sep: &str,
+    quotes: &str,
+    header: bool,
+    pos: &str,
+    neg: &str,
+    query_mode: &str,
+    tz_offset: Option<i32>,
+) -> Result<()> {
+    let start_time = std::time::Instant::now();
+
+    let parsed = ParsedPattern::parse(pattern)
+        .with_context(|| format!("Invalid pattern: {pattern}"))?
+        .with_case_sensitive(case_sensitive);
+
+    let filters = QueryFilters {
+        parsed: &parsed,
+        ext_filter,
+        files_only,
+        dirs_only,
+        hide_system,
+        min_size,
+        max_size,
+        limit,
+    };
+
+    let mode = QueryMode::from_str_opt(query_mode).unwrap_or_else(|| {
+        info!(query_mode, "Unknown query mode, defaulting to auto");
+        QueryMode::Auto
+    });
+    info!(?mode, "Query execution mode");
+
+    let mut output_config = OutputConfig::new()
+        .with_columns(columns)
+        .with_separator(sep)
+        .with_quote(quotes)
+        .with_header(header)
+        .with_pos(pos)
+        .with_neg(neg);
+    if let Some(hours) = tz_offset {
+        output_config = output_config.with_tz_offset_hours(hours);
+        info!(hours, "Timezone offset overridden via --tz-offset");
+    }
+
+    let needs_paths = !benchmark && output_config.needs_path_column();
+    let use_index_path = should_use_index_path(mode, index.as_ref(), multi_drives.as_ref());
+
+    #[cfg(windows)]
+    let drives_to_search: Vec<char> = if let Some(ref drives) = multi_drives {
+        drives.clone()
+    } else if let Some(drive) = single_drive.or_else(|| filters.parsed.drive()) {
+        vec![drive]
+    } else {
+        uffs_mft::detect_ntfs_drives()
+    };
+
+    let output_targets: Vec<char> = single_drive
+        .map(|drive| vec![drive])
+        .or_else(|| multi_drives.clone())
+        .or_else(|| filters.parsed.drive().map(|drive| vec![drive]))
+        .unwrap_or_default();
+
+    let mut results = if let Some(mft_path) = mft_file.as_ref() {
+        info!(path = %mft_path.display(), "📂 Loading from raw MFT file");
+        load_and_filter_from_mft_file(
+            mft_path,
+            single_drive,
+            &filters,
+            needs_paths,
+            profile,
+            debug_tree,
+        )?
+    } else if use_index_path {
+        info!("🚀 Using fast cached MftIndex query path");
+        #[cfg(windows)]
+        {
+            if drives_to_search.is_empty() {
+                bail!("No NTFS drives found on this system");
+            }
+
+            if drives_to_search.len() == 1 {
+                load_and_filter_data_index(
+                    Some(drives_to_search[0]),
+                    &filters,
+                    needs_paths,
+                    profile,
+                    no_cache,
+                )
+                .await?
+            } else {
+                load_and_filter_data_index_multi(
+                    &drives_to_search,
+                    &filters,
+                    needs_paths,
+                    profile,
+                    no_cache,
+                )
+                .await?
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            _ = no_cache;
+            bail!("Index query mode is only available on Windows");
+        }
+    } else {
+        info!("📊 Using DataFrame query path");
+        #[cfg(windows)]
+        if !benchmark {
+            let needs_streaming = index.is_none()
+                && (multi_drives.is_some()
+                    || (single_drive.is_none() && filters.parsed.drive().is_none()));
+
+            if needs_streaming {
+                let result = search_streaming(
+                    multi_drives.clone(),
+                    single_drive,
+                    &filters,
+                    format,
+                    out,
+                    &output_config,
+                    no_bitmap,
+                )
+                .await;
+                return result;
+            }
+        }
+
+        load_and_filter_data(
+            index,
+            multi_drives,
+            single_drive,
+            &filters,
+            needs_paths,
+            profile,
+            no_bitmap,
+        )
+        .await?
+    };
+
+    let t_tree = std::time::Instant::now();
+    if !benchmark && output_config.needs_tree_columns() {
+        let tree_cols = output_config.get_tree_columns();
+        let missing_cols: Vec<_> = tree_cols
+            .iter()
+            .filter(|col| results.column(col.column_name()).is_err())
+            .copied()
+            .collect();
+
+        if !missing_cols.is_empty() {
+            info!(columns = missing_cols.len(), "Computing tree metrics");
+            results = add_tree_columns(&results, &missing_cols)
+                .context("Failed to compute tree columns")?;
+        }
+    }
+    let tree_ms = t_tree.elapsed().as_millis();
+
+    let t_output = std::time::Instant::now();
+    if !benchmark {
+        write_results(&results, format, out, &output_config, &output_targets)?;
+    }
+    let output_ms = t_output.elapsed().as_millis();
+
+    let elapsed = start_time.elapsed();
+
+    if benchmark {
+        let row_count = results.height();
+        let total_ms = elapsed.as_millis();
+        let secs = elapsed.as_secs_f64();
+        eprintln!("=== BENCHMARK MODE (no output) ===");
+        eprintln!("  Records found:   {row_count:>10}");
+        eprintln!("  Total time:      {total_ms:>10} ms ({secs:.2} s)");
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "row_count as f64 is fine for display-only throughput"
+        )]
+        #[expect(
+            clippy::float_arithmetic,
+            reason = "throughput calculation for human-readable benchmark output"
+        )]
+        let throughput = row_count as f64 / secs;
+        eprintln!("  Throughput:      {throughput:>10.0} records/sec");
+    } else if profile {
+        let row_count = results.height();
+        let total_ms = elapsed.as_millis();
+        eprintln!("=== PROFILE: Output ===");
+        eprintln!("  Tree columns:    {tree_ms:>6} ms");
+        eprintln!("  Output/write:    {output_ms:>6} ms  ({row_count} rows)");
+        eprintln!("=== TOTAL: {total_ms} ms ===");
+    }
+
+    info!(count = results.height(), "Search complete");
+    Ok(())
+}
+
+/// Streaming search for multi-drive queries.
+///
+/// Outputs results as each drive completes, providing immediate feedback.
+/// Uses CSV or NDJSON format for streaming compatibility.
+#[cfg(windows)]
+async fn search_streaming(
+    multi_drives: Option<Vec<char>>,
+    single_drive: Option<char>,
+    filters: &QueryFilters<'_>,
+    format: &str,
+    out: &str,
+    output_config: &OutputConfig,
+    no_bitmap: bool,
+) -> Result<()> {
+    let drives: Vec<char> = if let Some(drives) = multi_drives {
+        drives
+    } else if let Some(drive) = single_drive.or_else(|| filters.parsed.drive()) {
+        vec![drive]
+    } else {
+        if !uffs_mft::is_elevated() {
+            bail!(
+                "Administrator privileges required.\n\n\
+                 UFFS reads the NTFS Master File Table directly, which requires elevated access.\n\n\
+                 Solutions:\n\
+                 1. Run PowerShell/Terminal as Administrator\n\
+                 2. Use a pre-built index: uffs search --index <file.parquet> \"*.txt\""
+            );
+        }
+        let all_drives = uffs_mft::detect_ntfs_drives();
+        if all_drives.is_empty() {
+            bail!("No NTFS drives found on this system");
+        }
+        info!(drives = ?all_drives, count = all_drives.len(), "Searching all NTFS drives");
+        all_drives
+    };
+
+    let is_console = matches!(
+        out.to_lowercase().as_str(),
+        "console" | "con" | "term" | "terminal"
+    );
+
+    if is_console {
+        let stdout = std::io::stdout();
+        search_multi_drive_streaming(&drives, filters, format, stdout, output_config, no_bitmap)
+            .await
+    } else {
+        let file =
+            File::create(out).with_context(|| format!("Failed to create output file: {out}"))?;
+        let writer = BufWriter::new(file);
+        search_multi_drive_streaming(&drives, filters, format, writer, output_config, no_bitmap)
+            .await?;
+        info!(file = out, "Results written to file");
+        Ok(())
+    }
+}
+
+/// Result from a single drive read operation.
+#[cfg(windows)]
+struct DriveResult {
+    /// Drive letter that was read.
+    drive: char,
+    /// Filtered `DataFrame` with matching results (None if no matches or
+    /// error).
+    /// **Note:** Paths are already resolved using the full MFT data.
+    df: Option<uffs_mft::DataFrame>,
+    /// Total records read from the MFT.
+    records_read: usize,
+    /// Number of records matching the filters.
+    matches: usize,
+    /// Error message if the drive read failed.
+    error: Option<String>,
+    /// Whether paths were resolved (for logging).
+    paths_resolved: bool,
+}
+
+/// Search multiple drives in parallel with per-drive filtering.
+///
+/// This approach spawns all drive reads concurrently using tokio tasks,
+/// then collects and merges results as they complete. This maximizes I/O
+/// parallelism across multiple drives.
+///
+/// # Path Resolution
+///
+/// When `needs_paths` is true, builds a FastPathResolver from the FULL MFT data
+/// BEFORE filtering. This ensures parent directories are available for path
+/// resolution, fixing the `<unknown>` path bug.
+///
+/// # Arguments
+///
+/// * `no_bitmap` - If true, disables MFT bitmap optimization (reads all
+///   records).
+#[cfg(windows)]
+pub(super) async fn search_multi_drive_filtered(
+    drives: &[char],
+    filters: &QueryFilters<'_>,
+    needs_paths: bool,
+    no_bitmap: bool,
+) -> Result<uffs_mft::DataFrame> {
+    use tokio::sync::mpsc;
+    use uffs_mft::{IntoLazy, col, lit};
+
+    if drives.is_empty() {
+        bail!("No drives specified for multi-drive search");
+    }
+
+    info!(
+        count = drives.len(),
+        needs_paths = needs_paths,
+        "Searching drives in PARALLEL (blazing fast mode)"
+    );
+
+    let owned_filters = Arc::new(OwnedQueryFilters::from_borrowed(filters));
+    let multi_progress = create_multi_progress();
+
+    let progress_bars: Option<Arc<std::collections::HashMap<char, ProgressBar>>> =
+        multi_progress.as_ref().map(|mp| {
+            let mut pbs = std::collections::HashMap::new();
+            for &drive_char in drives {
+                pbs.insert(drive_char, add_drive_progress(mp, drive_char));
+            }
+            Arc::new(pbs)
+        });
+
+    let (tx, mut rx) = mpsc::channel::<DriveResult>(drives.len());
+
+    for &drive_char in drives {
+        let tx = tx.clone();
+        let filters = Arc::clone(&owned_filters);
+        let pbs = progress_bars.clone();
+        let use_bitmap = !no_bitmap;
+
+        tokio::spawn(async move {
+            let pb = pbs.as_ref().and_then(|p| p.get(&drive_char));
+
+            let full_df =
+                uffs_mft::load_or_build_dataframe_cached(drive_char, uffs_mft::INDEX_TTL_SECONDS)
+                    .await;
+
+            let full_df = match full_df {
+                Ok(df) => df,
+                Err(e) => {
+                    if let Some(p) = pb {
+                        p.finish_with_message(format!("Error: {e}"));
+                    }
+                    let _ = tx
+                        .send(DriveResult {
+                            drive: drive_char,
+                            df: None,
+                            records_read: 0,
+                            matches: 0,
+                            error: Some(e.to_string()),
+                            paths_resolved: false,
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            let _ = use_bitmap;
+
+            let records_read = full_df.height();
+            if let Some(p) = pb {
+                p.finish();
+            }
+
+            let path_resolver = if needs_paths {
+                match uffs_core::FastPathResolver::build(&full_df, drive_char) {
+                    Ok(resolver) => Some(resolver),
+                    Err(e) => {
+                        let _ = tx
+                            .send(DriveResult {
+                                drive: drive_char,
+                                df: None,
+                                records_read,
+                                matches: 0,
+                                error: Some(format!("Failed to build path resolver: {e}")),
+                                paths_resolved: false,
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+
+            let filtered = match filters.execute(full_df) {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = tx
+                        .send(DriveResult {
+                            drive: drive_char,
+                            df: None,
+                            records_read,
+                            matches: 0,
+                            error: Some(e.to_string()),
+                            paths_resolved: false,
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            let matches = filtered.height();
+
+            let with_paths = if let Some(resolver) = &path_resolver {
+                match resolver.add_path_column_with_dir_suffix(&filtered) {
+                    Ok(df) => match uffs_core::add_path_only_column(&df) {
+                        Ok(df_with_path_only) => {
+                            match uffs_core::apply_directory_treesize(&df_with_path_only) {
+                                Ok(df_with_treesize) => df_with_treesize,
+                                Err(e) => {
+                                    let _ = tx
+                                        .send(DriveResult {
+                                            drive: drive_char,
+                                            df: None,
+                                            records_read,
+                                            matches,
+                                            error: Some(format!("Failed to apply treesize: {e}")),
+                                            paths_resolved: false,
+                                        })
+                                        .await;
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx
+                                .send(DriveResult {
+                                    drive: drive_char,
+                                    df: None,
+                                    records_read,
+                                    matches,
+                                    error: Some(format!("Failed to add path_only: {e}")),
+                                    paths_resolved: false,
+                                })
+                                .await;
+                            return;
+                        }
+                    },
+                    Err(e) => {
+                        let _ = tx
+                            .send(DriveResult {
+                                drive: drive_char,
+                                df: None,
+                                records_read,
+                                matches,
+                                error: Some(format!("Failed to add paths: {e}")),
+                                paths_resolved: false,
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            } else {
+                match uffs_core::apply_directory_treesize(&filtered) {
+                    Ok(df) => df,
+                    Err(e) => {
+                        let _ = tx
+                            .send(DriveResult {
+                                drive: drive_char,
+                                df: None,
+                                records_read,
+                                matches,
+                                error: Some(format!("Failed to apply treesize: {e}")),
+                                paths_resolved: false,
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            };
+
+            let df_with_drive = if matches > 0 {
+                match with_paths
+                    .lazy()
+                    .with_column(lit(format!("{drive_char}:")).alias("drive"))
+                    .collect()
+                {
+                    Ok(df) => Some(df),
+                    Err(e) => {
+                        let _ = tx
+                            .send(DriveResult {
+                                drive: drive_char,
+                                df: None,
+                                records_read,
+                                matches,
+                                error: Some(e.to_string()),
+                                paths_resolved: path_resolver.is_some(),
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+
+            let _ = tx
+                .send(DriveResult {
+                    drive: drive_char,
+                    df: df_with_drive,
+                    records_read,
+                    matches,
+                    error: None,
+                    paths_resolved: path_resolver.is_some(),
+                })
+                .await;
+        });
+    }
+
+    drop(tx);
+
+    let mut filtered_results: Vec<uffs_mft::DataFrame> = Vec::new();
+    let mut total_matches = 0usize;
+    let mut drives_processed = 0usize;
+
+    while let Some(result) = rx.recv().await {
+        drives_processed += 1;
+
+        if let Some(error) = result.error {
+            info!(drive = %result.drive, error = %error, "Drive failed");
+            continue;
+        }
+
+        total_matches += result.matches;
+
+        info!(
+            drive = %result.drive,
+            records = result.records_read,
+            matches = result.matches,
+            paths_resolved = result.paths_resolved,
+            progress = format!("{}/{}", drives_processed, drives.len()),
+            "Drive completed"
+        );
+
+        if let Some(df) = result.df {
+            filtered_results.push(df);
+        }
+    }
+
+    if filtered_results.is_empty() {
+        bail!("No matching files found across {} drives", drives.len());
+    }
+
+    let mut merged = filtered_results.remove(0);
+    for df in filtered_results {
+        merged = merged.vstack(&df).context("Failed to merge results")?;
+    }
+
+    let column_names: Vec<String> = merged
+        .get_column_names()
+        .into_iter()
+        .filter(|c| c.as_str() != "drive")
+        .map(|c| c.to_string())
+        .collect();
+    let columns: Vec<_> = std::iter::once("drive".to_string())
+        .chain(column_names)
+        .map(|s| col(&s))
+        .collect();
+
+    let mut lazy_result = merged.lazy().select(columns);
+
+    if filters.limit > 0 {
+        lazy_result = lazy_result.limit(filters.limit);
+    }
+
+    let result = lazy_result.collect().context("Failed to reorder columns")?;
+
+    info!(
+        total_matches = total_matches,
+        drives = drives.len(),
+        "Parallel multi-drive search complete"
+    );
+
+    Ok(result)
+}
+
+/// Stub for non-Windows platforms.
+#[cfg(not(windows))]
+#[expect(
+    clippy::unused_async,
+    reason = "must match async signature of Windows implementation"
+)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "platform stub — matches Windows counterpart"
+)]
+pub(super) async fn search_multi_drive_filtered(
+    _drives: &[char],
+    _filters: &QueryFilters<'_>,
+    _needs_paths: bool,
+    _no_bitmap: bool,
+) -> Result<uffs_mft::DataFrame> {
+    bail!("Multi-drive search is only supported on Windows")
+}
+
+/// Search multiple drives in parallel with streaming output.
+///
+/// Outputs results as each drive completes, providing immediate feedback.
+/// No progress bars - the streaming output IS the progress indicator.
+#[cfg(windows)]
+async fn search_multi_drive_streaming<W: Write + Send + 'static>(
+    drives: &[char],
+    filters: &QueryFilters<'_>,
+    format: &str,
+    writer: W,
+    output_config: &OutputConfig,
+    no_bitmap: bool,
+) -> Result<()> {
+    use tokio::sync::mpsc;
+    use uffs_mft::{IntoLazy, col, lit};
+
+    if drives.is_empty() {
+        bail!("No drives specified for multi-drive search");
+    }
+
+    info!(
+        count = drives.len(),
+        "Streaming search across drives (results appear as each drive completes)"
+    );
+
+    let owned_filters = Arc::new(OwnedQueryFilters::from_borrowed(filters));
+    let streaming_writer = Arc::new(StreamingWriter::new(
+        writer,
+        format,
+        filters.limit,
+        output_config.clone(),
+    ));
+
+    let (tx, mut rx) = mpsc::channel::<DriveResult>(drives.len());
+
+    for &drive_char in drives {
+        let tx = tx.clone();
+        let filters = Arc::clone(&owned_filters);
+        let use_bitmap = !no_bitmap;
+
+        tokio::spawn(async move {
+            let df =
+                uffs_mft::load_or_build_dataframe_cached(drive_char, uffs_mft::INDEX_TTL_SECONDS)
+                    .await;
+
+            let df = match df {
+                Ok(df) => df,
+                Err(e) => {
+                    let _ = tx
+                        .send(DriveResult {
+                            drive: drive_char,
+                            df: None,
+                            records_read: 0,
+                            matches: 0,
+                            error: Some(e.to_string()),
+                            paths_resolved: false,
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            let _ = use_bitmap;
+
+            let records_read = df.height();
+
+            let path_resolver = match uffs_core::FastPathResolver::build(&df, drive_char) {
+                Ok(resolver) => Some(resolver),
+                Err(e) => {
+                    let _ = tx
+                        .send(DriveResult {
+                            drive: drive_char,
+                            df: None,
+                            records_read,
+                            matches: 0,
+                            error: Some(format!("Failed to build path resolver: {e}")),
+                            paths_resolved: false,
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            let filtered = match filters.execute(df) {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = tx
+                        .send(DriveResult {
+                            drive: drive_char,
+                            df: None,
+                            records_read,
+                            matches: 0,
+                            error: Some(e.to_string()),
+                            paths_resolved: false,
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            let matches = filtered.height();
+
+            let with_paths = if let Some(resolver) = &path_resolver {
+                match resolver.add_path_column_with_dir_suffix(&filtered) {
+                    Ok(df) => match uffs_core::add_path_only_column(&df) {
+                        Ok(df_with_path_only) => {
+                            match uffs_core::apply_directory_treesize(&df_with_path_only) {
+                                Ok(df_with_treesize) => df_with_treesize,
+                                Err(e) => {
+                                    let _ = tx
+                                        .send(DriveResult {
+                                            drive: drive_char,
+                                            df: None,
+                                            records_read,
+                                            matches,
+                                            error: Some(format!("Failed to apply treesize: {e}")),
+                                            paths_resolved: false,
+                                        })
+                                        .await;
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx
+                                .send(DriveResult {
+                                    drive: drive_char,
+                                    df: None,
+                                    records_read,
+                                    matches,
+                                    error: Some(format!("Failed to add path_only: {e}")),
+                                    paths_resolved: false,
+                                })
+                                .await;
+                            return;
+                        }
+                    },
+                    Err(e) => {
+                        let _ = tx
+                            .send(DriveResult {
+                                drive: drive_char,
+                                df: None,
+                                records_read,
+                                matches,
+                                error: Some(format!("Failed to add paths: {e}")),
+                                paths_resolved: false,
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            } else {
+                match uffs_core::apply_directory_treesize(&filtered) {
+                    Ok(df) => df,
+                    Err(e) => {
+                        let _ = tx
+                            .send(DriveResult {
+                                drive: drive_char,
+                                df: None,
+                                records_read,
+                                matches,
+                                error: Some(format!("Failed to apply treesize: {e}")),
+                                paths_resolved: false,
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            };
+
+            let df_with_drive = if matches > 0 {
+                match with_paths
+                    .lazy()
+                    .with_column(lit(format!("{drive_char}:")).alias("drive"))
+                    .collect()
+                {
+                    Ok(df) => Some(df),
+                    Err(e) => {
+                        let _ = tx
+                            .send(DriveResult {
+                                drive: drive_char,
+                                df: None,
+                                records_read,
+                                matches,
+                                error: Some(e.to_string()),
+                                paths_resolved: false,
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+
+            let _ = tx
+                .send(DriveResult {
+                    drive: drive_char,
+                    df: df_with_drive,
+                    records_read,
+                    matches,
+                    error: None,
+                    paths_resolved: path_resolver.is_some(),
+                })
+                .await;
+        });
+    }
+
+    drop(tx);
+
+    let mut total_matches = 0usize;
+    let mut drives_processed = 0usize;
+
+    while let Some(result) = rx.recv().await {
+        drives_processed += 1;
+
+        if let Some(error) = result.error {
+            eprintln!("[{}:] Error: {}", result.drive, error);
+            continue;
+        }
+
+        total_matches += result.matches;
+
+        if let Some(ref df) = result.df {
+            let column_names: Vec<String> = df
+                .get_column_names()
+                .into_iter()
+                .filter(|c| c.as_str() != "drive")
+                .map(|c| c.to_string())
+                .collect();
+            let columns: Vec<_> = std::iter::once("drive".to_string())
+                .chain(column_names)
+                .map(|s| col(&s))
+                .collect();
+
+            if let Ok(reordered) = df.clone().lazy().select(columns).collect() {
+                if let Err(e) = streaming_writer.write_batch(&reordered) {
+                    eprintln!("[{}:] Write error: {}", result.drive, e);
+                }
+            }
+        }
+
+        if streaming_writer.limit_reached() {
+            info!(
+                limit = filters.limit,
+                "Output limit reached, stopping early"
+            );
+            break;
+        }
+
+        info!(
+            drive = %result.drive,
+            records = result.records_read,
+            matches = result.matches,
+            progress = format!("{}/{}", drives_processed, drives.len()),
+            "Drive completed"
+        );
+    }
+
+    info!(
+        total_matches = total_matches,
+        rows_output = streaming_writer.total_rows(),
+        drives = drives.len(),
+        "Streaming search complete"
+    );
+
+    Ok(())
+}
