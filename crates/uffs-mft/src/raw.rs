@@ -218,7 +218,10 @@ impl RawMftData {
     ///
     /// `None` if FRS is out of range.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "record_size and FRS fit in usize on 64-bit"
+    )]
     pub fn get_record(&self, frs: u64) -> Option<&[u8]> {
         let record_size = self.header.record_size as usize;
         let offset = frs as usize * record_size;
@@ -226,7 +229,10 @@ impl RawMftData {
     }
 
     /// Returns an iterator over all records.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "record_size fits in usize; index fits in u64"
+    )]
     pub fn iter_records(&self) -> impl Iterator<Item = (u64, &[u8])> {
         let record_size = self.header.record_size as usize;
         self.data
@@ -251,7 +257,10 @@ impl RawMftData {
 /// # Errors
 ///
 /// Returns an error if writing fails.
-#[allow(clippy::shadow_reuse)]
+#[expect(
+    clippy::shadow_reuse,
+    reason = "path rebinding from P to &Path is idiomatic"
+)]
 pub fn save_raw_mft<P: AsRef<Path>>(
     path: P,
     data: &[u8],
@@ -259,19 +268,25 @@ pub fn save_raw_mft<P: AsRef<Path>>(
     options: &SaveRawOptions,
 ) -> Result<RawMftHeader> {
     let path = path.as_ref();
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "MFT data length fits in u64"
+    )]
     let original_size = data.len() as u64;
     let record_count = original_size / u64::from(record_size);
 
     // Prepare data (compress if requested)
-    #[allow(unused_mut)]
+    #[expect(unused_mut, reason = "mutated only when zstd feature is enabled")]
     let mut flags = 0_u32;
-    #[allow(unused_mut)]
+    #[expect(unused_mut, reason = "mutated only when zstd feature is enabled")]
     let mut compressed_size = 0_u64;
 
     #[cfg(feature = "zstd")]
     let write_data: Vec<u8> = if options.compress {
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "compressed size fits in u64"
+        )]
         let compressed = zstd::encode_all(data, options.compression_level)
             .map_err(|err| MftError::Io(std::io::Error::other(err)))?;
         flags |= FLAG_COMPRESSED;
@@ -317,7 +332,10 @@ pub fn save_raw_mft<P: AsRef<Path>>(
 ///
 /// NTFS MFT records have `bytes_allocated` at offset 28-32 which tells us the
 /// record size. Standard is 1024 bytes, but some systems use 4096.
-#[allow(clippy::single_call_fn)] // Separate function for clarity and testability
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted for clarity and testability"
+)]
 fn detect_record_size_from_first_record(data: &[u8]) -> u32 {
     // bytes_allocated is at offset 28 in FileRecordSegmentHeader
     // Use get() with try_into to avoid indexing panics
@@ -347,7 +365,10 @@ fn detect_record_size_from_first_record(data: &[u8]) -> u32 {
 /// # Errors
 ///
 /// Returns an error if reading fails or file format is invalid.
-#[allow(clippy::shadow_reuse)]
+#[expect(
+    clippy::shadow_reuse,
+    reason = "path rebinding from P to &Path is idiomatic"
+)]
 pub fn load_raw_mft<P: AsRef<Path>>(path: P, options: &LoadRawOptions) -> Result<RawMftData> {
     use std::io::{Seek, SeekFrom};
 
@@ -513,7 +534,7 @@ pub struct StreamingRawMftWriter {
     /// Whether compression is enabled.
     compress: bool,
     /// Compression level (if compressing).
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "used only when zstd feature is enabled")]
     compression_level: i32,
     /// Volume letter (e.g., 'C', 'D').
     volume_letter: char,
@@ -781,7 +802,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::indexing_slicing)]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "test code with known valid indices"
+    )]
     fn test_save_load_uncompressed() -> TestResult {
         let temp_dir = std::env::temp_dir();
         let path = temp_dir.join("test_mft_uncompressed.raw");
@@ -843,7 +867,10 @@ mod tests {
         }
 
         // Save compressed
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "test constant 1024 fits in u32"
+        )]
         let record_size_u32 = record_size as u32;
         let options = SaveRawOptions::default(); // compress: true
         let header = save_raw_mft(&path, &data, record_size_u32, &options)?;
@@ -891,7 +918,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::indexing_slicing)]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "test code with known valid indices"
+    )]
     fn test_iter_records() {
         let header = RawMftHeader {
             version: VERSION,
@@ -942,7 +972,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::indexing_slicing)]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "test code with known valid indices"
+    )]
     fn test_raw_compat_mode() -> TestResult {
         let temp_dir = std::env::temp_dir();
         let path = temp_dir.join("test_mft_raw_compat.raw");
@@ -985,7 +1018,14 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::indexing_slicing, clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "test code with known valid indices"
+    )]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "test constants fit in target types"
+    )]
     fn test_load_raw_ntfs_format() -> TestResult {
         let temp_dir = std::env::temp_dir();
         let path = temp_dir.join("test_mft_raw_ntfs.raw");

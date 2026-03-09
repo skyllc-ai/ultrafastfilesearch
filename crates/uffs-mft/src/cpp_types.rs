@@ -35,7 +35,10 @@
 // Allow direct indexing in this C++ port module. Bounds are checked at higher
 // levels (buffer size validation, resize operations, sentinel checks).
 // This matches C++ behavior and is required for performance parity.
-#![allow(clippy::indexing_slicing)]
+#![expect(
+    clippy::indexing_slicing,
+    reason = "C++ port: bounds checked at entry points, not on every access"
+)]
 
 extern crate alloc;
 
@@ -65,7 +68,10 @@ use core::ops::{Add, AddAssign, Sub, SubAssign};
 /// Panics in debug builds if `value > u32::MAX`.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_possible_truncation)] // Intentional: C++ port uses u32 indices
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "C++ port uses u32 indices; debug_assert guards overflow"
+)]
 pub fn usize_to_u32(value: usize) -> u32 {
     debug_assert!(
         u32::try_from(value).is_ok(),
@@ -83,7 +89,10 @@ pub fn usize_to_u32(value: usize) -> u32 {
 /// Panics in debug builds if `value > u16::MAX`.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_possible_truncation)] // Intentional: MFT records are max 4KB
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "MFT records are max 4KB; debug_assert guards overflow"
+)]
 pub fn usize_to_u16(value: usize) -> u16 {
     debug_assert!(
         u16::try_from(value).is_ok(),
@@ -102,7 +111,10 @@ pub fn usize_to_u16(value: usize) -> u16 {
 /// Panics in debug builds if `value > u32::MAX`.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_possible_truncation)] // Intentional: C++ port uses u32 indices
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "C++ port uses u32 indices; debug_assert guards overflow"
+)]
 pub fn u64_to_u32(value: u64) -> u32 {
     debug_assert!(
         u32::try_from(value).is_ok(),
@@ -118,7 +130,10 @@ pub fn u64_to_u32(value: u64) -> u32 {
 /// Panics in debug builds if `value > usize::MAX`.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_possible_truncation)] // Intentional: 32-bit support
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "supports 32-bit targets; debug_assert guards overflow"
+)]
 pub fn u64_to_usize(value: u64) -> usize {
     debug_assert!(
         usize::try_from(value).is_ok(),
@@ -133,7 +148,10 @@ pub fn u64_to_usize(value: u64) -> usize {
 /// Negative values are treated as 0.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_sign_loss)] // Intentional: we check for negative first
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "negative values are handled by returning 0"
+)]
 pub const fn i64_to_u64_filetime(value: i64) -> u64 {
     if value < 0 { 0 } else { value as u64 }
 }
@@ -144,7 +162,7 @@ pub const fn i64_to_u64_filetime(value: i64) -> u64 {
 /// Values exceeding `i64::MAX` are clamped.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_possible_wrap)] // Intentional: we check bounds first
+#[expect(clippy::cast_possible_wrap, reason = "values > i64::MAX are clamped")]
 pub const fn u64_to_i64_filetime(value: u64) -> i64 {
     if value > i64::MAX as u64 {
         i64::MAX
@@ -1236,7 +1254,10 @@ impl CppMftIndex {
     /// # Arguments
     /// * `volume` - Volume letter (e.g., 'C')
     #[must_use]
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "C++ parity conversion requires sequential field mapping"
+    )]
     pub fn into_mft_index(self, volume: char) -> crate::index::MftIndex {
         use crate::index::{
             ChildInfo as RustChildInfo, FileRecord, InternalStreamInfo, MftIndex,
@@ -1429,7 +1450,10 @@ impl CppMftIndex {
 
     /// Convert C++ `StandardInfo` attributes to Rust flags.
     // Separate function for code organization matching C++ structure
-    #[allow(clippy::single_call_fn)]
+    #[expect(
+        clippy::single_call_fn,
+        reason = "extracted for code organization matching C++ structure"
+    )]
     #[inline]
     const fn convert_cpp_attributes_to_rust_flags(stdinfo: &StandardInfo) -> u32 {
         // Use inline constants to avoid `use` statement in const fn
@@ -1614,7 +1638,10 @@ impl CppMftIndex {
 
             // Convert UTF-16LE to String
             // Note: chunks_exact(2) guarantees each chunk has exactly 2 elements
-            #[allow(clippy::missing_asserts_for_indexing)]
+            #[expect(
+                clippy::missing_asserts_for_indexing,
+                reason = "chunks_exact(2) guarantees chunk.len() == 2"
+            )]
             let u16_chars: Vec<u16> = bytes
                 .chunks_exact(2)
                 .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
@@ -1695,7 +1722,10 @@ const FRH_DIRECTORY: u16 = 0x0002;
 const FILE_NAME_WIN32: u8 = 0x01;
 /// NTFS `FILE_NAME` namespace: DOS-only (8.3 short name, not visible
 /// standalone).
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "defined for completeness of NTFS namespace constants"
+)]
 const FILE_NAME_DOS: u8 = 0x02;
 /// NTFS `FILE_NAME` namespace: Win32+DOS combined (visible in Explorer).
 #[allow(dead_code)]
@@ -1857,7 +1887,10 @@ impl CppParsePipeline {
             // In this context, we want to propagate the panic rather than handle it
             // gracefully. Merge lock acquisition with its single usage to avoid
             // holding the lock longer than necessary.
-            #[allow(clippy::unwrap_used)]
+            #[expect(
+                clippy::unwrap_used,
+                reason = "mutex poisoning propagates thread panic"
+            )]
             self.index.lock().unwrap().get_or_create(max_frs - 1);
         }
 
@@ -1865,7 +1898,10 @@ impl CppParsePipeline {
         // Note: Mutex poisoning only occurs if a thread panics while holding the lock.
         // In this context, we want to propagate the panic rather than handle it
         // gracefully.
-        #[allow(clippy::unwrap_used)]
+        #[expect(
+            clippy::unwrap_used,
+            reason = "mutex poisoning propagates thread panic"
+        )]
         let mut index = self.index.lock().unwrap();
         self.load(&mut index, buffer, virtual_offset);
     }
@@ -1959,7 +1995,10 @@ impl CppParsePipeline {
 
     /// Get the base FRS from a record (handles extension records).
     // Separate function for code organization matching C++ structure
-    #[allow(clippy::single_call_fn)]
+    #[expect(
+        clippy::single_call_fn,
+        reason = "extracted for code organization matching C++ structure"
+    )]
     #[inline]
     fn get_base_frs(record_data: &[u8], frs: u32) -> u32 {
         // BaseFileRecordSegment is at offset 32 in FILE_RECORD_SEGMENT_HEADER
@@ -1994,7 +2033,10 @@ impl CppParsePipeline {
     /// - Parse stream attributes
     ///
     /// This function is called with the mutex held (serialized parsing).
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "C++ parity: sequential attribute parsing loop"
+    )]
     fn load(&self, index: &mut CppMftIndex, buffer: &[u8], virtual_offset: u64) {
         use core::sync::atomic::Ordering;
 
@@ -2077,9 +2119,16 @@ impl CppParsePipeline {
     ///
     /// Returns `true` if the record was in-use and parsed, `false` otherwise.
     // Separate function for code organization matching C++ structure
-    #[allow(clippy::single_call_fn)]
+    #[expect(
+        clippy::single_call_fn,
+        reason = "extracted for code organization matching C++ structure"
+    )]
     #[inline]
-    #[allow(clippy::too_many_lines, unsafe_code)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "C++ parity: sequential attribute dispatch"
+    )]
+    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
     fn parse_record(index: &mut CppMftIndex, data: &[u8], frs: u32) -> bool {
         use core::mem::size_of;
 
@@ -2183,9 +2232,12 @@ impl CppParsePipeline {
 
     /// Parse `$STANDARD_INFORMATION` attribute.
     // Separate function for code organization matching C++ structure
-    #[allow(clippy::single_call_fn)]
+    #[expect(
+        clippy::single_call_fn,
+        reason = "extracted for code organization matching C++ structure"
+    )]
     #[inline]
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
     fn parse_standard_info(index: &mut CppMftIndex, attr_data: &[u8], frs_base: u32, flags: u16) {
         use core::mem::size_of;
 
@@ -2232,9 +2284,12 @@ impl CppParsePipeline {
 
     /// Parse `$FILE_NAME` attribute.
     // Separate function for code organization matching C++ structure
-    #[allow(clippy::single_call_fn)]
+    #[expect(
+        clippy::single_call_fn,
+        reason = "extracted for code organization matching C++ structure"
+    )]
     #[inline]
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
     fn parse_file_name(index: &mut CppMftIndex, attr_data: &[u8], frs_base: u32) {
         use core::mem::size_of;
 
@@ -2344,6 +2399,96 @@ impl CppParsePipeline {
         index.records_data[record_idx].name_count += 1;
     }
 
+    /// Check if a record already has a name with the given (parent, name) pair.
+    ///
+    /// Fix 4: Used to deduplicate names when both Win32 (0x01) and Win32+DOS
+    /// (0x03) namespaces carry the same name string.
+    #[expect(clippy::single_call_fn, reason = "helper function for readability")]
+    fn record_has_name(
+        index: &CppMftIndex,
+        record_idx: usize,
+        parent_frs: u32,
+        name_data: &[u8],
+        is_ascii: bool,
+    ) -> bool {
+        let record = &index.records_data[record_idx];
+        if record.name_count == 0 {
+            return false;
+        }
+
+        // Check first_name
+        if record.first_name.parent == parent_frs
+            && Self::name_matches(index, record.first_name.name, name_data, is_ascii)
+        {
+            return true;
+        }
+
+        // Check overflow names chain
+        let mut next = record.first_name.next_entry;
+        while next != NO_ENTRY {
+            let ni = &index.nameinfos[next as usize];
+            if ni.parent == parent_frs && Self::name_matches(index, ni.name, name_data, is_ascii) {
+                return true;
+            }
+            next = ni.next_entry;
+        }
+
+        false
+    }
+
+    /// Check if a stored name matches the given name data.
+    #[inline]
+    fn name_matches(
+        index: &CppMftIndex,
+        stored_name: NameInfo,
+        name_data: &[u8],
+        new_is_ascii: bool,
+    ) -> bool {
+        let stored_offset = stored_name.offset() as usize;
+        let stored_len = stored_name.length() as usize;
+        let stored_is_ascii = stored_name.ascii();
+
+        // Both ASCII: compare directly
+        if stored_is_ascii && new_is_ascii {
+            // new name_data is UTF-16LE, extract ASCII bytes
+            let new_ascii: Vec<u8> = name_data.chunks_exact(2).map(|ch| ch[0]).collect();
+            if stored_len != new_ascii.len() {
+                return false;
+            }
+            let stored_bytes = &index.names[stored_offset..stored_offset + stored_len];
+            return stored_bytes == new_ascii.as_slice();
+        }
+
+        // Both UTF-16: compare directly
+        if !stored_is_ascii && !new_is_ascii {
+            let stored_byte_len = stored_len * 2;
+            if stored_byte_len != name_data.len() {
+                return false;
+            }
+            let stored_bytes = &index.names[stored_offset..stored_offset + stored_byte_len];
+            return stored_bytes == name_data;
+        }
+
+        // Mixed: convert to compare
+        // stored is ASCII, new is UTF-16
+        if stored_is_ascii && !new_is_ascii {
+            let new_ascii: Vec<u8> = name_data.chunks_exact(2).map(|ch| ch[0]).collect();
+            // Check if new is actually ASCII-compatible
+            if !is_ascii_utf16(name_data) {
+                return false;
+            }
+            if stored_len != new_ascii.len() {
+                return false;
+            }
+            let stored_bytes = &index.names[stored_offset..stored_offset + stored_len];
+            return stored_bytes == new_ascii.as_slice();
+        }
+
+        // stored is UTF-16, new is ASCII
+        // This shouldn't happen in practice (new is always from raw UTF-16LE)
+        false
+    }
+
     /// Check if a stream is the "default" stream that should be primary.
     ///
     /// For directories: the directory-index stream (`type_name_id=0`,
@@ -2369,8 +2514,11 @@ impl CppParsePipeline {
     }
 
     /// Parse stream attributes (`$DATA`, `$INDEX_ROOT`, etc.).
-    #[allow(unsafe_code)]
-    #[allow(clippy::too_many_lines)]
+    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "C++ parity: sequential stream attribute parsing"
+    )]
     fn parse_stream(
         index: &mut CppMftIndex,
         attr_data: &[u8],
@@ -2588,7 +2736,7 @@ impl CppParsePipeline {
     ///   `info->allocated += IsNonResident ? AllocatedSize : 0`
     ///   `info->bulkiness += info->allocated`
     /// No special cases for $I30 Bitmap or IndexAllocation.
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
     fn update_stream_sizes(
         index: &mut CppMftIndex,
         attr_data: &[u8],
@@ -2667,8 +2815,11 @@ impl CppParsePipeline {
     ///   `info->length += IsNonResident ? DataSize : ValueLength`
     ///   `info->allocated += IsNonResident ? AllocatedSize : 0`
     ///   `info->bulkiness += info->allocated`
-    #[allow(unsafe_code)]
-    #[allow(clippy::single_call_fn)]
+    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
+    #[expect(
+        clippy::single_call_fn,
+        reason = "extracted for consistency with update_stream_sizes"
+    )]
     fn update_overflow_stream_sizes(
         index: &mut CppMftIndex,
         attr_data: &[u8],
@@ -2744,7 +2895,10 @@ impl CppParsePipeline {
     /// Panics if the pipeline still has multiple references or if the mutex was
     /// poisoned.
     #[must_use]
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "Arc::try_unwrap and Mutex::into_inner panics indicate a bug"
+    )]
     pub fn into_index(self) -> CppMftIndex {
         Arc::try_unwrap(self.index)
             .expect("Pipeline still has multiple references")
@@ -2768,13 +2922,26 @@ fn is_ascii_utf16(data: &[u8]) -> bool {
 // ============================================================================
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::unwrap_used,
+    reason = "test code — panicking on failure is acceptable"
+)]
+#[expect(
     clippy::expect_used,
+    reason = "test code — panicking on failure is acceptable"
+)]
+#[expect(
     clippy::indexing_slicing,
+    reason = "test code with known valid indices"
+)]
+#[expect(
     clippy::significant_drop_tightening,
-    clippy::semicolon_outside_block,
-    clippy::let_underscore_untyped
+    reason = "test code — drop order is not critical"
+)]
+#[expect(clippy::semicolon_outside_block, reason = "test code style")]
+#[expect(
+    clippy::let_underscore_untyped,
+    reason = "test code — type inference is sufficient"
 )]
 mod size_tests {
     use core::mem::size_of;
@@ -2932,13 +3099,26 @@ mod size_tests {
 // ============================================================================
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::unwrap_used,
+    reason = "test code — panicking on failure is acceptable"
+)]
+#[expect(
     clippy::expect_used,
+    reason = "test code — panicking on failure is acceptable"
+)]
+#[expect(
     clippy::indexing_slicing,
+    reason = "test code with known valid indices"
+)]
+#[expect(
     clippy::significant_drop_tightening,
-    clippy::semicolon_outside_block,
-    clippy::let_underscore_untyped
+    reason = "test code — drop order is not critical"
+)]
+#[expect(clippy::semicolon_outside_block, reason = "test code style")]
+#[expect(
+    clippy::let_underscore_untyped,
+    reason = "test code — type inference is sufficient"
 )]
 mod usa_fixup_tests {
     use crate::ntfs::apply_usa_fixup;
@@ -3096,17 +3276,36 @@ mod usa_fixup_tests {
 // ============================================================================
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::cast_possible_truncation,
-    clippy::significant_drop_tightening,
-    clippy::semicolon_outside_block,
-    clippy::let_underscore_untyped,
-    clippy::cast_sign_loss,
-    clippy::single_call_fn
+    reason = "test code — panicking on failure is acceptable"
 )]
+#[expect(
+    clippy::expect_used,
+    reason = "test code — panicking on failure is acceptable"
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "test code with known valid indices"
+)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "test constants fit in target types"
+)]
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "test code — drop order is not critical"
+)]
+#[expect(clippy::semicolon_outside_block, reason = "test code style")]
+#[expect(
+    clippy::let_underscore_untyped,
+    reason = "test code — type inference is sufficient"
+)]
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "test code with known non-negative values"
+)]
+#[expect(clippy::single_call_fn, reason = "test helpers extracted for clarity")]
 mod attribute_parsing_tests {
     use super::*;
 
@@ -3397,17 +3596,39 @@ mod attribute_parsing_tests {
 // ============================================================================
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::unwrap_used,
+    reason = "test code — panicking on failure is acceptable"
+)]
+#[expect(
     clippy::expect_used,
+    reason = "test code — panicking on failure is acceptable"
+)]
+#[expect(
     clippy::indexing_slicing,
+    reason = "test code with known valid indices"
+)]
+#[expect(
     clippy::cast_possible_truncation,
+    reason = "test constants fit in target types"
+)]
+#[expect(
     clippy::significant_drop_tightening,
-    clippy::semicolon_outside_block,
+    reason = "test code — drop order is not critical"
+)]
+#[expect(clippy::semicolon_outside_block, reason = "test code style")]
+#[expect(
     clippy::let_underscore_untyped,
+    reason = "test code — type inference is sufficient"
+)]
+#[expect(
     clippy::cast_sign_loss,
-    clippy::single_call_fn,
-    unsafe_code
+    reason = "test code with known non-negative values"
+)]
+#[expect(clippy::single_call_fn, reason = "test helpers extracted for clarity")]
+#[expect(
+    unsafe_code,
+    reason = "test code using ptr::read for packed struct verification"
 )]
 mod stream_parsing_tests {
     use super::*;
@@ -3794,17 +4015,36 @@ mod stream_parsing_tests {
 // ============================================================================
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::cast_possible_truncation,
-    clippy::significant_drop_tightening,
-    clippy::semicolon_outside_block,
-    clippy::let_underscore_untyped,
-    clippy::cast_sign_loss,
-    clippy::single_call_fn
+    reason = "test code — panicking on failure is acceptable"
 )]
+#[expect(
+    clippy::expect_used,
+    reason = "test code — panicking on failure is acceptable"
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "test code with known valid indices"
+)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "test constants fit in target types"
+)]
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "test code — drop order is not critical"
+)]
+#[expect(clippy::semicolon_outside_block, reason = "test code style")]
+#[expect(
+    clippy::let_underscore_untyped,
+    reason = "test code — type inference is sufficient"
+)]
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "test code with known non-negative values"
+)]
+#[expect(clippy::single_call_fn, reason = "test helpers extracted for clarity")]
 mod extension_record_tests {
     use super::*;
 

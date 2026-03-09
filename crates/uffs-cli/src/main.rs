@@ -74,7 +74,10 @@ mod commands;
 /// - `es` → Everything-compatible mode
 /// - `uffs-cpp` → C++ UFFS compatible mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[allow(dead_code)] // Variants will be used as personalities are implemented
+#[expect(
+    dead_code,
+    reason = "Everything and CppCompat variants reserved for future personality modes"
+)]
 pub enum Personality {
     /// Modern CLI: clean, ripgrep/fd style (default)
     #[default]
@@ -160,7 +163,10 @@ fn parse_drive_letter(input: &str) -> Result<char, String> {
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 #[command(args_conflicts_with_subcommands = true)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "CLI args struct mirrors many boolean flags from clap"
+)]
 struct Cli {
     /// Enable verbose output
     #[arg(short, long, global = true)]
@@ -372,7 +378,10 @@ enum Commands {
 /// if called more than once).
 // Extracted for clarity and maintainability - logging setup is complex enough
 // to warrant its own function even if only called once.
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted for clarity — logging setup is complex enough to warrant its own function"
+)]
 fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     use std::fs;
 
@@ -439,7 +448,10 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     let subscriber = Registry::default().with(terminal_layer).with(file_layer);
 
     // This should only be called once at program startup
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "global subscriber set once at startup; panic is intentional if called twice"
+    )]
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set global tracing subscriber - was init_logging called twice?");
 
@@ -451,7 +463,14 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
 /// This is separated from `main()` to allow custom error handling that
 /// doesn't show backtraces for user-facing errors like "file not found".
 // Intentional separation for error handling - not a candidate for inlining.
-#[allow(clippy::too_many_lines, clippy::single_call_fn)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "top-level CLI dispatch — splitting further would obscure control flow"
+)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "separated from main() for structured error handling"
+)]
 async fn run() -> Result<()> {
     // Touch tripwire to ensure it's embedded in the binary string table
     // (Fix #6: tripwire that doesn't break CSV)
@@ -532,7 +551,10 @@ async fn run() -> Result<()> {
 }
 
 #[tokio::main]
-#[allow(clippy::print_stderr)] // Intentional: user-facing error output
+#[expect(
+    clippy::print_stderr,
+    reason = "intentional user-facing error output to stderr"
+)]
 async fn main() {
     if let Err(err) = run().await {
         // Print error without backtrace for clean user-facing output

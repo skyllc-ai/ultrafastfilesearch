@@ -7,22 +7,55 @@
 //!
 //! Run with: `cargo bench -p uffs-core --bench query`
 
-// Suppress lints for benchmarks
-#![allow(clippy::missing_docs_in_private_items)]
-#![allow(clippy::single_call_fn)]
-#![allow(clippy::integer_division_remainder_used)]
-#![allow(clippy::arithmetic_side_effects)]
-#![allow(clippy::min_ident_chars)]
-#![allow(clippy::default_numeric_fallback)]
-#![allow(clippy::std_instead_of_core)]
-#![allow(clippy::semicolon_if_nothing_returned)]
-#![allow(clippy::unwrap_used)]
-#![allow(clippy::expect_used)]
-#![allow(unused_crate_dependencies)]
-#![allow(clippy::doc_markdown)]
-#![allow(clippy::indexing_slicing)]
-#![allow(clippy::shadow_reuse)]
-#![allow(clippy::redundant_closure_for_method_calls)]
+// Benchmark-specific lint exceptions
+#![expect(clippy::missing_docs_in_private_items, reason = "benchmark code")]
+#![expect(
+    clippy::single_call_fn,
+    reason = "benchmark functions called once by criterion_group! macro"
+)]
+#![expect(
+    clippy::integer_division_remainder_used,
+    reason = "benchmark data generation uses modulo"
+)]
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "benchmark data generation arithmetic"
+)]
+#![expect(
+    clippy::min_ident_chars,
+    reason = "benchmark code uses short loop variables"
+)]
+#![expect(clippy::default_numeric_fallback, reason = "benchmark code")]
+#![expect(
+    clippy::std_instead_of_core,
+    reason = "benchmark code uses std for simplicity"
+)]
+#![expect(clippy::semicolon_if_nothing_returned, reason = "benchmark code")]
+#![expect(
+    clippy::unwrap_used,
+    reason = "benchmark code unwraps controlled test data"
+)]
+#![expect(
+    clippy::expect_used,
+    reason = "benchmark code expects on controlled test data"
+)]
+#![expect(
+    unused_crate_dependencies,
+    reason = "transitive dependencies not directly used"
+)]
+#![expect(clippy::doc_markdown, reason = "benchmark code")]
+#![expect(
+    clippy::indexing_slicing,
+    reason = "benchmark code indexes known-valid positions"
+)]
+#![expect(
+    clippy::shadow_reuse,
+    reason = "benchmarks reuse variable names in loops"
+)]
+#![expect(
+    clippy::redundant_closure_for_method_calls,
+    reason = "benchmark code clarity"
+)]
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use uffs_core::MftQuery;

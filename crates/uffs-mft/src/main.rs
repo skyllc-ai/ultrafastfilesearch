@@ -125,7 +125,14 @@ fn format_duration(duration: core::time::Duration) -> String {
 /// - < 1 GB: `123.45 MB`
 /// - < 1 TB: `123.45 GB`
 /// - >= 1 TB: `123.45 TB`
-#[allow(clippy::cast_precision_loss, clippy::float_arithmetic)] // Precision loss acceptable for display
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "precision loss acceptable for display"
+)]
+#[expect(
+    clippy::float_arithmetic,
+    reason = "floating-point arithmetic required for human-readable byte formatting"
+)]
 fn format_bytes(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{bytes:>4} B")
@@ -758,7 +765,10 @@ enum Commands {
 /// terminal. Otherwise, terminal logging is controlled by `RUST_LOG` (default:
 /// `info`). File logging is controlled by `RUST_LOG_FILE` (default: `info`).
 /// Log directory is controlled by `UFFS_LOG_DIR` (default: `~/bin/uffs/logs`).
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "logical separation of logging initialization"
+)]
 fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     use std::fs;
 
@@ -819,7 +829,10 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     // Combine layers
     let subscriber = Registry::default().with(terminal_layer).with(file_layer);
 
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "global subscriber must be set or the program cannot continue"
+    )]
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set global tracing subscriber");
 
@@ -827,7 +840,14 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
 }
 
 #[tokio::main]
-#[allow(clippy::print_stderr, clippy::exit)] // Intentional: user-facing error output
+#[expect(
+    clippy::print_stderr,
+    reason = "intentional user-facing error output in main"
+)]
+#[expect(
+    clippy::exit,
+    reason = "top-level entry point must set process exit code"
+)]
 async fn main() {
     // Check for -v/--verbose flag early
     let verbose = std::env::args().any(|arg| arg == "-v" || arg == "--verbose");
@@ -847,7 +867,18 @@ async fn main() {
 }
 
 /// Main application logic, separated from `main()` for clean error handling.
-#[allow(clippy::exit, clippy::unused_async, clippy::single_call_fn)]
+#[expect(
+    clippy::exit,
+    reason = "called from main to set process exit code on error"
+)]
+#[expect(
+    clippy::unused_async,
+    reason = "async for consistency with dispatched command handlers"
+)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "logical separation of run logic from main error handling"
+)]
 async fn run() -> Result<()> {
     // Parse CLI - let clap handle its own error formatting
     // Clap already provides excellent error messages with usage hints
@@ -976,7 +1007,14 @@ async fn dispatch_command(command: Commands) -> Result<()> {
 ///
 /// Only the `load` command works on non-Windows platforms.
 #[cfg(not(windows))]
-#[allow(clippy::unused_async, clippy::single_call_fn)] // Async for API parity with Windows
+#[expect(
+    clippy::unused_async,
+    reason = "async for api parity with windows implementation"
+)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "logical separation of command dispatch"
+)]
 async fn dispatch_command(command: Commands) -> Result<()> {
     match command {
         Commands::Load {
@@ -1819,7 +1857,10 @@ async fn cmd_drives() -> Result<()> {
 
 /// Gets the volume label for a drive letter.
 #[cfg(windows)]
-#[allow(unsafe_code)] // Required: Windows FFI (GetVolumeInformationW)
+#[expect(
+    unsafe_code,
+    reason = "required for windows ffi call to GetVolumeInformationW"
+)]
 fn get_volume_label(drive: char) -> Option<String> {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
@@ -2541,7 +2582,10 @@ async fn cmd_bitmap_diag(drive: char, show_samples: bool) -> Result<()> {
 
 /// Bitmap diagnostic stub for non-Windows platforms.
 #[cfg(not(windows))]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "non-windows stub kept for cross-platform compilation"
+)]
 fn cmd_bitmap_diag(_drive: char, _show_samples: bool) -> impl Future<Output = Result<()>> {
     core::future::ready(Err(anyhow::anyhow!(
         "Bitmap diagnostic is only available on Windows"
@@ -2672,10 +2716,24 @@ async fn cmd_save(
             "  Compressed size:     {}",
             format_bytes(header.compressed_size)
         );
-        #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "precision loss acceptable for display percentages"
+        )]
+        #[expect(
+            clippy::float_arithmetic,
+            reason = "floating-point needed for compression ratio calculation"
+        )]
         let ratio = header.compressed_size as f64 / header.original_size as f64 * 100.0_f64;
         println!("  Compression ratio:    {ratio:.1}%");
-        #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "precision loss acceptable for display percentages"
+        )]
+        #[expect(
+            clippy::float_arithmetic,
+            reason = "floating-point needed for savings calculation"
+        )]
         let savings = 100.0_f64 - ratio;
         println!("  Space saved:          {savings:.1}%");
     } else {
@@ -2692,15 +2750,31 @@ async fn cmd_save(
 ///
 /// Works on all platforms - parses NTFS structures from saved file.
 /// Supports both UFFS-MFT format and raw NTFS format.
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::print_stdout,
+    reason = "cli output function with complex display logic"
+)]
+#[expect(clippy::print_stdout, reason = "intentional user-facing cli output")]
+#[expect(
     clippy::shadow_reuse,
+    reason = "shadow reuse improves readability in sequential processing"
+)]
+#[expect(
     clippy::min_ident_chars,
+    reason = "short identifiers used for concise loop variables"
+)]
+#[expect(
     clippy::expect_used,
+    reason = "expect used for file operations that should not fail after validation"
+)]
+#[expect(
     clippy::single_call_fn,
-    clippy::fn_params_excessive_bools
-)] // CLI output function with complex display logic
+    reason = "logical separation of load command implementation"
+)]
+#[expect(
+    clippy::fn_params_excessive_bools,
+    reason = "bool params map directly to cli flags"
+)]
 fn cmd_load(
     input: &Path,
     output_path: Option<&Path>,
@@ -2782,10 +2856,24 @@ fn cmd_load(
                 "  Compressed size:     {}",
                 format_bytes(header.compressed_size)
             );
-            #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "precision loss acceptable for display percentages"
+            )]
+            #[expect(
+                clippy::float_arithmetic,
+                reason = "floating-point needed for compression ratio calculation"
+            )]
             let ratio = header.compressed_size as f64 / header.original_size as f64 * 100.0_f64;
             println!("  Compression ratio:    {ratio:.1}%");
-            #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "precision loss acceptable for display percentages"
+            )]
+            #[expect(
+                clippy::float_arithmetic,
+                reason = "floating-point needed for savings calculation"
+            )]
             let savings = 100.0_f64 - ratio;
             println!("  Space saved:          {savings:.1}%");
         } else {
@@ -2994,7 +3082,10 @@ fn cmd_load(
                 if let ParseResult::Base(parsed) = result {
                     if parsed.names.len() > 1 {
                         hardlink_count += 1;
-                        #[allow(clippy::cast_possible_truncation)]
+                        #[expect(
+                            clippy::cast_possible_truncation,
+                            reason = "name count per mft record fits in u16"
+                        )]
                         {
                             max_name_count = max_name_count.max(parsed.names.len() as u16);
                         }
@@ -3008,7 +3099,10 @@ fn cmd_load(
                 if let Some(parsed) = parse_record(&record_buf, frs) {
                     if parsed.names.len() > 1 {
                         hardlink_count += 1;
-                        #[allow(clippy::cast_possible_truncation)]
+                        #[expect(
+                            clippy::cast_possible_truncation,
+                            reason = "name count per mft record fits in u16"
+                        )]
                         {
                             max_name_count = max_name_count.max(parsed.names.len() as u16);
                         }
@@ -3170,7 +3264,10 @@ fn cmd_load(
 /// This measures pure disk I/O throughput by reading the entire MFT with
 /// synchronous 1MB reads. It does NOT parse records or build `DataFrame`s.
 #[cfg(windows)]
-#[allow(unsafe_code)] // Required: Windows FFI (ReadFile, SetFilePointerEx)
+#[expect(
+    unsafe_code,
+    reason = "required for windows ffi calls to ReadFile and SetFilePointerEx"
+)]
 async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     use std::time::Instant;
 
@@ -4071,7 +4168,7 @@ async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> {
 
     // Close overlapped handles
     for handle in handles {
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code, reason = "required for windows ffi call to CloseHandle")]
         unsafe {
             windows::Win32::Foundation::CloseHandle(handle).ok();
         }
@@ -4857,7 +4954,8 @@ async fn cmd_index_all(drives: Option<Vec<char>>, no_cache: bool, ttl: u64) -> R
     // Read all indices (default: use cache)
     let indices = if no_cache {
         println!("🔨 Building fresh indices (will save to cache)...");
-        reader.read_all_index_cached(0).await? // TTL=0 forces rebuild but still saves
+        reader.read_all_index_cached(0).await? // TTL=0 forces rebuild but still
+    // saves
     } else {
         println!("📦 Reading indices (with cache)...");
         reader.read_all_index_cached(ttl).await?
@@ -4928,7 +5026,14 @@ fn format_number(n: u64) -> String {
 
 /// Index ALL NTFS drives (non-Windows stub).
 #[cfg(not(windows))]
-#[allow(dead_code, clippy::unused_async)]
+#[expect(
+    dead_code,
+    reason = "non-windows stub kept for cross-platform compilation"
+)]
+#[expect(
+    clippy::unused_async,
+    reason = "async for api parity with windows implementation"
+)]
 async fn cmd_index_all(_drives: Option<Vec<char>>, _no_cache: bool, _ttl: u64) -> Result<()> {
     anyhow::bail!("index-all command is only supported on Windows")
 }

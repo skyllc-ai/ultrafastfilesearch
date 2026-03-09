@@ -133,10 +133,10 @@ pub struct TreeIndex {
     metrics_cache: HashMap<u64, TreeMetrics>,
 }
 
-// Allow single_call_fn for helper functions that are intentionally separate
-// for clarity and to enable threshold-based switching between
-// sequential/parallel
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "helper functions separated for clarity and sequential/parallel threshold switching"
+)]
 impl TreeIndex {
     /// Build a tree index from a `DataFrame`.
     ///
@@ -259,7 +259,10 @@ impl TreeIndex {
             });
 
         // Build children HashMap in parallel using fold + reduce
-        #[allow(clippy::iter_over_hash_type)] // Order doesn't matter for merging child lists
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "order doesn't matter for merging child lists"
+        )]
         let children: HashMap<u64, Vec<u64>> = data
             .par_iter()
             .filter(|(frs, parent, _, _, _)| frs != parent) // Skip self-references
@@ -456,7 +459,6 @@ impl TreeIndex {
     }
 
     /// Build column vectors sequentially (for small datasets).
-    #[allow(clippy::type_complexity)]
     fn build_columns_sequential(
         &self,
         frs_values: &[u64],
@@ -504,7 +506,6 @@ impl TreeIndex {
     }
 
     /// Build column vectors in parallel using Rayon (for large datasets).
-    #[allow(clippy::type_complexity)]
     fn build_columns_parallel(&self, frs_values: &[u64], columns: &[TreeColumn]) -> TreeColumnVecs {
         let need_descendants = columns.contains(&TreeColumn::Descendants);
         let need_treesize = columns.contains(&TreeColumn::TreeSize);
@@ -624,19 +625,29 @@ pub fn apply_directory_treesize(df: &DataFrame) -> Result<DataFrame> {
 }
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::unwrap_used,
-    clippy::indexing_slicing,
-    clippy::expect_used,
-    clippy::print_stdout,
-    clippy::use_debug,
-    clippy::cast_possible_truncation,
-    clippy::uninlined_format_args,
-    clippy::shadow_unrelated,
-    clippy::let_underscore_untyped,
-    clippy::doc_markdown,
-    clippy::manual_div_ceil
+    reason = "test code uses unwrap on controlled data"
 )]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "test code indexes known-valid positions"
+)]
+#[expect(
+    clippy::expect_used,
+    reason = "test code uses expect on controlled data"
+)]
+#[expect(clippy::print_stdout, reason = "benchmark test outputs timing info")]
+#[expect(clippy::use_debug, reason = "benchmark test outputs debug info")]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "test data fits in target types"
+)]
+#[expect(
+    clippy::shadow_unrelated,
+    reason = "test variables reused across sections"
+)]
+#[expect(clippy::let_underscore_untyped, reason = "test code discards results")]
 mod tests {
     use super::*;
 

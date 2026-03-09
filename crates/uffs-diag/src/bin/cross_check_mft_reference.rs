@@ -19,14 +19,14 @@
 //!   docs/trial_runs/UltraFastFileSearch/f_mft.parquet
 //! ```
 
-// Standalone binary doesn't use all crate dependencies
-#![allow(unused_crate_dependencies)]
-#![allow(
+#![expect(
+    unused_crate_dependencies,
+    reason = "standalone binary doesn't use all crate dependencies"
+)]
+#![expect(
     clippy::print_stdout,
     clippy::print_stderr,
-    clippy::cast_precision_loss,
-    clippy::too_many_lines,
-    clippy::std_instead_of_alloc
+    reason = "diagnostic tool — stdout/stderr output is intentional"
 )]
 
 use std::env;
@@ -34,7 +34,10 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 // Keep uffs_mft version-locked with diagnostics, even if not used directly.
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "version-locks uffs_mft with diagnostic crate"
+)]
 use uffs_mft as _;
 use uffs_polars::{
     BooleanChunked, CsvParseOptions, CsvReadOptions, DataFrame, DataFrameJoinOps, DataType,
@@ -101,7 +104,10 @@ fn main() -> Result<()> {
 }
 
 /// Load the reference CSV produced by the C++ reader into a `DataFrame`.
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "encapsulates CSV loading with focused error context"
+)]
 fn load_reference_csv(path: &Path) -> Result<DataFrame> {
     // The reference writer always emits a header row with well-known column
     // names (RecordNumber, IsDirectory, IsBaseRecord, ...).
@@ -122,7 +128,10 @@ fn load_reference_csv(path: &Path) -> Result<DataFrame> {
 }
 
 /// Load the Rust-generated Parquet export of the raw MFT into a `DataFrame`.
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "encapsulates Parquet loading with focused error context"
+)]
 fn load_parquet(path: &Path) -> Result<DataFrame> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("Failed to open Parquet file: {}", path.display()))?;
@@ -133,7 +142,10 @@ fn load_parquet(path: &Path) -> Result<DataFrame> {
 }
 
 /// Join the reference and Parquet `DataFrame`s on FRS / record number.
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "encapsulates join logic with key normalization"
+)]
 fn join_on_frs(df_ref: &DataFrame, df_parquet: &DataFrame) -> Result<DataFrame> {
     // Normalize key columns:
     // - reference: RecordNumber (u64)
@@ -187,7 +199,14 @@ fn join_on_frs(df_ref: &DataFrame, df_parquet: &DataFrame) -> Result<DataFrame> 
 
 /// Print summary statistics about directory/base-record agreement between
 /// the reference CSV and the Parquet `DataFrame`.
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "encapsulates agreement summary for readability"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "sequential analysis — splitting would reduce clarity"
+)]
 fn summarize_directory_agreement(df: &DataFrame) -> Result<()> {
     println!("\nDirectory/base-record agreement summary:");
 
@@ -285,7 +304,10 @@ fn summarize_directory_agreement(df: &DataFrame) -> Result<()> {
 }
 
 /// Print detailed joined rows for a set of FRS of special interest.
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "encapsulates focused FRS inspection for readability"
+)]
 fn print_focus_frs(df: &DataFrame, frs_values: &[u64]) -> Result<()> {
     println!("\nFocused inspection for high-impact missing parents:");
 
@@ -356,7 +378,10 @@ fn print_focus_frs(df: &DataFrame, frs_values: &[u64]) -> Result<()> {
 /// 1. Does the reference reader believe this FRS is an in-use directory?
 /// 2. How many children in our Rust pipeline treat this FRS as their parent,
 ///    even when we never emit a corresponding directory row?
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "encapsulates reference-vs-children analysis for readability"
+)]
 fn print_reference_and_children(
     df_ref: &DataFrame,
     df_parquet: &DataFrame,

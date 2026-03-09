@@ -17,8 +17,6 @@
 //! assert!(filter.matches("report.pdf")); // from documents collection
 //! ```
 
-#![allow(clippy::single_call_fn)]
-
 use std::collections::{HashMap, HashSet};
 
 use uffs_polars::{DataFrame, Expr, IntoLazy, col, lit};
@@ -82,7 +80,6 @@ impl ExtensionFilter {
     /// # Errors
     ///
     /// Returns an error if the input is empty.
-    #[allow(clippy::shadow_reuse)]
     pub fn parse(input: &str) -> core::result::Result<Self, &'static str> {
         let trimmed_input = input.trim();
         if trimmed_input.is_empty() {
@@ -371,7 +368,10 @@ pub struct ExtensionIndexStats {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::std_instead_of_core)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test code uses unwrap on controlled data"
+)]
 mod tests {
     use uffs_polars::Column;
 

@@ -14,7 +14,10 @@ pub const TRIPWIRE: &str = concat!("TRIPWIRE_UFFS_CPP_TREE_FIX_v", env!("CARGO_P
 /// Touch the tripwire to ensure it's not optimized away by the compiler.
 /// Call this from `main()` or early in the program.
 #[inline(never)]
-#[allow(clippy::single_call_fn)] // Intentionally called once from main
+#[expect(
+    clippy::single_call_fn,
+    reason = "intentionally called once from main to prevent compiler optimization"
+)]
 pub fn touch_tripwire() {
     core::hint::black_box(TRIPWIRE);
 }
@@ -292,7 +295,10 @@ use uffs_mft::{MftProgress, MftReader};
 /// Returns `false` if:
 /// - `QueryMode::ForceDataFrame` is set, OR
 /// - Query requires features only available in `DataFrame` path
-#[allow(clippy::single_call_fn)] // Extracted for clarity and testability
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted for clarity and testability"
+)]
 fn should_use_index_path(
     mode: QueryMode,
     parquet_index: Option<&PathBuf>,
@@ -340,13 +346,26 @@ fn should_use_index_path(
 /// - Extension filtering: `--ext pictures,mp4,pdf`
 /// - Output customization: `--out`, `--columns`, `--sep`, `--quotes`,
 ///   `--header`, `--pos`, `--neg`
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     clippy::fn_params_excessive_bools,
+    reason = "CLI entry point passes through all parsed args"
+)]
+#[expect(
     clippy::print_stderr,
+    reason = "intentional user-facing output to stderr"
+)]
+#[expect(
     clippy::too_many_lines,
+    reason = "top-level search orchestrator — splitting further would obscure control flow"
+)]
+#[expect(
     clippy::single_call_fn,
-    clippy::semicolon_outside_block
+    reason = "public CLI entry point called from main dispatch"
+)]
+#[expect(
+    clippy::semicolon_outside_block,
+    reason = "cfg blocks produce mixed semicolon styles"
 )]
 pub async fn search(
     pattern: &str,
@@ -361,7 +380,7 @@ pub async fn search(
     debug_tree: bool,
     benchmark: bool,
     no_bitmap: bool,
-    #[cfg_attr(not(windows), allow(unused_variables))] no_cache: bool,
+    no_cache: bool,
     min_size: Option<u64>,
     max_size: Option<u64>,
     limit: u32,
@@ -501,6 +520,7 @@ pub async fn search(
         }
         #[cfg(not(windows))]
         {
+            _ = no_cache;
             bail!("Index query mode is only available on Windows");
         }
     } else {
@@ -529,7 +549,10 @@ pub async fn search(
                 let elapsed = start_time.elapsed();
                 let secs = elapsed.as_secs();
 
-                #[allow(clippy::print_stdout)] // Intentional: C++ compatibility requires stdout
+                #[expect(
+                    clippy::print_stdout,
+                    reason = "C++ compatibility requires stdout output"
+                )]
                 if !drives_to_search.is_empty() {
                     let drive_list: String = drives_to_search
                         .iter()
@@ -540,7 +563,10 @@ pub async fn search(
                     println!("\nDrives? \t{}\t{drive_list}\n", drives_to_search.len());
                 }
 
-                #[allow(clippy::print_stdout)] // Intentional: C++ compatibility requires stdout
+                #[expect(
+                    clippy::print_stdout,
+                    reason = "C++ compatibility requires stdout output"
+                )]
                 if secs <= 1 {
                     println!(
                         "MMMmmm that was FAST ... maybe your searchstring was wrong?\t{pattern}\n\
@@ -607,7 +633,14 @@ pub async fn search(
         eprintln!("  Records found:   {row_count:>10}");
         eprintln!("  Total time:      {total_ms:>10} ms ({secs:.2} s)");
         // Throughput calculation intentionally uses floating-point
-        #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "row_count as f64 is fine for display-only throughput"
+        )]
+        #[expect(
+            clippy::float_arithmetic,
+            reason = "throughput calculation for human-readable benchmark output"
+        )]
         let throughput = row_count as f64 / secs;
         eprintln!("  Throughput:      {throughput:>10.0} records/sec");
     } else if profile {
@@ -624,7 +657,10 @@ pub async fn search(
     let secs = elapsed.as_secs();
 
     #[cfg(windows)]
-    #[allow(clippy::print_stdout)] // Intentional: C++ compatibility requires stdout
+    #[expect(
+        clippy::print_stdout,
+        reason = "C++ compatibility requires stdout output"
+    )]
     if !drives_to_search.is_empty() {
         let drive_list: String = drives_to_search
             .iter()
@@ -637,7 +673,10 @@ pub async fn search(
 
     // C++ compatibility: "MMMmmm that was FAST" message when elapsed <= 1 second
     // (to stdout)
-    #[allow(clippy::print_stdout)] // Intentional: C++ compatibility requires stdout
+    #[expect(
+        clippy::print_stdout,
+        reason = "C++ compatibility requires stdout output"
+    )]
     if secs <= 1 {
         println!(
             "MMMmmm that was FAST ... maybe your searchstring was wrong?\t{pattern}\n\
@@ -716,7 +755,12 @@ async fn search_streaming(
 /// This function loads a previously saved raw MFT file and processes it
 /// exactly like a live MFT read, enabling debugging on any platform.
 /// Same pipeline as Windows live read - only the load source differs.
-#[allow(clippy::single_call_fn, clippy::print_stderr, clippy::print_stdout)]
+#[expect(clippy::single_call_fn, reason = "extracted from search() for clarity")]
+#[expect(
+    clippy::print_stderr,
+    clippy::print_stdout,
+    reason = "intentional user-facing profiling output"
+)]
 fn load_and_filter_from_mft_file(
     mft_path: &Path,
     drive_letter: Option<char>,
@@ -769,10 +813,17 @@ fn load_and_filter_from_mft_file(
 }
 
 /// Load raw MFT with debug output for tree metrics.
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
+    reason = "name count and shown counter values are small enough for u16/u32"
+)]
+#[expect(
     clippy::print_stdout,
-    clippy::single_call_fn
+    reason = "intentional debug output for tree metrics investigation"
+)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted for debug-specific MFT loading path"
 )]
 fn load_raw_mft_with_debug(
     mft_path: &Path,
@@ -886,7 +937,14 @@ fn load_raw_mft_with_debug(
 /// * `profile` - If true, prints detailed timing breakdown to stderr.
 /// * `no_bitmap` - If true, disables MFT bitmap optimization (reads all
 ///   records).
-#[allow(clippy::single_call_fn, clippy::print_stderr)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted from search() to reduce line count"
+)]
+#[expect(
+    clippy::print_stderr,
+    reason = "intentional profiling output to stderr"
+)]
 async fn load_and_filter_data(
     index: Option<PathBuf>,
     multi_drives: Option<Vec<char>>,
@@ -1015,7 +1073,11 @@ async fn load_and_filter_data(
 /// This is the fast path for simple queries. Uses cached `MftIndex` when
 /// available (unless `no_cache` is true).
 #[cfg(windows)]
-#[allow(clippy::single_call_fn, clippy::print_stderr)]
+#[expect(clippy::single_call_fn, reason = "extracted from search() for clarity")]
+#[expect(
+    clippy::print_stderr,
+    reason = "intentional profiling output to stderr"
+)]
 async fn load_and_filter_data_index(
     single_drive: Option<char>,
     filters: &QueryFilters<'_>,
@@ -1075,7 +1137,14 @@ async fn load_and_filter_data_index(
 /// Searches each drive in parallel using cached indices (unless `no_cache` is
 /// true), then combines results.
 #[cfg(windows)]
-#[allow(clippy::single_call_fn, clippy::print_stderr)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted for multi-drive parallel search"
+)]
+#[expect(
+    clippy::print_stderr,
+    reason = "intentional profiling output to stderr"
+)]
 async fn load_and_filter_data_index_multi(
     drives: &[char],
     filters: &QueryFilters<'_>,
@@ -1243,7 +1312,10 @@ struct QueryFilters<'a> {
 }
 
 /// Build and execute the MFT query with all filters applied.
-#[allow(clippy::single_call_fn)] // Extracted to reduce search() line count below clippy::too_many_lines limit
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted to reduce search() line count"
+)]
 fn execute_query(
     df: uffs_mft::DataFrame,
     filters: &QueryFilters<'_>,
@@ -1292,7 +1364,14 @@ fn execute_query(
 /// This is the fast path for simple queries. Returns results as a `DataFrame`
 /// for compatibility with the output pipeline.
 // TEMPORARY: print_stderr for debugging nested tokio runtime panic (issue #XXX)
-#[allow(clippy::single_call_fn, clippy::print_stderr)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted to reduce search() line count"
+)]
+#[expect(
+    clippy::print_stderr,
+    reason = "temporary debugging for nested tokio runtime panic"
+)]
 fn execute_index_query(
     index: &uffs_mft::MftIndex,
     filters: &QueryFilters<'_>,
@@ -1358,12 +1437,25 @@ fn execute_index_query(
 /// TODO: Remove this function and output directly from `SearchResults` +
 /// `MftIndex`.
 // TEMPORARY: print_stderr for debugging nested tokio runtime panic (issue #XXX)
-#[allow(
+#[expect(
     clippy::single_call_fn,
+    reason = "temporary conversion layer — will be removed when output pipeline supports SearchResults directly"
+)]
+#[expect(
     clippy::too_many_lines,
+    reason = "builds full C++ parity schema with 30+ columns"
+)]
+#[expect(
     clippy::min_ident_chars,
+    reason = "short names (e.g. df) conventional in DataFrame-heavy code"
+)]
+#[expect(
     clippy::option_if_let_else,
-    clippy::print_stderr
+    reason = "if-let chains are clearer for record lookup fallback"
+)]
+#[expect(
+    clippy::print_stderr,
+    reason = "temporary debugging for nested tokio runtime panic"
 )]
 fn results_to_dataframe(
     index: &uffs_mft::MftIndex,
@@ -1612,7 +1704,10 @@ fn results_to_dataframe(
 ///
 /// When `drives` is non-empty, appends a C++ compatible footer after the data:
 /// `\r\n\r\nDrives? \t{count}\t{drive_list}\r\n\r\n`
-#[allow(clippy::single_call_fn)] // Extracted to reduce search() line count below clippy::too_many_lines limit
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted to reduce search() line count below clippy::too_many_lines limit"
+)]
 fn write_results(
     results: &uffs_mft::DataFrame,
     format: &str,
@@ -2100,7 +2195,14 @@ async fn search_multi_drive_filtered(
 
 /// Stub for non-Windows platforms.
 #[cfg(not(windows))]
-#[allow(clippy::unused_async, clippy::single_call_fn)]
+#[expect(
+    clippy::unused_async,
+    reason = "must match async signature of Windows implementation"
+)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "platform stub — matches Windows counterpart"
+)]
 async fn search_multi_drive_filtered(
     _drives: &[char],
     _filters: &QueryFilters<'_>,
@@ -2412,7 +2514,10 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
 ///
 /// If no drives are specified, indexes ALL available NTFS drives.
 // Public API entry point - called from main.rs command dispatch
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "public CLI command handler called from main dispatch"
+)]
 pub async fn index(
     output_path: PathBuf,
     single_drive: Option<char>,
@@ -2587,7 +2692,14 @@ async fn index_multi_drive(drives: &[char], output: &Path) -> Result<()> {
 /// Index multiple drives (non-Windows stub).
 #[cfg(not(windows))]
 // Platform-specific stub must match Windows signature; called once per platform is expected.
-#[allow(clippy::unused_async, clippy::single_call_fn)]
+#[expect(
+    clippy::unused_async,
+    reason = "must match async signature of Windows implementation"
+)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "platform stub — matches Windows counterpart"
+)]
 async fn index_multi_drive(_drives: &[char], _output: &Path) -> Result<()> {
     anyhow::bail!("Multi-drive indexing is only supported on Windows")
 }
@@ -2600,7 +2712,10 @@ async fn index_multi_drive(_drives: &[char], _output: &Path) -> Result<()> {
 /// - The index file cannot be loaded
 /// - Writing to stdout fails
 // CLI command handler - separate function for testability and maintainability.
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "public CLI command handler called from main dispatch"
+)]
 pub fn info(path: &Path) -> Result<()> {
     let df = MftReader::load_parquet(path)
         .with_context(|| format!("Failed to load index: {}", path.display()))?;
@@ -2682,7 +2797,10 @@ fn count_multi_value_u16(df: &uffs_mft::DataFrame, name: &str) -> u64 {
 }
 
 /// Extract statistics from a `DataFrame` index file.
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted for clarity and testability"
+)]
 fn extract_index_stats(df: &uffs_mft::DataFrame, path: &Path) -> IndexStats {
     let abs_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let file_size = std::fs::metadata(path).map_or(0, |meta| meta.len());
@@ -2713,7 +2831,11 @@ fn extract_index_stats(df: &uffs_mft::DataFrame, path: &Path) -> IndexStats {
 }
 
 /// Print index information to stdout.
-#[allow(clippy::single_call_fn, clippy::too_many_lines)]
+#[expect(clippy::single_call_fn, reason = "extracted for clarity")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "structured info display with many fields — splitting would harm readability"
+)]
 fn print_index_info(stats: &IndexStats, df: &uffs_mft::DataFrame) -> Result<()> {
     let mut out = std::io::stdout().lock();
     let sep = "═══════════════════════════════════════════════════════════════";
@@ -2828,7 +2950,14 @@ fn format_number(num: u64) -> String {
 }
 
 /// Format file size in human-readable format.
-#[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "u64 to f64 is acceptable for human-readable size display"
+)]
+#[expect(
+    clippy::float_arithmetic,
+    reason = "division for human-readable size formatting"
+)]
 fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
@@ -2857,7 +2986,10 @@ fn format_size(bytes: u64) -> String {
 /// - Query execution fails
 /// - Writing to stdout fails
 // CLI command handler - separate function for testability and maintainability.
-#[allow(clippy::single_call_fn)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "public CLI command handler called from main dispatch"
+)]
 pub fn stats(path: &Path, top: u32) -> Result<()> {
     let df = MftReader::load_parquet(path)
         .with_context(|| format!("Failed to load index: {}", path.display()))?;

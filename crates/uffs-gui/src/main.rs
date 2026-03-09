@@ -17,16 +17,13 @@
 //! - `RUST_LOG_FILE`: File log level (default: `info`)
 //! - `UFFS_LOG_DIR`: Log directory (default: `~/bin/uffs/logs`)
 
-// Suppress lints for GUI binary - these are intentional for GUI apps
-#![allow(clippy::print_stdout)]
-#![allow(clippy::print_stderr)]
-#![allow(clippy::use_debug)]
-#![allow(clippy::single_call_fn)]
-#![allow(clippy::missing_docs_in_private_items)]
-#![allow(unused_crate_dependencies)]
+#![expect(
+    unused_crate_dependencies,
+    reason = "uffs-core, uffs-mft, uffs-polars, tokio, and anyhow are declared for future GUI implementation"
+)]
 
-use std::io;
 use std::path::PathBuf;
+use std::{fs, io};
 
 use clap::Parser;
 use tracing::info;
@@ -52,9 +49,11 @@ struct Cli {
 /// If `verbose` is true and `RUST_LOG` is not set, uses `info` level for
 /// terminal. Otherwise, terminal logging is controlled by `RUST_LOG` (default:
 /// `error`). File logging is controlled by `RUST_LOG_FILE` (default: `info`).
+#[expect(
+    clippy::single_call_fn,
+    reason = "logging setup is logically separate from main"
+)]
 fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
-    use std::fs;
-
     // Get log directory (default: ~/bin/uffs/logs)
     let log_dir = std::env::var("UFFS_LOG_DIR").map_or_else(
         |_| {
@@ -111,14 +110,22 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     // Combine layers
     let subscriber = Registry::default().with(terminal_layer).with(file_layer);
 
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "panic is correct if global subscriber setup fails"
+    )]
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set global tracing subscriber");
 
     guard
 }
 
-fn main() {
+/// Entry point: prints a placeholder banner and exits.
+#[expect(
+    clippy::print_stderr,
+    reason = "placeholder banner intentionally prints to stderr"
+)]
+fn main() -> std::process::ExitCode {
     // Check for -v/--verbose flag early
     let verbose = std::env::args().any(|arg| arg == "-v" || arg == "--verbose");
 
@@ -148,5 +155,5 @@ fn main() {
     eprintln!("║                                                              ║");
     eprintln!("╚══════════════════════════════════════════════════════════════╝");
 
-    std::process::exit(1);
+    std::process::ExitCode::FAILURE
 }

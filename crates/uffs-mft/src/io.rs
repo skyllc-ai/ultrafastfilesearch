@@ -410,7 +410,10 @@ impl MftRecordReader {
     /// # Errors
     ///
     /// Returns an error if the record cannot be read or is invalid.
-    #[allow(unsafe_code)] // Required: Windows FFI (SetFilePointerEx, ReadFile)
+    #[expect(
+        unsafe_code,
+        reason = "FFI: SetFilePointerEx and ReadFile for MFT record access"
+    )]
     pub fn read_record(&mut self, handle: HANDLE, frs: u64) -> Result<&[u8]> {
         // Use extent map to get the physical offset (handles fragmentation)
         let record_offset =
@@ -511,12 +514,23 @@ pub use crate::parse::{
 ///
 /// `true` if a record was added to the index, `false` if skipped.
 #[deprecated(note = "Use parse_record_full() + MftRecordMerger + from_parsed_records() instead")]
-#[allow(unsafe_code, clippy::too_many_lines, clippy::cast_possible_truncation)]
+#[expect(
+    unsafe_code,
+    reason = "ptr::read for NTFS header and attribute parsing from raw bytes"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "monolithic parser kept for performance-critical hot path"
+)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "NTFS field sizes are bounded by u16/u32 record layout"
+)]
 pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::MftIndex) -> bool {
     use crate::index::{
         ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo,
     };
-    #[allow(unused_imports)] // Used in inline parsing mode
+    #[expect(unused_imports, reason = "used in inline parsing mode")]
     use crate::ntfs::{
         AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
         StandardInformation, file_reference_to_frs, filetime_to_unix_micros,
@@ -985,7 +999,14 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 ///
 /// `true` if any names/streams were added, `false` otherwise.
 #[deprecated(note = "Use parse_record_full() + MftRecordMerger instead")]
-#[allow(unsafe_code, clippy::cast_possible_truncation)]
+#[expect(
+    unsafe_code,
+    reason = "ptr::read for NTFS attribute parsing from raw bytes"
+)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "NTFS field sizes are bounded by u16/u32 record layout"
+)]
 fn parse_extension_to_index(
     data: &[u8],
     base_frs: u64,
@@ -1367,7 +1388,18 @@ fn parse_extension_to_index(
 ///
 /// `true` if a record was added to the fragment, `false` if skipped.
 #[deprecated(note = "Use parse_record_full() + MftRecordMerger + from_parsed_records() instead")]
-#[allow(unsafe_code, clippy::too_many_lines, clippy::cast_possible_truncation)]
+#[expect(
+    unsafe_code,
+    reason = "ptr::read for NTFS header and attribute parsing from raw bytes"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "monolithic parser kept for performance-critical hot path"
+)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "NTFS field sizes are bounded by u16/u32 record layout"
+)]
 pub fn parse_record_to_fragment(
     data: &[u8],
     frs: u64,
@@ -1914,7 +1946,14 @@ pub fn parse_record_to_fragment(
 ///
 /// `true` if any names/streams were added, `false` otherwise.
 #[deprecated(note = "Use parse_record_full() + MftRecordMerger instead")]
-#[allow(unsafe_code, clippy::cast_possible_truncation)]
+#[expect(
+    unsafe_code,
+    reason = "ptr::read for NTFS attribute parsing from raw bytes"
+)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "NTFS field sizes are bounded by u16/u32 record layout"
+)]
 fn parse_extension_to_fragment(
     data: &[u8],
     base_frs: u64,
@@ -2361,7 +2400,10 @@ impl BatchMftReader {
     /// # Returns
     ///
     /// A tuple of (buffer slice, first FRS in buffer, number of records read).
-    #[allow(unsafe_code)] // Required: Windows FFI (SetFilePointerEx, ReadFile)
+    #[expect(
+        unsafe_code,
+        reason = "FFI: SetFilePointerEx and ReadFile for batched MFT access"
+    )]
     pub fn read_batch(&mut self, handle: HANDLE, start_frs: u64) -> Result<(&[u8], u64, usize)> {
         // Get physical offset for the starting FRS
         let start_offset =
@@ -3682,7 +3724,10 @@ impl ParallelMftReader {
     /// # Returns
     ///
     /// Vector of parsed records.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: SetFilePointerEx and ReadFile for bulk MFT reads"
+    )]
     /// Bulk read using IOCP - queues ALL reads at once, lets Windows optimize
     /// disk scheduling. This is the C++ approach: submit all I/O
     /// operations, then wait for completions.
@@ -3951,7 +3996,10 @@ impl ParallelMftReader {
     /// * `overlapped_handle` - Handle opened with FILE_FLAG_OVERLAPPED
     /// * `merge_extensions` - Whether to merge extension records
     /// * `progress_callback` - Optional progress callback
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: ReadFile, GetQueuedCompletionStatus for IOCP bulk reads"
+    )]
     pub fn read_all_bulk_iocp<F>(
         &self,
         overlapped_handle: HANDLE,
@@ -4360,7 +4408,10 @@ impl ParallelMftReader {
     /// Key insight from C++ team: HDDs have a single read head, so queuing
     /// thousands of reads just creates I/O scheduler overhead. 2 reads in
     /// flight = one reading, one being set up.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: ReadFile, GetQueuedCompletionStatus for sliding window IOCP"
+    )]
     pub fn read_all_sliding_window_iocp<F>(
         &self,
         overlapped_handle: HANDLE,
@@ -4825,7 +4876,10 @@ impl ParallelMftReader {
     /// * `concurrency` - Number of I/O ops in flight (None = 2 for HDD)
     /// * `io_chunk_size` - Size of each I/O in bytes (None = 1MB)
     /// * `_progress_callback` - Optional progress callback
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: ReadFile, GetQueuedCompletionStatus for IOCP-to-index reads"
+    )]
     pub fn read_all_sliding_window_iocp_to_index<F>(
         &self,
         overlapped_handle: HANDLE,
@@ -4845,7 +4899,7 @@ impl ParallelMftReader {
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
         // Note: Some imports may appear unused but are needed for the inline parsing logic
-        #[allow(unused_imports)]
+        #[expect(unused_imports, reason = "used in inline parsing mode")]
         use crate::index::MftIndex;
 
         let record_size = self.extent_map.bytes_per_record as usize;
@@ -5208,7 +5262,10 @@ impl ParallelMftReader {
     /// * `concurrency` - Number of I/O ops in flight (None = 2 for HDD)
     /// * `io_chunk_size` - Size of each I/O in bytes (None = 1MB)
     /// * `_progress_callback` - Optional progress callback
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: ReadFile, GetQueuedCompletionStatus for C++ port IOCP reads"
+    )]
     pub fn read_all_sliding_window_iocp_to_index_cpp_port<F>(
         &self,
         overlapped_handle: HANDLE,
@@ -5307,7 +5364,14 @@ impl ParallelMftReader {
     ///   drive)
     /// * `num_workers` - Number of parsing worker threads (None = num_cpus)
     /// * `_progress_callback` - Optional progress callback
-    #[allow(unsafe_code, clippy::too_many_lines)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: ReadFile, GetQueuedCompletionStatus for parallel IOCP reads"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "parallel I/O orchestration with worker threads requires sequential setup"
+    )]
     pub fn read_all_sliding_window_iocp_to_index_parallel<F>(
         &self,
         overlapped_handle: HANDLE,
@@ -6031,7 +6095,10 @@ impl ParallelMftReader {
     /// M1 8.4: Uses reusable aligned buffer to minimize allocations.
     /// The buffer is resized only if the chunk is larger than the current
     /// buffer.
-    #[allow(unsafe_code)] // Required: Windows FFI (SetFilePointerEx, ReadFile)
+    #[expect(
+        unsafe_code,
+        reason = "FFI: SetFilePointerEx and ReadFile for chunk-based MFT access"
+    )]
     pub fn read_chunk(
         &self,
         handle: HANDLE,
@@ -6133,7 +6200,10 @@ impl StreamingMftReader {
     ///
     /// This method reads chunks and processes them immediately, reducing
     /// memory pressure compared to buffering the entire MFT.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: SetFilePointerEx and ReadFile via read_chunk_into_buffer"
+    )]
     pub fn read_all_streaming<F>(
         &mut self,
         handle: HANDLE,
@@ -6225,7 +6295,10 @@ impl StreamingMftReader {
     }
 
     /// Reads a chunk into the internal reusable buffer.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: SetFilePointerEx and ReadFile for streaming chunk reads"
+    )]
     fn read_chunk_into_buffer(
         &mut self,
         handle: HANDLE,
@@ -6319,7 +6392,10 @@ impl PrefetchMftReader {
     ///
     /// This method uses a background thread to prefetch the next chunk while
     /// processing the current one, maximizing throughput.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: SetFilePointerEx and ReadFile for prefetch double-buffered reads"
+    )]
     pub fn read_all_prefetch<F>(
         &self,
         handle: HANDLE,
@@ -6434,7 +6510,10 @@ impl PrefetchMftReader {
     }
 
     /// Reads a chunk into a provided buffer.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: SetFilePointerEx and ReadFile for prefetch chunk reads"
+    )]
     fn read_chunk_into_buffer(
         &self,
         handle: HANDLE,
@@ -6567,7 +6646,10 @@ impl PipelinedMftReader {
     /// possible, sending them through a bounded channel to the main thread
     /// for parsing. The bounded channel provides backpressure to prevent
     /// memory explosion.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: SetFilePointerEx and ReadFile via reader thread for pipelined I/O"
+    )]
     pub fn read_all_pipelined<F>(
         &self,
         handle: HANDLE,
@@ -6750,7 +6832,10 @@ impl PipelinedMftReader {
     ///   Read chunks                                 Parse records in
     ///   from disk                                   parallel batches
     /// ```
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: SetFilePointerEx and ReadFile via reader thread for parallel pipelined I/O"
+    )]
     pub fn read_all_pipelined_parallel<F>(
         &self,
         handle: HANDLE,
@@ -6973,7 +7058,10 @@ fn parse_buffer_zero_copy_inner(
 }
 
 /// Static helper to read a chunk into a buffer (for use in reader thread).
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "FFI: SetFilePointerEx and ReadFile for static chunk reader helper"
+)]
 fn read_chunk_into_buffer_static(
     handle: HANDLE,
     chunk: &ReadChunk,
@@ -7045,7 +7133,10 @@ impl IoCompletionPort {
     ///
     /// # Errors
     /// Returns an error if IOCP creation fails.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: CreateIoCompletionPort to create IOCP handle"
+    )]
     pub fn new(concurrency: u32) -> Result<Self> {
         use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
         use windows::Win32::System::IO::CreateIoCompletionPort;
@@ -7065,7 +7156,10 @@ impl IoCompletionPort {
     ///
     /// # Errors
     /// Returns an error if association fails.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: CreateIoCompletionPort to associate file handle with IOCP"
+    )]
     pub fn associate(&self, file_handle: HANDLE, key: usize) -> Result<()> {
         use windows::Win32::System::IO::CreateIoCompletionPort;
 
@@ -7088,7 +7182,10 @@ impl IoCompletionPort {
 }
 
 impl Drop for IoCompletionPort {
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: CloseHandle to release IOCP handle on drop"
+    )]
     fn drop(&mut self) {
         use windows::Win32::Foundation::CloseHandle;
         if !self.handle.is_invalid() {
@@ -7149,7 +7246,10 @@ impl OverlappedRead {
     ///
     /// # Safety
     /// The returned pointer is valid as long as self is pinned and alive.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "returns raw pointer to pinned OVERLAPPED for Windows async I/O"
+    )]
     pub fn as_overlapped_ptr(&mut self) -> *mut windows::Win32::System::IO::OVERLAPPED {
         &mut self.overlapped as *mut _
     }
@@ -7230,7 +7330,10 @@ impl IocpMftReader {
     /// This method issues multiple overlapped reads simultaneously,
     /// processing completions as they arrive and issuing new reads
     /// to maintain the target concurrency level.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: ReadFile, GetQueuedCompletionStatus for overlapped IOCP reads"
+    )]
     pub fn read_all_iocp<F>(
         &self,
         handle: HANDLE,
@@ -7574,7 +7677,14 @@ impl MultiVolumeIocpReader {
     /// # Errors
     ///
     /// Returns an error if IOCP creation fails or if all volumes fail to read.
-    #[allow(unsafe_code, clippy::too_many_lines)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: ReadFile, GetQueuedCompletionStatus for multi-volume IOCP reads"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "multi-volume IOCP orchestration with per-volume state tracking"
+    )]
     pub fn read_all_volumes(&mut self) -> Result<Vec<crate::index::MftIndex>> {
         use std::pin::Pin;
 

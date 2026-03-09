@@ -14,22 +14,10 @@
 //! - `RUST_LOG_FILE`: File log level (default: `info`)
 //! - `UFFS_LOG_DIR`: Log directory (default: `~/bin/uffs/logs`)
 
-// Suppress lints for TUI binary - these are intentional for TUI apps
-#![allow(clippy::single_call_fn)]
-#![allow(clippy::indexing_slicing)]
-#![allow(clippy::min_ident_chars)]
-#![allow(clippy::missing_docs_in_private_items)]
-#![allow(clippy::str_to_string)]
-#![allow(clippy::print_stderr)]
-#![allow(clippy::use_debug)]
-#![allow(clippy::wildcard_enum_match_arm)]
-#![allow(clippy::missing_asserts_for_indexing)]
-#![allow(clippy::option_if_let_else)]
-#![allow(clippy::ref_patterns)]
-#![allow(clippy::shadow_unrelated)]
-#![allow(clippy::doc_markdown)]
-#![allow(dead_code)]
-#![allow(unused_crate_dependencies)]
+#![expect(
+    unused_crate_dependencies,
+    reason = "tokio is a transitive runtime dependency not directly referenced"
+)]
 
 use std::io;
 use std::path::PathBuf;
@@ -57,6 +45,7 @@ use tracing_subscriber::registry::Registry;
 use tracing_subscriber::{EnvFilter, Layer};
 use uffs_mft::MftReader;
 
+/// Application state and search logic.
 mod app;
 
 use app::App;
@@ -80,6 +69,10 @@ struct Cli {
 /// If `verbose` is true and `RUST_LOG` is not set, uses `info` level for
 /// terminal. Otherwise, terminal logging is controlled by `RUST_LOG` (default:
 /// `error`). File logging is controlled by `RUST_LOG_FILE` (default: `info`).
+#[expect(
+    clippy::single_call_fn,
+    reason = "separated from main for readability; logging setup is a distinct concern"
+)]
 fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     use std::fs;
 
@@ -141,13 +134,17 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     // Combine layers
     let subscriber = Registry::default().with(terminal_layer).with(file_layer);
 
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "global subscriber must be set once at startup; failure is unrecoverable"
+    )]
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set global tracing subscriber");
 
     guard
 }
 
+/// Entry point: parse CLI, set up terminal, and run the TUI event loop.
 fn main() -> Result<()> {
     // Check for -v/--verbose flag early
     let verbose = std::env::args().any(|arg| arg == "-v" || arg == "--verbose");
@@ -169,9 +166,9 @@ fn main() -> Result<()> {
         match MftReader::load_parquet(&index_path) {
             Ok(df) => App::with_dataframe(df, Some(index_path)),
             Err(err) => {
-                let mut app = App::new();
-                app.error = Some(format!("Failed to load index: {err}"));
-                app
+                let mut fallback = App::new();
+                fallback.error = Some(format!("Failed to load index: {err}"));
+                fallback
             }
         }
     } else {
@@ -190,24 +187,43 @@ fn main() -> Result<()> {
     terminal.show_cursor()?;
 
     if let Err(err) = res {
-        eprintln!("Error: {err:?}");
+        #[expect(
+            clippy::print_stderr,
+            reason = "terminal is restored at this point; stderr is appropriate for error reporting"
+        )]
+        #[expect(
+            clippy::use_debug,
+            reason = "Debug format provides full error chain for diagnostics"
+        )]
+        {
+            eprintln!("Error: {err:?}");
+        }
     }
 
     Ok(())
 }
 
+/// Run the TUI event loop, handling key input and rendering.
+#[expect(
+    clippy::single_call_fn,
+    reason = "separated from main for readability; event loop is a distinct concern"
+)]
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "only specific keys are handled; wildcard is idiomatic for key dispatch"
+)]
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
 where
     <B as ratatui::backend::Backend>::Error: Send + Sync + 'static,
 {
     loop {
-        terminal.draw(|f| ui(f, app))?;
+        terminal.draw(|frame| ui(frame, app))?;
 
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                    KeyCode::Char(c) => app.input.push(c),
+                    KeyCode::Char(ch) => app.input.push(ch),
                     KeyCode::Backspace => {
                         app.input.pop();
                     }
@@ -221,7 +237,24 @@ where
     }
 }
 
-fn ui(f: &mut Frame, app: &App) {
+/// Render the TUI layout: search bar, status, results list, and help bar.
+#[expect(
+    clippy::single_call_fn,
+    reason = "separated from run_app for readability; UI rendering is a distinct concern"
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "layout split guarantees exactly 4 chunks matching the 4 constraints"
+)]
+#[expect(
+    clippy::missing_asserts_for_indexing,
+    reason = "layout split guarantees exactly 4 chunks matching the 4 constraints"
+)]
+#[expect(
+    clippy::option_if_let_else,
+    reason = "if-let is more readable for widget construction with different layouts per branch"
+)]
+fn ui(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
@@ -231,7 +264,7 @@ fn ui(f: &mut Frame, app: &App) {
             Constraint::Min(10),   // Results
             Constraint::Length(3), // Help bar
         ])
-        .split(f.area());
+        .split(frame.area());
 
     // Search input
     let input_title = if app.has_index() {
@@ -242,10 +275,10 @@ fn ui(f: &mut Frame, app: &App) {
     let input = Paragraph::new(app.input.as_str())
         .style(Style::default().fg(Color::Yellow))
         .block(Block::default().borders(Borders::ALL).title(input_title));
-    f.render_widget(input, chunks[0]);
+    frame.render_widget(input, chunks[0]);
 
     // Status/Error bar
-    let status_content = if let Some(ref err) = app.error {
+    let status_content = if let Some(err) = &app.error {
         Line::from(vec![
             Span::styled("Error: ", Style::default().fg(Color::Red)),
             Span::styled(err.as_str(), Style::default().fg(Color::Red)),
@@ -258,19 +291,19 @@ fn ui(f: &mut Frame, app: &App) {
     };
     let status_bar = Paragraph::new(status_content)
         .block(Block::default().borders(Borders::ALL).title(" Status "));
-    f.render_widget(status_bar, chunks[1]);
+    frame.render_widget(status_bar, chunks[1]);
 
     // Results list
     let items: Vec<ListItem> = app
         .results
         .iter()
-        .map(|r| {
-            let icon = if r.is_directory { "📁" } else { "📄" };
-            let size_str = format_size(r.size);
+        .map(|result| {
+            let icon = if result.is_directory { "📁" } else { "📄" };
+            let size_str = format_size(result.size);
             ListItem::new(Line::from(vec![
                 Span::raw(icon),
                 Span::raw(" "),
-                Span::styled(&r.name, Style::default().fg(Color::Cyan)),
+                Span::styled(&result.name, Style::default().fg(Color::Cyan)),
                 Span::raw(" - "),
                 Span::styled(size_str, Style::default().fg(Color::Gray)),
             ]))
@@ -290,7 +323,7 @@ fn ui(f: &mut Frame, app: &App) {
         )
         .highlight_symbol("> ");
 
-    f.render_stateful_widget(results, chunks[2], &mut app.list_state.clone());
+    frame.render_stateful_widget(results, chunks[2], &mut app.list_state.clone());
 
     // Help bar
     let help = Paragraph::new(Line::from(vec![
@@ -302,11 +335,22 @@ fn ui(f: &mut Frame, app: &App) {
         Span::raw(" Quit"),
     ]))
     .block(Block::default().borders(Borders::ALL).title(" Help "));
-    f.render_widget(help, chunks[3]);
+    frame.render_widget(help, chunks[3]);
 }
 
 /// Format file size in human-readable format.
-#[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "separated for testability and readability"
+)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "f64 provides sufficient precision for human-readable file sizes"
+)]
+#[expect(
+    clippy::float_arithmetic,
+    reason = "float division is needed for human-readable size formatting"
+)]
 fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;

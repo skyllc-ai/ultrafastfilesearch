@@ -46,7 +46,10 @@
 //! | `flags`      | `UInt16`       | Bit-packed attributes          |
 
 #![warn(clippy::all, clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
+#![expect(
+    clippy::module_name_repetitions,
+    reason = "re-exports use crate-prefixed names for clarity"
+)]
 
 extern crate alloc;
 

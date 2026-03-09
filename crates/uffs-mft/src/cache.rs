@@ -233,7 +233,10 @@ pub fn cleanup_expired_cache(ttl_seconds: u64) {
 /// Result of a cache check operation.
 // The Fresh variant is intentionally large as it contains the loaded index.
 // Boxing would add indirection overhead for the common case.
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Fresh variant is intentionally large; boxing would add indirection overhead"
+)]
 #[derive(Debug)]
 pub enum CacheStatus {
     /// Cache is fresh and ready to use.

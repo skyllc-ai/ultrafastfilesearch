@@ -9,15 +9,15 @@
 //! compare_raw_mft <file_a> <file_b>
 //! ```
 
-// CLI diagnostic tool - these lints are appropriate to allow
-#![allow(clippy::print_stdout)]
-#![allow(clippy::print_stderr)]
-#![allow(clippy::float_arithmetic)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::single_call_fn)]
-// Standalone binary doesn't use all crate dependencies
-#![allow(unused_crate_dependencies)]
+#![expect(
+    unused_crate_dependencies,
+    reason = "standalone binary doesn't use all crate dependencies"
+)]
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "diagnostic tool — stdout/stderr output is intentional"
+)]
 
 use std::env;
 use std::fs::File;
@@ -53,7 +53,7 @@ struct RawMftHeader {
     /// Original uncompressed size in bytes.
     original_size: u64,
     /// Compressed size in bytes (if compressed).
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "parsed from binary format but not yet used")]
     compressed_size: u64,
 }
 
@@ -92,6 +92,10 @@ impl RawMftHeader {
 }
 
 /// Read and parse the header from a raw MFT file.
+#[expect(
+    clippy::single_call_fn,
+    reason = "encapsulates header I/O with focused error context"
+)]
 fn read_header<P: AsRef<Path>>(path: P) -> Result<(RawMftHeader, BufReader<File>)> {
     let file = File::open(path.as_ref())
         .with_context(|| format!("Failed to open {}", path.as_ref().display()))?;
@@ -102,6 +106,15 @@ fn read_header<P: AsRef<Path>>(path: P) -> Result<(RawMftHeader, BufReader<File>
     Ok((header, reader))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "sequential comparison pipeline — splitting would reduce clarity"
+)]
+#[expect(
+    clippy::float_arithmetic,
+    clippy::cast_precision_loss,
+    reason = "progress reporting and GiB calculations use floating-point"
+)]
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {

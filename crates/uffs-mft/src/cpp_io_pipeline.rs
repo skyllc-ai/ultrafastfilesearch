@@ -314,7 +314,14 @@ impl CppIoPipeline {
     /// 1. Queues data reads using the computed skip ranges
     /// 2. Processes completions and feeds data to the parse pipeline
     /// 3. Returns the parsed index
-    #[allow(unsafe_code, clippy::too_many_lines)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: windows IOCP API (ReadFile, GetQueuedCompletionStatus)"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "IOCP sliding-window loop is inherently complex"
+    )]
     pub fn run(
         self,
         overlapped_handle: HANDLE,
