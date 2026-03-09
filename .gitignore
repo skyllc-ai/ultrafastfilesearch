@@ -29,6 +29,9 @@ Cargo.lock
 
 # Reference code (legacy C++ UFFS, boost, WTL, etc.)
 reference/
+!docs/reference/
+docs/reference/**
+!docs/reference/README.md
 
 # Root-only clutter moved out of the tracked tree
 /Shell/

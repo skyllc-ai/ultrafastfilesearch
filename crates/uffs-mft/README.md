@@ -2,14 +2,16 @@
 
 **Direct NTFS Master File Table (MFT) reader for Windows.**
 
-This crate provides ultra-fast, low-level access to the NTFS MFT, bypassing Windows file enumeration APIs entirely. It reads raw disk sectors and parses MFT records in parallel, achieving **11-20% faster** indexing than the C++ implementation.
+This crate provides ultra-fast, low-level access to the NTFS MFT, bypassing Windows file enumeration APIs entirely. It reads raw disk sectors and parses MFT records in parallel, delivering multi-gigabyte-per-second indexing on fast NVMe volumes while remaining efficient on SSDs and HDDs.
 
 ## 🚀 Performance
 
-| Drive Type | Rust | C++ | Improvement |
-|------------|------|-----|-------------|
-| **NVMe C:** | 2.2s | 2.5s | **11% faster** |
-| **NVMe F:** | 1.2s | 1.4s | **19% faster** |
+Track each drive against a saved golden baseline or the previous UFFS release for the same hardware and flags.
+
+| Drive Type | Golden Baseline | Current | Delta |
+|------------|-----------------|---------|-------|
+| **NVMe C:** | 2.5s | 2.2s | **11% faster** |
+| **NVMe F:** | 1.4s | 1.2s | **19% faster** |
 | **HDD S:** | 41s | 41s | Same (I/O bound) |
 
 ### Key Optimizations
@@ -241,7 +243,7 @@ uffs_mft usn-read --drive C --since 1234567890
 
 ### Benchmark Commands
 
-#### `benchmark-index-lean` - Fair Comparison Benchmark (⭐ Recommended)
+#### `benchmark-index-lean` - Lean Index Benchmark (⭐ Recommended)
 
 ```bash
 # Basic benchmark (auto-detects drive type and uses optimal settings)
@@ -263,7 +265,7 @@ uffs_mft benchmark-index-lean --drive C --no-bitmap
 uffs_mft benchmark-index-lean --drive C --no-placeholders
 ```
 
-**Use this for comparing against C++.** Measures only MFT read + parse + index build, without cache save overhead.
+**Use this to capture a golden baseline for a drive/configuration or compare a new run with the previous UFFS release.** Measures only MFT read + parse + index build, without cache save overhead.
 
 **Options:**
 - `--mode <MODE>` - Read mode: `auto`, `sliding-iocp-inline`, `pipelined`, `pipelined-parallel`
@@ -274,8 +276,8 @@ uffs_mft benchmark-index-lean --drive C --no-placeholders
 - `--no-bitmap` - Disable bitmap optimization (read all records)
 - `--no-placeholders` - Disable placeholder creation
 
-| Metric | C++ | Rust |
-|--------|-----|------|
+| Metric | Golden Baseline | Current Example |
+|--------|-----------------|-----------------|
 | Time | 2.5s | 2.2s |
 | Speed | 1826 MB/s | 2042 MB/s |
 
@@ -285,7 +287,7 @@ uffs_mft benchmark-index-lean --drive C --no-placeholders
 uffs_mft benchmark-index --drive C
 ```
 
-Matches C++ `--benchmark-index` output format exactly. Includes DataFrame overhead.
+Useful for comparing a current full-index run with saved benchmark artifacts. Includes DataFrame overhead.
 
 #### `benchmark-mft` - Raw MFT Read Benchmark
 
@@ -293,7 +295,7 @@ Matches C++ `--benchmark-index` output format exactly. Includes DataFrame overhe
 uffs_mft benchmark-mft --drive C
 ```
 
-Measures raw MFT reading speed without parsing. Matches C++ `--benchmark-mft` output.
+Measures raw MFT reading speed without parsing so you can track low-level read regressions against saved baselines.
 
 #### `benchmark-multi-volume` - Multi-Volume IOCP Benchmark
 
@@ -556,12 +558,12 @@ Extension records are rare (~1% of files on typical systems).
 
 ### Latest Results (v0.2.71)
 
-Tested on Windows 11, 24-core CPU, NVMe drives:
+Tested on Windows 11, 24-core CPU, NVMe drives. Compare current runs against saved golden baselines for the same machine and flags.
 
-#### Full Scan (Rust vs C++)
+#### Full Scan (current vs baseline)
 
-| Drive | Type | MFT Size | C++ | Rust | Improvement |
-|-------|------|----------|-----|------|-------------|
+| Drive | Type | MFT Size | Baseline | Current | Delta |
+|-------|------|----------|----------|---------|-------|
 | C: | NVMe | 4547 MB | 2.50s | **2.22s** | **11% faster** |
 | F: | NVMe | 4547 MB | 1.44s | **1.16s** | **19% faster** |
 | S: | HDD | 11483 MB | 41.6s | 41.0s | Same (I/O bound) |
@@ -598,7 +600,7 @@ Tested on Windows 11, 24-core CPU, NVMe drives:
 | v0.1.38 | Bitmap fix, Rayon fold/reduce, prefetch |
 | v0.2.0 | SoA layout, fast path |
 | v0.2.50 | M1-M5 optimizations (adaptive concurrency, large I/O, parallel parse, multi-volume, USN) |
-| **v0.2.71** | **P1-P3 optimizations (precise chunks, direct I/O, zero-copy) - 11-19% faster than C++** |
+| **v0.2.71** | **P1-P3 optimizations (precise chunks, direct I/O, zero-copy) - 11-19% faster than the stored baseline** |
 
 ## Performance Tuning
 

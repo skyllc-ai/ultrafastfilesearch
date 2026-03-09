@@ -154,8 +154,8 @@ impl ExtensionTable {
 /// Extension index using Compressed Sparse Row (CSR) format.
 #[derive(Debug, Default, Clone)]
 pub struct ExtensionIndex {
-    /// CSR offsets: offsets[`ext_id`] = start index in postings and
-    /// offsets[`ext_id + 1`] = end index in postings.
+    /// CSR offsets: `offsets[extension_id]` gives the start index in
+    /// `postings`, and `offsets[extension_id + 1]` gives the exclusive end.
     pub offsets: Vec<u32>,
     /// CSR postings: record indices for each extension.
     pub postings: Vec<u32>,

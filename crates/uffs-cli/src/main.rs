@@ -11,14 +11,6 @@
 //! uffs --ext=rs,toml      # Find Rust files
 //! ```
 //!
-//! ## Multi-Personality CLI (`BusyBox` Pattern)
-//!
-//! The binary name determines CLI behavior. Create symlinks for compatibility:
-//! ```bash
-//! ln -s uffs es           # Everything-compatible mode
-//! ln -s uffs uffs-cpp     # C++ UFFS compatible mode
-//! ```
-//!
 //! ## Logging
 //!
 //! Use `-v` / `--verbose` for info-level terminal output:
@@ -49,7 +41,7 @@
 // Dependencies used in commands.rs for streaming output (Windows-only code
 // paths)
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use chrono as _;
@@ -69,68 +61,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 mod commands;
 
-// ============================================================================
-// Multi-Personality CLI (BusyBox Pattern)
-// ============================================================================
-
-/// CLI personality based on binary name (argv[0]).
-///
-/// Allows a single binary to behave differently based on how it's invoked,
-/// similar to `BusyBox`. Users can create symlinks to get different CLI styles:
-/// - `uffs` → Modern CLI (ripgrep/fd style)
-/// - `es` → Everything-compatible mode
-/// - `uffs-cpp` → C++ UFFS compatible mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Personality {
-    /// Modern CLI: clean, ripgrep/fd style (default)
-    #[default]
-    Modern,
-    /// Everything-compatible: matches voidtools Everything CLI
-    Everything,
-    /// C++ UFFS compatible: matches original C++ implementation
-    CppCompat,
-}
-
-impl Personality {
-    /// Detect personality from the binary name (argv[0]).
-    ///
-    /// Returns `Modern` for unknown binary names.
-    #[must_use]
-    pub fn detect() -> Self {
-        let binary_name = std::env::args()
-            .next()
-            .and_then(|path| {
-                Path::new(&path)
-                    .file_stem()
-                    .map(|stem| stem.to_string_lossy().to_lowercase())
-            })
-            .unwrap_or_default();
-
-        match binary_name.as_ref() {
-            "es" | "everything" => Self::Everything,
-            "uffs-cpp" | "uffs_cpp" => Self::CppCompat,
-            _ => Self::Modern, // "uffs" or anything else
-        }
-    }
-
-    /// Get the display name for this personality.
-    #[must_use]
-    pub const fn name(&self) -> &'static str {
-        match self {
-            Self::Modern => "UFFS (Ultra Fast File Search)",
-            Self::Everything => "UFFS (Everything-compatible mode)",
-            Self::CppCompat => "UFFS (C++ compatible mode)",
-        }
-    }
-
-    /// Check if this personality should use C++ compatible output quirks.
-    #[must_use]
-    pub const fn is_cpp_compat(&self) -> bool {
-        matches!(self, Self::CppCompat)
-    }
-}
-
-/// Parse a drive letter from various formats for CPP compatibility.
+/// Parse a drive letter from common CLI input formats.
 ///
 /// Accepts:
 /// - Single letter: `C`, `c`
@@ -139,7 +70,7 @@ impl Personality {
 /// Returns uppercase drive letter.
 fn parse_drive_letter(input: &str) -> Result<char, String> {
     let trimmed = input.trim();
-    // Strip trailing colon if present (CPP compatibility: "C:" -> "C")
+    // Strip trailing colon if present (`C:` -> `C`).
     let letter_str = trimmed.strip_suffix(':').unwrap_or(trimmed);
 
     if letter_str.len() != 1 {
@@ -273,7 +204,7 @@ struct Cli {
     out: String,
 
     /// Columns to output (comma-separated or "all")
-    /// Default: all columns (CPP compatible)
+    /// Default: all columns.
     #[arg(long, default_value = "all")]
     columns: String,
 
@@ -281,12 +212,11 @@ struct Cli {
     #[arg(long, default_value = ",")]
     sep: String,
 
-    /// Quote character for string values (default: double-quote for CPP
-    /// compatibility)
+    /// Quote character for string values (default: double quote)
     #[arg(long, default_value = "\"")]
     quotes: String,
 
-    /// Include header row in output (default: true for CPP compatibility)
+    /// Include header row in output.
     #[arg(long, default_value = "true")]
     header: bool,
 
@@ -466,10 +396,6 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
 /// This is separated from `main()` to allow custom error handling that
 /// doesn't show backtraces for user-facing errors like "file not found".
 async fn run() -> Result<()> {
-    // Touch tripwire to ensure it's embedded in the binary string table
-    // (Fix #6: tripwire that doesn't break CSV)
-    commands::touch_tripwire();
-
     // Check for -v/--verbose flag early to set log level before initializing
     // logging This allows `uffs -v ...` to show info-level logs without
     // RUST_LOG=info
@@ -477,10 +403,6 @@ async fn run() -> Result<()> {
 
     // Initialize logging with terminal + file support
     let _guard = init_logging(verbose);
-
-    // Detect CLI personality based on binary name (BusyBox pattern)
-    let personality = Personality::detect();
-    tracing::debug!(?personality, "CLI personality detected");
 
     let cli = Cli::parse();
 

@@ -89,21 +89,17 @@ use {
 // Module declarations
 // ============================================================================
 
-pub mod cpp_tree;
-pub mod cpp_types;
 pub mod error;
 pub mod flags;
 pub mod index;
 pub mod raw;
+pub mod tree_metrics;
 
 // Cross-platform modules (NTFS structures and parsing)
 pub mod ntfs; // NTFS structure definitions - cross-platform
 pub mod parse; // MFT record parsing - cross-platform
 
 // Windows-only modules (I/O operations)
-#[cfg(windows)]
-pub mod cpp_io_pipeline;
-
 #[cfg(windows)]
 pub mod io;
 

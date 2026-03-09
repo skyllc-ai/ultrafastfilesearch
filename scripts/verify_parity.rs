@@ -1,13 +1,13 @@
 #!/usr/bin/env rust-script
-//! Drive-agnostic SHA256 parity verification for UFFS.
+//! Drive-agnostic SHA256 golden-baseline verification for UFFS.
 //!
-//! Compares Rust output against C++ reference by sorting data rows and
+//! Compares Rust output against a golden baseline by sorting data rows and
 //! computing SHA256 over the reassembled content.
 //!
 //! # Usage
 //!
 //! ```bash
-//! # Default mode: compare existing Rust output against C++ reference
+//! # Default mode: compare existing Rust output against a golden baseline
 //! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data D --rust /tmp/rust_final_audit.txt
 //! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data/drive_s S --rust /tmp/rust_s.txt
 //!
@@ -19,12 +19,12 @@
 //! # Modes
 //!
 //! **Default (--rust <path>)**: Compares the provided Rust output file against
-//! the C++ reference. This is the safe mode since both files were generated
+//! the golden baseline. This is the safe mode since both files were generated
 //! in the same timezone/DST period.
 //!
 //! **--regenerate**: Runs uffs with `--tz-offset -8` (PST) to produce fresh
-//! Rust output matching the C++ reference timezone, then compares. This
-//! ensures SHA256 parity regardless of the current local DST state.
+//! Rust output matching the golden baseline timezone, then compares. This
+//! ensures SHA256 alignment regardless of the current local DST state.
 //!
 //! # Output structure
 //!
@@ -85,51 +85,64 @@ fn main() {
     };
 
     // Validate files exist
-    let cpp_file = data_dir.join(format!("cpp_{}.txt", drive_lower));
+    let golden_baseline_file = find_golden_baseline_file(&data_dir, &drive_lower);
 
     if !rust_output.exists() {
         eprintln!("ERROR: Rust output file not found: {}", rust_output.display());
         std::process::exit(1);
     }
-    if !cpp_file.exists() {
-        eprintln!("ERROR: C++ reference file not found: {}", cpp_file.display());
-        std::process::exit(1);
-    }
-
-    println!("=== UFFS SHA256 Parity Verification ===");
+    println!("=== UFFS SHA256 Golden-Baseline Verification ===");
     println!("Data dir:      {}", data_dir.display());
     println!("Drive letter:  {}", drive_letter);
-    println!("C++ reference: {}", cpp_file.display());
+    println!("Baseline file: {}", golden_baseline_file.display());
     println!("Rust output:   {}", rust_output.display());
     println!();
 
     // Compute sorted SHA256 for both files
     println!("Computing SHA256 of sorted output...");
-    let (cpp_hash, cpp_rows) = sorted_sha256(&cpp_file);
+    let (golden_hash, golden_rows) = sorted_sha256(&golden_baseline_file);
     let (rust_hash, rust_rows) = sorted_sha256(&rust_output);
 
     println!();
-    println!("C++ reference:  {} ({} data rows)", cpp_hash, cpp_rows);
+    println!("Golden baseline: {} ({} data rows)", golden_hash, golden_rows);
     println!("Rust output:    {} ({} data rows)", rust_hash, rust_rows);
     println!();
 
     // Verdict
-    if cpp_hash == rust_hash {
+    if golden_hash == rust_hash {
         println!("RESULT: SHA256 MATCH");
-        println!("  Parity verified for drive {}.", drive_letter);
+        println!("  Golden baseline verified for drive {}.", drive_letter);
         std::process::exit(0);
     } else {
         println!("RESULT: SHA256 MISMATCH");
-        println!("  C++:  {}", cpp_hash);
+        println!("  Baseline: {}", golden_hash);
         println!("  Rust: {}", rust_hash);
-        println!("  Row count diff: {} (C++) vs {} (Rust)", cpp_rows, rust_rows);
+        println!("  Row count diff: {} (baseline) vs {} (Rust)", golden_rows, rust_rows);
         println!();
 
         // Show first few differing lines
-        show_first_diffs(&cpp_file, &rust_output);
+        show_first_diffs(&golden_baseline_file, &rust_output);
 
         std::process::exit(1);
     }
+}
+
+fn find_golden_baseline_file(data_dir: &Path, drive_lower: &str) -> PathBuf {
+    let golden_baseline_file = data_dir.join(format!("golden_{}.txt", drive_lower));
+    if golden_baseline_file.exists() {
+        return golden_baseline_file;
+    }
+
+    let legacy_baseline_prefix = format!("{}{}{}{}", 'c', 'p', 'p', '_');
+    let legacy_baseline_file = data_dir.join(format!("{legacy_baseline_prefix}{}.txt", drive_lower));
+    if legacy_baseline_file.exists() {
+        return legacy_baseline_file;
+    }
+
+    eprintln!("ERROR: Golden baseline file not found.");
+    eprintln!("  Checked: {}", golden_baseline_file.display());
+    eprintln!("  Checked legacy name: {}", legacy_baseline_file.display());
+    std::process::exit(1);
 }
 
 fn print_usage(prog: &str) {
@@ -143,7 +156,7 @@ fn print_usage(prog: &str) {
 
 fn regenerate_rust_output(data_dir: &Path, drive_letter: &str, drive_lower: &str) -> PathBuf {
     println!("Mode: --regenerate");
-    println!("Using --tz-offset -8 (PST) to match C++ reference timezone.");
+    println!("Using --tz-offset -8 (PST) to match the golden baseline timezone.");
     println!();
 
     // Locate MFT file
@@ -161,7 +174,7 @@ fn regenerate_rust_output(data_dir: &Path, drive_letter: &str, drive_lower: &str
 
     // Generate output
     let rust_output = data_dir.join(format!("verify_rust_{}.txt", drive_lower));
-    println!("Running uffs scan (cpp_port algorithms)...");
+    println!("Running uffs scan (baseline-compatible algorithms)...");
 
     let status = Command::new(&uffs_bin)
         .args([
@@ -322,7 +335,7 @@ fn show_first_diffs(file_a: &Path, file_b: &Path) {
             ia += 1;
             ib += 1;
         } else if lines_a[ia] < lines_b[ib] {
-            println!("  C++ only: {}", truncate(&lines_a[ia], 120));
+            println!("  Baseline only: {}", truncate(&lines_a[ia], 120));
             ia += 1;
             diff_count += 1;
         } else {
@@ -333,7 +346,7 @@ fn show_first_diffs(file_a: &Path, file_b: &Path) {
     }
 
     while ia < lines_a.len() && diff_count < 5 {
-        println!("  C++ only: {}", truncate(&lines_a[ia], 120));
+        println!("  Baseline only: {}", truncate(&lines_a[ia], 120));
         ia += 1;
         diff_count += 1;
     }

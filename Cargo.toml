@@ -25,7 +25,6 @@ members = [
     "crates/uffs-cli",      # 🖥️  Command-line interface
     "crates/uffs-tui",      # 📟 Terminal UI
     "crates/uffs-gui",      # 🪟 Graphical UI (future)
-    "crates/uffs-legacy",   # 📜 Legacy code (reference only)
     "crates/uffs-diag",     # 🔬 Diagnostic tools (temporarily enabled)
 ]
 exclude = [
@@ -116,7 +115,6 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["fmt", "time", "env-filter"] }
 tracing-appender = "0.2.4"
 log = "0.4.29"
-simplelog = "0.12.2"
 
 # ───── Time ─────
 # Note: chrono version constrained by Polars git dependency (requires <= 0.4.41)
@@ -154,8 +152,6 @@ ignore = "0.4.25"
 jwalk = "0.8.1"
 sysinfo = "0.38.3"
 num-format = "0.4.4"
-async-recursion = "1.1.1"
-async-trait = "0.1.89"
 rand = "0.10.0"
 tokio-stream = "0.1.18"
 

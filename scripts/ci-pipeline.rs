@@ -25,7 +25,7 @@
 // UFFS - UltraFastFileSearch: High-Performance File Search Tool
 // Contact: 50460704+githubrobbi@users.noreply.github.com for licensing inquiries
 //
-//! High-Performance CI Pipeline with Tokio Async Orchestration
+//! Nightly CI pipeline driver with Tokio async orchestration
 //!
 //! This script implements advanced CI pipeline optimizations using:
 //! - Tokio async/await for true parallelism
@@ -416,11 +416,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Complete two-phase fast-fail workflow (optimized)
+    /// Complete two-phase nightly workflow (optimized)
     Go,
-    /// Comprehensive validation with parallel execution
+    /// Comprehensive nightly-grade validation with parallel execution
     CheckAll,
-    /// Phase 1: Testing with maximum parallelism
+    /// Phase 1 nightly validation gates with maximum parallelism
     Phase1,
     /// Phase 2: Build and deploy
     Phase2,
@@ -434,7 +434,7 @@ enum Commands {
     WorkflowReset,
     /// Resume incomplete workflow
     WorkflowResume,
-    /// Cross-compilation validation
+    /// Nightly cross-compilation validation
     CrossCheck,
 }
 
@@ -702,11 +702,9 @@ async fn phase1_optimized(ctx: &PipelineContext) -> Result<()> {
     ).await?;
 
     // Step 6: Parallel linting
-    // NOTE: --exclude uffs-legacy because it's frozen legacy code kept for reference only.
-    // The modern crates (uffs-core, uffs-mft, uffs-cli, etc.) follow strict linting.
     let linting_commands = vec![
         ("Production linting", "cargo", vec![
-            "clippy", "--workspace", "--exclude", "uffs-legacy",
+            "clippy", "--workspace",
             "--all-targets", "--all-features", "--no-deps", "--",
             "-D", "clippy::pedantic", "-D", "clippy::nursery", "-D", "clippy::cargo",
             "-A", "clippy::multiple_crate_versions", "-W", "clippy::panic",
@@ -714,7 +712,7 @@ async fn phase1_optimized(ctx: &PipelineContext) -> Result<()> {
             "-W", "clippy::unwrap_used", "-W", "clippy::expect_used",
         ]),
         ("Test linting", "cargo", vec![
-            "clippy", "--workspace", "--exclude", "uffs-legacy",
+            "clippy", "--workspace",
             "--all-targets", "--all-features", "--tests", "--no-deps", "--",
             "-D", "clippy::pedantic", "-D", "clippy::nursery", "-D", "clippy::cargo",
             "-A", "clippy::multiple_crate_versions", "-W", "clippy::panic",
@@ -1087,19 +1085,17 @@ async fn run_enhanced_phase1(state: &mut WorkflowState, ctx: &PipelineContext) -
     }).await?;
 
     // Step 4: Parallel validation (doc tests + linting)
-    // NOTE: --exclude uffs-legacy because it's frozen legacy code kept for reference only.
-    // The modern crates (uffs-core, uffs-mft, uffs-cli, etc.) follow strict linting.
     execute_step_with_tracking(state, STEP_PARALLEL_VALIDATION, || async {
         let parallel_commands = vec![
             ("Documentation tests", "cargo", vec!["test", "--doc", "--workspace", "--all-features"]),
             ("Production linting", "cargo", vec![
-                "clippy", "--workspace", "--exclude", "uffs-legacy",
+                "clippy", "--workspace",
                 "--lib", "--bins", "--all-features", "--no-deps", "--",
                 "-D", "warnings", "-D", "clippy::pedantic", "-D", "clippy::nursery", "-D", "clippy::cargo",
                 "-A", "clippy::multiple_crate_versions", "-W", "clippy::panic", "-W", "clippy::todo", "-W", "clippy::unimplemented",
             ]),
             ("Test linting", "cargo", vec![
-                "clippy", "--workspace", "--exclude", "uffs-legacy",
+                "clippy", "--workspace",
                 "--all-targets", "--all-features", "--tests", "--no-deps", "--",
                 "-D", "clippy::pedantic", "-D", "clippy::nursery", "-D", "clippy::cargo",
                 "-A", "clippy::multiple_crate_versions", "-W", "clippy::panic", "-W", "clippy::todo", "-W", "clippy::unimplemented",
@@ -1112,11 +1108,10 @@ async fn run_enhanced_phase1(state: &mut WorkflowState, ctx: &PipelineContext) -
     }).await?;
 
     // Step 5: Final format check
-    // NOTE: --exclude uffs-legacy for the same reason as above.
     execute_step_with_tracking(state, STEP_FORMAT_CHECK, || async {
         execute_command("Format normalization", "cargo", &["fmt", "--all"], ctx).await?;
         execute_command("CI lint gating", "cargo", &[
-            "clippy", "--workspace", "--exclude", "uffs-legacy", "--all-features", "--", "-D", "warnings"
+            "clippy", "--workspace", "--all-features", "--", "-D", "warnings"
         ], ctx).await
     }).await?;
 

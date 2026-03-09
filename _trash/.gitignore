@@ -1,0 +1,3 @@
+# Local rollback staging for de-tracked root clutter.
+*
+!.gitignore

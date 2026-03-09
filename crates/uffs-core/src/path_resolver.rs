@@ -325,8 +325,8 @@ impl FastPathResolver {
 
     /// Add a "path" column to a `DataFrame` using this resolver (sequential).
     ///
-    /// For large `DataFrames`, consider using [`add_path_column_parallel`]
-    /// instead.
+    /// For large `DataFrames`, consider using
+    /// [`FastPathResolver::add_path_column_parallel`] instead.
     ///
     /// # Errors
     ///

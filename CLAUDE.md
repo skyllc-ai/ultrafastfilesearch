@@ -64,7 +64,6 @@ crates/
 ├── uffs-cli/      CLI binary (`uffs`). Built on clap. Subcommands: search, index, info, stats.
 ├── uffs-tui/      Terminal UI binary (`uffs_tui`). Built on ratatui/crossterm.
 ├── uffs-gui/      GUI placeholder (future).
-├── uffs-legacy/   Reference-only legacy C++ port (do not modify).
 └── uffs-diag/     Diagnostic tools (temporarily in workspace members for analysis).
 ```
 
@@ -107,7 +106,7 @@ The workspace enforces extremely strict Clippy settings in `Cargo.toml` `[worksp
 - Most unit tests run cross-platform (mocked/fixture-based data)
 - Tests requiring live MFT access are `#[ignore]` — run with `cargo test -- --ignored` on Windows (elevated)
 - Windows-specific code is gated with `#[cfg(windows)]`
-- Comparison tests against C++ reference output are in `uffs-mft` with `cpp_comparison` filter
+- Prefer focused fixture, golden-output, or regression tests when validating parser and query behavior
 
 ## Scripts
 

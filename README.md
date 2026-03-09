@@ -5,7 +5,7 @@
 
 **Ultra-high-performance file search for Windows using direct NTFS MFT reading and Polars DataFrames.**
 
-> 🦀 This is the Rust rewrite of UFFS, replacing the original C++ version with modern, safe, and blazing-fast code.
+> 🦀 UFFS is a Windows-first search engine built for fast NTFS indexing, instant repeated queries, and practical file-system analysis.
 
 ---
 
@@ -418,7 +418,7 @@ See [LICENSE](LICENSE) for details.
 
 ## 🙏 Acknowledgments
 
-This Rust implementation is inspired by the original C++ UFFS, which was based on [SwiftSearch](https://sourceforge.net/projects/swiftsearch/) by wfunction.
+UFFS benefits from the broader NTFS tooling ecosystem, including [SwiftSearch](https://sourceforge.net/projects/swiftsearch/) by wfunction.
 
 ---
 

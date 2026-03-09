@@ -1382,9 +1382,9 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     //     2
     //   - Channel B (printed): only directory stream -> junction prints
     //     descendants=1
-    // The cpp_tree.rs algorithm handles this by storing printed_desc = 1 + children
-    // while returning result.treesize = total_stream_count + children for
-    // propagation.
+    // The tree metrics algorithm handles this by storing printed_desc = 1 +
+    // children while returning result.treesize = total_stream_count + children
+    // for propagation.
     if is_directory && dir_index_size > 0 {
         // Add $I30 as the default stream (empty name) for directories
         // This matches C++ behavior where $I30 is the "default" stream for directories
