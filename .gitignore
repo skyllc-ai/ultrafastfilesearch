@@ -6,6 +6,12 @@
 debug/
 target/
 
+# Root clutter quarantine / local rollback staging
+/_trash/*
+!/_trash/.gitignore
+/_trash/**/.gitkeep
+/_trash/**/.keep
+
 # Build artifacts and environment files
 build/
 build/last_environment
@@ -23,6 +29,12 @@ Cargo.lock
 
 # Reference code (legacy C++ UFFS, boost, WTL, etc.)
 reference/
+
+# Root-only clutter moved out of the tracked tree
+/Shell/
+/LOG/
+/vendor/
+/missing_paths.txt
 
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
