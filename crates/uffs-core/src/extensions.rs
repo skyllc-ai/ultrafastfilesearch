@@ -17,6 +17,12 @@
 //! assert!(filter.matches("report.pdf")); // from documents collection
 //! ```
 
+// Helper functions separated for testability
+#![expect(
+    clippy::single_call_fn,
+    reason = "helper functions extracted for testability"
+)]
+
 use std::collections::{HashMap, HashSet};
 
 use uffs_polars::{DataFrame, Expr, IntoLazy, col, lit};
@@ -266,7 +272,7 @@ impl ExtensionIndex {
         let mut index: HashMap<String, Vec<u64>> = HashMap::new();
         let mut total_files = 0;
 
-        for (frs_opt, name_opt) in frs_col.into_iter().zip(name_col.into_iter()) {
+        for (frs_opt, name_opt) in frs_col.into_iter().zip(name_col) {
             let Some(frs) = frs_opt else { continue };
             let Some(name) = name_opt else { continue };
 
@@ -378,7 +384,7 @@ mod tests {
     use super::*;
 
     // Use a test-specific Result type that works with CoreError
-    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+    type TestResult = core::result::Result<(), Box<dyn core::error::Error>>;
 
     #[test]
     fn test_parse_single_extension() {

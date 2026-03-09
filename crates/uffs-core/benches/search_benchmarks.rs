@@ -15,18 +15,10 @@
     clippy::single_call_fn,
     reason = "benchmark functions called once by criterion_group! macro"
 )]
+#![expect(clippy::let_underscore_untyped, reason = "benchmarks discard results")]
 #![expect(
     clippy::let_underscore_must_use,
     reason = "benchmarks discard results to measure computation"
-)]
-#![expect(clippy::let_underscore_untyped, reason = "benchmarks discard results")]
-#![expect(
-    clippy::std_instead_of_core,
-    reason = "benchmark code uses std for simplicity"
-)]
-#![expect(
-    clippy::std_instead_of_alloc,
-    reason = "benchmark code uses std for simplicity"
 )]
 #![expect(
     clippy::unwrap_used,
@@ -36,38 +28,19 @@
     clippy::expect_used,
     reason = "benchmark code expects on controlled test data"
 )]
-#![expect(
-    clippy::similar_names,
-    reason = "benchmark variable names for different sizes"
-)]
 #![expect(clippy::missing_docs_in_private_items, reason = "benchmark code")]
-#![expect(clippy::missing_panics_doc, reason = "benchmark code")]
 #![expect(
     clippy::shadow_reuse,
     reason = "benchmarks reuse variable names in loops"
 )]
 #![expect(
-    clippy::shadow_same,
-    reason = "benchmarks reuse variable names in loops"
-)]
-#![expect(clippy::semicolon_if_nothing_returned, reason = "benchmark code")]
-#![expect(clippy::semicolon_inside_block, reason = "benchmark code")]
-#![expect(clippy::semicolon_outside_block, reason = "benchmark code")]
-#![expect(
-    clippy::needless_pass_by_value,
-    reason = "criterion API requires owned values"
-)]
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "benchmark data fits in target types"
-)]
-#![expect(
-    clippy::indexing_slicing,
-    reason = "benchmark code indexes known-valid positions"
-)]
-#![expect(
     clippy::min_ident_chars,
     reason = "benchmark code uses short loop variables"
+)]
+#![expect(clippy::semicolon_if_nothing_returned, reason = "benchmark code style")]
+#![expect(
+    clippy::std_instead_of_core,
+    reason = "benchmark code uses std for simplicity"
 )]
 #![expect(
     unused_crate_dependencies,

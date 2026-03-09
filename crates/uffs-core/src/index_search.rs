@@ -34,12 +34,6 @@
 use std::collections::HashSet;
 
 use aho_corasick::AhoCorasick;
-// memchr is used by aho-corasick internally; kept for future SIMD optimizations
-#[expect(
-    unused_imports,
-    reason = "memchr used by aho-corasick; kept for future SIMD work"
-)]
-use memchr as _;
 use rayon::prelude::*;
 use regex::Regex;
 use uffs_mft::index::{FileRecord, MftIndex};

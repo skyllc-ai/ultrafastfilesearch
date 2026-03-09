@@ -374,7 +374,7 @@ fn load_or_build_dataframe_cached_sync(
     // Cache miss - read fresh
     eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: cache MISS, reading MFT fresh");
     tracing::info!(drive = %drive, "📖 Cache miss - reading MFT fresh");
-    let reader = MftReader::open_sync(drive)?;
+    let reader = MftReader::open(drive)?;
     eprintln!(
         "[DEBUG] load_or_build_dataframe_cached_sync: reader opened, calling read_all_index_sync"
     );

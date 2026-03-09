@@ -1725,16 +1725,9 @@ const FRH_DIRECTORY: u16 = 0x0002;
 const FILE_NAME_WIN32: u8 = 0x01;
 /// NTFS `FILE_NAME` namespace: DOS-only (8.3 short name, not visible
 /// standalone).
-#[expect(
-    dead_code,
-    reason = "defined for completeness of NTFS namespace constants"
-)]
 const FILE_NAME_DOS: u8 = 0x02;
 /// NTFS `FILE_NAME` namespace: Win32+DOS combined (visible in Explorer).
-#[expect(
-    dead_code,
-    reason = "defined for completeness of NTFS namespace constants"
-)]
+#[expect(dead_code, reason = "NTFS constant for completeness")]
 const FILE_NAME_WIN32_DOS: u8 = 0x03;
 
 /// FILE record magic number ('FILE' in little-endian = 'ELIF')
@@ -1775,6 +1768,10 @@ pub struct CppParsePipeline {
     pub records_not_in_use: core::sync::atomic::AtomicU64,
 }
 
+#[expect(
+    clippy::single_call_fn,
+    reason = "private helpers extracted for C++ parity"
+)]
 impl CppParsePipeline {
     /// Create a new pipeline with the given record size.
     #[must_use]
@@ -2039,10 +2036,6 @@ impl CppParsePipeline {
     /// - Parse stream attributes
     ///
     /// This function is called with the mutex held (serialized parsing).
-    #[expect(
-        clippy::too_many_lines,
-        reason = "C++ parity: sequential attribute parsing loop"
-    )]
     fn load(&self, index: &mut CppMftIndex, buffer: &[u8], virtual_offset: u64) {
         use core::sync::atomic::Ordering;
 
@@ -2125,15 +2118,7 @@ impl CppParsePipeline {
     ///
     /// Returns `true` if the record was in-use and parsed, `false` otherwise.
     // Separate function for code organization matching C++ structure
-    #[expect(
-        clippy::single_call_fn,
-        reason = "extracted for code organization matching C++ structure"
-    )]
     #[inline]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "C++ parity: sequential attribute dispatch"
-    )]
     #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
     fn parse_record(index: &mut CppMftIndex, data: &[u8], frs: u32) -> bool {
         use core::mem::size_of;
@@ -2238,10 +2223,6 @@ impl CppParsePipeline {
 
     /// Parse `$STANDARD_INFORMATION` attribute.
     // Separate function for code organization matching C++ structure
-    #[expect(
-        clippy::single_call_fn,
-        reason = "extracted for code organization matching C++ structure"
-    )]
     #[inline]
     #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
     fn parse_standard_info(index: &mut CppMftIndex, attr_data: &[u8], frs_base: u32, flags: u16) {
@@ -2290,10 +2271,6 @@ impl CppParsePipeline {
 
     /// Parse `$FILE_NAME` attribute.
     // Separate function for code organization matching C++ structure
-    #[expect(
-        clippy::single_call_fn,
-        reason = "extracted for code organization matching C++ structure"
-    )]
     #[inline]
     #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
     fn parse_file_name(index: &mut CppMftIndex, attr_data: &[u8], frs_base: u32) {
@@ -2410,7 +2387,7 @@ impl CppParsePipeline {
     ///
     /// Fix 4: Used to deduplicate names when both Win32 (0x01) and Win32+DOS
     /// (0x03) namespaces carry the same name string.
-    #[expect(clippy::single_call_fn, reason = "helper function for readability")]
+    #[expect(dead_code, reason = "helper for future name deduplication feature")]
     fn record_has_name(
         index: &CppMftIndex,
         record_idx: usize,
@@ -2521,7 +2498,6 @@ impl CppParsePipeline {
     }
 
     /// Parse stream attributes (`$DATA`, `$INDEX_ROOT`, etc.).
-    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
     #[expect(
         clippy::too_many_lines,
         reason = "C++ parity: sequential stream attribute parsing"
@@ -2742,7 +2718,7 @@ impl CppParsePipeline {
     ///   `info->length += IsNonResident ? DataSize : ValueLength`
     ///   `info->allocated += IsNonResident ? AllocatedSize : 0`
     ///   `info->bulkiness += info->allocated`
-    /// No special cases for $I30 Bitmap or IndexAllocation.
+    /// No special cases for `$I30` Bitmap or `IndexAllocation`.
     #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
     fn update_stream_sizes(
         index: &mut CppMftIndex,
@@ -2930,26 +2906,15 @@ fn is_ascii_utf16(data: &[u8]) -> bool {
 
 #[cfg(test)]
 #[expect(
-    clippy::unwrap_used,
-    reason = "test code — panicking on failure is acceptable"
-)]
-#[expect(
-    clippy::expect_used,
-    reason = "test code — panicking on failure is acceptable"
-)]
-#[expect(
     clippy::indexing_slicing,
     reason = "test code with known valid indices"
 )]
 #[expect(
-    clippy::significant_drop_tightening,
-    reason = "test code — drop order is not critical"
+    clippy::expect_used,
+    reason = "test code uses expect on controlled data"
 )]
-#[expect(clippy::semicolon_outside_block, reason = "test code style")]
-#[expect(
-    clippy::let_underscore_untyped,
-    reason = "test code — type inference is sufficient"
-)]
+#[expect(clippy::let_underscore_untyped, reason = "test code discards results")]
+#[expect(clippy::shadow_unrelated, reason = "test code reuses variable names")]
 mod size_tests {
     use core::mem::size_of;
 
@@ -3000,19 +2965,17 @@ mod size_tests {
         let mut index = CppMftIndex::new();
 
         // First access creates placeholder
-        {
-            let record = index.get_or_create(100);
-            // Copy field to avoid packed struct reference issues
-            let name_count = record.name_count;
-            assert_eq!(name_count, 0); // Placeholder has no names
-        }
+        let record = index.get_or_create(100);
+        // Copy field to avoid packed struct reference issues
+        let name_count = record.name_count;
+        assert_eq!(name_count, 0); // Placeholder has no names
+        let _ = record;
 
         // Second access returns same record
-        {
-            let record2 = index.get_or_create(100);
-            let name_count = record2.name_count;
-            assert_eq!(name_count, 0);
-        }
+        let record2 = index.get_or_create(100);
+        let name_count = record2.name_count;
+        assert_eq!(name_count, 0);
+        let _ = record2;
 
         // Verify lookup table was expanded
         assert!(index.records_lookup.len() > 100);
@@ -3107,25 +3070,8 @@ mod size_tests {
 
 #[cfg(test)]
 #[expect(
-    clippy::unwrap_used,
-    reason = "test code — panicking on failure is acceptable"
-)]
-#[expect(
-    clippy::expect_used,
-    reason = "test code — panicking on failure is acceptable"
-)]
-#[expect(
     clippy::indexing_slicing,
     reason = "test code with known valid indices"
-)]
-#[expect(
-    clippy::significant_drop_tightening,
-    reason = "test code — drop order is not critical"
-)]
-#[expect(clippy::semicolon_outside_block, reason = "test code style")]
-#[expect(
-    clippy::let_underscore_untyped,
-    reason = "test code — type inference is sufficient"
 )]
 mod usa_fixup_tests {
     use crate::ntfs::apply_usa_fixup;
@@ -4038,20 +3984,11 @@ mod stream_parsing_tests {
     clippy::cast_possible_truncation,
     reason = "test constants fit in target types"
 )]
+#[expect(clippy::cast_sign_loss, reason = "test timestamps are known valid")]
 #[expect(
     clippy::significant_drop_tightening,
-    reason = "test code — drop order is not critical"
+    reason = "test code - drop order not critical"
 )]
-#[expect(clippy::semicolon_outside_block, reason = "test code style")]
-#[expect(
-    clippy::let_underscore_untyped,
-    reason = "test code — type inference is sufficient"
-)]
-#[expect(
-    clippy::cast_sign_loss,
-    reason = "test code with known non-negative values"
-)]
-#[expect(clippy::single_call_fn, reason = "test helpers extracted for clarity")]
 mod extension_record_tests {
     use super::*;
 

@@ -192,17 +192,23 @@ impl MultiSectorHeader {
 /// This function does not panic - it performs bounds checking and returns
 /// `false` if the buffer is too small.
 #[must_use]
-#[expect(clippy::indexing_slicing, reason = "bounds checked before each access")]
 pub fn apply_usa_fixup(buffer: &mut [u8], usa_offset: u16, usa_count: u16) -> bool {
-    let usa_offset_usize = usize::from(usa_offset);
-
-    // Need at least the check value
-    if usa_count < 1 || usa_offset_usize + 2 > buffer.len() {
+    // Need at least one entry (the check value)
+    if usa_count < 1 {
         return false;
     }
 
-    // Read the check value (first entry in USA)
-    let check_value = u16::from_le_bytes([buffer[usa_offset_usize], buffer[usa_offset_usize + 1]]);
+    let usa_offset_usize = usize::from(usa_offset);
+
+    // Read the check value (first entry in USA) using safe .get() + try_into
+    let Some(check_bytes) = buffer.get(usa_offset_usize..usa_offset_usize + 2) else {
+        return false;
+    };
+    // Slice is exactly 2 bytes from the .get() range, so try_into cannot fail
+    let Ok(check_arr): Result<[u8; 2], _> = check_bytes.try_into() else {
+        return false;
+    };
+    let check_value = u16::from_le_bytes(check_arr);
 
     let mut result = true;
 
@@ -217,21 +223,30 @@ pub fn apply_usa_fixup(buffer: &mut [u8], usa_offset: u16, usa_count: u16) -> bo
         // Offset of the replacement value in the USA
         let usa_entry_offset = usa_offset_usize + sector_idx_usize * 2;
 
-        // Check bounds
-        if sector_end_offset + 2 > buffer.len() || usa_entry_offset + 2 > buffer.len() {
+        // Get USA replacement bytes using safe .get() + try_into
+        let Some(usa_slice) = buffer.get(usa_entry_offset..usa_entry_offset + 2) else {
             break;
-        }
+        };
+        let Ok(replacement): Result<[u8; 2], _> = usa_slice.try_into() else {
+            break;
+        };
 
-        // Verify the check value matches
-        let current_value =
-            u16::from_le_bytes([buffer[sector_end_offset], buffer[sector_end_offset + 1]]);
+        // Get sector bytes to verify check value using safe .get() + try_into
+        let Some(sector_slice) = buffer.get(sector_end_offset..sector_end_offset + 2) else {
+            break;
+        };
+        let Ok(sector_arr): Result<[u8; 2], _> = sector_slice.try_into() else {
+            break;
+        };
+        let current_value = u16::from_le_bytes(sector_arr);
         if current_value != check_value {
             result = false;
         }
 
-        // Restore the original value from the USA
-        buffer[sector_end_offset] = buffer[usa_entry_offset];
-        buffer[sector_end_offset + 1] = buffer[usa_entry_offset + 1];
+        // Restore the original value - use .get_mut() for safe mutable access
+        if let Some(dest) = buffer.get_mut(sector_end_offset..sector_end_offset + 2) {
+            dest.copy_from_slice(&replacement);
+        }
     }
 
     result
@@ -582,12 +597,7 @@ impl FileNameAttribute {
     /// Returns the parent directory sequence number (upper 16 bits).
     #[must_use]
     pub const fn parent_sequence(&self) -> u16 {
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "extracting upper 16 bits into u16"
-        )]
-        let seq = (self.parent_directory >> 48_i32) as u16;
-        seq
+        (self.parent_directory >> 48_i32) as u16
     }
 }
 
@@ -687,12 +697,7 @@ impl AttributeListEntry {
     /// Returns the sequence number of the target record.
     #[must_use]
     pub const fn target_sequence(&self) -> u16 {
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "extracting upper 16 bits into u16"
-        )]
-        let seq = (self.file_reference >> 48_i32) as u16;
-        seq
+        (self.file_reference >> 48_i32) as u16
     }
 }
 
@@ -781,12 +786,7 @@ pub const fn file_reference_to_frs(file_reference: u64) -> u64 {
 /// The upper 16 bits contain the sequence number.
 #[must_use]
 pub const fn file_reference_to_sequence(file_reference: u64) -> u16 {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "extracting upper 16 bits into u16"
-    )]
-    let seq = (file_reference >> 48_i32) as u16;
-    seq
+    (file_reference >> 48_i32) as u16
 }
 
 // ============================================================================
@@ -871,48 +871,45 @@ impl<'a> AttributeRef<'a> {
     /// Returns the resident attribute value, if this is a resident attribute.
     #[must_use]
     #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
-    #[expect(clippy::indexing_slicing, reason = "bounds checked before access")]
     pub fn resident_value(&self) -> Option<&'a [u8]> {
         if self.is_non_resident() {
             return None;
         }
 
         let header_size = size_of::<AttributeRecordHeader>();
-        if self.data.len() < header_size + size_of::<ResidentAttributeData>() {
-            return None;
-        }
+        let resident_size = size_of::<ResidentAttributeData>();
 
-        // SAFETY: We've verified the buffer is large enough.
+        // Use .get() for safe slice access
+        let resident_slice = self.data.get(header_size..header_size + resident_size)?;
+
+        // SAFETY: We've verified the slice is exactly the right size via .get()
         let resident: ResidentAttributeData =
-            unsafe { core::ptr::read(self.data[header_size..].as_ptr().cast()) };
+            unsafe { core::ptr::read(resident_slice.as_ptr().cast()) };
 
         let value_offset = resident.value_offset as usize;
         let value_length = resident.value_length as usize;
 
-        if value_offset + value_length > self.data.len() {
-            return None;
-        }
-
-        Some(&self.data[value_offset..value_offset + value_length])
+        // Use .get() for safe range access
+        self.data.get(value_offset..value_offset + value_length)
     }
 
     /// Returns the non-resident attribute data, if this is a non-resident
     /// attribute.
     #[must_use]
     #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
-    #[expect(clippy::indexing_slicing, reason = "bounds checked before access")]
     pub fn non_resident_data(&self) -> Option<NonResidentAttributeData> {
         if !self.is_non_resident() {
             return None;
         }
 
         let header_size = size_of::<AttributeRecordHeader>();
-        if self.data.len() < header_size + size_of::<NonResidentAttributeData>() {
-            return None;
-        }
+        let nr_size = size_of::<NonResidentAttributeData>();
 
-        // SAFETY: We've verified the buffer is large enough.
-        Some(unsafe { core::ptr::read(self.data[header_size..].as_ptr().cast()) })
+        // Use .get() for safe slice access
+        let nr_slice = self.data.get(header_size..header_size + nr_size)?;
+
+        // SAFETY: We've verified the slice is exactly the right size via .get()
+        Some(unsafe { core::ptr::read(nr_slice.as_ptr().cast()) })
     }
 
     /// Parses data runs from a non-resident attribute.
@@ -927,7 +924,6 @@ impl<'a> AttributeRef<'a> {
 
     /// Returns the attribute name, if present.
     #[must_use]
-    #[expect(clippy::indexing_slicing, reason = "bounds checked before access")]
     pub fn name(&self) -> Option<&'a [u16]> {
         if self.header.name_length == 0 {
             return None;
@@ -935,24 +931,24 @@ impl<'a> AttributeRef<'a> {
 
         let name_offset = self.header.name_offset as usize;
         let name_length = self.header.name_length as usize;
-        let name_end = name_offset + name_length * 2;
+        let name_byte_len = name_length * 2;
 
-        if name_end > self.data.len() {
-            return None;
-        }
+        // Use .get() for safe slice access
+        let name_bytes = self.data.get(name_offset..name_offset + name_byte_len)?;
 
-        // Bounds verified above
-        let name_bytes = &self.data[name_offset..name_end];
         if name_bytes.len() % 2 != 0 {
             return None;
         }
 
         // Convert bytes to u16 slice (handling potential unaligned access)
         // Note: We build a Vec but return None since we can't return a reference to
-        // local data
-        for idx in 0..name_length {
-            let offset = idx * 2;
-            let _char = u16::from_le_bytes([name_bytes[offset], name_bytes[offset + 1]]);
+        // local data. Use .chunks_exact() instead of manual indexing.
+        for chunk in name_bytes.chunks_exact(2) {
+            // Validate we can parse each character (chunks_exact guarantees 2 bytes)
+            let Ok(arr): Result<[u8; 2], _> = chunk.try_into() else {
+                return None;
+            };
+            let _char = u16::from_le_bytes(arr);
         }
 
         // This is a bit awkward - we need to return a reference but we created a Vec
@@ -965,16 +961,20 @@ impl<'a> Iterator for AttributeIterator<'a> {
     type Item = AttributeRef<'a>;
 
     #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
-    #[expect(clippy::indexing_slicing, reason = "bounds checked before access")]
     fn next(&mut self) -> Option<Self::Item> {
-        // Check if we've reached the end
-        if self.offset + size_of::<AttributeRecordHeader>() > self.max_offset {
+        let header_size = size_of::<AttributeRecordHeader>();
+
+        // Use .get() for safe bounds checking
+        let header_slice = self.data.get(self.offset..self.offset + header_size)?;
+
+        // Also check we're within max_offset
+        if self.offset + header_size > self.max_offset {
             return None;
         }
 
-        // SAFETY: We've verified the buffer is large enough.
+        // SAFETY: We've verified the slice is exactly the right size via .get()
         let header: AttributeRecordHeader =
-            unsafe { core::ptr::read(self.data[self.offset..].as_ptr().cast()) };
+            unsafe { core::ptr::read(header_slice.as_ptr().cast()) };
 
         // Check for end marker
         if header.type_code == 0xFFFF_FFFF {
@@ -983,11 +983,12 @@ impl<'a> Iterator for AttributeIterator<'a> {
 
         // Validate length
         let length = header.length as usize;
-        if length < size_of::<AttributeRecordHeader>() || self.offset + length > self.max_offset {
+        if length < header_size || self.offset + length > self.max_offset {
             return None;
         }
 
-        let attr_data = &self.data[self.offset..self.offset + length];
+        // Use .get() for safe slice access
+        let attr_data = self.data.get(self.offset..self.offset + length)?;
         self.offset += length;
 
         Some(AttributeRef {
@@ -1058,21 +1059,16 @@ impl DataRun {
 /// A vector of `DataRun` entries describing the physical layout.
 #[must_use]
 #[expect(clippy::similar_names, reason = "vcn and lcn are standard NTFS terms")]
-#[expect(
-    clippy::indexing_slicing,
-    reason = "bounds checked in while loop condition"
-)]
 pub fn parse_data_runs(data: &[u8], lowest_vcn: i64) -> Vec<DataRun> {
     let mut runs = Vec::new();
     let mut offset = 0;
     let mut current_vcn = lowest_vcn;
     let mut current_lcn: i64 = 0;
 
-    while offset < data.len() {
-        // First byte encodes the sizes of the length and offset fields
-        let header = data[offset];
+    // Use while let for idiomatic iteration with early exit
+    while let Some(&header) = data.get(offset) {
+        // Header byte of 0 marks end of data runs
         if header == 0 {
-            // End of data runs
             break;
         }
 
@@ -1081,18 +1077,22 @@ pub fn parse_data_runs(data: &[u8], lowest_vcn: i64) -> Vec<DataRun> {
 
         offset += 1;
 
-        // Validate we have enough data
-        if offset + length_size + offset_size > data.len() {
+        // Get run length bytes using safe .get()
+        let Some(length_bytes) = data.get(offset..offset + length_size) else {
             break;
-        }
+        };
 
         // Parse the run length (unsigned)
-        let run_length = parse_variable_length_unsigned(&data[offset..offset + length_size]);
+        let run_length = parse_variable_length_unsigned(length_bytes);
         offset += length_size;
 
         // Parse the LCN offset (signed, delta from previous LCN)
         let lcn_delta = if offset_size > 0 {
-            parse_variable_length_signed(&data[offset..offset + offset_size])
+            // Get offset bytes using safe .get()
+            let Some(offset_bytes) = data.get(offset..offset + offset_size) else {
+                break;
+            };
+            parse_variable_length_signed(offset_bytes)
         } else {
             0 // Sparse run
         };
@@ -1138,14 +1138,11 @@ fn parse_variable_length_unsigned(data: &[u8]) -> u64 {
     clippy::single_call_fn,
     reason = "extracted for clarity alongside parse_variable_length_unsigned"
 )]
-#[expect(
-    clippy::indexing_slicing,
-    reason = "data.is_empty() check ensures data.len() >= 1"
-)]
 fn parse_variable_length_signed(data: &[u8]) -> i64 {
-    if data.is_empty() {
+    // Use .last() instead of data[data.len() - 1] for safe access
+    let Some(&last_byte) = data.last() else {
         return 0;
-    }
+    };
 
     let mut value: i64 = 0;
     for (idx, &byte) in data.iter().enumerate() {
@@ -1153,7 +1150,6 @@ fn parse_variable_length_signed(data: &[u8]) -> i64 {
     }
 
     // Sign-extend if the high bit of the last byte is set
-    let last_byte = data[data.len() - 1];
     if last_byte & 0x80 != 0 {
         // Sign extend
         let shift = data.len() * 8;
@@ -1176,36 +1172,38 @@ fn parse_variable_length_signed(data: &[u8]) -> i64 {
 /// A vector of `DataRun` entries, or an empty vector if parsing fails.
 #[must_use]
 #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
-#[expect(clippy::indexing_slicing, reason = "bounds checked before access")]
 pub fn extract_data_runs_from_attribute(attr_data: &[u8]) -> Vec<DataRun> {
-    if attr_data.len() < size_of::<AttributeRecordHeader>() {
-        return Vec::new();
-    }
+    let header_size = size_of::<AttributeRecordHeader>();
 
-    // SAFETY: We've verified the buffer is large enough.
-    let header: AttributeRecordHeader = unsafe { core::ptr::read(attr_data.as_ptr().cast()) };
+    // Use .get() for safe slice access
+    let Some(header_slice) = attr_data.get(0..header_size) else {
+        return Vec::new();
+    };
+
+    // SAFETY: We've verified the slice is exactly the right size via .get()
+    let header: AttributeRecordHeader = unsafe { core::ptr::read(header_slice.as_ptr().cast()) };
 
     // Must be non-resident
     if header.is_non_resident == 0 {
         return Vec::new();
     }
 
-    // Read non-resident data
-    let nr_offset = size_of::<AttributeRecordHeader>();
-    if attr_data.len() < nr_offset + size_of::<NonResidentAttributeData>() {
+    // Read non-resident data using .get()
+    let nr_size = size_of::<NonResidentAttributeData>();
+    let Some(nr_slice) = attr_data.get(header_size..header_size + nr_size) else {
         return Vec::new();
-    }
+    };
 
-    // SAFETY: We've verified the buffer is large enough.
-    let nr_data: NonResidentAttributeData =
-        unsafe { core::ptr::read(attr_data[nr_offset..].as_ptr().cast()) };
+    // SAFETY: We've verified the slice is exactly the right size via .get()
+    let nr_data: NonResidentAttributeData = unsafe { core::ptr::read(nr_slice.as_ptr().cast()) };
 
     let mapping_pairs_offset = nr_data.mapping_pairs_offset as usize;
-    if mapping_pairs_offset >= attr_data.len() {
-        return Vec::new();
-    }
 
-    let mapping_pairs_data = &attr_data[mapping_pairs_offset..];
+    // Use .get() for safe tail slice access
+    let Some(mapping_pairs_data) = attr_data.get(mapping_pairs_offset..) else {
+        return Vec::new();
+    };
+
     parse_data_runs(mapping_pairs_data, nr_data.lowest_vcn)
 }
 

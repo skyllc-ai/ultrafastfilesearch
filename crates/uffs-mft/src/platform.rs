@@ -423,19 +423,11 @@ impl VolumeHandle {
     /// # Errors
     ///
     /// Returns an error if the bitmap cannot be read.
-    #[expect(
-        unsafe_code,
-        reason = "FFI: windows API (CreateFileW, GetFileSizeEx, ReadFile)"
-    )]
     pub fn get_mft_bitmap(&self) -> Result<MftBitmap> {
         self.get_mft_bitmap_internal(false)
     }
 
     /// Gets the MFT bitmap with optional verbose diagnostic output.
-    #[expect(
-        unsafe_code,
-        reason = "FFI: windows API (CreateFileW, GetFileSizeEx, ReadFile)"
-    )]
     pub fn get_mft_bitmap_verbose(&self) -> Result<MftBitmap> {
         self.get_mft_bitmap_internal(true)
     }

@@ -427,10 +427,9 @@ impl MftProgress {
 /// ```rust,ignore
 /// use uffs_mft::MftReader;
 ///
-/// #[tokio::main]
-/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let reader = MftReader::open('C').await?;
-///     let df = reader.read_all().await?;
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let reader = MftReader::open('C')?;
+///     let df = reader.read_all()?;
 ///     println!("Found {} files", df.height());
 ///     Ok(())
 /// }
@@ -533,12 +532,7 @@ impl MftReader {
     ///
     /// This function is only available on Windows.
     #[cfg(windows)]
-    #[expect(
-        clippy::unused_async,
-        reason = "async for API consistency across platforms"
-    )]
-    pub async fn open(volume: char) -> Result<Self> {
-        // Open the volume handle (validates NTFS and privileges)
+    pub fn open(volume: char) -> Result<Self> {
         let handle = VolumeHandle::open(volume)?;
 
         Ok(Self {
@@ -570,43 +564,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
-    pub async fn open(_volume: char) -> Result<Self> {
-        Err(MftError::PlatformNotSupported)
-    }
-
-    /// Synchronous version of `open` for use in blocking contexts.
-    ///
-    /// This is the same as `open` but without the async wrapper, for use
-    /// with `spawn_blocking` or other blocking contexts.
-    #[cfg(windows)]
-    pub fn open_sync(volume: char) -> Result<Self> {
-        let handle = VolumeHandle::open(volume)?;
-
-        Ok(Self {
-            volume: volume.to_ascii_uppercase(),
-            handle,
-            mode: MftReadMode::Auto,
-            merge_extensions: true,
-            use_bitmap: true,
-            expand_links: true,
-            add_placeholders: true,
-            concurrency: None,
-            io_size: None,
-            parallel_parse: None,
-            parse_workers: None,
-            forensic: false,
-        })
-    }
-
-    /// Synchronous version of `open` (non-Windows stub).
-    ///
-    /// # Errors
-    ///
-    /// Always returns `MftError::PlatformNotSupported` on non-Windows
-    /// platforms.
-    #[cfg(not(windows))]
-    pub const fn open_sync(_volume: char) -> Result<Self> {
+    pub const fn open(_volume: char) -> Result<Self> {
         Err(MftError::PlatformNotSupported)
     }
 
@@ -854,11 +812,7 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
-    #[expect(
-        clippy::unused_async,
-        reason = "async for API consistency across platforms"
-    )]
-    pub async fn read_all(&self) -> Result<DataFrame> {
+    pub fn read_all(&self) -> Result<DataFrame> {
         self.read_mft_internal(None::<fn(MftProgress)>)
     }
 
@@ -869,8 +823,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
-    pub async fn read_all(&self) -> Result<DataFrame> {
+    pub const fn read_all(&self) -> Result<DataFrame> {
         Err(MftError::PlatformNotSupported)
     }
 
@@ -884,11 +837,7 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
-    #[expect(
-        clippy::unused_async,
-        reason = "async for API consistency across platforms"
-    )]
-    pub async fn read_with_progress<F>(&self, callback: F) -> Result<DataFrame>
+    pub fn read_with_progress<F>(&self, callback: F) -> Result<DataFrame>
     where
         F: Fn(MftProgress) + Send + 'static,
     {
@@ -902,57 +851,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
-    pub async fn read_with_progress<F>(&self, _callback: F) -> Result<DataFrame>
-    where
-        F: Fn(MftProgress) + Send + 'static,
-    {
-        Err(MftError::PlatformNotSupported)
-    }
-
-    /// Synchronous version of `read_all` for use in blocking contexts.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if MFT reading fails.
-    #[cfg(windows)]
-    pub fn read_all_sync(&self) -> Result<DataFrame> {
-        self.read_mft_internal(None::<fn(MftProgress)>)
-    }
-
-    /// Synchronous version of `read_all` (non-Windows stub).
-    ///
-    /// # Errors
-    ///
-    /// Always returns `MftError::PlatformNotSupported` on non-Windows
-    /// platforms.
-    #[cfg(not(windows))]
-    pub const fn read_all_sync(&self) -> Result<DataFrame> {
-        Err(MftError::PlatformNotSupported)
-    }
-
-    /// Synchronous version of `read_with_progress` for use in blocking
-    /// contexts.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if MFT reading fails.
-    #[cfg(windows)]
-    pub fn read_with_progress_sync<F>(&self, callback: F) -> Result<DataFrame>
-    where
-        F: Fn(MftProgress) + Send + 'static,
-    {
-        self.read_mft_internal(Some(callback))
-    }
-
-    /// Synchronous version of `read_with_progress` (non-Windows stub).
-    ///
-    /// # Errors
-    ///
-    /// Always returns `MftError::PlatformNotSupported` on non-Windows
-    /// platforms.
-    #[cfg(not(windows))]
-    pub fn read_with_progress_sync<F>(&self, _callback: F) -> Result<DataFrame>
+    pub fn read_with_progress<F>(&self, _callback: F) -> Result<DataFrame>
     where
         F: Fn(MftProgress) + Send + 'static,
     {
@@ -1023,18 +922,6 @@ impl MftReader {
         trace!(volume = %volume, "read_all_index: EXIT");
         tracing::debug!(volume = %volume, "[TRIP] reader::read_all_index EXIT");
         result
-    }
-
-    /// Read MFT into lean index (non-Windows stub).
-    ///
-    /// # Errors
-    ///
-    /// Always returns `MftError::PlatformNotSupported` on non-Windows
-    /// platforms.
-    #[cfg(not(windows))]
-    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
-    pub async fn read_all_index(&self) -> Result<crate::index::MftIndex> {
-        Err(MftError::PlatformNotSupported)
     }
 
     /// Synchronous version of `read_all_index` for use in blocking contexts.
@@ -1457,11 +1344,7 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
-    #[expect(
-        clippy::unused_async,
-        reason = "async for API consistency across platforms"
-    )]
-    pub async fn read_with_timing(
+    pub fn read_with_timing(
         &self,
         skip_df_build: bool,
     ) -> Result<(Option<DataFrame>, BenchmarkResult)> {
@@ -1475,8 +1358,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
-    pub async fn read_with_timing(
+    pub const fn read_with_timing(
         &self,
         _skip_df_build: bool,
     ) -> Result<(Option<DataFrame>, BenchmarkResult)> {
@@ -3490,11 +3372,7 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
-    #[expect(
-        clippy::unused_async,
-        reason = "async for API consistency across platforms"
-    )]
-    pub async fn read_raw(&self) -> Result<(Vec<u8>, u32)> {
+    pub fn read_raw(&self) -> Result<(Vec<u8>, u32)> {
         self.read_raw_internal()
     }
 
@@ -3505,8 +3383,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
-    pub async fn read_raw(&self) -> Result<(Vec<u8>, u32)> {
+    pub const fn read_raw(&self) -> Result<(Vec<u8>, u32)> {
         Err(MftError::PlatformNotSupported)
     }
 
@@ -3579,11 +3456,7 @@ impl MftReader {
     ///
     /// Returns an error if reading or saving fails.
     #[cfg(windows)]
-    #[expect(
-        clippy::unused_async,
-        reason = "async for API consistency across platforms"
-    )]
-    pub async fn save_raw_to_file<P: AsRef<Path>>(
+    pub fn save_raw_to_file<P: AsRef<Path>>(
         &self,
         path: P,
         options: &crate::raw::SaveRawOptions,
@@ -3772,8 +3645,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
-    pub async fn save_raw_to_file<P: AsRef<Path>>(
+    pub fn save_raw_to_file<P: AsRef<Path>>(
         &self,
         _path: P,
         _options: &crate::raw::SaveRawOptions,
@@ -3798,10 +3670,6 @@ impl MftReader {
     ///
     /// Cross-platform - works on all platforms. Uses cross-platform
     /// `MftRecordMerger` from parse module.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "record_count is u64 but MFT sizes are bounded by disk size, always fits in usize"
-    )]
     pub fn load_raw_to_dataframe<P: AsRef<Path>>(path: P) -> Result<DataFrame> {
         Self::load_raw_to_dataframe_with_options(path, &crate::raw::LoadRawOptions::default())
     }
@@ -3896,10 +3764,16 @@ impl MftReader {
     /// # Platform
     ///
     /// Works on all platforms - parses NTFS structures from saved file.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "parsing logic with forensic/sequential/parallel branches is inherently complex"
+    )]
     pub fn load_raw_to_index_with_options<P: AsRef<Path>>(
         path: P,
         options: &crate::raw::LoadRawOptions,
     ) -> Result<crate::index::MftIndex> {
+        use std::time::Instant;
+
         use tracing::info;
 
         use crate::index::MftIndex;
@@ -3972,7 +3846,7 @@ impl MftReader {
             let record_size = raw.header.record_size as usize;
             let single_thread = std::env::var("UFFS_SINGLE_THREAD").is_ok();
 
-            let parse_start = std::time::Instant::now();
+            let parse_start = Instant::now();
 
             if single_thread {
                 // Sequential fallback (for debugging)
@@ -4021,7 +3895,7 @@ impl MftReader {
                 // Parallel parsing using rayon (same pattern as io.rs)
                 use rayon::prelude::*;
 
-                let records_per_chunk = 4096usize;
+                let records_per_chunk = 4096_usize;
                 let bytes_per_chunk = records_per_chunk * record_size;
                 let buffer_slice = raw.data.as_mut_slice();
 
@@ -4030,18 +3904,22 @@ impl MftReader {
                     .enumerate()
                     .map(|(chunk_idx, chunk)| {
                         let mut results = Vec::new();
-                        let mut fixup_ok = 0u64;
-                        let mut fixup_fail = 0u64;
-                        let mut bases = 0u64;
-                        let mut extensions = 0u64;
-                        let mut skips = 0u64;
+                        let mut fixup_ok = 0_u64;
+                        let mut fixup_fail = 0_u64;
+                        let mut bases = 0_u64;
+                        let mut extensions = 0_u64;
+                        let mut skips = 0_u64;
 
                         let start_frs = chunk_idx * records_per_chunk;
                         let records_in_chunk = chunk.len() / record_size;
 
                         for i in 0..records_in_chunk {
                             let offset = i * record_size;
-                            let record_slice = &mut chunk[offset..offset + record_size];
+                            let Some(record_slice) = chunk.get_mut(offset..offset + record_size)
+                            else {
+                                // Shouldn't happen given records_in_chunk calculation, but be safe
+                                continue;
+                            };
 
                             if !apply_fixup(record_slice) {
                                 fixup_fail += 1;
@@ -4455,14 +4333,14 @@ impl MultiDriveMftReader {
         // Use spawn_blocking to run blocking I/O on a dedicated thread pool.
         // This avoids blocking the async runtime and prevents nested runtime panics.
         tokio::task::spawn_blocking(move || {
-            let reader = MftReader::open_sync(drive)?;
+            let reader = MftReader::open(drive)?;
 
             if let Some(cb) = callback {
-                reader.read_with_progress_sync(move |progress| {
+                reader.read_with_progress(move |progress| {
                     cb(drive, progress);
                 })
             } else {
-                reader.read_all_sync()
+                reader.read_all()
             }
         })
         .await
@@ -4791,7 +4669,7 @@ impl MultiDriveMftReader {
     {
         // Use spawn_blocking to run blocking I/O on a dedicated thread pool.
         tokio::task::spawn_blocking(move || {
-            let reader = MftReader::open_sync(drive)?;
+            let reader = MftReader::open(drive)?;
 
             if let Some(cb) = callback {
                 reader.read_index_with_progress_sync(move |progress| {
@@ -4823,7 +4701,7 @@ impl MultiDriveMftReader {
         use crate::platform::VolumeHandle;
         use crate::usn::query_usn_journal;
 
-        let reader = MftReader::open_sync(drive)?;
+        let reader = MftReader::open(drive)?;
         let index = reader.read_all_index_sync()?;
 
         // Get volume info for caching
@@ -5020,18 +4898,18 @@ impl MultiDriveMftReader {
 mod tests {
     use super::*;
 
-    #[tokio::test]
+    #[test]
     #[cfg(windows)]
-    async fn test_open_valid_volume() {
-        let result = MftReader::open('C').await;
+    fn test_open_valid_volume() {
+        let result = MftReader::open('C');
         // This will fail without admin privileges, but should not panic
         assert!(result.is_ok() || matches!(result, Err(MftError::InsufficientPrivileges)));
     }
 
-    #[tokio::test]
+    #[test]
     #[cfg(not(windows))]
-    async fn test_platform_not_supported() {
-        let result = MftReader::open('C').await;
+    fn test_platform_not_supported() {
+        let result = MftReader::open('C');
         assert!(matches!(result, Err(MftError::PlatformNotSupported)));
     }
 
@@ -5099,11 +4977,11 @@ mod tests {
 
     /// Test that MftReader stores None for concurrency/io_size by default,
     /// allowing the I/O layer to use optimal settings based on drive type.
-    #[tokio::test]
+    #[test]
     #[cfg(windows)]
-    async fn test_mft_reader_uses_none_defaults() {
+    fn test_mft_reader_uses_none_defaults() {
         // This test requires admin privileges, so we check if we can open
-        let reader = match MftReader::open('C').await {
+        let reader = match MftReader::open('C') {
             Ok(r) => r,
             Err(MftError::InsufficientPrivileges) => {
                 // Skip test if not running as admin
@@ -5132,10 +5010,10 @@ mod tests {
     }
 
     /// Test that MftReader builder methods correctly set values
-    #[tokio::test]
+    #[test]
     #[cfg(windows)]
-    async fn test_mft_reader_builder_overrides() {
-        let reader = match MftReader::open('C').await {
+    fn test_mft_reader_builder_overrides() {
+        let reader = match MftReader::open('C') {
             Ok(r) => r,
             Err(MftError::InsufficientPrivileges) => return,
             Err(e) => panic!("Unexpected error: {:?}", e),
@@ -5156,10 +5034,10 @@ mod tests {
     }
 
     /// Test that MftReadMode::Auto is the default
-    #[tokio::test]
+    #[test]
     #[cfg(windows)]
-    async fn test_mft_reader_default_mode_is_auto() {
-        let reader = match MftReader::open('C').await {
+    fn test_mft_reader_default_mode_is_auto() {
+        let reader = match MftReader::open('C') {
             Ok(r) => r,
             Err(MftError::InsufficientPrivileges) => return,
             Err(e) => panic!("Unexpected error: {:?}", e),
@@ -5173,10 +5051,10 @@ mod tests {
     }
 
     /// Test that all boolean defaults are set for optimal performance
-    #[tokio::test]
+    #[test]
     #[cfg(windows)]
-    async fn test_mft_reader_boolean_defaults() {
-        let reader = match MftReader::open('C').await {
+    fn test_mft_reader_boolean_defaults() {
+        let reader = match MftReader::open('C') {
             Ok(r) => r,
             Err(MftError::InsufficientPrivileges) => return,
             Err(e) => panic!("Unexpected error: {:?}", e),

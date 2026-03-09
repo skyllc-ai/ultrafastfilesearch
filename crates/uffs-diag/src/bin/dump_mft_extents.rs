@@ -17,10 +17,15 @@
     unused_crate_dependencies,
     reason = "standalone binary doesn't use all crate dependencies"
 )]
+// print_stderr is needed on all platforms for the error messages
 #![expect(
-    clippy::print_stdout,
     clippy::print_stderr,
-    reason = "diagnostic tool — stdout/stderr output is intentional"
+    reason = "diagnostic tool uses stderr for errors"
+)]
+// print_stdout is only used on Windows
+#![cfg_attr(
+    windows,
+    expect(clippy::print_stdout, reason = "Windows diagnostic output")
 )]
 
 // This binary is Windows-only in terms of real functionality, but is compiled
@@ -34,11 +39,6 @@ use std::env;
 use anyhow::{Context, Result};
 #[cfg(windows)]
 use uffs_mft::{MftExtent, VolumeHandle};
-// On non-Windows targets we still want to exercise the uffs-diag dependency
-// set and keep versions in lockstep with the core crates, even though this
-// particular binary is effectively a no-op there.
-#[cfg(not(windows))]
-use {anyhow as _, uffs_mft as _, uffs_polars as _};
 
 fn main() {
     #[cfg(windows)]

@@ -15,10 +15,6 @@ use crate::error::Result;
 
 /// Available output columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(
-    clippy::missing_docs_in_private_items,
-    reason = "variants are self-documenting via display_name()"
-)]
 pub enum OutputColumn {
     /// Full path including filename.
     Path,
@@ -474,8 +470,8 @@ impl OutputConfig {
     /// Useful for reproducible parity testing when the reference output was
     /// generated in a different DST period than the current one.
     #[must_use]
-    pub fn with_tz_offset_hours(mut self, hours: i32) -> Self {
-        self.timezone_offset_secs = hours * 3600;
+    pub const fn with_tz_offset_hours(mut self, hours: i32) -> Self {
+        self.timezone_offset_secs = hours * 3_600_i32;
         self
     }
 
@@ -699,10 +695,6 @@ pub fn add_descendants_column(df: &DataFrame) -> Result<DataFrame> {
 #[expect(
     clippy::unwrap_used,
     reason = "test code uses unwrap on controlled data"
-)]
-#[expect(
-    clippy::indexing_slicing,
-    reason = "test code indexes known-valid positions"
 )]
 #[expect(
     clippy::expect_used,

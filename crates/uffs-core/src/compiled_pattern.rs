@@ -25,6 +25,12 @@
 //! let expr = compiled.to_expr("name", true);
 //! ```
 
+// Helper functions separated for testability and code clarity
+#![expect(
+    clippy::single_call_fn,
+    reason = "helper functions extracted for testability and code clarity"
+)]
+
 use uffs_polars::{Expr, NamedFrom, PlSmallStr, Series, col, lit};
 
 use crate::error::Result;

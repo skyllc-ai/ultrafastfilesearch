@@ -229,10 +229,6 @@ impl RawMftData {
     }
 
     /// Returns an iterator over all records.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "record_size fits in usize; index fits in u64"
-    )]
     pub fn iter_records(&self) -> impl Iterator<Item = (u64, &[u8])> {
         let record_size = self.header.record_size as usize;
         self.data
@@ -268,25 +264,17 @@ pub fn save_raw_mft<P: AsRef<Path>>(
     options: &SaveRawOptions,
 ) -> Result<RawMftHeader> {
     let path = path.as_ref();
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "MFT data length fits in u64"
-    )]
     let original_size = data.len() as u64;
     let record_count = original_size / u64::from(record_size);
 
     // Prepare data (compress if requested)
-    #[expect(unused_mut, reason = "mutated only when zstd feature is enabled")]
+    #[allow(unused_mut)] // mutated only when zstd feature is enabled
     let mut flags = 0_u32;
-    #[expect(unused_mut, reason = "mutated only when zstd feature is enabled")]
+    #[allow(unused_mut)] // mutated only when zstd feature is enabled
     let mut compressed_size = 0_u64;
 
     #[cfg(feature = "zstd")]
     let write_data: Vec<u8> = if options.compress {
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "compressed size fits in u64"
-        )]
         let compressed = zstd::encode_all(data, options.compression_level)
             .map_err(|err| MftError::Io(std::io::Error::other(err)))?;
         flags |= FLAG_COMPRESSED;

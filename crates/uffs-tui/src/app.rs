@@ -1,5 +1,12 @@
 //! TUI Application state.
 
+// TUI applications have single-call constructors and methods
+#![expect(
+    clippy::single_call_fn,
+    reason = "TUI application methods are called once from main"
+)]
+#![expect(clippy::min_ident_chars, reason = "short closure vars conventional")]
+
 use std::path::PathBuf;
 
 use ratatui::widgets::ListState;
@@ -57,20 +64,22 @@ impl App {
         }
     }
 
-    /// Create application with a pre-loaded DataFrame.
+    /// Create application with a pre-loaded `DataFrame`.
     pub fn with_dataframe(df: DataFrame, path: Option<PathBuf>) -> Self {
         let record_count = df.height();
+        let status = format!(
+            "Loaded {} records{}",
+            record_count,
+            path.as_ref()
+                .map_or(String::new(), |p| format!(" from {}", p.display()))
+        );
         Self {
             input: String::new(),
             results: Vec::new(),
             list_state: ListState::default(),
             dataframe: Some(df),
-            index_path: path.clone(),
-            status: format!(
-                "Loaded {} records{}",
-                record_count,
-                path.map_or(String::new(), |path| format!(" from {}", path.display()))
-            ),
+            index_path: path,
+            status,
             error: None,
         }
     }

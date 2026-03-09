@@ -11,12 +11,16 @@
 
 #![expect(
     unused_crate_dependencies,
-    reason = "standalone binary doesn't use all crate dependencies"
+    reason = "shared Cargo.toml dependencies not used by all binaries"
 )]
 #![expect(
     clippy::print_stdout,
     clippy::print_stderr,
     reason = "diagnostic tool — stdout/stderr output is intentional"
+)]
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "diagnostic tool arithmetic on known-valid data"
 )]
 
 use std::env;
@@ -59,6 +63,10 @@ struct RawMftHeader {
 
 impl RawMftHeader {
     /// Parse header from raw bytes.
+    #[expect(
+        clippy::single_call_fn,
+        reason = "factored for clarity in comparison tool"
+    )]
     fn from_bytes(buf: &[u8; HEADER_SIZE]) -> Result<Self> {
         if &buf[0..8] != MAGIC {
             bail!("Invalid magic bytes");
@@ -92,10 +100,6 @@ impl RawMftHeader {
 }
 
 /// Read and parse the header from a raw MFT file.
-#[expect(
-    clippy::single_call_fn,
-    reason = "encapsulates header I/O with focused error context"
-)]
 fn read_header<P: AsRef<Path>>(path: P) -> Result<(RawMftHeader, BufReader<File>)> {
     let file = File::open(path.as_ref())
         .with_context(|| format!("Failed to open {}", path.as_ref().display()))?;

@@ -8,7 +8,7 @@
 
 #![expect(
     unused_crate_dependencies,
-    reason = "standalone binary doesn't use all crate dependencies"
+    reason = "shared Cargo.toml dependencies not used by all binaries"
 )]
 #![expect(
     clippy::print_stdout,
@@ -16,21 +16,14 @@
     reason = "diagnostic tool — stdout/stderr output is intentional"
 )]
 
-use std::collections::BTreeMap;
+extern crate alloc;
+
+use alloc::collections::BTreeMap;
 use std::env;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use uffs_mft::raw::{LoadRawOptions, load_raw_mft};
-// This binary intentionally pulls in uffs_polars via the uffs-diag crate
-// dependency set so that offline diagnostics can share the same Polars
-// facade version as the main CLI, even though this specific tool does not
-// use it directly.
-#[expect(
-    unused_imports,
-    reason = "version-locks uffs_polars with diagnostic crate"
-)]
-use uffs_polars as _;
 
 /// Local copy of the NTFS multi-sector header so this tool can run on
 /// non-Windows targets (the real `ntfs` module is `cfg(windows)`).
@@ -92,7 +85,7 @@ fn main() -> Result<()> {
     }
 
     let raw_path = args.get(1).map(String::as_str).ok_or_else(|| {
-        anyhow::anyhow!("Expected <mft.raw> path argument to be present after length check",)
+        anyhow::anyhow!("Expected <mft.raw> path argument to be present after length check")
     })?;
     let bucket_size: u64 = if args.len() >= 3 {
         args.get(2)
@@ -130,11 +123,14 @@ fn main() -> Result<()> {
                 continue;
             }
 
-            // SAFETY: We've checked that the buffer is large enough for the header.
             #[expect(
                 unsafe_code,
                 reason = "ptr::read from validated buffer for packed struct"
             )]
+            // SAFETY: We've checked that the buffer is at least
+            // `size_of::<MultiSectorHeader>()` bytes long, and
+            // `MultiSectorHeader` is `#[repr(C, packed)]` with no padding
+            // or alignment requirements beyond u8.
             let header: MultiSectorHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
             let magic = header.magic;
             let class = classify_magic(magic);

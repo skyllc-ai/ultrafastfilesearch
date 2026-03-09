@@ -19,7 +19,7 @@
 
 #![expect(
     unused_crate_dependencies,
-    reason = "standalone binary doesn't use all crate dependencies"
+    reason = "shared Cargo.toml dependencies not used by all binaries"
 )]
 #![expect(
     clippy::print_stdout,
@@ -27,22 +27,17 @@
     reason = "diagnostic tool — stdout/stderr output is intentional"
 )]
 
+extern crate alloc;
+
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::env;
 use std::path::Path;
-use std::string::String;
-use std::vec::Vec;
 
 use anyhow::{Context, Result};
-// This binary intentionally depends on uffs_mft via the uffs-diag crate
-// workspace, even though it does not use its types directly. This keeps
-// diagnostic tooling version-locked to the core MFT reader.
-#[expect(
-    unused_imports,
-    reason = "version-locks uffs_mft with diagnostic crate"
-)]
-use uffs_mft as _;
 use uffs_polars::{BooleanChunked, DataFrame, SerReader, UInt64Chunked};
 
 fn main() -> Result<()> {
@@ -106,7 +101,7 @@ fn analyze_parents(df: &DataFrame) -> Result<()> {
             .iter()
             .any(|name| name == required_column)
         {
-            anyhow::bail!("Required column '{required_column}' missing from DataFrame",);
+            anyhow::bail!("Required column '{required_column}' missing from DataFrame");
         }
     }
 
@@ -186,9 +181,9 @@ fn analyze_parents(df: &DataFrame) -> Result<()> {
     }
 
     println!(
-        "  Of these, parents that DO have at least one row (non-directory row): {missing_but_present_as_frs}",
+        "  Of these, parents that DO have at least one row (non-directory row): {missing_but_present_as_frs}"
     );
-    println!("  Parents that have NO row at all in the DataFrame: {missing_and_absent_completely}",);
+    println!("  Parents that have NO row at all in the DataFrame: {missing_and_absent_completely}");
 
     // Convert back to a sorted Vec<u64> for downstream analysis/printing.
     let missing_parents_vec: Vec<u64> = missing_parents.into_iter().collect();
@@ -244,7 +239,7 @@ fn print_missing_parent_details(missing_parents: &[u64], parent_col: &UInt64Chun
         *buckets.entry(bucket).or_insert(0) += 1;
     }
 
-    println!("\nMissing parents by FRS bucket (bucket_size={bucket_size}):",);
+    println!("\nMissing parents by FRS bucket (bucket_size={bucket_size}):");
     for (bucket, count) in buckets.iter().take(20) {
         println!(
             "  bucket {bucket:>6} (FRS {start_frs:>10} .. {end_frs:>10}): {parent_count:>6} parents",

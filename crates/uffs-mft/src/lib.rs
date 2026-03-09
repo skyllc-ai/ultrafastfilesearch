@@ -16,10 +16,9 @@
 //! ```rust,ignore
 //! use uffs_mft::MftReader;
 //!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Read MFT from C: drive (requires admin privileges)
-//!     let df = MftReader::open('C').await?.read_all().await?;
+//!     let df = MftReader::open('C')?.read_all()?;
 //!
 //!     println!("Found {} files", df.height());
 //!

@@ -21,7 +21,7 @@
 
 #![expect(
     unused_crate_dependencies,
-    reason = "standalone binary doesn't use all crate dependencies"
+    reason = "shared Cargo.toml dependencies not used by all binaries"
 )]
 #![expect(
     clippy::print_stdout,
@@ -33,12 +33,6 @@ use std::env;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-// Keep uffs_mft version-locked with diagnostics, even if not used directly.
-#[expect(
-    unused_imports,
-    reason = "version-locks uffs_mft with diagnostic crate"
-)]
-use uffs_mft as _;
 use uffs_polars::{
     BooleanChunked, CsvParseOptions, CsvReadOptions, DataFrame, DataFrameJoinOps, DataType,
     JoinArgs, JoinType, SerReader,
@@ -50,7 +44,7 @@ fn main() -> Result<()> {
         let program = args
             .first()
             .map_or("cross_check_mft_reference", String::as_str);
-        eprintln!("Usage: {program} <f_mft_reference.csv> <f_mft.parquet>",);
+        eprintln!("Usage: {program} <f_mft_reference.csv> <f_mft.parquet>");
         std::process::exit(1);
     }
 
@@ -199,14 +193,7 @@ fn join_on_frs(df_ref: &DataFrame, df_parquet: &DataFrame) -> Result<DataFrame> 
 
 /// Print summary statistics about directory/base-record agreement between
 /// the reference CSV and the Parquet `DataFrame`.
-#[expect(
-    clippy::single_call_fn,
-    reason = "encapsulates agreement summary for readability"
-)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "sequential analysis — splitting would reduce clarity"
-)]
+#[expect(clippy::single_call_fn, reason = "factored for readability")]
 fn summarize_directory_agreement(df: &DataFrame) -> Result<()> {
     println!("\nDirectory/base-record agreement summary:");
 

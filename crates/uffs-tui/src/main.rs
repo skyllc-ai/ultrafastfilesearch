@@ -18,6 +18,10 @@
     unused_crate_dependencies,
     reason = "tokio is a transitive runtime dependency not directly referenced"
 )]
+#![expect(
+    clippy::option_if_let_else,
+    reason = "if-let chains clearer for loading with error handling"
+)]
 
 use std::io;
 use std::path::PathBuf;

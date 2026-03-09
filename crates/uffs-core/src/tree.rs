@@ -628,14 +628,6 @@ pub fn apply_directory_treesize(df: &DataFrame) -> Result<DataFrame> {
     clippy::unwrap_used,
     reason = "test code uses unwrap on controlled data"
 )]
-#[expect(
-    clippy::indexing_slicing,
-    reason = "test code indexes known-valid positions"
-)]
-#[expect(
-    clippy::expect_used,
-    reason = "test code uses expect on controlled data"
-)]
 #[expect(clippy::print_stdout, reason = "benchmark test outputs timing info")]
 #[expect(clippy::use_debug, reason = "benchmark test outputs debug info")]
 #[expect(
@@ -646,7 +638,6 @@ pub fn apply_directory_treesize(df: &DataFrame) -> Result<DataFrame> {
     clippy::shadow_unrelated,
     reason = "test variables reused across sections"
 )]
-#[expect(clippy::let_underscore_untyped, reason = "test code discards results")]
 mod tests {
     use super::*;
 
@@ -863,7 +854,8 @@ mod tests {
     }
 
     /// Benchmark test to measure tree building cost.
-    /// Run with: cargo test -p uffs-core tree::tests::bench_tree_building
+    ///
+    /// Run with: `cargo test -p uffs-core tree::tests::bench_tree_building`
     /// --release -- --nocapture
     #[test]
     fn bench_tree_building() {
@@ -885,7 +877,7 @@ mod tests {
         let is_dir_vec: Vec<bool> = (0..count).map(|idx| idx % 100 == 0).collect();
         let size_vec: Vec<u64> = (0..count).map(|idx| (idx * 1000) as u64).collect();
         let alloc_vec: Vec<u64> = (0..count)
-            .map(|idx| ((idx * 1000 + 4095) / 4096 * 4096) as u64)
+            .map(|idx| ((idx * 1000).div_ceil(4096) * 4096) as u64)
             .collect();
 
         let df = DataFrame::new_infer_height(vec![
@@ -906,14 +898,14 @@ mod tests {
         let start = Instant::now();
         for frs in 0..count as u64 {
             if frs % 100 == 0 {
-                let _ = tree.descendants(frs);
+                _ = tree.descendants(frs);
             }
         }
         let compute_time = start.elapsed();
 
         println!("\n=== Tree Building Benchmark ({count} files) ===");
-        println!("Tree index build time: {:?}", build_time);
-        println!("Metrics computation time: {:?}", compute_time);
+        println!("Tree index build time: {build_time:?}");
+        println!("Metrics computation time: {compute_time:?}");
         println!("Total time: {:?}", build_time + compute_time);
         println!("Per-file build cost: {:?}", build_time / count as u32);
     }

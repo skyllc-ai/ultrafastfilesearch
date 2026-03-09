@@ -4,6 +4,20 @@
 //! All public functions are async where I/O is involved and return
 //! `anyhow::Result`.
 
+// CLI command modules have many single-call functions by design (one per command/subcommand)
+#![expect(
+    clippy::single_call_fn,
+    reason = "CLI command functions are called once from dispatch"
+)]
+#![expect(
+    clippy::min_ident_chars,
+    reason = "short names (d, v) conventional in closures"
+)]
+#![expect(
+    clippy::print_stderr,
+    reason = "CLI outputs user-facing messages to stderr"
+)]
+
 /// Binary string table tripwire for parity harness verification.
 /// This constant is embedded in the binary and can be found with:
 /// `strings uffs.exe | grep TRIPWIRE`
@@ -363,10 +377,6 @@ fn should_use_index_path(
     clippy::single_call_fn,
     reason = "public CLI entry point called from main dispatch"
 )]
-#[expect(
-    clippy::semicolon_outside_block,
-    reason = "cfg blocks produce mixed semicolon styles"
-)]
 pub async fn search(
     pattern: &str,
     single_drive: Option<char>,
@@ -466,15 +476,11 @@ pub async fn search(
 
     // Determine drives for C++ compatible footer in output file
     // (computed before data loading since multi_drives may be consumed)
-    let footer_drives: Vec<char> = if let Some(drive) = single_drive {
-        vec![drive]
-    } else if let Some(ref drives) = multi_drives {
-        drives.clone()
-    } else if let Some(drive) = filters.parsed.drive() {
-        vec![drive]
-    } else {
-        vec![]
-    };
+    let footer_drives: Vec<char> = single_drive
+        .map(|d| vec![d])
+        .or_else(|| multi_drives.clone())
+        .or_else(|| filters.parsed.drive().map(|d| vec![d]))
+        .unwrap_or_default();
 
     // Handle raw MFT file input (cross-platform debugging)
     let mut results = if let Some(mft_path) = mft_file.as_ref() {
@@ -756,11 +762,6 @@ async fn search_streaming(
 /// exactly like a live MFT read, enabling debugging on any platform.
 /// Same pipeline as Windows live read - only the load source differs.
 #[expect(clippy::single_call_fn, reason = "extracted from search() for clarity")]
-#[expect(
-    clippy::print_stderr,
-    clippy::print_stdout,
-    reason = "intentional user-facing profiling output"
-)]
 fn load_and_filter_from_mft_file(
     mft_path: &Path,
     drive_letter: Option<char>,
@@ -985,13 +986,13 @@ async fn load_and_filter_data(
         tracing::trace!(drive = %drive_letter, "search_dataframe: after load_or_build_dataframe_cached");
 
         // Non-Windows: read directly (no caching)
+        // Note: MftReader::open returns error on non-Windows (PlatformNotSupported)
         #[cfg(not(windows))]
         let full_df = {
             let reader = MftReader::open(drive_letter)
-                .await
                 .with_context(|| format!("Failed to open drive {drive_letter}:"))?
                 .with_use_bitmap(!no_bitmap);
-            reader.read_all().await?
+            reader.read_all()?
         };
 
         let read_ms = t_read.elapsed().as_millis();
@@ -1098,7 +1099,6 @@ async fn load_and_filter_data_index(
     let t_load = std::time::Instant::now();
 
     let reader = MftReader::open(drive_letter)
-        .await
         .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
 
     // Use cached read by default, fresh read if --no-cache
@@ -1184,7 +1184,6 @@ async fn load_and_filter_data_index_multi(
             let t_load = std::time::Instant::now();
 
             let reader = MftReader::open(drive)
-                .await
                 .with_context(|| format!("Failed to open drive {drive}:"))?;
 
             // Use cached read by default, fresh read if --no-cache
@@ -1312,10 +1311,6 @@ struct QueryFilters<'a> {
 }
 
 /// Build and execute the MFT query with all filters applied.
-#[expect(
-    clippy::single_call_fn,
-    reason = "extracted to reduce search() line count"
-)]
 fn execute_query(
     df: uffs_mft::DataFrame,
     filters: &QueryFilters<'_>,
@@ -1363,15 +1358,6 @@ fn execute_query(
 ///
 /// This is the fast path for simple queries. Returns results as a `DataFrame`
 /// for compatibility with the output pipeline.
-// TEMPORARY: print_stderr for debugging nested tokio runtime panic (issue #XXX)
-#[expect(
-    clippy::single_call_fn,
-    reason = "extracted to reduce search() line count"
-)]
-#[expect(
-    clippy::print_stderr,
-    reason = "temporary debugging for nested tokio runtime panic"
-)]
 fn execute_index_query(
     index: &uffs_mft::MftIndex,
     filters: &QueryFilters<'_>,
@@ -1452,10 +1438,6 @@ fn execute_index_query(
 #[expect(
     clippy::option_if_let_else,
     reason = "if-let chains are clearer for record lookup fallback"
-)]
-#[expect(
-    clippy::print_stderr,
-    reason = "temporary debugging for nested tokio runtime panic"
 )]
 fn results_to_dataframe(
     index: &uffs_mft::MftIndex,
@@ -1744,7 +1726,7 @@ fn write_results(
         if !drives.is_empty() {
             let drive_list: String = drives
                 .iter()
-                .map(|d| format!("{d}:"))
+                .map(|drive| format!("{drive}:"))
                 .collect::<Vec<_>>()
                 .join("|");
             write!(
@@ -2578,7 +2560,6 @@ pub async fn index(
             info!(drive = %drive_letter, "Indexing drive");
 
             let reader = MftReader::open(drive_letter)
-                .await
                 .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
 
             // Create progress bar (None if disabled via UFFS_NO_PROGRESS=1)
@@ -2602,16 +2583,14 @@ pub async fn index(
             };
 
             // Read MFT with progress callback
-            let mut df = reader
-                .read_with_progress(move |progress: MftProgress| {
-                    if let Some(bar) = &progress_bar {
-                        if let Some(total) = progress.total_records {
-                            bar.set_length(progress.bytes_read.max(total));
-                        }
-                        bar.set_position(progress.bytes_read);
+            let mut df = reader.read_with_progress(move |progress: MftProgress| {
+                if let Some(bar) = &progress_bar {
+                    if let Some(total) = progress.total_records {
+                        bar.set_length(progress.bytes_read.max(total));
                     }
-                })
-                .await?;
+                    bar.set_position(progress.bytes_read);
+                }
+            })?;
 
             info!(records = df.height(), "Read records");
 
@@ -2833,10 +2812,6 @@ fn extract_index_stats(df: &uffs_mft::DataFrame, path: &Path) -> IndexStats {
 
 /// Print index information to stdout.
 #[expect(clippy::single_call_fn, reason = "extracted for clarity")]
-#[expect(
-    clippy::too_many_lines,
-    reason = "structured info display with many fields — splitting would harm readability"
-)]
 fn print_index_info(stats: &IndexStats, df: &uffs_mft::DataFrame) -> Result<()> {
     let mut out = std::io::stdout().lock();
     let sep = "═══════════════════════════════════════════════════════════════";

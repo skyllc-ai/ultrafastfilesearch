@@ -35,6 +35,13 @@
 // These dependencies are used by the uffs-mft library, not this binary.
 // Cargo doesn't support per-binary dependencies, so we suppress the warnings
 // here.
+
+// CLI binaries have single-call functions by design (one per command)
+#![expect(
+    clippy::single_call_fn,
+    reason = "CLI command functions are called once from dispatch"
+)]
+
 #[cfg(not(windows))]
 use core::future::Future;
 use std::io;
@@ -848,10 +855,6 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     clippy::print_stderr,
     reason = "intentional user-facing error output in main"
 )]
-#[expect(
-    clippy::exit,
-    reason = "top-level entry point must set process exit code"
-)]
 async fn main() {
     // Check for -v/--verbose flag early
     let verbose = std::env::args().any(|arg| arg == "-v" || arg == "--verbose");
@@ -871,18 +874,6 @@ async fn main() {
 }
 
 /// Main application logic, separated from `main()` for clean error handling.
-#[expect(
-    clippy::exit,
-    reason = "called from main to set process exit code on error"
-)]
-#[expect(
-    clippy::unused_async,
-    reason = "async for consistency with dispatched command handlers"
-)]
-#[expect(
-    clippy::single_call_fn,
-    reason = "logical separation of run logic from main error handling"
-)]
 async fn run() -> Result<()> {
     // Parse CLI - let clap handle its own error formatting
     // Clap already provides excellent error messages with usage hints
@@ -1120,7 +1111,6 @@ async fn cmd_read(
     let open_start = Instant::now();
 
     let reader = MftReader::open(drive)
-        .await
         .with_context(|| format!("Failed to open drive {}:", drive))?
         .with_mode(mode)
         .with_merge_extensions(full)
@@ -1139,7 +1129,6 @@ async fn cmd_read(
 
     let mut df = reader
         .read_all()
-        .await
         .with_context(|| "Failed to read MFT")?;
 
     let record_count = df.height();
@@ -1434,14 +1423,12 @@ async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: bool) -> Res
         println!();
 
         let reader = MftReader::open(drive)
-            .await
             .with_context(|| format!("Failed to open drive {}:", drive))?
             .with_use_bitmap(!no_bitmap)
             .with_expand_links(!unique); // unique=true means don't expand
 
         let df = reader
             .read_all()
-            .await
             .with_context(|| "Failed to read MFT")?;
 
         let total_parsed = df.height();
@@ -1960,7 +1947,6 @@ async fn cmd_bench(
 
     // Open the reader once (opening is fast, we don't need to re-open for each run)
     let reader = MftReader::open(drive)
-        .await
         .with_context(|| format!("Failed to open drive {}:", drive))?
         .with_mode(mode)
         .with_merge_extensions(full);
@@ -1974,7 +1960,6 @@ async fn cmd_bench(
 
         let (_, result) = reader
             .read_with_timing(no_df)
-            .await
             .with_context(|| format!("Benchmark run {} failed", run))?;
 
         info!(
@@ -2340,7 +2325,6 @@ async fn benchmark_single_drive(
     use uffs_mft::MftReader;
 
     let reader = MftReader::open(drive)
-        .await
         .with_context(|| format!("Failed to open drive {}:", drive))?
         .with_merge_extensions(full);
 
@@ -2353,7 +2337,6 @@ async fn benchmark_single_drive(
 
         let (_, result) = reader
             .read_with_timing(no_df)
-            .await
             .with_context(|| format!("Benchmark run {} failed", run))?;
 
         results.push(result);
@@ -2656,7 +2639,6 @@ async fn cmd_save(
 
     // Open reader and save
     let reader = MftReader::open(drive)
-        .await
         .with_context(|| format!("Failed to open drive {drive}:"))?;
 
     // Raw compat mode implies no compression
@@ -2669,7 +2651,6 @@ async fn cmd_save(
 
     let header = reader
         .save_raw_to_file(output, &options)
-        .await
         .with_context(|| format!("Failed to save raw MFT to {}", output.display()))?;
 
     let elapsed = start_time.elapsed();
@@ -2870,10 +2851,6 @@ fn cmd_load(
             )]
             let ratio = header.compressed_size as f64 / header.original_size as f64 * 100.0_f64;
             println!("  Compression ratio:    {ratio:.1}%");
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "precision loss acceptable for display percentages"
-            )]
             #[expect(
                 clippy::float_arithmetic,
                 reason = "floating-point needed for savings calculation"
@@ -3570,13 +3547,11 @@ async fn cmd_benchmark_index(drive: char) -> Result<()> {
 
     // Open reader and read MFT
     let reader = MftReader::open(drive_upper)
-        .await
         .with_context(|| format!("Failed to open drive {}:", drive_upper))?
         .with_mode(MftReadMode::Auto);
 
     let df = reader
         .read_all()
-        .await
         .with_context(|| format!("Failed to read MFT from {}:", drive_upper))?;
 
     let elapsed = start_time.elapsed();
@@ -3772,7 +3747,6 @@ async fn cmd_benchmark_index_lean(
     // - parallel_parse: enable M3 parallel parsing optimization
     // - parse_workers: number of parsing worker threads
     let mut reader = MftReader::open(drive_upper)
-        .await
         .with_context(|| format!("Failed to open drive {}:", drive_upper))?
         .with_mode(mode)
         .with_use_bitmap(!no_bitmap)
@@ -3958,7 +3932,6 @@ async fn cmd_benchmark_tree(drive: char, iterations: usize, no_cache: bool) -> R
     let mut index = if no_cache {
         println!("Building fresh index from disk...");
         let reader = MftReader::open(drive_upper)
-            .await
             .with_context(|| format!("Failed to open drive {}:", drive_upper))?;
         reader
             .read_all_index()
@@ -3971,7 +3944,6 @@ async fn cmd_benchmark_tree(drive: char, iterations: usize, no_cache: bool) -> R
             None => {
                 println!("Cache miss - building fresh index...");
                 let reader = MftReader::open(drive_upper)
-                    .await
                     .with_context(|| format!("Failed to open drive {}:", drive_upper))?;
                 reader
                     .read_all_index()
@@ -4378,7 +4350,7 @@ async fn cmd_index_save(drive: char, output: &Path) -> Result<()> {
     let start = Instant::now();
 
     // Build the index
-    let reader = MftReader::open(drive).await?;
+    let reader = MftReader::open(drive)?;
     let index = reader.read_all_index().await?;
 
     let build_time = start.elapsed();
@@ -4592,7 +4564,7 @@ async fn cmd_cache_get(drive: char, force: bool, ttl: Option<u64>) -> Result<()>
     println!("🔨 Building fresh index...");
 
     let start = Instant::now();
-    let reader = MftReader::open(drive).await?;
+    let reader = MftReader::open(drive)?;
     let index = reader.read_all_index().await?;
     let build_time = start.elapsed();
 
@@ -4859,7 +4831,7 @@ async fn do_full_index_build(drive: char) -> Result<()> {
     println!();
     println!("🔨 Building full index for {}:...", drive);
 
-    let reader = MftReader::open(drive).await?;
+    let reader = MftReader::open(drive)?;
     let index = reader.read_all_index().await?;
     let build_time = start.elapsed();
 

@@ -530,7 +530,6 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     use crate::index::{
         ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo,
     };
-    #[expect(unused_imports, reason = "used in inline parsing mode")]
     use crate::ntfs::{
         AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
         StandardInformation, file_reference_to_frs, filetime_to_unix_micros,
@@ -4904,8 +4903,6 @@ impl ParallelMftReader {
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
-        // Note: Some imports may appear unused but are needed for the inline parsing logic
-        #[expect(unused_imports, reason = "used in inline parsing mode")]
         use crate::index::MftIndex;
 
         let record_size = self.extent_map.bytes_per_record as usize;
@@ -5268,10 +5265,6 @@ impl ParallelMftReader {
     /// * `concurrency` - Number of I/O ops in flight (None = 2 for HDD)
     /// * `io_chunk_size` - Size of each I/O in bytes (None = 1MB)
     /// * `_progress_callback` - Optional progress callback
-    #[expect(
-        unsafe_code,
-        reason = "FFI: ReadFile, GetQueuedCompletionStatus for C++ port IOCP reads"
-    )]
     pub fn read_all_sliding_window_iocp_to_index_cpp_port<F>(
         &self,
         overlapped_handle: HANDLE,
@@ -5283,13 +5276,6 @@ impl ParallelMftReader {
     where
         F: Fn(u64, u64),
     {
-        use std::collections::VecDeque;
-        use std::pin::Pin;
-
-        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
-        use windows::Win32::Storage::FileSystem::ReadFile;
-        use windows::Win32::System::IO::GetQueuedCompletionStatus;
-
         use crate::cpp_types::CppParsePipeline;
 
         let record_size = self.extent_map.bytes_per_record as usize;
@@ -6208,10 +6194,6 @@ impl StreamingMftReader {
     ///
     /// This method reads chunks and processes them immediately, reducing
     /// memory pressure compared to buffering the entire MFT.
-    #[expect(
-        unsafe_code,
-        reason = "FFI: SetFilePointerEx and ReadFile via read_chunk_into_buffer"
-    )]
     pub fn read_all_streaming<F>(
         &mut self,
         handle: HANDLE,
@@ -6400,10 +6382,6 @@ impl PrefetchMftReader {
     ///
     /// This method uses a background thread to prefetch the next chunk while
     /// processing the current one, maximizing throughput.
-    #[expect(
-        unsafe_code,
-        reason = "FFI: SetFilePointerEx and ReadFile for prefetch double-buffered reads"
-    )]
     pub fn read_all_prefetch<F>(
         &self,
         handle: HANDLE,
@@ -6654,10 +6632,6 @@ impl PipelinedMftReader {
     /// possible, sending them through a bounded channel to the main thread
     /// for parsing. The bounded channel provides backpressure to prevent
     /// memory explosion.
-    #[expect(
-        unsafe_code,
-        reason = "FFI: SetFilePointerEx and ReadFile via reader thread for pipelined I/O"
-    )]
     pub fn read_all_pipelined<F>(
         &self,
         handle: HANDLE,
@@ -6840,10 +6814,6 @@ impl PipelinedMftReader {
     ///   Read chunks                                 Parse records in
     ///   from disk                                   parallel batches
     /// ```
-    #[expect(
-        unsafe_code,
-        reason = "FFI: SetFilePointerEx and ReadFile via reader thread for parallel pipelined I/O"
-    )]
     pub fn read_all_pipelined_parallel<F>(
         &self,
         handle: HANDLE,
@@ -7254,10 +7224,7 @@ impl OverlappedRead {
     ///
     /// # Safety
     /// The returned pointer is valid as long as self is pinned and alive.
-    #[expect(
-        unsafe_code,
-        reason = "returns raw pointer to pinned OVERLAPPED for Windows async I/O"
-    )]
+    /// Note: Creating raw pointers is safe; only dereferencing requires unsafe.
     pub fn as_overlapped_ptr(&mut self) -> *mut windows::Win32::System::IO::OVERLAPPED {
         &mut self.overlapped as *mut _
     }
@@ -7625,7 +7592,7 @@ pub struct VolumeState {
     /// I/O chunk size for this volume
     pub io_chunk_size: usize,
     /// Record merger accumulating parsed records (unified pipeline)
-    pub merger: crate::parse::MftRecordMerger,
+    pub merger: MftRecordMerger,
     /// Queue of pending I/O operations
     pub io_queue: std::collections::VecDeque<MultiVolumeIoOp>,
     /// Next I/O operation index to issue
@@ -8028,7 +7995,7 @@ pub fn prepare_volume_state(
     }
 
     let total_io_ops = io_queue.len();
-    let estimated_records = bitmap.as_ref().map_or(total_records, |b| b.count_in_use());
+    let _estimated_records = bitmap.as_ref().map_or(total_records, |b| b.count_in_use());
 
     VolumeState {
         drive_letter,
@@ -8039,7 +8006,7 @@ pub fn prepare_volume_state(
         pending_ops: 0,
         max_concurrency,
         io_chunk_size,
-        merger: crate::parse::MftRecordMerger::with_capacity(total_records),
+        merger: MftRecordMerger::with_capacity(total_records),
         io_queue,
         next_io_idx: 0,
         total_io_ops,

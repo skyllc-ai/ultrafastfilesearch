@@ -40,6 +40,12 @@
 //! RUST_LOG=trace RUST_LOG_FILE=trace uffs *.txt
 //! ```
 
+// CLI main module uses single-call functions by design
+#![expect(
+    clippy::single_call_fn,
+    reason = "CLI entry point functions are called once from main"
+)]
+
 // Dependencies used in commands.rs for streaming output (Windows-only code
 // paths)
 use std::io;
@@ -75,10 +81,6 @@ mod commands;
 /// - `es` → Everything-compatible mode
 /// - `uffs-cpp` → C++ UFFS compatible mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[expect(
-    dead_code,
-    reason = "Everything and CppCompat variants reserved for future personality modes"
-)]
 pub enum Personality {
     /// Modern CLI: clean, ripgrep/fd style (default)
     #[default]
@@ -463,15 +465,6 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
 ///
 /// This is separated from `main()` to allow custom error handling that
 /// doesn't show backtraces for user-facing errors like "file not found".
-// Intentional separation for error handling - not a candidate for inlining.
-#[expect(
-    clippy::too_many_lines,
-    reason = "top-level CLI dispatch — splitting further would obscure control flow"
-)]
-#[expect(
-    clippy::single_call_fn,
-    reason = "separated from main() for structured error handling"
-)]
 async fn run() -> Result<()> {
     // Touch tripwire to ensure it's embedded in the binary string table
     // (Fix #6: tripwire that doesn't break CSV)

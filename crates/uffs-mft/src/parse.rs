@@ -14,10 +14,14 @@
 //!
 //! # Platform Support
 
-// Allow pedantic lints for low-level parsing code that works with raw NTFS structures
+// Low-level NTFS parsing uses manual indexing with bounds verified by:
+// 1. Size checks before ptr::read operations
+// 2. Range bounds validated against data.len()
+// 3. Loop conditions that terminate before overflow
+// Performance-critical hot path - 40+ call sites
 #![expect(
     clippy::indexing_slicing,
-    reason = "bounds checked before indexing in NTFS parser"
+    reason = "NTFS parser hot path; bounds manually verified before all index access"
 )]
 #![expect(
     clippy::cast_sign_loss,
@@ -34,14 +38,6 @@
 #![expect(
     clippy::assigning_clones,
     reason = "clone() is clearer than clone_from() here"
-)]
-#![expect(
-    clippy::map_unwrap_or,
-    reason = "map().unwrap_or() is more readable than map_or()"
-)]
-#![expect(
-    clippy::wildcard_enum_match_arm,
-    reason = "catch-all for Skip/Extension is intentional"
 )]
 //! All functions in this module are cross-platform and can be used to parse
 //! saved MFT files on macOS, Linux, or Windows.
@@ -481,10 +477,6 @@ pub fn add_missing_parent_placeholders_to_vec(records: &mut Vec<ParsedRecord>) -
 /// Handles both NTFS 1.2 (36 bytes) and NTFS 3.0+ (72 bytes) formats.
 /// For NTFS 3.0+, also extracts `usn`, `security_id`, and `owner_id`.
 #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
-#[expect(
-    clippy::single_call_fn,
-    reason = "extracted for clarity and encapsulation"
-)]
 fn parse_standard_info_full(data: &[u8], attr_offset: usize, result: &mut ExtendedStandardInfo) {
     use core::mem::size_of;
 
@@ -543,10 +535,6 @@ fn parse_standard_info_full(data: &[u8], attr_offset: usize, result: &mut Extend
 
 /// Parses `$FILE_NAME` and returns a `NameInfo` with timestamps.
 #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
-#[expect(
-    clippy::single_call_fn,
-    reason = "extracted for clarity and encapsulation"
-)]
 fn parse_file_name_full(data: &[u8], attr_offset: usize, source_frs: u64) -> Option<NameInfo> {
     use core::mem::size_of;
 
@@ -605,10 +593,6 @@ fn parse_file_name_full(data: &[u8], attr_offset: usize, source_frs: u64) -> Opt
 /// The `$BadClus` file (FRS 8) has a `$Bad` stream that is a sparse file
 /// spanning the entire volume. C++ uses `InitializedSize` instead of `DataSize`
 /// for this stream to avoid reporting the full volume size.
-#[expect(
-    clippy::single_call_fn,
-    reason = "extracted for clarity and encapsulation"
-)]
 fn parse_data_attribute_full(
     data: &[u8],
     attr_offset: usize,
@@ -2558,6 +2542,7 @@ pub fn parse_record_zero_alloc_forensic(
 /// This struct is cross-platform and can be used on all platforms.
 /// It only depends on `ParsedRecord`, `ParseResult`, `ExtensionAttributes`,
 /// and `ParsedColumns` which are all cross-platform.
+#[derive(Debug)]
 pub struct MftRecordMerger {
     /// Base records indexed directly by FRS number.
     /// `base_records[frs]` = Some(record) if present, None otherwise.

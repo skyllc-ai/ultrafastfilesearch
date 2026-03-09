@@ -25,6 +25,12 @@
 //! assert_eq!(parsed.drive(), None);
 //! ```
 
+// Helper functions separated for testability and code clarity
+#![expect(
+    clippy::single_call_fn,
+    reason = "helper functions extracted for testability and code clarity"
+)]
+
 use crate::error::{CoreError, Result};
 
 /// Type of search pattern.

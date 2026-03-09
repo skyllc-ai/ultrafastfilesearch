@@ -16,10 +16,6 @@ use crate::error::{CoreError, Result};
 /// # Errors
 ///
 /// Returns an error if the glob pattern is invalid.
-#[expect(
-    clippy::single_call_fn,
-    reason = "intentionally separate for clarity and testability"
-)]
 pub fn glob_to_regex(pattern: &str) -> Result<String> {
     let mut regex = String::with_capacity(pattern.len() * 2);
     regex.push('^');

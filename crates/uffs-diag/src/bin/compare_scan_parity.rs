@@ -41,10 +41,8 @@
     clippy::use_debug,
     reason = "diagnostic tool — stdout/stderr/debug output is intentional"
 )]
-#![expect(
-    clippy::missing_docs_in_private_items,
-    reason = "diagnostic tool — internal items are self-documenting"
-)]
+// allow (not expect) because tests don't trigger doc lints
+#![allow(clippy::missing_docs_in_private_items)]
 #![expect(
     clippy::too_many_lines,
     reason = "diagnostic analysis functions are inherently long sequential pipelines"
@@ -55,7 +53,6 @@
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    clippy::cast_lossless,
     clippy::default_numeric_fallback,
     reason = "statistical comparison tool — arithmetic casts are pervasive and reviewed"
 )]

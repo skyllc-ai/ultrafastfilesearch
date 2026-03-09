@@ -25,16 +25,6 @@
     clippy::min_ident_chars,
     reason = "benchmark code uses short loop variables"
 )]
-#![expect(clippy::default_numeric_fallback, reason = "benchmark code")]
-#![expect(
-    clippy::std_instead_of_core,
-    reason = "benchmark code uses std for simplicity"
-)]
-#![expect(clippy::semicolon_if_nothing_returned, reason = "benchmark code")]
-#![expect(
-    clippy::unwrap_used,
-    reason = "benchmark code unwraps controlled test data"
-)]
 #![expect(
     clippy::expect_used,
     reason = "benchmark code expects on controlled test data"
@@ -43,18 +33,17 @@
     unused_crate_dependencies,
     reason = "transitive dependencies not directly used"
 )]
-#![expect(clippy::doc_markdown, reason = "benchmark code")]
-#![expect(
-    clippy::indexing_slicing,
-    reason = "benchmark code indexes known-valid positions"
-)]
 #![expect(
     clippy::shadow_reuse,
     reason = "benchmarks reuse variable names in loops"
 )]
 #![expect(
+    clippy::indexing_slicing,
+    reason = "benchmark code indexes known-valid positions"
+)]
+#![expect(
     clippy::redundant_closure_for_method_calls,
-    reason = "benchmark code clarity"
+    reason = "benchmark code clarity with closures"
 )]
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -67,7 +56,7 @@ use uffs_polars::{Column, DataFrame};
 // Test Data Generation
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Create a test DataFrame with realistic file names and extensions.
+/// Create a test `DataFrame` with realistic file names and extensions.
 fn create_test_dataframe(num_rows: usize) -> DataFrame {
     let extensions = [
         "txt", "rs", "log", "dll", "exe", "pdf", "jpg", "png", "mp4", "doc",

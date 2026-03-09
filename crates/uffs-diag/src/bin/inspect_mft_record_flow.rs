@@ -8,7 +8,7 @@
 
 #![expect(
     unused_crate_dependencies,
-    reason = "standalone binary doesn't use all crate dependencies"
+    reason = "shared Cargo.toml dependencies not used by all binaries"
 )]
 #![expect(
     clippy::print_stdout,
@@ -21,13 +21,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use uffs_mft::{LoadRawOptions, RawMftData, load_raw_mft};
-// Keep uffs_polars dependency wired in for version-locking, even though this
-// binary does not use it directly.
-#[expect(
-    unused_imports,
-    reason = "version-locks uffs_polars with diagnostic crate"
-)]
-use uffs_polars as _;
 
 /// Local copy of `FileRecordSegmentHeader` so this binary can run on
 /// non-Windows targets (the real NTFS structs are cfg(windows)).
@@ -99,7 +92,7 @@ fn main() -> Result<()> {
     }
 
     let raw_path = args.get(1).map(String::as_str).ok_or_else(|| {
-        anyhow::anyhow!("Expected <mft.raw> path argument to be present after length check",)
+        anyhow::anyhow!("Expected <mft.raw> path argument to be present after length check")
     })?;
 
     let frs_values: Vec<u64> = args
@@ -131,10 +124,6 @@ fn main() -> Result<()> {
 #[expect(
     clippy::single_call_fn,
     reason = "encapsulates the full record inspection pipeline"
-)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "sequential diagnostic dump — splitting would reduce clarity"
 )]
 fn inspect_record_flow(raw: &RawMftData, frs: u64) {
     use core::mem::size_of;
@@ -198,7 +187,7 @@ fn inspect_record_flow(raw: &RawMftData, frs: u64) {
     // available here.
     #[cfg(not(windows))]
     {
-        println!("(fixup + full parse not available on this platform; header dump only)",);
+        println!("(fixup + full parse not available on this platform; header dump only)");
     }
 }
 

@@ -3,11 +3,6 @@
 //! This crate provides diagnostic tools for MFT analysis. The library portion
 //! exposes shared modules used by the diagnostic binaries.
 
-#![expect(
-    clippy::missing_docs_in_private_items,
-    reason = "diagnostic crate — internal items are self-documenting CLI helpers"
-)]
-
 // Keep dependencies wired in for version-locking, even though the library
 // portion does not use them directly (the binaries do).
 use anyhow as _;

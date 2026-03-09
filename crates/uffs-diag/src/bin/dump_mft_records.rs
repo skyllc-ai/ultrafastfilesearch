@@ -30,10 +30,6 @@ use uffs_mft::raw::{LoadRawOptions, load_raw_mft};
 // dependency set so that offline diagnostics can share the same Polars
 // facade version as the main CLI, even though this specific tool does not
 // use it directly.
-#[expect(
-    unused_imports,
-    reason = "version-locks uffs_polars with diagnostic crate"
-)]
 use uffs_polars as _;
 
 /// Local copy of `MultiSectorHeader` layout so this tool can run on
@@ -129,7 +125,7 @@ fn main() -> Result<()> {
     }
 
     let raw_path = args.get(1).map(String::as_str).ok_or_else(|| {
-        anyhow::anyhow!("Expected <mft.raw> path argument to be present after length check",)
+        anyhow::anyhow!("Expected <mft.raw> path argument to be present after length check")
     })?;
     let frs_values: Vec<u64> = args
         .get(2..)
@@ -175,10 +171,6 @@ fn main() -> Result<()> {
 #[expect(
     clippy::use_debug,
     reason = "diagnostic tool — Debug output is intentional for inspection"
-)]
-#[expect(
-    clippy::similar_names,
-    reason = "base_frs/ext_frs naming mirrors NTFS terminology"
 )]
 #[expect(
     clippy::cast_possible_truncation,
@@ -433,7 +425,7 @@ fn dump_record(frs: u64, data: &[u8]) {
     println!("    is_directory         = {}", header.is_directory());
     println!("  bytes_in_use           = {bytes_in_use}");
     println!("  bytes_allocated        = {bytes_allocated}");
-    println!("  base_file_record_seg   = 0x{base_file_record_segment:016X}",);
+    println!("  base_file_record_seg   = 0x{base_file_record_segment:016X}");
     println!("  is_base_record         = {}", header.is_base_record());
 
     // Quick hex dump of the first part of the record for manual inspection.

@@ -40,10 +40,11 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::all, clippy::pedantic)]
 
-// Suppress unused crate warnings for dev-dependencies (used in benchmarks/tests
-// only)
+// Suppress unused crate warnings for dev-dependencies and reserved dependencies
+// memchr is reserved for future SIMD-optimized string search
 #[cfg(test)]
 use criterion as _;
+use memchr as _;
 #[cfg(test)]
 use tokio as _;
 
