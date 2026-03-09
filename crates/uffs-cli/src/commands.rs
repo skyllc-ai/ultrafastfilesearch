@@ -1607,8 +1607,9 @@ fn results_to_dataframe(
         // For directories (including reparse), always prefer the record's tree metrics
         // to ensure we get the computed values from cpp_tree, not potentially stale
         // values from SearchResult.
-        // C++ parity: ADS entries (stream_index > 0) have descendants/treesize/tree_allocated = 0.
-        // Only the default stream (stream_index == 0) gets tree metrics.
+        // C++ parity: ADS entries (stream_index > 0) have
+        // descendants/treesize/tree_allocated = 0. Only the default stream
+        // (stream_index == 0) gets tree metrics.
         let (desc, tsize, talloc) = if result.stream_index > 0 {
             // ADS stream: no tree metrics
             (0_u32, 0_u64, 0_u64)

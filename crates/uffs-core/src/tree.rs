@@ -600,8 +600,7 @@ pub fn apply_directory_treesize(df: &DataFrame) -> Result<DataFrame> {
     let has_stream_name = df.column("stream_name").is_ok();
 
     let is_default_dir = if has_stream_name {
-        col("is_directory")
-            .and(col("stream_name").eq(lit("")))
+        col("is_directory").and(col("stream_name").eq(lit("")))
     } else {
         col("is_directory")
     };

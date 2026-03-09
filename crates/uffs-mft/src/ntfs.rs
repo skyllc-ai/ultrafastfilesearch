@@ -763,7 +763,8 @@ pub const fn filetime_to_unix_micros(filetime: i64) -> i64 {
         return 0;
     }
 
-    // Convert from 100ns to microseconds (works for both positive and negative offsets)
+    // Convert from 100ns to microseconds (works for both positive and negative
+    // offsets)
     (filetime - FILETIME_UNIX_DIFF) / 10
 }
 

@@ -646,8 +646,14 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                                 };
                                 if is_better || primary_name.is_none() {
                                     // Move old primary to additional if exists
-                                    if let Some((old_name, old_parent, _, old_parse_idx)) = primary_name.take() {
-                                        additional_names.push((old_name, old_parent, old_parse_idx));
+                                    if let Some((old_name, old_parent, _, old_parse_idx)) =
+                                        primary_name.take()
+                                    {
+                                        additional_names.push((
+                                            old_name,
+                                            old_parent,
+                                            old_parse_idx,
+                                        ));
                                     }
                                     primary_name = Some((name, parent_frs, namespace, parse_idx));
                                 } else {
@@ -667,9 +673,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     let nr_offset = offset + 16;
                     if nr_offset + 8 <= data.len() {
                         let lowest_vcn = i64::from_le_bytes(
-                            data[nr_offset..nr_offset + 8]
-                                .try_into()
-                                .unwrap_or([0; 8]),
+                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
                         );
                         lowest_vcn == 0
                     } else {
@@ -835,7 +839,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let additional_count = additional_names.len();
     let mut link_indices: Vec<u32> = Vec::with_capacity(additional_count);
     // Collect parent FRS values for building children array later
-    let mut additional_parent_frs: SmallVec<[(u64, u16); 4]> = SmallVec::with_capacity(additional_count);
+    let mut additional_parent_frs: SmallVec<[(u64, u16); 4]> =
+        SmallVec::with_capacity(additional_count);
     for (link_name, link_parent, link_parse_idx) in additional_names {
         additional_parent_frs.push((link_parent, link_parse_idx));
         let link_offset = index.add_name(&link_name);
@@ -1083,9 +1088,7 @@ fn parse_extension_to_index(
                     let nr_offset = offset + 16;
                     if nr_offset + 8 <= data.len() {
                         let lowest_vcn = i64::from_le_bytes(
-                            data[nr_offset..nr_offset + 8]
-                                .try_into()
-                                .unwrap_or([0; 8]),
+                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
                         );
                         lowest_vcn == 0
                     } else {
@@ -1517,8 +1520,14 @@ pub fn parse_record_to_fragment(
                                     _ => false,
                                 };
                                 if is_better || primary_name.is_none() {
-                                    if let Some((old_name, old_parent, _, old_parse_idx)) = primary_name.take() {
-                                        additional_names.push((old_name, old_parent, old_parse_idx));
+                                    if let Some((old_name, old_parent, _, old_parse_idx)) =
+                                        primary_name.take()
+                                    {
+                                        additional_names.push((
+                                            old_name,
+                                            old_parent,
+                                            old_parse_idx,
+                                        ));
                                     }
                                     primary_name = Some((name, parent_frs, namespace, parse_idx));
                                 } else {
@@ -1538,9 +1547,7 @@ pub fn parse_record_to_fragment(
                     let nr_offset = offset + 16;
                     if nr_offset + 8 <= data.len() {
                         let lowest_vcn = i64::from_le_bytes(
-                            data[nr_offset..nr_offset + 8]
-                                .try_into()
-                                .unwrap_or([0; 8]),
+                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
                         );
                         lowest_vcn == 0
                     } else {
@@ -1702,7 +1709,8 @@ pub fn parse_record_to_fragment(
     let additional_count = additional_names.len();
     let mut link_indices: Vec<u32> = Vec::with_capacity(additional_count);
     // Collect parent FRS values for building children array later
-    let mut additional_parent_frs: SmallVec<[(u64, u16); 4]> = SmallVec::with_capacity(additional_count);
+    let mut additional_parent_frs: SmallVec<[(u64, u16); 4]> =
+        SmallVec::with_capacity(additional_count);
     for (link_name, link_parent, link_parse_idx) in additional_names {
         additional_parent_frs.push((link_parent, link_parse_idx));
         let link_offset = fragment.add_name(&link_name);
@@ -2028,9 +2036,7 @@ fn parse_extension_to_fragment(
                     let nr_offset = offset + 16;
                     if nr_offset + 8 <= data.len() {
                         let lowest_vcn = i64::from_le_bytes(
-                            data[nr_offset..nr_offset + 8]
-                                .try_into()
-                                .unwrap_or([0; 8]),
+                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
                         );
                         lowest_vcn == 0
                     } else {
@@ -5348,8 +5354,10 @@ impl ParallelMftReader {
     ///
     /// This method uses a producer-consumer pattern:
     /// - IOCP thread reads data and sends buffers to a channel
-    /// - Worker threads parse buffers using `parse_record_full()` (unified pipeline)
-    /// - After all I/O completes, results are merged via `MftRecordMerger` into final index
+    /// - Worker threads parse buffers using `parse_record_full()` (unified
+    ///   pipeline)
+    /// - After all I/O completes, results are merged via `MftRecordMerger` into
+    ///   final index
     ///
     /// This is beneficial for NVMe drives where I/O is faster than parsing.
     /// For HDD, use `read_all_sliding_window_iocp_to_index` (inline parsing).

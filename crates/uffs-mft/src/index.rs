@@ -2280,8 +2280,8 @@ impl MftIndex {
 
         tracing::debug!("[TRIP] MftIndex::compute_tree_metrics_cpp_port EXIT");
     }
-    // NOTE: compute_tree_metrics_impl was removed - cpp_port is now the sole algorithm.
-    // See commit "refactor: remove algorithm selection machinery"
+    // NOTE: compute_tree_metrics_impl was removed - cpp_port is now the sole
+    // algorithm. See commit "refactor: remove algorithm selection machinery"
 
     /// Display enhanced statistics to stdout.
     ///
@@ -5402,9 +5402,10 @@ mod tests {
             "Directory should have descendants = 2"
         );
 
-        // Root's size = children.length (Channel A from directory) + root's first_len (0)
-        // Channel A from directory = file_delta(1000) + internal_stream_delta(256) = 1256
-        // Root treesize (Channel B) = 1256 + 0 = 1256
+        // Root's size = children.length (Channel A from directory) + root's first_len
+        // (0) Channel A from directory = file_delta(1000) +
+        // internal_stream_delta(256) = 1256 Root treesize (Channel B) = 1256 +
+        // 0 = 1256
         let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
         assert_eq!(
             index.records[root_idx].treesize, 1256,

@@ -46,12 +46,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use chrono as _;
 use clap::{Parser, Subcommand};
 use mimalloc::MiMalloc;
 use tracing_subscriber::fmt::time::UtcTime;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Layer};
-use {chrono as _, uffs_polars as _};
+use uffs_polars as _;
 
 /// Use mimalloc globally - faster than system allocator for our workload:
 /// many small allocations (file names, records) + large buffers (MFT,

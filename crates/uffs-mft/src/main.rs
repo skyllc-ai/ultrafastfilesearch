@@ -41,6 +41,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use bitflags as _;
 use clap::{Parser, Subcommand};
 // Dev-dependencies (used in benchmarks and tests only)
 #[cfg(test)]
@@ -55,8 +56,11 @@ use indicatif as _;
 use indicatif::{ProgressBar, ProgressStyle};
 #[cfg(test)]
 use proptest as _;
+use rayon as _;
+use rustc_hash as _;
 // SmallVec for path chain building (used in index.rs PathResolver)
 use smallvec as _;
+use thiserror as _;
 #[cfg(not(windows))]
 use tracing as _;
 #[cfg(windows)]
@@ -71,10 +75,10 @@ use tracing_subscriber::{EnvFilter, Layer};
 use uffs_mft as _;
 #[cfg(windows)]
 use uffs_mft::MftReader;
+use uffs_polars as _;
 // Optional dependencies
 #[cfg(feature = "zstd")]
 use zstd as _;
-use {bitflags as _, rayon as _, rustc_hash as _, thiserror as _, uffs_polars as _};
 // Benchmark dependencies (used by bench/bench-all commands on Windows)
 #[cfg(not(windows))]
 use {chrono as _, hostname as _, num_cpus as _};

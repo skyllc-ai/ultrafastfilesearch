@@ -1718,7 +1718,10 @@ const FRH_IN_USE: u16 = 0x0001;
 const FRH_DIRECTORY: u16 = 0x0002;
 
 /// NTFS `FILE_NAME` namespace: Win32 (case-insensitive, visible in Explorer).
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "defined for completeness of NTFS namespace constants"
+)]
 const FILE_NAME_WIN32: u8 = 0x01;
 /// NTFS `FILE_NAME` namespace: DOS-only (8.3 short name, not visible
 /// standalone).
@@ -1728,7 +1731,10 @@ const FILE_NAME_WIN32: u8 = 0x01;
 )]
 const FILE_NAME_DOS: u8 = 0x02;
 /// NTFS `FILE_NAME` namespace: Win32+DOS combined (visible in Explorer).
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "defined for completeness of NTFS namespace constants"
+)]
 const FILE_NAME_WIN32_DOS: u8 = 0x03;
 
 /// FILE record magic number ('FILE' in little-endian = 'ELIF')
@@ -2317,8 +2323,8 @@ impl CppParsePipeline {
             unsafe { core::ptr::read(attr_data[value_offset..].as_ptr().cast()) };
 
         // C++ parity: skip only DOS-only (0x02) namespace.
-        // C++ code: `if (fn->Flags != 0x02 /*FILE_NAME_DOS */)` (ntfs_index.hpp line 550)
-        // Accepts POSIX (0x00), Win32 (0x01), and Win32+DOS (0x03).
+        // C++ code: `if (fn->Flags != 0x02 /*FILE_NAME_DOS */)` (ntfs_index.hpp line
+        // 550) Accepts POSIX (0x00), Win32 (0x01), and Win32+DOS (0x03).
         let namespace = fn_attr.file_name_namespace;
         if namespace == FILE_NAME_DOS {
             return;
@@ -2344,7 +2350,8 @@ impl CppParsePipeline {
         let record_idx = index.records_lookup[frs_base as usize] as usize;
 
         // C++ parity: no deduplication. If record already has a name, push
-        // current first_name to overflow list (matches C++ ntfs_index.hpp lines 552-557).
+        // current first_name to overflow list (matches C++ ntfs_index.hpp lines
+        // 552-557).
         let current_name_count = index.records_data[record_idx].name_count;
         if current_name_count > 0 {
             // Push current first_name to overflow list

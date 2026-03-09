@@ -12,12 +12,26 @@
 //! ```
 
 // Suppress unused crate warnings for dependencies used by the main crate.
-use {
-    anyhow as _, bitflags as _, chrono as _, clap as _, criterion as _, dirs_next as _,
-    hostname as _, indicatif as _, num_cpus as _, proptest as _, rayon as _, rustc_hash as _,
-    smallvec as _, thiserror as _, tokio as _, tracing as _, tracing_appender as _,
-    tracing_subscriber as _, uffs_mft as _, uffs_polars as _,
-};
+use anyhow as _;
+use bitflags as _;
+use chrono as _;
+use clap as _;
+use criterion as _;
+use dirs_next as _;
+use hostname as _;
+use indicatif as _;
+use num_cpus as _;
+use proptest as _;
+use rayon as _;
+use rustc_hash as _;
+use smallvec as _;
+use thiserror as _;
+use tokio as _;
+use tracing as _;
+use tracing_appender as _;
+use tracing_subscriber as _;
+use uffs_mft as _;
+use uffs_polars as _;
 
 #[cfg(feature = "zstd")]
 extern crate zstd as _;

@@ -227,7 +227,9 @@ impl CompiledPattern {
             Self::ContainsAny(patterns) => {
                 if case_sensitive {
                     let series = Series::new(PlSmallStr::EMPTY, patterns);
-                    col_expr.str().contains_any(lit(series).implode(true), false)
+                    col_expr
+                        .str()
+                        .contains_any(lit(series).implode(true), false)
                 } else {
                     // Use ascii_case_insensitive=true for case-insensitive matching
                     let series = Series::new(PlSmallStr::EMPTY, patterns);

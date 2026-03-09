@@ -683,7 +683,8 @@ fn parse_data_attribute_full(
             i64::from_le_bytes(data[nr_offset + 40..nr_offset + 48].try_into().ok()?);
 
         // Check compression unit (at offset 18 in non-resident header)
-        // Layout: LowestVCN(8) + HighestVCN(8) + MappingPairsOffset(2) + CompressionUnit(1)
+        // Layout: LowestVCN(8) + HighestVCN(8) + MappingPairsOffset(2) +
+        // CompressionUnit(1)
         let compression_unit = data[nr_offset + 18];
         let is_compressed = compression_unit > 0;
 
@@ -1061,9 +1062,7 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                         let nr_offset = offset + 16;
                         if nr_offset + 8 <= data.len() {
                             let lowest_vcn = i64::from_le_bytes(
-                                data[nr_offset..nr_offset + 8]
-                                    .try_into()
-                                    .unwrap_or([0; 8]),
+                                data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
                             );
                             lowest_vcn == 0
                         } else {
@@ -1181,9 +1180,7 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                     let nr_offset = offset + 16;
                     if nr_offset + 8 <= data.len() {
                         let lowest_vcn = i64::from_le_bytes(
-                            data[nr_offset..nr_offset + 8]
-                                .try_into()
-                                .unwrap_or([0; 8]),
+                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
                         );
                         lowest_vcn == 0
                     } else {
@@ -1304,9 +1301,7 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                     let nr_offset = offset + 16;
                     if nr_offset + 8 <= data.len() {
                         let lowest_vcn = i64::from_le_bytes(
-                            data[nr_offset..nr_offset + 8]
-                                .try_into()
-                                .unwrap_or([0; 8]),
+                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
                         );
                         lowest_vcn == 0
                     } else {
@@ -1855,32 +1850,31 @@ pub fn parse_record_forensic(
                     } else {
                         String::new()
                     };
-                    let (size, allocated_size, is_resident) =
-                        if attr_header.is_non_resident == 0 {
-                            let value_length = u32::from_le_bytes(
-                                data.get(offset + 16..offset + 20)
-                                    .and_then(|b| b.try_into().ok())
-                                    .unwrap_or([0; 4]),
-                            ) as u64;
-                            (value_length, 0_u64, true)
+                    let (size, allocated_size, is_resident) = if attr_header.is_non_resident == 0 {
+                        let value_length = u32::from_le_bytes(
+                            data.get(offset + 16..offset + 20)
+                                .and_then(|b| b.try_into().ok())
+                                .unwrap_or([0; 4]),
+                        ) as u64;
+                        (value_length, 0_u64, true)
+                    } else {
+                        let nr_offset = offset + 16;
+                        if nr_offset + 48 <= data.len() {
+                            let allocated = i64::from_le_bytes(
+                                data[nr_offset + 24..nr_offset + 32]
+                                    .try_into()
+                                    .unwrap_or([0; 8]),
+                            );
+                            let data_size = i64::from_le_bytes(
+                                data[nr_offset + 32..nr_offset + 40]
+                                    .try_into()
+                                    .unwrap_or([0; 8]),
+                            );
+                            (data_size.max(0) as u64, allocated.max(0) as u64, false)
                         } else {
-                            let nr_offset = offset + 16;
-                            if nr_offset + 48 <= data.len() {
-                                let allocated = i64::from_le_bytes(
-                                    data[nr_offset + 24..nr_offset + 32]
-                                        .try_into()
-                                        .unwrap_or([0; 8]),
-                                );
-                                let data_size = i64::from_le_bytes(
-                                    data[nr_offset + 32..nr_offset + 40]
-                                        .try_into()
-                                        .unwrap_or([0; 8]),
-                                );
-                                (data_size.max(0) as u64, allocated.max(0) as u64, false)
-                            } else {
-                                (0_u64, 0_u64, false)
-                            }
-                        };
+                            (0_u64, 0_u64, false)
+                        }
+                    };
                     let stream_name = if attr_name.is_empty() {
                         format!("$UNKNOWN_0x{type_code:X}")
                     } else {
@@ -2106,9 +2100,7 @@ pub fn parse_record_forensic(
                         let nr_offset = offset + 16;
                         if nr_offset + 8 <= data.len() {
                             let lowest_vcn = i64::from_le_bytes(
-                                data[nr_offset..nr_offset + 8]
-                                    .try_into()
-                                    .unwrap_or([0; 8]),
+                                data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
                             );
                             lowest_vcn == 0
                         } else {
@@ -2221,9 +2213,7 @@ pub fn parse_record_forensic(
                     let nr_offset = offset + 16;
                     if nr_offset + 8 <= data.len() {
                         let lowest_vcn = i64::from_le_bytes(
-                            data[nr_offset..nr_offset + 8]
-                                .try_into()
-                                .unwrap_or([0; 8]),
+                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
                         );
                         lowest_vcn == 0
                     } else {
@@ -2720,7 +2710,6 @@ impl MftRecordMerger {
                             });
                         }
                     }
-
                 }
             }
         }
