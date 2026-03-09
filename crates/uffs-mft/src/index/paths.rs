@@ -1,6 +1,6 @@
 //! Name iteration and Windows path materialization for index records.
 
-use super::*;
+use super::{FileRecord, IndexStreamInfo, LinkInfo, MftIndex, NO_ENTRY, ROOT_FRS};
 
 // ============================================================================
 // Name/Stream Iteration (for hard link and ADS expansion)

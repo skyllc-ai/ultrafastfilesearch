@@ -721,7 +721,7 @@ impl FileRecord {
 /// bytes after converting to lowercase. For non-ASCII strings, it falls back
 /// to allocating lowercase versions.
 #[cfg(test)]
-pub(crate) fn cmp_ascii_case_insensitive(str_a: &str, str_b: &str) -> core::cmp::Ordering {
+pub fn cmp_ascii_case_insensitive(str_a: &str, str_b: &str) -> core::cmp::Ordering {
     if str_a.is_ascii() && str_b.is_ascii() {
         // Fast path: both strings are ASCII
         str_a

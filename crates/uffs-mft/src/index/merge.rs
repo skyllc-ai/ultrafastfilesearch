@@ -1,6 +1,19 @@
 //! Fragment merge helpers for combining worker-local index fragments.
 
-use super::*;
+use super::{
+    ChildInfo, ExtensionIndex, FileRecord, IndexNameRef, IndexStreamInfo, InternalStreamInfo,
+    LinkInfo, MftIndex, MftIndexFragment, NO_ENTRY,
+};
+
+/// Returns true when a record carries overflow name/stream payload to merge.
+#[inline]
+const fn has_merge_payload(record: &FileRecord) -> bool {
+    record.first_name.name.is_valid()
+        || record.first_name.next_entry != NO_ENTRY
+        || record.first_stream.name.is_valid()
+        || record.first_stream.next_entry != NO_ENTRY
+        || record.first_internal_stream != NO_ENTRY
+}
 
 impl MftIndex {
     /// Merge multiple index fragments into this index.
@@ -167,34 +180,16 @@ impl MftIndex {
                 let existing_is_placeholder = !existing.has_base_data();
                 let record_has_base = record.has_base_data();
 
-                if existing_is_placeholder && record_has_base {
+                let should_replace_existing = (existing_is_placeholder && record_has_base)
+                    || (!existing.has_name() && record.has_name());
+
+                if should_replace_existing {
                     let placeholder =
                         core::mem::replace(&mut self.records[existing_idx as usize], record);
-                    if placeholder.first_name.name.is_valid()
-                        || placeholder.first_name.next_entry != NO_ENTRY
-                        || placeholder.first_stream.name.is_valid()
-                        || placeholder.first_stream.next_entry != NO_ENTRY
-                        || placeholder.first_internal_stream != NO_ENTRY
-                    {
+                    if has_merge_payload(&placeholder) {
                         deferred_merges.push((existing_idx, placeholder));
                     }
-                } else if !existing.has_name() && record.has_name() {
-                    let placeholder =
-                        core::mem::replace(&mut self.records[existing_idx as usize], record);
-                    if placeholder.first_name.name.is_valid()
-                        || placeholder.first_name.next_entry != NO_ENTRY
-                        || placeholder.first_stream.name.is_valid()
-                        || placeholder.first_stream.next_entry != NO_ENTRY
-                        || placeholder.first_internal_stream != NO_ENTRY
-                    {
-                        deferred_merges.push((existing_idx, placeholder));
-                    }
-                } else if record.first_name.name.is_valid()
-                    || record.first_name.next_entry != NO_ENTRY
-                    || record.first_stream.name.is_valid()
-                    || record.first_stream.next_entry != NO_ENTRY
-                    || record.first_internal_stream != NO_ENTRY
-                {
+                } else if has_merge_payload(&record) {
                     deferred_merges.push((existing_idx, record));
                 }
             }

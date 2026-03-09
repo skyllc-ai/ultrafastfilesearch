@@ -1,6 +1,9 @@
 //! Persistent on-disk serialization for `MftIndex` snapshots.
 
-use super::*;
+use super::{
+    ChildInfo, ExtensionTable, FileRecord, IndexNameRef, IndexStreamInfo, LinkInfo, MftIndex,
+    MftStats, NO_ENTRY, SizeInfo, StandardInfo,
+};
 
 // ============================================================================
 // M5: Persistent Index Storage

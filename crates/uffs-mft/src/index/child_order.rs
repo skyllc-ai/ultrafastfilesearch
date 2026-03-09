@@ -1,6 +1,6 @@
 //! Directory child-link maintenance and stable child ordering helpers.
 
-use super::*;
+use super::{ChildInfo, FileRecord, MftIndex, NO_ENTRY};
 
 impl MftIndex {
     /// Add a child entry to a parent directory.

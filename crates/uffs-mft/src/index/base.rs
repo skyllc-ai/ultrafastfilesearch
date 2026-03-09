@@ -1,6 +1,9 @@
 //! Core `MftIndex` constructors, lookup helpers, and stats utilities.
 
-use super::*;
+use super::{
+    ChildInfo, ExtensionIndex, ExtensionTable, FileRecord, IndexNameRef, IndexStreamInfo, LinkInfo,
+    MftIndex, MftStats, NO_ENTRY,
+};
 
 impl MftIndex {
     /// Create a new empty index for the given volume

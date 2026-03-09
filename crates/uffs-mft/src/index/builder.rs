@@ -1,6 +1,9 @@
 //! Index construction from parsed records and post-build orchestration.
 
-use super::*;
+use super::{
+    ChildInfo, ExtensionIndex, FileRecord, IndexBuildTiming, IndexNameRef, IndexStreamInfo,
+    InternalStreamInfo, LinkInfo, MftIndex, NO_ENTRY, SizeInfo, StandardInfo,
+};
 
 // ============================================================================
 // Building MftIndex from ParsedRecords (Cross-Platform)

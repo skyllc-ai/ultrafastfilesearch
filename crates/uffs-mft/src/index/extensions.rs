@@ -2,7 +2,7 @@
 
 use alloc::sync::Arc;
 
-use super::*;
+use super::{MftIndex, NO_ENTRY};
 
 /// Extension interning table for O(1) lookups and statistics.
 #[derive(Debug, Clone, Default)]
@@ -270,7 +270,7 @@ impl ExtensionIndex {
 
     /// Returns true if the index is empty.
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.postings.is_empty()
     }
 

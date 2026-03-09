@@ -1,6 +1,9 @@
 //! Core index container and child-link metadata.
 
-use super::*;
+use super::{
+    ExtensionIndex, ExtensionTable, FileRecord, IndexStreamInfo, InternalStreamInfo, LinkInfo,
+    MftStats,
+};
 
 /// Directory child entry.
 #[derive(Debug, Clone, Copy, Default)]

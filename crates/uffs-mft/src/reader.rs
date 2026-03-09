@@ -2,8 +2,6 @@
 //!
 //! This module provides the main entry point for reading NTFS MFT data.
 
-use core::time::Duration;
-use std::path::Path;
 #[cfg(windows)]
 use std::sync::Arc;
 #[cfg(windows)]
@@ -11,401 +9,26 @@ use std::time::Instant;
 
 #[cfg(windows)]
 use tracing::{debug, info, trace, warn};
-use uffs_polars::{DataFrame, ParquetReader, ParquetWriter, SerReader};
+use uffs_polars::DataFrame;
 
 use crate::error::{MftError, Result};
 #[cfg(windows)]
-use crate::ntfs::StreamInfo;
-#[cfg(windows)]
 use crate::platform::VolumeHandle;
 
-// ============================================================================
-// MFT Read Mode Selection
-// ============================================================================
+mod benchmark;
+mod persistence;
+mod read_mode;
+mod stats;
 
-/// Read mode for MFT operations.
-///
-/// Different modes optimize for different drive types and workloads:
-/// - `Parallel`: Best for SSDs - reads all chunks then parses in parallel
-/// - `Streaming`: Best for HDDs - sequential reads with immediate parsing
-/// - `Prefetch`: Best for HDDs - double-buffered prefetch for I/O overlap
-/// - `Pipelined`: True I/O and CPU overlap with separate threads
-/// - `PipelinedParallel`: Pipelined I/O with multi-core parallel parsing
-/// - `Auto`: Automatically selects based on detected drive type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum MftReadMode {
-    /// Automatic mode selection based on drive type (default).
-    /// - SSD → `Parallel`
-    /// - HDD → `PipelinedParallel`
-    /// - Unknown → `Parallel`
-    #[default]
-    Auto,
-    /// Parallel mode: Read all chunks into memory, then parse in parallel.
-    /// Best for SSDs where random I/O is fast.
-    Parallel,
-    /// Streaming mode: Sequential reads with immediate parsing.
-    /// Lower memory usage, good for HDDs.
-    Streaming,
-    /// Prefetch mode: Double-buffered reads for I/O overlap.
-    /// Good for HDDs - overlaps next read with current parse.
-    Prefetch,
-    /// Pipelined mode: True I/O and CPU overlap with separate threads.
-    /// Best for HDDs - reader thread queues chunks while parser processes.
-    /// Note: Parsing is single-threaded. Use `PipelinedParallel` for
-    /// multi-core.
-    Pipelined,
-    /// Pipelined parallel mode: Pipelined I/O with multi-core parallel parsing.
-    /// Best for HDDs with multi-core CPUs - combines I/O overlap with Rayon
-    /// parallel parsing for maximum throughput.
-    PipelinedParallel,
-    /// IOCP parallel mode: Windows I/O Completion Ports with multiple
-    /// concurrent reads in flight. Mirrors the C++ implementation for
-    /// maximum I/O overlap. Best for HDDs where multiple outstanding reads
-    /// can hide latency.
-    IocpParallel,
-    /// Bulk mode: C++ style "read all, then parse".
-    /// Pre-allocates single buffer for entire MFT, reads all extents
-    /// directly into it (zero copies), then parses in parallel.
-    /// Uses bitmap skip optimization to reduce I/O.
-    /// Best for HDDs with sufficient RAM (~12GB for large drives).
-    Bulk,
-    /// Bulk IOCP mode: True C++ style - queues ALL reads to IOCP at once.
-    /// Combines bulk buffer allocation with IOCP for maximum I/O overlap.
-    /// Windows I/O manager optimizes disk head scheduling across all reads.
-    /// Best for HDDs - lets the OS schedule reads optimally.
-    BulkIocp,
-    /// Sliding window IOCP mode: C++ style with 2 reads in flight.
-    /// Only 2 reads queued at a time (not thousands!), with per-read buffer
-    /// recycling. This matches the actual C++ implementation which uses a
-    /// sliding window, not bulk queuing.
-    /// Best for HDDs - minimal I/O scheduler overhead, maximum throughput.
-    SlidingIocp,
-    /// Sliding window IOCP with inline parsing: Full C++ parity.
-    /// Parses each 1MB chunk as it completes (no buffering), builds index
-    /// incrementally during I/O, creates parent placeholders on-demand.
-    /// Eliminates separate parse and index build phases.
-    /// Best for HDDs - overlaps CPU work with I/O for maximum throughput.
-    SlidingIocpInline,
-}
-
-impl MftReadMode {
-    /// Returns the mode name as a string.
-    #[must_use]
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Parallel => "parallel",
-            Self::Streaming => "streaming",
-            Self::Prefetch => "prefetch",
-            Self::Pipelined => "pipelined",
-            Self::PipelinedParallel => "pipelined-parallel",
-            Self::IocpParallel => "iocp-parallel",
-            Self::Bulk => "bulk",
-            Self::BulkIocp => "bulk-iocp",
-            Self::SlidingIocp => "sliding-iocp",
-            Self::SlidingIocpInline => "sliding-iocp-inline",
-        }
-    }
-}
-
-impl core::fmt::Display for MftReadMode {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-impl core::str::FromStr for MftReadMode {
-    type Err = String;
-
-    fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "auto" => Ok(Self::Auto),
-            "parallel" => Ok(Self::Parallel),
-            "streaming" => Ok(Self::Streaming),
-            "prefetch" => Ok(Self::Prefetch),
-            "pipelined" | "pipeline" => Ok(Self::Pipelined),
-            "pipelined-parallel" | "pipelinedparallel" => Ok(Self::PipelinedParallel),
-            "iocp-parallel" | "iocpparallel" | "iocp" => Ok(Self::IocpParallel),
-            "bulk" => Ok(Self::Bulk),
-            "bulk-iocp" | "bulkiocp" => Ok(Self::BulkIocp),
-            "sliding-iocp" | "slidingiocp" | "sliding" => Ok(Self::SlidingIocp),
-            "sliding-iocp-inline" | "slidingiocpinline" | "inline" => Ok(Self::SlidingIocpInline),
-            _ => Err(format!(
-                "Invalid read mode '{s}'. Valid options: auto, parallel, streaming, prefetch, pipelined, pipelined-parallel, iocp-parallel, bulk, bulk-iocp, sliding-iocp, sliding-iocp-inline"
-            )),
-        }
-    }
-}
-
-// ============================================================================
-// MFT Statistics (computed during DF build - M1 8.3 optimization)
-// ============================================================================
-
-/// Statistics computed during MFT parsing and `DataFrame` building.
-///
-/// This struct is populated during the single-pass DF build loop,
-/// eliminating the need for a separate statistics pass (M1 8.3 optimization).
-#[derive(Debug, Clone, Default)]
-pub struct MftStats {
-    /// Number of directory records.
-    pub dir_count: u64,
-    /// Number of file records.
-    pub file_count: u64,
-    /// Number of hidden files/directories.
-    pub hidden_count: u64,
-    /// Number of system files/directories.
-    pub system_count: u64,
-    /// Number of compressed files.
-    pub compressed_count: u64,
-    /// Number of encrypted files.
-    pub encrypted_count: u64,
-    /// Number of sparse files.
-    pub sparse_count: u64,
-    /// Number of reparse points.
-    pub reparse_count: u64,
-    /// Number of files with multiple data streams (ADS).
-    pub multi_stream_count: u64,
-    /// Number of files with multiple names (hard links).
-    pub multi_name_count: u64,
-    /// Total logical file size in bytes.
-    pub total_file_size: u64,
-    /// Total allocated size in bytes.
-    pub total_allocated_size: u64,
-}
-
-impl MftStats {
-    /// Returns the slack space (allocated - logical size).
-    #[must_use]
-    pub const fn slack_space(&self) -> u64 {
-        self.total_allocated_size
-            .saturating_sub(self.total_file_size)
-    }
-
-    /// Returns the slack percentage (0.0 to 100.0).
-    ///
-    /// This is a display/presentation function that computes a human-readable
-    /// percentage. Float arithmetic is unavoidable here since percentages are
-    /// inherently fractional values (e.g., 45.67%).
-    #[must_use]
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "precision loss acceptable for progress display"
-    )]
-    #[expect(
-        clippy::float_arithmetic,
-        reason = "float arithmetic required for percentage calculation"
-    )]
-    pub fn slack_percentage(&self) -> f64 {
-        if self.total_allocated_size > 0 {
-            (self.slack_space() as f64 / self.total_allocated_size as f64) * 100.0
-        } else {
-            0.0
-        }
-    }
-}
-
-// ============================================================================
-// Benchmark / Timing Types
-// ============================================================================
-
-/// Phase timing breakdown for MFT reading operations.
-///
-/// Each phase is measured independently to identify bottlenecks.
-#[derive(Debug, Clone, Default)]
-pub struct PhaseTimings {
-    /// Time to open volume and retrieve MFT metadata.
-    pub open_ms: u64,
-    /// Time spent reading chunks from disk (I/O).
-    pub read_ms: u64,
-    /// Time spent parsing MFT records (CPU, parallel).
-    pub parse_ms: u64,
-    /// Time spent merging extension records.
-    pub merge_ms: u64,
-    /// Time spent building the `DataFrame` from parsed records.
-    pub df_build_ms: u64,
-    /// Time spent building the lean `MftIndex` (record insertion + sorting).
-    /// This is the index build time WITHOUT tree metrics.
-    pub index_build_ms: u64,
-    /// Time spent computing tree metrics (descendants, treesize,
-    /// `tree_allocated`). This is the "preprocessing" phase in C++
-    /// terminology.
-    pub tree_metrics_ms: u64,
-    /// Total wall-clock time.
-    pub total_ms: u64,
-}
-
-impl PhaseTimings {
-    /// Returns the sum of individual phases (may differ from total due to
-    /// overlap).
-    #[must_use]
-    pub const fn sum_phases(&self) -> u64 {
-        self.open_ms
-            + self.read_ms
-            + self.parse_ms
-            + self.merge_ms
-            + self.df_build_ms
-            + self.index_build_ms
-            + self.tree_metrics_ms
-    }
-
-    /// Returns the overhead (total - sum of phases).
-    #[must_use]
-    #[expect(
-        clippy::cast_possible_wrap,
-        reason = "overhead can be negative; u64 values are bounded by total runtime"
-    )]
-    pub const fn overhead_ms(&self) -> i64 {
-        self.total_ms as i64 - self.sum_phases() as i64
-    }
-}
-
-/// Drive and MFT characteristics for benchmarking.
-#[derive(Debug, Clone)]
-pub struct DriveCharacteristics {
-    /// Drive letter (e.g., 'C').
-    pub drive_letter: char,
-    /// Detected drive type (SSD, HDD, Unknown).
-    pub drive_type: String,
-    /// Total MFT size in bytes.
-    pub mft_size_bytes: u64,
-    /// Total number of MFT records.
-    pub total_records: u64,
-    /// Number of in-use records (if bitmap available).
-    pub in_use_records: Option<u64>,
-    /// Number of MFT extents (fragmentation indicator).
-    pub extent_count: usize,
-    /// Bytes per MFT record.
-    pub bytes_per_record: u32,
-    /// Chunk size used for I/O (bytes).
-    pub chunk_size_bytes: usize,
-    /// Number of read chunks generated.
-    pub chunk_count: usize,
-}
-
-/// Complete benchmark result including timings and characteristics.
-#[derive(Debug, Clone)]
-pub struct BenchmarkResult {
-    /// Phase timing breakdown.
-    pub timings: PhaseTimings,
-    /// Drive and MFT characteristics.
-    pub characteristics: DriveCharacteristics,
-    /// Number of records successfully parsed.
-    pub records_parsed: usize,
-    /// Throughput in MB/s (based on MFT size / total time).
-    pub throughput_mb_s: f64,
-    /// Records processed per second.
-    pub records_per_sec: f64,
-}
-
-impl BenchmarkResult {
-    /// Formats the result as JSON for scripting.
-    #[must_use]
-    pub fn to_json(&self) -> String {
-        format!(
-            r#"{{
-  "drive": "{}",
-  "drive_type": "{}",
-  "mft_size_bytes": {},
-  "total_records": {},
-  "in_use_records": {},
-  "extent_count": {},
-  "bytes_per_record": {},
-  "chunk_size_bytes": {},
-  "chunk_count": {},
-  "records_parsed": {},
-  "timings_ms": {{
-    "open": {},
-    "read": {},
-    "parse": {},
-    "merge": {},
-    "df_build": {},
-    "index_build": {},
-    "tree_metrics": {},
-    "total": {}
-  }},
-  "throughput": {{
-    "mb_per_sec": {:.2},
-    "records_per_sec": {:.0}
-  }}
-}}"#,
-            self.characteristics.drive_letter,
-            self.characteristics.drive_type,
-            self.characteristics.mft_size_bytes,
-            self.characteristics.total_records,
-            self.characteristics
-                .in_use_records
-                .map_or_else(|| "null".to_owned(), |val| val.to_string()),
-            self.characteristics.extent_count,
-            self.characteristics.bytes_per_record,
-            self.characteristics.chunk_size_bytes,
-            self.characteristics.chunk_count,
-            self.records_parsed,
-            self.timings.open_ms,
-            self.timings.read_ms,
-            self.timings.parse_ms,
-            self.timings.merge_ms,
-            self.timings.df_build_ms,
-            self.timings.index_build_ms,
-            self.timings.tree_metrics_ms,
-            self.timings.total_ms,
-            self.throughput_mb_s,
-            self.records_per_sec,
-        )
-    }
-}
-
-// ============================================================================
-// Progress Types
-// ============================================================================
-
-/// Progress information during MFT reading.
-#[derive(Debug, Clone)]
-pub struct MftProgress {
-    /// Number of records read so far.
-    pub records_read: u64,
-    /// Total number of records (if known).
-    pub total_records: Option<u64>,
-    /// Bytes read from disk.
-    pub bytes_read: u64,
-    /// Time elapsed since start.
-    pub elapsed: Duration,
-}
-
-impl MftProgress {
-    /// Returns the percentage complete (0.0 to 100.0), if total is known.
-    #[must_use]
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "precision loss acceptable for progress display"
-    )]
-    #[expect(
-        clippy::float_arithmetic,
-        reason = "float arithmetic required for percentage calculation"
-    )]
-    pub fn percentage(&self) -> Option<f64> {
-        self.total_records
-            .map(|total| (self.records_read as f64 / total as f64) * 100.0_f64)
-    }
-
-    /// Returns the read speed in MB/s.
-    #[must_use]
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "precision loss acceptable for progress display"
-    )]
-    #[expect(
-        clippy::float_arithmetic,
-        reason = "float arithmetic required for speed calculation"
-    )]
-    pub fn speed_mbps(&self) -> f64 {
-        let secs = self.elapsed.as_secs_f64();
-        if secs > 0.0 {
-            (self.bytes_read as f64 / 1_048_576.0) / secs
-        } else {
-            0.0
-        }
-    }
-}
+pub use self::benchmark::{BenchmarkResult, DriveCharacteristics, PhaseTimings};
+#[cfg(windows)]
+use self::benchmark::{
+    build_benchmark_result, build_drive_characteristics, estimate_combined_phase_timings,
+};
+pub use self::read_mode::MftReadMode;
+#[cfg(windows)]
+use self::read_mode::{dataframe_effective_mode, index_effective_mode};
+pub use self::stats::{MftProgress, MftStats};
 
 /// MFT Reader for direct NTFS Master File Table access.
 ///
@@ -1458,23 +1081,7 @@ impl MftReader {
         // OS can optimize continuous sequential reads better.
         // For read_all() (returns Vec<ParsedRecord>), use SlidingIocp for IOCP-based
         // I/O.
-        let effective_mode = match self.mode {
-            MftReadMode::Auto => {
-                // Auto-select based on drive type - use IOCP for all drive types
-                // The concurrency is automatically adjusted per drive type
-                match drive_type {
-                    // NVMe: IOCP with 32 concurrent reads
-                    crate::platform::DriveType::Nvme => MftReadMode::SlidingIocp,
-                    // SSD: IOCP with 8 concurrent reads
-                    crate::platform::DriveType::Ssd => MftReadMode::SlidingIocp,
-                    // HDD: IOCP with 2 concurrent reads (sequential is optimal)
-                    crate::platform::DriveType::Hdd => MftReadMode::SlidingIocp,
-                    // Unknown: Conservative IOCP approach
-                    crate::platform::DriveType::Unknown => MftReadMode::SlidingIocp,
-                }
-            }
-            mode => mode,
-        };
+        let effective_mode = dataframe_effective_mode(self.mode, drive_type);
 
         info!(
             mode = %effective_mode,
@@ -2060,43 +1667,7 @@ impl MftReader {
         }
 
         // Log stats (computed during the loop above)
-        info!(
-            directories = stats.dir_count,
-            files = stats.file_count,
-            "📊 Record type breakdown"
-        );
-
-        info!(
-            hidden = stats.hidden_count,
-            system = stats.system_count,
-            compressed = stats.compressed_count,
-            encrypted = stats.encrypted_count,
-            sparse = stats.sparse_count,
-            reparse_points = stats.reparse_count,
-            "🏷️  Attribute flags summary"
-        );
-
-        if stats.multi_stream_count > 0 || stats.multi_name_count > 0 {
-            info!(
-                files_with_ads = stats.multi_stream_count,
-                files_with_hardlinks = stats.multi_name_count,
-                "🔗 Extended attributes"
-            );
-        }
-
-        debug!(
-            total_file_size_gb = format!(
-                "{:.2}",
-                stats.total_file_size as f64 / (1024.0 * 1024.0 * 1024.0)
-            ),
-            total_allocated_gb = format!(
-                "{:.2}",
-                stats.total_allocated_size as f64 / (1024.0 * 1024.0 * 1024.0)
-            ),
-            slack_space_mb = format!("{:.2}", stats.slack_space() as f64 / (1024.0 * 1024.0)),
-            slack_percentage = format!("{:.1}%", stats.slack_percentage()),
-            "💾 Storage analysis"
-        );
+        stats.log_summary();
 
         // Build DataFrame with full schema
         Self::build_dataframe_full(
@@ -2218,19 +1789,7 @@ impl MftReader {
         // For lean index (MftIndex), use SlidingIocpInline for NVMe/SSD - this uses
         // IOCP with multiple reads in flight and inline parsing, matching C++
         // performance.
-        let effective_mode = match self.mode {
-            MftReadMode::Auto => match drive_type {
-                // NVMe: Use IOCP with 32 concurrent reads + parallel parsing (2024 MB/s)
-                crate::platform::DriveType::Nvme => MftReadMode::SlidingIocpInline,
-                // SSD: Use IOCP with 8 concurrent reads + parallel parsing
-                crate::platform::DriveType::Ssd => MftReadMode::SlidingIocpInline,
-                // HDD: Use IOCP with 2 concurrent reads (sequential is optimal)
-                crate::platform::DriveType::Hdd => MftReadMode::SlidingIocpInline,
-                // Unknown: Conservative IOCP approach
-                crate::platform::DriveType::Unknown => MftReadMode::SlidingIocpInline,
-            },
-            mode => mode,
-        };
+        let effective_mode = index_effective_mode(self.mode, drive_type);
 
         info!(mode = %effective_mode, "🚀 Using read mode (lean index)");
 
@@ -2478,21 +2037,20 @@ impl MftReader {
                 result?
             }
             MftReadMode::SlidingIocpInline => {
-                // Sliding window IOCP with inline parsing: Full C++ parity
+                // Sliding window IOCP with inline parsing and direct index building
                 // This mode returns MftIndex directly, skipping the intermediate
                 // Vec<ParsedRecord>
                 let overlapped_handle = self.handle.open_overlapped_handle()?;
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
-                let result = parallel_reader
-                    .read_all_sliding_window_iocp_to_index_cpp_port::<fn(u64, u64)>(
-                        overlapped_handle,
-                        self.volume,
-                        self.concurrency,
-                        self.io_size,
-                        None,
-                    );
+                let result = parallel_reader.read_all_sliding_window_iocp_to_index::<fn(u64, u64)>(
+                    overlapped_handle,
+                    self.volume,
+                    self.concurrency,
+                    self.io_size,
+                    None,
+                );
 
                 // Close the overlapped handle
                 #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
@@ -2653,17 +2211,17 @@ impl MftReader {
         let open_ms = open_start.elapsed().as_millis() as u64;
 
         // Build characteristics
-        let characteristics = DriveCharacteristics {
-            drive_letter: self.volume,
-            drive_type: format!("{drive_type:?}"),
+        let characteristics = build_drive_characteristics(
+            self.volume,
+            drive_type,
             mft_size_bytes,
             total_records,
             in_use_records,
-            extent_count: extents.len(),
-            bytes_per_record: record_size,
-            chunk_size_bytes: chunk_size,
+            extents.len(),
+            record_size,
+            chunk_size,
             chunk_count,
-        };
+        );
 
         info!(
             volume = %self.volume,
@@ -2753,13 +2311,13 @@ impl MftReader {
             total_ms,
         };
 
-        let result = BenchmarkResult {
+        let result = build_benchmark_result(
             timings,
             characteristics,
             records_parsed,
             throughput_mb_s,
             records_per_sec,
-        };
+        );
 
         info!(
             total_ms,
@@ -2824,17 +2382,17 @@ impl MftReader {
         let open_ms = open_start.elapsed().as_millis() as u64;
 
         // Build characteristics
-        let characteristics = DriveCharacteristics {
-            drive_letter: self.volume,
-            drive_type: format!("{:?}", drive_type),
+        let characteristics = build_drive_characteristics(
+            self.volume,
+            drive_type,
             mft_size_bytes,
             total_records,
             in_use_records,
-            extent_count: extents.len(),
-            bytes_per_record: record_size,
-            chunk_size_bytes: chunk_size,
+            extents.len(),
+            record_size,
+            chunk_size,
             chunk_count,
-        };
+        );
 
         info!(
             volume = %self.volume,
@@ -2885,29 +2443,8 @@ impl MftReader {
         // For now, we report combined time. Future: instrument inside
         // ParallelMftReader. Estimate: ~70% read, ~30% parse on HDD; ~30% read,
         // ~70% parse on SSD
-        let (read_ms, parse_ms, merge_ms) = match drive_type {
-            crate::platform::DriveType::Nvme => {
-                // NVMe: I/O is extremely fast, parsing dominates
-                let read_est = read_parse_ms * 20 / 100;
-                let parse_est = read_parse_ms * 60 / 100;
-                let merge_est = read_parse_ms * 20 / 100;
-                (read_est, parse_est, merge_est)
-            }
-            crate::platform::DriveType::Ssd => {
-                // SSD: I/O is fast, parsing dominates
-                let read_est = read_parse_ms * 30 / 100;
-                let parse_est = read_parse_ms * 50 / 100;
-                let merge_est = read_parse_ms * 20 / 100;
-                (read_est, parse_est, merge_est)
-            }
-            _ => {
-                // HDD: I/O dominates
-                let read_est = read_parse_ms * 70 / 100;
-                let parse_est = read_parse_ms * 20 / 100;
-                let merge_est = read_parse_ms * 10 / 100;
-                (read_est, parse_est, merge_est)
-            }
-        };
+        let (read_ms, parse_ms, merge_ms) =
+            estimate_combined_phase_timings(drive_type, read_parse_ms);
 
         info!(
             records_parsed,
@@ -2955,13 +2492,13 @@ impl MftReader {
             total_ms,
         };
 
-        let result = BenchmarkResult {
+        let result = build_benchmark_result(
             timings,
             characteristics,
             records_parsed,
             throughput_mb_s,
             records_per_sec,
-        };
+        );
 
         info!(
             total_ms,
@@ -3282,43 +2819,6 @@ impl MftReader {
         DataFrame::new_infer_height(polars_columns).map_err(MftError::from)
     }
 
-    /// Save a `DataFrame` to Parquet format.
-    ///
-    /// Parquet provides excellent compression and fast loading times.
-    ///
-    /// # Arguments
-    ///
-    /// * `df` - The `DataFrame` to save
-    /// * `path` - Output file path
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file cannot be written.
-    pub fn save_parquet<P: AsRef<Path>>(df: &mut DataFrame, path: P) -> Result<()> {
-        let file = std::fs::File::create(path.as_ref())?;
-        ParquetWriter::new(file)
-            .finish(df)
-            .map_err(|err| MftError::Parquet(err.to_string()))?;
-        Ok(())
-    }
-
-    /// Load a `DataFrame` from Parquet format.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Input file path
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file cannot be read or is invalid.
-    pub fn load_parquet<P: AsRef<Path>>(path: P) -> Result<DataFrame> {
-        let file = std::fs::File::open(path.as_ref())?;
-        let df = ParquetReader::new(file)
-            .finish()
-            .map_err(|err| MftError::Parquet(err.to_string()))?;
-        Ok(df)
-    }
-
     /// Get the volume letter this reader is attached to.
     #[must_use]
     pub const fn volume(&self) -> char {
@@ -3352,636 +2852,6 @@ impl MftReader {
 
         // Use new_infer_height to infer height from columns (Polars 0.52+ API)
         DataFrame::new_infer_height(schema_columns).map_err(MftError::from)
-    }
-
-    // ========================================================================
-    // RAW MFT Persistence
-    // ========================================================================
-
-    /// Read the entire MFT as raw bytes.
-    ///
-    /// This reads all MFT records as contiguous raw bytes, handling fragmented
-    /// MFTs by reassembling extents in order. The result can be saved with
-    /// [`save_raw_mft`](crate::raw::save_raw_mft) for offline analysis.
-    ///
-    /// # Returns
-    ///
-    /// A tuple of (raw bytes, record size).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if MFT reading fails.
-    #[cfg(windows)]
-    pub fn read_raw(&self) -> Result<(Vec<u8>, u32)> {
-        self.read_raw_internal()
-    }
-
-    /// Read raw MFT (non-Windows stub).
-    ///
-    /// # Errors
-    ///
-    /// Always returns `MftError::PlatformNotSupported` on non-Windows
-    /// platforms.
-    #[cfg(not(windows))]
-    pub const fn read_raw(&self) -> Result<(Vec<u8>, u32)> {
-        Err(MftError::PlatformNotSupported)
-    }
-
-    /// Internal raw MFT reading implementation.
-    ///
-    /// Uses the shared `ParallelMftReader` infrastructure for proper chunk
-    /// handling, sector alignment, and dynamic buffer sizing.
-    #[cfg(windows)]
-    fn read_raw_internal(&self) -> Result<(Vec<u8>, u32)> {
-        use crate::io::{MftExtentMap, ParallelMftReader, generate_read_chunks};
-        use crate::platform::detect_drive_type;
-
-        let record_size = self.handle.file_record_size();
-        let volume_data = self.handle.volume_data();
-
-        // Get MFT extents for fragmented MFT support
-        let extents = self.handle.get_mft_extents().unwrap_or_else(|_| {
-            vec![crate::platform::MftExtent {
-                vcn: 0,
-                cluster_count: volume_data.mft_valid_data_length
-                    / u64::from(volume_data.bytes_per_cluster),
-                lcn: volume_data.mft_start_lcn as i64,
-            }]
-        });
-
-        // Create extent map
-        let extent_map = MftExtentMap::new(extents, volume_data.bytes_per_cluster, record_size);
-        let total_records = extent_map.total_records();
-
-        // Allocate output buffer for all records
-        let total_size = total_records as usize * record_size as usize;
-        let mut output = vec![0u8; total_size];
-
-        // Use ParallelMftReader for proper chunk reading (handles sector alignment,
-        // dynamic buffer sizing, etc.)
-        let drive_type = detect_drive_type(self.volume);
-        let parallel_reader =
-            ParallelMftReader::new_optimized(extent_map.clone(), None, drive_type);
-
-        // Generate read chunks (without bitmap - we want ALL records for raw dump)
-        let chunks = generate_read_chunks(&extent_map, None, parallel_reader.chunk_size);
-
-        let handle = self.handle.raw_handle();
-
-        // Read each chunk using the shared read_chunk function
-        for chunk in chunks {
-            let data = parallel_reader.read_chunk(handle, &chunk, record_size)?;
-
-            // Copy to output at correct position
-            let output_offset = chunk.start_frs as usize * record_size as usize;
-            let copy_size = data.len().min(total_size - output_offset);
-            output[output_offset..output_offset + copy_size].copy_from_slice(&data[..copy_size]);
-        }
-
-        Ok((output, record_size))
-    }
-
-    /// Read raw MFT and save to file using streaming I/O.
-    ///
-    /// This method uses streaming I/O to avoid buffering the entire MFT in
-    /// memory. Each chunk is read from disk and immediately written to the
-    /// output file, enabling efficient saves of large MFTs (10+ GB).
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Output file path
-    /// * `options` - Save options (compression, etc.)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if reading or saving fails.
-    #[cfg(windows)]
-    pub fn save_raw_to_file<P: AsRef<Path>>(
-        &self,
-        path: P,
-        options: &crate::raw::SaveRawOptions,
-    ) -> Result<crate::raw::RawMftHeader> {
-        self.save_raw_streaming(path, options)
-    }
-
-    /// Internal streaming save implementation.
-    ///
-    /// Uses double-buffering with a dedicated reader thread to overlap
-    /// disk reads with file writes for maximum throughput.
-    #[cfg(windows)]
-    #[expect(
-        unsafe_code,
-        reason = "FFI: windows ReadFile, SetFilePointerEx for raw MFT streaming"
-    )]
-    fn save_raw_streaming<P: AsRef<Path>>(
-        &self,
-        path: P,
-        options: &crate::raw::SaveRawOptions,
-    ) -> Result<crate::raw::RawMftHeader> {
-        use std::thread;
-
-        use crossbeam_channel::{Receiver, Sender, bounded};
-        use windows::Win32::Foundation::HANDLE;
-        use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
-
-        use crate::io::{AlignedBuffer, MftExtentMap, SECTOR_SIZE, generate_read_chunks};
-        use crate::platform::detect_drive_type;
-        use crate::raw::StreamingRawMftWriter;
-
-        let record_size = self.handle.file_record_size();
-        let volume_data = self.handle.volume_data();
-
-        // Get MFT extents for fragmented MFT support
-        let extents = self.handle.get_mft_extents().unwrap_or_else(|_| {
-            vec![crate::platform::MftExtent {
-                vcn: 0,
-                cluster_count: volume_data.mft_valid_data_length
-                    / u64::from(volume_data.bytes_per_cluster),
-                lcn: volume_data.mft_start_lcn as i64,
-            }]
-        });
-
-        // Create extent map
-        let extent_map = MftExtentMap::new(extents, volume_data.bytes_per_cluster, record_size);
-
-        // Determine chunk size based on drive type
-        // Use larger chunks (4-8 MB) for streaming to reduce syscall overhead
-        let drive_type = detect_drive_type(self.volume);
-        let chunk_size = match drive_type {
-            crate::platform::DriveType::Nvme => 8 * 1024 * 1024, // 8 MB for NVMe
-            crate::platform::DriveType::Ssd => 8 * 1024 * 1024,  // 8 MB for SSD
-            crate::platform::DriveType::Hdd => 4 * 1024 * 1024,  // 4 MB for HDD
-            crate::platform::DriveType::Unknown => 4 * 1024 * 1024,
-        };
-
-        // Generate read chunks
-        let chunks = generate_read_chunks(&extent_map, None, chunk_size);
-        let total_chunks = chunks.len();
-
-        info!(
-            "Streaming save: {} chunks, {} MB each, drive type: {:?}",
-            total_chunks,
-            chunk_size / (1024 * 1024),
-            drive_type
-        );
-
-        // Create streaming writer
-        let mut writer = StreamingRawMftWriter::new(path, record_size, options)?;
-
-        // Use double-buffering with a reader thread for I/O overlap
-        // Channel capacity of 2 gives us double-buffering
-        let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = bounded(2);
-
-        // Convert HANDLE to usize for thread transfer (HANDLE is just a pointer)
-        // SAFETY: Windows file handles are thread-safe kernel objects. We convert
-        // to usize to avoid Send issues with the raw pointer inside HANDLE.
-        let handle_ptr = self.handle.raw_handle().0 as usize;
-        let record_size_copy = record_size;
-
-        // Spawn reader thread
-        let reader_handle = thread::spawn(move || -> Result<()> {
-            // Reconstruct HANDLE from usize
-            let handle = HANDLE(handle_ptr as *mut std::ffi::c_void);
-            let mut buffer = AlignedBuffer::new(chunk_size + SECTOR_SIZE);
-
-            for chunk in chunks {
-                // Read chunk with sector alignment
-                let read_size = chunk.record_count * u64::from(record_size_copy);
-                let aligned_offset = (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
-                let offset_adjustment = (chunk.disk_offset - aligned_offset) as usize;
-                let aligned_size = ((read_size as usize + offset_adjustment + SECTOR_SIZE - 1)
-                    / SECTOR_SIZE)
-                    * SECTOR_SIZE;
-
-                // Resize buffer if needed
-                if buffer.len() < aligned_size {
-                    buffer = AlignedBuffer::new(aligned_size);
-                }
-
-                // Seek to position
-                let mut new_pos: i64 = 0;
-                let seek_result = unsafe {
-                    SetFilePointerEx(
-                        handle,
-                        aligned_offset as i64,
-                        Some(&mut new_pos),
-                        FILE_BEGIN,
-                    )
-                };
-
-                if seek_result.is_err() {
-                    return Err(MftError::Io(std::io::Error::last_os_error()));
-                }
-
-                // Read data
-                let mut bytes_read: u32 = 0;
-                let read_result = unsafe {
-                    ReadFile(
-                        handle,
-                        Some(&mut buffer.as_mut_slice()[..aligned_size]),
-                        Some(&mut bytes_read),
-                        None,
-                    )
-                };
-
-                if read_result.is_err() {
-                    return Err(MftError::Io(std::io::Error::last_os_error()));
-                }
-
-                // Extract the actual data (skip alignment padding)
-                let actual_size = read_size as usize;
-                let data =
-                    buffer.as_slice()[offset_adjustment..offset_adjustment + actual_size].to_vec();
-
-                // Send to writer (blocks if channel is full - double-buffering)
-                if tx.send(data).is_err() {
-                    break; // Writer closed, stop reading
-                }
-            }
-
-            Ok(())
-        });
-
-        // Writer loop - receive chunks and write them
-        let mut chunks_written = 0;
-        for data in rx {
-            writer.write_chunk(&data)?;
-            chunks_written += 1;
-
-            if chunks_written % 100 == 0 {
-                debug!(
-                    "Streaming save progress: {}/{} chunks",
-                    chunks_written, total_chunks
-                );
-            }
-        }
-
-        // Wait for reader thread to finish
-        match reader_handle.join() {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(e),
-            Err(_) => {
-                return Err(MftError::Io(std::io::Error::other(
-                    "Reader thread panicked",
-                )));
-            }
-        }
-
-        // Finish writing and get final header
-        let header = writer.finish()?;
-
-        info!(
-            "Streaming save complete: {} records, {} bytes",
-            header.record_count, header.original_size
-        );
-
-        Ok(header)
-    }
-
-    /// Save raw MFT to file (non-Windows stub).
-    ///
-    /// # Errors
-    ///
-    /// Always returns `MftError::PlatformNotSupported` on non-Windows
-    /// platforms.
-    #[cfg(not(windows))]
-    pub fn save_raw_to_file<P: AsRef<Path>>(
-        &self,
-        _path: P,
-        _options: &crate::raw::SaveRawOptions,
-    ) -> Result<crate::raw::RawMftHeader> {
-        Err(MftError::PlatformNotSupported)
-    }
-
-    /// Load raw MFT from file and parse to `DataFrame`.
-    ///
-    /// This loads a previously saved raw MFT file and parses it into a
-    /// `DataFrame`.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Input file path
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if loading or parsing fails.
-    ///
-    /// # Platform
-    ///
-    /// Cross-platform - works on all platforms. Uses cross-platform
-    /// `MftRecordMerger` from parse module.
-    pub fn load_raw_to_dataframe<P: AsRef<Path>>(path: P) -> Result<DataFrame> {
-        Self::load_raw_to_dataframe_with_options(path, &crate::raw::LoadRawOptions::default())
-    }
-
-    /// Load raw MFT from file and convert to `DataFrame` with custom options.
-    ///
-    /// This variant allows specifying load options like volume letter override.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Input file path
-    /// * `options` - Load options (volume letter override, etc.)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if loading or parsing fails.
-    ///
-    /// # Platform
-    ///
-    /// Cross-platform - works on all platforms.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "record_count is u64 but MFT sizes are bounded by disk size, always fits in usize"
-    )]
-    pub fn load_raw_to_dataframe_with_options<P: AsRef<Path>>(
-        path: P,
-        options: &crate::raw::LoadRawOptions,
-    ) -> Result<DataFrame> {
-        use crate::parse::{MftRecordMerger, apply_fixup, parse_record_full};
-
-        let raw = crate::raw::load_raw_mft(path, options)?;
-
-        // Parse all records
-        // record_count is u64 but MFT sizes are bounded by disk size, always < 2^32
-        let mut merger = MftRecordMerger::with_capacity(raw.header.record_count as usize);
-
-        for (frs, record_data) in raw.iter_records() {
-            let mut record_buf = record_data.to_vec();
-
-            // Apply fixup
-            if !apply_fixup(&mut record_buf) {
-                continue;
-            }
-
-            // Parse record
-            let result = parse_record_full(&record_buf, frs);
-            merger.add_result(result);
-        }
-
-        // Merge extensions and convert directly to ParsedColumns (SoA path)
-        // Note: load_raw_to_dataframe doesn't have access to expand_links setting,
-        // so we default to true (C++ parity)
-        let parsed_columns = merger.merge_into_columns(true);
-
-        // Convert to DataFrame using SoA path (no transpose needed!)
-        Self::build_dataframe_from_columns(parsed_columns)
-    }
-
-    /// Load raw MFT from file and build `MftIndex`.
-    ///
-    /// This loads a previously saved raw MFT file and builds a lean `MftIndex`
-    /// (fast path, no `DataFrame` overhead).
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Input file path
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if loading or parsing fails.
-    ///
-    /// # Platform
-    ///
-    /// Works on all platforms - parses NTFS structures from saved file.
-    pub fn load_raw_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIndex> {
-        Self::load_raw_to_index_with_options(path, &crate::raw::LoadRawOptions::default())
-    }
-
-    /// Load raw MFT from file and build `MftIndex` with custom options.
-    ///
-    /// This variant allows specifying load options like volume letter override.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Input file path
-    /// * `options` - Load options (volume letter override, etc.)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if loading or parsing fails.
-    ///
-    /// # Platform
-    ///
-    /// Works on all platforms - parses NTFS structures from saved file.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "parsing logic with forensic/sequential/parallel branches is inherently complex"
-    )]
-    pub fn load_raw_to_index_with_options<P: AsRef<Path>>(
-        path: P,
-        options: &crate::raw::LoadRawOptions,
-    ) -> Result<crate::index::MftIndex> {
-        use std::time::Instant;
-
-        use tracing::info;
-
-        use crate::index::MftIndex;
-        use crate::parse::{
-            MftRecordMerger, ParseOptions, ParseResult, apply_fixup, parse_record_forensic,
-            parse_record_full,
-        };
-
-        let mut raw = crate::raw::load_raw_mft(path, options)?;
-
-        // Parse all records into ParsedRecord format
-        let capacity = usize::try_from(raw.header.record_count).unwrap_or(0);
-
-        // Diagnostic counters for offline path
-        let total_records_in_file = capacity;
-
-        // Use forensic parsing if enabled
-        let parse_options = if options.forensic {
-            ParseOptions::FORENSIC
-        } else {
-            ParseOptions::DEFAULT
-        };
-
-        if options.forensic {
-            // Forensic mode: use forensic parser that handles deleted/corrupt/extension
-            // Note: In forensic mode, extension records are returned as Base records
-            let mut parsed_records = Vec::with_capacity(capacity);
-            let mut records_examined: u64 = 0;
-            let mut fixup_success: u64 = 0;
-            let mut fixup_failed: u64 = 0;
-            let mut base_records: u64 = 0;
-
-            for (frs, record_data) in raw.iter_records() {
-                records_examined += 1;
-                let mut record_buf = record_data.to_vec();
-                let fixup_ok = apply_fixup(&mut record_buf);
-                if fixup_ok {
-                    fixup_success += 1;
-                } else {
-                    fixup_failed += 1;
-                }
-                let result = parse_record_forensic(&record_buf, frs, &parse_options, !fixup_ok);
-                if let ParseResult::Base(parsed) = result {
-                    base_records += 1;
-                    parsed_records.push(parsed);
-                }
-            }
-
-            // Log diagnostic summary for forensic mode
-            info!("📊 OFFLINE PATH PARSE DIAGNOSTICS (Forensic Mode)");
-            info!(
-                total_records_in_file,
-                records_examined,
-                fixup_success,
-                fixup_failed,
-                base_records_parsed = base_records,
-                final_record_count = parsed_records.len(),
-                "Offline parse pipeline summary"
-            );
-
-            Ok(MftIndex::from_parsed_records(
-                raw.header.volume_letter,
-                parsed_records,
-            ))
-        } else {
-            // Normal mode: use MftRecordMerger to properly merge extension records
-            // This is critical for files with $ATTRIBUTE_LIST where $FILE_NAME
-            // attributes are stored in extension records.
-
-            let record_size = raw.header.record_size as usize;
-            let single_thread = std::env::var("UFFS_SINGLE_THREAD").is_ok();
-
-            let parse_start = Instant::now();
-
-            if single_thread {
-                // Sequential fallback (for debugging)
-                let mut merger = MftRecordMerger::with_capacity(capacity);
-                let mut fixup_success: u64 = 0;
-                let mut fixup_failed: u64 = 0;
-                let mut base_records: u64 = 0;
-                let mut extension_records: u64 = 0;
-                let mut skip_records: u64 = 0;
-
-                for (frs, record_data) in raw.iter_records() {
-                    let mut record_buf = record_data.to_vec();
-                    if !apply_fixup(&mut record_buf) {
-                        fixup_failed += 1;
-                        continue;
-                    }
-                    fixup_success += 1;
-                    let result = parse_record_full(&record_buf, frs);
-                    match &result {
-                        ParseResult::Base(_) => base_records += 1,
-                        ParseResult::Extension(_) => extension_records += 1,
-                        ParseResult::Skip => skip_records += 1,
-                    }
-                    merger.add_result(result);
-                }
-
-                let parsed_records = merger.merge();
-
-                info!(
-                    total_records_in_file,
-                    parse_ms = parse_start.elapsed().as_millis(),
-                    fixup_success,
-                    fixup_failed,
-                    base_records,
-                    extension_records,
-                    skip_records,
-                    final_merged_count = parsed_records.len(),
-                    "Offline parse complete (sequential)"
-                );
-
-                Ok(MftIndex::from_parsed_records(
-                    raw.header.volume_letter,
-                    parsed_records,
-                ))
-            } else {
-                // Parallel parsing using rayon (same pattern as io.rs)
-                use rayon::prelude::*;
-
-                let records_per_chunk = 4096_usize;
-                let bytes_per_chunk = records_per_chunk * record_size;
-                let buffer_slice = raw.data.as_mut_slice();
-
-                let results: Vec<(Vec<ParseResult>, u64, u64, u64, u64, u64)> = buffer_slice
-                    .par_chunks_mut(bytes_per_chunk)
-                    .enumerate()
-                    .map(|(chunk_idx, chunk)| {
-                        let mut results = Vec::new();
-                        let mut fixup_ok = 0_u64;
-                        let mut fixup_fail = 0_u64;
-                        let mut bases = 0_u64;
-                        let mut extensions = 0_u64;
-                        let mut skips = 0_u64;
-
-                        let start_frs = chunk_idx * records_per_chunk;
-                        let records_in_chunk = chunk.len() / record_size;
-
-                        for i in 0..records_in_chunk {
-                            let offset = i * record_size;
-                            let Some(record_slice) = chunk.get_mut(offset..offset + record_size)
-                            else {
-                                // Shouldn't happen given records_in_chunk calculation, but be safe
-                                continue;
-                            };
-
-                            if !apply_fixup(record_slice) {
-                                fixup_fail += 1;
-                                continue;
-                            }
-                            fixup_ok += 1;
-
-                            let frs = (start_frs + i) as u64;
-                            let result = parse_record_full(record_slice, frs);
-                            match &result {
-                                ParseResult::Base(_) => bases += 1,
-                                ParseResult::Extension(_) => extensions += 1,
-                                ParseResult::Skip => skips += 1,
-                            }
-                            if !matches!(result, ParseResult::Skip) {
-                                results.push(result);
-                            }
-                        }
-                        (results, fixup_ok, fixup_fail, bases, extensions, skips)
-                    })
-                    .collect();
-
-                // Combine results in chunk order (preserves FRS ordering)
-                let mut merger = MftRecordMerger::with_capacity(capacity);
-                let mut fixup_success: u64 = 0;
-                let mut fixup_failed: u64 = 0;
-                let mut base_records: u64 = 0;
-                let mut extension_records: u64 = 0;
-                let mut skip_records: u64 = 0;
-
-                for (chunk_results, ok, fail, bases, exts, skips) in results {
-                    fixup_success += ok;
-                    fixup_failed += fail;
-                    base_records += bases;
-                    extension_records += exts;
-                    skip_records += skips;
-                    for result in chunk_results {
-                        merger.add_result(result);
-                    }
-                }
-
-                let parsed_records = merger.merge();
-
-                info!(
-                    total_records_in_file,
-                    parse_ms = parse_start.elapsed().as_millis(),
-                    fixup_success,
-                    fixup_failed,
-                    base_records,
-                    extension_records,
-                    skip_records,
-                    final_merged_count = parsed_records.len(),
-                    threads = rayon::current_num_threads(),
-                    "Offline parse complete (parallel)"
-                );
-
-                Ok(MftIndex::from_parsed_records(
-                    raw.header.volume_letter,
-                    parsed_records,
-                ))
-            }
-        }
     }
 
     /// Convert parsed records to DataFrame (legacy AoS path).
@@ -4896,6 +3766,8 @@ impl MultiDriveMftReader {
 
 #[cfg(test)]
 mod tests {
+    use core::time::Duration;
+
     use super::*;
 
     #[test]

@@ -1,6 +1,6 @@
 //! Optional conversion from `MftIndex` into Polars data frames.
 
-use super::*;
+use super::MftIndex;
 
 // Polars DataFrame Conversion (optional, on-demand)
 // ============================================================================

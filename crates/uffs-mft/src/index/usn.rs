@@ -1,6 +1,8 @@
 //! Incremental USN-driven updates for persisted indexes.
 
-use super::*;
+use super::{
+    FileRecord, IndexNameRef, IndexStreamInfo, LinkInfo, MftIndex, NO_ENTRY, StandardInfo,
+};
 
 // USN Journal Incremental Update Support
 // ============================================================================

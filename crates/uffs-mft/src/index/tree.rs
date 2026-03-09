@@ -1,6 +1,6 @@
 //! Tree-metric orchestration and self-healing entry points for `MftIndex`.
 
-use super::*;
+use super::MftIndex;
 
 impl MftIndex {
     /// Compute tree metrics (descendants, treesize, `tree_allocated`) for all

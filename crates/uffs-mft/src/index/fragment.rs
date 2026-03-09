@@ -1,6 +1,8 @@
 //! Per-worker index fragments used during parallel MFT parsing.
 
-use super::*;
+use super::{
+    ChildInfo, ExtensionTable, FileRecord, IndexStreamInfo, InternalStreamInfo, LinkInfo, NO_ENTRY,
+};
 
 // ============================================================================
 // MftIndexFragment - Partial index for parallel parsing
