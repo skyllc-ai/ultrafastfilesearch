@@ -170,6 +170,53 @@ impl MultiSectorHeader {
     }
 }
 
+/// Reads a fixed-width little-endian byte array from `data` at `offset`.
+#[inline]
+fn read_le_array<const N: usize>(data: &[u8], offset: usize) -> Option<[u8; N]> {
+    let end = offset.checked_add(N)?;
+    data.get(offset..end)?.try_into().ok()
+}
+
+/// Reads a single byte from `data` at `offset`.
+#[inline]
+fn read_u8(data: &[u8], offset: usize) -> Option<u8> {
+    data.get(offset).copied()
+}
+
+/// Reads a little-endian `u16` from `data` at `offset`.
+#[inline]
+fn read_u16_le(data: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(read_le_array(data, offset)?))
+}
+
+/// Reads a little-endian `u32` from `data` at `offset`.
+#[inline]
+fn read_u32_le(data: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(read_le_array(data, offset)?))
+}
+
+/// Reads a little-endian `u64` from `data` at `offset`.
+#[inline]
+fn read_u64_le(data: &[u8], offset: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(read_le_array(data, offset)?))
+}
+
+/// Reads a little-endian `i64` from `data` at `offset`.
+#[inline]
+fn read_i64_le(data: &[u8], offset: usize) -> Option<i64> {
+    Some(i64::from_le_bytes(read_le_array(data, offset)?))
+}
+
+/// Decodes a `MultiSectorHeader` from on-disk bytes without unaligned reads.
+#[inline]
+fn parse_multi_sector_header(data: &[u8]) -> Option<MultiSectorHeader> {
+    Some(MultiSectorHeader {
+        magic: read_u32_le(data, 0)?,
+        usa_offset: read_u16_le(data, 4)?,
+        usa_count: read_u16_le(data, 6)?,
+    })
+}
+
 /// Applies the Update Sequence Array (USA) fixup to a record buffer.
 ///
 /// NTFS uses the USA for sector-level integrity checking. The last 2 bytes
@@ -265,14 +312,14 @@ pub fn apply_usa_fixup(buffer: &mut [u8], usa_offset: u16, usa_count: u16) -> bo
 /// `true` if fixup was successful, `false` if the record is invalid
 /// or corrupted.
 #[must_use]
-#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
 pub fn fixup_file_record(buffer: &mut [u8]) -> bool {
     if buffer.len() < size_of::<MultiSectorHeader>() {
         return false;
     }
 
-    // SAFETY: We've verified the buffer is large enough for the header.
-    let header: MultiSectorHeader = unsafe { core::ptr::read(buffer.as_ptr().cast()) };
+    let Some(header) = parse_multi_sector_header(buffer) else {
+        return false;
+    };
 
     // Verify magic
     if !header.is_file_record() {
@@ -389,6 +436,31 @@ pub struct ResidentAttributeData {
     pub flags: u16,
 }
 
+/// Decodes an `AttributeRecordHeader` from on-disk bytes without unaligned
+/// reads.
+#[inline]
+fn parse_attribute_record_header(data: &[u8]) -> Option<AttributeRecordHeader> {
+    Some(AttributeRecordHeader {
+        type_code: read_u32_le(data, 0)?,
+        length: read_u32_le(data, 4)?,
+        is_non_resident: read_u8(data, 8)?,
+        name_length: read_u8(data, 9)?,
+        name_offset: read_u16_le(data, 10)?,
+        flags: read_u16_le(data, 12)?,
+        instance: read_u16_le(data, 14)?,
+    })
+}
+
+/// Decodes `ResidentAttributeData` from on-disk bytes without unaligned reads.
+#[inline]
+fn parse_resident_attribute_data(data: &[u8]) -> Option<ResidentAttributeData> {
+    Some(ResidentAttributeData {
+        value_length: read_u32_le(data, 0)?,
+        value_offset: read_u16_le(data, 4)?,
+        flags: read_u16_le(data, 6)?,
+    })
+}
+
 /// Non-resident attribute data (follows `AttributeRecordHeader`).
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
@@ -410,6 +482,22 @@ pub struct NonResidentAttributeData {
     /// Initialized data size.
     pub initialized_size: i64,
     // CompressedSize follows only if compressed
+}
+
+/// Decodes `NonResidentAttributeData` from on-disk bytes without unaligned
+/// reads.
+#[inline]
+fn parse_non_resident_attribute_data(data: &[u8]) -> Option<NonResidentAttributeData> {
+    Some(NonResidentAttributeData {
+        lowest_vcn: read_i64_le(data, 0)?,
+        highest_vcn: read_i64_le(data, 8)?,
+        mapping_pairs_offset: read_u16_le(data, 16)?,
+        compression_unit: read_u8(data, 18)?,
+        reserved: read_le_array(data, 19)?,
+        allocated_size: read_i64_le(data, 24)?,
+        data_size: read_i64_le(data, 32)?,
+        initialized_size: read_i64_le(data, 40)?,
+    })
 }
 
 // ============================================================================
@@ -454,6 +542,29 @@ pub struct FileRecordSegmentHeader {
     pub reserved: u16,
     /// Segment number (lower 32 bits).
     pub segment_number_lower: u32,
+}
+
+/// Decodes a `FileRecordSegmentHeader` from on-disk bytes without unaligned
+/// reads.
+///
+/// This path stays allocation-free and touches only fixed-width little-endian
+/// fields in the hot attribute-iteration path.
+#[inline]
+fn parse_file_record_segment_header(data: &[u8]) -> Option<FileRecordSegmentHeader> {
+    Some(FileRecordSegmentHeader {
+        multi_sector_header: parse_multi_sector_header(data)?,
+        log_file_sequence_number: read_u64_le(data, 8)?,
+        sequence_number: read_u16_le(data, 16)?,
+        link_count: read_u16_le(data, 18)?,
+        first_attribute_offset: read_u16_le(data, 20)?,
+        flags: read_u16_le(data, 22)?,
+        bytes_in_use: read_u32_le(data, 24)?,
+        bytes_allocated: read_u32_le(data, 28)?,
+        base_file_record_segment: read_u64_le(data, 32)?,
+        next_attribute_number: read_u16_le(data, 40)?,
+        reserved: read_u16_le(data, 42)?,
+        segment_number_lower: read_u32_le(data, 44)?,
+    })
 }
 
 impl FileRecordSegmentHeader {
@@ -818,15 +929,16 @@ impl<'a> AttributeIterator<'a> {
     ///
     /// `None` if the buffer is too small or doesn't contain a valid record.
     #[must_use]
-    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
-    #[expect(clippy::missing_const_for_fn, reason = "can't be const due to unsafe")]
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "slice bounds checks and decoding helpers are not const here"
+    )]
     pub fn new(record: &'a [u8]) -> Option<Self> {
         if record.len() < size_of::<FileRecordSegmentHeader>() {
             return None;
         }
 
-        // SAFETY: We've verified the buffer is large enough for the header.
-        let header: FileRecordSegmentHeader = unsafe { core::ptr::read(record.as_ptr().cast()) };
+        let header = parse_file_record_segment_header(record)?;
 
         // Copy the packed field to avoid unaligned reference
         let multi_sector_header = header.multi_sector_header;
@@ -873,7 +985,6 @@ impl<'a> AttributeRef<'a> {
 
     /// Returns the resident attribute value, if this is a resident attribute.
     #[must_use]
-    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
     pub fn resident_value(&self) -> Option<&'a [u8]> {
         if self.is_non_resident() {
             return None;
@@ -885,9 +996,7 @@ impl<'a> AttributeRef<'a> {
         // Use .get() for safe slice access
         let resident_slice = self.data.get(header_size..header_size + resident_size)?;
 
-        // SAFETY: We've verified the slice is exactly the right size via .get()
-        let resident: ResidentAttributeData =
-            unsafe { core::ptr::read(resident_slice.as_ptr().cast()) };
+        let resident = parse_resident_attribute_data(resident_slice)?;
 
         let value_offset = resident.value_offset as usize;
         let value_length = resident.value_length as usize;
@@ -899,7 +1008,6 @@ impl<'a> AttributeRef<'a> {
     /// Returns the non-resident attribute data, if this is a non-resident
     /// attribute.
     #[must_use]
-    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
     pub fn non_resident_data(&self) -> Option<NonResidentAttributeData> {
         if !self.is_non_resident() {
             return None;
@@ -911,8 +1019,7 @@ impl<'a> AttributeRef<'a> {
         // Use .get() for safe slice access
         let nr_slice = self.data.get(header_size..header_size + nr_size)?;
 
-        // SAFETY: We've verified the slice is exactly the right size via .get()
-        Some(unsafe { core::ptr::read(nr_slice.as_ptr().cast()) })
+        parse_non_resident_attribute_data(nr_slice)
     }
 
     /// Parses data runs from a non-resident attribute.
@@ -963,7 +1070,6 @@ impl<'a> AttributeRef<'a> {
 impl<'a> Iterator for AttributeIterator<'a> {
     type Item = AttributeRef<'a>;
 
-    #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
     fn next(&mut self) -> Option<Self::Item> {
         let header_size = size_of::<AttributeRecordHeader>();
 
@@ -975,9 +1081,7 @@ impl<'a> Iterator for AttributeIterator<'a> {
             return None;
         }
 
-        // SAFETY: We've verified the slice is exactly the right size via .get()
-        let header: AttributeRecordHeader =
-            unsafe { core::ptr::read(header_slice.as_ptr().cast()) };
+        let header = parse_attribute_record_header(header_slice)?;
 
         // Check for end marker
         if header.type_code == 0xFFFF_FFFF {
@@ -1174,7 +1278,6 @@ fn parse_variable_length_signed(data: &[u8]) -> i64 {
 ///
 /// A vector of `DataRun` entries, or an empty vector if parsing fails.
 #[must_use]
-#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
 pub fn extract_data_runs_from_attribute(attr_data: &[u8]) -> Vec<DataRun> {
     let header_size = size_of::<AttributeRecordHeader>();
 
@@ -1183,8 +1286,9 @@ pub fn extract_data_runs_from_attribute(attr_data: &[u8]) -> Vec<DataRun> {
         return Vec::new();
     };
 
-    // SAFETY: We've verified the slice is exactly the right size via .get()
-    let header: AttributeRecordHeader = unsafe { core::ptr::read(header_slice.as_ptr().cast()) };
+    let Some(header) = parse_attribute_record_header(header_slice) else {
+        return Vec::new();
+    };
 
     // Must be non-resident
     if header.is_non_resident == 0 {
@@ -1197,8 +1301,9 @@ pub fn extract_data_runs_from_attribute(attr_data: &[u8]) -> Vec<DataRun> {
         return Vec::new();
     };
 
-    // SAFETY: We've verified the slice is exactly the right size via .get()
-    let nr_data: NonResidentAttributeData = unsafe { core::ptr::read(nr_slice.as_ptr().cast()) };
+    let Some(nr_data) = parse_non_resident_attribute_data(nr_slice) else {
+        return Vec::new();
+    };
 
     let mapping_pairs_offset = nr_data.mapping_pairs_offset as usize;
 
@@ -1484,6 +1589,18 @@ pub fn is_internal_windows_stream(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn write_u16_le(buffer: &mut [u8], offset: usize, value: u16) {
+        buffer[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_u32_le(buffer: &mut [u8], offset: usize, value: u32) {
+        buffer[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_i64_le(buffer: &mut [u8], offset: usize, value: i64) {
+        buffer[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
     #[test]
     fn test_filetime_conversion() {
         // Test known value: 2024-01-01 00:00:00 UTC
@@ -1543,5 +1660,140 @@ mod tests {
         assert!(header.is_in_use());
         assert!(header.is_directory());
         assert!(header.is_base_record());
+    }
+
+    #[test]
+    fn test_fixup_file_record_applies_usa_from_safe_header_decode() {
+        let mut record = vec![0_u8; 1024];
+        let usa_offset = 0x30;
+        let check_value = 0xABCD;
+        let original_first = 0x1234;
+        let original_second = 0x5678;
+
+        record[0..4].copy_from_slice(b"FILE");
+        write_u16_le(&mut record, 4, usa_offset as u16);
+        write_u16_le(&mut record, 6, 3);
+        write_u16_le(&mut record, usa_offset, check_value);
+        write_u16_le(&mut record, usa_offset + 2, original_first);
+        write_u16_le(&mut record, usa_offset + 4, original_second);
+        write_u16_le(&mut record, SECTOR_SIZE - 2, check_value);
+        write_u16_le(&mut record, SECTOR_SIZE * 2 - 2, check_value);
+
+        assert!(fixup_file_record(&mut record));
+        assert_eq!(
+            &record[SECTOR_SIZE - 2..SECTOR_SIZE],
+            &original_first.to_le_bytes()
+        );
+        assert_eq!(
+            &record[SECTOR_SIZE * 2 - 2..SECTOR_SIZE * 2],
+            &original_second.to_le_bytes()
+        );
+    }
+
+    #[test]
+    fn test_attribute_iterator_reads_resident_attribute_value() {
+        let mut record = vec![0_u8; 96];
+        let record_len = record.len() as u32;
+        let first_attribute_offset = size_of::<FileRecordSegmentHeader>();
+        let attr_offset = first_attribute_offset;
+        let attr_length =
+            size_of::<AttributeRecordHeader>() + size_of::<ResidentAttributeData>() + 4;
+        let end_marker_offset = attr_offset + attr_length;
+
+        record[0..4].copy_from_slice(b"FILE");
+        write_u16_le(&mut record, 20, first_attribute_offset as u16);
+        write_u16_le(&mut record, 22, FileRecordFlags::InUse as u16);
+        write_u32_le(
+            &mut record,
+            24,
+            (end_marker_offset + size_of::<AttributeRecordHeader>()) as u32,
+        );
+        write_u32_le(&mut record, 28, record_len);
+
+        write_u32_le(&mut record, attr_offset, AttributeType::Data as u32);
+        write_u32_le(&mut record, attr_offset + 4, attr_length as u32);
+        record[attr_offset + 8] = 0;
+        record[attr_offset + 9] = 0;
+        write_u16_le(&mut record, attr_offset + 10, 0);
+        write_u16_le(&mut record, attr_offset + 12, 0);
+        write_u16_le(&mut record, attr_offset + 14, 1);
+
+        write_u32_le(&mut record, attr_offset + 16, 4);
+        write_u16_le(
+            &mut record,
+            attr_offset + 20,
+            (size_of::<AttributeRecordHeader>() + size_of::<ResidentAttributeData>()) as u16,
+        );
+        write_u16_le(&mut record, attr_offset + 22, 0);
+        record[attr_offset + 24..attr_offset + 28].copy_from_slice(&[1, 2, 3, 4]);
+
+        write_u32_le(&mut record, end_marker_offset, AttributeType::End as u32);
+
+        let mut iter = AttributeIterator::new(&record).expect("valid record header");
+        let attribute = iter.next().expect("resident attribute");
+
+        assert_eq!(attribute.attribute_type(), Some(AttributeType::Data));
+        assert_eq!(attribute.resident_value(), Some(&[1, 2, 3, 4][..]));
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_non_resident_attribute_helpers_decode_mapping_pairs() {
+        let mut attr =
+            vec![
+                0_u8;
+                size_of::<AttributeRecordHeader>() + size_of::<NonResidentAttributeData>() + 4
+            ];
+        let attr_len = attr.len() as u32;
+
+        write_u32_le(&mut attr, 0, AttributeType::Data as u32);
+        write_u32_le(&mut attr, 4, attr_len);
+        attr[8] = 1;
+        write_u16_le(&mut attr, 12, 0x0001);
+        write_u16_le(&mut attr, 14, 2);
+
+        let nr_offset = size_of::<AttributeRecordHeader>();
+        write_i64_le(&mut attr, nr_offset, 7);
+        write_i64_le(&mut attr, nr_offset + 8, 11);
+        write_u16_le(
+            &mut attr,
+            nr_offset + 16,
+            (nr_offset + size_of::<NonResidentAttributeData>()) as u16,
+        );
+        attr[nr_offset + 18] = 0;
+        write_i64_le(&mut attr, nr_offset + 24, 40);
+        write_i64_le(&mut attr, nr_offset + 32, 20);
+        write_i64_le(&mut attr, nr_offset + 40, 20);
+        attr[nr_offset + 48..nr_offset + 52].copy_from_slice(&[0x11, 0x05, 0x0A, 0x00]);
+
+        let attribute = AttributeRef {
+            data: &attr,
+            header: AttributeRecordHeader {
+                type_code: AttributeType::Data as u32,
+                length: attr.len() as u32,
+                is_non_resident: 1,
+                name_length: 0,
+                name_offset: 0,
+                flags: 0x0001,
+                instance: 2,
+            },
+        };
+
+        let nr_data = attribute.non_resident_data().expect("non-resident header");
+        let lowest_vcn = nr_data.lowest_vcn;
+        assert_eq!(lowest_vcn, 7);
+        assert_eq!(
+            nr_data.mapping_pairs_offset as usize,
+            nr_offset + size_of::<NonResidentAttributeData>()
+        );
+
+        assert_eq!(
+            attribute.data_runs(),
+            vec![DataRun {
+                vcn: 7,
+                cluster_count: 5,
+                lcn: 10,
+            }]
+        );
     }
 }
