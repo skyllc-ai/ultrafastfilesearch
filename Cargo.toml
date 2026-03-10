@@ -113,7 +113,6 @@ miette = { version = "7.6.0", features = ["fancy"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["fmt", "time", "env-filter"] }
 tracing-appender = "0.2.4"
-log = "0.4.29"
 
 # ───── Time ─────
 # Note: chrono version constrained by Polars git dependency (requires <= 0.4.41)

@@ -105,6 +105,15 @@ Scope: Factual snapshot of the repository’s architecture, tooling, policies, s
 | Allocator | mimalloc (CLI) |
 
 
+### Wave 3E dependency close-out (2026-03-10)
+
+- `async-trait` / `async-recursion`: no longer present in the current root or crate manifests, so the Wave 1G follow-up resolves to **no manifest change required**.
+- `simplelog`: not present in active manifests; no follow-up needed.
+- `log`: removed from `workspace.dependencies` because active workspace code already standardizes on `tracing`/`tracing-subscriber`, and current `crates/` + `scripts/` searches show no remaining direct `log::...` macro usage.
+- `hostname`: retained in `crates/uffs-mft/Cargo.toml` for the existing benchmark metadata path (`hostname::get()` in `src/commands/windows.rs`). Current docs.rs metadata still shows `hostname 0.4.2` building on current desktop targets, so replacing it with `gethostname` would be churn-only in this wave.
+- `uffs-polars` feature policy: follow the audit's selective-trim guardrail and avoid broad feature cuts. This wave does **not** act on the separate candidate list (`dot_diagram`, `to_dummies`, `rle`, `reinterpret`, `extract_jsonpath`); it only applies the repo-local `INTENT_PROMPT.md` §6 examples by removing the clearly filesystem-irrelevant financial/time-series features `business`, `month_start`, `month_end`, `ewma`, and `ewma_by`, while keeping generic temporal support such as `offset_by`.
+
+
 ---
 
 ## Build Profiles and Performance Settings

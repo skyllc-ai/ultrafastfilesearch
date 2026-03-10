@@ -66,9 +66,6 @@ polars = { git = "https://github.com/pola-rs/polars", branch = "main", default-f
     "dtype-datetime",    # DateTime type
     "dtype-time",        # Time type
     "dtype-duration",    # Duration type
-    "business",          # Business day calculations
-    "month_start",       # Month start dates
-    "month_end",         # Month end dates
     "offset_by",         # Date offset operations
 
     # ===== I/O Formats =====
@@ -107,8 +104,6 @@ polars = { git = "https://github.com/pola-rs/polars", branch = "main", default-f
     "cum_agg",           # Cumulative aggregations
     "rolling_window",    # Rolling window operations
     "rolling_window_by", # Rolling window by column
-    "ewma",              # Exponential weighted moving average
-    "ewma_by",           # EWMA by column
     "approx_unique",     # HyperLogLog approximate distinct counts
     "unique_counts",     # Count unique values
     "top_k",             # Top-K selection
