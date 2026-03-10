@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_NO_BUFFERING, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_FLAG_OVERLAPPED, FILE_FLAG_SEQUENTIAL_SCAN, FILE_FLAGS_AND_ATTRIBUTES,
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_NO_BUFFERING,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_OVERLAPPED, FILE_FLAG_SEQUENTIAL_SCAN,
     FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     SYNCHRONIZE,
 };
@@ -28,11 +28,11 @@ use windows::Win32::Storage::FileSystem::{
 /// FILE_READ_DATA access right (0x0001) - required to read data from a
 /// file/volume
 const FILE_READ_DATA: u32 = 0x0001;
+use windows::core::PCWSTR;
 use windows::Win32::System::Ioctl::{
     FSCTL_GET_NTFS_VOLUME_DATA, FSCTL_GET_RETRIEVAL_POINTERS, NTFS_VOLUME_DATA_BUFFER,
     STARTING_VCN_INPUT_BUFFER,
 };
-use windows::core::PCWSTR;
 
 use crate::error::{MftError, Result};
 use crate::ntfs::NtfsBootSector;
@@ -55,15 +55,20 @@ pub struct VolumeHandle {
     volume_data: NtfsVolumeData,
 }
 
-// SAFETY: Windows file handles are thread-safe. The HANDLE is just a pointer
-// to a kernel object that the OS manages. Multiple threads can safely read
-// from the same handle (though we don't do that - each task has its own
-// handle). This is required for tokio::spawn to work with MftReader.
+// SAFETY: `VolumeHandle` owns a Windows `HANDLE` to a kernel-managed file
+// object plus immutable metadata (`volume` and `volume_data`). It contains no
+// Rust references or unsynchronized interior mutability, so moving ownership
+// to another thread does not invalidate any aliasing assumptions. Handle
+// cleanup remains centralized in `Drop`.
 #[expect(
     unsafe_code,
     reason = "windows file handles are thread-safe kernel objects"
 )]
 unsafe impl Send for VolumeHandle {}
+// SAFETY: Shared references to `VolumeHandle` only expose immutable metadata or
+// copy the raw `HANDLE`. The wrapper itself performs no unsynchronized mutable
+// access, and Windows file handles are designed to be used from multiple
+// threads.
 #[expect(
     unsafe_code,
     reason = "windows file handles are thread-safe kernel objects"
@@ -151,6 +156,9 @@ impl VolumeHandle {
         // - SEQUENTIAL_SCAN optimizes cache for sequential access
         // - These two flags work against each other
         // - Let the OS cache + read-ahead do its job
+        // SAFETY: `volume_path` is UTF-16 and NUL-terminated for the duration of
+        // the call, optional pointers are passed as `None`, and on success the
+        // returned handle is owned by this function.
         let handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(volume_path.as_ptr()),
@@ -195,6 +203,10 @@ impl VolumeHandle {
         let mut buffer = NTFS_VOLUME_DATA_BUFFER::default();
         let mut bytes_returned: u32 = 0;
 
+        // SAFETY: `handle` is an open volume handle, `buffer` points to valid
+        // writable storage for `NTFS_VOLUME_DATA_BUFFER`, and
+        // `bytes_returned` is a valid out-parameter for the duration of the
+        // call.
         let result = unsafe {
             DeviceIoControl(
                 handle,
@@ -275,6 +287,9 @@ impl VolumeHandle {
         // FILE_FLAG_SEQUENTIAL_SCAN enables aggressive OS read-ahead
         // Do NOT use FILE_FLAG_NO_BUFFERING - it disables OS cache and read-ahead
         // which works against SEQUENTIAL_SCAN (C++ team insight)
+        // SAFETY: `volume_path` is UTF-16 and NUL-terminated for the duration of
+        // the call, optional pointers are passed as `None`, and ownership of
+        // any returned handle is transferred to the caller.
         let handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(volume_path.as_ptr()),
@@ -325,10 +340,12 @@ impl VolumeHandle {
         reason = "FFI: windows API and ptr::read for packed struct"
     )]
     pub fn read_boot_sector(&self) -> Result<NtfsBootSector> {
-        use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
+        use windows::Win32::Storage::FileSystem::{ReadFile, SetFilePointerEx, FILE_BEGIN};
 
         // Seek to the beginning of the volume
         let mut new_position = 0_i64;
+        // SAFETY: `self.handle` is a live volume handle and `new_position`
+        // points to writable stack storage for the duration of the call.
         unsafe {
             SetFilePointerEx(self.handle, 0, Some(&mut new_position), FILE_BEGIN)?;
         }
@@ -337,6 +354,8 @@ impl VolumeHandle {
         let mut buffer = [0_u8; 512];
         let mut bytes_read = 0_u32;
 
+        // SAFETY: `self.handle` is a live volume handle, `buffer` is a writable
+        // 512-byte stack array, and `bytes_read` is a valid out-parameter.
         unsafe {
             ReadFile(self.handle, Some(&mut buffer), Some(&mut bytes_read), None)?;
         }
@@ -348,7 +367,8 @@ impl VolumeHandle {
             )));
         }
 
-        // SAFETY: NtfsBootSector is repr(C, packed) and exactly 512 bytes
+        // SAFETY: `NtfsBootSector` is `repr(C, packed)` (alignment 1), and we
+        // verified that `buffer` contains exactly one full 512-byte boot sector.
         let boot_sector: NtfsBootSector = unsafe { core::ptr::read(buffer.as_ptr().cast()) };
 
         if !boot_sector.is_valid() {
@@ -381,6 +401,9 @@ impl VolumeHandle {
             .chain(core::iter::once(0))
             .collect();
 
+        // SAFETY: `mft_path` is UTF-16 and NUL-terminated for the duration of
+        // the call, optional pointers are `None`, and any returned handle is
+        // wrapped in `HandleGuard` before use.
         let mft_handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(mft_path.as_ptr()),
@@ -441,7 +464,7 @@ impl VolumeHandle {
     )]
     fn get_mft_bitmap_internal(&self, verbose: bool) -> Result<MftBitmap> {
         use windows::Win32::Storage::FileSystem::{
-            FILE_BEGIN, GetFileSizeEx, ReadFile, SYNCHRONIZE, SetFilePointerEx,
+            GetFileSizeEx, ReadFile, SetFilePointerEx, FILE_BEGIN, SYNCHRONIZE,
         };
 
         // Open the $MFT::$BITMAP stream to get retrieval pointers and size
@@ -457,6 +480,9 @@ impl VolumeHandle {
         }
 
         // Match C++ flags: FILE_READ_ATTRIBUTES | SYNCHRONIZE
+        // SAFETY: `bitmap_path` is UTF-16 and NUL-terminated for the duration of
+        // the call, optional pointers are `None`, and any returned handle is
+        // wrapped in `HandleGuard` before use.
         let bitmap_handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(bitmap_path.as_ptr()),
@@ -490,6 +516,8 @@ impl VolumeHandle {
 
         // Get file size
         let mut file_size: i64 = 0;
+        // SAFETY: `bitmap_handle` is a live file handle and `file_size` points
+        // to writable stack storage for the duration of the call.
         unsafe {
             if let Err(e) = GetFileSizeEx(bitmap_handle, &mut file_size) {
                 if verbose {
@@ -577,6 +605,8 @@ impl VolumeHandle {
 
             // Seek to the extent's physical location on the volume
             let mut new_position = 0_i64;
+            // SAFETY: `self.handle` is a live volume handle and `new_position`
+            // is valid writable storage for the duration of the seek call.
             unsafe {
                 if let Err(e) = SetFilePointerEx(
                     self.handle,
@@ -595,6 +625,9 @@ impl VolumeHandle {
 
             // Read the extent data from the volume (full clusters)
             let mut bytes_read: u32 = 0;
+            // SAFETY: `self.handle` is a live volume handle, the slice points to
+            // a contiguous writable region of `extent_bytes`, and `bytes_read`
+            // is a valid out-parameter for the duration of the read.
             unsafe {
                 if let Err(e) = ReadFile(
                     self.handle,
@@ -653,6 +686,8 @@ impl Drop for HandleGuard {
     #[expect(unsafe_code, reason = "FFI: windows API (CloseHandle)")]
     fn drop(&mut self) {
         if !self.0.is_invalid() {
+            // SAFETY: `HandleGuard` exclusively owns this valid handle and drops
+            // it exactly once when the guard is destroyed.
             unsafe {
                 let _ = CloseHandle(self.0);
             }
@@ -703,8 +738,8 @@ fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
     use windows::Win32::System::IO::DeviceIoControl;
 
     let mut extents = Vec::new();
-    // SAFETY: STARTING_VCN_INPUT_BUFFER is a simple struct with a single i64 field.
-    // Zeroing it sets StartingVcn to 0, which is what we want.
+    // SAFETY: `STARTING_VCN_INPUT_BUFFER` is a plain FFI struct whose all-zero
+    // bit pattern represents `StartingVcn == 0`, the initial query window.
     let starting_vcn: STARTING_VCN_INPUT_BUFFER = unsafe { std::mem::zeroed() };
 
     // Initial buffer size - will grow if needed
@@ -714,6 +749,9 @@ fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
     loop {
         let mut bytes_returned: u32 = 0;
 
+        // SAFETY: `handle` is an open file handle, `starting_vcn` and `buffer`
+        // point to valid initialized storage for the provided lengths, and
+        // `bytes_returned` is a valid out-parameter.
         let result = unsafe {
             DeviceIoControl(
                 handle,
@@ -841,6 +879,8 @@ impl Drop for VolumeHandle {
     #[expect(unsafe_code, reason = "FFI: windows API (CloseHandle)")]
     fn drop(&mut self) {
         if !self.handle.is_invalid() {
+            // SAFETY: `VolumeHandle` owns this valid handle and closes it once
+            // during drop after all safe borrows have ended.
             unsafe {
                 let _ = CloseHandle(self.handle);
             }
@@ -1151,32 +1191,35 @@ impl Iterator for InUseClusterRangeIterator<'_> {
 )]
 pub fn is_elevated() -> bool {
     use windows::Win32::Security::{
-        GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
     };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-    // SAFETY: All Windows API calls are properly checked for errors.
-    unsafe {
-        let mut token_handle = HANDLE::default();
-        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle).is_err() {
-            return false;
-        }
+    let mut token_handle = HANDLE::default();
+    // SAFETY: `GetCurrentProcess()` returns the current pseudo-handle, and
+    // `token_handle` points to writable storage for the returned token handle.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle) }.is_err() {
+        return false;
+    }
 
-        let mut elevation = TOKEN_ELEVATION::default();
-        let mut return_length = 0_u32;
+    let _token_guard = HandleGuard(token_handle);
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut return_length = 0_u32;
 
-        let result = GetTokenInformation(
+    // SAFETY: `token_handle` was successfully opened above, `elevation`
+    // provides writable storage matching the advertised buffer size, and
+    // `return_length` is a valid out-parameter.
+    let result = unsafe {
+        GetTokenInformation(
             token_handle,
             TokenElevation,
             Some(core::ptr::from_mut(&mut elevation).cast()),
             size_of::<TOKEN_ELEVATION>() as u32,
             &mut return_length,
-        );
+        )
+    };
 
-        let _ = CloseHandle(token_handle);
-
-        result.is_ok() && elevation.TokenIsElevated != 0
-    }
+    result.is_ok() && elevation.TokenIsElevated != 0
 }
 
 /// Returns the path to the volume root (e.g., "C:\").
@@ -1268,7 +1311,8 @@ pub fn detect_ntfs_drives() -> Vec<char> {
 
     let mut ntfs_drives = Vec::new();
 
-    // SAFETY: GetLogicalDrives is a simple Windows API call with no side effects.
+    // SAFETY: `GetLogicalDrives` takes no pointers and returns a bitmask by
+    // value, so there are no aliasing or lifetime preconditions to satisfy.
     let drive_mask = unsafe { GetLogicalDrives() };
 
     if drive_mask == 0 {
@@ -1307,6 +1351,8 @@ fn is_ntfs_volume(drive_letter: char) -> bool {
         .chain(std::iter::once(0))
         .collect();
 
+    // SAFETY: `root_path` is UTF-16 and NUL-terminated for the duration of the
+    // call.
     let drive_type = unsafe { GetDriveTypeW(PCWSTR(root_path.as_ptr())) };
 
     // DRIVE_FIXED = 3, DRIVE_REMOVABLE = 2
@@ -1319,6 +1365,8 @@ fn is_ntfs_volume(drive_letter: char) -> bool {
     // Get filesystem name using GetVolumeInformationW (no admin required)
     let mut fs_name_buffer: [u16; 32] = [0; 32];
 
+    // SAFETY: `root_path` is UTF-16 and NUL-terminated, and `fs_name_buffer`
+    // points to writable storage for the filesystem name returned by Windows.
     let result = unsafe {
         GetVolumeInformationW(
             PCWSTR(root_path.as_ptr()),
@@ -1370,6 +1418,8 @@ pub fn is_volume_read_only(drive_letter: char) -> bool {
 
     let mut fs_flags: u32 = 0;
 
+    // SAFETY: `root_path` is UTF-16 and NUL-terminated, and `fs_flags` points
+    // to writable storage for the returned filesystem flags.
     let result = unsafe {
         GetVolumeInformationW(
             PCWSTR(root_path.as_ptr()),
@@ -1552,7 +1602,10 @@ impl DriveType {
 ///
 /// The detected drive type, or `DriveType::Unknown` if detection fails.
 #[must_use]
-#[expect(unsafe_code, reason = "FFI: windows API (DeviceIoControl)")]
+#[expect(
+    unsafe_code,
+    reason = "FFI: windows API (CreateFileW, DeviceIoControl) and unaligned descriptor read"
+)]
 pub fn detect_drive_type(drive_letter: char) -> DriveType {
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -1612,6 +1665,9 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
         .chain(std::iter::once(0))
         .collect();
 
+    // SAFETY: `drive_path` is UTF-16 and NUL-terminated for the duration of the
+    // call, optional pointers are `None`, and any returned handle is wrapped in
+    // `HandleGuard` before use.
     let handle = unsafe {
         CreateFileW(
             PCWSTR(drive_path.as_ptr()),
@@ -1629,92 +1685,110 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
         Err(_) => return DriveType::Unknown,
     };
 
-    // First, check if it's NVMe by querying the bus type
-    let is_nvme = {
+    let drive_classification = {
+        let _handle_guard = HandleGuard(handle);
+
+        // First, check if it's NVMe by querying the bus type
+        let is_nvme = {
+            let query = StoragePropertyQuery {
+                property_id: STORAGE_DEVICE_PROPERTY,
+                query_type: PROPERTY_STANDARD_QUERY,
+                additional_parameters: [0],
+            };
+
+            // Allocate a buffer large enough for the descriptor
+            let mut buffer = [0u8; 1024];
+            let mut bytes_returned: u32 = 0;
+
+            // SAFETY: `handle` is a live device handle, `query` contains the
+            // exact input bytes Windows expects for this IOCTL, `buffer` is a
+            // writable output buffer of the advertised length, and
+            // `bytes_returned` is a valid out-parameter.
+            let result = unsafe {
+                DeviceIoControl(
+                    handle,
+                    IOCTL_STORAGE_QUERY_PROPERTY,
+                    Some(&query as *const _ as *const std::ffi::c_void),
+                    size_of::<StoragePropertyQuery>() as u32,
+                    Some(buffer.as_mut_ptr() as *mut std::ffi::c_void),
+                    buffer.len() as u32,
+                    Some(&mut bytes_returned),
+                    None,
+                )
+            };
+
+            if result.is_ok() && bytes_returned >= size_of::<StorageDeviceDescriptor>() as u32 {
+                // SAFETY: `bytes_returned` proves the prefix needed for
+                // `StorageDeviceDescriptor` is present in `buffer`, the struct is
+                // `repr(C)` plain data, and `read_unaligned` handles the buffer's
+                // byte alignment.
+                let descriptor = unsafe {
+                    core::ptr::read_unaligned(buffer.as_ptr().cast::<StorageDeviceDescriptor>())
+                };
+                descriptor.bus_type == BUS_TYPE_NVME
+            } else {
+                false
+            }
+        };
+
+        // If it's NVMe, we're done
+        if is_nvme {
+            return DriveType::Nvme;
+        }
+
+        // Otherwise, check seek penalty to distinguish SSD from HDD
         let query = StoragePropertyQuery {
-            property_id: STORAGE_DEVICE_PROPERTY,
+            property_id: STORAGE_DEVICE_SEEK_PENALTY_PROPERTY,
             query_type: PROPERTY_STANDARD_QUERY,
             additional_parameters: [0],
         };
 
-        // Allocate a buffer large enough for the descriptor
-        let mut buffer = [0u8; 1024];
+        let mut descriptor = DeviceSeekPenaltyDescriptor {
+            version: 0,
+            size: 0,
+            incurs_seek_penalty: 0,
+        };
+
         let mut bytes_returned: u32 = 0;
 
+        // SAFETY: `handle` is a live device handle, `query` and `descriptor`
+        // point to initialized storage matching the advertised sizes, and
+        // `bytes_returned` is a valid out-parameter.
         let result = unsafe {
             DeviceIoControl(
                 handle,
                 IOCTL_STORAGE_QUERY_PROPERTY,
                 Some(&query as *const _ as *const std::ffi::c_void),
                 size_of::<StoragePropertyQuery>() as u32,
-                Some(buffer.as_mut_ptr() as *mut std::ffi::c_void),
-                buffer.len() as u32,
+                Some(&mut descriptor as *mut _ as *mut std::ffi::c_void),
+                size_of::<DeviceSeekPenaltyDescriptor>() as u32,
                 Some(&mut bytes_returned),
                 None,
             )
         };
 
-        if result.is_ok() && bytes_returned >= size_of::<StorageDeviceDescriptor>() as u32 {
-            let descriptor = unsafe { &*(buffer.as_ptr() as *const StorageDeviceDescriptor) };
-            descriptor.bus_type == BUS_TYPE_NVME
+        if result.is_ok() && bytes_returned >= size_of::<DeviceSeekPenaltyDescriptor>() as u32 {
+            Some(if descriptor.incurs_seek_penalty == 0 {
+                DriveType::Ssd
+            } else {
+                DriveType::Hdd
+            })
         } else {
-            false
+            None
         }
     };
 
-    // If it's NVMe, we're done
-    if is_nvme {
-        let _ = unsafe { CloseHandle(handle) };
-        return DriveType::Nvme;
-    }
-
-    // Otherwise, check seek penalty to distinguish SSD from HDD
-    let query = StoragePropertyQuery {
-        property_id: STORAGE_DEVICE_SEEK_PENALTY_PROPERTY,
-        query_type: PROPERTY_STANDARD_QUERY,
-        additional_parameters: [0],
-    };
-
-    let mut descriptor = DeviceSeekPenaltyDescriptor {
-        version: 0,
-        size: 0,
-        incurs_seek_penalty: 0,
-    };
-
-    let mut bytes_returned: u32 = 0;
-
-    let result = unsafe {
-        DeviceIoControl(
-            handle,
-            IOCTL_STORAGE_QUERY_PROPERTY,
-            Some(&query as *const _ as *const std::ffi::c_void),
-            size_of::<StoragePropertyQuery>() as u32,
-            Some(&mut descriptor as *mut _ as *mut std::ffi::c_void),
-            size_of::<DeviceSeekPenaltyDescriptor>() as u32,
-            Some(&mut bytes_returned),
-            None,
-        )
-    };
-
-    // Close handle
-    let _ = unsafe { CloseHandle(handle) };
-
-    if result.is_ok() && bytes_returned >= size_of::<DeviceSeekPenaltyDescriptor>() as u32 {
-        if descriptor.incurs_seek_penalty == 0 {
-            DriveType::Ssd
-        } else {
-            DriveType::Hdd
-        }
-    } else {
-        // Fallback: try to detect via trim support
+    drive_classification.unwrap_or_else(|| {
+        // Fallback: try to detect via trim support after the primary handle has
+        // been closed by `_handle_guard`.
         detect_drive_type_via_trim(drive_letter)
-    }
+    })
 }
 
 /// Fallback detection using TRIM support (SSDs support TRIM).
 #[expect(
     unsafe_code,
-    reason = "FFI: windows API (DeviceIoControl) for trim detection"
+    reason = "FFI: windows API (CreateFileW, DeviceIoControl) for trim detection"
 )]
 fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
     use windows::Win32::Storage::FileSystem::{
@@ -1745,6 +1819,9 @@ fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
         .chain(std::iter::once(0))
         .collect();
 
+    // SAFETY: `drive_path` is UTF-16 and NUL-terminated for the duration of the
+    // call, optional pointers are `None`, and any returned handle is wrapped in
+    // `HandleGuard` before use.
     let handle = unsafe {
         CreateFileW(
             PCWSTR(drive_path.as_ptr()),
@@ -1762,6 +1839,8 @@ fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
         Err(_) => return DriveType::Unknown,
     };
 
+    let _handle_guard = HandleGuard(handle);
+
     let query = StoragePropertyQuery {
         property_id: STORAGE_DEVICE_TRIM_PROPERTY,
         query_type: PROPERTY_STANDARD_QUERY,
@@ -1776,6 +1855,9 @@ fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
 
     let mut bytes_returned: u32 = 0;
 
+    // SAFETY: `handle` is a live device handle, `query` and `descriptor`
+    // point to initialized storage matching the advertised sizes, and
+    // `bytes_returned` is a valid out-parameter.
     let result = unsafe {
         DeviceIoControl(
             handle,
@@ -1788,8 +1870,6 @@ fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
             None,
         )
     };
-
-    let _ = unsafe { CloseHandle(handle) };
 
     if result.is_ok() && bytes_returned >= size_of::<DeviceTrimDescriptor>() as u32 {
         if descriptor.trim_enabled != 0 {
