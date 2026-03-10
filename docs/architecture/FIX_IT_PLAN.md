@@ -35,7 +35,7 @@ Before starting, ensure you have:
 
 2. **Reference Data**:
    - C++ UFFS output (Parquet or CSV) for comparison
-   - Run: `old_cpp_reference/uffs/bin/UltraFastFileSearch.exe` to generate baseline (local-only, never pushed)
+   - Run: `old_cpp_reference/uffs/bin/UltraFastFileSearch.exe` from the optional repo-root, gitignored local tree to generate the baseline (local-only, never pushed)
 
 3. **Understanding**:
    - Read `docs/architecture/RUST_VS_CPP_ANALYSIS.md` thoroughly

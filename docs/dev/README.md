@@ -15,7 +15,7 @@ Use this bucket for contributor workflow, implementation plans, and build/develo
 
 ## Local-only legacy reference tree
 
-- If you keep an external private legacy reference tree next to this repo, keep it local-only, never push it, and prefer a clearer ignored name such as `old_cpp_reference/` instead of plain `reference/`.
+- If you keep a private legacy reference tree, use the optional repo-root, gitignored `old_cpp_reference/` layout, keep it local-only, and never push it.
 
 Legacy documents remain in place for now; this index provides the stable category landing page for future cleanup.
 

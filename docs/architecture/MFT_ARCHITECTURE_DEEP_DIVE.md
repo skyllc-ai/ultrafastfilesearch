@@ -1158,7 +1158,7 @@ tracy uffs_trace.tracy
 
 ## Appendix B: References
 
-- [C++ Source (local-only `old_cpp_reference/` tree)](../../old_cpp_reference/uffs/UltraFastFileSearch-code/UltraFastFileSearch.cpp)
+- C++ source example from the optional repo-root, gitignored local tree: `old_cpp_reference/uffs/UltraFastFileSearch-code/UltraFastFileSearch.cpp`
 - [Rust MFT Reader](../../crates/uffs-mft/src/reader.rs)
 - [Rust I/O Implementation](../../crates/uffs-mft/src/io.rs)
 - [Path Resolver](../../crates/uffs-core/src/path_resolver.rs)
