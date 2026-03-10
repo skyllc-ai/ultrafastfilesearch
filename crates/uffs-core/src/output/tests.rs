@@ -1,3 +1,5 @@
+//! Tests for output column parsing and formatting behavior.
+
 use uffs_polars::{Column, DataFrame};
 
 use super::*;

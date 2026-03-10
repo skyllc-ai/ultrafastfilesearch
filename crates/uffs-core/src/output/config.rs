@@ -1,3 +1,5 @@
+//! Output configuration and row formatting helpers.
+
 use std::io::Write;
 
 use uffs_polars::{Column, DataFrame, DataType};

@@ -1,3 +1,5 @@
+//! Output column definitions and mappings.
+
 /// Available output columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputColumn {
