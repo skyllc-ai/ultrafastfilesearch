@@ -10,3 +10,11 @@ Use this bucket for benchmark reports, optimization notes, and validation result
 
 This landing page gives the performance work a stable home while older documents are incrementally normalized.
 
+## Focused cross-platform benchmark lane
+
+- Hot-path query benchmark: `cargo bench -p uffs-core --bench query`
+- Benchmark source: [`../../crates/uffs-core/benches/query.rs`](../../crates/uffs-core/benches/query.rs)
+
+Use this lane for non-Windows performance checks on query/pattern hot paths when live MFT benchmarks are unavailable.
+
+

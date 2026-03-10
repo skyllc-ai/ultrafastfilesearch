@@ -94,7 +94,13 @@ fn parse_drive_letter(input: &str) -> Result<char, String> {
 /// UFFS - Ultra Fast File Search using direct MFT reading
 #[derive(Parser)]
 #[command(name = "uffs")]
-#[command(author, version, about, long_about = None)]
+#[command(
+    author,
+    version,
+    about = "Command-line interface for UFFS (Ultra Fast File Search)",
+    long_about = "Fast NTFS search via direct Master File Table reads.\n\nSearch is the default action: pass a pattern with no subcommand to search a live volume, a saved index, or a raw MFT file. Use subcommands for index creation and offline inspection.",
+    after_help = "Examples:\n  uffs '*.txt'\n  uffs '>.*\\.log$' --drive C\n  uffs '*' --mft-file G_mft.bin --drive G\n  uffs index -d C index.parquet"
+)]
 #[command(propagate_version = true)]
 #[command(args_conflicts_with_subcommands = true)]
 #[expect(
@@ -117,7 +123,7 @@ struct Cli {
     ///   `uffs *.txt`           - All .txt files
     ///   `uffs c:/pro*`         - Files starting with "pro" on C:
     ///   `uffs ">.*\.log$"`     - REGEX for .log files
-    #[arg(value_name = "PATTERN")]
+    #[arg(value_name = "PATTERN", verbatim_doc_comment)]
     pattern: Option<String>,
 
     /// Drive letter to search (e.g., C or C:). Overrides drive in pattern.
@@ -138,7 +144,7 @@ struct Cli {
     /// save`). Use `--drive` to specify the volume letter for path
     /// resolution (default: X). Example: `uffs "*" --mft-file G_mft.bin
     /// --drive G`
-    #[arg(long, conflicts_with_all = ["index", "drives"])]
+    #[arg(long, conflicts_with_all = ["index", "drives"], verbatim_doc_comment)]
     mft_file: Option<PathBuf>,
 
     /// Show only files (exclude directories)
@@ -233,7 +239,7 @@ struct Cli {
     /// - auto: Automatically choose best path (default)
     /// - index: Force fast `MftIndex` path (simple queries only)
     /// - dataframe: Force Polars `DataFrame` path (full features)
-    #[arg(long, default_value = "auto")]
+    #[arg(long, default_value = "auto", verbatim_doc_comment)]
     query_mode: String,
 
     /// Override timezone offset for timestamp display (hours from UTC).
@@ -464,6 +470,37 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::Cli;
+
+    fn render_long_help(mut command: clap::Command) -> String {
+        let mut buffer = Vec::new();
+        command
+            .write_long_help(&mut buffer)
+            .expect("CLI help should render successfully");
+        String::from_utf8(buffer).expect("CLI help should be valid UTF-8")
+    }
+
+    #[test]
+    fn test_cli_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn test_top_level_help_includes_examples_and_default_search_guidance() {
+        let help = render_long_help(Cli::command());
+
+        assert!(help.contains("Search is the default action"));
+        assert!(help.contains("uffs '*.txt'"));
+        assert!(help.contains("uffs '>.*\\.log$' --drive C"));
+        assert!(help.contains("uffs '*' --mft-file G_mft.bin --drive G"));
+        assert!(help.contains("uffs index -d C index.parquet"));
+    }
 }
 
 #[tokio::main]

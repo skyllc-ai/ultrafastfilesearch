@@ -9,6 +9,7 @@ Canonical architecture and subsystem writeups live here.
 - [`enhanced-mft-parsing.md`](enhanced-mft-parsing.md)
 - [`paths_builder.md`](paths_builder.md)
 - [`PHASE7_PERFORMANCE_VALIDATION.md`](PHASE7_PERFORMANCE_VALIDATION.md)
+- [`unsafe-surface-review.md`](unsafe-surface-review.md)
 
 ## Investigation notes
 
