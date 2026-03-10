@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use anyhow::{Context, Result};
 use tracing::info;
 use uffs_core::output::OutputConfig;
-use uffs_core::{export_csv, export_json, export_table};
+use uffs_core::{export_json, export_table};
 
 /// Streaming output writer for multi-drive search.
 ///
@@ -118,7 +118,11 @@ impl<W: Write> StreamingWriter<W> {
         let col_names: Vec<_> = df.get_column_names();
         let columns: Vec<_> = col_names
             .iter()
-            .filter_map(|name| df.column(name).ok().map(|col| (*name, col)))
+            .filter_map(|name| {
+                df.column(name)
+                    .ok()
+                    .map(|col| (format_json_string(name.as_str()), col))
+            })
             .collect();
 
         let mut rows_written = 0;
@@ -141,9 +145,8 @@ impl<W: Write> StreamingWriter<W> {
                 if i > 0 {
                     obj.push_str(", ");
                 }
-                obj.push('"');
                 obj.push_str(col_name);
-                obj.push_str("\": ");
+                obj.push_str(": ");
                 obj.push_str(&format_json_value(col, row_idx));
             }
             obj.push('}');
@@ -169,21 +172,53 @@ impl<W: Write> StreamingWriter<W> {
     }
 }
 
+#[cfg(any(windows, test))]
+fn format_json_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\u{08}' => escaped.push_str("\\b"),
+            '\u{0C}' => escaped.push_str("\\f"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            control if control <= '\u{1F}' => push_json_unicode_escape(&mut escaped, control),
+            other => escaped.push(other),
+        }
+    }
+    escaped.push('"');
+    escaped
+}
+
+#[cfg(any(windows, test))]
+fn push_json_unicode_escape(buf: &mut String, ch: char) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let code = ch as u32;
+    buf.push_str("\\u");
+    buf.push(HEX[((code >> 12) & 0xF) as usize] as char);
+    buf.push(HEX[((code >> 8) & 0xF) as usize] as char);
+    buf.push(HEX[((code >> 4) & 0xF) as usize] as char);
+    buf.push(HEX[(code & 0xF) as usize] as char);
+}
+
 /// Format a cell value for JSON output.
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn format_json_value(col: &uffs_polars::Column, row_idx: usize) -> String {
     use uffs_polars::{AnyValue, TimeUnit};
 
     let val = col.get(row_idx);
     match val {
         Ok(AnyValue::Null) => "null".to_string(),
-        Ok(AnyValue::String(s)) => format!("\"{}\"", s.replace('"', "\\\"").replace('\n', "\\n")),
+        Ok(AnyValue::String(s)) => format_json_string(s),
         Ok(AnyValue::Boolean(b)) => if b { "true" } else { "false" }.to_string(),
         Ok(AnyValue::Datetime(ts, TimeUnit::Microseconds, _)) => {
             let secs = ts / 1_000_000;
             let micros = (ts % 1_000_000) as u32;
             if let Some(dt) = chrono::DateTime::from_timestamp(secs, micros * 1000) {
-                format!("\"{}\"", dt.format("%Y-%m-%d %H:%M:%S"))
+                format_json_string(&dt.format("%Y-%m-%d %H:%M:%S").to_string())
             } else {
                 "null".to_string()
             }
@@ -198,7 +233,7 @@ fn format_json_value(col: &uffs_polars::Column, row_idx: usize) -> String {
         Ok(AnyValue::Int64(n)) => n.to_string(),
         Ok(AnyValue::Float32(n)) => n.to_string(),
         Ok(AnyValue::Float64(n)) => n.to_string(),
-        Ok(v) => format!("\"{}\"", v.to_string().replace('"', "\\\"")),
+        Ok(v) => format_json_string(&v.to_string()),
         Err(_) => "null".to_string(),
     }
 }
@@ -436,7 +471,7 @@ pub(super) fn write_results(
     format: &str,
     out: &str,
     output_config: &OutputConfig,
-    output_targets: &[char],
+    _output_targets: &[char],
 ) -> Result<()> {
     let is_console = matches!(
         out.to_lowercase().as_str(),
@@ -447,7 +482,7 @@ pub(super) fn write_results(
         let stdout = std::io::stdout();
         match format {
             "json" => export_json(results, stdout)?,
-            "csv" => export_csv(results, stdout)?,
+            "csv" => output_config.write(results, stdout)?,
             "custom" => output_config.write(results, stdout)?,
             _ => export_table(results, stdout)?,
         }
@@ -458,25 +493,8 @@ pub(super) fn write_results(
 
         match format {
             "json" => export_json(results, &mut writer)?,
-            "csv" => export_csv(results, &mut writer)?,
+            "csv" => output_config.write(results, &mut writer)?,
             _ => output_config.write(results, &mut writer)?,
-        }
-
-        if !output_targets.is_empty() {
-            let drive_list = output_targets
-                .iter()
-                .map(|drive| format!("{drive}:"))
-                .collect::<Vec<_>>()
-                .join("|");
-            let summary_label = ['D', 'r', 'i', 'v', 'e', 's', '?']
-                .into_iter()
-                .collect::<String>();
-            write!(
-                writer,
-                "\r\n\r\n{} \t{}\t{drive_list}\r\n\r\n",
-                summary_label,
-                output_targets.len()
-            )?;
         }
         writer.flush()?;
 
@@ -484,4 +502,90 @@ pub(super) fn write_results(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use uffs_polars::{Column, DataFrame};
+
+    use super::*;
+
+    fn temp_output_path(extension: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0_u128, |duration| duration.as_nanos());
+        std::env::temp_dir().join(format!(
+            "uffs-cli-output-contract-{}-{nanos}.{extension}",
+            std::process::id()
+        ))
+    }
+
+    fn sample_df() -> Result<DataFrame> {
+        DataFrame::new_infer_height(vec![
+            Column::new("path".into(), &["C:\\Temp\\file.txt"]),
+            Column::new("name".into(), &["file.txt"]),
+        ])
+        .map_err(Into::into)
+    }
+
+    #[test]
+    fn test_format_json_value_escapes_windows_paths_and_control_chars() {
+        let column = Column::new("path".into(), &["C:\\Temp\\tab\t\"quote\"\n\r\u{0001}"]);
+
+        assert_eq!(
+            format_json_value(&column, 0),
+            "\"C:\\\\Temp\\\\tab\\t\\\"quote\\\"\\n\\r\\u0001\""
+        );
+    }
+
+    #[test]
+    fn test_write_results_csv_uses_output_config_without_footer() -> Result<()> {
+        let path = temp_output_path("csv");
+        let results = sample_df()?;
+        let output_config = OutputConfig::new()
+            .with_columns("path,name")
+            .with_separator(";")
+            .with_quote("'")
+            .with_header(false);
+
+        write_results(
+            &results,
+            "csv",
+            &path.to_string_lossy(),
+            &output_config,
+            &['C', 'D'],
+        )?;
+
+        let written = fs::read_to_string(&path)?;
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(written, "'C:\\Temp\\file.txt';'file.txt'\n");
+        Ok(())
+    }
+
+    #[test]
+    fn test_write_results_json_file_has_no_footer() -> Result<()> {
+        let path = temp_output_path("json");
+        let results = sample_df()?;
+        let output_config = OutputConfig::new().with_columns("path,name");
+
+        write_results(
+            &results,
+            "json",
+            &path.to_string_lossy(),
+            &output_config,
+            &['C', 'D'],
+        )?;
+
+        let written = fs::read_to_string(&path)?;
+        let _ = fs::remove_file(&path);
+
+        assert!(!written.contains("Drives?"));
+        assert!(written.contains(r#""C:\\Temp\\file.txt""#));
+        Ok(())
+    }
 }
