@@ -1,3 +1,5 @@
+//! Windows privilege, path, and drive-classification helpers.
+
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
 

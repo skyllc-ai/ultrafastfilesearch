@@ -1,3 +1,5 @@
+//! Retrieval-pointer helpers for locating MFT extents on disk.
+
 use std::mem::size_of;
 
 use windows::Win32::Foundation::HANDLE;

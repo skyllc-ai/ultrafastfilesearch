@@ -1,3 +1,5 @@
+//! Bitmap helpers for interpreting the `$MFT::$BITMAP` allocation stream.
+
 /// Bitmap indicating which MFT records are in use.
 ///
 /// The `$MFT::$BITMAP` stream contains one bit per MFT record.

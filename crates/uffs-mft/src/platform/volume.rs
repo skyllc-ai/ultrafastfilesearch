@@ -1,3 +1,5 @@
+//! Windows NTFS volume handle and metadata access helpers.
+
 use std::mem::size_of;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
