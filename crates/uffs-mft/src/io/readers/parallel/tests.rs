@@ -1,3 +1,5 @@
+//! Tests for parallel reader configuration helpers.
+
 use super::*;
 
 #[test]
