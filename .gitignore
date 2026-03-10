@@ -27,7 +27,9 @@ Cargo.lock
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
 
-# Reference code (legacy C++ UFFS, boost, WTL, etc.)
+# Local-only legacy reference trees (private C++ UFFS, boost, WTL, etc.)
+# Prefer `old_cpp_reference/` for the external private legacy tree; do not push it.
+old_cpp_reference/
 reference/
 docs/reference/
 

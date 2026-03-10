@@ -35,7 +35,7 @@ Before starting, ensure you have:
 
 2. **Reference Data**:
    - C++ UFFS output (Parquet or CSV) for comparison
-   - Run: `reference/uffs/bin/UltraFastFileSearch.exe` to generate baseline
+   - Run: `old_cpp_reference/uffs/bin/UltraFastFileSearch.exe` to generate baseline (local-only, never pushed)
 
 3. **Understanding**:
    - Read `docs/architecture/RUST_VS_CPP_ANALYSIS.md` thoroughly
@@ -295,7 +295,7 @@ Rust doesn't do this, causing path resolution to fail with `<unknown:XXXXXX>`.
 
 **Steps**:
 
-1. Open `reference/uffs/UltraFastFileSearch-code/UltraFastFileSearch.cpp`
+1. Open `old_cpp_reference/uffs/UltraFastFileSearch-code/UltraFastFileSearch.cpp`
 
 2. Study the `at()` method (lines 4016-4039):
 
@@ -1018,7 +1018,7 @@ to child-to-parent direction only.
 
 **Steps**:
 
-1. Open `reference/uffs/UltraFastFileSearch-code/UltraFastFileSearch.cpp`
+1. Open `old_cpp_reference/uffs/UltraFastFileSearch-code/UltraFastFileSearch.cpp`
 
 2. Study the `ChildInfo` structure (around line 3950):
 
@@ -1438,7 +1438,7 @@ if __name__ == "__main__":
 
 1. Generate C++ baseline:
 ```bash
-cd reference/uffs/bin
+cd old_cpp_reference/uffs/bin
 ./UltraFastFileSearch.exe --drive=C --output=cpp_baseline.parquet
 ```
 

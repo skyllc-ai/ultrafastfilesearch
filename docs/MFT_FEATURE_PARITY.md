@@ -1,7 +1,7 @@
 # MFT Feature Parity: Reference baseline vs Rust implementation
 
 > **Document Purpose:** Detailed gap analysis and implementation roadmap to achieve 100% feature parity
-> between the reference baseline (`reference/uffs/UltraFastFileSearch-code/file.cpp`) and the Rust
+> between the reference baseline (`old_cpp_reference/uffs/UltraFastFileSearch-code/file.cpp`, local-only and never pushed) and the Rust
 > implementation (`crates/uffs-mft/`).
 
 ---
@@ -133,7 +133,7 @@ if !header.is_base_record() {
 
 **Reference Behavior:**
 ```cpp
-// reference/uffs/file.cpp:2371-2372
+// old_cpp_reference/uffs/file.cpp:2371-2372
 unsigned int const frs_base = frsh->BaseFileRecordSegment 
     ? static_cast<unsigned int>(frsh->BaseFileRecordSegment) : frs;
 Records::iterator base_record = this->at(frs_base);
@@ -187,7 +187,7 @@ if !is_better_name && !result.name.is_empty() {
 
 **Reference Behavior:**
 ```cpp
-// reference/uffs/file.cpp:2394-2419
+// old_cpp_reference/uffs/file.cpp:2394-2419
 if (fn->Flags != 0x02 /* FILE_NAME_DOS */) {
     // Push existing first_name to nameinfos list
     if (LinkInfos::value_type *const si = this->nameinfo(&*base_record)) {
@@ -248,7 +248,7 @@ Some(AttributeType::Data) => {
 
 **Reference Behavior:**
 ```cpp
-// reference/uffs/file.cpp:2464-2512
+// old_cpp_reference/uffs/file.cpp:2464-2512
 StreamInfo *info = NULL;
 // ... creates StreamInfo for EACH $DATA attribute
 info->type_name_id = ah->Type >> 4;
@@ -303,7 +303,7 @@ result.size = data_size as u64;
 
 **Reference Behavior:**
 ```cpp
-// reference/uffs/file.cpp:2517-2525
+// old_cpp_reference/uffs/file.cpp:2517-2525
 info->allocated += ah->IsNonResident
     ? ah->NonResident.CompressionUnit
         ? static_cast<file_size_type>(ah->NonResident.CompressedSize)
@@ -352,7 +352,7 @@ result.flags = (si.file_attributes & 0xFFFF) as u16;
 
 **Reference Behavior:**
 ```cpp
-// reference/uffs/file.cpp:1920-1935 (StandardInfo struct)
+// old_cpp_reference/uffs/file.cpp:1920-1935 (StandardInfo struct)
 struct StandardInfo {
     unsigned long long created, written, accessed : 0x40 - 6;
     is_readonly : 1, is_archive : 1, is_system : 1, is_hidden : 1,
@@ -407,7 +407,7 @@ struct StandardInfo {
 
 **Reference Behavior:**
 ```cpp
-// reference/uffs/file.cpp:2407-2417
+// old_cpp_reference/uffs/file.cpp:2407-2417
 if (frs_parent != frs_base) {
     Records::iterator const parent = this->at(frs_parent, &base_record);
     ChildInfo *const child_info = &this->childinfos.back();
@@ -839,7 +839,7 @@ The implementation is complete when:
 
 ## References
 
-- **Reference baseline:** `reference/uffs/UltraFastFileSearch-code/file.cpp`
+- **Reference baseline:** `old_cpp_reference/uffs/UltraFastFileSearch-code/file.cpp` (local-only, never pushed)
   - Lines 939-1193: NTFS structures
   - Lines 1884-2090: NtfsIndex data structures
   - Lines 2370-2530: Record parsing logic

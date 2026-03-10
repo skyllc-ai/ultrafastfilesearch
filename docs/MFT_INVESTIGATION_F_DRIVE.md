@@ -21,17 +21,17 @@ We decided to treat this as a forensic investigation of the **MFT processing pip
 
 ### 1.3 Where to find more background and reference implementations
 
-This document focuses on the *Rust* side investigation, but it sits in the context of a mature, working legacy implementation. For deeper background and a known‑good reference, use:
+This document focuses on the *Rust* side investigation, but it sits in the context of a mature, working legacy implementation. For deeper background and a known‑good reference, use the local-only private legacy tree (kept out of commits and preferably named `old_cpp_reference/`):
 
 - **Architecture & design docs (legacy implementation):**
-  - `reference/Ultra-Fast-File-Search/docs/architecture`
+  - `old_cpp_reference/Ultra-Fast-File-Search/docs/architecture`
   - Contains exhaustive documentation for the original Ultra-Fast-File-Search, including how the legacy implementation handles:
     - `$MFT` parsing and extent mapping.
     - Path resolution and parent/child relationships.
     - Performance characteristics and design tradeoffs.
 
 - **Reference C++ source code:**
-  - `reference/Ultra-Fast-File-Search/UltraFastFileSearch-code`
+  - `old_cpp_reference/Ultra-Fast-File-Search/UltraFastFileSearch-code`
   - This is the **ground truth implementation** we compare against when validating the Rust port. When in doubt about intended behavior, consult this tree to see how the legacy version:
     - Opens NTFS volumes and enumerates `$MFT`.
     - Maps VCN/LCN extents.
