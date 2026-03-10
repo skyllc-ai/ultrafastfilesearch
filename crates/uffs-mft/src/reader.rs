@@ -1,6 +1,9 @@
 //! MFT Reader implementation.
 //!
 //! This module provides the main entry point for reading NTFS MFT data.
+//! Exception: This module exceeds 800 lines because reader configuration,
+//! orchestration, and benchmarks still share one audited surface; a split is
+//! deferred outside Wave 3C.
 
 #[cfg(windows)]
 use std::sync::Arc;
@@ -83,8 +86,9 @@ pub struct MftReader {
     use_bitmap: bool,
     /// Whether to expand hard links to separate rows.
     ///
-    /// - `true` (default): Each hard link becomes a separate row, matching C++
-    ///   behavior and user expectations (what they see in Explorer).
+    /// - `true` (default): Each hard link becomes a separate row, matching the
+    ///   legacy output behavior and user expectations (what they see in
+    ///   Explorer).
     /// - `false`: One row per unique FRS (power user mode, smaller output).
     expand_links: bool,
     /// Whether to add placeholder records for missing parent directories.
@@ -95,7 +99,8 @@ pub struct MftReader {
     ///
     /// # Performance Optimization (2026-01-23)
     ///
-    /// C++ team doesn't add placeholders upfront - they resolve paths lazily.
+    /// The legacy implementation resolved placeholders lazily instead of adding
+    /// them upfront.
     /// Disabling this saves ~15% of CPU time during indexing.
     add_placeholders: bool,
     /// Number of concurrent I/O operations (reads in flight).
@@ -162,7 +167,7 @@ impl MftReader {
             volume: volume.to_ascii_uppercase(),
             handle,
             mode: MftReadMode::Auto,
-            // Enable extension merging by default for C++ parity.
+            // Enable extension merging by default for baseline-compatible output.
             // Extension records contain additional attributes for files with
             // many hard links or alternate data streams. Without merging,
             // ~1% of files may have incomplete attribute information.
@@ -170,7 +175,7 @@ impl MftReader {
             // more important for file search accuracy.
             merge_extensions: true,
             use_bitmap: true,       // Use bitmap optimization by default
-            expand_links: true,     // Expand hard links by default (C++ parity)
+            expand_links: true,     // Expand hard links by default for baseline-compatible output
             add_placeholders: true, // Add placeholders by default for path resolution
             concurrency: None,      // Use default (2 for HDD)
             io_size: None,          // Use default (1MB)
@@ -256,9 +261,9 @@ impl MftReader {
     /// Sets whether to expand hard links to separate rows.
     ///
     /// When enabled (default), each hard link becomes a separate row in the
-    /// output. This matches C++ behavior and user expectations - if a file
-    /// has 3 hard links, users see 3 entries in Explorer, so they expect
-    /// 3 entries in search results.
+    /// output. This matches the legacy output behavior and user expectations -
+    /// if a file has 3 hard links, users see 3 entries in Explorer, so they
+    /// expect 3 entries in search results.
     ///
     /// When disabled (`--unique` mode), only one row per unique FRS is output.
     /// This is useful for power users who want to count unique files, not
@@ -292,8 +297,9 @@ impl MftReader {
     ///
     /// # Performance Optimization (2026-01-23)
     ///
-    /// C++ team doesn't add placeholders upfront - they resolve paths lazily.
-    /// Disabling this matches C++ behavior and saves ~15% of CPU time.
+    /// The legacy implementation resolved placeholders lazily instead of adding
+    /// them upfront. Disabling this matches the legacy output behavior and
+    /// saves ~15% of CPU time.
     ///
     /// # Arguments
     ///
@@ -992,7 +998,7 @@ impl MftReader {
     ///
     /// This implementation uses the high-performance parallel reader with:
     /// 1. Extent-aware reading for fragmented MFTs
-    /// 2. Bitmap-based cluster skipping (like C++ implementation)
+    /// 2. Bitmap-based cluster skipping (matching the historical baseline)
     /// 3. Parallel record processing using Rayon
     /// 4. Large batch I/O (4-8 MB) for reduced syscall overhead
     /// 5. Drive-type aware tuning (SSD vs HDD)
@@ -1076,9 +1082,9 @@ impl MftReader {
         }
 
         // M2 9.1-9.3: Select reader based on mode
-        // C++ team insight: "read all then parse" is faster than pipelining even on HDD
-        // because: no context switching, CPU cache stays hot, no channel overhead,
-        // OS can optimize continuous sequential reads better.
+        // Historical benchmark insight: "read all then parse" is faster than pipelining
+        // even on HDD because: no context switching, CPU cache stays hot, no
+        // channel overhead, OS can optimize continuous sequential reads better.
         // For read_all() (returns Vec<ParsedRecord>), use SlidingIocp for IOCP-based
         // I/O.
         let effective_mode = dataframe_effective_mode(self.mode, drive_type);
@@ -1439,8 +1445,8 @@ impl MftReader {
         };
 
         // Add placeholder records for missing parent directories.
-        // This matches C++ behavior where `at()` creates placeholder records
-        // for any referenced FRS that hasn't been seen yet.
+        // This matches the legacy output behavior where `at()` creates placeholder
+        // records for any referenced FRS that hasn't been seen yet.
         // Can be disabled with `with_add_placeholders(false)` for ~15% speedup.
         let mut parsed_records = parsed_records;
         if self.add_placeholders {
@@ -1783,9 +1789,9 @@ impl MftReader {
         }
 
         // Select reader based on mode
-        // C++ team insight: "read all then parse" is faster than pipelining even on HDD
-        // because: no context switching, CPU cache stays hot, no channel overhead,
-        // OS can optimize continuous sequential reads better.
+        // Historical benchmark insight: "read all then parse" is faster than pipelining
+        // even on HDD because: no context switching, CPU cache stays hot, no
+        // channel overhead, OS can optimize continuous sequential reads better.
         // For lean index (MftIndex), use SlidingIocpInline for NVMe/SSD - this uses
         // IOCP with multiple reads in flight and inline parsing, matching C++
         // performance.
@@ -2423,8 +2429,8 @@ impl MftReader {
         )?;
 
         // Add placeholder records for missing parent directories.
-        // This matches C++ behavior where `at()` creates placeholder records
-        // for any referenced FRS that hasn't been seen yet.
+        // This matches the legacy output behavior where `at()` creates placeholder
+        // records for any referenced FRS that hasn't been seen yet.
         // Can be disabled with `with_add_placeholders(false)` for ~15% speedup.
         if self.add_placeholders {
             let placeholders_added = parsed_columns.add_missing_parent_placeholders();
@@ -2665,7 +2671,8 @@ impl MftReader {
         DataFrame::new_infer_height(columns).map_err(MftError::from)
     }
 
-    /// Builds a `DataFrame` with full C++ parity schema (23 columns).
+    /// Builds a `DataFrame` with the full baseline-compatible schema (23
+    /// columns).
     #[cfg(windows)]
     #[expect(
         clippy::too_many_arguments,
@@ -2743,13 +2750,13 @@ impl MftReader {
             Series::new("is_offline".into(), is_offline_vec).into_column(),
             Series::new("is_not_indexed".into(), is_not_indexed_vec).into_column(),
             Series::new("is_temporary".into(), is_temporary_vec).into_column(),
-            // Additional flags for C++ parity
+            // Additional flags for baseline-compatible output
             Series::new("is_integrity_stream".into(), is_integrity_stream_vec).into_column(),
             Series::new("is_no_scrub_data".into(), is_no_scrub_data_vec).into_column(),
             Series::new("is_pinned".into(), is_pinned_vec).into_column(),
             Series::new("is_unpinned".into(), is_unpinned_vec).into_column(),
             Series::new("is_virtual".into(), is_virtual_vec).into_column(),
-            // Raw attribute flags (combined value for C++ parity)
+            // Raw attribute flags (combined value for baseline-compatible output)
             Series::new("flags".into(), flags_vec).into_column(),
         ];
 
@@ -2812,7 +2819,7 @@ impl MftReader {
             Series::new("is_pinned".into(), columns.is_pinned).into_column(),
             Series::new("is_unpinned".into(), columns.is_unpinned).into_column(),
             Series::new("is_virtual".into(), columns.is_virtual).into_column(),
-            // Raw attribute flags (combined value for C++ parity)
+            // Raw attribute flags (combined value for baseline-compatible output)
             Series::new("flags".into(), columns.flags).into_column(),
         ];
 
@@ -3932,7 +3939,7 @@ mod tests {
             Err(e) => panic!("Unexpected error: {:?}", e),
         };
 
-        // These defaults are set for optimal performance and C++ parity
+        // These defaults are set for optimal performance and baseline-compatible output
         assert!(reader.use_bitmap, "use_bitmap should default to true");
         assert!(reader.expand_links, "expand_links should default to true");
         assert!(

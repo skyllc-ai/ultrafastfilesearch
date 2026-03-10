@@ -1,8 +1,8 @@
-//! Deep comparison of UFFS C++ vs Rust outputs using Polars.
+//! Deep comparison of UFFS reference-output vs Rust outputs using Polars.
 //!
-//! This is a development/debugging tool for comparing C++ and Rust UFFS
-//! outputs. It identifies structural differences, missing records, and
-//! attribute mismatches.
+//! This is a development/debugging tool for comparing the reference output and
+//! Rust UFFS outputs. It identifies structural differences, missing records,
+//! and attribute mismatches.
 //!
 //! # Usage
 //!
@@ -13,7 +13,7 @@
 //! # Output
 //!
 //! The tool prints analysis results to stdout, including:
-//! - Column comparison between C++ and Rust outputs
+//! - Column comparison between the reference output and Rust output
 //! - Path matching statistics
 //! - Missing path analysis by drive and parent directory
 //! - Pattern analysis for system files and unknown paths
@@ -69,7 +69,7 @@ use uffs_polars::{Column, CsvReadOptions, DataFrame, IntoSeries, SerReader, Stri
 /// # Arguments
 ///
 /// * `path` - Path to the CSV file
-/// * `name` - Display name for logging (e.g., "C++" or "Rust")
+/// * `name` - Display name for logging (e.g., "reference" or "Rust")
 ///
 /// # Errors
 ///
@@ -152,7 +152,7 @@ fn extract_ads_name(path: &str) -> Option<&str> {
 
 /// Entry point for the UFFS diff analysis tool.
 ///
-/// Compares C++ and Rust UFFS outputs to identify differences in:
+/// Compares the reference output and Rust output to identify differences in:
 /// - Column schemas
 /// - Path matching
 /// - Missing files by drive and parent directory
@@ -164,11 +164,11 @@ fn extract_ads_name(path: &str) -> Option<&str> {
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
-        eprintln!("Usage: analyze_diff <cpp.txt> <rust.txt>");
+        eprintln!("Usage: analyze_diff <reference.txt> <rust.txt>");
         std::process::exit(1);
     }
 
-    let cpp_path = Path::new(&args[1]);
+    let reference_path = Path::new(&args[1]);
     let rust_path = Path::new(&args[2]);
 
     println!("{}", "=".repeat(70));
@@ -176,31 +176,31 @@ fn main() -> Result<()> {
     println!("{}", "=".repeat(70));
 
     // Load data
-    let cpp = load_csv(cpp_path, "C++")?;
+    let reference = load_csv(reference_path, "reference")?;
     let rust = load_csv(rust_path, "Rust")?;
 
     println!("\n{}", "=".repeat(70));
     println!("STEP 1: Column Comparison");
     println!("{}", "=".repeat(70));
 
-    let cpp_cols: HashSet<_> = cpp.get_column_names().into_iter().collect();
+    let reference_cols: HashSet<_> = reference.get_column_names().into_iter().collect();
     let rust_cols: HashSet<_> = rust.get_column_names().into_iter().collect();
 
-    let only_cpp: Vec<_> = cpp_cols.difference(&rust_cols).collect();
-    let only_rust: Vec<_> = rust_cols.difference(&cpp_cols).collect();
-    let common: Vec<_> = cpp_cols.intersection(&rust_cols).collect();
+    let only_reference: Vec<_> = reference_cols.difference(&rust_cols).collect();
+    let only_rust: Vec<_> = rust_cols.difference(&reference_cols).collect();
+    let common: Vec<_> = reference_cols.intersection(&rust_cols).collect();
 
     println!(
-        "C++ columns ({}): {:?}",
-        cpp_cols.len(),
-        cpp.get_column_names()
+        "Reference columns ({}): {:?}",
+        reference_cols.len(),
+        reference.get_column_names()
     );
     println!(
         "Rust columns ({}): {:?}",
         rust_cols.len(),
         rust.get_column_names()
     );
-    println!("Only in C++: {only_cpp:?}");
+    println!("Only in reference: {only_reference:?}");
     println!("Only in Rust: {only_rust:?}");
     println!("Common columns ({}): {:?}", common.len(), common);
 
@@ -209,12 +209,12 @@ fn main() -> Result<()> {
     println!("{}", "=".repeat(70));
 
     // Normalize paths
-    let cpp = normalize_paths(&cpp)?;
+    let reference = normalize_paths(&reference)?;
     let rust = normalize_paths(&rust)?;
 
     // Sample paths
-    println!("\nSample C++ paths:");
-    println!("{:?}", cpp.column("path_norm")?.head(Some(5)));
+    println!("\nSample reference paths:");
+    println!("{:?}", reference.column("path_norm")?.head(Some(5)));
     println!("\nSample Rust paths:");
     println!("{:?}", rust.column("path_norm")?.head(Some(5)));
 
@@ -223,7 +223,7 @@ fn main() -> Result<()> {
     println!("{}", "=".repeat(70));
 
     // Extract paths into sets
-    let cpp_paths: HashSet<String> = cpp
+    let reference_paths: HashSet<String> = reference
         .column("path_norm")?
         .str()?
         .into_iter()
@@ -237,18 +237,18 @@ fn main() -> Result<()> {
         .filter_map(|opt_str: Option<&str>| opt_str.map(String::from))
         .collect();
 
-    println!("C++ unique paths: {:?}", cpp_paths.len());
+    println!("Reference unique paths: {:?}", reference_paths.len());
     println!("Rust unique paths: {:?}", rust_paths.len());
 
-    let common_paths: HashSet<_> = cpp_paths.intersection(&rust_paths).collect();
-    let cpp_only: Vec<_> = cpp_paths.difference(&rust_paths).collect();
-    let rust_only: Vec<_> = rust_paths.difference(&cpp_paths).collect();
+    let common_paths: HashSet<_> = reference_paths.intersection(&rust_paths).collect();
+    let reference_only: Vec<_> = reference_paths.difference(&rust_paths).collect();
+    let rust_only: Vec<_> = rust_paths.difference(&reference_paths).collect();
 
     println!("Exact matches: {:?}", common_paths.len());
-    println!("C++ only: {:?}", cpp_only.len());
+    println!("Reference only: {:?}", reference_only.len());
     println!("Rust only: {:?}", rust_only.len());
 
-    let match_rate = 100.0 * common_paths.len() as f64 / cpp_paths.len() as f64;
+    let match_rate = 100.0 * common_paths.len() as f64 / reference_paths.len() as f64;
     println!("Match rate: {match_rate:.2}%");
 
     println!("\n{}", "=".repeat(70));
@@ -256,13 +256,13 @@ fn main() -> Result<()> {
     println!("{}", "=".repeat(70));
 
     // Sample missing paths
-    println!("\nSample paths in C++ but NOT in Rust (first 20):");
-    for (idx, path) in cpp_only.iter().take(20).enumerate() {
+    println!("\nSample paths in the reference output but NOT in Rust (first 20):");
+    for (idx, path) in reference_only.iter().take(20).enumerate() {
         println!("  {}: {path}", idx + 1);
     }
 
     if !rust_only.is_empty() {
-        println!("\nSample paths in Rust but NOT in C++ (first 20):");
+        println!("\nSample paths in Rust but NOT in the reference output (first 20):");
         for (idx, path) in rust_only.iter().take(20).enumerate() {
             println!("  {}: {path}", idx + 1);
         }
@@ -271,7 +271,7 @@ fn main() -> Result<()> {
     // Analyze by drive
     println!("\nMissing paths by drive:");
     let mut drive_counts: HashMap<char, usize> = HashMap::new();
-    for path in &cpp_only {
+    for path in &reference_only {
         if let Some(drive) = extract_drive(path) {
             *drive_counts.entry(drive).or_insert(0) += 1;
         }
@@ -287,7 +287,7 @@ fn main() -> Result<()> {
     println!("{}", "=".repeat(70));
 
     // Check which parent directories are missing
-    let cpp_parents: HashSet<String> = cpp_paths
+    let reference_parents: HashSet<String> = reference_paths
         .iter()
         .filter_map(|path| extract_parent(path).map(String::from))
         .collect();
@@ -296,15 +296,15 @@ fn main() -> Result<()> {
         .filter_map(|path| extract_parent(path).map(String::from))
         .collect();
 
-    let missing_parents: Vec<_> = cpp_parents.difference(&rust_parents).collect();
+    let missing_parents: Vec<_> = reference_parents.difference(&rust_parents).collect();
     println!(
-        "Parent dirs in C++ but not Rust: {:?}",
+        "Parent dirs in reference output but not Rust: {:?}",
         missing_parents.len()
     );
 
     // Top missing parent directories by frequency
     let mut parent_freq: HashMap<&str, usize> = HashMap::new();
-    for path in &cpp_only {
+    for path in &reference_only {
         if let Some(parent) = extract_parent(path) {
             *parent_freq.entry(parent).or_insert(0) += 1;
         }
@@ -322,7 +322,7 @@ fn main() -> Result<()> {
     println!("{}", "=".repeat(70));
 
     // Check for $-prefixed (system) files
-    let system_files_count = cpp_only
+    let system_files_count = reference_only
         .iter()
         .filter(|path| {
             path.split('/')
@@ -346,18 +346,24 @@ fn main() -> Result<()> {
     }
 
     // Check for very short paths (root-level issues)
-    let cpp_short_count = cpp_paths.iter().filter(|path| path.len() < 10).count();
+    let reference_short_count = reference_paths
+        .iter()
+        .filter(|path| path.len() < 10)
+        .count();
     let rust_short_count = rust_paths.iter().filter(|path| path.len() < 10).count();
-    println!("\nC++ paths < 10 chars: {cpp_short_count}");
+    println!("\nReference paths < 10 chars: {reference_short_count}");
     println!("Rust paths < 10 chars: {rust_short_count}");
 
     // Check for paths with "." as filename (directory entries)
-    let cpp_dot_count = cpp_paths.iter().filter(|path| path.ends_with("/.")).count();
+    let reference_dot_count = reference_paths
+        .iter()
+        .filter(|path| path.ends_with("/."))
+        .count();
     let rust_dot_count = rust_paths
         .iter()
         .filter(|path| path.ends_with("/."))
         .count();
-    println!("\nC++ paths ending with '/.' (dir entries): {cpp_dot_count}");
+    println!("\nReference paths ending with '/.' (dir entries): {reference_dot_count}");
     println!("Rust paths ending with '/.' (dir entries): {rust_dot_count}");
 
     println!("\n{}", "=".repeat(70));
@@ -365,20 +371,20 @@ fn main() -> Result<()> {
     println!("{}", "=".repeat(70));
 
     // Count ADS entries in each set
-    let cpp_ads_count = cpp_paths.iter().filter(|p| is_ads_path(p)).count();
+    let reference_ads_count = reference_paths.iter().filter(|p| is_ads_path(p)).count();
     let rust_ads_count = rust_paths.iter().filter(|p| is_ads_path(p)).count();
-    let cpp_only_ads_count = cpp_only.iter().filter(|p| is_ads_path(p)).count();
+    let reference_only_ads_count = reference_only.iter().filter(|p| is_ads_path(p)).count();
     let rust_only_ads_count = rust_only.iter().filter(|p| is_ads_path(p)).count();
 
-    println!("ADS entries in C++: {cpp_ads_count}");
+    println!("ADS entries in reference output: {reference_ads_count}");
     println!("ADS entries in Rust: {rust_ads_count}");
-    println!("ADS entries in C++ only (missing from Rust): {cpp_only_ads_count}");
+    println!("ADS entries only in reference output: {reference_only_ads_count}");
     println!("ADS entries in Rust only (extra): {rust_only_ads_count}");
 
     // Sample ADS entries
-    if cpp_ads_count > 0 {
-        println!("\nSample ADS entries from C++ (first 10):");
-        for (idx, path) in cpp_paths
+    if reference_ads_count > 0 {
+        println!("\nSample ADS entries from the reference output (first 10):");
+        for (idx, path) in reference_paths
             .iter()
             .filter(|p| is_ads_path(p))
             .take(10)
@@ -390,7 +396,7 @@ fn main() -> Result<()> {
 
     // Analyze ADS stream names
     let mut ads_name_freq: HashMap<&str, usize> = HashMap::new();
-    for path in cpp_paths.iter().filter(|p| is_ads_path(p)) {
+    for path in reference_paths.iter().filter(|p| is_ads_path(p)) {
         if let Some(name) = extract_ads_name(path) {
             *ads_name_freq.entry(name).or_insert(0) += 1;
         }
@@ -398,7 +404,7 @@ fn main() -> Result<()> {
     if !ads_name_freq.is_empty() {
         let mut ads_names: Vec<_> = ads_name_freq.iter().collect();
         ads_names.sort_by_key(|(_, cnt)| Reverse(*cnt));
-        println!("\nTop 10 ADS stream names in C++:");
+        println!("\nTop 10 ADS stream names in the reference output:");
         for (name, count) in ads_names.iter().take(10) {
             println!("  {count:>8}: {name}");
         }
@@ -409,36 +415,39 @@ fn main() -> Result<()> {
     println!("{}", "=".repeat(70));
 
     // Filter out ADS entries for a "base files only" comparison
-    let cpp_no_ads: HashSet<_> = cpp_paths.iter().filter(|p| !is_ads_path(p)).collect();
+    let reference_no_ads: HashSet<_> = reference_paths.iter().filter(|p| !is_ads_path(p)).collect();
     let rust_no_ads: HashSet<_> = rust_paths.iter().filter(|p| !is_ads_path(p)).collect();
 
-    let common_no_ads: HashSet<_> = cpp_no_ads.intersection(&rust_no_ads).collect();
-    let cpp_only_no_ads: Vec<_> = cpp_no_ads.difference(&rust_no_ads).collect();
-    let rust_only_no_ads: Vec<_> = rust_no_ads.difference(&cpp_no_ads).collect();
+    let common_no_ads: HashSet<_> = reference_no_ads.intersection(&rust_no_ads).collect();
+    let reference_only_no_ads: Vec<_> = reference_no_ads.difference(&rust_no_ads).collect();
+    let rust_only_no_ads: Vec<_> = rust_no_ads.difference(&reference_no_ads).collect();
 
-    let match_rate_no_ads = if cpp_no_ads.is_empty() {
+    let match_rate_no_ads = if reference_no_ads.is_empty() {
         0.0
     } else {
-        100.0 * common_no_ads.len() as f64 / cpp_no_ads.len() as f64
+        100.0 * common_no_ads.len() as f64 / reference_no_ads.len() as f64
     };
 
     println!("\nExcluding ADS entries:");
-    println!("  C++ base files: {}", cpp_no_ads.len());
+    println!("  Reference base files: {}", reference_no_ads.len());
     println!("  Rust base files: {}", rust_no_ads.len());
     println!("  Exact matches: {}", common_no_ads.len());
-    println!("  C++ only (missing from Rust): {}", cpp_only_no_ads.len());
+    println!(
+        "  Reference only (missing from Rust): {}",
+        reference_only_no_ads.len()
+    );
     println!("  Rust only (extra): {}", rust_only_no_ads.len());
     println!("  Match rate (no ADS): {match_rate_no_ads:.2}%");
 
-    if !cpp_only_no_ads.is_empty() {
-        println!("\nSample base files in C++ but NOT in Rust (first 20):");
-        for (idx, path) in cpp_only_no_ads.iter().take(20).enumerate() {
+    if !reference_only_no_ads.is_empty() {
+        println!("\nSample base files in the reference output but NOT in Rust (first 20):");
+        for (idx, path) in reference_only_no_ads.iter().take(20).enumerate() {
             println!("  {}: {path}", idx + 1);
         }
     }
 
     if !rust_only_no_ads.is_empty() {
-        println!("\nSample base files in Rust but NOT in C++ (first 20):");
+        println!("\nSample base files in Rust but NOT in the reference output (first 20):");
         for (idx, path) in rust_only_no_ads.iter().take(20).enumerate() {
             println!("  {}: {path}", idx + 1);
         }
@@ -448,29 +457,32 @@ fn main() -> Result<()> {
     println!("SUMMARY & ROOT CAUSE HYPOTHESIS");
     println!("{}", "=".repeat(70));
 
-    let missing_pct = 100.0 * cpp_only.len() as f64 / cpp_paths.len() as f64;
-    let missing_no_ads_pct = if cpp_no_ads.is_empty() {
+    let missing_pct = 100.0 * reference_only.len() as f64 / reference_paths.len() as f64;
+    let missing_no_ads_pct = if reference_no_ads.is_empty() {
         0.0
     } else {
-        100.0 * cpp_only_no_ads.len() as f64 / cpp_no_ads.len() as f64
+        100.0 * reference_only_no_ads.len() as f64 / reference_no_ads.len() as f64
     };
 
     println!("\nAnalysis Complete (ALL paths):");
-    println!("  - C++ found {} unique paths", cpp_paths.len());
+    println!(
+        "  - Reference output found {} unique paths",
+        reference_paths.len()
+    );
     println!("  - Rust found {} unique paths", rust_paths.len());
     println!(
         "  - Missing from Rust: {} ({missing_pct:.1}%)",
-        cpp_only.len(),
+        reference_only.len(),
     );
     println!("  - Extra in Rust: {}", rust_only.len());
     println!("  - Match rate: {match_rate:.2}%");
 
     println!("\nAnalysis Complete (EXCLUDING ADS):");
-    println!("  - C++ base files: {}", cpp_no_ads.len());
+    println!("  - Reference base files: {}", reference_no_ads.len());
     println!("  - Rust base files: {}", rust_no_ads.len());
     println!(
         "  - Missing from Rust: {} ({missing_no_ads_pct:.1}%)",
-        cpp_only_no_ads.len(),
+        reference_only_no_ads.len(),
     );
     println!("  - Extra in Rust: {}", rust_only_no_ads.len());
     println!("  - Match rate (no ADS): {match_rate_no_ads:.2}%");
@@ -480,9 +492,9 @@ fn main() -> Result<()> {
         clippy::cast_possible_wrap,
         reason = "ADS counts are small enough that i64 wrapping cannot occur"
     )]
-    let ads_diff = cpp_ads_count as i64 - rust_ads_count as i64;
+    let ads_diff = reference_ads_count as i64 - rust_ads_count as i64;
     println!(
-        "  1. ADS entries: {cpp_ads_count} in C++, {rust_ads_count} in Rust (diff: {ads_diff})"
+        "  1. ADS entries: {reference_ads_count} in reference output, {rust_ads_count} in Rust (diff: {ads_diff})"
     );
     println!(
         "  2. <unknown> paths: {} paths have unresolved parents",
@@ -493,7 +505,9 @@ fn main() -> Result<()> {
         missing_parents.len()
     );
     println!("  4. System files ($): {system_files_count} $-prefixed files missing");
-    println!("  5. Directory entries (.): C++ has {cpp_dot_count}, Rust has {rust_dot_count}");
+    println!(
+        "  5. Directory entries (.): reference output has {reference_dot_count}, Rust has {rust_dot_count}"
+    );
 
     Ok(())
 }

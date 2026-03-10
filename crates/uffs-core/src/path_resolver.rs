@@ -278,7 +278,7 @@ impl FastPathResolver {
             }
         }
 
-        // Build final path (uppercase drive letter for C++ parity)
+        // Build final path (uppercase drive letter for legacy-output parity)
         path_buf.push(self.volume.to_ascii_uppercase());
         path_buf.push_str(":\\");
 
@@ -399,7 +399,8 @@ impl FastPathResolver {
         }
     }
 
-    /// Add a "path" column with trailing slashes for directories (C++ parity).
+    /// Add a "path" column with trailing slashes for directories (legacy-output
+    /// parity).
     ///
     /// Builds paths correctly for hard links by using `parent_frs` + `name`
     /// instead of just resolving `frs`. Each hard link gets its correct

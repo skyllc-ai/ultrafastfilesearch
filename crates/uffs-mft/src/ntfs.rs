@@ -761,7 +761,7 @@ pub const fn filetime_to_unix_micros(filetime: i64) -> i64 {
     // Difference is 11644473600 seconds = 116444736000000000 * 100ns
     const FILETIME_UNIX_DIFF: i64 = 116_444_736_000_000_000;
 
-    // C++ parity: allow negative Unix timestamps (pre-1970 dates).
+    // legacy-output parity: allow negative Unix timestamps (pre-1970 dates).
     // C++ uses FileTimeToLocalFileTime() which handles all valid FILETIME values.
     // Only clamp for filetime == 0 (unset/null timestamp).
     if filetime == 0 {
@@ -1208,7 +1208,7 @@ pub fn extract_data_runs_from_attribute(attr_data: &[u8]) -> Vec<DataRun> {
 }
 
 // ============================================================================
-// High-Level Data Structures (for C++ parity)
+// High-Level Data Structures (for legacy-output parity)
 // ============================================================================
 
 /// Information about a single file name (hard link).
@@ -1457,8 +1457,9 @@ const _: () = {
 /// NOT start with `$`. Streams like `${GUID}.Metadata` (iCloud) start with `${`
 /// and are user-visible.
 ///
-/// This matches C++ behavior where non-$DATA attributes are filtered during
-/// output when `match_attributes=false` (`ntfs_index.hpp` line 1388-1392):
+/// This matches established behavior where non-$DATA attributes are filtered
+/// during output when `match_attributes=false` (`ntfs_index.hpp` line
+/// 1388-1392):
 /// ```cpp
 /// bool const is_attribute = k->type_name_id &&
 ///     (k->type_name_id << (CHAR_BIT / 2)) != static_cast<int>(ntfs::AttributeTypeCode::AttributeData);

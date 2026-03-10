@@ -112,10 +112,10 @@ pub fn generate_read_chunks(
             // IMPORTANT: We ALWAYS add chunks regardless of bitmap status.
             // The bitmap is used for I/O optimization (skip_begin/skip_end) to reduce
             // disk reads, but we still parse all records and check the IN_USE flag
-            // in each record header. This matches C++ behavior where bitmap is
+            // in each record header. This matches established behavior where bitmap is
             // advisory, not authoritative.
             //
-            // The C++ implementation (line 7489) defaults to reading all records:
+            // The legacy implementation (line 7489) defaults to reading all records:
             //   this->mft_bitmap.resize(..., ~Bitmap::value_type() /*default should be to
             // read unused slots too */);
             //

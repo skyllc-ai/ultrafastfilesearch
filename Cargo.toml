@@ -25,13 +25,11 @@ members = [
     "crates/uffs-cli",      # 🖥️  Command-line interface
     "crates/uffs-tui",      # 📟 Terminal UI
     "crates/uffs-gui",      # 🪟 Graphical UI (future)
-    "crates/uffs-diag",     # 🔬 Diagnostic tools (temporarily enabled)
+    "crates/uffs-diag",     # 🔬 Diagnostic tools (validated by workspace build/test)
 ]
 exclude = [
     # Vendored reference tools / external code (kept out of the main workspace)
     "vendor/mft-reader-rs",
-    # Diagnostic/forensic tools - rarely needed, move to members when required
-    # "crates/uffs-diag",  # Temporarily enabled for analysis
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -60,7 +58,8 @@ uffs-mft = { path = "crates/uffs-mft", features = ["zstd"] }
 uffs-core = { path = "crates/uffs-core" }
 uffs-cli = { path = "crates/uffs-cli" }
 uffs-tui = { path = "crates/uffs-tui" }
-# uffs-diag = { path = "crates/uffs-diag" }  # Excluded - uncomment when needed
+# NOTE: no `uffs-diag` workspace dependency alias on purpose.
+# It is a top-level diagnostic/tool crate, not a shared runtime dependency.
 
 # ───── Polars (via facade crate for compilation isolation) ─────
 # NOTE: Polars is pulled from git main branch in uffs-polars crate
@@ -146,8 +145,6 @@ memmap2 = "0.9.10"
 parking_lot = "0.12.5"
 rayon = "1.11.0"
 num_cpus = "1.17.0"
-once_cell = "1.21.3"
-colored = "3.1.1"
 ignore = "0.4.25"
 jwalk = "0.8.1"
 sysinfo = "0.38.3"

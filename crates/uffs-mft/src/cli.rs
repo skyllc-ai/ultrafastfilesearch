@@ -230,7 +230,8 @@ pub enum Commands {
         forensic: bool,
     },
 
-    /// Raw MFT read benchmark (matches C++ --benchmark-mft output exactly)
+    /// Raw MFT read benchmark (aligned with the reference `--benchmark-mft`
+    /// output)
     ///
     /// Measures pure disk I/O throughput by reading the entire MFT with
     /// synchronous 1MB reads. Does NOT parse records or build `DataFrame`s.
@@ -248,8 +249,8 @@ pub enum Commands {
         drive: char,
     },
 
-    /// Full index build benchmark (matches C++ --benchmark-index output
-    /// exactly)
+    /// Full index build benchmark (aligned with the reference
+    /// `--benchmark-index` output)
     ///
     /// Measures the complete UFFS indexing pipeline: async I/O + parsing +
     /// `DataFrame` building. This is what users experience when indexing.
@@ -342,7 +343,7 @@ pub enum Commands {
     /// the C++ "preprocessing" phase in `--benchmark-index`.
     ///
     /// Use this for direct apples-to-apples comparison of tree algorithm
-    /// performance between Rust and C++ implementations.
+    /// performance between Rust and the reference benchmark.
     ///
     /// # Examples
     ///

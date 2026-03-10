@@ -2,7 +2,7 @@
 _Date: 2026-02-04_  
 _Focus drive: H: (simplest repro)_
 
-This document is written as a **developer-facing forensic + implementation report**. It explains **why the Rust LIVE run shows a bad root row (`H:\`)** even though the rest of the tree matches the C++ reference, and provides a **drop‑in fix**.
+This document is written as a **developer-facing forensic + implementation report**. It explains **why the Rust LIVE run shows a bad root row (`H:\`)** even though the rest of the tree matches the legacy baseline, and provides a **drop‑in fix**.
 
 ---
 

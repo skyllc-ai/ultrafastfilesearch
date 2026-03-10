@@ -7,7 +7,7 @@
 - `Size on Disk = 0`
 - `Descendants = 0`
 
-…while **all other directories/files match C++**, and **OFFLINE** scan matches C++.
+…while **all other directories/files match C++**, and **OFFLINE** scan matches the legacy baseline.
 
 ---
 
@@ -39,8 +39,8 @@ On Windows, these are *not equivalent*:
 Many code paths “normalize” to `X:\` because:
 
 - it is unambiguous
-- it matches C++/Win32 APIs
-- it matches your C++ reference output format
+- it matches the legacy baseline/Win32 APIs
+- it matches your legacy baseline output format
 
 If *any* part of your pipeline uses `H:` as a key and another part uses `H:\` as a key, **only the root** will collide/miss, because every non-root path has at least one `\` separator.
 

@@ -400,7 +400,8 @@ pub fn compile_extensions(extensions: &[&str]) -> IndexPattern {
 /// Files with ADS produce multiple results (same path, different stream names).
 #[derive(Debug, Clone)]
 pub struct SearchResult {
-    /// The file/directory name (includes `:stream_name` for ADS, C++ parity).
+    /// The file/directory name (includes `:stream_name` for ADS, legacy-output
+    /// parity).
     pub name: String,
     /// The full path (if resolved), including `:stream_name` for ADS.
     pub path: Option<String>,
@@ -438,7 +439,7 @@ impl SearchResult {
     #[must_use]
     pub fn from_record(record: &FileRecord, index: &MftIndex) -> Self {
         let is_directory = record.is_directory();
-        // C++ parity: directories have empty name, files have actual name
+        // legacy-output parity: directories have empty name, files have actual name
         let name = if is_directory {
             String::new()
         } else {
@@ -482,7 +483,7 @@ impl SearchResult {
         let stream_name = index.stream_name(stream_info);
         let has_ads = !stream_name.is_empty();
 
-        // C++ parity: directories have empty Name for default stream,
+        // legacy-output parity: directories have empty Name for default stream,
         // but ADS entries get "dirname:streamname" format (same as files)
         let name = if is_directory && !has_ads {
             // Default directory stream: empty Name
@@ -496,10 +497,11 @@ impl SearchResult {
             index.get_name(&name_info.name).to_owned()
         };
 
-        // C++ parity: Only the default stream (stream_idx == 0) gets tree metrics.
-        // ADS streams (stream_idx > 0) have descendants/treesize/tree_allocated = 0.
-        // In C++, each stream has its own treesize field, and only the default stream
-        // accumulates children's treesize (line 4794 in UltraFastFileSearch.cpp).
+        // legacy-output parity: Only the default stream (stream_idx == 0) gets tree
+        // metrics. ADS streams (stream_idx > 0) have
+        // descendants/treesize/tree_allocated = 0. In C++, each stream has its
+        // own treesize field, and only the default stream accumulates
+        // children's treesize (line 4794 in UltraFastFileSearch.cpp).
         let (descendants, treesize, tree_allocated) = if stream_idx == 0 {
             (record.descendants, record.treesize, record.tree_allocated)
         } else {
@@ -836,7 +838,7 @@ impl<'a> IndexQuery<'a> {
         // Append stream name for ADS
         let stream_name = index.stream_name(stream);
         let path = if stream_name.is_empty() {
-            // Add trailing backslash for directories (C++ parity)
+            // Add trailing backslash for directories (legacy-output parity)
             if record.is_directory() && !base_path.ends_with('\\') {
                 base_path.push('\\');
             }
@@ -963,8 +965,9 @@ impl<'a> IndexQuery<'a> {
                 (0..name_count).flat_map(move |name_idx| {
                     let inner_cached_path = outer_cached_path.clone();
                     (0..stream_count).filter_map(move |stream_idx| {
-                        // Filter out non-$DATA streams (matches C++ match_attributes=false)
-                        // Only $DATA (type_name_id=8) and $I30 (type_name_id=0) are output
+                        // Filter out non-$DATA streams (matches the legacy baseline
+                        // match_attributes=false) Only $DATA
+                        // (type_name_id=8) and $I30 (type_name_id=0) are output
                         let stream_info = index.get_stream_at(record, stream_idx)?;
                         if !stream_info.is_output_stream() {
                             return None;

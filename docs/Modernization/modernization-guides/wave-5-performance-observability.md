@@ -106,7 +106,7 @@ hyperfine --warmup 1 'target/release/uffs "*.rs"'
 
 **Step 3**: Compare with C++ baseline
 ```bash
-# Run C++ version
+# Run legacy version
 hyperfine 'uffs.com "*.rs"'
 
 # Run Rust version

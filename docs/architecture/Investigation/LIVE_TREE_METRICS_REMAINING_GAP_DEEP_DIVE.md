@@ -21,7 +21,7 @@ Everything else (row count, path match, ADS count, timestamps, boolean flags) ma
 ### 2) These 3 rows look like “tree metrics never stamped”
 The two junction rows are especially telling:
 
-- **LIVE Size = 48** matches C++.
+- **LIVE Size = 48** matches the legacy baseline.
 - **LIVE Descendants = 0** is the default/uninitialized value in most implementations.
 - A leaf directory, once the tree pass runs, should *never* end with descendants=0 — even with no children it should become **1** (the directory itself).
 

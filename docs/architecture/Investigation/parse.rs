@@ -47,7 +47,7 @@ thread_local! {
 // Parsed Record Structures
 // ============================================================================
 
-/// Parsed data from an MFT record (full C++ parity).
+/// Parsed data from an MFT record (full legacy-output parity).
 ///
 /// This struct captures ALL information from an MFT record, including:
 /// - Multiple file names (hard links)
@@ -316,7 +316,7 @@ pub fn apply_fixup(data: &mut [u8]) -> bool {
 
 /// Creates a placeholder record for a missing parent directory.
 ///
-/// This matches C++ behavior where the `at()` method creates placeholder
+/// This matches established behavior where the `at()` method creates placeholder
 /// records for any referenced FRS that hasn't been seen yet. When a file
 /// references a parent directory that wasn't parsed (e.g., marked as not-in-use
 /// in bitmap but still referenced), we create a placeholder to ensure path
@@ -1157,7 +1157,7 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
         );
     }
     let (size, allocated_size) = if is_directory && dir_index_size > 0 {
-        // Directory with index allocation - use index size (C++ parity)
+        // Directory with index allocation - use index size (legacy-output parity)
         if frs == 42 {
             println!(
                 "  FRS 42: using dir_index_size={}, dir_index_allocated={}",
@@ -1664,7 +1664,7 @@ pub fn parse_record_forensic(
     // For directories, C++ includes $INDEX_ROOT + $INDEX_ALLOCATION size
     let is_directory = header.is_directory();
     let (size, allocated_size) = if is_directory && dir_index_size > 0 {
-        // Directory with index allocation - use index size (C++ parity)
+        // Directory with index allocation - use index size (legacy-output parity)
         (dir_index_size, dir_index_allocated)
     } else {
         streams.iter().find(|s| s.name.is_empty()).map_or_else(
@@ -2086,7 +2086,7 @@ pub struct ParsedColumns {
     /// Stream name (empty for default stream, non-empty for ADS).
     pub stream_name: Vec<String>,
 
-    // Attribute flags (all boolean columns for C++ parity)
+    // Attribute flags (all boolean columns for legacy-output parity)
     /// Read-only flag.
     pub is_readonly: Vec<bool>,
     /// Hidden flag.
@@ -2119,7 +2119,7 @@ pub struct ParsedColumns {
     pub is_unpinned: Vec<bool>,
     /// Virtual flag.
     pub is_virtual: Vec<bool>,
-    /// Raw attribute flags (combined value for C++ parity).
+    /// Raw attribute flags (combined value for legacy-output parity).
     pub flags: Vec<u32>,
 }
 
@@ -2189,7 +2189,7 @@ impl ParsedColumns {
     pub fn push_record(&mut self, record: &ParsedRecord) {
         self.frs.push(record.frs);
         self.parent_frs.push(record.parent_frs);
-        // C++ parity: directories have empty name
+        // legacy-output parity: directories have empty name
         if record.is_directory {
             self.name.push(String::new());
         } else {
@@ -2228,7 +2228,7 @@ impl ParsedColumns {
 
     /// Pushes a record with full expansion (names × streams).
     ///
-    /// This matches C++ behavior: one row per (hard link × stream) combination.
+    /// This matches established behavior: one row per (hard link × stream) combination.
     /// If a file has 2 hard links and 3 streams, this creates 6 rows.
     ///
     /// This is the default behavior for user-facing output, as users
@@ -2269,7 +2269,7 @@ impl ParsedColumns {
             for stream_info in &streams {
                 self.frs.push(record.frs);
                 self.parent_frs.push(name_info.parent_frs);
-                // C++ parity: directories have empty name
+                // legacy-output parity: directories have empty name
                 if record.is_directory {
                     self.name.push(String::new());
                 } else {
@@ -2419,7 +2419,7 @@ impl ParsedColumns {
     /// Adds placeholder records for parent directories that are referenced
     /// but not present in the parsed records.
     ///
-    /// This matches C++ behavior where `at()` creates placeholder records
+    /// This matches established behavior where `at()` creates placeholder records
     /// for any referenced FRS that hasn't been seen yet. Without this,
     /// path resolution fails with `<unknown:XXXXXX>` for files whose parent
     /// directories weren't parsed (e.g., marked as not-in-use in bitmap).

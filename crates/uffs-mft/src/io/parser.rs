@@ -12,8 +12,8 @@ pub use crate::parse::{
 /// Parses a record directly into MftIndex (inline parsing for IOCP).
 ///
 /// This function parses the record and adds it directly to the index,
-/// creating parent placeholders on-demand. This is the C++ parity approach
-/// that eliminates the intermediate `ParsedRecord` allocation.
+/// creating parent placeholders on-demand. This is the legacy-output parity
+/// approach that eliminates the intermediate `ParsedRecord` allocation.
 ///
 /// # Returns
 ///
@@ -169,8 +169,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 }
             }
             Some(AttributeType::Data) => {
-                // C++ parity: Only primary attributes (LowestVCN == 0) count as streams.
-                // Continuation extents (LowestVCN > 0) are skipped. See ntfs_index_load.hpp:358
+                // legacy-output parity: Only primary attributes (LowestVCN == 0) count as
+                // streams. Continuation extents (LowestVCN > 0) are skipped.
+                // See ntfs_index_load.hpp:358
                 let is_primary = if attr_header.is_non_resident == 0 {
                     true // Resident attributes are always primary
                 } else {
@@ -584,8 +585,9 @@ fn parse_extension_to_index(
                 }
             }
             Some(AttributeType::Data) => {
-                // C++ parity: Only primary attributes (LowestVCN == 0) count as streams.
-                // Continuation extents (LowestVCN > 0) are skipped. See ntfs_index_load.hpp:358
+                // legacy-output parity: Only primary attributes (LowestVCN == 0) count as
+                // streams. Continuation extents (LowestVCN > 0) are skipped.
+                // See ntfs_index_load.hpp:358
                 let is_primary = if attr_header.is_non_resident == 0 {
                     true // Resident attributes are always primary
                 } else {
@@ -739,7 +741,7 @@ fn parse_extension_to_index(
             // This happens when the $FILE_NAME attribute is ONLY in extension records
             if !record.first_name.name.is_valid() {
                 // Copy the first extension name directly into first_name
-                // This matches C++ behavior (ntfs_index.hpp lines 559-567)
+                // This matches established behavior (ntfs_index.hpp lines 559-567)
                 let first_link = &index.links[link_indices[0] as usize];
                 record.first_name.name = first_link.name;
                 record.first_name.parent_frs = first_link.parent_frs;
@@ -1043,8 +1045,9 @@ pub fn parse_record_to_fragment(
                 }
             }
             Some(AttributeType::Data) => {
-                // C++ parity: Only primary attributes (LowestVCN == 0) count as streams.
-                // Continuation extents (LowestVCN > 0) are skipped. See ntfs_index_load.hpp:358
+                // legacy-output parity: Only primary attributes (LowestVCN == 0) count as
+                // streams. Continuation extents (LowestVCN > 0) are skipped.
+                // See ntfs_index_load.hpp:358
                 let is_primary = if attr_header.is_non_resident == 0 {
                     true // Resident attributes are always primary
                 } else {
@@ -1532,8 +1535,9 @@ fn parse_extension_to_fragment(
                 }
             }
             Some(AttributeType::Data) => {
-                // C++ parity: Only primary attributes (LowestVCN == 0) count as streams.
-                // Continuation extents (LowestVCN > 0) are skipped. See ntfs_index_load.hpp:358
+                // legacy-output parity: Only primary attributes (LowestVCN == 0) count as
+                // streams. Continuation extents (LowestVCN > 0) are skipped.
+                // See ntfs_index_load.hpp:358
                 let is_primary = if attr_header.is_non_resident == 0 {
                     true // Resident attributes are always primary
                 } else {
@@ -1714,7 +1718,7 @@ fn parse_extension_to_fragment(
         // This happens when the $FILE_NAME attribute is ONLY in extension records
         if !first_name_valid {
             // Copy the first extension name directly into first_name
-            // This matches C++ behavior (ntfs_index.hpp lines 559-567)
+            // This matches established behavior (ntfs_index.hpp lines 559-567)
             // Copy values first to avoid borrow conflict
             let first_link_name = fragment.links[link_indices[0] as usize].name;
             let first_link_parent = fragment.links[link_indices[0] as usize].parent_frs;

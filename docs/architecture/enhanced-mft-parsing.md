@@ -575,7 +575,7 @@ Currently, tree metrics (descendants count, total size, total allocated size) ar
 - Building a separate TreeIndex structure
 - Computing metrics lazily when needed
 
-For CLI use cases, we **always** need tree metrics for C++ parity (to populate Size/Size on Disk columns for directories). By computing these metrics eagerly during index building, we:
+For CLI use cases, we **always** need tree metrics for legacy-output parity (to populate Size/Size on Disk columns for directories). By computing these metrics eagerly during index building, we:
 - Eliminate the separate TreeIndex step
 - Make metrics immediately available in MftIndex
 - Simplify the API for downstream tools
@@ -692,7 +692,7 @@ impl MftIndex {
 **Benefits**:
 - ✅ **Simpler API**: No separate TreeIndex step needed
 - ✅ **Faster queries**: Tree metrics always available (no on-demand computation)
-- ✅ **Better for CLI**: Always need tree metrics for C++ parity
+- ✅ **Better for CLI**: Always need tree metrics for legacy-output parity
 - ✅ **Consistent**: Fits "pay once, benefit forever" philosophy
 - ✅ **Less code**: Remove TreeIndex dependency from CLI
 
@@ -1050,7 +1050,7 @@ pub struct FileRecord {
 **Benefits**:
 - ✅ **Simpler API**: No separate TreeIndex step needed
 - ✅ **Faster queries**: Tree metrics always available (no on-demand computation)
-- ✅ **Better for CLI**: We ALWAYS need tree metrics for C++ parity
+- ✅ **Better for CLI**: We ALWAYS need tree metrics for legacy-output parity
 - ✅ **Consistent**: Fits "pay once, benefit forever" philosophy
 - ✅ **Less code**: Remove TreeIndex dependency from CLI
 

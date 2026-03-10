@@ -1,7 +1,7 @@
 # UFFS Parity Fix Plan: Tree Metrics Mismatches (Live + Offline)
 
 **Date:** 2026-02-05  
-**Scope:** Fix tree metrics mismatches between C++ reference output and Rust output (live + offline).  
+**Scope:** Fix tree metrics mismatches between legacy baseline output and Rust output (live + offline).  
 **Focus symptoms:** Live-only large size deltas (e.g., `65712 → 184`, `48 → 8` with same descendants), plus offline tiny ±1–±8 byte drift with identical descendants.
 
 > Sources used for the baseline symptoms and constraints:
@@ -49,7 +49,7 @@ This usually implies **duplicate rows** (same path repeated), or extra rows that
 ## 1) The most likely root cause behind the *live* size deltas
 
 ### 1.1 Why “out-of-order live parsing” is uniquely dangerous in your current Rust port
-Your Rust “C++ port” parsing path is **stateful and order-dependent**:
+Your Rust “legacy port” parsing path is **stateful and order-dependent**:
 
 - `parse_stream(...)` uses “merge if same stream, else push previous first_stream into overflow and make the new one the first_stream”.
 - That is effectively “**last stream wins**” for `record.first_stream`.

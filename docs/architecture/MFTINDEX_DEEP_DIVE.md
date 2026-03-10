@@ -266,7 +266,7 @@ The parser extracts data from these NTFS attributes:
 | `$BITMAP` | 0xB0 | Directory index bitmap |
 | `$REPARSE_POINT` | 0xC0 | Symlink/junction target, reparse tag |
 
-### Stream Counting (C++ Parity)
+### Stream Counting (Baseline-Compatible)
 
 For accurate tree metrics, these are counted as "streams":
 - `$DATA` streams (default + ADS)
@@ -293,7 +293,7 @@ For accurate tree metrics, these are counted as "streams":
 
 ---
 
-## 8. C++ Parity Status
+## 8. Baseline Status
 
 From `TREE_METRICS_PARITY_ANALYSIS.md`:
 

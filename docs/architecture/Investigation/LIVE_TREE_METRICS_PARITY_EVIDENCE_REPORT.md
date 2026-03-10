@@ -156,7 +156,7 @@ discrepancies in directory sizes for files with multiple hardlinks.
 | 1 | Tree dispatch (no "org" shim) | ✅ CORRECT | Dispatches to `crate::cpp_tree` |
 | 2 | Descendants use printed channel | ✅ CORRECT | Uses `children.treesize + 1` |
 | 3 | Orphan sweep after ROOT | ✅ CORRECT | Uses `seen: Vec<bool>`, sweeps unvisited |
-| 4 | Delta function matches C++ | ⚠️ **MISMATCH** | Uses shortcut, not C++ floor-division |
+| 4 | Delta function matches the legacy baseline | ⚠️ **MISMATCH** | Uses shortcut, not C++ floor-division |
 
 ---
 
@@ -168,7 +168,7 @@ Replace the current delta function with the exact C++ formula:
 /// Computes the delta share for a hardlink using the C++ floor-division formula.
 ///
 /// Distributes `value` across `total_names` hardlinks, returning the share for
-/// hardlink index `name_info`. This matches the C++ implementation exactly.
+/// hardlink index `name_info`. This matches the legacy implementation exactly.
 #[inline]
 const fn delta(value: u64, name_info: u32, total_names: u32) -> u64 {
     if total_names <= 1 {

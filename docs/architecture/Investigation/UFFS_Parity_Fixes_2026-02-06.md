@@ -249,7 +249,7 @@ diff --git a/cpp_types.rs b/cpp_types.rs
 -                stream.size.length += non_res.data_size;
                  stream.size.bulkiness += non_res.allocated_size;
 +
-+                // C++ parity: for $I30 IndexAllocation, treat "length" as allocated_size.
++                // legacy-output parity: for $I30 IndexAllocation, treat "length" as allocated_size.
 +                const ATTR_INDEX_ALLOCATION: u32 = 0xA0;
 +                if is_dir_index && type_code == ATTR_INDEX_ALLOCATION {
 +                    stream.size.length += non_res.allocated_size;
@@ -264,7 +264,7 @@ diff --git a/cpp_types.rs b/cpp_types.rs
                  };
 -                stream.size.length += res.value_length as u64;
 +
-+                // C++ parity: exclude $I30 $BITMAP from "Size" (but keep it in allocated/bulkiness if desired)
++                // legacy-output parity: exclude $I30 $BITMAP from "Size" (but keep it in allocated/bulkiness if desired)
 +                const ATTR_BITMAP: u32 = 0xB0;
 +                if !(is_dir_index && type_code == ATTR_BITMAP) {
 +                    stream.size.length += res.value_length as u64;

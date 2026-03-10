@@ -381,11 +381,11 @@ impl VolumeHandle {
         let mft_handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(mft_path.as_ptr()),
-                0, // No access needed, just getting extents (matches C++)
+                0, // No access needed, just getting extents (matches the legacy baseline)
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 None,
                 OPEN_EXISTING,
-                FILE_FLAGS_AND_ATTRIBUTES(0), // No flags (matches C++)
+                FILE_FLAGS_AND_ATTRIBUTES(0), // No flags (matches the legacy baseline)
                 None,
             )
         };
@@ -949,8 +949,8 @@ impl MftBitmap {
     /// operation, this returns how many records at the beginning and end
     /// can be skipped because they are not in use.
     ///
-    /// This is the key optimization from the C++ implementation - we can avoid
-    /// reading entire clusters if all records in them are unused.
+    /// This is the key optimization from the legacy implementation - we can
+    /// avoid reading entire clusters if all records in them are unused.
     ///
     /// # Arguments
     ///
@@ -1392,13 +1392,13 @@ impl DriveType {
     ///
     /// - NVMe: 4 MB (high bandwidth, large sequential reads are efficient)
     /// - SSD: 2 MB (SATA bandwidth, moderate chunk size)
-    /// - HDD: 1 MB (matches C++ actual behavior - profiler shows 1024KB reads)
+    /// - HDD: 1 MB (matches observed behavior - profiler shows 1024KB reads)
     /// - Unknown: 1 MB (conservative default)
     ///
     /// Note: C++ team initially said 64KB, but profiler shows they actually use
     /// 1MB (1024KB) reads. With 1MB reads, C++ does 8,141 reads for 11.5GB MFT.
     /// With 64KB reads, Rust would need ~180,000 reads - the syscall overhead
-    /// alone adds ~20 seconds. Using 1MB matches C++ actual behavior.
+    /// alone adds ~20 seconds. Using 1MB matches observed behavior.
     #[must_use]
     pub const fn optimal_chunk_size(&self) -> usize {
         match self {
@@ -1437,8 +1437,10 @@ impl DriveType {
     /// Based on benchmarks (2026-01-24):
     /// - HDD S: 40.3s @ 285 MB/s with concurrency=2,4,32,64 (no difference -
     ///   I/O bound)
-    /// - NVMe C: 2.16s @ 2109 MB/s with concurrency=32-64 (28% faster than C++)
-    /// - NVMe F: 1.34s @ 3384 MB/s with concurrency=64 (13% faster than C++)
+    /// - NVMe C: 2.16s @ 2109 MB/s with concurrency=32-64 (28% faster than the
+    ///   legacy baseline)
+    /// - NVMe F: 1.34s @ 3384 MB/s with concurrency=64 (13% faster than the
+    ///   legacy baseline)
     #[must_use]
     pub const fn optimal_concurrency(&self) -> usize {
         match self {
@@ -1483,7 +1485,7 @@ impl DriveType {
     ///
     /// - NVMe: 4 MB (high bandwidth, amortize syscall cost)
     /// - SSD: 2 MB (SATA bandwidth)
-    /// - HDD: 1 MB (matches C++ behavior)
+    /// - HDD: 1 MB (matches established behavior)
     /// - Unknown: 1 MB (conservative default)
     ///
     /// Based on benchmarks (2026-01-24):

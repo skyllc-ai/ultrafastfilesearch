@@ -12,7 +12,7 @@
 
 **Date:** 2026-02-03 19:05:39  
 **Trial Directory:** `docs/trial_runs/g_disk`  
-**C++ Reference:** `docs/trial_runs/g_disk/cpp_g.txt`  
+**legacy baseline:** `docs/trial_runs/g_disk/cpp_g.txt`  
 **Rust Live Scan:** `docs/trial_runs/g_disk/rust_live_g.txt`  
 **Rust Offline Scan:** `docs/trial_runs/g_disk/rust_offline_g.txt`
 

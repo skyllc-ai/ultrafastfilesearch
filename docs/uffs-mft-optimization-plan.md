@@ -38,7 +38,7 @@ This document describes an **experiment-driven roadmap** to make `uffs-mft` the 
 **Goals**
 - Minimize **wall-clock time** from start of read to DataFrame ready.
 - Keep **memory usage** bounded and predictable on very large volumes.
-- Maintain or improve **correctness** and parity with the C++ implementation.
+- Maintain or improve **correctness** and parity with the legacy implementation.
 - Provide clear hooks for testing, benchmarking, and future tuning.
 
 **Non-goals (for now)**

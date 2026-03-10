@@ -516,7 +516,7 @@ uses `to_lowercase()` at query time which is still fast for typical workloads.
 
 ### 9.1 C++ String Matching
 
-The C++ implementation uses:
+The legacy implementation uses:
 - **Boyer-Moore-Horspool** for literal substring search
 - **Boost.Xpressive** for regex
 - **Custom iterators** for case-insensitive matching
@@ -534,7 +534,7 @@ The C++ implementation uses:
 
 ### 9.3 Conclusion
 
-With the proposed optimizations, Rust/Polars should be **faster than C++** for pattern matching because:
+With the proposed optimizations, Rust/Polars should be **faster than the legacy baseline** for pattern matching because:
 1. Polars uses SIMD for string operations
 2. Aho-Corasick is faster than looping for multi-pattern
 3. Pre-computed `ext` column enables O(1) extension lookup

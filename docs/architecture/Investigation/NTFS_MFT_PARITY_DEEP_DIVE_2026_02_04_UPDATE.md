@@ -36,7 +36,7 @@ When:
 
 …that is a classic “hardlink delta rounding” signature.
 
-On Windows system volumes, hardlinks are everywhere (WinSxS, System32, driver store, WindowsApps, etc.). The C++ reference avoids double-counting hardlinked files in subtree size totals by splitting each file’s contribution across its N names using a **floor-division delta**.
+On Windows system volumes, hardlinks are everywhere (WinSxS, System32, driver store, WindowsApps, etc.). The legacy baseline avoids double-counting hardlinked files in subtree size totals by splitting each file’s contribution across its N names using a **floor-division delta**.
 
 If we match C++ “almost”, the only thing that tends to remain is **tiny per-directory differences** due to:
 - applying delta to an aggregated sum (`delta(a+b)`), instead of per stream (`delta(a)+delta(b)`)

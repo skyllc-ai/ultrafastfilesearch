@@ -162,7 +162,7 @@ impl OutputColumn {
             "treesize" | "tree_size" => Some(Self::TreeSize),
             "treeallocated" | "tree_allocated" => Some(Self::TreeAllocated),
             "bulkiness" => Some(Self::Bulkiness),
-            // New columns for C++ parity
+            // New columns for legacy-output parity
             "integrity" => Some(Self::Integrity),
             "noscrub" => Some(Self::NoScrub),
             "directoryflag" => Some(Self::DirectoryFlag),
@@ -206,14 +206,14 @@ impl OutputColumn {
             Self::TreeSize => "treesize",
             Self::TreeAllocated => "tree_allocated",
             Self::Bulkiness => "bulkiness",
-            // New columns for C++ parity
+            // New columns for legacy-output parity
             Self::Integrity => "is_integrity_stream",
             Self::NoScrub => "is_no_scrub_data",
             Self::DirectoryFlag => "is_directory",
         }
     }
 
-    /// Get the display name for headers (matches C++ output exactly).
+    /// Get the display name for headers (matches expected output exactly).
     #[must_use]
     pub const fn display_name(&self) -> &'static str {
         match self {
@@ -340,9 +340,9 @@ pub struct OutputConfig {
     /// Representation for false/inactive boolean (default: "0").
     pub neg: String,
     /// Fixed timezone offset in seconds from UTC (computed once at startup).
-    /// This matches C++ behavior where Windows' `FileTimeToLocalFileTime()`
-    /// uses the CURRENT timezone offset for ALL timestamps, ignoring
-    /// historical DST.
+    /// This matches established behavior where Windows'
+    /// `FileTimeToLocalFileTime()` uses the CURRENT timezone offset for ALL
+    /// timestamps, ignoring historical DST.
     pub timezone_offset_secs: i32,
     // NOTE: Tripwire was removed from OutputConfig (Fix #1).
     // Tripwire is now logged to stderr/tracing and embedded in binary string table.
@@ -634,7 +634,7 @@ impl OutputConfig {
                     let micros = u32::try_from(micros_i64).unwrap_or(0);
                     if let Some(utc_dt) = chrono::DateTime::from_timestamp(secs, micros * 1000) {
                         // Apply fixed timezone offset (computed once at startup)
-                        // This matches C++ behavior: same offset for all timestamps
+                        // This matches established behavior: same offset for all timestamps
                         if let Some(fixed_tz) = FixedOffset::east_opt(self.timezone_offset_secs) {
                             let local_dt = utc_dt.with_timezone(&fixed_tz);
                             // Format WITHOUT subseconds to match C++ output exactly

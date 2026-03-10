@@ -42,13 +42,14 @@ const HOST_TRIPLE: &str = "aarch64-apple-darwin";
 /// - uffs_mft: Low-level MFT reading tool
 /// - uffs_tui: Terminal UI (placeholder)
 /// - uffs_gui: Graphical UI (placeholder)
-/// - uffs-diag binaries: Excluded from workspace - build manually when needed
+/// - uffs-diag binaries: intentionally omitted from dist/ packaging
 const BINARIES: &[(&str, &str)] = &[
     ("uffs", "uffs-cli"),
     ("uffs_mft", "uffs-mft"),
     ("uffs_tui", "uffs-tui"),
     ("uffs_gui", "uffs-gui"),
-    // uffs-diag excluded from workspace - uncomment when needed:
+    // `uffs-diag` is a workspace member, but these binaries are not shipped in `dist/`.
+    // Build them directly with Cargo when a diagnostic workflow needs them.
     // ("analyze_mft_parents", "uffs-diag"),
     // ("dump_mft_records", "uffs-diag"),
     // ("scan_mft_magic", "uffs-diag"),
@@ -57,6 +58,7 @@ const BINARIES: &[(&str, &str)] = &[
     // ("compare_raw_mft", "uffs-diag"),
     // ("inspect_mft_record_flow", "uffs-diag"),
     // ("analyze_diff", "uffs-diag"),
+    // ("compare_scan_parity", "uffs-diag"),
 ];
 
 struct Target {

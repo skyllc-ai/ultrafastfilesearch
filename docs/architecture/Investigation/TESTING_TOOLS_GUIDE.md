@@ -91,9 +91,9 @@ For each drive (e.g., `C`), the script generates:
 
 **Scan Outputs (CSV format):**
 - `rust_c.txt` - Rust current implementation (with `--no-bitmap`)
-- `cpp_c.txt` - C++ reference implementation (uffs.com)
+- `cpp_c.txt` - legacy baseline implementation (uffs.com)
 - `rust_new_c.txt` - Rust with C++ tree algorithm (with `--no-bitmap`)
-- `rust_cpp_full_c.txt` - Rust with full C++ port (parsing + tree, with `--no-bitmap`)
+- `rust_cpp_full_c.txt` - Rust with full legacy port (parsing + tree, with `--no-bitmap`)
 
 **Log Files:**
 - `rust_c.log`, `cpp_c.log`, `rust_new_c.log`, `rust_cpp_full_c.log`
@@ -113,7 +113,7 @@ For each drive (e.g., `C`), the script generates:
    uffs.exe "*" --drive C --no-bitmap --out rust_c.txt
    ```
 
-2. **C++** - Original C++ implementation (baseline)
+2. **C++** - Original legacy implementation (baseline)
    ```powershell
    uffs.com "*" C: > cpp_c.txt
    ```
@@ -190,10 +190,10 @@ uffs "*.txt" --mft-file D_mft.bin --drive D  # Specify drive letter for path res
 # Current Rust algorithms (default)
 uffs "*.txt"
 
-# C++ port algorithms (for parity testing)
+# legacy port algorithms (for parity testing)
 uffs "*" --tree-algo cpp          # Use C++ tree algorithm
 uffs "*" --parse-algo cpp_port    # Use C++ parsing algorithm
-uffs "*" --tree-algo cpp --parse-algo cpp_port  # Full C++ port
+uffs "*" --tree-algo cpp --parse-algo cpp_port  # Full legacy port
 ```
 
 #### Filtering Options
@@ -273,7 +273,7 @@ uffs "*" --no-bitmap              # Read entire MFT (don't use bitmap optimizati
 
 **Parity Testing:**
 ```bash
-# Full C++ port mode (for comparison with C++ baseline)
+# Full legacy port mode (for comparison with C++ baseline)
 uffs "*" --drive C --parse-algo cpp_port --tree-algo cpp --no-bitmap --out rust_cpp_full.txt
 ```
 
@@ -1352,14 +1352,14 @@ Creates test directory structure for MFT testing.
 
 ### Workflow 1: Full Parity Testing (Windows)
 
-**Goal:** Verify Rust implementation matches C++ baseline exactly.
+**Goal:** Verify Rust implementation matches the legacy baseline exactly.
 
 ```powershell
 # 1. Collect test data on Windows
 cd docs/architecture/Investigation
 .\trial_run.ps1 -Drives D
 
-# 2. Compare C++ vs Rust (full C++ port)
+# 2. Compare C++ vs Rust (full legacy port)
 cargo run --release -p uffs-diag --bin compare_scan_parity -- \
   docs/trial_runs/d_disk/cpp_d.txt \
   docs/trial_runs/d_disk/rust_cpp_full_d.txt \

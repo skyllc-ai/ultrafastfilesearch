@@ -11,7 +11,7 @@ Your checklist correctly calls out that the commonly-used shortcut:
 base + if i < rem { 1 } else { 0 }
 ```
 
-is **not equivalent** to the C++ reference implementation:
+is **not equivalent** to the legacy baseline implementation:
 
 ```rust
 value * (i + 1) / n - value * i / n

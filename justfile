@@ -417,7 +417,7 @@ default:
     @echo "  just devenv-rollback - Rollback to previous version"
     @echo ""
     @printf "\033[0;32m🏁 UFFS Performance Benchmarks:\033[0m\n"
-    @echo "  just bench-vs-cpp - Compare Rust vs C++ (uffs.com) performance"
+    @echo "  just bench-vs-cpp - Compare Rust vs reference uffs.com performance"
     @echo "  just bench-vs-cpp D - Compare on specific drive"
     @echo "  just bench-micro - Run criterion micro-benchmarks"
     @echo "  just bench-search - End-to-end search benchmark"
@@ -597,8 +597,12 @@ setup:
 # PREVENTS: Compilation errors from mixed toolchain artifacts
 # SCOPE: Validates rust-toolchain.toml configuration is active
 verify-toolchain:
-    @printf "\033[0;34m🔧 Verifying Rust toolchain consistency...\033[0m\n"
-    @rust-script scripts/verify-toolchain.rs
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf "\033[0;34m🔧 Verifying Rust toolchain consistency...\033[0m\n"
+    cargo +nightly --version
+    cargo +nightly metadata --format-version 1 --no-deps >/dev/null
+    printf "\033[0;32m✅ Nightly toolchain metadata resolved successfully\033[0m\n"
 
 # AUTOMATIC: Applies formatting automatically (no --check flag)
 # Uses standard cargo fmt for all workspace members
@@ -704,10 +708,11 @@ build-local:
 
 # Check and build current platform binaries (NO VERSION INCREMENT)
 build-current-platform:
-    @printf "\033[0;34m🔍 Checking current platform binaries (NO VERSION INCREMENT)...\033[0m\n"
-    @printf "\033[1;33m📦 Builds only if missing, commits and pushes automatically\033[0m\n"
-    @echo "========================================================"
-    rust-script scripts/build-current-platform.rs
+    #!/usr/bin/env bash
+    printf "\033[1;33m⚠️  build-current-platform is intentionally unavailable.\033[0m\n"
+    printf "\033[0;34m   The backing script was removed, and this lane keeps the boundary explicit\033[0m\n"
+    printf "\033[0;34m   instead of leaving a dangling entry point. Use 'just build-local' or 'just build'.\033[0m\n"
+    exit 1
 
 # Quick alias for local build and install
 install: build-local
@@ -723,9 +728,10 @@ deploy-release:
     just copy-binary release
 
 # Install latest pre-built binaries from dist/ to ~/bin (platform-aware)
-# Install UFFS binaries to ~/bin (Windows only)
+# Install shipped UFFS binaries to ~/bin (Windows only)
 # UFFS is Windows-only - it requires NTFS MFT access via Windows APIs
-# Binaries: uffs, uffs_mft, uffs_tui, uffs_gui
+# Shipped dist/ binaries: uffs, uffs_mft, uffs_tui, uffs_gui
+# Diagnostic uffs-diag binaries are workspace tools, but are not installed from dist/
 # This recipe uses PowerShell on Windows, bash on Unix (where it will fail gracefully)
 [windows]
 use:
@@ -740,7 +746,7 @@ use:
     if (-not $distDir) { $versions = Get-ChildItem -Path "dist" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^v\d+\.\d+\.\d+$' } | Sort-Object { [version]($_.Name -replace '^v','') } -Descending; if ($versions) { $distDir = $versions[0].FullName } }; \
     if (-not $distDir) { Write-Host "❌ No binaries found in dist/. Run 'just go' first." -ForegroundColor Red; exit 1 }; \
     Write-Host "  → Using: $distDir" -ForegroundColor Cyan; \
-    $binaries = @("uffs", "uffs_mft", "uffs_tui", "uffs_gui", "analyze_mft_parents", "dump_mft_records", "scan_mft_magic", "dump_mft_extents", "cross_check_mft_reference", "compare_raw_mft", "inspect_mft_record_flow", "analyze_diff"); \
+    $binaries = @("uffs", "uffs_mft", "uffs_tui", "uffs_gui"); \
     $installed = 0; $skipped = 0; \
     foreach ($bin in $binaries) { $src = "$distDir\$bin\$bin-windows-x64.exe"; $dest = "$binDir\$bin.exe"; if (Test-Path $src) { Copy-Item $src $dest -Force; Write-Host "  ✅ $bin.exe" -ForegroundColor Green; $installed++ } else { Write-Host "  ⚠️  $bin (not found)" -ForegroundColor Yellow; $skipped++ } }; \
     Write-Host "✅ Installed $installed binaries to ~/bin" -ForegroundColor Green; \
@@ -776,9 +782,15 @@ push:
     git pull origin main --rebase
     git push origin main
 
+# Enforce oversized Rust file policy with explicit exceptions
+file-size-policy:
+    @printf "\033[0;34m📏 Checking oversized Rust file policy...\033[0m\n"
+    bash scripts/check_file_size_policy.sh
+
 # Comprehensive code validation (CI/CD grade - all features and targets)
 check:
     @printf "\033[0;34m🔍 Comprehensive validation (CI/CD grade)...\033[0m\n"
+    just file-size-policy
     cargo check --workspace --all-targets --all-features
     cargo fmt --all -- --check
 
@@ -1697,19 +1709,19 @@ benchmark-advanced:
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Compare Rust vs C++ implementation (integration benchmark)
+# Compare Rust vs reference binary (integration benchmark)
 bench-vs-cpp drive="C":
     #!/usr/bin/env bash
     set -euo pipefail
-    printf "\033[0;34m🏁 UFFS Benchmark: Rust vs C++ Comparison\033[0m\n"
+    printf "\033[0;34m🏁 UFFS Benchmark: Rust vs reference binary\033[0m\n"
     printf "\033[0;34m   Drive: {{drive}}:\033[0m\n"
     printf "\033[0;34m   Pattern: *.txt\033[0m\n"
     echo ""
 
-    # Check for C++ reference implementation
+    # Check for the reference binary
     CPP_UFFS="$HOME/bin/uffs.com"
     if [[ ! -f "$CPP_UFFS" ]]; then
-        printf "\033[1;31m❌ C++ reference not found at $CPP_UFFS\033[0m\n"
+        printf "\033[1;31m❌ Reference binary not found at $CPP_UFFS\033[0m\n"
         printf "\033[0;33m   Please ensure uffs.com is in ~/bin/\033[0m\n"
         exit 1
     fi
@@ -1728,14 +1740,14 @@ bench-vs-cpp drive="C":
     RUST_OUTPUT="$TEMP_DIR/rust_output.txt"
     trap "rm -rf $TEMP_DIR" EXIT
 
-    # Benchmark C++ version
-    printf "\033[0;34m\n⏱️  Benchmarking C++ (uffs.com)...\033[0m\n"
+    # Benchmark reference binary
+    printf "\033[0;34m\n⏱️  Benchmarking reference binary (uffs.com)...\033[0m\n"
     CPP_START=$(date +%s.%N)
     "$CPP_UFFS" "*.txt" --drive {{drive}} > "$CPP_OUTPUT" 2>&1 || true
     CPP_END=$(date +%s.%N)
     CPP_TIME=$(echo "$CPP_END - $CPP_START" | bc)
     CPP_COUNT=$(wc -l < "$CPP_OUTPUT" | tr -d ' ')
-    printf "\033[0;32m   C++ Time: ${CPP_TIME}s, Files: ${CPP_COUNT}\033[0m\n"
+    printf "\033[0;32m   Reference Time: ${CPP_TIME}s, Files: ${CPP_COUNT}\033[0m\n"
 
     # Benchmark Rust version
     printf "\033[0;34m\n⏱️  Benchmarking Rust (uffs)...\033[0m\n"
@@ -1762,22 +1774,22 @@ bench-vs-cpp drive="C":
     printf "\033[0;34m\n═══════════════════════════════════════════════════════════\033[0m\n"
     printf "\033[0;34m📊 BENCHMARK RESULTS\033[0m\n"
     printf "\033[0;34m═══════════════════════════════════════════════════════════\033[0m\n"
-    printf "%-20s %15s %15s\n" "Metric" "C++" "Rust"
+    printf "%-20s %15s %15s\n" "Metric" "Reference" "Rust"
     printf "%-20s %15s %15s\n" "────────────────────" "───────────────" "───────────────"
     printf "%-20s %14.2fs %14.2fs\n" "Time" "$CPP_TIME" "$RUST_TIME"
     printf "%-20s %15s %15s\n" "Files Found" "$CPP_COUNT" "$RUST_COUNT"
     printf "\033[0;34m═══════════════════════════════════════════════════════════\033[0m\n"
 
     if (( $(echo "$SPEEDUP > 1" | bc -l) )); then
-        printf "\033[0;32m✅ Rust is ${SPEEDUP}x FASTER than C++\033[0m\n"
+        printf "\033[0;32m✅ Rust is ${SPEEDUP}x faster than the reference binary\033[0m\n"
     elif (( $(echo "$SPEEDUP < 1" | bc -l) )); then
-        printf "\033[1;33m⚠️  Rust is ${RATIO}x SLOWER than C++\033[0m\n"
+        printf "\033[1;33m⚠️  Rust is ${RATIO}x slower than the reference binary\033[0m\n"
     else
-        printf "\033[0;34m   Rust and C++ are approximately equal\033[0m\n"
+        printf "\033[0;34m   Rust and the reference binary are approximately equal\033[0m\n"
     fi
 
     if [[ $COUNT_DIFF -ne 0 ]]; then
-        printf "\033[1;33m⚠️  File count difference: $COUNT_DIFF (Rust - C++)\033[0m\n"
+        printf "\033[1;33m⚠️  File count difference: $COUNT_DIFF (Rust - reference)\033[0m\n"
         printf "\033[0;33m   This may indicate path resolution issues\033[0m\n"
     else
         printf "\033[0;32m✅ File counts match!\033[0m\n"
@@ -1913,7 +1925,7 @@ bench-help:
     #!/usr/bin/env bash
     printf "\033[0;34m🏁 UFFS Benchmark Commands\033[0m\n"
     echo ""
-    printf "\033[0;32m  Integration Benchmarks (Rust vs C++):\033[0m\n"
+    printf "\033[0;32m  Integration Benchmarks (Rust vs reference):\033[0m\n"
     echo "    just bench-vs-cpp          # Compare on C: drive"
     echo "    just bench-vs-cpp D        # Compare on D: drive"
     echo ""

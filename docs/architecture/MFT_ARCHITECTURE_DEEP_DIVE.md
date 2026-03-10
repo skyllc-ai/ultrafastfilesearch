@@ -8,7 +8,7 @@ This document analyzes the architectural differences between the C++ UltraFastFi
 - C++ (legacy): ~43.6s for `*.txt` search, 735K files found
 - Rust (current): ~56.1s for same search, fewer files due to path resolution bug
 
-**Goal:** Make Rust 2-5x faster than C++ through modern architecture.
+**Goal:** Make Rust 2-5x faster than the legacy baseline through modern architecture.
 
 ---
 
@@ -82,7 +82,7 @@ Before diving into optimizations, it's critical to understand that **the MFT rea
 
 ### 1.1 Core Data Structures (`NtfsIndex` class)
 
-The C++ implementation uses a highly optimized, cache-friendly data layout:
+The legacy implementation uses a highly optimized, cache-friendly data layout:
 
 ```cpp
 class NtfsIndex : public RefCounted<NtfsIndex> {
@@ -742,7 +742,7 @@ just bench-update-baseline
 4. **Parallel path resolution** - Rayon for multi-threaded resolution
 
 **Benchmark targets:**
-- `just bench-vs-cpp` should show Rust 2x faster than C++
+- `just bench-vs-cpp` should show Rust 2x faster than the legacy baseline
 - `just bench-micro` should show pattern matching 4-8x faster
 
 ### Phase 3: Output Optimization (Week 5-6)
@@ -754,7 +754,7 @@ just bench-update-baseline
 3. **Format optimization** - Avoid unnecessary allocations
 
 **Benchmark targets:**
-- `just bench-vs-cpp` should show Rust 4x faster than C++
+- `just bench-vs-cpp` should show Rust 4x faster than the legacy baseline
 - `just bench-search` should show first result in <100ms
 
 ### Phase 4: True Pipelining for HDD Optimization (Week 7-8) ✅ COMPLETE
@@ -827,7 +827,7 @@ Read A ──────▶
 |--------|---------|-----------------|---------------|---------------------|
 | `*.txt` search (SSD C:) | ~56s | ~20s | ~10s | ~10s (no change) |
 | `*.txt` search (HDD S:) | ~90s | ~50s | ~35s | **~25s** |
-| Files found | Broken | 735K (matches C++) | 735K | 735K |
+| Files found | Broken | 735K (matches the legacy baseline) | 735K | 735K |
 | vs C++ (43.6s) | 1.3x slower | 2x faster | **4x faster** | **4x faster** |
 
 ### Memory Usage
@@ -967,7 +967,7 @@ The post-processing layer (`uffs-core`) is the bottleneck:
 - It's the **bottleneck** for the full search pipeline
 - Vec-based lookup provides **3-5x speedup** over HashMap
 - NameArena provides **2-3x fewer allocations**
-- Combined with SIMD, we can achieve **4x faster than C++**
+- Combined with SIMD, we can achieve **4x faster than the legacy baseline**
 
 > **Note:** Pipelined I/O was previously highlighted as critical, but the current
 > `PrefetchMftReader` already provides most of the benefit. True pipelining would
@@ -1102,7 +1102,7 @@ def main():
     if ratio > 1:
         print(f"\n⚠️  Rust is {ratio:.2f}x SLOWER than C++")
     else:
-        print(f"\n✅ Rust is {1/ratio:.2f}x FASTER than C++")
+        print(f"\n✅ Rust is {1/ratio:.2f}x faster than the legacy baseline")
 
 if __name__ == '__main__':
     main()

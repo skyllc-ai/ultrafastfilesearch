@@ -57,7 +57,7 @@ Your samples show many diffs like:
 - `65712 vs 65776` (**+64**)
 - `131424 vs 131432` (**+8**)
 
-Those are *exactly what you’d expect* if Rust is counting `$I30:$BITMAP` bytes into directory sizes while the C++ reference does not (bitmap resident sizes are often 8 bytes, 64 bytes, etc depending on number of index blocks).
+Those are *exactly what you’d expect* if Rust is counting `$I30:$BITMAP` bytes into directory sizes while the legacy baseline does not (bitmap resident sizes are often 8 bytes, 64 bytes, etc depending on number of index blocks).
 
 So: the mismatch *count* looks scary, but it’s likely one systematic rule difference.
 
@@ -92,18 +92,18 @@ You likely need this in **both** pipelines:
    - This is used by your **offline scan**.
    - In `index.rs`, `MftIndex::from_parsed_records()` currently treats directory size as:
      
-     > `$INDEX_ROOT + $INDEX_ALLOCATION + $BITMAP` (comment currently says this is “C++ parity”)
+     > `$INDEX_ROOT + $INDEX_ALLOCATION + $BITMAP` (comment currently says this is “legacy-output parity”)
 
      Based on your mismatch signatures, that comment is almost certainly wrong. Update parsing so directory size is:
 
      > `$INDEX_ROOT + $INDEX_ALLOCATION` (**exclude `$BITMAP`**)
 
-2. **The C++ port parser (`cpp_types.rs`)**
-   - If/when your live pipeline uses the C++ port parsing, it must also exclude bitmap or it will reintroduce the same mismatch.
+2. **The legacy port parser (`cpp_types.rs`)**
+   - If/when your live pipeline uses the legacy port parsing, it must also exclude bitmap or it will reintroduce the same mismatch.
 
 ---
 
-### 1.3 Concrete code change in `cpp_types.rs` (C++ port parser)
+### 1.3 Concrete code change in `cpp_types.rs` (legacy port parser)
 
 File: `cpp_types.rs`  
 Function: `fn parse_stream(...)`

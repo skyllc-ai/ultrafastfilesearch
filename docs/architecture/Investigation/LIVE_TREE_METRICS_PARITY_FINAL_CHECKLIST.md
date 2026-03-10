@@ -8,7 +8,7 @@ This note is focused on the **LIVE/ONLINE** MFT path (IOCP + C++-style pipeline)
 - `--tree-algo=cpp`
 - `--no-cache`
 
-It assumes **OFFLINE** (saved MFT file) is already at **100% parity** vs the C++ reference.
+It assumes **OFFLINE** (saved MFT file) is already at **100% parity** vs the legacy baseline.
 
 ---
 

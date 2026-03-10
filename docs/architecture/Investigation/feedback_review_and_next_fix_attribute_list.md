@@ -106,7 +106,7 @@ On real Windows volumes, the attribute that commonly fits this pattern is:
 
 - **`$ATTRIBUTE_LIST` (type 0x20)**
 
-And there’s a smoking gun in the C++ reference:
+And there’s a smoking gun in the legacy baseline:
 
 - In the C++ `switch` over NTFS attribute types, **`AttributeAttributeList` is commented out** as an explicit case, so it falls through to the `default:` logic and is treated like a stream (counted and sized).
 

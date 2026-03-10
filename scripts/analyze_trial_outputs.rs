@@ -1,12 +1,12 @@
 #!/usr/bin/env rust-script
-//! Analyze UFFS trial run outputs - compare C++ vs Rust outputs for exact parity.
+//! Analyze UFFS trial run outputs by comparing the reference output with Rust output.
 //!
 //! Usage:
 //!   rust-script scripts/analyze_trial_outputs.rs <trial_dir>
 //!   rust-script scripts/analyze_trial_outputs.rs docs/trial_runs/d_disk
 //!
 //! Expected files in trial_dir:
-//!   - cpp_d.txt (or cpp_<drive>.txt) - C++ reference output
+//!   - baseline_d.txt (or baseline_<drive>.txt) - reference output
 //!   - rust_new_d.txt (or rust_new_<drive>.txt) - Rust with new tree algo
 //!
 //! The script will:
@@ -114,24 +114,24 @@ fn normalize_path(path: &str) -> String {
     path.to_lowercase().replace('\\', "/").trim_end_matches('/').to_string()
 }
 
-fn compare_outputs(cpp_file: &Path, rust_file: &Path) {
+fn compare_outputs(reference_file: &Path, rust_file: &Path) {
     println!("\n{}", "=".repeat(70));
     println!("Comparing:");
-    println!("  C++:  {}", cpp_file.display());
+    println!("  Reference: {}", reference_file.display());
     println!("  Rust: {}", rust_file.display());
     println!("{}", "=".repeat(70));
 
-    let cpp_records = parse_uffs_output(cpp_file);
+    let reference_records = parse_uffs_output(reference_file);
     let rust_records = parse_uffs_output(rust_file);
 
     println!("\nRecord counts:");
-    println!("  C++:  {:>12}", format_num(cpp_records.len()));
+    println!("  Reference: {:>8}", format_num(reference_records.len()));
     println!("  Rust: {:>12}", format_num(rust_records.len()));
-    let diff = rust_records.len() as i64 - cpp_records.len() as i64;
+    let diff = rust_records.len() as i64 - reference_records.len() as i64;
     println!("  Diff: {:>+12}", diff);
 
     // Build path maps
-    let cpp_paths: HashMap<String, &Record> = cpp_records
+    let reference_paths: HashMap<String, &Record> = reference_records
         .iter()
         .map(|r| (normalize_path(&r.path), r))
         .collect();
@@ -140,34 +140,34 @@ fn compare_outputs(cpp_file: &Path, rust_file: &Path) {
         .map(|r| (normalize_path(&r.path), r))
         .collect();
 
-    let cpp_keys: HashSet<_> = cpp_paths.keys().cloned().collect();
+    let reference_keys: HashSet<_> = reference_paths.keys().cloned().collect();
     let rust_keys: HashSet<_> = rust_paths.keys().cloned().collect();
 
-    let common: HashSet<_> = cpp_keys.intersection(&rust_keys).cloned().collect();
-    let cpp_only: Vec<_> = cpp_keys.difference(&rust_keys).cloned().collect();
-    let rust_only: Vec<_> = rust_keys.difference(&cpp_keys).cloned().collect();
+    let common: HashSet<_> = reference_keys.intersection(&rust_keys).cloned().collect();
+    let reference_only: Vec<_> = reference_keys.difference(&rust_keys).cloned().collect();
+    let rust_only: Vec<_> = rust_keys.difference(&reference_keys).cloned().collect();
 
     println!("\nPath comparison:");
     println!("  Common paths:  {:>12}", format_num(common.len()));
-    println!("  C++ only:      {:>12}", format_num(cpp_only.len()));
+    println!("  Reference only:{:>12}", format_num(reference_only.len()));
     println!("  Rust only:     {:>12}", format_num(rust_only.len()));
 
-    if !cpp_paths.is_empty() {
-        let match_pct = common.len() as f64 / cpp_paths.len() as f64 * 100.0;
+    if !reference_paths.is_empty() {
+        let match_pct = common.len() as f64 / reference_paths.len() as f64 * 100.0;
         println!("  Match rate:    {:>11.4}%", match_pct);
     }
 
     // Check attribute differences
     let mut attr_diffs = Vec::new();
     for path in &common {
-        let cpp_rec = cpp_paths.get(path).unwrap();
+        let reference_rec = reference_paths.get(path).unwrap();
         let rust_rec = rust_paths.get(path).unwrap();
-        if cpp_rec.size != rust_rec.size || cpp_rec.descendants != rust_rec.descendants {
+        if reference_rec.size != rust_rec.size || reference_rec.descendants != rust_rec.descendants {
             attr_diffs.push((
                 path.clone(),
-                cpp_rec.size.clone(),
+                reference_rec.size.clone(),
                 rust_rec.size.clone(),
-                cpp_rec.descendants.clone(),
+                reference_rec.descendants.clone(),
                 rust_rec.descendants.clone(),
             ));
         }
@@ -176,28 +176,28 @@ fn compare_outputs(cpp_file: &Path, rust_file: &Path) {
     if !attr_diffs.is_empty() {
         println!("\n⚠️  Attribute differences in common paths: {}", attr_diffs.len());
         println!("\nFirst 10 attribute differences:");
-        for (path, cpp_size, rust_size, cpp_desc, rust_desc) in attr_diffs.iter().take(10) {
+        for (path, reference_size, rust_size, reference_desc, rust_desc) in attr_diffs.iter().take(10) {
             println!("  {}", path);
-            println!("    Size: C++={} vs Rust={}", cpp_size, rust_size);
-            println!("    Desc: C++={} vs Rust={}", cpp_desc, rust_desc);
+            println!("    Size: REF={} vs Rust={}", reference_size, rust_size);
+            println!("    Desc: REF={} vs Rust={}", reference_desc, rust_desc);
         }
     }
 
     // Report missing paths
-    if !cpp_only.is_empty() {
-        println!("\n❌ Paths in C++ but NOT in Rust (first 20):");
-        let mut sorted: Vec<_> = cpp_only.iter().collect();
+    if !reference_only.is_empty() {
+        println!("\n❌ Paths in reference output but NOT in Rust (first 20):");
+        let mut sorted: Vec<_> = reference_only.iter().collect();
         sorted.sort();
         for p in sorted.iter().take(20) {
             println!("  {}", p);
         }
-        if cpp_only.len() > 20 {
-            println!("  ... and {} more", cpp_only.len() - 20);
+        if reference_only.len() > 20 {
+            println!("  ... and {} more", reference_only.len() - 20);
         }
     }
 
     if !rust_only.is_empty() {
-        println!("\n❌ Paths in Rust but NOT in C++ (first 20):");
+        println!("\n❌ Paths in Rust but NOT in the reference output (first 20):");
         let mut sorted: Vec<_> = rust_only.iter().collect();
         sorted.sort();
         for p in sorted.iter().take(20) {
@@ -209,7 +209,7 @@ fn compare_outputs(cpp_file: &Path, rust_file: &Path) {
     }
 
     // Perfect match check
-    if cpp_only.is_empty() && rust_only.is_empty() && attr_diffs.is_empty() {
+    if reference_only.is_empty() && rust_only.is_empty() && attr_diffs.is_empty() {
         println!("\n✅ PERFECT MATCH - All {} paths match exactly!", format_num(common.len()));
     }
 }
@@ -250,7 +250,7 @@ fn main() {
         eprintln!("Usage: rust-script {} <trial_dir>", args[0]);
         eprintln!();
         eprintln!("Expected files in trial_dir:");
-        eprintln!("  - cpp_d.txt (or cpp_<drive>.txt) - C++ reference output");
+        eprintln!("  - baseline_d.txt (or baseline_<drive>.txt) - reference output");
         eprintln!("  - rust_new_d.txt (or rust_new_<drive>.txt) - Rust with new tree algo");
         std::process::exit(1);
     }
@@ -261,20 +261,24 @@ fn main() {
         std::process::exit(1);
     }
 
-    let cpp_files = find_files(trial_dir, "cpp_");
+    let reference_files = find_files(trial_dir, "baseline_");
     let rust_new_files = find_files(trial_dir, "rust_new_");
 
     println!("Trial directory: {}", trial_dir.display());
-    println!("Found {} C++ files, {} Rust (new) files", cpp_files.len(), rust_new_files.len());
+    println!(
+        "Found {} reference files, {} Rust (new) files",
+        reference_files.len(),
+        rust_new_files.len()
+    );
 
-    for cpp_file in &cpp_files {
-        if let Some(stem) = cpp_file.file_stem().and_then(|s| s.to_str()) {
-            let drive = stem.strip_prefix("cpp_").unwrap_or("");
+    for reference_file in &reference_files {
+        if let Some(stem) = reference_file.file_stem().and_then(|s| s.to_str()) {
+            let drive = stem.strip_prefix("baseline_").unwrap_or("");
             let rust_file = trial_dir.join(format!("rust_new_{}.txt", drive));
             if rust_file.exists() {
-                compare_outputs(cpp_file, &rust_file);
+                compare_outputs(reference_file, &rust_file);
             } else {
-                println!("\n⚠️  No matching Rust file for {}", cpp_file.display());
+                println!("\n⚠️  No matching Rust file for {}", reference_file.display());
             }
         }
     }

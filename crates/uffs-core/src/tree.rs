@@ -102,7 +102,8 @@ struct TreeMetrics {
     /// Sum of allocated sizes in subtree.
     tree_allocated: u64,
     /// Filtered bulkiness sum (excludes large files >= 1% of folder size).
-    /// This matches the C++ algorithm for identifying fragmented folders.
+    /// This matches the historical algorithm for identifying fragmented
+    /// folders.
     bulkiness_sum: u64,
 }
 
@@ -297,7 +298,7 @@ impl TreeIndex {
     /// metrics with just the file's own size. For directories,
     /// recursively computes metrics for all descendants.
     ///
-    /// # Bulkiness Algorithm (matches C++ reference)
+    /// # Bulkiness Algorithm (matches the historical baseline)
     ///
     /// For directories, bulkiness is computed by:
     /// 1. Summing all children's allocated sizes
@@ -347,8 +348,9 @@ impl TreeIndex {
                     children_bulkiness_total.saturating_add(child_metrics.bulkiness_sum);
             }
 
-            // Apply C++ bulkiness algorithm: filter out large files >= 1% of folder size
-            // This identifies folders with many small fragmented files
+            // Apply the historical bulkiness algorithm: filter out large files >= 1% of
+            // folder size This identifies folders with many small fragmented
+            // files
             let threshold = metrics.tree_allocated / 100; // 1% threshold
 
             if threshold > 0 && !children_bulkiness.is_empty() {
@@ -394,7 +396,7 @@ impl TreeIndex {
     ///
     /// This is the filtered sum of allocated sizes, excluding large files
     /// that are >= 1% of the folder's total allocated size. This matches
-    /// the C++ reference algorithm for identifying fragmented folders.
+    /// the historical baseline algorithm for identifying fragmented folders.
     pub fn bulkiness(&mut self, frs: u64) -> u64 {
         self.compute_metrics(frs).bulkiness_sum
     }
@@ -568,7 +570,7 @@ pub fn add_tree_columns(df: &DataFrame, columns: &[TreeColumn]) -> Result<DataFr
     tree.add_columns(df, columns)
 }
 
-/// Apply treesize transformation to directories for C++ parity.
+/// Apply treesize transformation to directories for baseline-compatible output.
 ///
 /// For directories, replaces:
 /// - `size` with `treesize` (sum of logical sizes in subtree)
@@ -576,8 +578,8 @@ pub fn add_tree_columns(df: &DataFrame, columns: &[TreeColumn]) -> Result<DataFr
 ///
 /// For files, keeps the original `size` and `allocated_size` values.
 ///
-/// This matches C++ UFFS behavior where directory sizes show the total
-/// size of all files under them, not the directory's own metadata size.
+/// This matches the historical UFFS behavior where directory sizes show the
+/// total size of all files under them, not the directory's own metadata size.
 ///
 /// # Requirements
 ///
@@ -595,8 +597,9 @@ pub fn add_tree_columns(df: &DataFrame, columns: &[TreeColumn]) -> Result<DataFr
 pub fn apply_directory_treesize(df: &DataFrame) -> Result<DataFrame> {
     use uffs_polars::{IntoLazy, col, lit, when};
 
-    // C++ parity: Apply treesize to ALL directories (including reparse points).
-    // ADS entries keep the stream-specific size (not the parent's treesize).
+    // Baseline-compatible output: apply treesize to ALL directories, including
+    // reparse points. ADS entries keep the stream-specific size (not the
+    // parent's treesize).
     let has_stream_name = df.column("stream_name").is_ok();
 
     let is_default_dir = if has_stream_name {

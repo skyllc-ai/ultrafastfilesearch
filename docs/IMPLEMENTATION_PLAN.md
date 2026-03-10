@@ -365,7 +365,7 @@ crates/uffs-mft/src/
 
 #### High-Performance MFT Reading Architecture
 
-The MFT reading implementation matches the C++ reference for performance:
+The MFT reading implementation matches the historical baseline for performance:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐

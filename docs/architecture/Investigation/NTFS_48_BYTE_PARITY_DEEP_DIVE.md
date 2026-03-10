@@ -119,7 +119,7 @@ This perfectly matches the observed behavior.
 
 ## Why C++ Does Not Have This Bug
 
-The C++ implementation:
+The legacy implementation:
 
 - Identifies streams by **(attribute type + name)**
 - Uses a `default:` switch case to count *all* attributes

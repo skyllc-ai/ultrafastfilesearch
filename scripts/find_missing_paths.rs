@@ -1,9 +1,9 @@
 #!/usr/bin/env rust-script
-//! Find paths that are in C++ output but not in Rust output.
+//! Find paths that are in the reference output but not in Rust output.
 //! Output the full CSV lines for analysis.
 //!
 //! Usage:
-//!   rust-script scripts/find_missing_paths.rs <cpp_file> <rust_file>
+//!   rust-script scripts/find_missing_paths.rs <reference_file> <rust_file>
 //!
 //! ```cargo
 //! [dependencies]
@@ -53,11 +53,11 @@ fn parse_csv_line(line: &str) -> Vec<String> {
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
-        eprintln!("Usage: rust-script {} <cpp_file> <rust_file>", args[0]);
+        eprintln!("Usage: rust-script {} <reference_file> <rust_file>", args[0]);
         std::process::exit(1);
     }
 
-    let cpp_file = &args[1];
+    let reference_file = &args[1];
     let rust_file = &args[2];
 
     // First pass: collect all Rust paths
@@ -76,12 +76,13 @@ fn main() {
     }
     eprintln!("Rust paths: {}", rust_paths.len());
 
-    // Second pass: find C++ paths not in Rust
-    eprintln!("Reading C++ file and finding missing...");
-    let cpp_reader = BufReader::new(File::open(cpp_file).expect("Failed to open C++ file"));
+    // Second pass: find reference-output paths not in Rust.
+    eprintln!("Reading reference file and finding missing...");
+    let reference_reader =
+        BufReader::new(File::open(reference_file).expect("Failed to open reference file"));
     let mut missing = Vec::new();
     
-    for line in cpp_reader.lines().flatten() {
+    for line in reference_reader.lines().flatten() {
         if line.is_empty() || line.starts_with("\"Path\"") || line.starts_with("Path") {
             continue;
         }
@@ -94,7 +95,7 @@ fn main() {
         }
     }
 
-    eprintln!("\nFound {} paths in C++ but not in Rust:\n", missing.len());
+    eprintln!("\nFound {} paths in the reference output but not in Rust:\n", missing.len());
     
     // Output missing paths with full CSV line
     for (path, full_line) in &missing {

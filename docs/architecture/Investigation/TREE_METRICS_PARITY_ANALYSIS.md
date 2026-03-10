@@ -421,7 +421,7 @@ awk -F',' 'NR>1 && $4==5 && $1!=5 {sum+=$39} END {print sum}' /tmp/rust_mft.csv
 
 ## 10. Conclusion
 
-Significant progress has been made in achieving C++ parity:
+Significant progress has been made in achieving legacy-output parity:
 
 - **Descendants:** 100% match (15,119 = 15,119)
 - **Treesize:** 99.999992% match (48 bytes difference on 609 MB)

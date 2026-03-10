@@ -313,7 +313,7 @@ impl MftQuery {
 
     /// Hide both system files (`$`-prefixed) and metadata records (FRS < 16).
     ///
-    /// This provides full C++ parity by excluding:
+    /// This provides full legacy-output parity by excluding:
     /// 1. NTFS metadata records (FRS 0-15)
     /// 2. System files with `$` prefix (like `$Extend` subdirectories)
     #[must_use]

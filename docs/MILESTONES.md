@@ -41,9 +41,9 @@ crates/
 
 **Legend**: ⬜ Not Started | 🟡 In Progress | 🟢 Complete | 🔴 Blocked
 
-### Phase 6 Goal: "Faster Than C++"
+### Phase 6 Goal: "Outperform the Reference Baseline"
 
-Phase 6 focuses on making the Rust implementation **2-5x faster than C++** through:
+Phase 6 focuses on making the Rust implementation **2-5x faster than the reference binary** through:
 - **Pipelined I/O** ⭐ (2x speedup, 250x memory reduction) - overlap I/O and CPU work
 - Arena-based name storage (eliminate allocations)
 - Vector-based FRS lookup (O(1) direct indexing)
@@ -378,7 +378,7 @@ uffs save-raw --drives C,D --output-dir ./raw_mfts/
 
 ### High-Performance MFT Reading Architecture
 
-The implementation matches the C++ reference for performance with these key components:
+The implementation matches the historical baseline for performance with these key components:
 
 | Component | Location | Description |
 |-----------|----------|-------------|
@@ -435,9 +435,9 @@ The implementation matches the C++ reference for performance with these key comp
 
 ---
 
-## Phase 6: Performance Optimization - "Faster Than C++" (Weeks 22-31)
+## Phase 6: Performance Optimization - "Outperform the Reference Baseline" (Weeks 22-31)
 
-**Goal**: Make Rust implementation 2-5x faster than C++ through architectural optimizations
+**Goal**: Make the Rust implementation 2-5x faster than the reference binary through architectural optimizations
 **Crates**: `uffs-mft`, `uffs-core`
 **Target Date**: Week 31
 **Status**: 🟡 In Progress
@@ -468,7 +468,7 @@ Before diving into optimizations, note that **`uffs-mft` is already 55% faster**
 
 ### Background
 
-Analysis of the C++ implementation revealed key architectural differences that explain its speed:
+Analysis of the historical baseline revealed key architectural differences that explain its speed:
 - **Contiguous memory**: All data in vectors, not scattered heap allocations
 - **Direct indexing**: `vector[frs]` instead of HashMap lookups
 - **Packed structures**: Minimal memory footprint, cache-friendly
@@ -602,7 +602,7 @@ Reader Thread ──▶ [Bounded Channel] ──▶ Parser Thread
 
 ### Acceptance Criteria
 
-- [x] PathResolver correctly resolves ALL files (matches C++ output)
+- [x] PathResolver correctly resolves ALL files (matches reference output)
 - [x] Benchmark suite covers all critical paths
 - [ ] `*.txt` search completes in <20s (vs C++ ~43.6s)
 - [ ] Memory usage <50 bytes per file (vs current ~200+)
@@ -623,7 +623,7 @@ Reader Thread ──▶ [Bounded Channel] ──▶ Parser Thread
 
 **Conservative estimate**: 10-15x faster than current Rust
 **Optimistic estimate**: 25-50x faster than current Rust
-**Target**: 2-5x faster than C++
+**Target**: 2-5x faster than the reference binary
 
 ### Memory Targets
 
@@ -709,7 +709,7 @@ Phase 4 (uffs-cli & Performance)
     ↓
 Phase 5 (uffs-tui & Polish)
     ↓
-Phase 6 (Performance Optimization - "Faster Than C++")
+Phase 6 (Performance Optimization - "Outperform the Reference Baseline")
 ```
 
 ---
@@ -748,7 +748,7 @@ Phase 6 (Performance Optimization - "Faster Than C++")
 | 2026-01-16 | **Implementation complete** | All core crates implemented |
 | 2026-01-16 | **High-performance MFT reading** | Parallel processing (Rayon), batch I/O, cluster-level bitmap skipping, fragmented MFT support |
 | 2026-01-16 | **Phase 3.5: Directory Tree Structure** | `TreeIndex` with memoized metrics: descendants, treesize, tree_allocated, bulkiness |
-| 2026-01-19 | **Phase 6: Performance Optimization** | Deep dive analysis of C++ vs Rust architecture; roadmap to make Rust 2-5x faster than C++ |
+| 2026-01-19 | **Phase 6: Performance Optimization** | Deep dive analysis of the historical baseline vs Rust architecture; roadmap to make Rust 2-5x faster than the reference binary |
 
 ---
 
@@ -845,7 +845,7 @@ UltraFastFileSearch/
 
 ### Project Resources
 
-- **C++ Reference**: `old_cpp/uffs/UltraFastFileSearch-code/`
+- **Reference baseline**: `old_cpp/uffs/UltraFastFileSearch-code/`
 - **Architecture Doc**: `docs/architecture/Suggested Rust Source Code Structure.docx`
 - **Implementation Plan**: `docs/IMPLEMENTATION_PLAN.md`
 

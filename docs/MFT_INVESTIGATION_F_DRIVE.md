@@ -21,18 +21,18 @@ We decided to treat this as a forensic investigation of the **MFT processing pip
 
 ### 1.3 Where to find more background and reference implementations
 
-This document focuses on the *Rust* side investigation, but it sits in the context of a mature, working C++ implementation. For deeper background and a known‑good reference, use:
+This document focuses on the *Rust* side investigation, but it sits in the context of a mature, working legacy implementation. For deeper background and a known‑good reference, use:
 
-- **Architecture & design docs (C++ implementation):**
+- **Architecture & design docs (legacy implementation):**
   - `reference/Ultra-Fast-File-Search/docs/architecture`
-  - Contains exhaustive documentation for the original Ultra-Fast-File-Search, including how the C++ implementation handles:
+  - Contains exhaustive documentation for the original Ultra-Fast-File-Search, including how the legacy implementation handles:
     - `$MFT` parsing and extent mapping.
     - Path resolution and parent/child relationships.
     - Performance characteristics and design tradeoffs.
 
 - **Reference C++ source code:**
   - `reference/Ultra-Fast-File-Search/UltraFastFileSearch-code`
-  - This is the **ground truth implementation** we compare against when validating the Rust port. When in doubt about intended behavior, consult this tree to see how the C++ version:
+  - This is the **ground truth implementation** we compare against when validating the Rust port. When in doubt about intended behavior, consult this tree to see how the legacy version:
     - Opens NTFS volumes and enumerates `$MFT`.
     - Maps VCN/LCN extents.
     - Interprets `FILE` records and builds full paths.
@@ -331,7 +331,7 @@ This change ensures the **full runlist for `$MFT`** is obtained as intended, rat
 - Regenerating `f_mft.raw` and `f_mft.parquet` on Windows after this fix should:
   - Produce valid `FILE` records in high‑FRS regions where we previously saw `RCRD`/ZERO/OTHER.
   - Dramatically reduce or eliminate the set of "missing parents" in `analyze_mft_parents`.
-  - Bring Rust path coverage and counts in line with the C++ implementation on F:.
+  - Bring Rust path coverage and counts in line with the legacy implementation on F:.
 
 ## 7. Diagnostic Crate Split: `uffs-diag`
 
@@ -492,7 +492,7 @@ Taken together with the earlier raw/MFT analysis, this diff confirms that **Rust
    - `cargo run -p uffs-diag --bin analyze_mft_parents -- docs/trial_runs/f_mft.parquet`
 
 4. **Compare Rust vs C++ path coverage again**:
-   - Re-run equivalent queries on Rust and C++ implementations using the newly indexed F:.
+   - Re-run equivalent queries on Rust and legacy implementations using the newly indexed F:.
    - Confirm path counts, directory coverage, and absence of `<dir:XXXXXX>` placeholders align.
 
 5. **Refine any remaining edge cases**:
@@ -568,7 +568,7 @@ Across these samples we see a consistent pattern:
 - Many of the highest-impact **missing parents** are **not valid base directory FILE records** in the latest `f_mft.raw`.
 - From the raw MFT’s point of view, it is therefore reasonable (and correct) that `uffs-mft` does not emit a directory row for those FRS in `f_mft.parquet`.
 
-However, the C++ implementation is still able to resolve real directory paths for children that name these FRS as `parent_frs`, while the current Rust path resolver falls back to placeholders like `<dir:2640657>`.
+However, the legacy implementation is still able to resolve real directory paths for children that name these FRS as `parent_frs`, while the current Rust path resolver falls back to placeholders like `<dir:2640657>`.
 
 ### 10.4 Working hypothesis
 
@@ -686,7 +686,7 @@ We now have high confidence that, for every FRS where both the reference CSV and
 
 To completely rule out any residual differences in **how we read the raw bytes from disk** (extent mapping, VCN/LCN translation, etc.), we will ask the C++ team to build an independent, very low-level `$MFT` dump tool in C++.
 
-The goal of this tool is to generate a second raw snapshot ("C++ view of `$MFT`") using the same Windows APIs and patterns the C++ implementation trusts in production. We can then compare that file bit-for-bit against the raw snapshot produced by `uffs-mft`.
+The goal of this tool is to generate a second raw snapshot ("C++ view of `$MFT`") using the same Windows APIs and patterns the legacy implementation trusts in production. We can then compare that file bit-for-bit against the raw snapshot produced by `uffs-mft`.
 
 ### 12.2 C++ raw dump tool design
 
@@ -842,7 +842,7 @@ The extent retrieval is now correct (all 28 extents with correct VCN/LCN/cluster
 
 **Phase 1 (Extent Retrieval): COMPLETE ✓**
 - Rust now correctly retrieves all 28 MFT extents
-- Extent data matches C++ exactly
+- Extent data matches the legacy baseline exactly
 
 **Phase 2 (Extent Reading): IN PROGRESS**
 - Bug identified: Read path produces wrong data starting at extent 5

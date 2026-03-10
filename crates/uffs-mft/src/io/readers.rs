@@ -519,10 +519,11 @@ impl ParallelMftReader {
         self.read_all_parallel_with_progress::<fn(u64, u64)>(handle, false, None)
     }
 
-    /// Reads and parses all MFT records in parallel with full C++ parity.
+    /// Reads and parses all MFT records in parallel with full legacy-output
+    /// parity.
     ///
     /// This function handles extension records by merging their attributes
-    /// into the base records, matching the C++ implementation behavior.
+    /// into the base records, matching the legacy implementation behavior.
     ///
     /// # Arguments
     ///
@@ -543,7 +544,7 @@ impl ParallelMftReader {
     /// Reads and parses all MFT records in parallel with progress callback.
     ///
     /// This function handles extension records by merging their attributes
-    /// into the base records, matching the C++ implementation behavior.
+    /// into the base records, matching the legacy implementation behavior.
     /// The progress callback is called during the I/O phase with (bytes_read,
     /// total_bytes).
     ///
@@ -1755,7 +1756,7 @@ impl ParallelMftReader {
 
     /// Sliding window IOCP read - C++ style with 2-4 reads in flight.
     ///
-    /// This matches the C++ implementation exactly:
+    /// This matches the legacy implementation exactly:
     /// - Only 2-4 reads queued at a time (not 11,500!)
     /// - Per-read buffer allocation with recycling
     /// - Process data as it arrives (overlap I/O with parsing)
@@ -2216,7 +2217,7 @@ impl ParallelMftReader {
 
     /// Sliding window IOCP read with inline parsing directly to MftIndex.
     ///
-    /// This is the C++ parity implementation that:
+    /// This is the legacy-output parity implementation that:
     /// - Parses each 1MB chunk as soon as it completes (no buffering)
     /// - Builds the index incrementally during I/O
     /// - Creates parent placeholders on-demand
@@ -2600,7 +2601,7 @@ impl ParallelMftReader {
         Ok(index)
     }
 
-    /// Reads all MFT records using the C++ port parsing algorithm.
+    /// Reads all MFT records using the legacy port parsing algorithm.
     ///
     /// This method uses `CppParsePipeline` which is a 100% faithful port of the
     /// C++ parsing algorithm. It processes chunks using the two-phase pipeline:
@@ -4371,7 +4372,7 @@ fn read_chunk_into_buffer_static(
 /// I/O Completion Port wrapper for Windows async I/O.
 ///
 /// This provides IOCP-based overlapped I/O for maximum I/O parallelism,
-/// mirroring the C++ implementation's approach of having multiple reads
+/// mirroring the legacy implementation's approach of having multiple reads
 /// in flight simultaneously.
 pub struct IoCompletionPort {
     /// The IOCP handle.
@@ -4506,7 +4507,7 @@ impl OverlappedRead {
 ///
 /// This reader uses Windows I/O Completion Ports to issue multiple
 /// overlapped reads simultaneously, maximizing I/O parallelism and
-/// hiding disk latency. This mirrors the C++ implementation's approach.
+/// hiding disk latency. This mirrors the legacy implementation's approach.
 ///
 /// Architecture:
 /// ```text

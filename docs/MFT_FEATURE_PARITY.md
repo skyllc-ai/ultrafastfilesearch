@@ -1,14 +1,14 @@
-# MFT Feature Parity: C++ vs Rust Implementation
+# MFT Feature Parity: Reference baseline vs Rust implementation
 
 > **Document Purpose:** Detailed gap analysis and implementation roadmap to achieve 100% feature parity
-> between the C++ reference (`reference/uffs/UltraFastFileSearch-code/file.cpp`) and the Rust
+> between the reference baseline (`reference/uffs/UltraFastFileSearch-code/file.cpp`) and the Rust
 > implementation (`crates/uffs-mft/`).
 
 ---
 
 ## Executive Summary
 
-| Category | C++ Features | Rust Implemented | Parity |
+| Category | Reference Features | Rust Implemented | Parity |
 |----------|--------------|------------------|--------|
 | I/O Layer | 5 | 5 | ✅ 100% |
 | Data Extraction | 10 | 10 | ✅ 100% |
@@ -43,7 +43,7 @@
 ### Phase 2: Hard Link Support ✅ COMPLETE
 | ID | Task | Status | File(s) |
 |----|------|--------|---------|
-| 2.1 | Add `NameInfo` struct matching C++ | [x] | `ntfs.rs` |
+| 2.1 | Add `NameInfo` struct matching the baseline | [x] | `ntfs.rs` |
 | 2.2 | Add `names: Vec<NameInfo>` to `ParsedRecord` | [x] | `io.rs` |
 | 2.3 | Add `name_count()` method to `ParsedRecord` | [x] | `io.rs` |
 | 2.4 | Collect ALL `$FILE_NAME` attributes (except DOS-only) | [x] | `io.rs` |
@@ -52,7 +52,7 @@
 ### Phase 3: Alternate Data Streams (ADS) ✅ COMPLETE
 | ID | Task | Status | File(s) |
 |----|------|--------|---------|
-| 3.1 | Add `StreamInfo` struct matching C++ | [x] | `ntfs.rs` |
+| 3.1 | Add `StreamInfo` struct matching the baseline | [x] | `ntfs.rs` |
 | 3.2 | Add `streams: Vec<StreamInfo>` to `ParsedRecord` | [x] | `io.rs` |
 | 3.3 | Add `stream_count()` method to `ParsedRecord` | [x] | `io.rs` |
 | 3.4 | Parse ALL `$DATA` attributes (named and unnamed) | [x] | `io.rs` |
@@ -131,7 +131,7 @@ if !header.is_base_record() {
 }
 ```
 
-**C++ Reference Behavior:**
+**Reference Behavior:**
 ```cpp
 // reference/uffs/file.cpp:2371-2372
 unsigned int const frs_base = frsh->BaseFileRecordSegment 
@@ -185,7 +185,7 @@ if !is_better_name && !result.name.is_empty() {
 }
 ```
 
-**C++ Reference Behavior:**
+**Reference Behavior:**
 ```cpp
 // reference/uffs/file.cpp:2394-2419
 if (fn->Flags != 0x02 /* FILE_NAME_DOS */) {
@@ -246,7 +246,7 @@ Some(AttributeType::Data) => {
 // ❌ Named streams (ADS) are completely ignored
 ```
 
-**C++ Reference Behavior:**
+**Reference Behavior:**
 ```cpp
 // reference/uffs/file.cpp:2464-2512
 StreamInfo *info = NULL;
@@ -301,7 +301,7 @@ result.size = data_size as u64;
 // ❌ No allocated_size, no compressed_size handling
 ```
 
-**C++ Reference Behavior:**
+**Reference Behavior:**
 ```cpp
 // reference/uffs/file.cpp:2517-2525
 info->allocated += ah->IsNonResident
@@ -350,7 +350,7 @@ result.flags = (si.file_attributes & 0xFFFF) as u16;
 // Stores as single u16 bitmask
 ```
 
-**C++ Reference Behavior:**
+**Reference Behavior:**
 ```cpp
 // reference/uffs/file.cpp:1920-1935 (StandardInfo struct)
 struct StandardInfo {
@@ -405,7 +405,7 @@ struct StandardInfo {
 - No child tracking
 - No tree traversal capability
 
-**C++ Reference Behavior:**
+**Reference Behavior:**
 ```cpp
 // reference/uffs/file.cpp:2407-2417
 if (frs_parent != frs_base) {
@@ -441,7 +441,7 @@ if (frs_parent != frs_base) {
 - Extracts: `created`, `modified`, `accessed`
 - Missing: `mft_changed` (when MFT record was last modified)
 
-**C++ Reference Behavior:**
+**Reference Behavior:**
 - Has access to all 4 timestamps from `$STANDARD_INFORMATION`
 
 **Implementation Strategy:**
@@ -839,7 +839,7 @@ The implementation is complete when:
 
 ## References
 
-- **C++ Reference:** `reference/uffs/UltraFastFileSearch-code/file.cpp`
+- **Reference baseline:** `reference/uffs/UltraFastFileSearch-code/file.cpp`
   - Lines 939-1193: NTFS structures
   - Lines 1884-2090: NtfsIndex data structures
   - Lines 2370-2530: Record parsing logic

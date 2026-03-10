@@ -2,7 +2,7 @@
 
 **Context:** you have **perfect parity** between C++ and Rust in **offline** mode, but **LIVE** scans still show **tree-metrics** mismatches (directory `Size`, `Descendants`) for a tiny set of paths — notably the **volume root** and some **junction/reparse directories**. fileciteturn0file1 fileciteturn0file0
 
-This doc explains what’s *actually* happening, why it looks like “symlinks/junctions”, and what to change so the **Rust “C++ tree” mode** achieves **100% output parity** with the C++ reference.
+This doc explains what’s *actually* happening, why it looks like “symlinks/junctions”, and what to change so the **Rust “C++ tree” mode** achieves **100% output parity** with the legacy baseline.
 
 ---
 
@@ -100,7 +100,7 @@ if record.is_reparse { descendants = 0; }     // ❌ breaks parity
 if record.is_reparse { treat_as_leaf_file(); } // ❌ breaks parity
 ```
 
-That’s a *UI policy*, not an NTFS fact. The C++ reference output is clearly treating the junction record as a **directory leaf**, not a file. fileciteturn0file1
+That’s a *UI policy*, not an NTFS fact. The legacy baseline output is clearly treating the junction record as a **directory leaf**, not a file. fileciteturn0file1
 
 ---
 
@@ -116,7 +116,7 @@ In your G: run:
 That can only happen if “Descendants” is closer to a **stream-count–style** measure (records + streams + internal streams), not a pure node-count. This is consistent with the C++-port algorithm behavior: it counts streams, and internal streams can push the value above “row count”.
 
 ### 4.2 Junction directories should still be directories
-A junction/reparse-point directory is still a directory record in the MFT, and the C++ reference output is clearly treating it that way: it prints `Desc=1` (leaf directory: “self only”). fileciteturn0file1
+A junction/reparse-point directory is still a directory record in the MFT, and the legacy baseline output is clearly treating it that way: it prints `Desc=1` (leaf directory: “self only”). fileciteturn0file1
 
 Crucially:
 - “Not following reparse targets” ≠ “printing it as a file”
@@ -155,7 +155,7 @@ if is_volume_root_row(path) {
 }
 ```
 
-**Why this is correct:** OFFLINE already matches C++ (so these fields are computed correctly); LIVE must simply emit them for the root row as well. fileciteturn0file0 fileciteturn0file1
+**Why this is correct:** OFFLINE already matches the legacy baseline (so these fields are computed correctly); LIVE must simply emit them for the root row as well. fileciteturn0file0 fileciteturn0file1
 
 ---
 
@@ -227,7 +227,7 @@ Right before writing rows:
 - if `X:\` exists in output, it must have the same `Size/Desc` as record 5.
 
 2) Assert reparse directories:
-- if `is_directory && is_reparse`, descendants must be `>= 1` (in C++ parity mode)
+- if `is_directory && is_reparse`, descendants must be `>= 1` (in legacy-output parity mode)
 
 This catches the bug at the exact layer it occurs (export), not 20 steps later.
 
@@ -258,7 +258,7 @@ Once LIVE output uses the same post-tree fields as OFFLINE, parity falls out nat
 - [ ] Ensure exporter uses computed metrics for *all* directories (including reparse) once tree metrics are computed.
 - [ ] Add post-export assertions:
   - root row matches record 5
-  - `is_directory => descendants >= 1` in C++ parity mode
+  - `is_directory => descendants >= 1` in legacy-output parity mode
 - [ ] Update parity analyzer to check trace logs for tripwires when `.log` files are tiny. fileciteturn0file3
 
 ---

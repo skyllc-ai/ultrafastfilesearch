@@ -32,14 +32,14 @@ use alloc::sync::Arc;
 // Constants
 // ============================================================================
 
-/// Sentinel value indicating "no entry" (matches C++ `~0` / `negative_one`)
+/// Sentinel value indicating "no entry" (matches the legacy baseline `~0` / `negative_one`)
 pub const NO_ENTRY: u32 = u32::MAX;
 
 /// Root directory FRS in NTFS
 pub const ROOT_FRS: u64 = 5;
 
 // ============================================================================
-// StandardInfo - Bit-packed attributes (matches C++ exactly)
+// StandardInfo - Bit-packed attributes (matches the legacy baseline exactly)
 // ============================================================================
 
 /// Bit-packed file attributes matching C++ `StandardInfo`.
@@ -425,7 +425,7 @@ impl IndexNameRef {
 /// Most files have only one name, stored inline in `FileRecord::first_name`.
 /// Files with multiple hard links form a linked list via `next_entry`.
 ///
-/// **Note**: Changed from C++ implementation - uses u64 for `parent_frs`
+/// **Note**: Changed from legacy implementation - uses u64 for `parent_frs`
 /// instead of u32 to support all valid NTFS volumes (48-bit FRS values).
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
@@ -442,7 +442,7 @@ pub struct LinkInfo {
 // SizeInfo - File size information
 // ============================================================================
 
-/// File size information (matches C++ `SizeInfo`).
+/// File size information (matches the legacy baseline `SizeInfo`).
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct SizeInfo {
@@ -456,7 +456,7 @@ pub struct SizeInfo {
 // IndexStreamInfo - Alternate Data Stream chain entry
 // ============================================================================
 
-/// Alternate Data Stream information (matches C++ `IndexStreamInfo`).
+/// Alternate Data Stream information (matches the legacy baseline `IndexStreamInfo`).
 ///
 /// Most files have only the default `$DATA` stream, stored inline.
 /// Files with ADS form a linked list via `next_entry`.
@@ -871,7 +871,7 @@ impl ExtensionIndex {
 ///
 /// Directories maintain a linked list of their children for traversal.
 ///
-/// **Note**: Changed from C++ implementation - uses u64 for `child_frs` instead
+/// **Note**: Changed from legacy implementation - uses u64 for `child_frs` instead
 /// of u32 to support all valid NTFS volumes (48-bit FRS values).
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
@@ -885,10 +885,10 @@ pub struct ChildInfo {
 }
 
 // ============================================================================
-// FileRecord - Core file metadata (matches C++ Record)
+// FileRecord - Core file metadata (matches the legacy baseline Record)
 // ============================================================================
 
-/// Core file/directory record (matches C++ `Record`).
+/// Core file/directory record (matches the legacy baseline `Record`).
 ///
 /// Size: ~232 bytes per record (includes sequence number, `$FILE_NAME`
 /// timestamps, forensic fields)
@@ -1841,7 +1841,7 @@ impl MftIndex {
         // =========================================================================
 
         // Phase 1: Calculate base metrics for each record
-        // Sum ALL streams' sizes (default + ADS) for C++ parity
+        // Sum ALL streams' sizes (default + ADS) for legacy-output parity
         let base_metrics: Vec<_> = self
             .records
             .iter()
@@ -1926,7 +1926,7 @@ impl MftIndex {
                 // for directories to match this behavior.
                 record.descendants = if *is_directory { *stream_count } else { 0 };
                 if *is_directory {
-                    // Directories include their own index size in treesize (C++ parity)
+                    // Directories include their own index size in treesize (legacy-output parity)
                     // The directory's size comes from $INDEX_ROOT + $INDEX_ALLOCATION + $BITMAP
                     record.treesize = *size;
                     record.tree_allocated = *allocated;
@@ -2605,7 +2605,7 @@ impl MftIndex {
             }
         }
 
-        // Reverse and join with volume prefix (backslash for C++ parity)
+        // Reverse and join with volume prefix (backslash for legacy-output parity)
         components.reverse();
         format!(
             "{}:\\{}",
@@ -2667,7 +2667,7 @@ impl MftIndex {
             current_frs = parent_frs;
         }
 
-        // Reverse and join (backslash for C++ parity)
+        // Reverse and join (backslash for legacy-output parity)
         components.reverse();
         format!(
             "{}:\\{}",
@@ -4025,7 +4025,7 @@ mod tests {
         index.compute_tree_metrics();
 
         // Verify file1.txt (leaf)
-        // C++ parity: Files have descendants = 0, but contribute 1 to parent
+        // legacy-output parity: Files have descendants = 0, but contribute 1 to parent
         let file1_idx = index.frs_to_idx_opt(file1_frs).unwrap();
         assert_eq!(index.records[file1_idx].descendants, 0);
         assert_eq!(index.records[file1_idx].treesize, 1000);
@@ -4044,7 +4044,7 @@ mod tests {
         assert_eq!(index.records[file3_idx].tree_allocated, 4096);
 
         // Verify dir1 (has 2 children: file1 and file2)
-        // C++ parity: descendants = 1 (self) + sum(max(1, child.descendants))
+        // legacy-output parity: descendants = 1 (self) + sum(max(1, child.descendants))
         // dir1 = 1 + 1 + 1 = 3
         let dir1_idx = index.frs_to_idx_opt(dir1_frs).unwrap();
         assert_eq!(index.records[dir1_idx].descendants, 3); // 1 + file1(1) + file2(1)
@@ -4052,7 +4052,7 @@ mod tests {
         assert_eq!(index.records[dir1_idx].tree_allocated, 8192); // 0 + 4096 + 4096
 
         // Verify root (has dir1 + file3)
-        // C++ parity: descendants = 1 (self) + sum(child.descendants)
+        // legacy-output parity: descendants = 1 (self) + sum(child.descendants)
         // root = 1 + 3 + 1 = 5
         let root_idx = index.frs_to_idx_opt(root_frs).unwrap();
         assert_eq!(index.records[root_idx].descendants, 5); // 1 + dir1(3) + file3(1)
@@ -4121,7 +4121,7 @@ mod tests {
         // Compute tree metrics
         index.compute_tree_metrics();
 
-        // C++ parity: Files have descendants = 0, dirs have descendants = 1 +
+        // legacy-output parity: Files have descendants = 0, dirs have descendants = 1 +
         // sum(max(1, child.descendants)) Formula: parent.descendants = 1 +
         // sum(max(1, child.descendants)) file.txt = 0, dir3 = 1+max(1,0)=2,
         // dir2 = 1+2=3, dir1 = 1+3=4, root = 1+4=5
@@ -4233,7 +4233,7 @@ mod tests {
         );
 
         // Verify root has correct descendants count
-        // C++ parity: Files have descendants = 0, dirs have descendants = 1 +
+        // legacy-output parity: Files have descendants = 0, dirs have descendants = 1 +
         // sum(max(1, child.descendants)) Each file = 0 (but contributes 1 to
         // parent) Each dir_i = 1 (self) + 100 files * max(1,0) = 1 + 100 = 101
         // root = 1 (self) + 100 dirs * 101 = 10,101
@@ -4849,7 +4849,7 @@ impl MftIndex {
 
                 // Set size and flags
                 // For directories, use parsed.size/allocated_size which includes
-                // $INDEX_ROOT + $INDEX_ALLOCATION + $BITMAP (C++ parity)
+                // $INDEX_ROOT + $INDEX_ALLOCATION + $BITMAP (legacy-output parity)
                 // For files, use the default stream size
                 if parsed.is_directory {
                     // Directory size comes from index attributes, already in parsed.size

@@ -74,7 +74,7 @@ This makes parity runs work “out of the box” without relying on a fragile en
 
 ### Why this matters
 
-In the C++ port, **hardlink delta distribution** depends on `ChildInfo.name_index`.
+In the legacy port, **hardlink delta distribution** depends on `ChildInfo.name_index`.
 
 Key detail:
 

@@ -3,10 +3,10 @@
 ## Overview
 
 This document provides step-by-step instructions to fix the ~9M missing files (~35% discrepancy)
-between the Rust and C++ implementations. Each milestone is broken down into actionable tasks
+between the Rust and legacy implementations. Each milestone is broken down into actionable tasks
 that can be completed independently.
 
-**Target**: Achieve >95% match rate with C++ implementation.
+**Target**: Achieve >95% match rate with legacy implementation.
 
 ---
 
@@ -48,7 +48,7 @@ Before starting, ensure you have:
 ### Problem Statement
 
 The Rust implementation skips entire I/O chunks based on the MFT bitmap, causing records to be
-missed. The C++ implementation uses the bitmap for I/O optimization only but still reads and
+missed. The legacy implementation uses the bitmap for I/O optimization only but still reads and
 parses all records.
 
 ### Files to Modify
@@ -140,7 +140,7 @@ chunks.push(ReadChunk {
 // NOTE: We ALWAYS add chunks regardless of bitmap status.
 // The bitmap is used for I/O optimization (skip_begin/skip_end) to reduce
 // disk reads, but we still parse all records and check the IN_USE flag
-// in each record header. This matches C++ behavior where bitmap is
+// in each record header. This matches established behavior where bitmap is
 // advisory, not authoritative.
 ```
 
@@ -277,7 +277,7 @@ python scripts/compare_outputs.py cpp_output.parquet rust_with_bitmap_fix.parque
 
 ### Problem Statement
 
-The C++ implementation creates placeholder records for any referenced FRS via the `at()` method.
+The legacy implementation creates placeholder records for any referenced FRS via the `at()` method.
 When processing a file with parent FRS X, if X hasn't been seen yet, a placeholder is created.
 Rust doesn't do this, causing path resolution to fail with `<unknown:XXXXXX>`.
 
@@ -418,7 +418,7 @@ for frs in missing_parents {
 ```rust
 /// Creates a placeholder record for a missing parent directory.
 ///
-/// This matches C++ behavior where the `at()` method creates placeholder
+/// This matches established behavior where the `at()` method creates placeholder
 /// records for any referenced FRS that hasn't been seen yet.
 #[must_use]
 pub fn create_placeholder_record(frs: u64) -> ParsedRecord {
@@ -463,7 +463,7 @@ impl MftReader {
     /// Adds placeholder records for parent directories that are referenced
     /// but not present in the parsed records.
     ///
-    /// This matches C++ behavior where `at()` creates placeholder records
+    /// This matches established behavior where `at()` creates placeholder records
     /// for any referenced FRS that hasn't been seen yet.
     fn add_missing_parent_placeholders(&self, mut columns: ParsedColumns) -> Result<ParsedColumns> {
         use std::collections::HashSet;
@@ -844,7 +844,7 @@ merge_extensions: true, // Match C++ behavior - always merge extensions
 ```rust
 /// Whether to merge extension record attributes into base records.
 ///
-/// Default: `true` (matches C++ behavior)
+/// Default: `true` (matches established behavior)
 ///
 /// When `true`, attributes from extension records are merged into their
 /// base records. This is necessary for files with many hardlinks or ADS.
@@ -1329,7 +1329,7 @@ and supports tree metrics computation (descendants, treesize, tree_allocated, bu
 
 ### Problem Statement
 
-After implementing all fixes, we need to verify the Rust implementation matches C++ output
+After implementing all fixes, we need to verify the Rust implementation matches the legacy baseline output
 with >95% accuracy.
 
 ### Task 5.1: Create Comparison Script
@@ -1617,7 +1617,7 @@ fn compare_with_cpp_baseline() {
 | `add_missing_parent_placeholders()` | reader.rs | Placeholder creation (new) |
 | `build_path()` | path_resolver.rs:247 | Path resolution |
 
-### C++ Reference
+### legacy baseline
 
 | Function | File | Line | Purpose |
 |----------|------|------|---------|

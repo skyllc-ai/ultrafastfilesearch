@@ -1,4 +1,6 @@
 //! Windows-only command handlers for the `uffs_mft` binary.
+//! Exception: This module exceeds 800 lines because Windows command entry
+//! points remain consolidated pending a dedicated command-module split.
 
 use std::path::{Path, PathBuf};
 
@@ -436,9 +438,10 @@ pub async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: bool) ->
             })
             .unwrap_or((0, 0));
 
-        // Calculate C++ equivalent count (names × streams per record)
-        // This is what C++ outputs: one row per (name, stream) combination
-        let cpp_equivalent_count = df
+        // Calculate the expanded-row estimate (names × streams per record).
+        // The reference output expands each record into one row per
+        // (name, stream) combination.
+        let expanded_row_equivalent_count = df
             .column("name_count")
             .ok()
             .and_then(|c| c.u16().ok())
@@ -546,8 +549,8 @@ pub async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: bool) ->
             format_number_commas(total_stream_count)
         );
         println!(
-            "  C++ equivalent:       {} (names × streams)",
-            format_number_commas(cpp_equivalent_count)
+            "  Expanded rows:        {} (names × streams)",
+            format_number_commas(expanded_row_equivalent_count)
         );
         println!();
         println!("💾 STORAGE ANALYSIS");
@@ -1702,7 +1705,7 @@ pub async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     let mft_size_mb = mft_size / (1024 * 1024);
 
     // =========================================================================
-    // Print Volume Information (matches C++ format exactly)
+    // Print Volume Information (matches the reference benchmark layout)
     // =========================================================================
     println!("=== MFT Read Benchmark Tool ===");
     println!("Drive: {}:", drive_upper);
@@ -1719,7 +1722,7 @@ pub async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     println!();
 
     // =========================================================================
-    // Print MFT Information (matches C++ format exactly)
+    // Print MFT Information (matches the reference benchmark layout)
     // =========================================================================
     println!("MFT Information:");
     println!("  Extents: {}", extents.len());
@@ -1734,7 +1737,7 @@ pub async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     // =========================================================================
     // Benchmark: Read MFT with 1MB synchronous reads
     // =========================================================================
-    const BUFFER_SIZE: usize = 1024 * 1024; // 1 MB buffer (matches C++)
+    const BUFFER_SIZE: usize = 1024 * 1024; // 1 MB buffer (matches the reference benchmark layout)
     let sector_size = vol_data.bytes_per_sector as usize;
     let bytes_per_cluster = vol_data.bytes_per_cluster;
 
@@ -1853,7 +1856,7 @@ pub async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     let total_mb = total_bytes_read / (1024 * 1024);
 
     // =========================================================================
-    // Print Benchmark Results (matches C++ format exactly)
+    // Print benchmark results using the historical layout
     // =========================================================================
     println!("=== Benchmark Results ===");
     println!("Total bytes read: {} ({} MB)", total_bytes_read, total_mb);
@@ -1866,7 +1869,7 @@ pub async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     println!();
 
     // =========================================================================
-    // Print Proof of Complete Read (matches C++ format exactly)
+    // Print proof of complete read using the historical layout
     // =========================================================================
     println!("=== Proof of Complete Read ===");
 
@@ -1934,7 +1937,7 @@ pub async fn cmd_benchmark_index(drive: char) -> Result<()> {
     drop(handle); // Release handle before opening reader
 
     // =========================================================================
-    // Print Volume Information (matches C++ format exactly)
+    // Print volume information using the historical layout
     // =========================================================================
     println!("=== Volume Information ===");
     println!("MFT Capacity: {} records", mft_capacity);
@@ -1982,7 +1985,7 @@ pub async fn cmd_benchmark_index(drive: char) -> Result<()> {
     };
 
     // =========================================================================
-    // Print Index Statistics (matches C++ format exactly)
+    // Print index statistics using the historical layout
     // =========================================================================
     println!("=== Index Statistics ===");
     println!("Records Processed: {}", mft_capacity);
@@ -1992,7 +1995,7 @@ pub async fn cmd_benchmark_index(drive: char) -> Result<()> {
     println!();
 
     // =========================================================================
-    // Print Benchmark Results (matches C++ format exactly)
+    // Print benchmark results using the historical layout
     // =========================================================================
     let mft_read_speed = if elapsed_secs > 0.0 {
         (mft_size as f64 / (1024.0 * 1024.0)) / elapsed_secs
@@ -2023,7 +2026,7 @@ pub async fn cmd_benchmark_index(drive: char) -> Result<()> {
     println!();
 
     // =========================================================================
-    // Print Summary (matches C++ format exactly)
+    // Print summary using the historical layout
     // =========================================================================
     println!("=== Summary ===");
     println!(
@@ -2205,7 +2208,7 @@ pub async fn cmd_benchmark_index_lean(
     println!();
 
     // =========================================================================
-    // Print Phase Timing Breakdown (for C++ comparison)
+    // Print phase timing breakdown for reference-benchmark comparison
     // =========================================================================
     println!("=== Phase Timing Breakdown ===");
     println!("Open/Metadata:    {:>6} ms", benchmark.timings.open_ms);
@@ -2226,23 +2229,23 @@ pub async fn cmd_benchmark_index_lean(
         benchmark.timings.index_build_ms
     );
     println!(
-        "Tree Metrics:     {:>6} ms  (C++ 'preprocessing' equivalent)",
+        "Tree Metrics:     {:>6} ms  (reference 'preprocessing' equivalent)",
         benchmark.timings.tree_metrics_ms
     );
     println!("─────────────────────────────────────────");
     println!("Total:            {:>6} ms", benchmark.timings.total_ms);
     println!();
 
-    // Show I/O + Parse + Merge subtotal for C++ comparison
+    // Show I/O + Parse + Merge subtotal for reference-benchmark comparison
     let io_parse_merge_ms =
         benchmark.timings.read_ms + benchmark.timings.parse_ms + benchmark.timings.merge_ms;
-    println!("=== C++ Comparison ===");
+    println!("=== Reference Benchmark Comparison ===");
     println!(
-        "I/O + Parse + Merge:  {:>6} ms  (compare to C++ 'Read + Parse')",
+        "I/O + Parse + Merge:  {:>6} ms  (compare to reference 'Read + Parse')",
         io_parse_merge_ms
     );
     println!(
-        "Tree Metrics:         {:>6} ms  (compare to C++ 'Preprocess')",
+        "Tree Metrics:         {:>6} ms  (compare to reference 'Preprocess')",
         benchmark.timings.tree_metrics_ms
     );
     println!();
@@ -2279,13 +2282,13 @@ pub async fn cmd_benchmark_index_lean(
     println!();
 
     // =========================================================================
-    // Print C++ Comparison Guide
+    // Print reference-benchmark comparison guide
     // =========================================================================
-    println!("=== C++ Comparison ===");
-    println!("To compare with C++ uffs.com:");
-    println!("  C++ --benchmark-mft={}:   Raw I/O only", drive_upper);
+    println!("=== Reference Benchmark Guide ===");
+    println!("To compare with the reference uffs.com binary:");
+    println!("  uffs.com --benchmark-mft={}:   Raw I/O only", drive_upper);
     println!(
-        "  C++ --benchmark-index={}: I/O + Parse + Preprocess",
+        "  uffs.com --benchmark-index={}: I/O + Parse + Preprocess",
         drive_upper
     );
     println!();
@@ -2315,8 +2318,9 @@ pub async fn cmd_benchmark_index_lean(
 /// Benchmark tree metrics computation in isolation.
 ///
 /// This measures ONLY the tree metrics phase (descendants, treesize,
-/// tree_allocated), which corresponds to the C++ "preprocessing" phase. Use
-/// this for direct apples-to-apples comparison of tree algorithm performance.
+/// tree_allocated), which corresponds to the reference "preprocessing" phase.
+/// Use this for direct apples-to-apples comparison of tree algorithm
+/// performance.
 #[cfg(windows)]
 pub async fn cmd_benchmark_tree(drive: char, iterations: usize, no_cache: bool) -> Result<()> {
     use std::time::Instant;
@@ -2330,7 +2334,7 @@ pub async fn cmd_benchmark_tree(drive: char, iterations: usize, no_cache: bool) 
     println!("Iterations: {}", iterations);
     println!("Cache: {}", if no_cache { "disabled" } else { "enabled" });
     println!();
-    println!("This measures ONLY tree metrics computation (C++ 'preprocessing' equivalent).");
+    println!("This measures ONLY tree metrics computation (reference 'preprocessing' equivalent).");
     println!();
 
     // Load or build the index
@@ -2437,14 +2441,14 @@ pub async fn cmd_benchmark_tree(drive: char, iterations: usize, no_cache: bool) 
     println!("Throughput: {} entries/sec", entries_per_sec);
     println!();
 
-    // C++ comparison guide
-    println!("=== C++ Comparison ===");
-    println!("To compare with C++ uffs.com:");
+    // Reference benchmark guide
+    println!("=== Reference Benchmark Guide ===");
+    println!("To compare with the reference uffs.com binary:");
     println!("  1. Run: uffs.com --benchmark-index={}:", drive_upper);
     println!("  2. Look for the 'Preprocess' phase timing");
     println!("  3. Compare with Rust 'Tree Metrics' timing above");
     println!();
-    println!("Note: C++ 'Preprocess' includes the same tree metrics computation:");
+    println!("Note: the reference 'Preprocess' phase includes the same tree metrics computation:");
     println!("  - descendants (recursive child count)");
     println!("  - treesize (recursive file count per stream)");
     println!("  - tree_allocated (recursive allocated size)");

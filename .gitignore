@@ -33,7 +33,8 @@ reference/
 docs/reference/**
 !docs/reference/README.md
 
-# Root-only clutter moved out of the tracked tree
+# Root-boundary leftovers intentionally kept out of the active tracked tree.
+# `dist/` stays tracked for distributable binaries; these paths do not.
 /Shell/
 /LOG/
 /vendor/
@@ -162,10 +163,3 @@ bundles/
 
 # Profile data (temporary, not for git)
 docs/profiles/
-
-# Personal/private files in LOG (keep CHANGELOG_HEALING.md files)
-LOG/mental_health
-LOG/projected_assessment_progression.md
-
-# Vendor submodule dirty state (local build artifacts)
-# The submodules themselves are tracked, but local modifications within them are ignored

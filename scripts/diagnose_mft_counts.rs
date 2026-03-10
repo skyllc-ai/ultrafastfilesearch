@@ -1,8 +1,8 @@
 #!/usr/bin/env rust-script
-//! Diagnostic script to compare MFT record counts between C++ and Rust outputs
+//! Diagnostic script to compare MFT record counts between the reference output and Rust output.
 //!
 //! Usage:
-//!   rust-script scripts/diagnose_mft_counts.rs <cpp_output.txt> <rust_output.txt>
+//!   rust-script scripts/diagnose_mft_counts.rs <reference_output.txt> <rust_output.txt>
 //!
 //! This analyzes:
 //!   1. Total record counts per drive
@@ -21,7 +21,7 @@ use std::env;
 use std::path::Path;
 
 fn load_csv(path: &Path) -> PolarsResult<DataFrame> {
-    // C++ output is CSV with quoted fields, comma separator
+    // Reference output is CSV with quoted fields, comma separator.
     // Rust output is TSV
     // Try to detect format from first line
     let first_line = std::fs::read_to_string(path)
@@ -133,46 +133,46 @@ fn analyze_file(label: &str, df: &DataFrame) -> HashMap<char, (usize, usize, usi
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
-        eprintln!("Usage: {} <cpp_output.txt> <rust_output.txt>", args[0]);
+        eprintln!("Usage: {} <reference_output.txt> <rust_output.txt>", args[0]);
         std::process::exit(1);
     }
     
-    let cpp_path = Path::new(&args[1]);
+    let reference_path = Path::new(&args[1]);
     let rust_path = Path::new(&args[2]);
     
-    println!("Loading C++ output: {}", cpp_path.display());
-    let cpp_df = load_csv(cpp_path).expect("Failed to load C++ file");
+    println!("Loading reference output: {}", reference_path.display());
+    let reference_df = load_csv(reference_path).expect("Failed to load reference file");
 
     println!("Loading Rust output: {}", rust_path.display());
     let rust_df = load_csv(rust_path).expect("Failed to load Rust file");
     
-    let cpp_stats = analyze_file("C++", &cpp_df);
+    let reference_stats = analyze_file("REFERENCE", &reference_df);
     let rust_stats = analyze_file("RUST", &rust_df);
     
     // Comparison
     println!("\n{}", "=".repeat(70));
-    println!("COMPARISON: C++ vs Rust");
+    println!("COMPARISON: REFERENCE vs Rust");
     println!("{}", "=".repeat(70));
-    println!("{:>6} {:>12} {:>12} {:>12} {:>10}", "Drive", "C++ Total", "Rust Total", "Difference", "% Match");
+    println!("{:>6} {:>16} {:>12} {:>12} {:>10}", "Drive", "Reference Total", "Rust Total", "Difference", "% Match");
     println!("{:-<6} {:-<12} {:-<12} {:-<12} {:-<10}", "", "", "", "", "");
     
-    let mut all_drives: std::collections::HashSet<char> = cpp_stats.keys().cloned().collect();
+    let mut all_drives: std::collections::HashSet<char> = reference_stats.keys().cloned().collect();
     all_drives.extend(rust_stats.keys().cloned());
     let mut drives: Vec<_> = all_drives.into_iter().collect();
     drives.sort();
     
     for drive in drives {
-        let cpp_total = cpp_stats.get(&drive).map(|s| s.0).unwrap_or(0);
+        let reference_total = reference_stats.get(&drive).map(|s| s.0).unwrap_or(0);
         let rust_total = rust_stats.get(&drive).map(|s| s.0).unwrap_or(0);
-        let diff = cpp_total as i64 - rust_total as i64;
-        let pct = if cpp_total > 0 { 
-            (rust_total as f64 / cpp_total as f64) * 100.0 
+        let diff = reference_total as i64 - rust_total as i64;
+        let pct = if reference_total > 0 { 
+            (rust_total as f64 / reference_total as f64) * 100.0 
         } else { 
             0.0 
         };
         println!("{:>6} {:>12} {:>12} {:>+12} {:>9.1}%", 
             format!("{}:", drive.to_uppercase()), 
-            cpp_total, 
+            reference_total, 
             rust_total,
             diff,
             pct);

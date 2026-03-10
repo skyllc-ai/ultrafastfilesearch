@@ -33,7 +33,7 @@ All 15,062+ subdirectory paths matched **perfectly** - only the root was off.
 
 ### Root Cause
 
-In the C++ implementation (`ntfs_index.hpp` lines 588-600):
+In the legacy implementation (`ntfs_index.hpp` lines 588-600):
 
 ```cpp
 // case ntfs::AttributeTypeCode::AttributeSecurityDescriptor:  // <-- COMMENTED OUT!
@@ -120,7 +120,7 @@ cargo run --release -p uffs-cli -- "G:*" \
     --parse-algo cpp_port --tree-algo cpp \
     --out /tmp/rust_offline_g_fixed.txt
 
-# Compare with C++ reference
+# Compare with legacy baseline
 cargo run --release -p uffs-diag --bin compare_scan_parity -- \
     docs/trial_runs/g_disk/cpp_g.txt \
     /tmp/rust_offline_g_fixed.txt -v
@@ -160,7 +160,7 @@ rust-script scripts/ci-pipeline.rs go -v
 
 ### Two-Channel Model in C++
 
-The C++ implementation uses two separate channels for tree metrics:
+The legacy implementation uses two separate channels for tree metrics:
 
 1. **Channel A (propagation)**: Values returned by recursion and accumulated into parents - includes ALL streams
 2. **Channel B (printed)**: Values stored into the record's directory stream and printed
@@ -181,5 +181,5 @@ For correct tree metrics, `total_stream_count` must include ALL streams, includi
 
 - `docs/architecture/Investigation/MFT_tree_metrics_parity_deep_dive.md` - Original investigation
 - `docs/trial_runs/g_disk/PARITY_ANALYSIS_2026_02_02.md` - Pre-fix parity analysis
-- `docs/architecture/C++_resources/UltraFastFileSearch-code/src/index/ntfs_index.hpp` - C++ reference
+- `docs/architecture/C++_resources/UltraFastFileSearch-code/src/index/ntfs_index.hpp` - legacy baseline
 

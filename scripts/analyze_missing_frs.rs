@@ -11,13 +11,13 @@ use std::io::{BufRead, BufReader};
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
-        eprintln!("Usage: {} <cpp_output.txt> <missing_paths.txt>", args[0]);
+        eprintln!("Usage: {} <reference_output.txt> <missing_paths.txt>", args[0]);
         eprintln!();
         eprintln!("Extracts FRS numbers for missing paths and analyzes their distribution.");
         std::process::exit(1);
     }
 
-    let cpp_file = &args[1];
+    let reference_file = &args[1];
     let missing_file = &args[2];
 
     // Read missing paths
@@ -31,12 +31,12 @@ fn main() {
 
     println!("   Found {} missing paths", missing_paths.len());
 
-    // Read C++ output and extract FRS for missing paths
-    println!("📖 Scanning C++ output: {}", cpp_file);
+    // Read reference output and extract FRS for missing paths.
+    println!("📖 Scanning reference output: {}", reference_file);
     let mut frs_numbers = Vec::new();
     let mut line_count = 0u64;
 
-    for line in BufReader::new(File::open(cpp_file).unwrap()).lines() {
+    for line in BufReader::new(File::open(reference_file).unwrap()).lines() {
         line_count += 1;
         if line_count % 1_000_000 == 0 {
             print!("\r   Processed {} million lines...", line_count / 1_000_000);
@@ -47,7 +47,7 @@ fn main() {
             Err(_) => continue,
         };
 
-        // C++ output format: path,size,timestamp,frs,parent_frs,flags
+        // Reference output format: path,size,timestamp,frs,parent_frs,flags
         let parts: Vec<&str> = line.split(',').collect();
         if parts.len() < 4 {
             continue;

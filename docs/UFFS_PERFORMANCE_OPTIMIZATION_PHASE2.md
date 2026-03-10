@@ -4,7 +4,7 @@ _Last updated: 2026-01-24 (verified and updated)_
 
 ## Executive Summary
 
-This document outlines the next phase of performance optimizations for UFFS, building on the successful Phase 1 work that achieved C++ parity. The goal is to maximize performance on modern NVMe drives while maintaining optimal HDD performance.
+This document outlines the next phase of performance optimizations for UFFS, building on the successful Phase 1 work that achieved baseline-compatible behavior. The goal is to maximize performance on modern NVMe drives while maintaining optimal HDD performance.
 
 ### Current State (v0.2.66)
 
@@ -235,7 +235,7 @@ This document outlines the next phase of performance optimizations for UFFS, bui
 **Problem** (solved):
 - Current implementation indexes one volume at a time
 - Users with multiple drives wait for sequential indexing
-- C++ implementation uses single IOCP for all volumes
+- The historical baseline uses a single IOCP for all volumes
 
 **Architecture**:
 

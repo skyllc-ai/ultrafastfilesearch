@@ -1,8 +1,7 @@
-//! Comprehensive C++ vs Rust scan output parity comparison tool.
+//! Comprehensive reference-output vs Rust scan parity comparison tool.
 //!
 //! This tool performs deep comparison of UFFS scan outputs to verify that
-//! the Rust implementation (with C++ port algorithms) produces identical
-//! results to the original C++ implementation.
+//! the Rust implementation produces identical results to the reference output.
 //!
 //! # Features
 //!
@@ -19,21 +18,24 @@
 //!
 //! ```bash
 //! # Compare trial_run.ps1 outputs (Windows)
-//! compare_scan_parity cpp_c.txt rust_cpp_full_c.txt
+//! compare_scan_parity baseline_c.txt rust_reference_full_c.txt
 //!
 //! # Compare with report output
-//! compare_scan_parity cpp_c.txt rust_cpp_full_c.txt --report parity_report.md
+//! compare_scan_parity baseline_c.txt rust_reference_full_c.txt --report parity_report.md
 //!
 //! # Verbose mode with all differences
-//! compare_scan_parity cpp_c.txt rust_cpp_full_c.txt -v
+//! compare_scan_parity baseline_c.txt rust_reference_full_c.txt -v
 //! ```
 //!
 //! # Input Formats
 //!
 //! Supports CSV outputs from:
-//! - C++ `uffs.com` (Windows `trial_run.ps1`)
-//! - Rust uffs (C++ port algorithms are now the default)
+//! - Reference `uffs.com` output (Windows `trial_run.ps1`)
+//! - Rust uffs
 //! - Rust uffs running on Mac with cached MFT data
+//! Exception: This diagnostic binary exceeds 800 lines because the end-to-end
+//! comparison and report pipeline are intentionally kept together for offline
+//! analysis; a structural split is deferred outside Wave 3C.
 
 #![expect(
     clippy::print_stdout,
@@ -102,10 +104,10 @@ use uffs_polars::{CsvReadOptions, DataFrame, SerReader, StringChunked};
 use {uffs_diag as _, uffs_mft as _};
 
 // ============================================================================
-// Column Name Mappings (C++ <-> Rust)
+// Column Name Mappings (reference output <-> Rust)
 // ============================================================================
 
-/// Map C++ column names to normalized internal names
+/// Map reference column names to normalized internal names
 #[expect(dead_code, reason = "utility for future column normalization")]
 fn normalize_column_name(name: &str) -> &'static str {
     match name.to_lowercase().replace(' ', "_").as_str() {
@@ -117,7 +119,7 @@ fn normalize_column_name(name: &str) -> &'static str {
         "created" => "created",
         "last_written" | "written" | "modified" => "modified",
         "last_accessed" | "accessed" => "accessed",
-        "descendants" | "decendents" => "descendants", // C++ typo
+        "descendants" | "decendents" => "descendants", // legacy typo
         "treesize" | "tree_size" => "treesize",
         "tree_allocated" | "treeallocated" => "tree_allocated",
         "directory_flag" | "directoryflag" | "is_directory" => "is_directory",
@@ -148,12 +150,12 @@ struct FieldStats {
     total_compared: u64,
     exact_matches: u64,
     mismatches: u64,
-    cpp_only: u64,
+    reference_only: u64,
     rust_only: u64,
     // For numeric fields
     sum_abs_diff: f64,
     max_abs_diff: f64,
-    diff_samples: Vec<(String, String, String)>, // (path, cpp_value, rust_value)
+    diff_samples: Vec<(String, String, String)>, // (path, reference_value, rust_value)
 }
 
 impl FieldStats {
@@ -179,7 +181,7 @@ impl FieldStats {
         self.total_compared += other.total_compared;
         self.exact_matches += other.exact_matches;
         self.mismatches += other.mismatches;
-        self.cpp_only += other.cpp_only;
+        self.reference_only += other.reference_only;
         self.rust_only += other.rust_only;
         self.sum_abs_diff += other.sum_abs_diff;
         if other.max_abs_diff > self.max_abs_diff {
@@ -217,7 +219,7 @@ struct ComparisonResults {
 // CSV Loading
 // ============================================================================
 
-/// Load CSV with flexible parsing (handles both C++ and Rust formats)
+/// Load CSV with flexible parsing (handles both reference and Rust formats)
 fn load_csv(path: &Path, label: &str) -> Result<DataFrame> {
     println!("Loading {label}: {}", path.display());
 
@@ -341,10 +343,10 @@ use uffs_polars::IntoSeries;
 fn compare_numeric_field(
     stats: &mut FieldStats,
     path: &str,
-    cpp_val: Option<u64>,
+    reference_val: Option<u64>,
     rust_val: Option<u64>,
 ) {
-    match (cpp_val, rust_val) {
+    match (reference_val, rust_val) {
         (Some(c), Some(r)) => {
             stats.total_compared += 1;
             if c == r {
@@ -363,7 +365,7 @@ fn compare_numeric_field(
                 }
             }
         }
-        (Some(_), None) => stats.cpp_only += 1,
+        (Some(_), None) => stats.reference_only += 1,
         (None, Some(_)) => stats.rust_only += 1,
         (None, None) => {}
     }
@@ -373,10 +375,10 @@ fn compare_numeric_field(
 fn compare_bool_field(
     stats: &mut FieldStats,
     path: &str,
-    cpp_val: Option<bool>,
+    reference_val: Option<bool>,
     rust_val: Option<bool>,
 ) {
-    match (cpp_val, rust_val) {
+    match (reference_val, rust_val) {
         (Some(c), Some(r)) => {
             stats.total_compared += 1;
             if c == r {
@@ -390,58 +392,67 @@ fn compare_bool_field(
                 }
             }
         }
-        (Some(_), None) => stats.cpp_only += 1,
+        (Some(_), None) => stats.reference_only += 1,
         (None, Some(_)) => stats.rust_only += 1,
         (None, None) => {}
     }
 }
 
-/// Perform full comparison between C++ and Rust `DataFrame`s
+/// Perform full comparison between the reference and Rust `DataFrame`s
 fn compare_dataframes(
-    cpp_df: &DataFrame,
+    reference_df: &DataFrame,
     rust_df: &DataFrame,
-    cpp_file: &str,
+    reference_file: &str,
     rust_file: &str,
 ) -> Result<ComparisonResults> {
     let mut results = ComparisonResults {
-        cpp_file: cpp_file.to_string(),
+        reference_file: reference_file.to_string(),
         rust_file: rust_file.to_string(),
-        cpp_total_rows: cpp_df.height(),
+        reference_total_rows: reference_df.height(),
         rust_total_rows: rust_df.height(),
         ..Default::default()
     };
 
     // Add normalized paths
-    let cpp_df = add_normalized_paths(cpp_df)?;
+    let reference_df = add_normalized_paths(reference_df)?;
     let rust_df = add_normalized_paths(rust_df)?;
 
     // Build path maps
-    let cpp_paths = build_path_map(&cpp_df)?;
+    let reference_paths = build_path_map(&reference_df)?;
     let rust_paths = build_path_map(&rust_df)?;
 
     // Path set analysis
-    let cpp_path_set: HashSet<_> = cpp_paths.keys().cloned().collect();
+    let reference_path_set: HashSet<_> = reference_paths.keys().cloned().collect();
     let rust_path_set: HashSet<_> = rust_paths.keys().cloned().collect();
 
-    let common: HashSet<_> = cpp_path_set.intersection(&rust_path_set).cloned().collect();
-    let cpp_only: Vec<_> = cpp_path_set.difference(&rust_path_set).cloned().collect();
-    let rust_only: Vec<_> = rust_path_set.difference(&cpp_path_set).cloned().collect();
+    let common: HashSet<_> = reference_path_set
+        .intersection(&rust_path_set)
+        .cloned()
+        .collect();
+    let reference_only: Vec<_> = reference_path_set
+        .difference(&rust_path_set)
+        .cloned()
+        .collect();
+    let rust_only: Vec<_> = rust_path_set
+        .difference(&reference_path_set)
+        .cloned()
+        .collect();
 
     results.common_paths = common.len();
-    results.cpp_only_paths = cpp_only.len();
+    results.reference_only_paths = reference_only.len();
     results.rust_only_paths = rust_only.len();
-    results.path_match_rate = if cpp_path_set.is_empty() {
+    results.path_match_rate = if reference_path_set.is_empty() {
         0.0
     } else {
-        100.0 * common.len() as f64 / cpp_path_set.len() as f64
+        100.0 * common.len() as f64 / reference_path_set.len() as f64
     };
 
     // Sample missing paths
-    results.sample_cpp_only = cpp_only.iter().take(20).cloned().collect();
+    results.sample_reference_only = reference_only.iter().take(20).cloned().collect();
     results.sample_rust_only = rust_only.iter().take(20).cloned().collect();
 
     // ADS analysis
-    results.cpp_ads_count = cpp_path_set.iter().filter(|p| is_ads_path(p)).count();
+    results.reference_ads_count = reference_path_set.iter().filter(|p| is_ads_path(p)).count();
     results.rust_ads_count = rust_path_set.iter().filter(|p| is_ads_path(p)).count();
 
     // Initialize field stats
@@ -470,8 +481,8 @@ fn compare_dataframes(
             .insert((*field).to_string(), FieldStats::default());
     }
 
-    // Column name mappings for C++ -> internal
-    let cpp_col_map: HashMap<&str, &str> = [
+    // Column name mappings for reference output -> internal
+    let reference_col_map: HashMap<&str, &str> = [
         ("Size", "size"),
         ("Size on Disk", "allocated_size"),
         ("Descendants", "descendants"),
@@ -490,7 +501,7 @@ fn compare_dataframes(
 
     // Find actual column names in DataFrames (convert PlSmallStr to String for
     // lookup)
-    let cpp_cols: HashSet<String> = cpp_df
+    let reference_cols: HashSet<String> = reference_df
         .get_column_names()
         .into_iter()
         .map(|s| s.to_string())
@@ -516,34 +527,31 @@ fn compare_dataframes(
     let progress = AtomicUsize::new(0);
 
     // Pre-compute column mappings for each field to avoid repeated lookups
-    // Both C++ and Rust files use the same display column names (e.g., "Size",
-    // "Size on Disk") Tuple is (internal_field_name, cpp_col, rust_col) - we
-    // use cpp_col for both since headers match
+    // Both files use the same display column names (e.g., "Size", "Size on
+    // Disk"). Tuple is (internal_field_name, reference_col, rust_col).
     let numeric_col_mappings: Vec<(&str, &str, &str)> = numeric_fields
         .iter()
         .map(|&field| {
-            let display_col = cpp_col_map
+            let display_col = reference_col_map
                 .iter()
                 .find(|(_, v)| **v == field)
                 .map(|(k, _)| *k)
-                .filter(|c| cpp_cols.contains(*c))
+                .filter(|c| reference_cols.contains(*c))
                 .unwrap_or(field);
-            (field, display_col, display_col) // Use display name for both C++
-            // and Rust
+            (field, display_col, display_col)
         })
         .collect();
 
     let bool_col_mappings: Vec<(&str, &str, &str)> = bool_fields
         .iter()
         .map(|&field| {
-            let display_col = cpp_col_map
+            let display_col = reference_col_map
                 .iter()
                 .find(|(_, v)| **v == field)
                 .map(|(k, _)| *k)
-                .filter(|c| cpp_cols.contains(*c))
+                .filter(|c| reference_cols.contains(*c))
                 .unwrap_or(field);
-            (field, display_col, display_col) // Use display name for both C++
-            // and Rust
+            (field, display_col, display_col)
         })
         .collect();
 
@@ -571,26 +579,26 @@ fn compare_dataframes(
                     );
                 }
 
-                let cpp_idx = cpp_paths[path];
+                let reference_idx = reference_paths[path];
                 let rust_idx = rust_paths[path];
 
                 // Compare numeric fields
-                for (field, cpp_col, rust_col) in &numeric_col_mappings {
-                    let cpp_val = get_u64_value(&cpp_df, cpp_col, cpp_idx);
+                for (field, reference_col, rust_col) in &numeric_col_mappings {
+                    let reference_val = get_u64_value(&reference_df, reference_col, reference_idx);
                     let rust_val = get_u64_value(&rust_df, rust_col, rust_idx);
 
                     if let Some(stats) = local_stats.get_mut(*field) {
-                        compare_numeric_field(stats, path, cpp_val, rust_val);
+                        compare_numeric_field(stats, path, reference_val, rust_val);
                     }
                 }
 
                 // Compare boolean fields
-                for (field, cpp_col, rust_col) in &bool_col_mappings {
-                    let cpp_val = get_bool_value(&cpp_df, cpp_col, cpp_idx);
+                for (field, reference_col, rust_col) in &bool_col_mappings {
+                    let reference_val = get_bool_value(&reference_df, reference_col, reference_idx);
                     let rust_val = get_bool_value(&rust_df, rust_col, rust_idx);
 
                     if let Some(stats) = local_stats.get_mut(*field) {
-                        compare_bool_field(stats, path, cpp_val, rust_val);
+                        compare_bool_field(stats, path, reference_val, rust_val);
                     }
                 }
 
@@ -634,13 +642,16 @@ fn print_results(results: &ComparisonResults) {
     println!("{}", "═".repeat(70));
 
     println!("\n📁 FILES COMPARED");
-    println!("  C++:  {}", results.cpp_file);
+    println!("  Reference: {}", results.reference_file);
     println!("  Rust: {}", results.rust_file);
 
     println!("\n📊 ROW COUNTS");
-    println!("  C++ rows:   {:>12}", format_num(results.cpp_total_rows));
+    println!(
+        "  Reference rows: {:>8}",
+        format_num(results.reference_total_rows)
+    );
     println!("  Rust rows:  {:>12}", format_num(results.rust_total_rows));
-    let diff = results.rust_total_rows as i64 - results.cpp_total_rows as i64;
+    let diff = results.rust_total_rows as i64 - results.reference_total_rows as i64;
     println!("  Difference: {:>+12}", diff);
 
     println!("\n🔗 PATH MATCHING");
@@ -649,8 +660,8 @@ fn print_results(results: &ComparisonResults) {
         format_num(results.common_paths)
     );
     println!(
-        "  C++ only:        {:>12}",
-        format_num(results.cpp_only_paths)
+        "  Reference only:  {:>12}",
+        format_num(results.reference_only_paths)
     );
     println!(
         "  Rust only:       {:>12}",
@@ -660,8 +671,8 @@ fn print_results(results: &ComparisonResults) {
 
     println!("\n📎 ALTERNATE DATA STREAMS (ADS)");
     println!(
-        "  C++ ADS entries:  {:>10}",
-        format_num(results.cpp_ads_count)
+        "  Reference ADS:    {:>10}",
+        format_num(results.reference_ads_count)
     );
     println!(
         "  Rust ADS entries: {:>10}",
@@ -697,18 +708,18 @@ fn print_results(results: &ComparisonResults) {
     }
 
     // Show sample differences
-    if !results.sample_cpp_only.is_empty() {
-        println!("\n❌ SAMPLE PATHS IN C++ BUT NOT IN RUST (first 20):");
-        for path in &results.sample_cpp_only {
+    if !results.sample_reference_only.is_empty() {
+        println!("\n❌ SAMPLE PATHS IN REFERENCE OUTPUT BUT NOT IN RUST (first 20):");
+        for path in &results.sample_reference_only {
             println!("  {path}");
         }
-        if results.cpp_only_paths > 20 {
-            println!("  ... and {} more", results.cpp_only_paths - 20);
+        if results.reference_only_paths > 20 {
+            println!("  ... and {} more", results.reference_only_paths - 20);
         }
     }
 
     if !results.sample_rust_only.is_empty() {
-        println!("\n❌ SAMPLE PATHS IN RUST BUT NOT IN C++ (first 20):");
+        println!("\n❌ SAMPLE PATHS IN RUST BUT NOT IN REFERENCE OUTPUT (first 20):");
         for path in &results.sample_rust_only {
             println!("  {path}");
         }
@@ -721,9 +732,9 @@ fn print_results(results: &ComparisonResults) {
     for (field, stats) in &results.field_stats {
         if !stats.diff_samples.is_empty() {
             println!("\n⚠️  SAMPLE {field} DIFFERENCES:");
-            for (path, cpp_val, rust_val) in &stats.diff_samples {
+            for (path, reference_val, rust_val) in &stats.diff_samples {
                 println!("  {path}");
-                println!("    C++: {cpp_val}  Rust: {rust_val}");
+                println!("    REF: {reference_val}  Rust: {rust_val}");
             }
         }
     }
@@ -733,7 +744,7 @@ fn print_results(results: &ComparisonResults) {
     println!("SUMMARY");
     println!("{}", "═".repeat(70));
 
-    let all_match = results.cpp_only_paths == 0
+    let all_match = results.reference_only_paths == 0
         && results.rust_only_paths == 0
         && results.field_stats.values().all(|s| s.mismatches == 0);
 
@@ -741,8 +752,11 @@ fn print_results(results: &ComparisonResults) {
         println!("\n✅ PERFECT PARITY - All paths and fields match exactly!");
     } else {
         println!("\n⚠️  DIFFERENCES DETECTED:");
-        if results.cpp_only_paths > 0 {
-            println!("  - {} paths missing from Rust", results.cpp_only_paths);
+        if results.reference_only_paths > 0 {
+            println!(
+                "  - {} paths missing from Rust",
+                results.reference_only_paths
+            );
         }
         if results.rust_only_paths > 0 {
             println!("  - {} extra paths in Rust", results.rust_only_paths);
@@ -785,7 +799,7 @@ fn write_markdown_report(results: &ComparisonResults, path: &Path) -> Result<()>
     writeln!(f)?;
     writeln!(f, "| Source | File |")?;
     writeln!(f, "|--------|------|")?;
-    writeln!(f, "| C++ | `{}` |", results.cpp_file)?;
+    writeln!(f, "| Reference | `{}` |", results.reference_file)?;
     writeln!(f, "| Rust | `{}` |", results.rust_file)?;
     writeln!(f)?;
 
@@ -793,9 +807,13 @@ fn write_markdown_report(results: &ComparisonResults, path: &Path) -> Result<()>
     writeln!(f)?;
     writeln!(f, "| Metric | Count |")?;
     writeln!(f, "|--------|------:|")?;
-    writeln!(f, "| C++ rows | {} |", format_num(results.cpp_total_rows))?;
+    writeln!(
+        f,
+        "| Reference rows | {} |",
+        format_num(results.reference_total_rows)
+    )?;
     writeln!(f, "| Rust rows | {} |", format_num(results.rust_total_rows))?;
-    let diff = results.rust_total_rows as i64 - results.cpp_total_rows as i64;
+    let diff = results.rust_total_rows as i64 - results.reference_total_rows as i64;
     writeln!(f, "| Difference | {:+} |", diff)?;
     writeln!(f)?;
 
@@ -804,7 +822,11 @@ fn write_markdown_report(results: &ComparisonResults, path: &Path) -> Result<()>
     writeln!(f, "| Metric | Count |")?;
     writeln!(f, "|--------|------:|")?;
     writeln!(f, "| Common paths | {} |", format_num(results.common_paths))?;
-    writeln!(f, "| C++ only | {} |", format_num(results.cpp_only_paths))?;
+    writeln!(
+        f,
+        "| Reference only | {} |",
+        format_num(results.reference_only_paths)
+    )?;
     writeln!(f, "| Rust only | {} |", format_num(results.rust_only_paths))?;
     writeln!(
         f,
@@ -817,7 +839,11 @@ fn write_markdown_report(results: &ComparisonResults, path: &Path) -> Result<()>
     writeln!(f)?;
     writeln!(f, "| Source | ADS Count |")?;
     writeln!(f, "|--------|----------:|")?;
-    writeln!(f, "| C++ | {} |", format_num(results.cpp_ads_count))?;
+    writeln!(
+        f,
+        "| Reference | {} |",
+        format_num(results.reference_ads_count)
+    )?;
     writeln!(f, "| Rust | {} |", format_num(results.rust_ads_count))?;
     writeln!(f)?;
 
@@ -850,7 +876,7 @@ fn write_markdown_report(results: &ComparisonResults, path: &Path) -> Result<()>
     writeln!(f)?;
 
     // Summary
-    let all_match = results.cpp_only_paths == 0
+    let all_match = results.reference_only_paths == 0
         && results.rust_only_paths == 0
         && results.field_stats.values().all(|s| s.mismatches == 0);
 
@@ -864,8 +890,12 @@ fn write_markdown_report(results: &ComparisonResults, path: &Path) -> Result<()>
     } else {
         writeln!(f, "⚠️ **DIFFERENCES DETECTED**")?;
         writeln!(f)?;
-        if results.cpp_only_paths > 0 {
-            writeln!(f, "- {} paths missing from Rust", results.cpp_only_paths)?;
+        if results.reference_only_paths > 0 {
+            writeln!(
+                f,
+                "- {} paths missing from Rust",
+                results.reference_only_paths
+            )?;
         }
         if results.rust_only_paths > 0 {
             writeln!(f, "- {} extra paths in Rust", results.rust_only_paths)?;
@@ -891,14 +921,16 @@ fn main() -> Result<()> {
 
     if args.len() < 3 {
         eprintln!(
-            "Usage: compare_scan_parity <cpp_output.txt> <rust_output.txt> [--report <file.md>] [-v]"
+            "Usage: compare_scan_parity <reference_output.txt> <rust_output.txt> [--report <file.md>] [-v]"
         );
         eprintln!();
-        eprintln!("Compare C++ and Rust UFFS scan outputs for parity verification.");
+        eprintln!("Compare reference and Rust UFFS scan outputs for parity verification.");
         eprintln!();
         eprintln!("Arguments:");
-        eprintln!("  cpp_output.txt   C++ output from trial_run.ps1 (e.g., cpp_c.txt)");
-        eprintln!("  rust_output.txt  Rust output with C++ algos (e.g., rust_cpp_full_c.txt)");
+        eprintln!(
+            "  reference_output.txt  Reference output from trial_run.ps1 (e.g., baseline_c.txt)"
+        );
+        eprintln!("  rust_output.txt       Rust output (e.g., rust_reference_full_c.txt)");
         eprintln!();
         eprintln!("Options:");
         eprintln!("  --report <file>  Write markdown report to file");
@@ -906,7 +938,7 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    let cpp_path = Path::new(&args[1]);
+    let reference_path = Path::new(&args[1]);
     let rust_path = Path::new(&args[2]);
 
     // Parse optional arguments
@@ -931,14 +963,14 @@ fn main() -> Result<()> {
     println!("{}", "═".repeat(70));
 
     // Load CSVs
-    let cpp_df = load_csv(cpp_path, "C++")?;
+    let reference_df = load_csv(reference_path, "reference")?;
     let rust_df = load_csv(rust_path, "Rust")?;
 
     // Perform comparison
     let results = compare_dataframes(
-        &cpp_df,
+        &reference_df,
         &rust_df,
-        &cpp_path.display().to_string(),
+        &reference_path.display().to_string(),
         &rust_path.display().to_string(),
     )?;
 
