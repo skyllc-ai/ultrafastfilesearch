@@ -13,6 +13,7 @@ This directory is being normalized toward a small set of durable buckets:
 - `docs/architecture/Investigation/` remains a working-notes area.
 - Exact duplicate investigation copies have been retired in favor of their stable canonical docs.
 - Reference-oriented committed docs are linked from the architecture and dev landing pages.
-- `docs/reference/` is local-only and stays ignored.
+- Any external private legacy reference tree is local-only, must not be pushed, and should use a clearer ignored local name such as `old_cpp_reference/` instead of plain `reference/`.
+- `docs/reference/` is also local-only and stays ignored.
 - Some older root-level documents still exist while links are being consolidated into the buckets above.
 
