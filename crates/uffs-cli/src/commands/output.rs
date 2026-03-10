@@ -471,7 +471,7 @@ pub(super) fn write_results(
     format: &str,
     out: &str,
     output_config: &OutputConfig,
-    _output_targets: &[char],
+    output_targets: &[char],
 ) -> Result<()> {
     let is_console = matches!(
         out.to_lowercase().as_str(),
@@ -480,12 +480,17 @@ pub(super) fn write_results(
 
     if is_console {
         let stdout = std::io::stdout();
+        let mut stdout = stdout.lock();
         match format {
-            "json" => export_json(results, stdout)?,
-            "csv" => output_config.write(results, stdout)?,
-            "custom" => output_config.write(results, stdout)?,
-            _ => export_table(results, stdout)?,
+            "json" => export_json(results, &mut stdout)?,
+            "csv" => output_config.write(results, &mut stdout)?,
+            "custom" => {
+                output_config.write(results, &mut stdout)?;
+                write_cpp_drive_footer(&mut stdout, output_targets)?;
+            }
+            _ => export_table(results, &mut stdout)?,
         }
+        stdout.flush()?;
     } else {
         let file =
             File::create(out).with_context(|| format!("Failed to create output file: {out}"))?;
@@ -494,6 +499,10 @@ pub(super) fn write_results(
         match format {
             "json" => export_json(results, &mut writer)?,
             "csv" => output_config.write(results, &mut writer)?,
+            "custom" => {
+                output_config.write(results, &mut writer)?;
+                write_cpp_drive_footer(&mut writer, output_targets)?;
+            }
             _ => output_config.write(results, &mut writer)?,
         }
         writer.flush()?;
@@ -502,6 +511,34 @@ pub(super) fn write_results(
     }
 
     Ok(())
+}
+
+/// Append the legacy C++ drive footer for baseline-compatible custom output.
+fn write_cpp_drive_footer<W: Write>(writer: &mut W, output_targets: &[char]) -> Result<()> {
+    if output_targets.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(writer)?;
+    writeln!(writer)?;
+    writeln!(
+        writer,
+        "Drives? \t{}\t{}",
+        output_targets.len(),
+        format_cpp_drive_letters(output_targets)
+    )?;
+    writeln!(writer)?;
+    Ok(())
+}
+
+/// Format drive letters using the legacy C++ footer style (for example `D:` or `C:|D:`).
+#[must_use]
+fn format_cpp_drive_letters(output_targets: &[char]) -> String {
+    output_targets
+        .iter()
+        .map(|drive| format!("{}:", drive.to_ascii_uppercase()))
+        .collect::<Vec<_>>()
+        .join("|")
 }
 
 #[cfg(test)]
@@ -543,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_results_csv_uses_output_config_without_footer() -> Result<()> {
+    fn test_write_results_csv_uses_output_config_without_cpp_footer() -> Result<()> {
         let path = temp_output_path("csv");
         let results = sample_df()?;
         let output_config = OutputConfig::new()
@@ -564,6 +601,38 @@ mod tests {
         let _ = fs::remove_file(&path);
 
         assert_eq!(written, "'C:\\Temp\\file.txt';'file.txt'\n");
+        Ok(())
+    }
+
+    #[test]
+    fn test_write_results_custom_file_appends_cpp_drive_footer() -> Result<()> {
+        let path = temp_output_path("txt");
+        let results = sample_df()?;
+        let output_config = OutputConfig::new()
+            .with_columns("path,name")
+            .with_header(false);
+
+        write_results(
+            &results,
+            "custom",
+            &path.to_string_lossy(),
+            &output_config,
+            &['C', 'D'],
+        )?;
+
+        let written = fs::read_to_string(&path)?;
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(
+            written,
+            concat!(
+                "\"C:\\Temp\\file.txt\",\"file.txt\"\n",
+                "\n",
+                "\n",
+                "Drives? \t2\tC:|D:\n",
+                "\n"
+            )
+        );
         Ok(())
     }
 
