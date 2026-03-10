@@ -783,13 +783,31 @@ fn parse_retrieval_pointers(buffer: &[u8], size: usize, extents: &mut Vec<MftExt
         return;
     }
 
+    let read_u32 = |offset: usize| -> Option<u32> {
+        let bytes = buffer.get(offset..offset + size_of::<u32>())?;
+        let mut raw = [0_u8; 4];
+        raw.copy_from_slice(bytes);
+        Some(u32::from_le_bytes(raw))
+    };
+    let read_i64 = |offset: usize| -> Option<i64> {
+        let bytes = buffer.get(offset..offset + size_of::<i64>())?;
+        let mut raw = [0_u8; 8];
+        raw.copy_from_slice(bytes);
+        Some(i64::from_le_bytes(raw))
+    };
+
     // RETRIEVAL_POINTERS_BUFFER layout:
     // - ExtentCount: u32
     // - StartingVcn: i64
     // - Extents[]: array of { NextVcn: i64, Lcn: i64 }
 
-    let extent_count = u32::from_le_bytes(buffer[0..4].try_into().unwrap()) as usize;
-    let mut prev_vcn = i64::from_le_bytes(buffer[8..16].try_into().unwrap()) as u64;
+    let Some(extent_count) = read_u32(0).map(|count| count as usize) else {
+        return;
+    };
+    let Some(starting_vcn) = read_i64(8) else {
+        return;
+    };
+    let mut prev_vcn = starting_vcn as u64;
 
     let extent_size = 16; // sizeof(LARGE_INTEGER) * 2
     let extents_offset = 16; // After ExtentCount (4) + padding (4) + StartingVcn (8)
@@ -800,8 +818,12 @@ fn parse_retrieval_pointers(buffer: &[u8], size: usize, extents: &mut Vec<MftExt
             break;
         }
 
-        let next_vcn = i64::from_le_bytes(buffer[offset..offset + 8].try_into().unwrap()) as u64;
-        let lcn = i64::from_le_bytes(buffer[offset + 8..offset + 16].try_into().unwrap());
+        let Some(next_vcn) = read_i64(offset).map(|value| value as u64) else {
+            break;
+        };
+        let Some(lcn) = read_i64(offset + 8) else {
+            break;
+        };
 
         let cluster_count = next_vcn.saturating_sub(prev_vcn);
 

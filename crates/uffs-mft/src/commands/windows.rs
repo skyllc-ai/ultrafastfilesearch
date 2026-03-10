@@ -901,9 +901,9 @@ pub async fn cmd_bench(
 
     // Calculate averages if multiple runs
     let avg_result = if runs == 1 {
-        results.into_iter().next().unwrap()
+        take_single_benchmark_result(results, "benchmark run requested one iteration")?
     } else {
-        average_results(&results)
+        average_results(&results)?
     };
 
     if json {
@@ -916,13 +916,22 @@ pub async fn cmd_bench(
 }
 
 #[cfg(windows)]
-fn average_results(results: &[uffs_mft::BenchmarkResult]) -> uffs_mft::BenchmarkResult {
-    let n = results.len() as u64;
-    if n == 0 {
-        panic!("No results to average");
-    }
+fn take_single_benchmark_result(
+    results: Vec<uffs_mft::BenchmarkResult>,
+    context: &str,
+) -> Result<uffs_mft::BenchmarkResult> {
+    results
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("{context}: no benchmark results were collected"))
+}
 
-    let first = &results[0];
+#[cfg(windows)]
+fn average_results(results: &[uffs_mft::BenchmarkResult]) -> Result<uffs_mft::BenchmarkResult> {
+    let Some(first) = results.first() else {
+        anyhow::bail!("no benchmark results were collected");
+    };
+    let n = results.len() as u64;
 
     let avg_timings = uffs_mft::PhaseTimings {
         open_ms: results.iter().map(|r| r.timings.open_ms).sum::<u64>() / n,
@@ -948,13 +957,13 @@ fn average_results(results: &[uffs_mft::BenchmarkResult]) -> uffs_mft::Benchmark
     let avg_records_per_sec: f64 =
         results.iter().map(|r| r.records_per_sec).sum::<f64>() / results.len() as f64;
 
-    uffs_mft::BenchmarkResult {
+    Ok(uffs_mft::BenchmarkResult {
         timings: avg_timings,
         characteristics: first.characteristics.clone(),
         records_parsed: first.records_parsed,
         throughput_mb_s: avg_throughput,
         records_per_sec: avg_records_per_sec,
-    }
+    })
 }
 
 #[cfg(windows)]
@@ -1276,9 +1285,9 @@ async fn benchmark_single_drive(
 
     // Average results
     Ok(if runs == 1 {
-        results.into_iter().next().unwrap()
+        take_single_benchmark_result(results, "single-drive benchmark requested one iteration")?
     } else {
-        average_results(&results)
+        average_results(&results)?
     })
 }
 

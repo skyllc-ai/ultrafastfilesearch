@@ -1936,7 +1936,11 @@ impl ParallelMftReader {
         // Queue initial reads (adaptive concurrency)
         for slot_id in 0..concurrency {
             if let Some(op) = io_ops.pop_front() {
-                let buffer = buffer_pool.pop().unwrap();
+                let Some(buffer) = buffer_pool.pop() else {
+                    return Err(MftError::InvalidData(
+                        "I/O buffer pool exhausted while queuing overlapped reads".to_owned(),
+                    ));
+                };
                 let mut in_flight_op = Box::pin(InFlightOp {
                     overlapped: unsafe { std::mem::zeroed() },
                     buffer,
@@ -2043,7 +2047,12 @@ impl ParallelMftReader {
 
                     // Queue next read if available
                     if let Some(next_op) = io_ops.pop_front() {
-                        let buffer = buffer_pool.pop().unwrap();
+                        let Some(buffer) = buffer_pool.pop() else {
+                            return Err(MftError::InvalidData(
+                                "I/O buffer pool exhausted while recycling overlapped reads"
+                                    .to_owned(),
+                            ));
+                        };
                         let mut new_in_flight = Box::pin(InFlightOp {
                             overlapped: unsafe { std::mem::zeroed() },
                             buffer,
@@ -2417,7 +2426,11 @@ impl ParallelMftReader {
         // Queue initial reads
         for slot_id in 0..concurrency {
             if let Some(op) = io_ops.pop_front() {
-                let buffer = buffer_pool.pop().unwrap();
+                let Some(buffer) = buffer_pool.pop() else {
+                    return Err(MftError::InvalidData(
+                        "I/O buffer pool exhausted while queuing inline-parse reads".to_owned(),
+                    ));
+                };
                 let mut in_flight_op = Box::pin(InFlightOp {
                     overlapped: unsafe { std::mem::zeroed() },
                     buffer,
@@ -2538,7 +2551,12 @@ impl ParallelMftReader {
                     buffer_pool.push(recycled_buffer);
 
                     if let Some(next_op) = io_ops.pop_front() {
-                        let buffer = buffer_pool.pop().unwrap();
+                        let Some(buffer) = buffer_pool.pop() else {
+                            return Err(MftError::InvalidData(
+                                "I/O buffer pool exhausted while recycling inline-parse reads"
+                                    .to_owned(),
+                            ));
+                        };
                         let mut new_in_flight = Box::pin(InFlightOp {
                             overlapped: unsafe { std::mem::zeroed() },
                             buffer,
@@ -2900,7 +2918,12 @@ impl ParallelMftReader {
         // Queue initial reads
         for slot_id in 0..concurrency {
             if let Some(op) = io_ops.pop_front() {
-                let buffer = buffer_pool.pop().unwrap();
+                let Some(buffer) = buffer_pool.pop() else {
+                    drop(tx);
+                    return Err(MftError::InvalidData(
+                        "I/O buffer pool exhausted while queuing worker reads".to_owned(),
+                    ));
+                };
                 let mut in_flight_op = Box::pin(InFlightOp {
                     overlapped: unsafe { std::mem::zeroed() },
                     buffer,
@@ -3003,7 +3026,12 @@ impl ParallelMftReader {
                     buffer_pool.push(recycled_buffer);
 
                     if let Some(next_op) = io_ops.pop_front() {
-                        let buffer = buffer_pool.pop().unwrap();
+                        let Some(buffer) = buffer_pool.pop() else {
+                            drop(tx);
+                            return Err(MftError::InvalidData(
+                                "I/O buffer pool exhausted while recycling worker reads".to_owned(),
+                            ));
+                        };
                         let mut new_in_flight = Box::pin(InFlightOp {
                             overlapped: unsafe { std::mem::zeroed() },
                             buffer,
@@ -5103,7 +5131,11 @@ impl MultiVolumeIocpReader {
             };
 
             // Take the completed operation and unpin it to get ownership
-            let completed_pinned = in_flight[vol_idx][slot_idx].take().unwrap();
+            let Some(completed_pinned) = in_flight[vol_idx][slot_idx].take() else {
+                return Err(MftError::InvalidData(
+                    "completed IOCP operation missing from in-flight slot".to_owned(),
+                ));
+            };
             let completed_op = Pin::into_inner(completed_pinned);
             let vol = &mut self.volumes[vol_idx];
             vol.pending_ops -= 1;
