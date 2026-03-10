@@ -1,4 +1,7 @@
 //! Compiled pattern IR for optimized Polars expression lowering.
+//! Exception: This module exceeds 800 lines because the compiled IR, lowering
+//! rules, and pattern-specialization helpers remain co-located pending a
+//! pattern-lowering split outside Wave 3C.
 //!
 //! This module provides a Pattern Intermediate Representation (IR) that enables
 //! specialized Polars string kernels instead of regex-everything approach.

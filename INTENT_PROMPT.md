@@ -566,10 +566,13 @@ rust-script scripts/verify_parity.rs /Users/rnio/uffs_data D --regenerate  # SHA
 
 **File size policy:**
 ```bash
-# No .rs file > 800 LOC unless exception documented in a module-level comment
-# Uses \; (not +) to avoid wc's "total" line causing false failures
+# Inventory oversized .rs files under crates/ (truth source; documented exceptions still appear here)
 find crates/ -name '*.rs' -exec wc -l {} \; \
   | awk '$1 > 800 { print "OVER:", $0; found=1 } END { exit found }'
+
+# Enforce the actual policy: every oversized file must be explicitly allowlisted
+# and carry a module-level //! Exception: comment; stale exceptions fail too
+bash scripts/check_file_size_policy.sh
 ```
 
 **C++ reference-implementation purge (zero hits = pass):**

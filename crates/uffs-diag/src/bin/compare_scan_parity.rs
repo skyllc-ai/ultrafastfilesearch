@@ -197,21 +197,21 @@ impl FieldStats {
 /// Overall comparison results
 #[derive(Debug, Default)]
 struct ComparisonResults {
-    cpp_file: String,
+    reference_file: String,
     rust_file: String,
-    cpp_total_rows: usize,
+    reference_total_rows: usize,
     rust_total_rows: usize,
     common_paths: usize,
-    cpp_only_paths: usize,
+    reference_only_paths: usize,
     rust_only_paths: usize,
     path_match_rate: f64,
     // Per-field statistics
     field_stats: HashMap<String, FieldStats>,
     // ADS analysis
-    cpp_ads_count: usize,
+    reference_ads_count: usize,
     rust_ads_count: usize,
     // Sample differences
-    sample_cpp_only: Vec<String>,
+    sample_reference_only: Vec<String>,
     sample_rust_only: Vec<String>,
 }
 

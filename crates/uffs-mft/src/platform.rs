@@ -1,4 +1,7 @@
 //! Platform-specific implementations for Windows.
+//! Exception: This module exceeds 800 lines because the Windows FFI wrappers,
+//! handle helpers, and volume/privilege utilities remain in one audited
+//! platform surface pending a structural split outside Wave 3C.
 //!
 //! This module provides Windows API wrappers for:
 //! - Volume handle management

@@ -1,4 +1,7 @@
 //! NTFS-specific structures and parsing.
+//! Exception: This module exceeds 800 lines because the packed NTFS structs,
+//! on-disk constants, and decoding helpers remain co-located for layout audit
+//! review pending a dedicated NTFS module split outside Wave 3C.
 //!
 //! This module provides low-level NTFS structure definitions for parsing
 //! the Master File Table (MFT) directly from disk.

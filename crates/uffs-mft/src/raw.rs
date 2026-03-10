@@ -1,4 +1,7 @@
 //! RAW MFT Persistence.
+//! Exception: This module exceeds 800 lines because the raw snapshot format,
+//! reader/writer implementation, and validation helpers remain together as one
+//! audited persistence surface pending a split outside Wave 3C.
 //!
 //! This module provides functionality to save and load complete raw MFT bytes
 //! for offline analysis. This allows:

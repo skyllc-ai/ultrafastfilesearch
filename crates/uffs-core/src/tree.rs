@@ -1,12 +1,16 @@
 //! Directory tree structure and metrics computation.
 //!
+//! Exception: This module exceeds 800 lines because the tree traversal logic
+//! and public metric API remain co-located for hot-path review; a structural
+//! split is deferred outside Wave 3C.
+//!
 //! This module provides efficient tree-based calculations for MFT data:
 //! - `descendants`: Count of all items under a directory
 //! - `treesize`: Sum of logical file sizes under a directory
 //! - `tree_allocated`: Sum of allocated sizes under a directory
 //! - `bulkiness`: Fragmentation metric (filtered allocated size sum)
 //!
-//! # Bulkiness Algorithm (matches C++ reference)
+//! # Bulkiness Algorithm (matches the historical baseline)
 //!
 //! Bulkiness identifies folders with many small fragmented files, not just big
 //! folders. The algorithm filters out large files that dominate a folder's

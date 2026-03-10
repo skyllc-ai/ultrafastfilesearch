@@ -1,4 +1,7 @@
 //! Reader implementations and async I/O orchestration for MFT ingestion.
+//! Exception: This module exceeds 800 lines because the concrete reader types
+//! and shared async orchestration remain co-located pending the larger I/O
+//! decomposition outside Wave 3C.
 
 use super::*;
 

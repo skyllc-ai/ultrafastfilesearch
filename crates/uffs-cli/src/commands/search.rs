@@ -1,4 +1,7 @@
 //! Search command implementation.
+//! Exception: This module exceeds 800 lines because the end-to-end search
+//! command flow remains consolidated pending a command-surface split outside
+//! Wave 3C.
 
 #[cfg(windows)]
 use std::fs::File;

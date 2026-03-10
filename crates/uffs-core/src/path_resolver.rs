@@ -1,4 +1,7 @@
 //! Path resolution from FRS numbers.
+//! Exception: This module exceeds 800 lines because the resolver variants and
+//! shared arena/caching logic remain together pending a path module split
+//! outside Wave 3C.
 //!
 //! Reconstructs full file paths from the parent-child FRS relationships.
 //!

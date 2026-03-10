@@ -1,4 +1,7 @@
 //! Windows-specific parsing bridges plus direct-to-index helpers.
+//! Exception: This module exceeds 800 lines because the Windows parser
+//! adapters and direct-to-index fast paths remain together for parity review
+//! pending a parser split outside Wave 3C.
 
 use super::*;
 // Re-use the cross-platform stream filtering function from ntfs module

@@ -348,6 +348,7 @@ default:
     @echo "  just test         - Run all tests with nextest"
     @echo "  just test-doc     - Run documentation tests"
     @echo "  just test-slow    - Run slow/ignored tests (comprehensive validation)"
+    @echo "  just file-size-policy - Enforce oversized Rust file exceptions"
     @echo "  just coverage     - Generate coverage report"
     @echo "  just lint-prod    - Ultra-strict production linting"
     @echo "  just lint-tests   - Pragmatic test linting"
@@ -1020,14 +1021,10 @@ version:
 release VERSION="":
     #!/usr/bin/env bash
     set -euo pipefail
-    printf "\033[0;34m🚀 Triggering GitHub Release Workflow...\033[0m\n"
-
-    if [ -z "{{ VERSION }}" ]; then
-        # Auto-detect version from Cargo.toml
-        ./scripts/release-github.sh
-    else
-        ./scripts/release-github.sh "{{ VERSION }}"
-    fi
+    printf "\033[1;33m⚠️  Release triggering is intentionally unavailable from justfile.\033[0m\n"
+    printf "\033[0;34m   The old helper script (scripts/release-github.sh) is not present in this repo state.\033[0m\n"
+    printf "\033[0;34m   Reintroduce a dedicated release helper in a separate lane before restoring this entry point.\033[0m\n"
+    exit 1
 
 # Watch the latest release workflow run
 release-watch:
@@ -1693,14 +1690,14 @@ benchmark-advanced:
     printf "\033[0;34m📊 Check target/cargo-timings/ for detailed build analysis\033[0m\n"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 🚀 UFFS Performance Benchmarks (Rust vs C++ Comparison)
+# 🚀 UFFS Performance Benchmarks (Rust vs reference binary)
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# These benchmarks compare the Rust implementation against the C++ reference
-# implementation (uffs.com) to track optimization progress.
+# These benchmarks compare the Rust implementation against the reference
+# uffs.com binary to track optimization progress.
 #
 # Usage:
-#   just bench-vs-cpp          # Compare Rust vs C++ for *.txt search
+#   just bench-vs-cpp          # Compare Rust vs the reference binary for *.txt search
 #   just bench-vs-cpp-drive C  # Compare on specific drive
 #   just bench-micro           # Run criterion micro-benchmarks
 #   just bench-search          # End-to-end search benchmark

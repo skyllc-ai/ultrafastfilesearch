@@ -1,4 +1,7 @@
 //! Output configuration and formatting.
+//! Exception: This module exceeds 800 lines because the output schema,
+//! formatting helpers, and writer integration remain co-located pending an
+//! output module split outside Wave 3C.
 //!
 //! Provides customizable output formatting with:
 //! - Column selection

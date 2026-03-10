@@ -1,4 +1,7 @@
 //! Direct search on `MftIndex` without `DataFrame` conversion.
+//! Exception: This module exceeds 800 lines because the optimized search
+//! execution pipeline remains together for hot-path review pending a dedicated
+//! search module split outside Wave 3C.
 //!
 //! This module provides SIMD-optimized pattern matching directly on `MftIndex`,
 //! avoiding the overhead of converting to a Polars `DataFrame` for simple
