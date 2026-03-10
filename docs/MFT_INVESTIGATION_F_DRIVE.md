@@ -590,9 +590,6 @@ The Rust pipeline currently treats `parent_frs` more literally and only consider
 
 To better understand the C++ semantics around these tricky high-FRS parents, the C++ team provided a **Rust reference MFT reader** that is intended to be a **1:1 port of the C++ MFT-reading logic** (but without full path reconstruction):
 
-- Location in this repo (vendored copy):
-  - `vendor/mft-reader-rs/`
-
 ### 11.1 What the reference reader does
 
 - Opens the NTFS volume (e.g. `\\.\\F:`) and reads `$MFT` using:
@@ -612,8 +609,7 @@ This gives us a **direct, C++-equivalent view** of the raw MFT records, separate
 On the Windows machine that has the F: drive attached, we built and ran the reference reader and captured its view of `$MFT`:
 
 1. Build and run the reference reader against F::
-   - From the `UltraFastFileSearch` repo root on Windows:
-     - `cd vendor\\mft-reader-rs`
+   - From the local checkout containing the reference reader on Windows:
      - `cargo run --release -- -d F -o f_mft_reference.csv -v`
 
 2. Copy the resulting CSV back into this repo on macOS, under:
