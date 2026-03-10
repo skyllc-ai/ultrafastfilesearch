@@ -1,3 +1,8 @@
+//! Legacy path resolver implementations retained for backward compatibility.
+//!
+//! Contains the original `HashMap`-based [`PathResolver`] and the deprecated
+//! multi-drive helper.
+
 use std::collections::{HashMap, HashSet};
 
 use uffs_polars::{Column, DataFrame};

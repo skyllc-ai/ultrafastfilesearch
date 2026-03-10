@@ -1,3 +1,8 @@
+//! Unit tests for `path_resolver` module behavior.
+//!
+//! Covers legacy and fast resolver path reconstruction, caching, and helper
+//! column generation.
+
 use super::*;
 
 type TestResult = core::result::Result<(), Box<dyn core::error::Error>>;
