@@ -262,8 +262,9 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                     // Examples: $SDH, $SII (in $Secure), $O, $Q (in $Quota), $R (in $Reparse)
                     // Also includes unnamed $BITMAP (e.g., in $MFT)
 
-                    // legacy-output parity: Only primary attributes (LowestVCN == 0) count as streams.
-                    // Continuation extents (LowestVCN > 0) are skipped. See ntfs_index_load.hpp:358
+                    // legacy-output parity: Only primary attributes (LowestVCN == 0) count as
+                    // streams. Continuation extents (LowestVCN > 0) are
+                    // skipped. See ntfs_index_load.hpp:358
                     let is_primary = if attr_header.is_non_resident == 0 {
                         true // Resident attributes are always primary
                     } else {
@@ -380,8 +381,9 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                     String::new()
                 };
 
-                // legacy-output parity: Only primary attributes (LowestVCN == 0) count as streams.
-                // Continuation extents (LowestVCN > 0) are skipped. See ntfs_index_load.hpp:358
+                // legacy-output parity: Only primary attributes (LowestVCN == 0) count as
+                // streams. Continuation extents (LowestVCN > 0) are skipped.
+                // See ntfs_index_load.hpp:358
                 let is_primary = if attr_header.is_non_resident == 0 {
                     true // Resident attributes are always primary
                 } else {
@@ -501,8 +503,9 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                     String::new()
                 };
 
-                // legacy-output parity: Only primary attributes (LowestVCN == 0) count as streams.
-                // Continuation extents (LowestVCN > 0) are skipped. See ntfs_index_load.hpp:358
+                // legacy-output parity: Only primary attributes (LowestVCN == 0) count as
+                // streams. Continuation extents (LowestVCN > 0) are skipped.
+                // See ntfs_index_load.hpp:358
                 let is_primary = if attr_header.is_non_resident == 0 {
                     true // Resident attributes are always primary
                 } else {
@@ -611,8 +614,8 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     // for propagation.
     if is_directory && dir_index_size > 0 {
         // Add $I30 as the default stream (empty name) for directories
-        // This matches established behavior where $I30 is the "default" stream for directories
-        // just like $DATA is the default stream for files
+        // This matches established behavior where $I30 is the "default" stream for
+        // directories just like $DATA is the default stream for files
         streams.push(StreamInfo {
             name: String::new(), // Empty name = default stream
             size: dir_index_size,

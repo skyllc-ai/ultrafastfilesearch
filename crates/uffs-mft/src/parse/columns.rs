@@ -199,8 +199,9 @@ impl ParsedColumns {
 
     /// Pushes a record with full expansion (names × streams).
     ///
-    /// This matches established behavior: one row per (hard link × stream) combination.
-    /// If a file has 2 hard links and 3 streams, this creates 6 rows.
+    /// This matches established behavior: one row per (hard link × stream)
+    /// combination. If a file has 2 hard links and 3 streams, this creates
+    /// 6 rows.
     ///
     /// This is the default behavior for user-facing output, as users
     /// expect to see each hard link and ADS as separate entries.
@@ -241,7 +242,8 @@ impl ParsedColumns {
         // to match C++ behavior (ntfs_index.hpp line 1388-1392)
         for name_info in &names {
             for stream_info in &streams {
-                // Skip internal Windows streams (matches the legacy baseline match_attributes=false)
+                // Skip internal Windows streams (matches the legacy baseline
+                // match_attributes=false)
                 if crate::ntfs::is_internal_windows_stream(&stream_info.name) {
                     continue;
                 }
@@ -397,10 +399,11 @@ impl ParsedColumns {
     /// Adds placeholder records for parent directories that are referenced
     /// but not present in the parsed records.
     ///
-    /// This matches established behavior where `at()` creates placeholder records
-    /// for any referenced FRS that hasn't been seen yet. Without this,
-    /// path resolution fails with `<unknown:XXXXXX>` for files whose parent
-    /// directories weren't parsed (e.g., marked as not-in-use in bitmap).
+    /// This matches established behavior where `at()` creates placeholder
+    /// records for any referenced FRS that hasn't been seen yet. Without
+    /// this, path resolution fails with `<unknown:XXXXXX>` for files whose
+    /// parent directories weren't parsed (e.g., marked as not-in-use in
+    /// bitmap).
     ///
     /// # Performance Optimization (2026-01-23)
     ///

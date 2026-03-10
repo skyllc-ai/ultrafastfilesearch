@@ -136,7 +136,8 @@ pub fn char_or_dot(byte: u8) -> char {
 }
 
 // ============================================================================
-// Full Index Build Benchmark Command (matches the legacy baseline --benchmark-index exactly)
+// Full Index Build Benchmark Command (matches the legacy baseline
+// --benchmark-index exactly)
 // ============================================================================
 
 /// Full index build benchmark matching C++ `--benchmark-index` output exactly.

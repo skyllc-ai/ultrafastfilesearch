@@ -140,7 +140,8 @@ pub struct ExtensionAttributes {
     pub streams: Vec<StreamInfo>,
     /// Directory index size from `$I30` attributes in this extension.
     /// This is accumulated from `$INDEX_ROOT` and `$INDEX_ALLOCATION`
-    /// attributes with name `$I30` (excludes `$BITMAP` for legacy-output parity).
+    /// attributes with name `$I30` (excludes `$BITMAP` for legacy-output
+    /// parity).
     pub dir_index_size: u64,
     /// Directory index allocated size from $I30 attributes in this extension.
     pub dir_index_allocated: u64,

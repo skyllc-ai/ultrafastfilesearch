@@ -531,7 +531,8 @@ fn write_cpp_drive_footer<W: Write>(writer: &mut W, output_targets: &[char]) -> 
     Ok(())
 }
 
-/// Format drive letters using the legacy C++ footer style (for example `D:` or `C:|D:`).
+/// Format drive letters using the legacy C++ footer style (for example `D:` or
+/// `C:|D:`).
 #[must_use]
 fn format_cpp_drive_letters(output_targets: &[char]) -> String {
     output_targets
