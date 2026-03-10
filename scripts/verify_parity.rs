@@ -1,8 +1,8 @@
 #!/usr/bin/env rust-script
-//! Drive-agnostic SHA256 golden-baseline verification for UFFS.
+//! Drive-agnostic strict full-output SHA256 verification for UFFS.
 //!
-//! Compares Rust output against a golden baseline by sorting data rows and
-//! computing SHA256 over the reassembled content.
+//! Compares Rust output against a golden baseline using the complete output
+//! file, including any non-CSV lines above or below the data rows.
 //!
 //! # Usage
 //!
@@ -26,27 +26,31 @@
 //! Rust output matching the golden baseline timezone, then compares. This
 //! ensures SHA256 alignment regardless of the current local DST state.
 //!
-//! # Output structure
+//! # Strict parity contract
 //!
-//! Output files have 2 header lines (CSV header + blank), data rows in the
-//! middle, and 4 footer lines (2 blank + "Drives?" + blank). This script
-//! sorts ONLY the data rows, preserving header and footer in place, then
-//! computes SHA256 over the reassembled content.
+//! The ordered full-file SHA256 is authoritative. If ordered hashes differ,
+//! the script also computes a line-sorted full-file SHA256 as a normalization
+//! step for row-order differences. No header or footer lines are truncated or
+//! ignored during either comparison.
 //!
 //! ```cargo
 //! [dependencies]
 //! sha2 = "0.10"
 //! ```
 
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const HEADER_LINES: usize = 2;
-const FOOTER_LINES: usize = 4;
+#[derive(Debug)]
+struct FileHashes {
+    ordered_hash: String,
+    sorted_hash: String,
+    line_count: usize,
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -91,40 +95,66 @@ fn main() {
         eprintln!("ERROR: Rust output file not found: {}", rust_output.display());
         std::process::exit(1);
     }
-    println!("=== UFFS SHA256 Golden-Baseline Verification ===");
+    println!("=== UFFS Strict Full-Output Parity Verification ===");
     println!("Data dir:      {}", data_dir.display());
     println!("Drive letter:  {}", drive_letter);
     println!("Baseline file: {}", golden_baseline_file.display());
     println!("Rust output:   {}", rust_output.display());
     println!();
 
-    // Compute sorted SHA256 for both files
-    println!("Computing SHA256 of sorted output...");
-    let (golden_hash, golden_rows) = sorted_sha256(&golden_baseline_file);
-    let (rust_hash, rust_rows) = sorted_sha256(&rust_output);
+    println!("Computing ordered full-file SHA256...");
+    let golden_hashes = compute_file_hashes(&golden_baseline_file);
+    let rust_hashes = compute_file_hashes(&rust_output);
 
     println!();
-    println!("Golden baseline: {} ({} data rows)", golden_hash, golden_rows);
-    println!("Rust output:    {} ({} data rows)", rust_hash, rust_rows);
+    println!(
+        "Golden baseline: {} ({} lines)",
+        golden_hashes.ordered_hash, golden_hashes.line_count
+    );
+    println!(
+        "Rust output:    {} ({} lines)",
+        rust_hashes.ordered_hash, rust_hashes.line_count
+    );
     println!();
 
-    // Verdict
-    if golden_hash == rust_hash {
-        println!("RESULT: SHA256 MATCH");
+    if golden_hashes.ordered_hash == rust_hashes.ordered_hash {
+        println!("RESULT: STRICT FULL OUTPUT MATCH");
         println!("  Golden baseline verified for drive {}.", drive_letter);
         std::process::exit(0);
-    } else {
-        println!("RESULT: SHA256 MISMATCH");
-        println!("  Baseline: {}", golden_hash);
-        println!("  Rust: {}", rust_hash);
-        println!("  Row count diff: {} (baseline) vs {} (Rust)", golden_rows, rust_rows);
-        println!();
-
-        // Show first few differing lines
-        show_first_diffs(&golden_baseline_file, &rust_output);
-
-        std::process::exit(1);
     }
+
+    println!("Ordered hashes differ; checking full-file line-sort normalization...");
+    println!(
+        "Golden baseline (sorted): {}",
+        golden_hashes.sorted_hash
+    );
+    println!("Rust output (sorted):    {}", rust_hashes.sorted_hash);
+    println!();
+
+    if golden_hashes.sorted_hash == rust_hashes.sorted_hash {
+        println!("RESULT: FULL OUTPUT MATCH AFTER LINE-SORT NORMALIZATION");
+        println!("  Exact line order differs, but the complete output line set matches.");
+        println!();
+        show_first_ordered_diffs(&golden_baseline_file, &rust_output);
+        std::process::exit(0);
+    }
+
+    println!("RESULT: STRICT FULL OUTPUT MISMATCH");
+    println!("  Ordered baseline: {}", golden_hashes.ordered_hash);
+    println!("  Ordered Rust:     {}", rust_hashes.ordered_hash);
+    println!("  Sorted baseline:  {}", golden_hashes.sorted_hash);
+    println!("  Sorted Rust:      {}", rust_hashes.sorted_hash);
+    println!(
+        "  Line count diff:  {} (baseline) vs {} (Rust)",
+        golden_hashes.line_count, rust_hashes.line_count
+    );
+    println!();
+
+    show_first_ordered_diffs(&golden_baseline_file, &rust_output);
+    println!();
+    show_first_sorted_diffs(&golden_baseline_file, &rust_output);
+
+    std::process::exit(1);
 }
 
 fn find_golden_baseline_file(data_dir: &Path, drive_lower: &str) -> PathBuf {
@@ -266,65 +296,88 @@ fn find_workspace_root() -> PathBuf {
     cwd
 }
 
-/// Read a file, split into header/data/footer, sort data rows, compute SHA256
-/// over the reassembled content. Returns (hex hash, data row count).
-fn sorted_sha256(path: &Path) -> (String, usize) {
+fn compute_file_hashes(path: &Path) -> FileHashes {
+    let lines = read_lines(path);
+    FileHashes {
+        ordered_hash: ordered_sha256(&lines),
+        sorted_hash: sorted_sha256(&lines),
+        line_count: lines.len(),
+    }
+}
+
+fn read_lines(path: &Path) -> Vec<String> {
     let file = fs::File::open(path)
         .unwrap_or_else(|e| panic!("Failed to open {}: {}", path.display(), e));
     let reader = BufReader::new(file);
-
-    let all_lines: Vec<String> = reader.lines()
-        .map(|l| l.expect("Failed to read line"))
-        .collect();
-
-    let total = all_lines.len();
-
-    if total <= HEADER_LINES + FOOTER_LINES {
-        eprintln!("WARNING: File {} has only {} lines (expected > {})",
-            path.display(), total, HEADER_LINES + FOOTER_LINES);
-        let mut hasher = Sha256::new();
-        for line in &all_lines {
-            hasher.update(line.as_bytes());
-            hasher.update(b"\n");
-        }
-        let hash = format!("{:x}", hasher.finalize());
-        return (hash, 0);
-    }
-
-    let header = &all_lines[..HEADER_LINES];
-    let footer = &all_lines[total - FOOTER_LINES..];
-    let mut data: Vec<&str> = all_lines[HEADER_LINES..total - FOOTER_LINES]
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
-
-    let data_count = data.len();
-    data.sort_unstable();
-
-    // Compute SHA256 of header + sorted data + footer
-    let mut hasher = Sha256::new();
-    for line in header {
-        hasher.update(line.as_bytes());
-        hasher.update(b"\n");
-    }
-    for line in &data {
-        hasher.update(line.as_bytes());
-        hasher.update(b"\n");
-    }
-    for line in footer {
-        hasher.update(line.as_bytes());
-        hasher.update(b"\n");
-    }
-
-    (format!("{:x}", hasher.finalize()), data_count)
+    reader
+        .lines()
+        .map(|line| line.expect("Failed to read line"))
+        .collect()
 }
 
-/// Show first few differences between sorted data rows of two files.
-fn show_first_diffs(file_a: &Path, file_b: &Path) {
-    let lines_a = read_sorted_data(file_a);
-    let lines_b = read_sorted_data(file_b);
+fn ordered_sha256(lines: &[String]) -> String {
+    sha256_for_lines(lines.iter().map(String::as_str))
+}
 
-    println!("First 5 differences in sorted data rows:");
+fn sorted_sha256(lines: &[String]) -> String {
+    let mut sorted_lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+    sorted_lines.sort_unstable();
+    sha256_for_lines(sorted_lines)
+}
+
+fn sha256_for_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
+    let mut hasher = Sha256::new();
+    for line in lines {
+        hasher.update(line.as_bytes());
+        hasher.update(b"\n");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// Show first few differences between the complete ordered outputs of two files.
+fn show_first_ordered_diffs(file_a: &Path, file_b: &Path) {
+    let lines_a = read_lines(file_a);
+    let lines_b = read_lines(file_b);
+
+    println!("First 5 differences in full output order:");
+    let mut diff_count = 0;
+    let max_len = lines_a.len().max(lines_b.len());
+
+    for index in 0..max_len {
+        if diff_count >= 5 {
+            break;
+        }
+
+        match (lines_a.get(index), lines_b.get(index)) {
+            (Some(line_a), Some(line_b)) if line_a == line_b => {}
+            (Some(line_a), Some(line_b)) => {
+                println!("  Line {} baseline: {}", index + 1, truncate(line_a, 120));
+                println!("  Line {} Rust:     {}", index + 1, truncate(line_b, 120));
+                diff_count += 1;
+            }
+            (Some(line_a), None) => {
+                println!("  Line {} baseline only: {}", index + 1, truncate(line_a, 120));
+                diff_count += 1;
+            }
+            (None, Some(line_b)) => {
+                println!("  Line {} Rust only:     {}", index + 1, truncate(line_b, 120));
+                diff_count += 1;
+            }
+            (None, None) => {}
+        }
+    }
+
+    if diff_count == 0 {
+        println!("  No ordered differences found after newline normalization.");
+    }
+}
+
+/// Show first few multiset differences after sorting complete output lines.
+fn show_first_sorted_diffs(file_a: &Path, file_b: &Path) {
+    let lines_a = read_sorted_lines(file_a);
+    let lines_b = read_sorted_lines(file_b);
+
+    println!("First 5 differences after full-file line sort:");
     let mut diff_count = 0;
 
     let mut ia = 0;
@@ -356,19 +409,16 @@ fn show_first_diffs(file_a: &Path, file_b: &Path) {
         ib += 1;
         diff_count += 1;
     }
+
+    if diff_count == 0 {
+        println!("  No sorted differences found after newline normalization.");
+    }
 }
 
-fn read_sorted_data(path: &Path) -> Vec<String> {
-    let file = fs::File::open(path).expect("Failed to open file");
-    let reader = BufReader::new(file);
-    let all_lines: Vec<String> = reader.lines().map(|l| l.unwrap()).collect();
-    let total = all_lines.len();
-    if total <= HEADER_LINES + FOOTER_LINES {
-        return vec![];
-    }
-    let mut data: Vec<String> = all_lines[HEADER_LINES..total - FOOTER_LINES].to_vec();
-    data.sort_unstable();
-    data
+fn read_sorted_lines(path: &Path) -> Vec<String> {
+    let mut all_lines = read_lines(path);
+    all_lines.sort_unstable();
+    all_lines
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -376,5 +426,56 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         format!("{}...", &s[..max])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ordered_sha256, sorted_sha256};
+
+    fn lines(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn sorted_full_file_hash_still_detects_missing_footer_lines() {
+        let baseline = lines(&[
+            "header",
+            "",
+            "row-a",
+            "row-b",
+            "",
+            "Drives?\t1\tD:",
+            "",
+        ]);
+        let rust = lines(&["header", "", "row-b", "row-a"]);
+
+        assert_ne!(ordered_sha256(&baseline), ordered_sha256(&rust));
+        assert_ne!(sorted_sha256(&baseline), sorted_sha256(&rust));
+    }
+
+    #[test]
+    fn sorted_full_file_hash_allows_row_reordering_when_full_line_set_matches() {
+        let baseline = lines(&[
+            "header",
+            "",
+            "row-a",
+            "row-b",
+            "",
+            "Drives?\t1\tD:",
+            "",
+        ]);
+        let rust = lines(&[
+            "header",
+            "",
+            "row-b",
+            "row-a",
+            "",
+            "Drives?\t1\tD:",
+            "",
+        ]);
+
+        assert_ne!(ordered_sha256(&baseline), ordered_sha256(&rust));
+        assert_eq!(sorted_sha256(&baseline), sorted_sha256(&rust));
     }
 }
