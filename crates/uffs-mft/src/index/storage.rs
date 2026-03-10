@@ -297,6 +297,46 @@ impl MftIndex {
             return Err("Data too short for header");
         }
 
+        const FRS_TO_IDX_ENTRY_BYTES: usize = 4;
+        const LINK_INFO_BYTES: usize = 20;
+        const STREAM_INFO_BYTES: usize = 29;
+        const CHILD_INFO_BYTES: usize = 14;
+        const EXTENSION_ENTRY_BYTES: usize = 16;
+        const EXTENSION_ENTRY_TRAILER_BYTES: usize = 12;
+
+        fn checked_section_bytes(
+            count: u64,
+            entry_size: usize,
+            too_large_error: &'static str,
+        ) -> Result<usize, &'static str> {
+            let count = usize::try_from(count).map_err(|_| too_large_error)?;
+            count.checked_mul(entry_size).ok_or(too_large_error)
+        }
+
+        fn ensure_remaining(
+            data_len: usize,
+            pos: usize,
+            required: usize,
+            exceeds_error: &'static str,
+        ) -> Result<(), &'static str> {
+            if required > data_len.saturating_sub(pos) {
+                return Err(exceeds_error);
+            }
+            Ok(())
+        }
+
+        fn record_size_bytes(version: u32) -> Result<usize, &'static str> {
+            match version {
+                3 => Ok(121),
+                4 => Ok(157),
+                5 => Ok(181),
+                6 => Ok(185),
+                7 => Ok(193),
+                8 => Ok(195),
+                _ => Err("Unsupported index version"),
+            }
+        }
+
         let mut pos = 0;
 
         // Helper macro to read bytes safely
@@ -391,14 +431,39 @@ impl MftIndex {
         header.validate()?;
 
         // Read frs_to_idx table
-        let frs_to_idx_len = read_u64!() as usize;
-        let mut frs_to_idx = Vec::with_capacity(frs_to_idx_len);
+        let frs_to_idx_len = read_u64!();
+        let frs_to_idx_bytes = checked_section_bytes(
+            frs_to_idx_len,
+            FRS_TO_IDX_ENTRY_BYTES,
+            "FRS table too large",
+        )?;
+        ensure_remaining(
+            data.len(),
+            pos,
+            frs_to_idx_bytes,
+            "FRS table exceeds remaining data",
+        )?;
+        let mut frs_to_idx =
+            Vec::with_capacity(usize::try_from(frs_to_idx_len).map_err(|_| "FRS table too large")?);
         for _ in 0..frs_to_idx_len {
             frs_to_idx.push(read_u32!());
         }
 
         // Read records
-        let mut records = Vec::with_capacity(record_count as usize);
+        let record_bytes = checked_section_bytes(
+            record_count,
+            record_size_bytes(version)?,
+            "Record section too large",
+        )?;
+        ensure_remaining(
+            data.len(),
+            pos,
+            record_bytes,
+            "Record section exceeds remaining data",
+        )?;
+        let mut records = Vec::with_capacity(
+            usize::try_from(record_count).map_err(|_| "Record section too large")?,
+        );
         for _ in 0..record_count {
             let frs = read_u64!();
             // Version 4+: sequence_number and namespace (read sequentially to avoid
@@ -512,14 +577,33 @@ impl MftIndex {
         }
 
         // Read names
-        let names_end = pos + names_size as usize;
+        let names_len = usize::try_from(names_size).map_err(|_| "Names section too large")?;
+        ensure_remaining(
+            data.len(),
+            pos,
+            names_len,
+            "Names section exceeds remaining data",
+        )?;
+        let names_end = pos
+            .checked_add(names_len)
+            .ok_or("Names section too large")?;
         let names_bytes = data.get(pos..names_end).ok_or("Unexpected end of data")?;
         let names = String::from_utf8(names_bytes.to_vec())
             .map_err(|_utf8_err| "Invalid UTF-8 in names")?;
         pos = names_end;
 
         // Read links (overflow links)
-        let mut links = Vec::with_capacity(links_count as usize);
+        let link_bytes =
+            checked_section_bytes(links_count, LINK_INFO_BYTES, "Links section too large")?;
+        ensure_remaining(
+            data.len(),
+            pos,
+            link_bytes,
+            "Links section exceeds remaining data",
+        )?;
+        let mut links = Vec::with_capacity(
+            usize::try_from(links_count).map_err(|_| "Links section too large")?,
+        );
         for _ in 0..links_count {
             let next_entry = read_u32!();
             let name_offset = read_u32!();
@@ -537,7 +621,20 @@ impl MftIndex {
         }
 
         // Read streams (overflow streams)
-        let mut streams = Vec::with_capacity(streams_count as usize);
+        let stream_bytes = checked_section_bytes(
+            streams_count,
+            STREAM_INFO_BYTES,
+            "Streams section too large",
+        )?;
+        ensure_remaining(
+            data.len(),
+            pos,
+            stream_bytes,
+            "Streams section exceeds remaining data",
+        )?;
+        let mut streams = Vec::with_capacity(
+            usize::try_from(streams_count).map_err(|_| "Streams section too large")?,
+        );
         for _ in 0..streams_count {
             let size_length = read_u64!();
             let size_allocated = read_u64!();
@@ -561,7 +658,20 @@ impl MftIndex {
         }
 
         // Read children
-        let mut children = Vec::with_capacity(children_count as usize);
+        let child_bytes = checked_section_bytes(
+            children_count,
+            CHILD_INFO_BYTES,
+            "Children section too large",
+        )?;
+        ensure_remaining(
+            data.len(),
+            pos,
+            child_bytes,
+            "Children section exceeds remaining data",
+        )?;
+        let mut children = Vec::with_capacity(
+            usize::try_from(children_count).map_err(|_| "Children section too large")?,
+        );
         for _ in 0..children_count {
             let next_entry = read_u32!();
             let child_frs = read_u64!();
@@ -576,20 +686,40 @@ impl MftIndex {
 
         // Read ExtensionTable
         let extension_count = read_u32!() as usize;
+        let extension_entries = extension_count.saturating_sub(1);
+        let min_extension_bytes = extension_entries
+            .checked_mul(EXTENSION_ENTRY_BYTES)
+            .ok_or("Extension table too large")?;
+        ensure_remaining(
+            data.len(),
+            pos,
+            min_extension_bytes,
+            "Extension table exceeds remaining data",
+        )?;
         let mut extensions = ExtensionTable::new();
 
         // Read each extension (starting from index 1, since 0 is NO_EXTENSION)
         for _ in 1..extension_count {
             // String length (u32)
             let str_len = read_u32!() as usize;
+            let required = str_len
+                .checked_add(EXTENSION_ENTRY_TRAILER_BYTES)
+                .ok_or("Extension table too large")?;
+            ensure_remaining(
+                data.len(),
+                pos,
+                required,
+                "Extension table exceeds remaining data",
+            )?;
+            let str_end = pos
+                .checked_add(str_len)
+                .ok_or("Extension table too large")?;
 
             // String bytes
-            let str_bytes = data
-                .get(pos..pos + str_len)
-                .ok_or("Unexpected end of data")?;
+            let str_bytes = data.get(pos..str_end).ok_or("Unexpected end of data")?;
             let ext_str = core::str::from_utf8(str_bytes)
                 .map_err(|_e| "Invalid UTF-8 in extension string")?;
-            pos += str_len;
+            pos = str_end;
 
             // Count (u32)
             let count = read_u32!();

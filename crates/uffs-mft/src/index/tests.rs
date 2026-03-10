@@ -22,3 +22,6 @@ mod tests_perf;
 
 #[path = "tests_merge.rs"]
 mod tests_merge;
+
+#[path = "tests_storage.rs"]
+mod tests_storage;
