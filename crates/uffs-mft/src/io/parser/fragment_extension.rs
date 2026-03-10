@@ -1,3 +1,6 @@
+//! Legacy extension-record helper for direct-to-fragment parsing.
+//! Extracts names and streams from extension records into a fragment.
+
 use core::mem::size_of;
 
 use smallvec::SmallVec;

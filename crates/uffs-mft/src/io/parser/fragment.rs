@@ -1,3 +1,6 @@
+//! Legacy direct-to-fragment parser bridge.
+//! Preserves the parallel parser surface used before fragment merge.
+
 use core::mem::size_of;
 
 use smallvec::SmallVec;

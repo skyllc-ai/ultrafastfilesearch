@@ -1,3 +1,6 @@
+//! Legacy direct-to-index parser bridge.
+//! Preserves the `io` parser surface for the IOCP fast path.
+
 use core::mem::size_of;
 
 use smallvec::SmallVec;

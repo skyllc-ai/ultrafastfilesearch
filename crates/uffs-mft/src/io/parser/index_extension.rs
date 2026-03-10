@@ -1,3 +1,6 @@
+//! Legacy extension-record helper for direct-to-index parsing.
+//! Extracts names and streams from extension records into the index.
+
 use core::mem::size_of;
 
 use smallvec::SmallVec;
