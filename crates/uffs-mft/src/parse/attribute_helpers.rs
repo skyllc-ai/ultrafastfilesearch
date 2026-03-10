@@ -1,3 +1,5 @@
+//! Helpers for parsing core NTFS attributes from MFT record bytes.
+
 use crate::ntfs::{ExtendedStandardInfo, NameInfo, StreamInfo};
 
 /// Parses `$STANDARD_INFORMATION` into `ExtendedStandardInfo`.

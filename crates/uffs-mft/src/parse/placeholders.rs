@@ -1,3 +1,5 @@
+//! Placeholder record creation for missing parent-directory references.
+
 use tracing::{debug, info, warn};
 
 use super::ParsedRecord;

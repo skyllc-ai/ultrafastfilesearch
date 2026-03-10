@@ -1,3 +1,5 @@
+//! Forensic parsing entry points and subparsers for special-record handling.
+
 mod base;
 mod extension;
 

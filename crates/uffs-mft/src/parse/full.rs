@@ -1,3 +1,5 @@
+//! Standard MFT record parsing for base and extension records.
+
 use tracing::debug;
 
 use super::{

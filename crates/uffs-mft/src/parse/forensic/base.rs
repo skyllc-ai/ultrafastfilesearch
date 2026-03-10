@@ -1,3 +1,5 @@
+//! Base-record forensic parsing after record-header validation.
+
 use super::super::{
     ParseResult, ParsedRecord, PrimaryNameTracker, parse_data_attribute_full, parse_file_name_full,
     parse_standard_info_full,

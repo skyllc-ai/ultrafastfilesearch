@@ -1,3 +1,5 @@
+//! Extension-record merge helpers for base parsed records and columns.
+
 use super::{ExtensionAttributes, ParseResult, ParsedColumns, ParsedRecord};
 use crate::ntfs::StreamInfo;
 

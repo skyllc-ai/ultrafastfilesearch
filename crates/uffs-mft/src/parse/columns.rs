@@ -1,3 +1,5 @@
+//! Column-oriented accumulation helpers for parsed MFT records.
+
 use tracing::{debug, info, warn};
 
 use super::{ParsedRecord, create_placeholder_record};

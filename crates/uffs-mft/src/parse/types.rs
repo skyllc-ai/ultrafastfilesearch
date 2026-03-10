@@ -1,3 +1,5 @@
+//! Shared types and parse results used across the MFT parsing pipeline.
+
 use crate::ntfs::{ExtendedStandardInfo, NameInfo, StreamInfo};
 
 /// Parsed data from an MFT record (full legacy-output parity).

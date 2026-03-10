@@ -1,3 +1,5 @@
+//! Multi-sector fixup application for raw MFT record buffers.
+
 use core::mem::size_of;
 
 use crate::ntfs::{FILE_RECORD_MAGIC, MultiSectorHeader, SECTOR_SIZE};

@@ -1,3 +1,5 @@
+//! Zero-allocation parsing entry points backed by a thread-local buffer.
+
 use core::cell::RefCell;
 
 use super::{ParseOptions, ParseResult, apply_fixup, parse_record_forensic, parse_record_full};
