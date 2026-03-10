@@ -8,6 +8,10 @@ This directory holds exploratory notes, parity deep dives, and one-off debugging
 - Keep new working notes here only while they are still exploratory.
 - Once a topic is stable, link or consolidate it into the canonical architecture doc instead of maintaining duplicate copies.
 
+## Active reference investigations
+
+- [`../../MFT_INVESTIGATION_F_DRIVE.md`](../../MFT_INVESTIGATION_F_DRIVE.md)
+
 ## Retired duplicate mirrors
 
 The following investigation files now exist only as redirects to their canonical stable copies:

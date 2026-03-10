@@ -29,9 +29,7 @@ Cargo.lock
 
 # Reference code (legacy C++ UFFS, boost, WTL, etc.)
 reference/
-!docs/reference/
-docs/reference/**
-!docs/reference/README.md
+docs/reference/
 
 # Root-boundary leftovers intentionally kept out of the active tracked tree.
 # `dist/` stays tracked for distributable binaries; these paths do not.

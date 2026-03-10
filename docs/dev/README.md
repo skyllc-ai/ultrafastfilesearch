@@ -9,5 +9,9 @@ Use this bucket for contributor workflow, implementation plans, and build/develo
 - [`../Modernization/modernization-guides/README.md`](../Modernization/modernization-guides/README.md)
 - [`../xwin-msvc-rlib-size-root-cause-and-workarounds.md`](../xwin-msvc-rlib-size-root-cause-and-workarounds.md)
 
+## Reference-oriented entry points
+
+- [`../CLI_FEATURE_PARITY.md`](../CLI_FEATURE_PARITY.md)
+
 Legacy documents remain in place for now; this index provides the stable category landing page for future cleanup.
 

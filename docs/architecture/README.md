@@ -11,6 +11,11 @@ Canonical architecture and subsystem writeups live here.
 - [`PHASE7_PERFORMANCE_VALIDATION.md`](PHASE7_PERFORMANCE_VALIDATION.md)
 - [`unsafe-surface-review.md`](unsafe-surface-review.md)
 
+## Reference-oriented entry points
+
+- [`../MFT_FEATURE_PARITY.md`](../MFT_FEATURE_PARITY.md)
+- [`../CROSS_PLATFORM_RAW_MFT_LOADING.md`](../CROSS_PLATFORM_RAW_MFT_LOADING.md)
+
 ## Investigation notes
 
 The sibling [`Investigation/`](Investigation/README.md) directory is reserved for active parity/debugging notes.
