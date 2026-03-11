@@ -16,6 +16,30 @@ use crate::error::{MftError, Result};
 // Multi-Drive MFT Reader
 // ============================================================================
 
+/// Maximum number of drive-level reader tasks to run at once.
+///
+/// Each drive reader can already fan out internally via blocking I/O and
+/// parsing workers, so we keep cross-drive orchestration conservative to avoid
+/// multiplying that parallelism across many volumes at once.
+#[cfg(any(windows, test))]
+const MAX_CONCURRENT_DRIVE_READERS: usize = 4;
+
+/// Returns the bounded drive-level task budget for multi-drive orchestration.
+#[cfg(any(windows, test))]
+#[must_use]
+fn drive_reader_budget(total_drives: usize) -> usize {
+    if total_drives == 0 {
+        return 0;
+    }
+
+    let hardware_budget = std::thread::available_parallelism()
+        .map_or(MAX_CONCURRENT_DRIVE_READERS, core::num::NonZeroUsize::get);
+
+    total_drives
+        .min(hardware_budget.max(1))
+        .min(MAX_CONCURRENT_DRIVE_READERS)
+}
+
 /// Result from reading a single drive.
 #[derive(Debug)]
 pub struct DriveReadResult {
@@ -152,20 +176,24 @@ impl MultiDriveMftReader {
         // Wrap callback in Arc for sharing across tasks
         let callback = callback.map(Arc::new);
 
-        // Spawn a task for each drive
+        // Keep only a bounded number of drive tasks in flight at once.
+        let budget = drive_reader_budget(self.drives.len());
+        let mut pending_drives = self.drives.iter().copied();
         let mut join_set = JoinSet::new();
 
-        for &drive in &self.drives {
-            let cb = callback.clone();
+        for _ in 0..budget {
+            if let Some(drive) = pending_drives.next() {
+                let cb = callback.clone();
 
-            join_set.spawn(async move {
-                let result = Self::read_single_drive(drive, cb).await;
-                DriveReadResult {
-                    drive,
-                    dataframe: result.as_ref().ok().cloned(),
-                    error: result.err(),
-                }
-            });
+                join_set.spawn(async move {
+                    let result = Self::read_single_drive(drive, cb).await;
+                    DriveReadResult {
+                        drive,
+                        dataframe: result.as_ref().ok().cloned(),
+                        error: result.err(),
+                    }
+                });
+            }
         }
 
         // Collect results
@@ -195,6 +223,19 @@ impl MultiDriveMftReader {
                         MftError::InvalidInput(format!("Task failed: {join_err}")),
                     ));
                 }
+            }
+
+            if let Some(drive) = pending_drives.next() {
+                let cb = callback.clone();
+
+                join_set.spawn(async move {
+                    let result = Self::read_single_drive(drive, cb).await;
+                    DriveReadResult {
+                        drive,
+                        dataframe: result.as_ref().ok().cloned(),
+                        error: result.err(),
+                    }
+                });
             }
         }
 
@@ -276,17 +317,22 @@ impl MultiDriveMftReader {
             return Ok(Vec::new());
         }
 
+        let budget = drive_reader_budget(self.drives.len());
+        let mut pending_drives = self.drives.iter().copied();
         let mut join_set = JoinSet::new();
 
-        for &drive in &self.drives {
-            join_set.spawn(async move {
-                let result = Self::read_single_drive::<fn(char, MftProgress)>(drive, None).await;
-                DriveReadResult {
-                    drive,
-                    dataframe: result.as_ref().ok().cloned(),
-                    error: result.err(),
-                }
-            });
+        for _ in 0..budget {
+            if let Some(drive) = pending_drives.next() {
+                join_set.spawn(async move {
+                    let result =
+                        Self::read_single_drive::<fn(char, MftProgress)>(drive, None).await;
+                    DriveReadResult {
+                        drive,
+                        dataframe: result.as_ref().ok().cloned(),
+                        error: result.err(),
+                    }
+                });
+            }
         }
 
         let mut results = Vec::with_capacity(self.drives.len());
@@ -300,6 +346,18 @@ impl MultiDriveMftReader {
                         error: Some(MftError::InvalidInput(format!("Task failed: {join_err}"))),
                     });
                 }
+            }
+
+            if let Some(drive) = pending_drives.next() {
+                join_set.spawn(async move {
+                    let result =
+                        Self::read_single_drive::<fn(char, MftProgress)>(drive, None).await;
+                    DriveReadResult {
+                        drive,
+                        dataframe: result.as_ref().ok().cloned(),
+                        error: result.err(),
+                    }
+                });
             }
         }
 
@@ -419,44 +477,48 @@ impl MultiDriveMftReader {
             return Err(MftError::InvalidInput("No drives specified".into()));
         }
 
+        let budget = drive_reader_budget(self.drives.len());
+        let mut pending_drives = self.drives.iter().copied();
         let mut join_set = JoinSet::new();
 
-        for &drive in &self.drives {
-            let ttl = ttl_seconds;
+        for _ in 0..budget {
+            if let Some(drive) = pending_drives.next() {
+                let ttl = ttl_seconds;
 
-            join_set.spawn(async move {
-                // Check cache first
-                let cache_result = check_cache_status(drive, ttl);
+                join_set.spawn(async move {
+                    // Check cache first
+                    let cache_result = check_cache_status(drive, ttl);
 
-                match cache_result {
-                    CacheStatus::Fresh {
-                        index,
-                        header,
-                        age_seconds,
-                    } => {
-                        info!(
-                            drive = %drive,
+                    match cache_result {
+                        CacheStatus::Fresh {
+                            index,
+                            header,
                             age_seconds,
-                            records = index.len(),
-                            "📦 Cache HIT - applying USN updates"
-                        );
-                        // Apply USN changes to bring index up to date
-                        Self::apply_usn_updates_to_cached_index(drive, index, header).await
+                        } => {
+                            info!(
+                                drive = %drive,
+                                age_seconds,
+                                records = index.len(),
+                                "📦 Cache HIT - applying USN updates"
+                            );
+                            // Apply USN changes to bring index up to date
+                            Self::apply_usn_updates_to_cached_index(drive, index, header).await
+                        }
+                        CacheStatus::Stale { age_seconds } => {
+                            info!(
+                                drive = %drive,
+                                age_seconds = ?age_seconds,
+                                "🔄 Cache STALE - rebuilding index"
+                            );
+                            Self::read_and_cache_single_drive(drive).await
+                        }
+                        CacheStatus::Missing => {
+                            info!(drive = %drive, "🆕 Cache MISS - building index");
+                            Self::read_and_cache_single_drive(drive).await
+                        }
                     }
-                    CacheStatus::Stale { age_seconds } => {
-                        info!(
-                            drive = %drive,
-                            age_seconds = ?age_seconds,
-                            "🔄 Cache STALE - rebuilding index"
-                        );
-                        Self::read_and_cache_single_drive(drive).await
-                    }
-                    CacheStatus::Missing => {
-                        info!(drive = %drive, "🆕 Cache MISS - building index");
-                        Self::read_and_cache_single_drive(drive).await
-                    }
-                }
-            });
+                });
+            }
         }
 
         // Collect results
@@ -477,6 +539,44 @@ impl MultiDriveMftReader {
                         MftError::InvalidInput(format!("Task failed: {join_err}")),
                     ));
                 }
+            }
+
+            if let Some(drive) = pending_drives.next() {
+                let ttl = ttl_seconds;
+
+                join_set.spawn(async move {
+                    // Check cache first
+                    let cache_result = check_cache_status(drive, ttl);
+
+                    match cache_result {
+                        CacheStatus::Fresh {
+                            index,
+                            header,
+                            age_seconds,
+                        } => {
+                            info!(
+                                drive = %drive,
+                                age_seconds,
+                                records = index.len(),
+                                "📦 Cache HIT - applying USN updates"
+                            );
+                            // Apply USN changes to bring index up to date
+                            Self::apply_usn_updates_to_cached_index(drive, index, header).await
+                        }
+                        CacheStatus::Stale { age_seconds } => {
+                            info!(
+                                drive = %drive,
+                                age_seconds = ?age_seconds,
+                                "🔄 Cache STALE - rebuilding index"
+                            );
+                            Self::read_and_cache_single_drive(drive).await
+                        }
+                        CacheStatus::Missing => {
+                            info!(drive = %drive, "🆕 Cache MISS - building index");
+                            Self::read_and_cache_single_drive(drive).await
+                        }
+                    }
+                });
             }
         }
 
@@ -527,13 +627,17 @@ impl MultiDriveMftReader {
         // Wrap callback in Arc for sharing across tasks
         let callback = callback.map(Arc::new);
 
-        // Spawn a task for each drive
+        // Keep only a bounded number of drive tasks in flight at once.
+        let budget = drive_reader_budget(self.drives.len());
+        let mut pending_drives = self.drives.iter().copied();
         let mut join_set = JoinSet::new();
 
-        for &drive in &self.drives {
-            let cb = callback.clone();
+        for _ in 0..budget {
+            if let Some(drive) = pending_drives.next() {
+                let cb = callback.clone();
 
-            join_set.spawn(async move { Self::read_single_drive_index(drive, cb).await });
+                join_set.spawn(async move { Self::read_single_drive_index(drive, cb).await });
+            }
         }
 
         // Collect results
@@ -554,6 +658,12 @@ impl MultiDriveMftReader {
                         MftError::InvalidInput(format!("Task failed: {join_err}")),
                     ));
                 }
+            }
+
+            if let Some(drive) = pending_drives.next() {
+                let cb = callback.clone();
+
+                join_set.spawn(async move { Self::read_single_drive_index(drive, cb).await });
             }
         }
 
@@ -802,5 +912,28 @@ impl MultiDriveMftReader {
         }
 
         Ok(index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_CONCURRENT_DRIVE_READERS, drive_reader_budget};
+
+    #[test]
+    fn drive_reader_budget_handles_empty_input() {
+        assert_eq!(drive_reader_budget(0), 0);
+    }
+
+    #[test]
+    fn drive_reader_budget_never_exceeds_drive_count() {
+        assert_eq!(drive_reader_budget(1), 1);
+        assert!(drive_reader_budget(3) <= 3);
+    }
+
+    #[test]
+    fn drive_reader_budget_caps_drive_fan_out() {
+        assert!(
+            drive_reader_budget(MAX_CONCURRENT_DRIVE_READERS + 8) <= MAX_CONCURRENT_DRIVE_READERS
+        );
     }
 }
