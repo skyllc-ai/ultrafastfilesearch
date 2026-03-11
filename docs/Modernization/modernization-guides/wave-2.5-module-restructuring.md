@@ -52,7 +52,6 @@ oversized files into focused modules while preserving the public API.
 | `uffs-core/src/compiled_pattern.rs` | 974 | Split if multiple types |
 | `uffs-core/src/tree.rs` | 854 | Split if multiple types |
 | `uffs-core/src/output.rs` | 790 | Split by output format |
-| `uffs-legacy/src/.../utils_impl.rs` | 704 | Legacy - lower priority |
 | `uffs-core/src/query.rs` | 679 | Split if multiple types |
 | `uffs-core/src/extensions.rs` | 616 | Split by extension type |
 | `uffs-cli/src/main.rs` | 519 | OK - main files can be larger |

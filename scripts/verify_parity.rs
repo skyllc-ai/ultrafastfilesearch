@@ -57,6 +57,7 @@ struct UffsReleaseArtifact {
     workspace_root: PathBuf,
     cargo_target_dir: PathBuf,
     binary_path: PathBuf,
+    target_dir_warning: Option<&'static str>,
 }
 
 fn main() {
@@ -229,6 +230,9 @@ fn regenerate_rust_output(data_dir: &Path, drive_letter: &str, drive_lower: &str
         "Artifact provenance:   cargo metadata target_directory → release/{}",
         uffs_binary_name()
     );
+    if let Some(target_dir_warning) = artifact.target_dir_warning {
+        println!("Target dir note:       {target_dir_warning}");
+    }
     println!();
 
     // Generate output
@@ -271,12 +275,14 @@ fn regenerate_rust_output(data_dir: &Path, drive_letter: &str, drive_lower: &str
 fn find_workspace_release_artifact() -> UffsReleaseArtifact {
     let workspace_root = find_workspace_root();
     let cargo_target_dir = cargo_target_directory(&workspace_root);
+    let target_dir_warning = literal_tilde_target_dir_warning(&cargo_target_dir);
     let release_artifact = cargo_target_dir.join("release").join(uffs_binary_name());
     if release_artifact.exists() {
         return UffsReleaseArtifact {
             workspace_root,
             cargo_target_dir,
             binary_path: release_artifact,
+            target_dir_warning,
         };
     }
 
@@ -287,8 +293,25 @@ fn find_workspace_release_artifact() -> UffsReleaseArtifact {
         "  Expected release artifact: {}",
         release_artifact.display()
     );
+    if let Some(target_dir_warning) = target_dir_warning {
+        eprintln!("  Target dir note: {target_dir_warning}");
+        eprintln!(
+            "  Fix the checked-in config or set CARGO_TARGET_DIR to an explicit absolute path before rebuilding."
+        );
+    }
     eprintln!("  Build it first with: cargo build --release -p uffs-cli --bin uffs");
     std::process::exit(1);
+}
+
+fn literal_tilde_target_dir_warning(target_dir: &Path) -> Option<&'static str> {
+    path_has_literal_tilde_component(target_dir).then_some(
+        "literal `~` path component detected; Cargo config paths are config-relative, not home-directory expansions",
+    )
+}
+
+fn path_has_literal_tilde_component(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == "~")
 }
 
 fn cargo_target_directory(workspace_root: &Path) -> PathBuf {
@@ -527,7 +550,10 @@ fn truncate(s: &str, max: usize) -> String {
 mod tests {
     use std::path::Path;
 
-    use super::{extract_json_string_field, ordered_sha256, sorted_sha256, uffs_binary_name};
+    use super::{
+        extract_json_string_field, ordered_sha256, path_has_literal_tilde_component, sorted_sha256,
+        uffs_binary_name,
+    };
 
     fn lines(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
@@ -569,6 +595,16 @@ mod tests {
             extract_json_string_field(metadata, "target_directory"),
             Some(r"C:\rust-target\uffs".to_string())
         );
+    }
+
+    #[test]
+    fn detects_literal_tilde_path_component() {
+        assert!(path_has_literal_tilde_component(Path::new(
+            "/workspace/~/Library/Caches/uffs/target"
+        )));
+        assert!(!path_has_literal_tilde_component(Path::new(
+            "/Users/test/Library/Caches/uffs/target"
+        )));
     }
 
     #[test]

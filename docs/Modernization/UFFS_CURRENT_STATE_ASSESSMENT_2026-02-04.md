@@ -62,7 +62,6 @@ Scope: Factual snapshot of the repository’s architecture, tooling, policies, s
 | crates/uffs-cli | Command-line interface | Active |
 | crates/uffs-tui | Terminal UI | Active |
 | crates/uffs-gui | Graphical UI | Placeholder |
-| crates/uffs-legacy | Legacy code | Deprecated (reference only) |
 | crates/uffs-diag | Diagnostic tools | "Temporarily enabled" |
 
 ### Excluded from Workspace
@@ -74,7 +73,6 @@ Scope: Factual snapshot of the repository’s architecture, tooling, policies, s
 - **uffs-core**: Higher-level query and analytics layer on top of `uffs-mft`, providing pattern compilation, extension index, path resolution, tree metrics, and export helpers; re-exports selected types from `uffs-mft`/`uffs-polars` for convenience.
 - **uffs-cli / uffs-tui / uffs-gui**: User-facing frontends that all depend directly on `uffs-mft` and `uffs-core` (and, in some cases, `uffs-polars`), sharing similar logging/telemetry stacks and configuration conventions.
 - **uffs-diag**: Diagnostic crate whose binaries focus on parity/debugging of MFT reading and indexing; the library acts mainly as a dependency anchor for these tools.
-- **uffs-legacy**: Historical implementation with a richer internal module hierarchy, kept in the workspace as a reference but not used by the modern binaries.
 
 ---
 
@@ -255,19 +253,17 @@ Scope: Factual snapshot of the repository’s architecture, tooling, policies, s
 | Crate | Lines | Files | Avg Lines/File | Assessment |
 |-------|------:|------:|---------------:|------------|
 | uffs-mft | 73,134 | 28 | 2,612 | **CRITICAL** - 75% of codebase |
-| uffs-legacy | 8,265 | 86 | 96 | Well-modularized (deprecated) |
 | uffs-core | 8,102 | 14 | 579 | Reasonable |
 | uffs-cli | 3,445 | 2 | 1,723 | **MONOLITHIC** - only 2 files |
 | uffs-diag | 3,400 | 11 | 309 | Reasonable |
 | uffs-tui | 585 | 2 | 293 | Acceptable |
 | uffs-gui | 152 | 1 | 152 | Placeholder |
 | uffs-polars | 140 | 1 | 140 | Appropriate (facade) |
-| **TOTAL** | **97,223** | **145** | **670** | |
+| **TOTAL** | **88,958** | **59** | **1,508** | |
 
 ### Key Observations
 - **uffs-mft is a "god crate"**: Contains 75% of the entire codebase
 - **uffs-cli is severely under-modularized**: 3,445 lines in only 2 files
-- **uffs-legacy is well-structured**: 86 files with proper module hierarchy (but deprecated)
 
 ---
 
@@ -383,36 +379,6 @@ src/
 - commands.rs handles index, search, cache, info, drives, etc.
 - No command-specific modules
 
-### uffs-legacy/src (Well-Organized - Reference)
-
-```
-src/
-├── lib.rs
-├── main.rs
-├── config/
-│   ├── mod.rs
-│   ├── app_configs.rs
-│   ├── cli_args.rs
-│   ├── constants.rs
-│   └── worker_threads.rs
-└── modules/
-    ├── cli/
-    ├── config/
-    ├── core/
-    ├── directory/
-    ├── disk/           # 20+ WMI query modules
-    ├── entities/
-    ├── errors/
-    ├── fs/
-    ├── gui/
-    ├── logging/
-    ├── old_code/
-    ├── platform/
-    └── utils/
-```
-
-**Note**: This deprecated crate has better organization than active crates.
-
 ### uffs-core/src (Library-Focused, Moderate Structure)
 
 ```
@@ -518,8 +484,6 @@ uffs-diag
    └──────────▶ [uffs-cli]  -- Main CLI
 
 [uffs-diag]   -- Diagnostics (uses uffs-mft + uffs-polars)
-
-[uffs-legacy] -- Deprecated, reference-only implementation
 ```
 
 ---
@@ -659,7 +623,6 @@ uffs-diag
 ### Crate Architecture Issues
 - **uffs-mft is a "god crate"**: 73,134 lines (75% of codebase)
 - **uffs-cli is under-modularized**: 3,445 lines in 2 files
-- **uffs-legacy is deprecated but still in workspace members**
 - **uffs-diag is "temporarily enabled"** (has been for a while)
 - **Duplicate dependency wiring**: `uffs-cli` has `uffs-polars` both via workspace and explicit path; `uffs-diag` also depends on `uffs-polars` alongside workspace-level configuration.
 - **Library/binary coupling**: `uffs-mft` and `uffs-diag` use `use {dep as _};` patterns in their libraries to keep binary-focused dependencies wired in, and `uffs-mft` combines a broad public API with the `uffs_mft` binary in the same crate.
@@ -677,7 +640,6 @@ uffs-diag
 | uffs-tui | No (binary crate only) | `uffs_tui` | No | No (no library target) |
 | uffs-gui | No (binary crate only) | `uffs_gui` | No | No (no library target) |
 | uffs-diag | Yes | Multiple diagnostics under `src/bin/` | No direct re-exports; uses `uffs-mft`/`uffs-polars` as dependencies | Yes – uses `use {anyhow as _, chrono as _, rayon as _, uffs_mft as _, uffs_polars as _};` |
-| uffs-legacy | Yes | At least one legacy binary | — (legacy crate; not part of modern Polars-based stack) | Not evaluated in this snapshot |
 
 ## Appendix: Selected Configuration Anchors
 
@@ -707,8 +669,7 @@ uffs-diag
 
 5. **Under-modularized CLI**: Only 2 source files for entire CLI
 6. **Binary Logic in Library**: main.rs in uffs-mft is 4,933 lines
-7. **Deprecated Code in Workspace**: uffs-legacy still a workspace member
-8. **Duplicate Dependencies**: uffs-cli has uffs-polars twice
+7. **Duplicate Dependencies**: uffs-cli has uffs-polars twice
 
 ### Minor Issues (Nice to Fix)
 

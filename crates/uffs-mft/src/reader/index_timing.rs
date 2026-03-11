@@ -68,7 +68,7 @@ impl MftReader {
             reader.read_mft_index_with_timing_internal()
         })
         .await
-        .map_err(|e| MftError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))??;
+        .map_err(|error| MftError::from_join_error("read_all_index_with_timing", &error))??;
 
         Ok(result)
     }

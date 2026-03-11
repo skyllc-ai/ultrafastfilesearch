@@ -368,7 +368,8 @@ pub struct FileRecordSegmentHeader {
     pub segment_number_lower: u32,
 }
 
-/// Decodes `FileRecordSegmentHeader` from on-disk bytes without unaligned reads.
+/// Decodes `FileRecordSegmentHeader` from on-disk bytes without unaligned
+/// reads.
 #[inline]
 #[expect(
     clippy::single_call_fn,

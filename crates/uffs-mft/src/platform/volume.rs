@@ -1,6 +1,7 @@
 //! Windows NTFS volume handle and metadata access helpers.
 
 use std::mem::size_of;
+use std::time::Duration;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
@@ -20,6 +21,58 @@ use crate::ntfs::NtfsBootSector;
 /// FILE_READ_DATA access right (0x0001) - required to read data from a
 /// file/volume.
 const FILE_READ_DATA: u32 = 0x0001;
+
+/// Short poll interval for Windows completion waits in MFT hot paths.
+pub(crate) const IOCP_WAIT_POLL_INTERVAL_MS: u32 = 100;
+
+/// Maximum stall time allowed between Windows completion notifications.
+pub(crate) const IOCP_WAIT_COMPLETION_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Win32 error code reported when a wait interval expires.
+pub(crate) const WAIT_TIMEOUT_ERROR_CODE: u32 = 258;
+
+/// Win32 error code reported when an overlapped operation is aborted.
+const ERROR_OPERATION_ABORTED_CODE: u32 = 995;
+
+/// Classifies a Windows wait failure using the approved Wave 3A taxonomy.
+#[must_use]
+pub(crate) fn classify_wait_error_code(
+    operation: &'static str,
+    error_code: u32,
+    detail: impl Into<String>,
+) -> MftError {
+    let detail = detail.into();
+
+    match error_code {
+        ERROR_OPERATION_ABORTED_CODE => MftError::Cancelled {
+            operation,
+            reason: format!("{detail} (Win32 error {error_code})"),
+        },
+        _ => MftError::WaitFailed {
+            operation,
+            reason: format!("{detail} (Win32 error {error_code})"),
+        },
+    }
+}
+
+/// Builds a timeout error for a Windows completion wait that exceeded its
+/// deadline.
+#[must_use]
+pub(crate) fn wait_deadline_exceeded(
+    operation: &'static str,
+    waited: Duration,
+    detail: impl Into<String>,
+) -> MftError {
+    let detail = detail.into();
+
+    MftError::Timeout {
+        operation,
+        reason: format!(
+            "{detail} after {} ms without observing a completion",
+            waited.as_millis()
+        ),
+    }
+}
 
 /// A handle to an NTFS volume for direct disk access.
 ///
@@ -375,7 +428,7 @@ impl VolumeHandle {
             .collect();
 
         if verbose {
-            eprintln!("[BITMAP] Opening: {}", bitmap_path_str);
+            tracing::info!(volume = %self.volume, bitmap_path = %bitmap_path_str, "Opening MFT bitmap");
         }
 
         // SAFETY: `bitmap_path` is UTF-16 and NUL-terminated for the duration of
@@ -396,13 +449,17 @@ impl VolumeHandle {
         let bitmap_handle = match bitmap_handle {
             Ok(h) => {
                 if verbose {
-                    eprintln!("[BITMAP] CreateFileW succeeded: {:?}", h);
+                    tracing::info!(volume = %self.volume, handle = ?h, "CreateFileW for MFT bitmap succeeded");
                 }
                 h
             }
             Err(e) => {
                 if verbose {
-                    eprintln!("[BITMAP] CreateFileW FAILED: {:?}", e);
+                    tracing::warn!(
+                        volume = %self.volume,
+                        error = ?e,
+                        "CreateFileW for MFT bitmap failed; falling back to all-valid bitmap"
+                    );
                 }
                 return Ok(MftBitmap::new_all_valid(
                     self.estimated_record_count() as usize
@@ -418,7 +475,11 @@ impl VolumeHandle {
         unsafe {
             if let Err(e) = GetFileSizeEx(bitmap_handle, &mut file_size) {
                 if verbose {
-                    eprintln!("[BITMAP] GetFileSizeEx FAILED: {:?}", e);
+                    tracing::warn!(
+                        volume = %self.volume,
+                        error = ?e,
+                        "GetFileSizeEx for MFT bitmap failed; falling back to all-valid bitmap"
+                    );
                 }
                 return Ok(MftBitmap::new_all_valid(
                     self.estimated_record_count() as usize
@@ -427,28 +488,39 @@ impl VolumeHandle {
         }
 
         if verbose {
-            eprintln!("[BITMAP] File size: {} bytes", file_size);
+            tracing::info!(volume = %self.volume, file_size, "Retrieved MFT bitmap size");
         }
 
         let extents = match get_retrieval_pointers(bitmap_handle) {
             Ok(e) if !e.is_empty() => {
                 if verbose {
-                    eprintln!("[BITMAP] Got {} extents:", e.len());
+                    tracing::info!(volume = %self.volume, extent_count = e.len(), "Retrieved MFT bitmap extents");
                     for (i, ext) in e.iter().enumerate().take(5) {
-                        eprintln!(
-                            "   [{}] VCN={}, clusters={}, LCN={}",
-                            i, ext.vcn, ext.cluster_count, ext.lcn
+                        tracing::info!(
+                            volume = %self.volume,
+                            extent_index = i,
+                            vcn = ext.vcn,
+                            cluster_count = ext.cluster_count,
+                            lcn = ext.lcn,
+                            "MFT bitmap extent sample"
                         );
                     }
                     if e.len() > 5 {
-                        eprintln!("   ... and {} more", e.len() - 5);
+                        tracing::info!(
+                            volume = %self.volume,
+                            additional_extent_count = e.len() - 5,
+                            "Additional MFT bitmap extents omitted from verbose sample"
+                        );
                     }
                 }
                 e
             }
             Ok(_) => {
                 if verbose {
-                    eprintln!("[BITMAP] get_retrieval_pointers returned empty!");
+                    tracing::warn!(
+                        volume = %self.volume,
+                        "get_retrieval_pointers returned no MFT bitmap extents; falling back to all-valid bitmap"
+                    );
                 }
                 return Ok(MftBitmap::new_all_valid(
                     self.estimated_record_count() as usize
@@ -456,7 +528,11 @@ impl VolumeHandle {
             }
             Err(e) => {
                 if verbose {
-                    eprintln!("[BITMAP] get_retrieval_pointers FAILED: {:?}", e);
+                    tracing::warn!(
+                        volume = %self.volume,
+                        error = ?e,
+                        "get_retrieval_pointers for MFT bitmap failed; falling back to all-valid bitmap"
+                    );
                 }
                 return Ok(MftBitmap::new_all_valid(
                     self.estimated_record_count() as usize
@@ -471,9 +547,12 @@ impl VolumeHandle {
         let mut buffer_offset = 0_usize;
 
         if verbose {
-            eprintln!(
-                "[BITMAP] Reading from volume, bytes_per_cluster={}, file_size={}, aligned_size={}",
-                bytes_per_cluster, file_size, aligned_size
+            tracing::info!(
+                volume = %self.volume,
+                bytes_per_cluster,
+                file_size,
+                aligned_size,
+                "Reading MFT bitmap extents from volume"
             );
         }
 
@@ -486,9 +565,12 @@ impl VolumeHandle {
             }
 
             if verbose && i < 3 {
-                eprintln!(
-                    "[BITMAP] Extent {}: seek to offset {}, read {} bytes (full clusters)",
-                    i, byte_offset, extent_bytes
+                tracing::info!(
+                    volume = %self.volume,
+                    extent_index = i,
+                    byte_offset,
+                    extent_bytes,
+                    "Reading MFT bitmap extent"
                 );
             }
 
@@ -503,7 +585,13 @@ impl VolumeHandle {
                     FILE_BEGIN,
                 ) {
                     if verbose {
-                        eprintln!("[BITMAP] SetFilePointerEx FAILED: {:?}", e);
+                        tracing::warn!(
+                            volume = %self.volume,
+                            extent_index = i,
+                            byte_offset,
+                            error = ?e,
+                            "SetFilePointerEx for MFT bitmap extent failed; falling back to all-valid bitmap"
+                        );
                     }
                     return Ok(MftBitmap::new_all_valid(
                         self.estimated_record_count() as usize
@@ -523,7 +611,13 @@ impl VolumeHandle {
                     None,
                 ) {
                     if verbose {
-                        eprintln!("[BITMAP] ReadFile FAILED: {:?}", e);
+                        tracing::warn!(
+                            volume = %self.volume,
+                            extent_index = i,
+                            extent_bytes,
+                            error = ?e,
+                            "ReadFile for MFT bitmap extent failed; falling back to all-valid bitmap"
+                        );
                     }
                     return Ok(MftBitmap::new_all_valid(
                         self.estimated_record_count() as usize
@@ -532,14 +626,19 @@ impl VolumeHandle {
             }
 
             if verbose && i < 3 {
-                eprintln!("[BITMAP] Read {} bytes from extent {}", bytes_read, i);
+                tracing::info!(volume = %self.volume, extent_index = i, bytes_read, "Read MFT bitmap extent bytes");
                 if i == 0 && bytes_read > 0 {
                     let sample: Vec<String> = buffer
                         [buffer_offset..buffer_offset + 32.min(bytes_read as usize)]
                         .iter()
                         .map(|b| format!("{:02X}", b))
                         .collect();
-                    eprintln!("[BITMAP] First 32 bytes: {}", sample.join(" "));
+                    tracing::info!(
+                        volume = %self.volume,
+                        extent_index = i,
+                        sample_hex = %sample.join(" "),
+                        "MFT bitmap first-byte sample"
+                    );
                 }
             }
 
@@ -547,13 +646,15 @@ impl VolumeHandle {
         }
 
         if verbose {
-            eprintln!(
-                "[BITMAP] Total bytes read: {}, truncating to file_size: {}",
-                buffer_offset, file_size
+            tracing::info!(
+                volume = %self.volume,
+                total_bytes_read = buffer_offset,
+                file_size,
+                "Completed MFT bitmap read; truncating to reported file size"
             );
             let all_ff = buffer.iter().take(file_size as usize).all(|&b| b == 0xFF);
             let all_00 = buffer.iter().take(file_size as usize).all(|&b| b == 0x00);
-            eprintln!("[BITMAP] All 0xFF: {}, All 0x00: {}", all_ff, all_00);
+            tracing::info!(volume = %self.volume, all_ff, all_00, "Computed MFT bitmap byte-pattern summary");
         }
 
         buffer.truncate(file_size as usize);
@@ -587,5 +688,53 @@ impl Drop for HandleGuard {
                 let _ = CloseHandle(self.0);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_wait_error_maps_aborted_waits_to_cancelled() {
+        let error = classify_wait_error_code("read_all_index", 995, "wait aborted");
+
+        assert!(matches!(
+            error,
+            MftError::Cancelled {
+                operation: "read_all_index",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn classify_wait_error_maps_other_wait_failures_to_wait_failed() {
+        let error = classify_wait_error_code("read_all_index", 123, "wait failed");
+
+        assert!(matches!(
+            error,
+            MftError::WaitFailed {
+                operation: "read_all_index",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn wait_deadline_helper_builds_timeout_error() {
+        let error = wait_deadline_exceeded(
+            "read_all_index",
+            Duration::from_secs(31),
+            "no completions arrived",
+        );
+
+        assert!(matches!(
+            error,
+            MftError::Timeout {
+                operation: "read_all_index",
+                ..
+            }
+        ));
     }
 }

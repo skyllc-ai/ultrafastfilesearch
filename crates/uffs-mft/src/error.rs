@@ -56,6 +56,33 @@ pub enum MftError {
         reason: String,
     },
 
+    /// Long-running operation timed out.
+    #[error("Operation '{operation}' timed out: {reason}")]
+    Timeout {
+        /// The operation that timed out.
+        operation: &'static str,
+        /// Additional context for the timeout.
+        reason: String,
+    },
+
+    /// Long-running operation was cancelled.
+    #[error("Operation '{operation}' was cancelled: {reason}")]
+    Cancelled {
+        /// The operation that was cancelled.
+        operation: &'static str,
+        /// Additional context for the cancellation.
+        reason: String,
+    },
+
+    /// Waiting for a long-running operation failed.
+    #[error("Waiting for operation '{operation}' failed: {reason}")]
+    WaitFailed {
+        /// The operation whose wait failed.
+        operation: &'static str,
+        /// Additional context for the wait failure.
+        reason: String,
+    },
+
     /// I/O error during disk operations.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -88,4 +115,71 @@ pub enum MftError {
     /// Invalid input provided.
     #[error("Invalid input: {0}")]
     InvalidInput(String),
+}
+
+impl MftError {
+    /// Classifies a Tokio join error for a long-running MFT operation.
+    #[cfg(any(windows, test))]
+    #[expect(
+        clippy::single_call_fn,
+        reason = "Windows async read entrypoints reuse this helper outside non-Windows test builds"
+    )]
+    #[must_use]
+    pub(crate) fn from_join_error(operation: &'static str, error: &tokio::task::JoinError) -> Self {
+        if error.is_cancelled() {
+            return Self::Cancelled {
+                operation,
+                reason: error.to_string(),
+            };
+        }
+
+        Self::WaitFailed {
+            operation,
+            reason: error.to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MftError;
+
+    #[tokio::test]
+    async fn cancelled_join_errors_map_to_cancelled() {
+        let handle = tokio::spawn(async {
+            core::future::pending::<()>().await;
+        });
+        handle.abort();
+
+        let outcome = handle.await;
+        assert!(outcome.is_err(), "aborted task unexpectedly completed");
+        let Err(join_error) = outcome else {
+            return;
+        };
+        let error = MftError::from_join_error("read_all_index", &join_error);
+
+        assert!(matches!(
+            error,
+            MftError::Cancelled {
+                operation: "read_all_index",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn wait_failed_variant_is_matchable() {
+        let error = MftError::WaitFailed {
+            operation: "read_all_index",
+            reason: "task panicked".to_owned(),
+        };
+
+        assert!(matches!(
+            error,
+            MftError::WaitFailed {
+                operation: "read_all_index",
+                ..
+            }
+        ));
+    }
 }

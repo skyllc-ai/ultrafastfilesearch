@@ -23,7 +23,7 @@ Elevate this Rust workspace from a functional but organically-grown codebase to 
 **Forbidden** (must be removed/rewritten):
 - References to the C++ implementation, porting, parity, or comparison (comments, docs, identifiers, scripts)
 - `cpp_*` modules, identifiers, and file prefixes in code (`cpp_types.rs`, `cpp_tree.rs`, `cpp_io_pipeline.rs`)
-- `crates/uffs-legacy/` (dead C++ port reference crate)
+- The obsolete legacy reference crate formerly kept under `crates/`
 - `CPP_*.md` docs and any docs whose primary purpose is C++ porting/comparison
 - C++ comparison/analysis scripts (`analyze_cpp_stats.rs`, etc.)
 - C++ parity/comparison tests (keep the underlying logic tests but reframe as Rust correctness tests)
@@ -36,7 +36,7 @@ Elevate this Rust workspace from a functional but organically-grown codebase to 
 **Specific files requiring rewrite (not just deletion):**
 - **`README.md`** — Remove "Rust rewrite of UFFS, replacing the original C++ version" and "inspired by the original C++ UFFS" phrasing; describe UFFS on its own merits
 - **`crates/uffs-mft/README.md`** — Remove "Rust vs C++" performance tables and "faster than the C++ implementation" language; replace with benchmarks against golden baseline or prior UFFS versions (e.g., "v0.1.30 baseline")
-- **`CLAUDE.md`** — Remove `uffs-legacy` reference and `cpp_comparison` test references
+- **`CLAUDE.md`** — Remove obsolete legacy-crate references and `cpp_comparison` test references
 - **`.gitignore`** — Remove any "legacy C++" comments
 - **`scripts/verify_parity.rs`** — Rename `cpp_file` → `baseline_file`, rewrite header/messages to use "golden baseline" terminology (this script is the Validation Agent and must be modernized in Phase 1, before DoD checks can pass)
 - **CI workflow comments** and **script help text** — Remove C++ implementation references
@@ -102,7 +102,7 @@ These constraints help the Coordinator avoid merge conflicts when assigning para
 Augment supports repo-stored rules in `.augment/rules/` and hierarchical `AGENTS.md` / `CLAUDE.md`. These have **length limits** — they're designed for short, high-leverage constraints, not full specs. Split the material:
 
 - **`.augment/rules/forge.md`** (Always-included, short): Non-negotiables only — no C++ port references, spec-first workflow, perf non-regression, no blanket `#[allow]`, `forge:` commit prefix, nightly-only
-- **`CLAUDE.md`** (root): Update to remove `uffs-legacy` and `cpp_comparison` references; add a pointer to `.augment/rules/forge.md` for FORGE-specific rules
+- **`CLAUDE.md`** (root): Update to remove obsolete legacy-crate references and `cpp_comparison` references; add a pointer to `.augment/rules/forge.md` for FORGE-specific rules
 - **This document** (`INTENT_PROMPT.md` → later `docs/architecture/FORGE_SPEC.md`): The full living spec with decomposition plans, DoD commands, idiom tables, etc. — referenced by agents but not always-included in context
 
 ---
@@ -117,7 +117,7 @@ Cargo workspace (resolver = "2", edition = "2024", rust-version = "1.85")
 ├── crates/uffs-cli/      — CLI binary on clap (~3.6K lines)
 ├── crates/uffs-tui/      — Terminal UI on ratatui (~700 lines)
 ├── crates/uffs-gui/      — Placeholder (~200 lines)
-├── crates/uffs-legacy/   — Dead legacy C++ port reference (TO BE REMOVED)
+├── [obsolete legacy crate] — Dead C++ port reference (TO BE REMOVED)
 ├── crates/uffs-diag/     — Diagnostic binaries ("temporarily enabled" since Jan 2026)
 ├── vendor/               — Disabled patches kept "for reference"
 ├── scripts/              — 11 rust-script utilities
@@ -169,7 +169,7 @@ This should be split into focused crates or at minimum well-separated internal m
 
 ### 3. DEAD WEIGHT IN THE WORKSPACE
 
-- **`crates/uffs-legacy/`** — "Reference only, do not modify" but still compiled as workspace member
+- **Obsolete legacy reference crate** — "Reference only, do not modify" but still compiled as workspace member
 - **`crates/uffs-diag/`** — "Temporarily enabled" since January 2026 (2+ months)
 - **`vendor/`** — Disabled patches with a comment saying "kept for reference"
 - **`dist/`** — 29GB of build artifacts (keep latest 2 in git for CI/scripts; keep all locally for rollback — offline scripts rely on these to locate current relevant artifacts)
@@ -195,7 +195,7 @@ This should be split into focused crates or at minimum well-separated internal m
 - `dirs-next` — ✅ correct choice (per RUSTSEC-2020-0053, `dirs` is unmaintained; `dirs-next` is the maintained fork)
 - `hostname` crate at 0.4.2 — check if still maintained
 - `log` + `simplelog` — **remove both**, standardize entirely on `tracing` + `tracing-subscriber` (the modern choice)
-- `colored` 3.x — **remove**: only used in `uffs-legacy` (being deleted), zero usage in active crates
+- `colored` 3.x — **remove**: only used in the obsolete legacy reference crate, zero usage in active crates
 
 ### 6. POLARS FEATURE AUDIT (Selective, Not Aggressive)
 
@@ -267,7 +267,7 @@ The repo root is cluttered with files and directories that don't belong there:
 | `missing_paths.txt` | Test output data from a Windows drive — not source code |
 | `LOG/` (48 files) | Changelog-healing session logs — valuable history but not tracked source |
 | `vendor/` | Disabled patches "kept for reference" — no longer active |
-| `crates/uffs-legacy/` | Dead C++ port reference |
+| Obsolete legacy reference crate | Dead C++ port reference |
 | `benchmarks/` | Empty (just `.gitkeep`) — remove placeholder or populate |
 | C++ scripts in `scripts/` | `analyze_cpp_stats.rs`, `analyze_trial_parity.rs`, `analyze_parity_differences.*`, `compare_outputs.py` (NOTE: **keep** `verify_parity.rs` — it's the Validation Agent, just modernize its C++ terminology) |
 
@@ -379,7 +379,7 @@ uffs-cli/src/commands/
 
 ### Crate Restructuring
 
-1. **Move `uffs-legacy` and `uffs-diag` out of workspace members** — use `exclude` or move to a separate `tools/` directory
+1. **Remove the obsolete legacy reference crate and move `uffs-diag` out of workspace members** — use `exclude` or move tools to a separate directory
 2. **Consider extracting `uffs-mft-index`** as a separate crate if the index grows further
 3. **Remove `vendor/`** entirely or move to `.gitignore`-d location
 4. **Clean `dist/`** — keep latest 2 artifacts in git for CI/scripts; gitignore the rest
@@ -393,13 +393,14 @@ uffs-cli/src/commands/
 **Tier 1 — Always on PR (must pass to merge):**
 1. **Format check** — `cargo +nightly fmt --check`
 2. **Clippy** — `cargo +nightly clippy --workspace --all-targets -- -D warnings` (use `cargo check` for Polars-heavy crates if clippy OOMs)
-3. **Tests** — `cargo +nightly nextest run --workspace` (exclude integration tests that require Windows/MFT)
+3. **Tests** — `cargo +nightly nextest run --workspace --all-features --lib --bins --tests` (exclude only tests that truly require Windows/MFT)
 4. **Security** — `cargo audit` + `cargo deny check`
 
 **Tier 2 — Scheduled / manual trigger (weekly + on-demand):**
-5. **Full build** — Use a larger runner, `sccache` with S3 backend, or pre-build Polars in a Docker image cached in GHCR
+5. **Full build** — `cargo build --release -p uffs-cli --bin uffs` (use a larger runner, `sccache` with S3 backend, or pre-build Polars in a Docker image cached in GHCR)
 6. **Coverage** — `cargo +nightly llvm-cov` with Codecov upload
-7. **Cross-compile check** — `cargo +nightly check --target x86_64-pc-windows-msvc`
+7. **Cross-compile check** — `cargo xwin check -p uffs-mft --lib --bin uffs_mft`
+8. **Windows regression** — `cargo test -p uffs-mft --bin uffs_mft required_output_path`
 
 **Acceptance criteria:** Tier 1 must be green on every PR. Tier 2 must be green before FORGE merge to main. Both tiers are non-negotiable for the final merge.
 
@@ -411,7 +412,7 @@ uffs-cli/src/commands/
 | `async-trait` | Remove **if** all async traits are used generically (no `dyn Trait`). If any async traits require trait objects, keep `async-trait` and document why — native `async fn in trait` (Rust 1.75+) doesn't support `dyn` dispatch |
 | `async-recursion` | Evaluate if still needed with `Box::pin` |
 | `log` + `simplelog` | **Remove both** — standardize on `tracing` ecosystem |
-| `colored` | **Remove** — only used in `uffs-legacy` (being deleted) |
+| `colored` | **Remove** — only used in the obsolete legacy reference crate |
 | `dirs-next` | ✅ Keep (correct maintained fork per RUSTSEC-2020-0053) |
 | `hostname` 0.4.2 | Check maintenance status, consider `gethostname` |
 | Polars features | Selective audit only — keep SQL, analytics, I/O features for MCP/query vision; remove only clearly irrelevant financial features |
@@ -485,7 +486,7 @@ Any refactoring must include before/after benchmarks proving no regression.
 ## Execution Strategy
 
 ### Phase 1: Cleanup & Hygiene (Week 1)
-- **Delete all C++ traces**: Remove `cpp_types.rs`, `cpp_tree.rs`, `cpp_io_pipeline.rs` (extract any still-needed logic into idiomatic Rust first). Remove `crates/uffs-legacy/` from workspace. Delete C++ comparison scripts and C++ porting docs (`docs/architecture/CPP_*.md`)
+- **Delete all C++ traces**: Remove `cpp_types.rs`, `cpp_tree.rs`, `cpp_io_pipeline.rs` (extract any still-needed logic into idiomatic Rust first). Remove the obsolete legacy reference crate from the workspace. Delete C++ comparison scripts and C++ porting docs (`docs/architecture/CPP_*.md`)
 - **Modernize `verify_parity.rs` terminology** — rename `cpp_file` → `baseline_file`, rewrite header/messages to use "golden baseline" language. This must happen in Phase 1 because the DoD grep checks cannot pass until this script is cleaned
 - **Rewrite READMEs** — remove C++ implementation references from `README.md`, `crates/uffs-mft/README.md`, `CLAUDE.md`, `.gitignore`
 - Remove/archive dead weight (`vendor/`, trim `docs/`, manage `dist/` retention policy) — use `cp` → `_trash/` then `git rm`, never `git mv`
@@ -555,12 +556,15 @@ Every criterion below must pass before FORGE can be declared complete. These are
 ```bash
 cargo +nightly fmt --check                                       # Clean formatting
 cargo +nightly clippy --workspace --all-targets -- -D warnings   # Zero warnings
-cargo +nightly test --workspace                                  # All tests pass (or: cargo nextest run --workspace)
+cargo +nightly nextest run --workspace --all-features --lib --bins --tests  # Canon test sweep
 RUSTDOCFLAGS="-D warnings" cargo +nightly doc --workspace --no-deps  # Docs build — warnings are fatal
 ```
 
 **Validation gate:**
 ```bash
+cargo build --release -p uffs-cli --bin uffs                     # Release CLI build succeeds
+cargo xwin check -p uffs-mft --lib --bin uffs_mft                # Windows-targeted MFT target checks
+cargo test -p uffs-mft --bin uffs_mft required_output_path       # Required output path regression passes
 rust-script scripts/verify_parity.rs /Users/rnio/uffs_data D --regenerate  # SHA256 MATCH
 ```
 
@@ -590,7 +594,6 @@ rg -n -S -g'*.rs' '\bcpp_[A-Za-z0-9_]*\b' crates/ scripts/ \
 
 # Confirm deleted files/crates are gone
 ls crates/uffs-mft/src/cpp_*.rs 2>/dev/null && exit 1 || true   # Should not exist
-ls crates/uffs-legacy/ 2>/dev/null && exit 1 || true            # Should not exist
 ```
 
 **Dependency purge (direct deps only — transitive deps from other crates are acceptable):**
