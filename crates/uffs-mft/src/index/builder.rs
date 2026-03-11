@@ -34,6 +34,11 @@ impl MftIndex {
         clippy::indexing_slicing,
         reason = "indices validated by get_or_create"
     )]
+    #[tracing::instrument(
+        level = "info",
+        skip_all,
+        fields(volume = %volume, input_records = records.len())
+    )]
     pub fn from_parsed_records(volume: char, records: Vec<crate::parse::ParsedRecord>) -> Self {
         /// System metafiles are FRS 0-15 (except root at FRS 5)
         const SYSTEM_METAFILE_MAX_FRS: u64 = 15;
@@ -477,6 +482,11 @@ impl MftIndex {
     /// A tuple of (`MftIndex`, `IndexBuildTiming`) with the built index and
     /// timing breakdown.
     #[must_use]
+    #[tracing::instrument(
+        level = "info",
+        skip_all,
+        fields(volume = %volume, input_records = records.len())
+    )]
     pub fn from_parsed_records_with_timing(
         volume: char,
         records: Vec<crate::parse::ParsedRecord>,

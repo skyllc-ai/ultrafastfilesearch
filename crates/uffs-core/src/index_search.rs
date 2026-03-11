@@ -521,6 +521,23 @@ impl<'a> IndexQuery<'a> {
     /// When expansion is enabled, each (name × stream) combination produces a
     /// result.
     #[must_use]
+    #[tracing::instrument(
+        level = "info",
+        skip(self),
+        fields(
+            record_count = self.index.records().len(),
+            type_filter = ?self.options.type_filter,
+            case_sensitive = self.options.case_sensitive,
+            resolve_paths = self.options.resolve_paths,
+            expand_names = self.options.expand_names,
+            expand_streams = self.options.expand_streams,
+            include_system_metafiles = self.options.include_system_metafiles,
+            min_size = ?self.min_size,
+            max_size = ?self.max_size,
+            limit = ?self.limit,
+            has_pattern = self.pattern.is_some()
+        )
+    )]
     pub fn collect(self) -> Vec<SearchResult> {
         use uffs_mft::index::PathCache;
 

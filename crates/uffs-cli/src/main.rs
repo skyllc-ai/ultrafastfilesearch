@@ -442,6 +442,7 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
 ///
 /// This is separated from `main()` to allow custom error handling that
 /// doesn't show backtraces for user-facing errors like "file not found".
+#[tracing::instrument(level = "info", skip_all)]
 async fn run() -> Result<()> {
     // Check for -v/--verbose flag early to set log level before initializing
     // logging This allows `uffs -v ...` to show info-level logs without
@@ -519,6 +520,7 @@ async fn run() -> Result<()> {
     clippy::single_call_fn,
     reason = "entrypoint wrapper exists solely to propagate shutdown into the spawned command task"
 )]
+#[tracing::instrument(level = "debug", skip_all, fields(operation = CLI_OPERATION))]
 async fn run_until_shutdown() -> Result<()> {
     let mut run_task = tokio::spawn(run());
 

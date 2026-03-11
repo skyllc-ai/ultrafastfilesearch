@@ -38,6 +38,7 @@ serde_json.workspace = true
 # Parallelization
 rayon.workspace = true
 chrono.workspace = true
+tracing.workspace = true
 
 # String matching (SIMD-optimized for IndexQuery)
 regex.workspace = true

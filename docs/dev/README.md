@@ -4,6 +4,7 @@ Use this bucket for contributor workflow, implementation plans, and build/develo
 
 ## Current entry points
 
+- [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md)
 - [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md)
 - [`../MILESTONES.md`](../MILESTONES.md)
 - [`../Modernization/modernization-guides/README.md`](../Modernization/modernization-guides/README.md)

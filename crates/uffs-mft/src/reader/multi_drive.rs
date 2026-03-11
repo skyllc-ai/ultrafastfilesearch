@@ -108,6 +108,7 @@ impl MultiDriveMftReader {
     ///
     /// Returns an error if all drives fail to read.
     #[cfg(windows)]
+    #[tracing::instrument(level = "info", skip(self), fields(drive_count = self.drives.len()))]
     pub async fn read_all(&self) -> Result<DataFrame> {
         self.read_all_internal(None::<fn(char, MftProgress)>).await
     }
@@ -136,6 +137,11 @@ impl MultiDriveMftReader {
     ///
     /// Returns an error if all drives fail to read.
     #[cfg(windows)]
+    #[tracing::instrument(
+        level = "info",
+        skip(self, callback),
+        fields(drive_count = self.drives.len(), progress_callback = true)
+    )]
     pub async fn read_with_progress<F>(&self, callback: F) -> Result<DataFrame>
     where
         F: Fn(char, MftProgress) + Send + Sync + Clone + 'static,
@@ -160,6 +166,14 @@ impl MultiDriveMftReader {
 
     /// Internal implementation for concurrent drive reading.
     #[cfg(windows)]
+    #[tracing::instrument(
+        level = "info",
+        skip(self, callback),
+        fields(
+            drive_count = self.drives.len(),
+            progress_callback = callback.is_some()
+        )
+    )]
     async fn read_all_internal<F>(&self, callback: Option<F>) -> Result<DataFrame>
     where
         F: Fn(char, MftProgress) + Send + Sync + Clone + 'static,

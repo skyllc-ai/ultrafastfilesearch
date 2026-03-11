@@ -75,6 +75,10 @@ uffs "*.rs" --index c_drive.parquet
 uffs "*" --mft-file c_mft.raw --drive C
 ```
 
+## 🤝 Contributing
+
+Want to contribute? Start with [CONTRIBUTING.md](CONTRIBUTING.md) for the pinned toolchain, `just`/`cargo` workflows, and Windows/Admin caveats. For the broader docs map, see [docs/README.md](docs/README.md) and [docs/dev/README.md](docs/dev/README.md).
+
 ---
 
 ## 📖 Usage Examples

@@ -15,6 +15,8 @@ on:
       - '**/Cargo.lock'
       - '.github/workflows/ci.yml'
       - '.github/workflows/optimized-ci.yml'
+      - 'scripts/check_file_size_policy.sh'
+      - 'scripts/file_size_exceptions.txt'
       - 'scripts/ci-pipeline.rs'
   pull_request:
     branches: [ main ]
@@ -26,6 +28,8 @@ on:
       - '**/Cargo.lock'
       - '.github/workflows/ci.yml'
       - '.github/workflows/optimized-ci.yml'
+      - 'scripts/check_file_size_policy.sh'
+      - 'scripts/file_size_exceptions.txt'
       - 'scripts/ci-pipeline.rs'
   workflow_dispatch:
 
@@ -73,6 +77,23 @@ jobs:
 
       - name: Run nightly clippy gate
         run: cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
+
+  rustdoc:
+    name: Tier 1 / Rustdoc
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install nightly Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run rustdoc warnings gate
+        run: RUSTDOCFLAGS="-Dwarnings" cargo doc --workspace --all-features --no-deps
 
   tests:
     name: Tier 1 / Tests
@@ -122,3 +143,14 @@ jobs:
 
       - name: Run dependency check
         run: cargo deny check
+
+  file-size-policy:
+    name: Tier 1 / File Size Policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enforce file size policy
+        run: bash scripts/check_file_size_policy.sh

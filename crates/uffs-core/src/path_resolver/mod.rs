@@ -160,6 +160,11 @@ impl FastPathResolver {
         clippy::cast_possible_truncation,
         reason = "u64 FRS fits in usize on 64-bit platforms"
     )]
+    #[tracing::instrument(
+        level = "debug",
+        skip(df),
+        fields(volume = %volume, rows = df.height(), columns = df.width())
+    )]
     pub fn build(df: &DataFrame, volume: char) -> Result<Self> {
         let frs_col = df.column("frs")?.u64()?;
         let parent_col = df.column("parent_frs")?.u64()?;
@@ -397,6 +402,15 @@ impl FastPathResolver {
     /// # Errors
     ///
     /// Returns an error if the frs column is missing.
+    #[tracing::instrument(
+        level = "debug",
+        skip(self, df),
+        fields(
+            volume = %self.volume,
+            rows = df.height(),
+            resolution_strategy = if df.height() > 10_000 { "parallel" } else { "sequential" }
+        )
+    )]
     pub fn add_path_column_auto(&mut self, df: &DataFrame) -> Result<DataFrame> {
         const PARALLEL_THRESHOLD: usize = 10_000;
 
@@ -597,6 +611,11 @@ impl FastPathResolverMultiDrive {
     /// # Errors
     ///
     /// Returns an error if required columns are missing.
+    #[tracing::instrument(
+        level = "debug",
+        skip(self, full_mft_df),
+        fields(drive = %drive, rows = full_mft_df.height(), columns = full_mft_df.width())
+    )]
     pub fn add_drive(&mut self, drive: char, full_mft_df: &DataFrame) -> Result<()> {
         let resolver = FastPathResolver::build(full_mft_df, drive)?;
         self.resolvers.insert(drive, resolver);
@@ -622,6 +641,11 @@ impl FastPathResolverMultiDrive {
     /// # Errors
     ///
     /// Returns an error if required columns are missing.
+    #[tracing::instrument(
+        level = "debug",
+        skip(self, filtered_df),
+        fields(rows = filtered_df.height(), drive_count = self.resolvers.len())
+    )]
     pub fn add_path_column(&mut self, filtered_df: &DataFrame) -> Result<DataFrame> {
         let drive_col = filtered_df.column("drive")?.str()?;
         let frs_col = filtered_df.column("frs")?.u64()?;

@@ -121,10 +121,76 @@ jobs:
       - name: Run build validation
         run: cargo build --workspace --all-features --bins
 
+  udeps:
+    name: Tier 2 / cargo-udeps
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Free up disk space
+        run: |
+          echo "🧹 Freeing up disk space for Polars compilation..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install nightly Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-udeps
+        uses: taiki-e/install-action@cargo-udeps
+
+      - name: Run cargo-udeps
+        run: cargo +nightly udeps --workspace --all-targets --all-features
+
+  miri:
+    name: Tier 2 / Miri
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Free up disk space
+        run: |
+          echo "🧹 Freeing up disk space for Polars compilation..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install nightly Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run focused Miri coverage
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+        run: |
+          # These raw persistence tests use temp files, so Miri needs isolation disabled.
+          # Keep coverage focused on the subset that runs under Miri today; the zstd-backed
+          # compressed raw test uses foreign-function calls that Miri does not support.
+          cargo +nightly miri test -p uffs-mft raw::tests::test_header_roundtrip -- --exact
+          cargo +nightly miri test -p uffs-mft raw::tests::test_load_header_only -- --exact
+          cargo +nightly miri test -p uffs-mft raw::tests::test_save_load_uncompressed -- --exact
+          cargo +nightly miri test -p uffs-mft raw::tests::test_raw_compat_mode -- --exact
+
   tier-2-summary:
     name: Tier 2 / Summary
     runs-on: ubuntu-latest
-    needs: [coverage, cross-check, build-validation]
+    needs: [coverage, cross-check, build-validation, udeps, miri]
     if: always()
     timeout-minutes: 5
     steps:
@@ -132,7 +198,9 @@ jobs:
         run: |
           if [[ "${{ needs.coverage.result }}" == "success" && \
                 "${{ needs.cross-check.result }}" == "success" && \
-                "${{ needs.build-validation.result }}" == "success" ]]; then
+                "${{ needs.build-validation.result }}" == "success" && \
+                "${{ needs.udeps.result }}" == "success" && \
+                "${{ needs.miri.result }}" == "success" ]]; then
             echo "✅ All Tier 2 nightly checks passed!"
           else
             echo "❌ Some Tier 2 nightly checks failed - review above"
@@ -149,3 +217,5 @@ jobs:
           echo "| Coverage | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Windows cross-check | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Build validation | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| cargo-udeps | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Miri | ✅ |" >> $GITHUB_STEP_SUMMARY

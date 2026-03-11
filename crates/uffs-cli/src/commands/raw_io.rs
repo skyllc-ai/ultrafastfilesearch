@@ -121,6 +121,23 @@ impl OwnedQueryFilters {
     clippy::print_stderr,
     reason = "intentional profiling output to stderr"
 )]
+#[tracing::instrument(
+    level = "info",
+    skip(mft_path, filters),
+    fields(
+        drive_letter = ?drive_letter,
+        needs_paths,
+        profile,
+        debug_tree,
+        files_only = filters.files_only,
+        dirs_only = filters.dirs_only,
+        hide_system = filters.hide_system,
+        min_size = ?filters.min_size,
+        max_size = ?filters.max_size,
+        limit = filters.limit,
+        has_ext_filter = filters.ext_filter.is_some()
+    )
+)]
 pub(super) fn load_and_filter_from_mft_file(
     mft_path: &Path,
     drive_letter: Option<char>,
@@ -298,6 +315,25 @@ fn load_raw_mft_with_debug(
     clippy::print_stderr,
     reason = "intentional profiling output to stderr"
 )]
+#[tracing::instrument(
+    level = "info",
+    skip(index, multi_drives, filters),
+    fields(
+        has_index = index.is_some(),
+        single_drive = ?single_drive,
+        multi_drive_count = multi_drives.as_ref().map_or(0, Vec::len),
+        needs_paths,
+        profile,
+        no_bitmap,
+        files_only = filters.files_only,
+        dirs_only = filters.dirs_only,
+        hide_system = filters.hide_system,
+        min_size = ?filters.min_size,
+        max_size = ?filters.max_size,
+        limit = filters.limit,
+        has_ext_filter = filters.ext_filter.is_some()
+    )
+)]
 pub(super) async fn load_and_filter_data(
     index: Option<PathBuf>,
     multi_drives: Option<Vec<char>>,
@@ -424,6 +460,23 @@ pub(super) async fn load_and_filter_data(
     clippy::print_stderr,
     reason = "intentional profiling output to stderr"
 )]
+#[tracing::instrument(
+    level = "info",
+    skip(filters),
+    fields(
+        single_drive = ?single_drive,
+        needs_paths,
+        profile,
+        no_cache,
+        files_only = filters.files_only,
+        dirs_only = filters.dirs_only,
+        hide_system = filters.hide_system,
+        min_size = ?filters.min_size,
+        max_size = ?filters.max_size,
+        limit = filters.limit,
+        has_ext_filter = filters.ext_filter.is_some()
+    )
+)]
 pub(super) async fn load_and_filter_data_index(
     single_drive: Option<char>,
     filters: &QueryFilters<'_>,
@@ -486,6 +539,23 @@ pub(super) async fn load_and_filter_data_index(
 #[expect(
     clippy::print_stderr,
     reason = "intentional profiling output to stderr"
+)]
+#[tracing::instrument(
+    level = "info",
+    skip(drives, filters),
+    fields(
+        drive_count = drives.len(),
+        needs_paths,
+        profile,
+        no_cache,
+        files_only = filters.files_only,
+        dirs_only = filters.dirs_only,
+        hide_system = filters.hide_system,
+        min_size = ?filters.min_size,
+        max_size = ?filters.max_size,
+        limit = filters.limit,
+        has_ext_filter = filters.ext_filter.is_some()
+    )
 )]
 pub(super) async fn load_and_filter_data_index_multi(
     drives: &[char],
@@ -620,6 +690,21 @@ pub(super) async fn load_and_filter_data_index_multi(
 }
 
 /// Build and execute the MFT query with all filters applied.
+#[tracing::instrument(
+    level = "debug",
+    skip(df, filters),
+    fields(
+        rows = df.height(),
+        columns = df.width(),
+        files_only = filters.files_only,
+        dirs_only = filters.dirs_only,
+        hide_system = filters.hide_system,
+        min_size = ?filters.min_size,
+        max_size = ?filters.max_size,
+        limit = filters.limit,
+        has_ext_filter = filters.ext_filter.is_some()
+    )
+)]
 fn execute_query(
     df: uffs_mft::DataFrame,
     filters: &QueryFilters<'_>,

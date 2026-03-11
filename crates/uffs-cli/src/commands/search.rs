@@ -146,6 +146,30 @@ fn should_use_index_path(
     clippy::single_call_fn,
     reason = "public CLI entry point called from main dispatch"
 )]
+#[tracing::instrument(
+    level = "info",
+    skip_all,
+    fields(
+        pattern = %pattern,
+        single_drive = ?single_drive,
+        multi_drive_count = multi_drives.as_ref().map_or(0, Vec::len),
+        has_index = index.is_some(),
+        has_mft_file = mft_file.is_some(),
+        files_only,
+        dirs_only,
+        hide_system,
+        benchmark,
+        no_bitmap,
+        no_cache,
+        min_size = ?min_size,
+        max_size = ?max_size,
+        limit,
+        format,
+        case_sensitive,
+        ext_filter = ?ext_filter,
+        query_mode
+    )
+)]
 pub async fn search(
     pattern: &str,
     single_drive: Option<char>,
@@ -859,6 +883,22 @@ fn spawn_drive_search_task(
 /// * `no_bitmap` - If true, disables MFT bitmap optimization (reads all
 ///   records).
 #[cfg(windows)]
+#[tracing::instrument(
+    level = "info",
+    skip(filters),
+    fields(
+        drive_count = drives.len(),
+        needs_paths,
+        no_bitmap,
+        files_only = filters.files_only,
+        dirs_only = filters.dirs_only,
+        hide_system = filters.hide_system,
+        min_size = ?filters.min_size,
+        max_size = ?filters.max_size,
+        limit = filters.limit,
+        has_ext_filter = filters.ext_filter.is_some()
+    )
+)]
 pub(super) async fn search_multi_drive_filtered(
     drives: &[char],
     filters: &QueryFilters<'_>,
@@ -1065,6 +1105,22 @@ pub(super) async fn search_multi_drive_filtered(
 /// Outputs results as each drive completes, providing immediate feedback.
 /// No progress bars - the streaming output IS the progress indicator.
 #[cfg(windows)]
+#[tracing::instrument(
+    level = "info",
+    skip(filters, writer, output_config),
+    fields(
+        drive_count = drives.len(),
+        format,
+        no_bitmap,
+        files_only = filters.files_only,
+        dirs_only = filters.dirs_only,
+        hide_system = filters.hide_system,
+        min_size = ?filters.min_size,
+        max_size = ?filters.max_size,
+        limit = filters.limit,
+        has_ext_filter = filters.ext_filter.is_some()
+    )
+)]
 async fn search_multi_drive_streaming<W: Write + Send + 'static>(
     drives: &[char],
     filters: &QueryFilters<'_>,
