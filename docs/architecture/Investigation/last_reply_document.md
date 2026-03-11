@@ -156,7 +156,7 @@ After previous fixes (internal stream linked list in `into_mft_index()`), the OF
 ## CI Pipeline Run
 
 ### Run 1: FAILED
-- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Command: `rust-script scripts/ci/ci-pipeline.rs go -v`
 - Status: Build errors
 - Errors:
   1. `E0433`: `cpp_tree` module not found in crate root
@@ -167,7 +167,7 @@ After previous fixes (internal stream linked list in `into_mft_index()`), the OF
 2. Added `internal_streams: Vec::new(),` to `MftIndex` initializer in `index.rs` (line 7562)
 
 ### Run 2: FAILED
-- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Command: `rust-script scripts/ci/ci-pipeline.rs go -v`
 - Status: Build errors in cpp_tree.rs
 - Errors:
   1. `E0609`: no field `size` on type `&FileRecord` (lines 104-105)
@@ -181,7 +181,7 @@ After previous fixes (internal stream linked list in `into_mft_index()`), the OF
 4. Removed unused `FileRecord` import
 
 ### Run 3: FAILED
-- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Command: `rust-script scripts/ci/ci-pipeline.rs go -v`
 - Status: Borrow checker error in cpp_tree.rs
 - Errors:
   1. `E0502`: cannot borrow `*self` as mutable because it is also borrowed as immutable (line 126)
@@ -191,7 +191,7 @@ After previous fixes (internal stream linked list in `into_mft_index()`), the OF
 2. This avoids the borrow conflict where `child_entry` was borrowed from `self.index.children` while `preprocess()` needs `&mut self`
 
 ### Run 4: FAILED
-- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Command: `rust-script scripts/ci/ci-pipeline.rs go -v`
 - Status: Multiple clippy errors
 - Errors:
   1. `unused_imports`: ChildInfo not used
@@ -219,7 +219,7 @@ After previous fixes (internal stream linked list in `into_mft_index()`), the OF
 11. Added `#[allow(clippy::too_many_lines)]` to apply_deferred_name_merges
 
 ### Run 5: FAILED
-- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Command: `rust-script scripts/ci/ci-pipeline.rs go -v`
 - Status: 35 clippy errors in cpp_tree.rs
 - Errors:
   1. `doc_markdown`: `name_info` and `total_names` need backticks in module docs
@@ -254,19 +254,19 @@ After previous fixes (internal stream linked list in `into_mft_index()`), the OF
 14. Fixed index.rs: `<< 1` to `<< 1_u8` for numeric fallback
 
 ### Run 6: ✅ PASSED
-- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Command: `rust-script scripts/ci/ci-pipeline.rs go -v`
 - Status: All tests, linting, and builds passed
 - Version: Incremented to v0.2.180
 - Windows binaries built and deployed
 - Changes committed and pushed to remote
 
 ### Run 7: ❌ FAILED
-- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Command: `rust-script scripts/ci/ci-pipeline.rs go -v`
 - Status: Build errors in cpp_tree.rs and index.rs
 - Context: User created `LIVE_ONLINE_TREE_METRICS_ROOT_JUNCTION_FIX.md` with drop-in replacements
 
 ### Run 8: ❌ FAILED
-- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Command: `rust-script scripts/ci/ci-pipeline.rs go -v`
 - Status: 9 clippy errors (3 in cpp_tree.rs, 6 in index.rs)
 - Errors:
   - `let_underscore_untyped`: lines 69, 81 in cpp_tree.rs
@@ -277,12 +277,12 @@ After previous fixes (internal stream linked list in `into_mft_index()`), the OF
   - `too_many_lines`: line 6476 in index.rs (113/100 lines)
 
 ### Run 9: ❌ FAILED
-- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Command: `rust-script scripts/ci/ci-pipeline.rs go -v`
 - Status: 1 clippy error remaining
 - Error: `default_numeric_fallback` on line 5980 - `<< 1` needs suffix `<< 1_u8`
 
 ### Run 10: ✅ PASSED
-- Command: `rust-script scripts/ci-pipeline.rs go -v`
+- Command: `rust-script scripts/ci/ci-pipeline.rs go -v`
 - Status: All tests and linting passed
 - Result:
   - ✅ Version incremented to **v0.2.181**

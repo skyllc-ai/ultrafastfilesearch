@@ -1202,7 +1202,7 @@ pub async fn cmd_bench_all(
         hostname: hostname::get()
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_else(|_| "unknown".to_string()),
-        cpu_count: num_cpus::get(),
+        cpu_count: std::thread::available_parallelism().map_or(4, std::num::NonZero::get),
         uffs_version: env!("CARGO_PKG_VERSION").to_string(),
         drives: results,
         total_benchmark_time_ms: total_time_ms,

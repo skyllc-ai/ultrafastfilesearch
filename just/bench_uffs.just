@@ -62,3 +62,64 @@ bench-search drive="C":
     for PATTERN in "${PATTERNS[@]}"; do START=$(date +%s.%N); COUNT=$(RUST_LOG=error "$RUST_UFFS" "$PATTERN" --drive {{drive}} 2>/dev/null | wc -l | tr -d ' '); END=$(date +%s.%N); TIME=$(echo "$END - $START" | bc); printf "%-20s %14.2fs %15s\n" "$PATTERN" "$TIME" "$COUNT"; done
     printf "\033[0;32m\n✅ Search benchmark complete!\033[0m\n"
 
+# Run all benchmarks and compare to baseline.
+bench-all-compare:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf "\033[0;34m📊 Running All Benchmarks with Baseline Comparison...\033[0m\n"
+    echo ""
+    BASELINE_FILE="benchmarks/baseline.json"
+    just bench-vs-cpp C
+    if [[ -f "$BASELINE_FILE" ]]; then
+        printf "\033[0;34m\n📈 Comparing to baseline...\033[0m\n"
+        BASELINE_TIME=$(jq -r '.rust.time_seconds' "$BASELINE_FILE")
+        LATEST_FILE=$(ls -t benchmarks/bench_*.json 2>/dev/null | head -1)
+        if [[ -n "$LATEST_FILE" ]]; then
+            CURRENT_TIME=$(jq -r '.rust.time_seconds' "$LATEST_FILE")
+            CHANGE=$(echo "scale=2; (($CURRENT_TIME - $BASELINE_TIME) / $BASELINE_TIME) * 100" | bc)
+            if (( $(echo "$CHANGE > 10" | bc -l) )); then printf "\033[1;31m⚠️  REGRESSION: ${CHANGE}%% slower than baseline!\033[0m\n"; elif (( $(echo "$CHANGE < -10" | bc -l) )); then printf "\033[0;32m🎉 IMPROVEMENT: ${CHANGE}%% faster than baseline!\033[0m\n"; else printf "\033[0;34m   Within 10%% of baseline (${CHANGE}%%)\033[0m\n"; fi
+        fi
+    else
+        printf "\033[1;33m⚠️  No baseline found. Run 'just bench-update-baseline' to create one.\033[0m\n"
+    fi
+    printf "\033[0;32m\n✅ All benchmarks complete!\033[0m\n"
+
+# Update baseline with current benchmark results.
+bench-update-baseline:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf "\033[0;34m📝 Updating Benchmark Baseline...\033[0m\n"
+    just bench-vs-cpp C
+    LATEST_FILE=$(ls -t benchmarks/bench_*.json 2>/dev/null | head -1)
+    if [[ -n "$LATEST_FILE" ]]; then
+        cp "$LATEST_FILE" "benchmarks/baseline.json"
+        printf "\033[0;32m✅ Baseline updated from: $LATEST_FILE\033[0m\n"
+        printf "\033[0;34m   Baseline saved to: benchmarks/baseline.json\033[0m\n"
+    else
+        printf "\033[1;31m❌ No benchmark results found!\033[0m\n"
+        exit 1
+    fi
+
+# Quick benchmark help.
+bench-help:
+    #!/usr/bin/env bash
+    printf "\033[0;34m🏁 UFFS Benchmark Commands\033[0m\n"
+    echo ""
+    printf "\033[0;32m  Integration Benchmarks (Rust vs reference):\033[0m\n"
+    echo "    just bench-vs-cpp          # Compare on C: drive"
+    echo "    just bench-vs-cpp D        # Compare on D: drive"
+    echo ""
+    printf "\033[0;32m  Micro-Benchmarks (Criterion):\033[0m\n"
+    echo "    just bench-micro           # Run all criterion benchmarks"
+    echo ""
+    printf "\033[0;32m  End-to-End Benchmarks:\033[0m\n"
+    echo "    just bench-search          # Search benchmark with multiple patterns"
+    echo "    just bench-search D        # Search benchmark on D: drive"
+    echo ""
+    printf "\033[0;32m  Baseline Management:\033[0m\n"
+    echo "    just bench-all-compare     # Run all and compare to baseline"
+    echo "    just bench-update-baseline # Update baseline with current results"
+    echo ""
+    printf "\033[0;34m📊 Results are saved to: benchmarks/*.json\033[0m\n"
+    printf "\033[0;34m📈 Criterion reports: target/criterion/report/index.html\033[0m\n"
+

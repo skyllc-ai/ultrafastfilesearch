@@ -28,10 +28,11 @@
 //!
 //! # Output structure
 //!
-//! Output files have 2 header lines (CSV header + blank), data rows in the
-//! middle, and 4 footer lines (2 blank + "Drives?" + blank). This script
-//! sorts ONLY the data rows, preserving header and footer in place, then
-//! computes SHA256 over the reassembled content.
+//! Output files have 2 header lines (CSV header + blank). Legacy baseline
+//! files may also have a trailing footer (`Drives?` + surrounding blank
+//! lines), but current `uffs --out ...` output intentionally omits that
+//! footer. This script sorts ONLY the data rows and ignores the optional
+//! legacy footer when computing SHA256.
 //!
 //! ```cargo
 //! [dependencies]
@@ -46,8 +47,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const HEADER_LINES: usize = 2;
-const FOOTER_LINES: usize = 4;
-
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -267,7 +266,9 @@ fn find_workspace_root() -> PathBuf {
 }
 
 /// Read a file, split into header/data/footer, sort data rows, compute SHA256
-/// over the reassembled content. Returns (hex hash, data row count).
+/// over the normalized header+data content. Optional legacy footers are
+/// ignored because `uffs --out` no longer writes them. Returns (hex hash, data
+/// row count).
 fn sorted_sha256(path: &Path) -> (String, usize) {
     let file = fs::File::open(path)
         .unwrap_or_else(|e| panic!("Failed to open {}: {}", path.display(), e));
@@ -279,9 +280,11 @@ fn sorted_sha256(path: &Path) -> (String, usize) {
 
     let total = all_lines.len();
 
-    if total <= HEADER_LINES + FOOTER_LINES {
+    let (header_len, footer_start) = split_output_sections(&all_lines);
+
+    if total <= header_len {
         eprintln!("WARNING: File {} has only {} lines (expected > {})",
-            path.display(), total, HEADER_LINES + FOOTER_LINES);
+            path.display(), total, header_len);
         let mut hasher = Sha256::new();
         for line in &all_lines {
             hasher.update(line.as_bytes());
@@ -291,9 +294,8 @@ fn sorted_sha256(path: &Path) -> (String, usize) {
         return (hash, 0);
     }
 
-    let header = &all_lines[..HEADER_LINES];
-    let footer = &all_lines[total - FOOTER_LINES..];
-    let mut data: Vec<&str> = all_lines[HEADER_LINES..total - FOOTER_LINES]
+    let header = &all_lines[..header_len];
+    let mut data: Vec<&str> = all_lines[header_len..footer_start]
         .iter()
         .map(|s| s.as_str())
         .collect();
@@ -301,17 +303,14 @@ fn sorted_sha256(path: &Path) -> (String, usize) {
     let data_count = data.len();
     data.sort_unstable();
 
-    // Compute SHA256 of header + sorted data + footer
+    // Compute SHA256 of header + sorted data, ignoring any optional legacy
+    // footer lines such as `Drives?`.
     let mut hasher = Sha256::new();
     for line in header {
         hasher.update(line.as_bytes());
         hasher.update(b"\n");
     }
     for line in &data {
-        hasher.update(line.as_bytes());
-        hasher.update(b"\n");
-    }
-    for line in footer {
         hasher.update(line.as_bytes());
         hasher.update(b"\n");
     }
@@ -362,13 +361,34 @@ fn read_sorted_data(path: &Path) -> Vec<String> {
     let file = fs::File::open(path).expect("Failed to open file");
     let reader = BufReader::new(file);
     let all_lines: Vec<String> = reader.lines().map(|l| l.unwrap()).collect();
-    let total = all_lines.len();
-    if total <= HEADER_LINES + FOOTER_LINES {
+    let (header_len, footer_start) = split_output_sections(&all_lines);
+    if all_lines.len() <= header_len {
         return vec![];
     }
-    let mut data: Vec<String> = all_lines[HEADER_LINES..total - FOOTER_LINES].to_vec();
+    let mut data: Vec<String> = all_lines[header_len..footer_start].to_vec();
     data.sort_unstable();
     data
+}
+
+fn split_output_sections(all_lines: &[String]) -> (usize, usize) {
+    let header_len = if all_lines.get(1).is_some_and(String::is_empty) {
+        HEADER_LINES
+    } else {
+        all_lines.len().min(1)
+    };
+
+    let footer_start = all_lines
+        .iter()
+        .rposition(|line| line.starts_with("Drives?"))
+        .map_or(all_lines.len(), |idx| {
+            let mut start = idx;
+            while start > header_len && all_lines[start - 1].is_empty() {
+                start -= 1;
+            }
+            start
+        });
+
+    (header_len, footer_start)
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -376,5 +396,74 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         format!("{}...", &s[..max])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_sorted_data, sorted_sha256, split_output_sections};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_output_path(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0_u128, |duration| duration.as_nanos());
+        std::env::temp_dir().join(format!(
+            "verify-parity-{name}-{}-{nanos}.txt",
+            std::process::id()
+        ))
+    }
+
+    fn write_output(path: &PathBuf, lines: &[&str]) {
+        let body = format!("{}\n", lines.join("\n"));
+        fs::write(path, body).expect("failed to write test output");
+    }
+
+    #[test]
+    fn split_output_sections_detects_optional_legacy_footer() {
+        let lines = vec![
+            "header".to_string(),
+            String::new(),
+            "row-b".to_string(),
+            "row-a".to_string(),
+            String::new(),
+            String::new(),
+            "Drives? \t1\tD:".to_string(),
+            String::new(),
+        ];
+
+        assert_eq!(split_output_sections(&lines), (2, 4));
+    }
+
+    #[test]
+    fn sorted_sha256_ignores_legacy_footer_but_keeps_all_data_rows() {
+        let footerless = temp_output_path("footerless");
+        let legacy = temp_output_path("legacy");
+
+        write_output(&footerless, &["header", "", "row-b", "row-a"]);
+        write_output(
+            &legacy,
+            &[
+                "header",
+                "",
+                "row-b",
+                "row-a",
+                "",
+                "",
+                "Drives? \t1\tD:",
+                "",
+            ],
+        );
+
+        let footerless_hash = sorted_sha256(&footerless);
+        let legacy_hash = sorted_sha256(&legacy);
+        assert_eq!(footerless_hash, legacy_hash);
+        assert_eq!(footerless_hash.1, 2);
+        assert_eq!(read_sorted_data(&footerless), vec!["row-a", "row-b"]);
+
+        let _ = fs::remove_file(footerless);
+        let _ = fs::remove_file(legacy);
     }
 }

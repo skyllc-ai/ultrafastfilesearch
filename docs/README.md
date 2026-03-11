@@ -13,7 +13,6 @@ This directory is being normalized toward a small set of durable buckets:
 - `docs/architecture/Investigation/` remains a working-notes area.
 - Exact duplicate investigation copies have been retired in favor of their stable canonical docs.
 - Reference-oriented committed docs are linked from the architecture and dev landing pages.
-- Any optional private legacy reference tree should use the repo-root, gitignored `old_cpp_reference/` layout, stay local-only, and must not be pushed.
-- `docs/reference/` is also local-only and stays ignored.
-- Some older root-level documents still exist while links are being consolidated into the buckets above.
+- The tracked `docs/reference/` bucket stays retired; committed reference material now lives under `docs/architecture/` and `docs/dev/`.
+- Historical/archive material that does not belong in the tracked buckets is being pushed into `_trash/docs/`.
 

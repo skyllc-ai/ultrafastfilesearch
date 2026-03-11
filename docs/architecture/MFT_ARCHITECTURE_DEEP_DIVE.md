@@ -14,7 +14,7 @@ This document analyzes the architectural differences between the C++ UltraFastFi
 
 ## 🎉 IMPORTANT: MFT Reader is Already Highly Optimized!
 
-Before diving into optimizations, it's critical to understand that **the MFT reading layer (`uffs-mft`) is already extremely fast** thanks to extensive optimization work documented in [uffs-mft-optimization-plan.md](../uffs-mft-optimization-plan.md).
+Before diving into optimizations, it's critical to understand that **the MFT reading layer (`uffs-mft`) is already extremely fast** thanks to extensive optimization work documented in [uffs-mft-optimization-plan.md](../performance/uffs-mft-optimization-plan.md).
 
 ### What's Already Done (v0.1.39):
 

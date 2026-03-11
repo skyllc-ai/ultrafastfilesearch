@@ -1512,9 +1512,8 @@ impl ParallelMftReader {
             }
         }
 
-        let num_workers = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
+        let num_workers =
+            std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
 
         info!(
             queued = pending_count,
@@ -2632,7 +2631,7 @@ impl ParallelMftReader {
     ///   drive)
     /// * `io_chunk_size` - Size of each I/O in bytes (None = auto based on
     ///   drive)
-    /// * `num_workers` - Number of parsing worker threads (None = num_cpus)
+    /// * `num_workers` - Number of parsing worker threads (None = use available CPU count)
     /// * `_progress_callback` - Optional progress callback
     #[expect(
         unsafe_code,
@@ -2681,7 +2680,9 @@ impl ParallelMftReader {
             }
         });
         let io_chunk_size = io_chunk_size.unwrap_or_else(|| self.drive_type.optimal_io_size());
-        let num_workers = num_workers.unwrap_or_else(num_cpus::get);
+        let num_workers = num_workers.unwrap_or_else(|| {
+            std::thread::available_parallelism().map_or(4, std::num::NonZero::get)
+        });
 
         info!(
             total_records,

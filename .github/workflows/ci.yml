@@ -15,7 +15,7 @@ on:
       - '**/Cargo.lock'
       - '.github/workflows/ci.yml'
       - '.github/workflows/optimized-ci.yml'
-      - 'scripts/ci-pipeline.rs'
+      - 'scripts/ci/ci-pipeline.rs'
   pull_request:
     branches: [ main ]
     paths:
@@ -26,7 +26,7 @@ on:
       - '**/Cargo.lock'
       - '.github/workflows/ci.yml'
       - '.github/workflows/optimized-ci.yml'
-      - 'scripts/ci-pipeline.rs'
+      - 'scripts/ci/ci-pipeline.rs'
   workflow_dispatch:
 
 permissions:

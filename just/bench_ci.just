@@ -5,17 +5,17 @@ benchmark-flows-debug:
     printf "\033[1;33m🎯 GOAL: Compare Rust script vs JUST file workflow approaches\033[0m\n"
     printf "\033[0;34m📋 SAME LOGIC: Both run identical steps with same commands\033[0m\n"
     printf "\033[0;34m📋 ONLY DIFFERENCE: Orchestration approach (async/parallel vs sequential)\033[0m\n"
-    printf "\033[0;34m\n🔄 Test 1: Rust Script Workflow (just go)\033[0m\n"
+    printf "\033[0;34m\n🔄 Test 1: Rust Script Validation Workflow (just go)\033[0m\n"
     printf "═══════════════════════════════════════════════════════\n"
     cargo clean
     TEST1_START=$(date +%s)
-    printf "\033[0;34m  → Running Rust script workflow with async/parallel optimization (VERBOSE)...\033[0m\n"
+    printf "\033[0;34m  → Running Rust script validation workflow with async/parallel optimization (VERBOSE)...\033[0m\n"
     if rust-script scripts/ci/ci-pipeline.rs go -v; then TEST1_END=$(date +%s); TEST1_TOTAL=$((TEST1_END - TEST1_START)); printf "\033[0;32m  ✅ Rust script completed successfully in ${TEST1_TOTAL}s\033[0m\n"; else TEST1_END=$(date +%s); TEST1_TOTAL=-1; printf "\033[0;31m  ❌ Rust script failed\033[0m\n"; fi
-    printf "\033[0;34m\n🔄 Test 2: JUST File Workflow (just go-justfile)\033[0m\n"
+    printf "\033[0;34m\n🔄 Test 2: JUST File Validation Workflow (just go-justfile)\033[0m\n"
     printf "═══════════════════════════════════════════════════════\n"
     cargo clean
     TEST2_START=$(date +%s)
-    printf "\033[0;34m  → Running JUST file workflow with sequential execution...\033[0m\n"
+    printf "\033[0;34m  → Running JUST file validation workflow with sequential execution...\033[0m\n"
     if just go-justfile; then TEST2_END=$(date +%s); TEST2_TOTAL=$((TEST2_END - TEST2_START)); printf "\033[0;32m  ✅ JUST file workflow completed successfully in ${TEST2_TOTAL}s\033[0m\n"; else TEST2_END=$(date +%s); TEST2_TOTAL=-1; printf "\033[0;31m  ❌ JUST file workflow failed\033[0m\n"; fi
     printf "\033[0;32m\n⚡ WORKFLOW ORCHESTRATION RESULTS:\033[0m\n"
     printf "═══════════════════════════════════════════════════════\n"
@@ -29,7 +29,7 @@ benchmark-rust-script:
     printf "\033[0;34m  → Cleaning for accurate measurement...\033[0m\n"
     cargo clean
     START_TIME=$(date +%s)
-    printf "\033[0;34m  → Running Rust script workflow (just go)...\033[0m\n"
+    printf "\033[0;34m  → Running Rust script validation workflow (just go)...\033[0m\n"
     just go
     END_TIME=$(date +%s)
     TOTAL_TIME=$((END_TIME - START_TIME))
@@ -46,7 +46,7 @@ benchmark-justfile:
     printf "\033[0;34m  → Cleaning for accurate measurement...\033[0m\n"
     cargo clean
     START_TIME=$(date +%s)
-    printf "\033[0;34m  → Running JUST file workflow (just go-justfile)...\033[0m\n"
+    printf "\033[0;34m  → Running JUST file validation workflow (just go-justfile)...\033[0m\n"
     just go-justfile
     END_TIME=$(date +%s)
     TOTAL_TIME=$((END_TIME - START_TIME))
@@ -86,4 +86,62 @@ benchmark-llvm-reuse:
     printf "\033[0;34m  → Step 2 (LLVM report reuse): ${STEP2_TIME}s\033[0m\n"
     printf "\033[0;34m  → Step 3 (Artifact reuse): ${STEP3_TIME}s\033[0m\n"
     printf "\033[0;34m  → Total execution time: ${TOTAL_TIME}s\033[0m\n"
+
+# Compare Rust script vs justfile workflow orchestration.
+benchmark-flows:
+    #!/usr/bin/env bash
+    printf "\033[0;34m⚡ Workflow Orchestration Comparison...\033[0m\n"
+    printf "\033[1;33m🎯 GOAL: Compare Rust script vs JUST file workflow approaches\033[0m\n"
+    printf "\033[0;34m📋 SAME LOGIC: Both run identical steps with same commands\033[0m\n"
+    printf "\033[0;34m📋 ONLY DIFFERENCE: Orchestration approach (async/parallel vs sequential)\033[0m\n"
+    printf "\033[0;34m\n🔄 Test 1: Rust Script Validation Workflow (just go)\033[0m\n"
+    printf "═══════════════════════════════════════════════════════\n"
+    cargo clean >/dev/null 2>&1
+    TEST1_START=$(date +%s)
+    printf "\033[0;34m  → Running Rust script validation workflow with async/parallel optimization...\033[0m\n"
+    if just go >/dev/null 2>&1; then TEST1_END=$(date +%s); TEST1_TOTAL=$((TEST1_END - TEST1_START)); printf "\033[0;32m  ✅ Rust script completed successfully\033[0m\n"; else TEST1_END=$(date +%s); TEST1_TOTAL=-1; printf "\033[0;31m  ❌ Rust script failed\033[0m\n"; fi
+    printf "\033[0;34m\n🔄 Test 2: JUST File Validation Workflow (just go-justfile)\033[0m\n"
+    printf "═══════════════════════════════════════════════════════\n"
+    cargo clean >/dev/null 2>&1
+    TEST2_START=$(date +%s)
+    printf "\033[0;34m  → Running JUST file validation workflow with sequential execution...\033[0m\n"
+    if just go-justfile >/dev/null 2>&1; then TEST2_END=$(date +%s); TEST2_TOTAL=$((TEST2_END - TEST2_START)); printf "\033[0;32m  ✅ JUST file workflow completed successfully\033[0m\n"; else TEST2_END=$(date +%s); TEST2_TOTAL=-1; printf "\033[0;31m  ❌ JUST file workflow failed\033[0m\n"; fi
+    printf "\033[0;32m\n⚡ WORKFLOW ORCHESTRATION RESULTS:\033[0m\n"
+    printf "═══════════════════════════════════════════════════════\n"
+    if [ "$TEST1_TOTAL" -eq -1 ] && [ "$TEST2_TOTAL" -eq -1 ]; then printf "\033[0;31m❌ Both workflows failed - check for errors\033[0m\n"; printf "\033[0;34m💡 Run 'just go' and 'just go-justfile' individually to debug\033[0m\n"; exit 1; elif [ "$TEST1_TOTAL" -eq -1 ]; then printf "\033[0;31m📊 Rust Script (async/parallel):  FAILED\033[0m\n"; printf "\033[0;34m📊 JUST File (sequential):        ${TEST2_TOTAL}s\033[0m\n"; printf "\033[0;32m🏆 WINNER: JUST File (just go-justfile) - Rust script failed\033[0m\n"; printf "\033[0;34m💡 RECOMMENDATION: Fix Rust script errors, then re-run benchmark\033[0m\n"; exit 1; elif [ "$TEST2_TOTAL" -eq -1 ]; then printf "\033[0;34m📊 Rust Script (async/parallel):  ${TEST1_TOTAL}s\033[0m\n"; printf "\033[0;31m📊 JUST File (sequential):        FAILED\033[0m\n"; printf "\033[0;32m🏆 WINNER: Rust Script (just go) - JUST file failed\033[0m\n"; printf "\033[0;34m💡 RECOMMENDATION: Fix JUST file errors, then re-run benchmark\033[0m\n"; exit 1; else printf "\033[0;34m📊 Rust Script (async/parallel):  ${TEST1_TOTAL}s\033[0m\n"; printf "\033[0;34m📊 JUST File (sequential):        ${TEST2_TOTAL}s\033[0m\n"; if [ "$TEST1_TOTAL" -lt "$TEST2_TOTAL" ]; then SAVINGS=$((TEST2_TOTAL - TEST1_TOTAL)); PERCENT_SAVINGS=$(echo "scale=1; $SAVINGS * 100 / $TEST2_TOTAL" | bc -l 2>/dev/null || echo "N/A"); printf "\033[0;32m🏆 WINNER: Rust Script (just go)\033[0m\n"; printf "\033[0;32m💰 SAVINGS: ${SAVINGS}s faster (${PERCENT_SAVINGS}%% improvement)\033[0m\n"; printf "\033[0;34m💡 RECOMMENDATION: Use 'just go' for optimal performance\033[0m\n"; elif [ "$TEST2_TOTAL" -lt "$TEST1_TOTAL" ]; then SAVINGS=$((TEST1_TOTAL - TEST2_TOTAL)); PERCENT_SAVINGS=$(echo "scale=1; $SAVINGS * 100 / $TEST1_TOTAL" | bc -l 2>/dev/null || echo "N/A"); printf "\033[0;32m🏆 WINNER: JUST File (just go-justfile)\033[0m\n"; printf "\033[0;32m💰 SAVINGS: ${SAVINGS}s faster (${PERCENT_SAVINGS}%% improvement)\033[0m\n"; printf "\033[0;34m💡 RECOMMENDATION: Use 'just go-justfile' for optimal performance\033[0m\n"; else printf "\033[0;33m🤝 TIE: Both approaches have identical performance\033[0m\n"; printf "\033[0;34m💡 RECOMMENDATION: Use either approach (no performance difference)\033[0m\n"; fi; fi
+    printf "\033[0;34m\n📋 COMPARISON SUMMARY:\033[0m\n"
+    printf "\033[0;34m  → Same logic: Both run identical steps with same commands\033[0m\n"
+    printf "\033[0;34m  → Only difference: Orchestration (async/parallel vs sequential)\033[0m\n"
+    printf "\033[0;34m  → Winner shows which workflow orchestration is faster\033[0m\n"
+
+# Compare both workflow orchestration approaches.
+benchmark-both:
+    #!/usr/bin/env bash
+    printf "\033[0;34m📊 Comprehensive workflow orchestration comparison...\033[0m\n"
+    printf "\033[1;33m⚠️  This will run both workflows and compare performance\033[0m\n"
+    printf "\033[0;34m  → Cleaning build artifacts for fair comparison...\033[0m\n"
+    just clean
+    printf "\033[0;34m\n🔄 Running Benchmark 1: Rust Script Workflow\033[0m\n"
+    printf "═══════════════════════════════════════════════════════\n"
+    just benchmark-rust-script
+    printf "\033[0;34m  → Cleaning for second benchmark...\033[0m\n"
+    just clean
+    printf "\033[0;34m\n🔄 Running Benchmark 2: JUST File Workflow\033[0m\n"
+    printf "═══════════════════════════════════════════════════════\n"
+    just benchmark-justfile
+    printf "\033[0;32m\n🎯 Benchmark Comparison Complete!\033[0m\n"
+    printf "\033[0;34m📊 Review the timing results above to compare approaches\033[0m\n"
+    printf "\033[0;34m💡 Consider the approach that best fits your development workflow\033[0m\n"
+
+# Performance profiling with advanced tools.
+benchmark-advanced:
+    #!/usr/bin/env bash
+    printf "\033[0;34m📊 Advanced performance profiling...\033[0m\n"
+    if command -v cargo-criterion >/dev/null 2>&1; then printf "\033[0;34m  → Running criterion benchmarks...\033[0m\n"; cargo criterion; else printf "\033[1;33m⚠️  cargo-criterion not found, run 'just setup' first\033[0m\n"; fi
+    printf "\033[0;34m  → Analyzing memory usage patterns...\033[0m\n"
+    if command -v valgrind >/dev/null 2>&1; then printf "\033[0;34m    → Running valgrind analysis...\033[0m\n"; valgrind --tool=massif cargo test; else printf "\033[1;33m⚠️  valgrind not available, skipping memory analysis\033[0m\n"; fi
+    printf "\033[0;34m  → Analyzing build time breakdown...\033[0m\n"
+    cargo build --timings
+    printf "\033[0;32m✅ Advanced profiling complete!\033[0m\n"
+    printf "\033[0;34m📊 Check target/cargo-timings/ for detailed build analysis\033[0m\n"
 

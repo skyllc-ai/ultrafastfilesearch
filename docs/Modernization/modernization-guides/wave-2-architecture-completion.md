@@ -220,7 +220,7 @@ impl Default for CacheConfig {
 
 ### Final Validation
 ```bash
-rust-script scripts/ci-pipeline.rs go -v
+rust-script scripts/ci/ci-pipeline.rs go -v
 ```
 
 ---

@@ -111,7 +111,7 @@ cargo install cargo-semver-checks
 cargo semver-checks check-release --workspace
 ```
 
-**Step 3**: Add to CI pipeline (scripts/ci-pipeline.rs)
+**Step 3**: Add to CI pipeline (scripts/ci/ci-pipeline.rs)
 
 ### Verification
 ```bash
@@ -207,7 +207,7 @@ cargo mutants --package uffs-mft --list | head -20
 
 ### Final Validation
 ```bash
-rust-script scripts/ci-pipeline.rs go -v
+rust-script scripts/ci/ci-pipeline.rs go -v
 ```
 
 ---

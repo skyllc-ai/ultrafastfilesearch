@@ -5,7 +5,7 @@
 *real code fixes**—no silencing, no skipping, no theatrics.
 
 **Context:** Use the CI pipeline driver for baseline and final validation:
-`rust-script scripts/ci-pipeline.rs workflow-reset && rust-script scripts/ci-pipeline.rs go - v`
+`rust-script scripts/ci/ci-pipeline.rs workflow-reset && rust-script scripts/ci/ci-pipeline.rs go - v`
 The pipeline can take ~50 minutes. During fix cycles, you may run local `cargo clippy`/`cargo test`/`cargo check`/`cargo build` to iterate quickly. Do not modify the pipeline itself; treat pipeline output as the single source of truth for acceptance.
 
 ---

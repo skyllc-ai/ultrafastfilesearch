@@ -13,8 +13,8 @@ Canonical architecture and subsystem writeups live here.
 
 ## Reference-oriented entry points
 
-- [`../MFT_FEATURE_PARITY.md`](../MFT_FEATURE_PARITY.md)
-- [`../CROSS_PLATFORM_RAW_MFT_LOADING.md`](../CROSS_PLATFORM_RAW_MFT_LOADING.md)
+- [`../dev/MFT_FEATURE_PARITY.md`](../dev/MFT_FEATURE_PARITY.md)
+- [`../dev/CROSS_PLATFORM_RAW_MFT_LOADING.md`](../dev/CROSS_PLATFORM_RAW_MFT_LOADING.md)
 
 ## Investigation notes
 

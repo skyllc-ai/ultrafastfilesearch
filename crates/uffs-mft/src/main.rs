@@ -71,7 +71,7 @@ use uffs_polars as _;
 use zstd as _;
 // Benchmark dependencies (used by bench/bench-all commands on Windows)
 #[cfg(not(windows))]
-use {chrono as _, hostname as _, num_cpus as _};
+use {chrono as _, hostname as _};
 
 /// CLI definitions for the `uffs_mft` binary.
 mod cli;

@@ -68,7 +68,7 @@ setup:
     just _install-component miri
     printf "\033[0;32m✅ Development environment setup complete!\033[0m\n"
     printf "\033[0;34mNext steps:\033[0m\n"
-    printf "  • Run 'just go' to build and test everything\n"
-    printf "  • Run 'just phase2-ship' for the standalone Phase 2 lane\n"
+    printf "  • Run 'just go' to validate everything safely\n"
+    printf "  • Run 'just phase2-ship' for the explicit ship lane\n"
     printf "  • Run 'just ci-analyze' for CI pipeline optimization\n"
 

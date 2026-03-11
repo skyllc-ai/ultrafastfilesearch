@@ -18,7 +18,7 @@
 | **No `clippy.toml`** | Confirmed absent (one exists in `vendor/errno/` — irrelevant, vendored) |
 | **`.cargo/config.toml` present** | Yes — sets `sccache` wrapper, custom `target-dir`, per-target `rustflags` and linkers. **Do not modify** (see §3.4) |
 | **Vendored code** | `vendor/errno`, `vendor/fs4`, `vendor/mft-reader-rs`, `vendor/stacker`, `vendor/winapi-util` |
-| **Workflow tool** | `just` (justfile at repo root); also `rust-script scripts/ci-pipeline.rs` |
+| **Workflow tool** | `just` (justfile at repo root); also `rust-script scripts/ci/ci-pipeline.rs` |
 
 ---
 
@@ -102,7 +102,7 @@ If an MSRV/edition bump is desirable, file it as a separate, explicitly approved
 - `[workspace.lints]` or `[lints]` tables in any `Cargo.toml`
 - `clippy.toml` (do not create one)
 - `.cargo/config.toml` (exists; do not modify — it configures sccache, target-dir, and per-target linkers/rustflags)
-- CI scripts (`.github/workflows/*.yml`), `justfile`, `scripts/ci-pipeline.rs`, or any file that passes `-A` / `-W` flags or sets `RUSTFLAGS` to suppress lints
+- CI scripts (`.github/workflows/*.yml`), `justfile`, `scripts/ci/ci-pipeline.rs`, or any file that passes `-A` / `-W` flags or sets `RUSTFLAGS` to suppress lints
 - Do not add `#![allow(...)]` via `cfg_attr` or feature-gated lint suppression
 
 **Exception:** the existing `multiple_crate_versions = "allow"` in `[workspace.lints.clippy]` may remain (justified — Polars/Tokio ecosystem brings unavoidable version conflicts).

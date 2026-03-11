@@ -97,7 +97,7 @@ Successfully completed all 7 phases of the Enhanced MFT Parsing implementation. 
 - Run with: `cargo test --lib`
 
 ### Windows-Specific Testing
-- PowerShell script: `scripts/test-phase7-windows.ps1`
+- PowerShell script: `scripts/windows/test-phase7-windows.ps1`
 - Builds in release mode (required due to heap constraints)
 - Runs CLI benchmarks on real NTFS drives
 - Generates JSON report with results
@@ -106,10 +106,10 @@ Successfully completed all 7 phases of the Enhanced MFT Parsing implementation. 
 **Usage**:
 ```powershell
 # Run in elevated PowerShell
-.\scripts\test-phase7-windows.ps1
+.\scripts\windows\test-phase7-windows.ps1
 
 # Custom drive and runs
-.\scripts\test-phase7-windows.ps1 -Drive E -Runs 5
+.\scripts\windows\test-phase7-windows.ps1 -Drive E -Runs 5
 ```
 
 ---

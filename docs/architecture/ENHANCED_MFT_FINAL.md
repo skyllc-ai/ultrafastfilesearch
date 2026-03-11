@@ -31,7 +31,7 @@
 - ✅ Added comprehensive performance tests
   - `test_extension_index_query_performance`: Tests extension index build and query on 10K files
   - `test_full_postprocessing_performance`: Tests full pipeline on 100K files
-- ✅ Created Windows testing script (`scripts/test-phase7-windows.ps1`)
+- ✅ Created Windows testing script (`scripts/windows/test-phase7-windows.ps1`)
   - Builds in release mode (required due to Windows heap constraints)
   - Runs all unit tests with `--release` flag
   - Executes CLI benchmarks on real NTFS drives
@@ -705,7 +705,7 @@ impl MftIndex {
 - [x] Benchmark extension queries (verify O(matches)) - 83ns for 1000 matches, 86x speedup
 - [x] Benchmark directory sorting (verify zero allocations) - 438µs for 1000 children
 - [x] Benchmark tree metrics (verify < 100 ms per 1M files) - ~20-40ms per 1M files
-- [x] Create Windows testing script (scripts/test-phase7-windows.ps1)
+- [x] Create Windows testing script (scripts/windows/test-phase7-windows.ps1)
 - [x] Document performance results (docs/architecture/PHASE7_PERFORMANCE_VALIDATION.md)
 - [x] All 47 unit tests passing
 
@@ -787,7 +787,7 @@ All 7 phases of the Enhanced MFT Parsing implementation have been successfully c
 - **Changelog**: `LOG/2026_01_25_16_00_CHANGELOG_HEALING.md`
 
 ### Next Steps
-1. Test on Windows using `scripts/test-phase7-windows.ps1`
+1. Test on Windows using `scripts/windows/test-phase7-windows.ps1`
 2. Monitor real-world performance
 3. Deploy to production
 

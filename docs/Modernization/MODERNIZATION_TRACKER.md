@@ -28,7 +28,7 @@ UFFS - Ultra Fast File Search
 ### 🚀 CI Pipeline Validation
 ```bash
 # Run after completing any major step or wave milestone
-rust-script scripts/ci-pipeline.rs go -v
+rust-script scripts/ci/ci-pipeline.rs go -v
 ```
 
 ### 📝 Healing Changelog Protocol
@@ -166,7 +166,7 @@ Location: LOG/<<YYYY_MM_DD_HH_MM>>_CHANGELOG_HEALING.md
 
 ```bash
 # Full CI Pipeline (run after major steps)
-rust-script scripts/ci-pipeline.rs go -v
+rust-script scripts/ci/ci-pipeline.rs go -v
 
 # Local checks (advisory - use between pipeline runs)
 just check && just clippy && just test

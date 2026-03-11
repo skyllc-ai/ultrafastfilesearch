@@ -630,12 +630,13 @@ Before declaring FORGE complete, execute these steps in order:
 
 2. **Run ALL Definition of Done checks above** — every single one must pass.
 
-3. **Full CI pipeline:**
+3. **Full validation pipeline:**
    ```bash
    just go
-   # or: rust-script scripts/ci-pipeline.rs go -v
+   # or: rust-script scripts/ci/ci-pipeline.rs go -v
    ```
-   Format → test → lint → build must all pass.
+   Workspace check → tests → doc tests → lint/security must all pass.
+   Ship actions live in `just phase2-ship`.
 
 4. **Git workflow throughout FORGE:**
    - Commit frequently with atomic, descriptive messages (`forge: split io.rs into io/ module tree`, `forge: remove cpp_types.rs`, etc.)
@@ -672,4 +673,4 @@ Before declaring FORGE complete, execute these steps in order:
 - The **`uffs-polars` facade crate** exists solely for compile-time isolation (~4min Polars compile). Do not merge it into other crates.
 - The **C++ reference-implementation layer is being deleted** — `cpp_types.rs`, `cpp_tree.rs`, `cpp_io_pipeline.rs` served their purpose for parity validation and are no longer needed. Extract any still-useful algorithms into idiomatic Rust modules before deletion. Remove C++ comparison tests, scripts (`analyze_cpp_stats.rs`, etc.), and docs (`CPP_*.md`). However, `.cpp` as a file extension in search examples/tests is **legitimate** — UFFS searches codebases.
 - **`unsafe` code exists** in the I/O layer for Windows API calls and aligned buffer management. Each instance must be preserved with safety documentation, or replaced with safe alternatives if possible.
-- The justfile `just go` command is the developer's primary workflow — format → test → lint → build → deploy → commit.
+- The justfile `just go` command is the developer's primary safe validation workflow; use `just phase2-ship` for version/deploy/commit/push.

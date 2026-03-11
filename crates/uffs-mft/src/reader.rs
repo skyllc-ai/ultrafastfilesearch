@@ -180,7 +180,7 @@ impl MftReader {
             concurrency: None,      // Use default (2 for HDD)
             io_size: None,          // Use default (1MB)
             parallel_parse: None,   // Auto-detect based on drive type
-            parse_workers: None,    // Use num_cpus
+            parse_workers: None,    // Use available CPU count
             forensic: false,        // Normal mode by default
         })
     }
@@ -393,7 +393,7 @@ impl MftReader {
     ///
     /// # Arguments
     ///
-    /// * `workers` - Number of worker threads (None = use `num_cpus`)
+    /// * `workers` - Number of worker threads (None = use available CPU count)
     #[must_use]
     pub const fn with_parse_workers(mut self, workers: Option<usize>) -> Self {
         self.parse_workers = workers;

@@ -75,10 +75,10 @@ use:
     $distDir = $null; $latestItem = Get-Item "dist\latest" -ErrorAction SilentlyContinue; \
     if ($latestItem -and $latestItem.LinkType -eq 'SymbolicLink') { $distDir = $latestItem.Target } elseif ($latestItem -and -not $latestItem.PSIsContainer) { $target = (Get-Content "dist\latest" -Raw).Trim(); if (Test-Path "dist\$target") { $distDir = "dist\$target" } }; \
     if (-not $distDir) { $versions = Get-ChildItem -Path "dist" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^v\d+\.\d+\.\d+$' } | Sort-Object { [version]($_.Name -replace '^v','') } -Descending; if ($versions) { $distDir = $versions[0].FullName } }; \
-    if (-not $distDir) { Write-Host "❌ No binaries found in dist/. Run 'just go' first." -ForegroundColor Red; exit 1 }; \
+    if (-not $distDir) { Write-Host "❌ No binaries found in dist/. Run 'just phase2-ship' first." -ForegroundColor Red; exit 1 }; \
     Write-Host "  → Using: $distDir" -ForegroundColor Cyan; $binaries = @("uffs", "uffs_mft", "uffs_tui", "uffs_gui"); $installed = 0; $skipped = 0; \
     foreach ($bin in $binaries) { $src = "$distDir\$bin\$bin-windows-x64.exe"; $dest = "$binDir\$bin.exe"; if (Test-Path $src) { Copy-Item $src $dest -Force; Write-Host "  ✅ $bin.exe" -ForegroundColor Green; $installed++ } else { Write-Host "  ⚠️  $bin (not found)" -ForegroundColor Yellow; $skipped++ } }; \
-    Write-Host "✅ Installed $installed binaries to ~/bin" -ForegroundColor Green; if ($skipped -gt 0) { Write-Host "⚠️  Skipped $skipped (run 'just go' to build all binaries)" -ForegroundColor Yellow }
+    Write-Host "✅ Installed $installed binaries to ~/bin" -ForegroundColor Green; if ($skipped -gt 0) { Write-Host "⚠️  Skipped $skipped (run 'just phase2-ship' to build all binaries)" -ForegroundColor Yellow }
 
 # Explain that UFFS is Windows-only on Unix hosts.
 [unix]
@@ -86,7 +86,7 @@ use:
     #!/usr/bin/env bash
     printf "\033[0;31m❌ UFFS only runs on Windows.\033[0m\n"
     printf "\033[0;34m   UFFS reads the NTFS Master File Table directly using Windows APIs.\033[0m\n"
-    printf "\033[0;34m   Use 'just go' to cross-compile Windows binaries from this host.\033[0m\n"
+    printf "\033[0;34m   Use 'just phase2-ship' to cross-compile and ship Windows binaries from this host.\033[0m\n"
     exit 1
 
 # Git commit with auto-generated message.
