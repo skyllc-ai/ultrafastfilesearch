@@ -63,7 +63,7 @@ Scope: Factual snapshot of the repository’s architecture, tooling, policies, s
 | crates/uffs-tui | Terminal UI | Active |
 | crates/uffs-gui | Graphical UI | Placeholder |
 | crates/uffs-legacy | Legacy code | Deprecated (reference only) |
-| crates/uffs-diag | Diagnostic tools | "Temporarily enabled" |
+| crates/uffs-diag | Diagnostic tools | Retained (workspace-only, not shipped in `dist/`) |
 
 ### Excluded from Workspace
 - `vendor/mft-reader-rs` (kept out of main workspace)
@@ -73,7 +73,7 @@ Scope: Factual snapshot of the repository’s architecture, tooling, policies, s
 - **uffs-mft**: Low-level NTFS/MFT reader and lean index implementation, plus Windows-specific IO pipeline; also exposes a broad public API by re-exporting index types, NTFS structs, path/extension helpers, and Polars types, and hosts the `uffs_mft` binary.
 - **uffs-core**: Higher-level query and analytics layer on top of `uffs-mft`, providing pattern compilation, extension index, path resolution, tree metrics, and export helpers; re-exports selected types from `uffs-mft`/`uffs-polars` for convenience.
 - **uffs-cli / uffs-tui / uffs-gui**: User-facing frontends that all depend directly on `uffs-mft` and `uffs-core` (and, in some cases, `uffs-polars`), sharing similar logging/telemetry stacks and configuration conventions.
-- **uffs-diag**: Diagnostic crate whose binaries focus on parity/debugging of MFT reading and indexing; the library acts mainly as a dependency anchor for these tools.
+- **uffs-diag**: Retained diagnostic crate whose binaries focus on parity/debugging of MFT reading and indexing; it remains referenced by current docs/workflows, builds in the workspace, and is intentionally excluded from `dist/` packaging.
 - **uffs-legacy**: Historical implementation with a richer internal module hierarchy, kept in the workspace as a reference but not used by the modern binaries.
 
 ---

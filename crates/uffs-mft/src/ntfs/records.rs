@@ -1,6 +1,7 @@
 //! NTFS record headers, fixup, and attribute iteration.
 
 use core::mem::size_of;
+use zerocopy::{FromBytes, Immutable, KnownLayout};
 
 use crate::ntfs::extract_data_runs_from_attribute;
 
@@ -18,7 +19,7 @@ pub const SECTOR_SIZE: usize = 512;
 /// Contains the Update Sequence Array (USA) used for sector-level
 /// integrity checking.
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct MultiSectorHeader {
     /// Magic number ("FILE" or "INDX").
     pub magic: u32,
@@ -231,7 +232,7 @@ impl AttributeType {
 
 /// Common header for all attribute records.
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct AttributeRecordHeader {
     /// Attribute type code.
     pub type_code: u32,
@@ -251,7 +252,7 @@ pub struct AttributeRecordHeader {
 
 /// Resident attribute data (follows `AttributeRecordHeader`).
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct ResidentAttributeData {
     /// Length of the attribute value.
     pub value_length: u32,
@@ -292,7 +293,7 @@ fn parse_resident_attribute_data(data: &[u8]) -> Option<ResidentAttributeData> {
 
 /// Non-resident attribute data (follows `AttributeRecordHeader`).
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct NonResidentAttributeData {
     /// Lowest VCN covered by this attribute record.
     pub lowest_vcn: i64,
@@ -340,7 +341,7 @@ pub enum FileRecordFlags {
 
 /// File Record Segment Header (MFT entry header).
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct FileRecordSegmentHeader {
     /// Multi-sector header with magic and USA info.
     pub multi_sector_header: MultiSectorHeader,
