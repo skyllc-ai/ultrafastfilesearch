@@ -335,6 +335,32 @@ fn test_index_query_collect_resolves_paths_for_hard_links_and_ads() -> TestResul
 }
 
 #[test]
+fn test_index_query_collect_any_pattern_matches_full_scan_results() -> TestResult {
+    let index = build_index_query_fixture()?;
+
+    let mut no_pattern: Vec<_> = IndexQuery::new(&index)
+        .resolve_paths()
+        .collect()
+        .into_iter()
+        .map(|result| (result.name, result.path, result.stream_name, result.frs))
+        .collect();
+    let mut any_pattern: Vec<_> = IndexQuery::new(&index)
+        .glob("*")
+        .resolve_paths()
+        .collect()
+        .into_iter()
+        .map(|result| (result.name, result.path, result.stream_name, result.frs))
+        .collect();
+
+    no_pattern.sort();
+    any_pattern.sort();
+
+    assert_eq!(any_pattern, no_pattern);
+
+    Ok(())
+}
+
+#[test]
 fn test_query_mode_from_str() {
     assert_eq!(QueryMode::from_str_opt("auto"), Some(QueryMode::Auto));
     assert_eq!(QueryMode::from_str_opt("hybrid"), Some(QueryMode::Auto));

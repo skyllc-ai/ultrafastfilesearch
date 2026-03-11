@@ -1,5 +1,9 @@
 //! Output helpers for CLI search commands.
 
+extern crate alloc;
+
+use alloc::borrow::Cow;
+use core::fmt::Write as _;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 #[cfg(windows)]
@@ -9,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use tracing::info;
-use uffs_core::output::OutputConfig;
+use uffs_core::output::{CPP_COLUMN_ORDER, OutputColumn, OutputConfig};
 use uffs_core::{export_json, export_table};
 
 /// Streaming output writer for multi-drive search.
@@ -237,6 +241,425 @@ fn format_json_value(col: &uffs_polars::Column, row_idx: usize) -> String {
     }
 }
 
+/// Return whether the offline native results can be written directly without a
+/// compatibility `DataFrame`.
+#[must_use]
+pub(super) fn can_write_native_results(format: &str, output_config: &OutputConfig) -> bool {
+    matches!(format.to_ascii_lowercase().as_str(), "csv" | "custom")
+        && !selected_output_columns(output_config).contains(&OutputColumn::Bulkiness)
+}
+
+/// Write native `IndexQuery` results directly for the offline `--mft-file`
+/// output path.
+pub(super) fn write_native_results(
+    index: &uffs_mft::MftIndex,
+    results: &[uffs_core::SearchResult],
+    format: &str,
+    out: &str,
+    output_config: &OutputConfig,
+    output_targets: &[char],
+) -> Result<()> {
+    let normalized_format = format.to_ascii_lowercase();
+    let is_console = matches!(
+        out.to_lowercase().as_str(),
+        "console" | "con" | "term" | "terminal"
+    );
+
+    if is_console {
+        let stdout_handle = std::io::stdout();
+        let mut stdout = stdout_handle.lock();
+        write_native_results_to(
+            index,
+            results,
+            &normalized_format,
+            &mut stdout,
+            output_config,
+            output_targets,
+        )?;
+        stdout.flush()?;
+    } else {
+        let file =
+            File::create(out).with_context(|| format!("Failed to create output file: {out}"))?;
+        let mut writer = BufWriter::new(file);
+        write_native_results_to(
+            index,
+            results,
+            &normalized_format,
+            &mut writer,
+            output_config,
+            output_targets,
+        )?;
+        writer.flush()?;
+
+        info!(file = out, "Results written to file");
+    }
+
+    Ok(())
+}
+
+/// Write native offline results to the provided writer.
+fn write_native_results_to<W: Write>(
+    index: &uffs_mft::MftIndex,
+    results: &[uffs_core::SearchResult],
+    format: &str,
+    writer: &mut W,
+    output_config: &OutputConfig,
+    output_targets: &[char],
+) -> Result<()> {
+    let output_cols = selected_output_columns(output_config);
+    let fixed_tz = chrono::FixedOffset::east_opt(output_config.timezone_offset_secs);
+
+    write_native_header(writer, output_config, output_cols)?;
+
+    let mut row_buffer = String::with_capacity(output_cols.len() * 32);
+    for result in results {
+        row_buffer.clear();
+        let record = index.find(result.frs);
+        let tree_metrics = native_tree_metrics(result, record);
+
+        for (idx, col) in output_cols.iter().enumerate() {
+            if idx > 0 {
+                row_buffer.push_str(&output_config.separator);
+            }
+            write_native_value(
+                &mut row_buffer,
+                output_config,
+                fixed_tz.as_ref(),
+                index,
+                result,
+                record,
+                tree_metrics,
+                *col,
+            );
+        }
+
+        row_buffer.push('\n');
+        writer.write_all(row_buffer.as_bytes())?;
+    }
+
+    if format == "custom" {
+        write_cpp_drive_footer(writer, output_targets)?;
+    }
+
+    Ok(())
+}
+
+/// Write the configured header for direct native output.
+fn write_native_header<W: Write>(
+    writer: &mut W,
+    output_config: &OutputConfig,
+    output_cols: &[OutputColumn],
+) -> Result<()> {
+    if !output_config.header {
+        return Ok(());
+    }
+
+    let mut header = String::with_capacity(output_cols.len() * 24);
+    for (idx, col) in output_cols.iter().enumerate() {
+        if idx > 0 {
+            header.push_str(&output_config.separator);
+        }
+        header.push_str(&output_config.quote);
+        header.push_str(col.display_name());
+        header.push_str(&output_config.quote);
+    }
+    header.push('\n');
+    header.push('\n');
+    writer.write_all(header.as_bytes())?;
+    Ok(())
+}
+
+/// Return the effective output columns for the current configuration.
+#[must_use]
+fn selected_output_columns(output_config: &OutputConfig) -> &[OutputColumn] {
+    output_config.columns.as_deref().unwrap_or(CPP_COLUMN_ORDER)
+}
+
+/// Write a single native value using the same formatting semantics as the
+/// `DataFrame` output path.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "direct native writer carries the same row context as the legacy path"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "matches the existing full output schema column-by-column"
+)]
+fn write_native_value(
+    row_buffer: &mut String,
+    output_config: &OutputConfig,
+    fixed_tz: Option<&chrono::FixedOffset>,
+    index: &uffs_mft::MftIndex,
+    result: &uffs_core::SearchResult,
+    record: Option<&uffs_mft::index::FileRecord>,
+    tree_metrics: (u32, u64, u64),
+    column: OutputColumn,
+) {
+    match column {
+        OutputColumn::Path => append_quoted(row_buffer, &output_config.quote, result_path(result)),
+        OutputColumn::Name => append_quoted(row_buffer, &output_config.quote, &result.name),
+        OutputColumn::PathOnly => append_quoted(
+            row_buffer,
+            &output_config.quote,
+            path_only_from_path(result_path(result)),
+        ),
+        OutputColumn::Size => append_display(row_buffer, displayed_size(result, tree_metrics)),
+        OutputColumn::SizeOnDisk => {
+            append_display(row_buffer, displayed_allocated_size(result, tree_metrics));
+        }
+        OutputColumn::Created => append_datetime(
+            row_buffer,
+            record.map_or(0, |rec| rec.stdinfo.created),
+            fixed_tz,
+        ),
+        OutputColumn::Modified => append_datetime(
+            row_buffer,
+            record.map_or(0, |rec| rec.stdinfo.modified),
+            fixed_tz,
+        ),
+        OutputColumn::Accessed => append_datetime(
+            row_buffer,
+            record.map_or(0, |rec| rec.stdinfo.accessed),
+            fixed_tz,
+        ),
+        OutputColumn::Type => append_quoted(
+            row_buffer,
+            &output_config.quote,
+            native_file_type(index, result, record).as_ref(),
+        ),
+        OutputColumn::Attributes | OutputColumn::AttributeValue => append_display(
+            row_buffer,
+            record.map_or(0_u32, |rec| rec.stdinfo.to_attributes()),
+        ),
+        OutputColumn::Hidden => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_hidden()),
+        ),
+        OutputColumn::System => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_system()),
+        ),
+        OutputColumn::Archive => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_archive()),
+        ),
+        OutputColumn::ReadOnly => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_readonly()),
+        ),
+        OutputColumn::Compressed => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_compressed()),
+        ),
+        OutputColumn::Encrypted => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_encrypted()),
+        ),
+        OutputColumn::Sparse => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_sparse()),
+        ),
+        OutputColumn::Reparse => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_reparse()),
+        ),
+        OutputColumn::Offline => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_offline()),
+        ),
+        OutputColumn::NotIndexed => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_not_indexed()),
+        ),
+        OutputColumn::Temporary => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_temporary()),
+        ),
+        OutputColumn::Virtual => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_virtual()),
+        ),
+        OutputColumn::Pinned => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_pinned()),
+        ),
+        OutputColumn::Unpinned => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_unpinned()),
+        ),
+        OutputColumn::Descendants => append_display(row_buffer, tree_metrics.0),
+        OutputColumn::TreeSize => append_display(row_buffer, tree_metrics.1),
+        OutputColumn::TreeAllocated => append_display(row_buffer, tree_metrics.2),
+        OutputColumn::Bulkiness => row_buffer.push_str(OutputColumn::Bulkiness.default_value()),
+        OutputColumn::Integrity => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_integrity_stream()),
+        ),
+        OutputColumn::NoScrub => append_bool(
+            row_buffer,
+            output_config,
+            record.is_some_and(|rec| rec.stdinfo.is_no_scrub_data()),
+        ),
+        OutputColumn::DirectoryFlag => append_bool(
+            row_buffer,
+            output_config,
+            record.map_or(result.is_directory, uffs_mft::FileRecord::is_directory),
+        ),
+    }
+}
+
+/// Return the output path string for a native search result.
+#[must_use]
+fn result_path(result: &uffs_core::SearchResult) -> &str {
+    result.path.as_deref().unwrap_or_default()
+}
+
+/// Return the parent-directory portion of a path, including the trailing
+/// backslash when present.
+#[must_use]
+fn path_only_from_path(path: &str) -> &str {
+    path.rfind('\\')
+        .and_then(|last_sep| path.get(..=last_sep))
+        .unwrap_or_default()
+}
+
+/// Compute the file-type string using the same metadata source as the
+/// compatibility `DataFrame` path.
+#[must_use]
+fn native_file_type<'a>(
+    index: &'a uffs_mft::MftIndex,
+    result: &'a uffs_core::SearchResult,
+    record: Option<&'a uffs_mft::index::FileRecord>,
+) -> Cow<'a, str> {
+    if let Some(rec) = record {
+        let ext_id = rec.first_name.name.extension_id();
+        return Cow::Borrowed(index.extensions.get_extension(ext_id).unwrap_or(""));
+    }
+
+    Cow::Owned(
+        result
+            .name
+            .rfind('.')
+            .and_then(|pos| {
+                if pos > 0 && pos < result.name.len() - 1 {
+                    result.name.get(pos + 1..)
+                } else {
+                    None
+                }
+            })
+            .map(str::to_lowercase)
+            .unwrap_or_default(),
+    )
+}
+
+/// Compute descendants/tree metrics for the output row.
+#[must_use]
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "kept non-const for readability alongside the other row helpers"
+)]
+fn native_tree_metrics(
+    result: &uffs_core::SearchResult,
+    record: Option<&uffs_mft::index::FileRecord>,
+) -> (u32, u64, u64) {
+    if result.stream_index > 0 {
+        (0, 0, 0)
+    } else if let Some(rec) = record {
+        rec.tree_metrics()
+    } else {
+        (result.descendants, result.treesize, result.tree_allocated)
+    }
+}
+
+/// Return the displayed size after applying directory treesize semantics.
+#[must_use]
+fn displayed_size(result: &uffs_core::SearchResult, tree_metrics: (u32, u64, u64)) -> u64 {
+    if result.is_directory && result.stream_name.is_empty() {
+        tree_metrics.1
+    } else {
+        result.size
+    }
+}
+
+/// Return the displayed allocated size after applying directory treesize
+/// semantics.
+#[must_use]
+fn displayed_allocated_size(
+    result: &uffs_core::SearchResult,
+    tree_metrics: (u32, u64, u64),
+) -> u64 {
+    if result.is_directory && result.stream_name.is_empty() {
+        tree_metrics.2
+    } else {
+        result.allocated_size
+    }
+}
+
+/// Append a quoted string field.
+fn append_quoted(row_buffer: &mut String, quote: &str, value: &str) {
+    row_buffer.push_str(quote);
+    row_buffer.push_str(value);
+    row_buffer.push_str(quote);
+}
+
+/// Append a boolean field using the configured positive/negative strings.
+fn append_bool(row_buffer: &mut String, output_config: &OutputConfig, value: bool) {
+    if value {
+        row_buffer.push_str(&output_config.pos);
+    } else {
+        row_buffer.push_str(&output_config.neg);
+    }
+}
+
+/// Append a datetime field using the same fixed-offset formatting as the
+/// `DataFrame` writer.
+fn append_datetime(
+    row_buffer: &mut String,
+    timestamp_micros: i64,
+    fixed_tz: Option<&chrono::FixedOffset>,
+) {
+    let secs = timestamp_micros.div_euclid(1_000_000);
+    let micros = u32::try_from(timestamp_micros.rem_euclid(1_000_000)).unwrap_or(0);
+    if let Some(utc_dt) = chrono::DateTime::from_timestamp(secs, micros * 1000) {
+        if let Some(timezone_offset) = fixed_tz {
+            append_display(
+                row_buffer,
+                utc_dt
+                    .with_timezone(timezone_offset)
+                    .format("%Y-%m-%d %H:%M:%S"),
+            );
+        } else {
+            append_display(row_buffer, utc_dt.format("%Y-%m-%d %H:%M:%S"));
+        }
+    }
+}
+
+/// Append a displayable value without introducing extra string allocations in
+/// the common case.
+fn append_display<T>(row_buffer: &mut String, value: T)
+where
+    T: core::fmt::Display,
+{
+    if row_buffer.write_fmt(format_args!("{value}")).is_err() {
+        row_buffer.push_str(&value.to_string());
+    }
+}
+
 /// Convert `IndexQuery` results to a `DataFrame` for output compatibility.
 ///
 /// **TEMPORARY**: This function exists only for compatibility with the current
@@ -246,10 +669,6 @@ fn format_json_value(col: &uffs_polars::Column, row_idx: usize) -> String {
 /// TODO: Remove this function and output directly from `SearchResults` +
 /// `MftIndex`.
 #[expect(
-    clippy::single_call_fn,
-    reason = "temporary conversion layer — will be removed when output pipeline supports SearchResults directly"
-)]
-#[expect(
     clippy::too_many_lines,
     reason = "builds the full output schema with 30+ columns"
 )]
@@ -257,13 +676,9 @@ fn format_json_value(col: &uffs_polars::Column, row_idx: usize) -> String {
     clippy::min_ident_chars,
     reason = "short names (e.g. df) conventional in DataFrame-heavy code"
 )]
-#[expect(
-    clippy::option_if_let_else,
-    reason = "if-let chains are clearer for record lookup fallback"
-)]
 pub(super) fn results_to_dataframe(
     index: &uffs_mft::MftIndex,
-    results: &[uffs_core::SearchResult],
+    results: Vec<uffs_core::SearchResult>,
     _resolve_paths: bool,
 ) -> Result<uffs_mft::DataFrame> {
     use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
@@ -307,14 +722,6 @@ pub(super) fn results_to_dataframe(
 
     for result in results {
         let record = index.find(result.frs);
-
-        frs_values.push(result.frs);
-        parent_frs_values.push(result.parent_frs);
-        names.push(result.name.clone());
-        paths.push(result.path.clone().unwrap_or_default());
-        sizes.push(result.size);
-        stream_names.push(result.stream_name.clone());
-
         let file_type = if let Some(rec) = record {
             let ext_id = rec.first_name.name.extension_id();
             index
@@ -336,6 +743,14 @@ pub(super) fn results_to_dataframe(
                 .map(str::to_lowercase)
                 .unwrap_or_default()
         };
+
+        frs_values.push(result.frs);
+        parent_frs_values.push(result.parent_frs);
+        paths.push(result.path.unwrap_or_default());
+        sizes.push(result.size);
+        stream_names.push(result.stream_name);
+        names.push(result.name);
+
         file_types.push(file_type);
 
         if let Some(rec) = record {
@@ -542,9 +957,13 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use uffs_core::SearchResult;
+    use uffs_mft::index::{IndexNameRef, MftIndex, ROOT_FRS, StandardInfo};
     use uffs_polars::{Column, DataFrame};
 
     use super::*;
+
+    type TestResult = Result<()>;
 
     fn temp_output_path(extension: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -562,6 +981,120 @@ mod tests {
             Column::new("name".into(), &["file.txt"]),
         ])
         .map_err(Into::into)
+    }
+
+    fn sample_index() -> MftIndex {
+        let mut index = MftIndex::new('C');
+        let root_name = index.add_name(".");
+        let file_name = index.add_name("file.txt");
+        let dir_name = index.add_name("Docs");
+        let file_ext = index.intern_extension("file.txt");
+
+        let root = index.get_or_create(ROOT_FRS);
+        root.stdinfo.set_directory(true);
+        root.first_name.name = IndexNameRef::new(root_name, 1, true, IndexNameRef::NO_EXTENSION);
+        root.first_name.parent_frs = ROOT_FRS;
+
+        let docs = index.get_or_create(7);
+        docs.stdinfo.set_directory(true);
+        docs.stdinfo.created = 1_700_000_000_000_000;
+        docs.stdinfo.modified = 1_700_000_100_000_000;
+        docs.stdinfo.accessed = 1_700_000_200_000_000;
+        docs.stdinfo.flags |= StandardInfo::IS_HIDDEN;
+        docs.first_name.name = IndexNameRef::new(dir_name, 4, true, IndexNameRef::NO_EXTENSION);
+        docs.first_name.parent_frs = ROOT_FRS;
+        docs.first_stream.size.length = 10;
+        docs.first_stream.size.allocated = 20;
+        docs.descendants = 3;
+        docs.treesize = 1000;
+        docs.tree_allocated = 2000;
+
+        let file = index.get_or_create(42);
+        file.stdinfo.created = 1_700_001_000_000_000;
+        file.stdinfo.modified = 1_700_001_100_000_000;
+        file.stdinfo.accessed = 1_700_001_200_000_000;
+        file.stdinfo.flags |= StandardInfo::IS_ARCHIVE | StandardInfo::IS_READONLY;
+        file.first_name.name = IndexNameRef::new(file_name, 8, true, file_ext);
+        file.first_name.parent_frs = 7;
+        file.first_stream.size.length = 123;
+        file.first_stream.size.allocated = 128;
+        file.descendants = 7;
+        file.treesize = 4096;
+        file.tree_allocated = 8192;
+
+        index
+    }
+
+    fn sample_search_results() -> Vec<SearchResult> {
+        vec![
+            SearchResult {
+                name: "Docs".to_owned(),
+                path: Some("C:\\Docs\\".to_owned()),
+                size: 10,
+                allocated_size: 20,
+                frs: 7,
+                parent_frs: ROOT_FRS,
+                is_directory: true,
+                stream_name: String::new(),
+                name_index: 0,
+                stream_index: 0,
+                descendants: 3,
+                treesize: 1000,
+                tree_allocated: 2000,
+            },
+            SearchResult {
+                name: "file.txt".to_owned(),
+                path: Some("C:\\Docs\\file.txt".to_owned()),
+                size: 123,
+                allocated_size: 128,
+                frs: 42,
+                parent_frs: 7,
+                is_directory: false,
+                stream_name: String::new(),
+                name_index: 0,
+                stream_index: 0,
+                descendants: 7,
+                treesize: 4096,
+                tree_allocated: 8192,
+            },
+        ]
+    }
+
+    fn write_results_to_string(
+        results: &DataFrame,
+        format: &str,
+        output_config: &OutputConfig,
+        output_targets: &[char],
+    ) -> Result<String> {
+        let mut output = Vec::new();
+        match format {
+            "json" => export_json(results, &mut output)?,
+            "custom" => {
+                output_config.write(results, &mut output)?;
+                write_cpp_drive_footer(&mut output, output_targets)?;
+            }
+            _ => output_config.write(results, &mut output)?,
+        }
+        String::from_utf8(output).map_err(Into::into)
+    }
+
+    fn write_native_results_to_string(
+        index: &MftIndex,
+        results: &[SearchResult],
+        format: &str,
+        output_config: &OutputConfig,
+        output_targets: &[char],
+    ) -> Result<String> {
+        let mut output = Vec::new();
+        write_native_results_to(
+            index,
+            results,
+            format,
+            &mut output,
+            output_config,
+            output_targets,
+        )?;
+        String::from_utf8(output).map_err(Into::into)
     }
 
     #[test]
@@ -650,6 +1183,96 @@ mod tests {
 
         assert!(!written.contains("Drives?"));
         assert!(written.contains(r#""C:\\Temp\\file.txt""#));
+        Ok(())
+    }
+
+    #[test]
+    fn test_results_to_dataframe_preserves_search_result_fields() -> TestResult {
+        let index = sample_index();
+        let df = results_to_dataframe(
+            &index,
+            vec![SearchResult {
+                name: "file.txt".to_owned(),
+                path: Some("C:\\Docs\\file.txt".to_owned()),
+                size: 123,
+                allocated_size: 128,
+                frs: 42,
+                parent_frs: ROOT_FRS,
+                is_directory: false,
+                stream_name: String::new(),
+                name_index: 0,
+                stream_index: 0,
+                descendants: 7,
+                treesize: 4096,
+                tree_allocated: 8192,
+            }],
+            true,
+        )?;
+
+        assert_eq!(df.column("name")?.str()?.get(0), Some("file.txt"));
+        assert_eq!(df.column("type")?.str()?.get(0), Some("txt"));
+        assert_eq!(df.column("path")?.str()?.get(0), Some("C:\\Docs\\file.txt"));
+        assert_eq!(df.column("path_only")?.str()?.get(0), Some("C:\\Docs\\"));
+        assert_eq!(df.column("stream_name")?.str()?.get(0), Some(""));
+        assert_eq!(df.column("size")?.u64()?.get(0), Some(123));
+        assert_eq!(df.column("allocated_size")?.u64()?.get(0), Some(128));
+        assert_eq!(df.column("descendants")?.u32()?.get(0), Some(7));
+        assert_eq!(df.column("treesize")?.u64()?.get(0), Some(4096));
+        assert_eq!(df.column("tree_allocated")?.u64()?.get(0), Some(8192));
+        Ok(())
+    }
+
+    #[test]
+    fn test_can_write_native_results_rejects_bulkiness_columns() {
+        let bulkiness = OutputConfig::new().with_columns("path,bulkiness");
+        let descendants = OutputConfig::new().with_columns("path,descendants,treesize");
+
+        assert!(!can_write_native_results("custom", &bulkiness));
+        assert!(can_write_native_results("csv", &descendants));
+        assert!(!can_write_native_results("json", &descendants));
+    }
+
+    #[test]
+    fn test_write_native_results_matches_dataframe_custom_output() -> TestResult {
+        let index = sample_index();
+        let results = sample_search_results();
+        let output_config = OutputConfig::new().with_columns(
+            "path,name,pathonly,size,sizeondisk,created,readonly,archive,hidden,directory,descendants,treesize,treeallocated,type",
+        );
+
+        let expected = write_results_to_string(
+            &results_to_dataframe(&index, results.clone(), true)?,
+            "custom",
+            &output_config,
+            &['C'],
+        )?;
+        let actual =
+            write_native_results_to_string(&index, &results, "custom", &output_config, &['C'])?;
+
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_write_native_results_matches_dataframe_csv_output() -> TestResult {
+        let index = sample_index();
+        let results = sample_search_results();
+        let output_config = OutputConfig::new()
+            .with_columns("path,name,size,sizeondisk,pathonly")
+            .with_separator(";")
+            .with_quote("'")
+            .with_header(false);
+
+        let expected = write_results_to_string(
+            &results_to_dataframe(&index, results.clone(), true)?,
+            "csv",
+            &output_config,
+            &['C'],
+        )?;
+        let actual =
+            write_native_results_to_string(&index, &results, "csv", &output_config, &['C'])?;
+
+        assert_eq!(actual, expected);
         Ok(())
     }
 }

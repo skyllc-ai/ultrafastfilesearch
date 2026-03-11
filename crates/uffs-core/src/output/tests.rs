@@ -152,3 +152,53 @@ fn test_add_descendants_column() {
     assert_eq!(desc_col.get(4), Some(1)); // Documents -> doc.pdf
     assert_eq!(desc_col.get(5), Some(0)); // doc.pdf (file)
 }
+
+#[test]
+fn test_write_preserves_header_spacing_and_missing_column_defaults() {
+    let df = DataFrame::new_infer_height(vec![
+        Column::new("path".into(), &["C:\\Temp\\file.txt"]),
+        Column::new("name".into(), &["file.txt"]),
+    ])
+    .unwrap();
+
+    let config = OutputConfig::new()
+        .with_columns("path,pathonly,descendants,name")
+        .with_quote("'");
+
+    let mut output = Vec::new();
+    config.write(&df, &mut output).unwrap();
+
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        concat!(
+            "'Path','Path Only','Descendants','Name'\n",
+            "\n",
+            "'C:\\Temp\\file.txt',,0,'file.txt'\n"
+        )
+    );
+}
+
+#[test]
+fn test_write_preserves_null_and_boolean_value_formatting() {
+    let df = DataFrame::new_infer_height(vec![
+        Column::new("name".into(), &[Some("alpha"), None, Some("beta")]),
+        Column::new("size".into(), &[Some(42_u64), None, Some(0_u64)]),
+        Column::new("is_archive".into(), &[Some(true), Some(false), None]),
+    ])
+    .unwrap();
+
+    let config = OutputConfig::new()
+        .with_columns("name,size,archive")
+        .with_header(false)
+        .with_quote("'")
+        .with_pos("+")
+        .with_neg("-");
+
+    let mut output = Vec::new();
+    config.write(&df, &mut output).unwrap();
+
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        concat!("'alpha',42,+\n", ",0,-\n", "'beta',0,\n")
+    );
+}

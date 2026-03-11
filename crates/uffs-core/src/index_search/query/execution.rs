@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use super::IndexQuery;
 use super::expansion::RecordExpander;
 use super::filtering::RecordFilter;
-use super::planning::CollectPlan;
+use super::planning::{CollectPlan, ScanPlan};
 use crate::index_search::SearchResult;
 
 impl IndexQuery<'_> {
@@ -31,21 +31,42 @@ impl IndexQuery<'_> {
             self.min_size,
             self.max_size,
         );
-        let plan = CollectPlan::build(index, self.pattern.as_ref(), include_system_metafiles);
+        let CollectPlan {
+            path_cache,
+            scan_plan,
+        } = CollectPlan::build(index, self.pattern.as_ref(), include_system_metafiles);
+        let path_resolver = path_cache.resolver();
         let expander = RecordExpander::new(
             index,
-            &plan.path_cache,
+            &path_cache,
             expand_names,
             expand_streams,
             resolve_paths,
         );
+        let scan_limit = limit.unwrap_or(usize::MAX);
 
-        plan.records_to_scan
-            .par_iter()
-            .filter(|record| plan.path_cache.is_valid(record.frs) && filters.matches(record))
-            .take_any(limit.unwrap_or(usize::MAX))
-            .flat_map_iter(|record| expander.collect_results(record))
-            .collect()
+        match scan_plan {
+            ScanPlan::Full(records) => records
+                .par_iter()
+                .enumerate()
+                .filter(|(record_idx, record)| {
+                    path_resolver.is_valid_idx(*record_idx) && filters.matches(record)
+                })
+                .take_any(scan_limit)
+                .flat_map_iter(|(record_idx, record)| expander.collect_results(record_idx, record))
+                .collect(),
+            ScanPlan::Filtered { records, indices } => indices
+                .par_iter()
+                .filter_map(|&record_idx_u32| {
+                    let record_idx = usize::try_from(record_idx_u32).ok()?;
+                    let record = records.get(record_idx)?;
+                    (path_resolver.is_valid_idx(record_idx) && filters.matches(record))
+                        .then_some((record_idx, record))
+                })
+                .take_any(scan_limit)
+                .flat_map_iter(|(record_idx, record)| expander.collect_results(record_idx, record))
+                .collect(),
+        }
     }
 
     /// Count matching records without collecting results.

@@ -4,12 +4,25 @@ use uffs_mft::index::{FileRecord, MftIndex, PathCache};
 
 use crate::index_search::IndexPattern;
 
+/// Candidate-record scan plan for `IndexQuery::collect()`.
+pub(super) enum ScanPlan<'a> {
+    /// Scan the full record slice directly.
+    Full(&'a [FileRecord]),
+    /// Scan a narrowed set of record indices from the extension index.
+    Filtered {
+        /// Backing slice used for index lookup.
+        records: &'a [FileRecord],
+        /// Candidate indices from the extension index.
+        indices: Vec<u32>,
+    },
+}
+
 /// Precomputed inputs for `IndexQuery::collect()`.
 pub(super) struct CollectPlan<'a> {
     /// Shared path cache used for path validity checks and materialization.
     pub(super) path_cache: PathCache<'a>,
     /// Candidate records to scan after extension-index planning.
-    pub(super) records_to_scan: Vec<&'a FileRecord>,
+    pub(super) scan_plan: ScanPlan<'a>,
 }
 
 impl<'a> CollectPlan<'a> {
@@ -25,21 +38,15 @@ impl<'a> CollectPlan<'a> {
         include_system_metafiles: bool,
     ) -> Self {
         let path_cache = PathCache::build(index, include_system_metafiles);
-        let extension_filter_indices = Self::build_extension_filter_indices(pattern, index);
         let records = index.records();
-        let records_to_scan: Vec<&FileRecord> = extension_filter_indices.as_ref().map_or_else(
-            || records.iter().collect(),
-            |indices| {
-                indices
-                    .iter()
-                    .filter_map(|&idx| records.get(idx as usize))
-                    .collect()
-            },
+        let scan_plan = Self::build_extension_filter_indices(pattern, index).map_or(
+            ScanPlan::Full(records),
+            |indices| ScanPlan::Filtered { records, indices },
         );
 
         Self {
             path_cache,
-            records_to_scan,
+            scan_plan,
         }
     }
 

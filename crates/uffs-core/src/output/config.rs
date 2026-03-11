@@ -1,5 +1,6 @@
 //! Output configuration and row formatting helpers.
 
+use core::fmt::Write as _;
 use std::io::Write;
 
 use uffs_polars::{Column, DataFrame, DataType};
@@ -222,6 +223,16 @@ impl OutputConfig {
             CPP_COLUMN_ORDER
         };
 
+        let fixed_tz = chrono::FixedOffset::east_opt(self.timezone_offset_secs);
+
+        let resolved_columns: Vec<_> = output_cols
+            .iter()
+            .map(|col| {
+                df.column(col.df_column())
+                    .map_or_else(|_| Err(col.default_value()), Ok)
+            })
+            .collect();
+
         // NOTE: Tripwire is now logged to stderr/tracing instead of CSV output.
         // This keeps CSV output strict (header + data rows only) for parity analysis.
         // The tripwire is also embedded in the binary string table (see TRIPWIRE
@@ -229,48 +240,62 @@ impl OutputConfig {
 
         // Write header if enabled
         if self.header {
-            let header_names: Vec<String> = output_cols
-                .iter()
-                .map(|col| format!("{}{}{}", self.quote, col.display_name(), self.quote))
-                .collect();
+            let mut header = String::with_capacity(output_cols.len() * 24);
+            for (idx, col) in output_cols.iter().enumerate() {
+                if idx > 0 {
+                    header.push_str(&self.separator);
+                }
+                header.push_str(&self.quote);
+                header.push_str(col.display_name());
+                header.push_str(&self.quote);
+            }
             // C++ outputs header followed by empty line
-            writeln!(writer, "{}", header_names.join(&self.separator))?;
-            writeln!(writer)?;
+            header.push('\n');
+            header.push('\n');
+            writer.write_all(header.as_bytes())?;
         }
 
         // Write data rows
+        let mut row_buffer = String::with_capacity(output_cols.len() * 32);
         for row_idx in 0..df.height() {
-            let mut row_values = Vec::with_capacity(output_cols.len());
+            row_buffer.clear();
 
-            for col in output_cols {
-                let col_name = col.df_column();
-                if let Ok(series) = df.column(col_name) {
-                    let value = self.format_value(series, row_idx);
-                    row_values.push(value);
-                } else {
-                    // Column not in DataFrame - use appropriate default
-                    // Numeric columns (like Descendants) should show "0" to match C++
-                    row_values.push(col.default_value().to_owned());
+            for (idx, resolved_column) in resolved_columns.iter().enumerate() {
+                if idx > 0 {
+                    row_buffer.push_str(&self.separator);
+                }
+
+                match resolved_column {
+                    Ok(series) => {
+                        self.write_value(&mut row_buffer, series, row_idx, fixed_tz.as_ref());
+                    }
+                    Err(default_value) => {
+                        // Column not in DataFrame - use appropriate default.
+                        // Numeric columns (like Descendants) should show "0" to match C++.
+                        row_buffer.push_str(default_value);
+                    }
                 }
             }
 
-            writeln!(writer, "{}", row_values.join(&self.separator))?;
+            row_buffer.push('\n');
+            writer.write_all(row_buffer.as_bytes())?;
         }
 
         Ok(())
     }
 
-    /// Format a single value from a series.
-    #[expect(
-        clippy::option_if_let_else,
-        reason = "if-let-else is clearer for match on dtype"
-    )]
+    /// Append a single formatted series value to the provided row buffer.
     #[expect(
         clippy::wildcard_enum_match_arm,
         reason = "intentional catch-all for remaining dtypes"
     )]
-    fn format_value(&self, series: &Column, row_idx: usize) -> String {
-        use chrono::FixedOffset;
+    fn write_value(
+        &self,
+        row_buffer: &mut String,
+        series: &Column,
+        row_idx: usize,
+        fixed_tz: Option<&chrono::FixedOffset>,
+    ) {
         use uffs_polars::{AnyValue, TimeUnit};
 
         let dtype = series.dtype();
@@ -279,28 +304,67 @@ impl OutputConfig {
             DataType::Boolean => {
                 if let Ok(val) = series.bool() {
                     match val.get(row_idx) {
-                        Some(true) => self.pos.clone(),
-                        Some(false) => self.neg.clone(),
-                        None => String::new(),
+                        Some(true) => row_buffer.push_str(&self.pos),
+                        Some(false) => row_buffer.push_str(&self.neg),
+                        None => {}
                     }
-                } else {
-                    String::new()
                 }
             }
             DataType::String => {
                 if let Ok(val) = series.str() {
-                    val.get(row_idx).map_or_else(String::new, |str_val| {
-                        format!("{}{}{}", self.quote, str_val, self.quote)
-                    })
-                } else {
-                    String::new()
+                    if let Some(str_val) = val.get(row_idx) {
+                        row_buffer.push_str(&self.quote);
+                        row_buffer.push_str(str_val);
+                        row_buffer.push_str(&self.quote);
+                    }
                 }
             }
-            DataType::UInt64 | DataType::Int64 | DataType::UInt32 | DataType::Int32 => {
-                // C++ outputs "0" for null numeric values, not empty string
-                match series.get(row_idx) {
-                    Ok(AnyValue::Null) | Err(_) => "0".to_owned(),
-                    Ok(val) => val.to_string(),
+            DataType::UInt64 => {
+                if let Ok(val) = series.u64() {
+                    match val.get(row_idx) {
+                        Some(number) => {
+                            Self::append_display(row_buffer, number);
+                        }
+                        None => row_buffer.push('0'),
+                    }
+                } else {
+                    row_buffer.push('0');
+                }
+            }
+            DataType::Int64 => {
+                if let Ok(val) = series.i64() {
+                    match val.get(row_idx) {
+                        Some(number) => {
+                            Self::append_display(row_buffer, number);
+                        }
+                        None => row_buffer.push('0'),
+                    }
+                } else {
+                    row_buffer.push('0');
+                }
+            }
+            DataType::UInt32 => {
+                if let Ok(val) = series.u32() {
+                    match val.get(row_idx) {
+                        Some(number) => {
+                            Self::append_display(row_buffer, number);
+                        }
+                        None => row_buffer.push('0'),
+                    }
+                } else {
+                    row_buffer.push('0');
+                }
+            }
+            DataType::Int32 => {
+                if let Ok(val) = series.i32() {
+                    match val.get(row_idx) {
+                        Some(number) => {
+                            Self::append_display(row_buffer, number);
+                        }
+                        None => row_buffer.push('0'),
+                    }
+                } else {
+                    row_buffer.push('0');
                 }
             }
             DataType::Datetime(TimeUnit::Microseconds, _) => {
@@ -318,24 +382,35 @@ impl OutputConfig {
                     if let Some(utc_dt) = chrono::DateTime::from_timestamp(secs, micros * 1000) {
                         // Apply fixed timezone offset (computed once at startup)
                         // This matches established behavior: same offset for all timestamps
-                        if let Some(fixed_tz) = FixedOffset::east_opt(self.timezone_offset_secs) {
-                            let local_dt = utc_dt.with_timezone(&fixed_tz);
+                        if let Some(timezone_offset) = fixed_tz {
+                            let local_dt = utc_dt.with_timezone(timezone_offset);
                             // Format WITHOUT subseconds to match C++ output exactly
-                            local_dt.format("%Y-%m-%d %H:%M:%S").to_string()
+                            Self::append_display(row_buffer, local_dt.format("%Y-%m-%d %H:%M:%S"));
                         } else {
                             // Fallback: format as UTC if offset is invalid
-                            utc_dt.format("%Y-%m-%d %H:%M:%S").to_string()
+                            Self::append_display(row_buffer, utc_dt.format("%Y-%m-%d %H:%M:%S"));
                         }
-                    } else {
-                        String::new()
                     }
-                } else {
-                    String::new()
                 }
             }
-            _ => series
-                .get(row_idx)
-                .map_or(String::new(), |val| val.to_string()),
+            _ => {
+                if let Ok(val) = series.get(row_idx) {
+                    if !matches!(val, AnyValue::Null) {
+                        Self::append_display(row_buffer, val);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Append a displayable value to the row buffer without intermediate
+    /// allocations.
+    fn append_display<T>(row_buffer: &mut String, value: T)
+    where
+        T: core::fmt::Display,
+    {
+        if row_buffer.write_fmt(format_args!("{value}")).is_err() {
+            row_buffer.push_str(&value.to_string());
         }
     }
 }
