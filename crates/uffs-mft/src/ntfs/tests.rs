@@ -1,5 +1,11 @@
 //! Regression tests for the split NTFS module surface.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::expect_used,
+    clippy::indexing_slicing
+)]
+
 use core::mem::size_of;
 
 use super::*;

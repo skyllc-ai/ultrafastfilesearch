@@ -29,14 +29,6 @@ use super::{ParseOptions, ParseResult, ParsedRecord};
 /// `ParseResult::Skip`.
 #[must_use]
 #[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS structs")]
-#[expect(
-    clippy::too_many_lines,
-    reason = "forensic parser handles many attribute types sequentially"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "forensic mode has many conditional paths"
-)]
 pub fn parse_record_forensic(
     data: &[u8],
     frs: u64,
@@ -63,6 +55,7 @@ pub fn parse_record_forensic(
         return ParseResult::Skip;
     }
 
+    // SAFETY: `data.len()` is validated above for the packed header size.
     let header: FileRecordSegmentHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
 
     let is_deleted = !header.is_in_use();

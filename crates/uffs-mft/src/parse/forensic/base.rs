@@ -20,6 +20,10 @@ use crate::ntfs::{
     clippy::cognitive_complexity,
     reason = "forensic base parsing has many conditional paths"
 )]
+#[expect(
+    clippy::single_call_fn,
+    reason = "kept separate from the dispatching entry point for forensic readability"
+)]
 pub(super) fn parse_base_record(
     data: &[u8],
     frs: u64,

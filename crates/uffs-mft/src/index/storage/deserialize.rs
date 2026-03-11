@@ -18,15 +18,11 @@ impl MftIndex {
         clippy::too_many_lines,
         reason = "binary deserialization has many sequential field reads"
     )]
-    #[expect(clippy::cast_possible_truncation, reason = "u64→usize safe on 64-bit")]
     #[expect(
         clippy::cognitive_complexity,
         reason = "version-conditional fields (v3/v4/v5/v6)"
     )]
     pub fn deserialize(data: &[u8]) -> Result<(Self, IndexHeader), &'static str> {
-        if data.len() < 96 {
-            return Err("Data too short for header");
-        }
         const FRS_TO_IDX_ENTRY_BYTES: usize = 4;
         const LINK_INFO_BYTES: usize = 20;
         const STREAM_INFO_BYTES: usize = 29;
@@ -39,11 +35,11 @@ impl MftIndex {
             entry_size: usize,
             too_large_error: &'static str,
         ) -> Result<usize, &'static str> {
-            let count = usize::try_from(count).map_err(|_| too_large_error)?;
-            count.checked_mul(entry_size).ok_or(too_large_error)
+            let count_usize = usize::try_from(count).map_err(|_err| too_large_error)?;
+            count_usize.checked_mul(entry_size).ok_or(too_large_error)
         }
 
-        fn ensure_remaining(
+        const fn ensure_remaining(
             data_len: usize,
             pos: usize,
             required: usize,
@@ -55,16 +51,8 @@ impl MftIndex {
             Ok(())
         }
 
-        fn record_size_bytes(version: u32) -> Result<usize, &'static str> {
-            match version {
-                3 => Ok(121),
-                4 => Ok(157),
-                5 => Ok(181),
-                6 => Ok(185),
-                7 => Ok(193),
-                8 => Ok(195),
-                _ => Err("Unsupported index version"),
-            }
+        if data.len() < 96 {
+            return Err("Data too short for header");
         }
 
         let mut pos = 0;
@@ -83,7 +71,7 @@ impl MftIndex {
                     .get(pos..pos + 2)
                     .ok_or("Unexpected end of data")?
                     .try_into()
-                    .map_err(|_| "Invalid u16 slice")?;
+                    .map_err(|_err| "Invalid u16 slice")?;
                 let val = u16::from_le_bytes(bytes);
                 pos += 2;
                 val
@@ -95,7 +83,7 @@ impl MftIndex {
                     .get(pos..pos + 4)
                     .ok_or("Unexpected end of data")?
                     .try_into()
-                    .map_err(|_| "Invalid u32 slice")?;
+                    .map_err(|_err| "Invalid u32 slice")?;
                 let val = u32::from_le_bytes(bytes);
                 pos += 4;
                 val
@@ -107,7 +95,7 @@ impl MftIndex {
                     .get(pos..pos + 8)
                     .ok_or("Unexpected end of data")?
                     .try_into()
-                    .map_err(|_| "Invalid u64 slice")?;
+                    .map_err(|_err| "Invalid u64 slice")?;
                 let val = u64::from_le_bytes(bytes);
                 pos += 8;
                 val
@@ -119,7 +107,7 @@ impl MftIndex {
                     .get(pos..pos + 8)
                     .ok_or("Unexpected end of data")?
                     .try_into()
-                    .map_err(|_| "Invalid i64 slice")?;
+                    .map_err(|_err| "Invalid i64 slice")?;
                 let val = i64::from_le_bytes(bytes);
                 pos += 8;
                 val
@@ -174,15 +162,24 @@ impl MftIndex {
             "FRS table exceeds remaining data",
         )?;
         let mut frs_to_idx =
-            Vec::with_capacity(usize::try_from(frs_to_idx_len).map_err(|_| "FRS table too large")?);
+            Vec::with_capacity(usize::try_from(frs_to_idx_len).map_err(|_err| "FRS table too large")?);
         for _ in 0..frs_to_idx_len {
             frs_to_idx.push(read_u32!());
         }
 
         // Read records
+        let record_size_bytes = match version {
+            3 => 121,
+            4 => 157,
+            5 => 181,
+            6 => 185,
+            7 => 193,
+            8 => 195,
+            _ => return Err("Unsupported index version"),
+        };
         let record_bytes = checked_section_bytes(
             record_count,
-            record_size_bytes(version)?,
+            record_size_bytes,
             "Record section too large",
         )?;
         ensure_remaining(
@@ -192,7 +189,7 @@ impl MftIndex {
             "Record section exceeds remaining data",
         )?;
         let mut records = Vec::with_capacity(
-            usize::try_from(record_count).map_err(|_| "Record section too large")?,
+            usize::try_from(record_count).map_err(|_err| "Record section too large")?,
         );
         for _ in 0..record_count {
             let frs = read_u64!();
@@ -307,7 +304,7 @@ impl MftIndex {
         }
 
         // Read names
-        let names_len = usize::try_from(names_size).map_err(|_| "Names section too large")?;
+        let names_len = usize::try_from(names_size).map_err(|_err| "Names section too large")?;
         ensure_remaining(
             data.len(),
             pos,
@@ -332,7 +329,7 @@ impl MftIndex {
             "Links section exceeds remaining data",
         )?;
         let mut links = Vec::with_capacity(
-            usize::try_from(links_count).map_err(|_| "Links section too large")?,
+            usize::try_from(links_count).map_err(|_err| "Links section too large")?,
         );
         for _ in 0..links_count {
             let next_entry = read_u32!();
@@ -363,7 +360,7 @@ impl MftIndex {
             "Streams section exceeds remaining data",
         )?;
         let mut streams = Vec::with_capacity(
-            usize::try_from(streams_count).map_err(|_| "Streams section too large")?,
+            usize::try_from(streams_count).map_err(|_err| "Streams section too large")?,
         );
         for _ in 0..streams_count {
             let size_length = read_u64!();
@@ -400,7 +397,7 @@ impl MftIndex {
             "Children section exceeds remaining data",
         )?;
         let mut children = Vec::with_capacity(
-            usize::try_from(children_count).map_err(|_| "Children section too large")?,
+            usize::try_from(children_count).map_err(|_err| "Children section too large")?,
         );
         for _ in 0..children_count {
             let next_entry = read_u32!();

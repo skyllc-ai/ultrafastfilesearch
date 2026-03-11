@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 
 use crate::display::{clean_path_for_display, format_bytes, format_duration, format_number_commas};
 
+/// Returns the already-validated export output path.
 fn required_output_path(output_path: Option<&Path>) -> Result<&Path> {
     output_path.ok_or_else(|| {
         anyhow::anyhow!("internal error: --output should have been validated before export")
@@ -522,16 +523,18 @@ mod tests {
     #[test]
     fn test_required_output_path_accepts_validated_path() {
         let path = Path::new("out.parquet");
-        let resolved = required_output_path(Some(path)).expect("validated path should pass");
-        assert_eq!(resolved, path);
+        assert_eq!(required_output_path(Some(path)).ok(), Some(path));
     }
 
     #[test]
     fn test_required_output_path_rejects_missing_output() {
-        let err = required_output_path(None).expect_err("missing output should error");
-        assert!(
-            err.to_string()
-                .contains("internal error: --output should have been validated before export")
-        );
+        let missing_output_error = required_output_path(None).err();
+        assert!(matches!(
+            missing_output_error,
+            Some(error)
+                if error
+                    .to_string()
+                    .contains("internal error: --output should have been validated before export")
+        ));
     }
 }

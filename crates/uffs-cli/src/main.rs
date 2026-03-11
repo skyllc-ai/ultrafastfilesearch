@@ -37,6 +37,7 @@
     clippy::single_call_fn,
     reason = "CLI entry point functions are called once from main"
 )]
+#![allow(clippy::items_after_test_module)]
 
 // Dependencies used in commands.rs for streaming output (Windows-only code
 // paths)
@@ -474,6 +475,13 @@ async fn run() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::default_numeric_fallback,
+        clippy::expect_used,
+        clippy::manual_let_else,
+        clippy::panic
+    )]
+
     use std::path::{Path, PathBuf};
 
     use clap::{CommandFactory, Parser};

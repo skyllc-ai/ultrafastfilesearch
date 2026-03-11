@@ -264,7 +264,7 @@ pub struct ResidentAttributeData {
 /// Decodes an `AttributeRecordHeader` from on-disk bytes without unaligned
 /// reads.
 #[inline]
-pub(crate) fn parse_attribute_record_header(data: &[u8]) -> Option<AttributeRecordHeader> {
+pub fn parse_attribute_record_header(data: &[u8]) -> Option<AttributeRecordHeader> {
     Some(AttributeRecordHeader {
         type_code: read_u32_le(data, 0)?,
         length: read_u32_le(data, 4)?,
@@ -278,6 +278,10 @@ pub(crate) fn parse_attribute_record_header(data: &[u8]) -> Option<AttributeReco
 
 /// Decodes `ResidentAttributeData` from on-disk bytes without unaligned reads.
 #[inline]
+#[expect(
+    clippy::single_call_fn,
+    reason = "kept separate to localize resident attribute header decoding"
+)]
 fn parse_resident_attribute_data(data: &[u8]) -> Option<ResidentAttributeData> {
     Some(ResidentAttributeData {
         value_length: read_u32_le(data, 0)?,
@@ -311,7 +315,7 @@ pub struct NonResidentAttributeData {
 /// Decodes `NonResidentAttributeData` from on-disk bytes without unaligned
 /// reads.
 #[inline]
-pub(crate) fn parse_non_resident_attribute_data(data: &[u8]) -> Option<NonResidentAttributeData> {
+pub fn parse_non_resident_attribute_data(data: &[u8]) -> Option<NonResidentAttributeData> {
     Some(NonResidentAttributeData {
         lowest_vcn: read_i64_le(data, 0)?,
         highest_vcn: read_i64_le(data, 8)?,
@@ -364,7 +368,12 @@ pub struct FileRecordSegmentHeader {
     pub segment_number_lower: u32,
 }
 
+/// Decodes `FileRecordSegmentHeader` from on-disk bytes without unaligned reads.
 #[inline]
+#[expect(
+    clippy::single_call_fn,
+    reason = "kept separate to localize file record header decoding"
+)]
 fn parse_file_record_segment_header(data: &[u8]) -> Option<FileRecordSegmentHeader> {
     Some(FileRecordSegmentHeader {
         multi_sector_header: parse_multi_sector_header(data)?,
@@ -415,10 +424,6 @@ pub struct AttributeIterator<'a> {
 impl<'a> AttributeIterator<'a> {
     /// Creates a new attribute iterator from a file record buffer.
     #[must_use]
-    #[expect(
-        clippy::missing_const_for_fn,
-        reason = "slice bounds checks and decoding helpers are not const here"
-    )]
     pub fn new(record: &'a [u8]) -> Option<Self> {
         if record.len() < size_of::<FileRecordSegmentHeader>() {
             return None;

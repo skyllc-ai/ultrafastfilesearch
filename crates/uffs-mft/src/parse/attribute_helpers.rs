@@ -30,6 +30,7 @@ pub(super) fn parse_standard_info_full(
     if value_length >= STANDARD_INFO_SIZE_V30
         && si_offset + size_of::<StandardInformationExtended>() <= data.len()
     {
+        // SAFETY: `si_offset` bounds are validated above and the struct is read from packed NTFS bytes.
         let si: StandardInformationExtended =
             unsafe { core::ptr::read(data[si_offset..].as_ptr().cast()) };
 
@@ -46,6 +47,7 @@ pub(super) fn parse_standard_info_full(
     } else if value_length >= STANDARD_INFO_SIZE_V12
         && si_offset + size_of::<StandardInformation>() <= data.len()
     {
+        // SAFETY: `si_offset` bounds are validated above and the struct is read from packed NTFS bytes.
         let si: StandardInformation = unsafe { core::ptr::read(data[si_offset..].as_ptr().cast()) };
 
         *result = ExtendedStandardInfo {
@@ -82,6 +84,7 @@ pub(super) fn parse_file_name_full(
         return None;
     }
 
+    // SAFETY: `fn_offset` bounds are validated above and the struct is read from packed NTFS bytes.
     let fn_attr: FileNameAttribute = unsafe { core::ptr::read(data[fn_offset..].as_ptr().cast()) };
 
     let name_len = fn_attr.file_name_length as usize;
