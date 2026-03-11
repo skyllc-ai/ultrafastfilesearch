@@ -1,13 +1,14 @@
 //! NTFS boot-sector layout and helpers.
 
 use core::mem::size_of;
+use zerocopy::{FromBytes, Immutable, KnownLayout};
 
 /// NTFS Boot Sector structure.
 ///
 /// Located at the first sector of an NTFS volume, contains critical
 /// filesystem parameters needed to locate and read the MFT.
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct NtfsBootSector {
     /// Jump instruction (3 bytes).
     pub jump: [u8; 3],

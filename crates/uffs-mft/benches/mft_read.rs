@@ -32,6 +32,7 @@ use tracing_appender as _;
 use tracing_subscriber as _;
 use uffs_mft as _;
 use uffs_polars as _;
+use zerocopy as _;
 
 #[cfg(feature = "zstd")]
 extern crate zstd as _;

@@ -58,6 +58,7 @@ chrono.workspace = true
 hostname = "0.4.2"
 num_cpus.workspace = true
 rustc-hash = "2.1.1"
+zerocopy.workspace = true
 
 # Windows APIs (Windows only)
 [target.'cfg(windows)'.dependencies]

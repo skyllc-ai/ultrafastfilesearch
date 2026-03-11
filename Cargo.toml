@@ -25,7 +25,7 @@ members = [
     "crates/uffs-cli",      # 🖥️  Command-line interface
     "crates/uffs-tui",      # 📟 Terminal UI
     "crates/uffs-gui",      # 🪟 Graphical UI (future)
-    "crates/uffs-diag",     # 🔬 Diagnostic tools (validated by workspace build/test)
+    "crates/uffs-diag",     # 🔬 Retained workspace-only diagnostic tools (not shipped in dist/)
 ]
 exclude = [
     # Vendored reference tools / external code (kept out of the main workspace)
@@ -89,6 +89,7 @@ wmi = "0.18.3"
 bitflags = "2.11.0"
 bitvec = "1.0.1"
 smallvec = "1.15.1"
+zerocopy = { version = "0.8", features = ["derive"] }
 
 # ───── Serialization ─────
 serde = { version = "1.0.228", features = ["derive"] }

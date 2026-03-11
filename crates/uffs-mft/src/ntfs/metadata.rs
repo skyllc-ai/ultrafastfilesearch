@@ -1,12 +1,13 @@
 //! NTFS attribute payloads and legacy-output metadata helpers.
 
 use core::mem::size_of;
+use zerocopy::{FromBytes, Immutable, KnownLayout};
 
 /// Standard Information attribute content (NTFS 1.2 - 36 bytes).
 ///
 /// Contains timestamps and basic file attributes.
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct StandardInformation {
     /// File creation time (FILETIME).
     pub creation_time: i64,
@@ -22,7 +23,7 @@ pub struct StandardInformation {
 
 /// Standard Information attribute content (NTFS 3.0+ - 72 bytes).
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct StandardInformationExtended {
     /// File creation time (FILETIME).
     pub creation_time: i64,
@@ -72,7 +73,7 @@ pub enum FileNamespace {
 
 /// File Name attribute content.
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct FileNameAttribute {
     /// Parent directory file reference.
     pub parent_directory: u64,
@@ -140,7 +141,7 @@ pub enum ReparseTag {
 
 /// Reparse point header.
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct ReparsePointHeader {
     /// Reparse tag.
     pub reparse_tag: u32,
@@ -152,7 +153,7 @@ pub struct ReparsePointHeader {
 
 /// Mount point / symbolic link reparse data buffer.
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct ReparseMountPointBuffer {
     /// Offset of the substitute name in `PathBuffer` (in bytes).
     pub substitute_name_offset: u16,
@@ -166,7 +167,7 @@ pub struct ReparseMountPointBuffer {
 
 /// Attribute List entry.
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct AttributeListEntry {
     /// Attribute type code.
     pub attribute_type: u32,
@@ -200,7 +201,7 @@ impl AttributeListEntry {
 
 /// Index header (common to `INDEX_ROOT` and `INDEX_ALLOCATION`).
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct IndexHeader {
     /// Offset to the first index entry (from start of this header).
     pub first_entry_offset: u32,
@@ -224,7 +225,7 @@ impl IndexHeader {
 
 /// Index root attribute content (0x90).
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct IndexRoot {
     /// Type of the indexed attribute (usually 0x30 for `$FILE_NAME`).
     pub indexed_attribute_type: u32,
