@@ -29,7 +29,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -225,8 +226,11 @@ where
 
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
+                if is_exit_key(key) {
+                    return Ok(());
+                }
+
                 match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     KeyCode::Char(ch) => app.input.push(ch),
                     KeyCode::Backspace => {
                         app.input.pop();
@@ -239,6 +243,21 @@ where
             }
         }
     }
+}
+
+/// Returns whether the given key event should terminate the TUI.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "helper exists to keep Ctrl+C shutdown handling explicit and separate from key dispatch"
+    )
+)]
+#[must_use]
+const fn is_exit_key(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Esc | KeyCode::Char('q'))
+        || (key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('c' | 'C')))
 }
 
 /// Render the TUI layout: search bar, status, results list, and help bar.
@@ -368,5 +387,37 @@ fn format_size(bytes: u64) -> String {
         format!("{:.2} KB", bytes as f64 / KB as f64)
     } else {
         format!("{bytes} B")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::is_exit_key;
+
+    #[test]
+    fn test_is_exit_key_accepts_quit_shortcuts() {
+        assert!(is_exit_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(is_exit_key(KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+        )));
+        assert!(is_exit_key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+    }
+
+    #[test]
+    fn test_is_exit_key_rejects_regular_input() {
+        assert!(!is_exit_key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::NONE,
+        )));
+        assert!(!is_exit_key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
     }
 }

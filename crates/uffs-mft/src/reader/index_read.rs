@@ -36,6 +36,18 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
+    #[tracing::instrument(
+        level = "info",
+        skip(self),
+        fields(
+            volume = %self.volume,
+            mode = %self.mode,
+            use_bitmap = self.use_bitmap,
+            merge_extensions = self.merge_extensions,
+            expand_links = self.expand_links,
+            forensic = self.forensic
+        )
+    )]
     pub async fn read_all_index(&self) -> Result<crate::index::MftIndex> {
         tracing::debug!(volume = %self.volume, "[TRIP] reader::read_all_index ENTER");
         trace!(volume = %self.volume, "read_all_index: ENTER");
@@ -76,7 +88,7 @@ impl MftReader {
             idx
         })
         .await
-        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?;
+        .map_err(|error| MftError::from_join_error("read_all_index", &error))?;
         trace!(volume = %volume, "read_all_index: EXIT");
         tracing::debug!(volume = %volume, "[TRIP] reader::read_all_index EXIT");
         result
@@ -150,6 +162,19 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
+    #[tracing::instrument(
+        level = "info",
+        skip(self, callback),
+        fields(
+            volume = %self.volume,
+            mode = %self.mode,
+            use_bitmap = self.use_bitmap,
+            merge_extensions = self.merge_extensions,
+            expand_links = self.expand_links,
+            forensic = self.forensic,
+            progress_callback = true
+        )
+    )]
     pub async fn read_index_with_progress<F>(&self, callback: F) -> Result<crate::index::MftIndex>
     where
         F: Fn(MftProgress) + Send + 'static,
@@ -187,7 +212,7 @@ impl MftReader {
             reader.read_mft_index_internal(Some(callback))
         })
         .await
-        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
+        .map_err(|error| MftError::from_join_error("read_index_with_progress", &error))?
     }
 
     /// Read MFT into lean index with progress (non-Windows stub).
@@ -214,6 +239,19 @@ impl MftReader {
     #[expect(
         clippy::too_many_lines,
         reason = "sequential I/O pipeline with mode-specific branches cannot be meaningfully split"
+    )]
+    #[tracing::instrument(
+        level = "info",
+        skip(self, callback),
+        fields(
+            volume = %self.volume,
+            configured_mode = %self.mode,
+            use_bitmap = self.use_bitmap,
+            merge_extensions = self.merge_extensions,
+            expand_links = self.expand_links,
+            forensic = self.forensic,
+            progress_callback = callback.is_some()
+        )
     )]
     fn read_mft_index_internal<F>(&self, callback: Option<F>) -> Result<crate::index::MftIndex>
     where

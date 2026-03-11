@@ -72,7 +72,7 @@ use zerocopy as _;
 use zstd as _;
 // Benchmark dependencies (used by bench/bench-all commands on Windows)
 #[cfg(not(windows))]
-use {chrono as _, hostname as _, num_cpus as _};
+use {chrono as _, hostname as _};
 
 /// CLI definitions for the `uffs_mft` binary.
 mod cli;
@@ -87,6 +87,46 @@ mod progress;
 
 use crate::cli::Cli;
 
+/// Operation label used for `uffs_mft` shutdown classification.
+const MFT_BINARY_OPERATION: &str = "uffs_mft";
+
+/// Maps spawned binary task failures onto the approved cancellation taxonomy.
+#[must_use]
+fn classify_binary_task_error(
+    operation: &'static str,
+    error: &tokio::task::JoinError,
+) -> uffs_mft::MftError {
+    if error.is_cancelled() {
+        return uffs_mft::MftError::Cancelled {
+            operation,
+            reason: error.to_string(),
+        };
+    }
+
+    uffs_mft::MftError::WaitFailed {
+        operation,
+        reason: error.to_string(),
+    }
+}
+
+/// Builds the explicit cancellation outcome for a Ctrl+C shutdown request.
+#[must_use]
+fn shutdown_requested_error(operation: &'static str) -> uffs_mft::MftError {
+    uffs_mft::MftError::Cancelled {
+        operation,
+        reason: "shutdown requested by Ctrl+C".to_owned(),
+    }
+}
+
+/// Builds a wait failure when the binary cannot install a Ctrl+C listener.
+#[must_use]
+fn ctrl_c_listener_error(operation: &'static str, error: &std::io::Error) -> uffs_mft::MftError {
+    uffs_mft::MftError::WaitFailed {
+        operation,
+        reason: format!("failed to listen for Ctrl+C: {error}"),
+    }
+}
+
 #[tokio::main]
 #[expect(
     clippy::print_stderr,
@@ -96,7 +136,7 @@ async fn main() {
     let verbose = std::env::args().any(|arg| arg == "-v" || arg == "--verbose");
     let _guard = logging::init_logging(verbose);
 
-    if let Err(err) = run().await {
+    if let Err(err) = run_until_shutdown().await {
         eprintln!("Error: {err}");
         for cause in err.chain().skip(1) {
             eprintln!("  Caused by: {cause}");
@@ -109,4 +149,87 @@ async fn main() {
 async fn run() -> Result<()> {
     let cli = Cli::parse();
     commands::dispatch_command(cli.command).await
+}
+
+/// Runs the binary while listening for Ctrl+C so shutdown reaches long-running
+/// command flows started from the binary entrypoint.
+#[expect(
+    clippy::single_call_fn,
+    reason = "entrypoint wrapper exists solely to propagate shutdown into the spawned command task"
+)]
+async fn run_until_shutdown() -> Result<()> {
+    let mut run_task = tokio::spawn(run());
+
+    tokio::select! {
+        result = &mut run_task => {
+            match result {
+                Ok(outcome) => outcome,
+                Err(error) => Err(classify_binary_task_error(MFT_BINARY_OPERATION, &error).into()),
+            }
+        }
+        signal = tokio::signal::ctrl_c() => {
+            run_task.abort();
+
+            match signal {
+                Ok(()) => Err(shutdown_requested_error(MFT_BINARY_OPERATION).into()),
+                Err(error) => Err(ctrl_c_listener_error(MFT_BINARY_OPERATION, &error).into()),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_binary_task_error, ctrl_c_listener_error, shutdown_requested_error};
+
+    #[tokio::test]
+    async fn test_classify_binary_task_error_maps_cancelled_joins() {
+        let handle = tokio::spawn(async {
+            core::future::pending::<()>().await;
+        });
+        handle.abort();
+
+        let outcome = handle.await;
+        assert!(outcome.is_err(), "aborted task unexpectedly completed");
+        let Err(join_error) = outcome else {
+            return;
+        };
+
+        let error = classify_binary_task_error("uffs_mft", &join_error);
+
+        assert!(matches!(
+            error,
+            uffs_mft::MftError::Cancelled {
+                operation: "uffs_mft",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_shutdown_requested_error_is_cancelled() {
+        let error = shutdown_requested_error("uffs_mft");
+
+        assert!(matches!(
+            error,
+            uffs_mft::MftError::Cancelled {
+                operation: "uffs_mft",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_ctrl_c_listener_error_is_wait_failed() {
+        let error =
+            ctrl_c_listener_error("uffs_mft", &std::io::Error::other("listener unavailable"));
+
+        assert!(matches!(
+            error,
+            uffs_mft::MftError::WaitFailed {
+                operation: "uffs_mft",
+                ..
+            }
+        ));
+    }
 }

@@ -20,7 +20,6 @@ use criterion as _;
 use dirs_next as _;
 use hostname as _;
 use indicatif as _;
-use num_cpus as _;
 use proptest as _;
 use rayon as _;
 use rustc_hash as _;

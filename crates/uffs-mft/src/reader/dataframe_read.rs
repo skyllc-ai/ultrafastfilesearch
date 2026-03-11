@@ -24,6 +24,18 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
+    #[tracing::instrument(
+        level = "info",
+        skip(self),
+        fields(
+            volume = %self.volume,
+            mode = %self.mode,
+            use_bitmap = self.use_bitmap,
+            add_placeholders = self.add_placeholders,
+            merge_extensions = self.merge_extensions,
+            parallel_parse = self.parallel_parse
+        )
+    )]
     pub fn read_all(&self) -> Result<DataFrame> {
         self.read_mft_internal(None::<fn(MftProgress)>)
     }
@@ -49,6 +61,19 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
+    #[tracing::instrument(
+        level = "info",
+        skip(self, callback),
+        fields(
+            volume = %self.volume,
+            mode = %self.mode,
+            use_bitmap = self.use_bitmap,
+            add_placeholders = self.add_placeholders,
+            merge_extensions = self.merge_extensions,
+            parallel_parse = self.parallel_parse,
+            progress_callback = true
+        )
+    )]
     pub fn read_with_progress<F>(&self, callback: F) -> Result<DataFrame>
     where
         F: Fn(MftProgress) + Send + 'static,
@@ -79,6 +104,19 @@ impl MftReader {
     /// 4. Large batch I/O (4-8 MB) for reduced syscall overhead
     /// 5. Drive-type aware tuning (SSD vs HDD)
     #[cfg(windows)]
+    #[tracing::instrument(
+        level = "info",
+        skip(self, callback),
+        fields(
+            volume = %self.volume,
+            configured_mode = %self.mode,
+            use_bitmap = self.use_bitmap,
+            add_placeholders = self.add_placeholders,
+            merge_extensions = self.merge_extensions,
+            parallel_parse = self.parallel_parse,
+            progress_callback = callback.is_some()
+        )
+    )]
     fn read_mft_internal<F>(&self, callback: Option<F>) -> Result<DataFrame>
     where
         F: Fn(MftProgress),
@@ -574,221 +612,6 @@ impl MftReader {
             });
         }
 
-        // M1 8.3 OPTIMIZATION: Fuse stats computation with DataFrame building
-        // This eliminates one full pass over all records (was ~5-10% of DF build time)
-        //
-        // With expand_links=true (default), we expand hard links to separate rows.
-        // Stats are computed per unique FRS (before expansion).
-        let expand_links = self.expand_links;
-        let base_capacity = parsed_records.len();
-        // If expanding links, estimate ~20% more rows for hard links
-        let capacity = if expand_links {
-            (base_capacity as f64 * 1.2) as usize
-        } else {
-            base_capacity
-        };
-        let mut stats = MftStats::default();
-
-        // Pre-allocate all column vectors
-        let mut frs_vec: Vec<u64> = Vec::with_capacity(capacity);
-        let mut parent_frs_vec: Vec<u64> = Vec::with_capacity(capacity);
-        let mut name_vec: Vec<String> = Vec::with_capacity(capacity);
-        let mut size_vec: Vec<u64> = Vec::with_capacity(capacity);
-        let mut allocated_size_vec: Vec<u64> = Vec::with_capacity(capacity);
-        let mut created_vec: Vec<i64> = Vec::with_capacity(capacity);
-        let mut modified_vec: Vec<i64> = Vec::with_capacity(capacity);
-        let mut accessed_vec: Vec<i64> = Vec::with_capacity(capacity);
-        let mut mft_changed_vec: Vec<i64> = Vec::with_capacity(capacity);
-        let mut is_directory_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut name_count_vec: Vec<u16> = Vec::with_capacity(capacity);
-        let mut stream_count_vec: Vec<u16> = Vec::with_capacity(capacity);
-        let mut stream_name_vec: Vec<String> = Vec::with_capacity(capacity);
-        let mut is_readonly_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_hidden_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_system_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_archive_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_compressed_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_encrypted_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_sparse_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_reparse_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_offline_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_not_indexed_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_temporary_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_integrity_stream_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_no_scrub_data_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_pinned_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_unpinned_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut is_virtual_vec: Vec<bool> = Vec::with_capacity(capacity);
-        let mut flags_vec: Vec<u32> = Vec::with_capacity(capacity);
-
-        // Single pass: build columns AND compute stats simultaneously
-        for parsed in parsed_records {
-            let name_count = parsed.name_count();
-            let stream_count = parsed.stream_count();
-
-            // Accumulate stats inline (no separate loop!)
-            // Stats are per unique FRS, not per expanded link
-            if parsed.is_directory {
-                stats.dir_count += 1;
-            } else {
-                stats.file_count += 1;
-                stats.total_file_size = stats.total_file_size.saturating_add(parsed.size);
-                stats.total_allocated_size = stats
-                    .total_allocated_size
-                    .saturating_add(parsed.allocated_size);
-            }
-            stats.hidden_count += u64::from(parsed.std_info.is_hidden);
-            stats.system_count += u64::from(parsed.std_info.is_system);
-            stats.compressed_count += u64::from(parsed.std_info.is_compressed);
-            stats.encrypted_count += u64::from(parsed.std_info.is_encrypted);
-            stats.sparse_count += u64::from(parsed.std_info.is_sparse);
-            stats.reparse_count += u64::from(parsed.std_info.is_reparse);
-            stats.multi_stream_count += u64::from(stream_count > 1);
-            stats.multi_name_count += u64::from(name_count > 1);
-
-            // Build column vectors - expand (names × streams) if enabled
-            if expand_links {
-                // Get names to iterate over
-                let names: Vec<_> = if parsed.names.is_empty() {
-                    vec![crate::ntfs::NameInfo {
-                        name: parsed.name.clone(),
-                        parent_frs: parsed.parent_frs,
-                        namespace: 3,
-                        fn_created: parsed.fn_created,
-                        fn_modified: parsed.fn_modified,
-                        fn_accessed: parsed.fn_accessed,
-                        fn_mft_changed: parsed.fn_mft_changed,
-                        source_frs: parsed.frs,
-                    }]
-                } else {
-                    parsed.names.clone()
-                };
-
-                // Get streams to iterate over
-                let streams: Vec<_> = if parsed.streams.is_empty() {
-                    vec![StreamInfo {
-                        name: String::new(),
-                        size: parsed.size,
-                        allocated_size: parsed.allocated_size,
-                        is_sparse: false,
-                        is_compressed: false,
-                        is_resident: false,
-                    }]
-                } else {
-                    parsed.streams.clone()
-                };
-
-                // Expand: one row per (name × stream) combination
-                for name_info in &names {
-                    for stream_info in &streams {
-                        frs_vec.push(parsed.frs);
-                        parent_frs_vec.push(name_info.parent_frs);
-                        name_vec.push(name_info.name.clone());
-                        // Use stream-specific size for ADS
-                        let (size, alloc) = if stream_info.name.is_empty() {
-                            (parsed.size, parsed.allocated_size)
-                        } else {
-                            (stream_info.size, stream_info.allocated_size)
-                        };
-                        size_vec.push(size);
-                        allocated_size_vec.push(alloc);
-                        created_vec.push(parsed.std_info.created);
-                        modified_vec.push(parsed.std_info.modified);
-                        accessed_vec.push(parsed.std_info.accessed);
-                        mft_changed_vec.push(parsed.std_info.mft_changed);
-                        is_directory_vec.push(parsed.is_directory);
-                        name_count_vec.push(1);
-                        stream_count_vec.push(1);
-                        stream_name_vec.push(stream_info.name.clone());
-                        is_readonly_vec.push(parsed.std_info.is_readonly);
-                        is_hidden_vec.push(parsed.std_info.is_hidden);
-                        is_system_vec.push(parsed.std_info.is_system);
-                        is_archive_vec.push(parsed.std_info.is_archive);
-                        is_compressed_vec.push(parsed.std_info.is_compressed);
-                        is_encrypted_vec.push(parsed.std_info.is_encrypted);
-                        is_sparse_vec.push(parsed.std_info.is_sparse);
-                        is_reparse_vec.push(parsed.std_info.is_reparse);
-                        is_offline_vec.push(parsed.std_info.is_offline);
-                        is_not_indexed_vec.push(parsed.std_info.is_not_content_indexed);
-                        is_temporary_vec.push(parsed.std_info.is_temporary);
-                        is_integrity_stream_vec.push(parsed.std_info.is_integrity_stream);
-                        is_no_scrub_data_vec.push(parsed.std_info.is_no_scrub_data);
-                        is_pinned_vec.push(parsed.std_info.is_pinned);
-                        is_unpinned_vec.push(parsed.std_info.is_unpinned);
-                        is_virtual_vec.push(parsed.std_info.is_virtual);
-                        flags_vec.push(parsed.std_info.to_raw_flags());
-                    }
-                }
-            } else {
-                // No expansion: one row per FRS (use primary name)
-                frs_vec.push(parsed.frs);
-                parent_frs_vec.push(parsed.parent_frs);
-                name_vec.push(parsed.name);
-                size_vec.push(parsed.size);
-                allocated_size_vec.push(parsed.allocated_size);
-                created_vec.push(parsed.std_info.created);
-                modified_vec.push(parsed.std_info.modified);
-                accessed_vec.push(parsed.std_info.accessed);
-                mft_changed_vec.push(parsed.std_info.mft_changed);
-                is_directory_vec.push(parsed.is_directory);
-                name_count_vec.push(name_count);
-                stream_count_vec.push(stream_count);
-                stream_name_vec.push(String::new()); // Default stream
-                is_readonly_vec.push(parsed.std_info.is_readonly);
-                is_hidden_vec.push(parsed.std_info.is_hidden);
-                is_system_vec.push(parsed.std_info.is_system);
-                is_archive_vec.push(parsed.std_info.is_archive);
-                is_compressed_vec.push(parsed.std_info.is_compressed);
-                is_encrypted_vec.push(parsed.std_info.is_encrypted);
-                is_sparse_vec.push(parsed.std_info.is_sparse);
-                is_reparse_vec.push(parsed.std_info.is_reparse);
-                is_offline_vec.push(parsed.std_info.is_offline);
-                is_not_indexed_vec.push(parsed.std_info.is_not_content_indexed);
-                is_temporary_vec.push(parsed.std_info.is_temporary);
-                is_integrity_stream_vec.push(parsed.std_info.is_integrity_stream);
-                is_no_scrub_data_vec.push(parsed.std_info.is_no_scrub_data);
-                is_pinned_vec.push(parsed.std_info.is_pinned);
-                is_unpinned_vec.push(parsed.std_info.is_unpinned);
-                is_virtual_vec.push(parsed.std_info.is_virtual);
-                flags_vec.push(parsed.std_info.to_raw_flags());
-            }
-        }
-
-        // Log stats (computed during the loop above)
-        stats.log_summary();
-
-        // Build DataFrame with full schema
-        Self::build_dataframe_full(
-            frs_vec,
-            parent_frs_vec,
-            name_vec,
-            size_vec,
-            allocated_size_vec,
-            created_vec,
-            modified_vec,
-            accessed_vec,
-            mft_changed_vec,
-            is_directory_vec,
-            name_count_vec,
-            stream_count_vec,
-            stream_name_vec,
-            is_readonly_vec,
-            is_hidden_vec,
-            is_system_vec,
-            is_archive_vec,
-            is_compressed_vec,
-            is_encrypted_vec,
-            is_sparse_vec,
-            is_reparse_vec,
-            is_offline_vec,
-            is_not_indexed_vec,
-            is_temporary_vec,
-            is_integrity_stream_vec,
-            is_no_scrub_data_vec,
-            is_pinned_vec,
-            is_unpinned_vec,
-            is_virtual_vec,
-            flags_vec,
-        )
+        Self::build_dataframe_from_read_records(parsed_records, self.expand_links)
     }
 }

@@ -50,7 +50,7 @@ If you still have any `cpp_tree_org` shim, the new `cpp_tree.rs` will not be use
 ## How to verify
 
 1. Rebuild and run the CI pipeline:
-   - `rust-script scripts/ci-pipeline.rs go -v`
+   - `rust-script scripts/ci/ci-pipeline.rs go -v`
 2. Re-run the parity trial where you previously saw 1–4 byte discrepancies (the “hardlink stress” dataset).
 3. Confirm the parity report shows **0 mismatches** in tree-metric columns:
    - `Size` (directory tree size)

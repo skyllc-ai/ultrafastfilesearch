@@ -4,9 +4,7 @@ Use this bucket for quick starts, operator instructions, and end-user testing wo
 
 ## Current entry points
 
-- [`../PHASE7_QUICK_START.md`](../PHASE7_QUICK_START.md)
-- [`../PHASE7_WINDOWS_TESTING.md`](../PHASE7_WINDOWS_TESTING.md)
-- [`../PHASE7_MAC_INSTRUCTIONS.md`](../PHASE7_MAC_INSTRUCTIONS.md)
+No active tracked user guides remain in this bucket yet.
 
-These files remain at the docs root for now, but this directory is the intended landing page for user-facing material.
+Retained validation context lives in [`../architecture/PHASE7_PERFORMANCE_VALIDATION.md`](../architecture/PHASE7_PERFORMANCE_VALIDATION.md). Historical PHASE7 walkthroughs were archived into `_trash/docs/`.
 

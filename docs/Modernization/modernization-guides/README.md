@@ -64,7 +64,7 @@ UFFS - Ultra Fast File Search
 │           │                                                  │
 │           ▼                                                  │
 │  3. 🚀 Run FULL CI Pipeline                                  │
-│     rust-script scripts/ci-pipeline.rs go -v                 │
+│     rust-script scripts/ci/ci-pipeline.rs go -v                 │
 │           │                                                  │
 │           ▼                                                  │
 │  4. ➡️  Continue to next wave (DO NOT ASK - JUST PROCEED)    │

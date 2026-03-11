@@ -25,6 +25,18 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
+    #[tracing::instrument(
+        level = "info",
+        skip(self),
+        fields(
+            volume = %self.volume,
+            ttl_seconds,
+            mode = %self.mode,
+            use_bitmap = self.use_bitmap,
+            merge_extensions = self.merge_extensions,
+            expand_links = self.expand_links
+        )
+    )]
     pub async fn read_index_cached(&self, ttl_seconds: u64) -> Result<crate::index::MftIndex> {
         use tracing::{debug, info, warn};
 
@@ -180,6 +192,17 @@ impl MftReader {
 
     /// Internal helper: read MFT fresh and save to cache.
     #[cfg(windows)]
+    #[tracing::instrument(
+        level = "info",
+        skip(self),
+        fields(
+            volume = %self.volume,
+            mode = %self.mode,
+            use_bitmap = self.use_bitmap,
+            merge_extensions = self.merge_extensions,
+            expand_links = self.expand_links
+        )
+    )]
     async fn read_and_cache_index(&self) -> Result<crate::index::MftIndex> {
         use tracing::info;
 

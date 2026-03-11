@@ -148,7 +148,7 @@ cargo run --release -p uffs-diag --bin compare_scan_parity -- \
 
 Full CI pipeline passed with all tests green:
 ```bash
-rust-script scripts/ci-pipeline.rs go -v
+rust-script scripts/ci/ci-pipeline.rs go -v
 # ✅ All tests pass
 # ✅ Build successful
 # ✅ Committed and pushed as v0.2.173

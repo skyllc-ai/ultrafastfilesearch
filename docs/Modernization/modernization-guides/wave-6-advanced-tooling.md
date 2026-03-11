@@ -107,7 +107,7 @@ cargo machete
 
 **Step 3**: Add to CI pipeline
 
-Add to `scripts/ci-pipeline.rs`:
+Add to `scripts/ci/ci-pipeline.rs`:
 ```rust
 // Check for unused dependencies
 run_command("cargo", &["machete", "--skip-target-dir"])?;
@@ -247,7 +247,7 @@ cargo expand --package uffs-mft -- MftRecord
 ```bash
 cargo machete
 sccache --show-stats
-rust-script scripts/ci-pipeline.rs go -v
+rust-script scripts/ci/ci-pipeline.rs go -v
 ```
 
 ---

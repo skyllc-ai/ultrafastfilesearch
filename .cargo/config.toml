@@ -11,10 +11,12 @@
 # =============================================================================
 
 [build]
-# Target directory - use ~/Library/Caches for macOS (stable, avoids iCloud sync)
-# /tmp can be cleaned by macOS or cause race conditions with concurrent builds
-# Windows users: set CARGO_TARGET_DIR=C:\rust-target\uffs environment variable
-target-dir = "~/Library/Caches/uffs/target"
+# Keep the checked-in target directory deterministic for artifact discovery.
+# Cargo config paths are config-relative, so `~/...` becomes `<workspace>/~/...`
+# instead of expanding to $HOME. Use an explicit CARGO_TARGET_DIR environment
+# variable locally if you want to place artifacts in an external cache.
+# Windows users can set: CARGO_TARGET_DIR=C:\rust-target\uffs
+target-dir = "target"
 
 # sccache for compilation caching (significant speedup on rebuilds)
 rustc-wrapper = "sccache"

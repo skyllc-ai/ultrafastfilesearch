@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use indicatif::ProgressBar;
-use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tracing::info;
 use uffs_mft::IntoLazy;
 
@@ -39,9 +39,11 @@ pub(super) async fn search_multi_drive_filtered(
         bail!("No drives specified for multi-drive search");
     }
 
+    let budget = super::search_drive_task_budget(drives.len());
+
     info!(
         count = drives.len(),
-        needs_paths, "Searching drives in PARALLEL (blazing fast mode)"
+        budget, needs_paths, "Searching drives in PARALLEL (blazing fast mode)"
     );
 
     let owned_filters = Arc::new(OwnedQueryFilters::from_borrowed(filters));
@@ -56,49 +58,80 @@ pub(super) async fn search_multi_drive_filtered(
             Arc::new(pbs)
         });
 
-    let (tx, mut rx) = mpsc::channel::<DriveResult>(drives.len());
+    let mut pending_drives = drives.iter().copied();
+    let mut join_set = JoinSet::new();
 
-    for &drive_char in drives {
-        let tx = tx.clone();
-        let filters = Arc::clone(&owned_filters);
-        let pbs = progress_bars.clone();
+    for _ in 0..budget {
+        if let Some(drive_char) = pending_drives.next() {
+            let filters = Arc::clone(&owned_filters);
+            let pbs = progress_bars.clone();
 
-        tokio::spawn(async move {
-            let pb = pbs
-                .as_ref()
-                .and_then(|progress_bars| progress_bars.get(&drive_char).cloned());
-            let result = search_single_drive(drive_char, filters, needs_paths, no_bitmap, pb).await;
-            let _ = tx.send(result).await;
-        });
+            join_set.spawn(async move {
+                let pb = pbs
+                    .as_ref()
+                    .and_then(|progress_bars| progress_bars.get(&drive_char).cloned());
+                search_single_drive(drive_char, filters, needs_paths, no_bitmap, pb).await
+            });
+        }
     }
-
-    drop(tx);
 
     let mut filtered_results: Vec<uffs_mft::DataFrame> = Vec::new();
     let mut total_matches = 0usize;
     let mut drives_processed = 0usize;
 
-    while let Some(result) = rx.recv().await {
+    while let Some(join_result) = join_set.join_next().await {
         drives_processed += 1;
+
+        let result = match join_result {
+            Ok(result) => result,
+            Err(error) => {
+                info!(error = %error, "Drive search task failed");
+
+                if let Some(drive_char) = pending_drives.next() {
+                    let filters = Arc::clone(&owned_filters);
+                    let pbs = progress_bars.clone();
+
+                    join_set.spawn(async move {
+                        let pb = pbs
+                            .as_ref()
+                            .and_then(|progress_bars| progress_bars.get(&drive_char).cloned());
+                        search_single_drive(drive_char, filters, needs_paths, no_bitmap, pb).await
+                    });
+                }
+
+                continue;
+            }
+        };
 
         if let Some(error) = result.error {
             info!(drive = %result.drive, error = %error, "Drive failed");
-            continue;
+        } else {
+            total_matches += result.matches;
+
+            info!(
+                drive = %result.drive,
+                records = result.records_read,
+                matches = result.matches,
+                paths_resolved = result.paths_resolved,
+                progress = format!("{}/{}", drives_processed, drives.len()),
+                "Drive completed"
+            );
+
+            if let Some(df) = result.df {
+                filtered_results.push(df);
+            }
         }
 
-        total_matches += result.matches;
+        if let Some(drive_char) = pending_drives.next() {
+            let filters = Arc::clone(&owned_filters);
+            let pbs = progress_bars.clone();
 
-        info!(
-            drive = %result.drive,
-            records = result.records_read,
-            matches = result.matches,
-            paths_resolved = result.paths_resolved,
-            progress = format!("{}/{}", drives_processed, drives.len()),
-            "Drive completed"
-        );
-
-        if let Some(df) = result.df {
-            filtered_results.push(df);
+            join_set.spawn(async move {
+                let pb = pbs
+                    .as_ref()
+                    .and_then(|progress_bars| progress_bars.get(&drive_char).cloned());
+                search_single_drive(drive_char, filters, needs_paths, no_bitmap, pb).await
+            });
         }
     }
 

@@ -15,7 +15,9 @@ on:
       - '**/Cargo.lock'
       - '.github/workflows/ci.yml'
       - '.github/workflows/optimized-ci.yml'
-      - 'scripts/ci-pipeline.rs'
+      - 'scripts/ci/check_file_size_policy.sh'
+      - 'scripts/ci/file_size_exceptions.txt'
+      - 'scripts/ci/ci-pipeline.rs'
   pull_request:
     branches: [ main ]
     paths:
@@ -26,7 +28,9 @@ on:
       - '**/Cargo.lock'
       - '.github/workflows/ci.yml'
       - '.github/workflows/optimized-ci.yml'
-      - 'scripts/ci-pipeline.rs'
+      - 'scripts/ci/check_file_size_policy.sh'
+      - 'scripts/ci/file_size_exceptions.txt'
+      - 'scripts/ci/ci-pipeline.rs'
   workflow_dispatch:
 
 permissions:
@@ -72,7 +76,24 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run nightly clippy gate
-        run: cargo clippy --workspace --exclude uffs-legacy --all-targets --all-features --no-deps -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
+
+  rustdoc:
+    name: Tier 1 / Rustdoc
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install nightly Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run rustdoc warnings gate
+        run: RUSTDOCFLAGS="-Dwarnings" cargo doc --workspace --all-features --no-deps
 
   tests:
     name: Tier 1 / Tests
@@ -92,10 +113,10 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Run tests
-        run: cargo nextest run --workspace --exclude uffs-legacy --all-features --lib --bins --tests
+        run: cargo nextest run --workspace --all-features --lib --bins --tests
 
       - name: Run doc tests
-        run: RUSTDOCFLAGS="-Dwarnings" cargo test --doc --workspace --exclude uffs-legacy --all-features
+        run: RUSTDOCFLAGS="-Dwarnings" cargo test --doc --workspace --all-features
 
   security:
     name: Tier 1 / Security
@@ -122,3 +143,14 @@ jobs:
 
       - name: Run dependency check
         run: cargo deny check
+
+  file-size-policy:
+    name: Tier 1 / File Size Policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enforce file size policy
+        run: bash scripts/ci/check_file_size_policy.sh

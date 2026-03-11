@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
-use super::MultiDriveMftReader;
+use super::{MultiDriveMftReader, drive_reader_budget};
 use crate::cache::{CacheStatus, check_cache_status, save_to_cache};
 use crate::error::{MftError, Result};
 use crate::index::{IndexHeader, MftIndex};
@@ -67,40 +67,44 @@ impl MultiDriveMftReader {
             return Err(MftError::InvalidInput("No drives specified".into()));
         }
 
+        let budget = drive_reader_budget(self.drives.len());
         let mut join_set = JoinSet::new();
+        let mut pending_drives = self.drives.iter().copied();
 
-        for &drive in &self.drives {
-            let ttl = ttl_seconds;
+        for _ in 0..budget {
+            if let Some(drive) = pending_drives.next() {
+                let ttl = ttl_seconds;
 
-            join_set.spawn(async move {
-                match check_cache_status(drive, ttl) {
-                    CacheStatus::Fresh {
-                        index,
-                        header,
-                        age_seconds,
-                    } => {
-                        info!(
-                            drive = %drive,
+                join_set.spawn(async move {
+                    match check_cache_status(drive, ttl) {
+                        CacheStatus::Fresh {
+                            index,
+                            header,
                             age_seconds,
-                            records = index.len(),
-                            "📦 Cache HIT - applying USN updates"
-                        );
-                        Self::apply_usn_updates_to_cached_index(drive, index, header).await
+                        } => {
+                            info!(
+                                drive = %drive,
+                                age_seconds,
+                                records = index.len(),
+                                "📦 Cache HIT - applying USN updates"
+                            );
+                            Self::apply_usn_updates_to_cached_index(drive, index, header).await
+                        }
+                        CacheStatus::Stale { age_seconds } => {
+                            info!(
+                                drive = %drive,
+                                age_seconds = ?age_seconds,
+                                "🔄 Cache STALE - rebuilding index"
+                            );
+                            Self::read_and_cache_single_drive(drive).await
+                        }
+                        CacheStatus::Missing => {
+                            info!(drive = %drive, "🆕 Cache MISS - building index");
+                            Self::read_and_cache_single_drive(drive).await
+                        }
                     }
-                    CacheStatus::Stale { age_seconds } => {
-                        info!(
-                            drive = %drive,
-                            age_seconds = ?age_seconds,
-                            "🔄 Cache STALE - rebuilding index"
-                        );
-                        Self::read_and_cache_single_drive(drive).await
-                    }
-                    CacheStatus::Missing => {
-                        info!(drive = %drive, "🆕 Cache MISS - building index");
-                        Self::read_and_cache_single_drive(drive).await
-                    }
-                }
-            });
+                });
+            }
         }
 
         let mut indices: Vec<MftIndex> = Vec::new();
@@ -116,6 +120,40 @@ impl MultiDriveMftReader {
                         MftError::InvalidInput(format!("Task failed: {join_err}")),
                     ));
                 }
+            }
+
+            if let Some(drive) = pending_drives.next() {
+                let ttl = ttl_seconds;
+
+                join_set.spawn(async move {
+                    match check_cache_status(drive, ttl) {
+                        CacheStatus::Fresh {
+                            index,
+                            header,
+                            age_seconds,
+                        } => {
+                            info!(
+                                drive = %drive,
+                                age_seconds,
+                                records = index.len(),
+                                "📦 Cache HIT - applying USN updates"
+                            );
+                            Self::apply_usn_updates_to_cached_index(drive, index, header).await
+                        }
+                        CacheStatus::Stale { age_seconds } => {
+                            info!(
+                                drive = %drive,
+                                age_seconds = ?age_seconds,
+                                "🔄 Cache STALE - rebuilding index"
+                            );
+                            Self::read_and_cache_single_drive(drive).await
+                        }
+                        CacheStatus::Missing => {
+                            info!(drive = %drive, "🆕 Cache MISS - building index");
+                            Self::read_and_cache_single_drive(drive).await
+                        }
+                    }
+                });
             }
         }
 
@@ -140,11 +178,15 @@ impl MultiDriveMftReader {
         }
 
         let callback = callback.map(Arc::new);
+        let budget = drive_reader_budget(self.drives.len());
         let mut join_set = JoinSet::new();
+        let mut pending_drives = self.drives.iter().copied();
 
-        for &drive in &self.drives {
-            let cb = callback.clone();
-            join_set.spawn(async move { Self::read_single_drive_index(drive, cb).await });
+        for _ in 0..budget {
+            if let Some(drive) = pending_drives.next() {
+                let cb = callback.clone();
+                join_set.spawn(async move { Self::read_single_drive_index(drive, cb).await });
+            }
         }
 
         let mut indices: Vec<MftIndex> = Vec::new();
@@ -160,6 +202,11 @@ impl MultiDriveMftReader {
                         MftError::InvalidInput(format!("Task failed: {join_err}")),
                     ));
                 }
+            }
+
+            if let Some(drive) = pending_drives.next() {
+                let cb = callback.clone();
+                join_set.spawn(async move { Self::read_single_drive_index(drive, cb).await });
             }
         }
 

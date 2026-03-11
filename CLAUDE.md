@@ -11,8 +11,11 @@ UFFS (Ultra Fast File Search) is a Windows-only, high-performance file search to
 The primary workflow tool is `just` (justfile). Use `just` to see all commands.
 
 ```bash
-# Full two-phase workflow (format → test → lint → build → deploy → commit)
+# Safe-by-default validation (no version bump / deploy / commit / push)
 just go
+
+# Explicit ship lane (version bump / build / deploy / commit / push)
+just phase2-ship
 
 # Quick check during development (no coverage)
 just check
@@ -46,7 +49,7 @@ just coverage-report
 just audit
 
 # Full CI pipeline via rust-script (alternative to justfile)
-rust-script scripts/ci-pipeline.rs go -v
+rust-script scripts/ci/ci-pipeline.rs go -v
 ```
 
 ## Architecture
@@ -110,7 +113,7 @@ The workspace enforces extremely strict Clippy settings in `Cargo.toml` `[worksp
 
 ## Scripts
 
-- `scripts/ci-pipeline.rs` — Full async CI pipeline (rust-script)
-- `scripts/build-local.rs` — Local release build helper
+- `scripts/ci/ci-pipeline.rs` — Full async CI pipeline (rust-script)
+- `scripts/dev/build-local.rs` — Local release build helper
 - `scripts/trial_run.ps1` — Windows: runs live MFT trial for parity analysis
-- `scripts/create_mft_test_tree.ps1` — Windows: generates test directory structures
+- `scripts/windows/create_mft_test_tree.ps1` — Windows: generates test directory structures

@@ -28,7 +28,7 @@ Added comprehensive performance tests that can run on any platform:
 
 ### 2. Windows-Specific Testing
 
-Created PowerShell script `scripts/test-phase7-windows.ps1` for comprehensive Windows testing:
+Created PowerShell script `scripts/windows/test-phase7-windows.ps1` for comprehensive Windows testing:
 
 **Features**:
 - Builds in release mode (required due to heap constraints)
@@ -40,13 +40,13 @@ Created PowerShell script `scripts/test-phase7-windows.ps1` for comprehensive Wi
 **Usage**:
 ```powershell
 # Run in elevated PowerShell
-.\scripts\test-phase7-windows.ps1
+.\scripts\windows\test-phase7-windows.ps1
 
 # Custom drive and runs
-.\scripts\test-phase7-windows.ps1 -Drive E -Runs 5
+.\scripts\windows\test-phase7-windows.ps1 -Drive E -Runs 5
 
 # Skip build step
-.\scripts\test-phase7-windows.ps1 -SkipBuild
+.\scripts\windows\test-phase7-windows.ps1 -SkipBuild
 ```
 
 ## Performance Targets
@@ -124,7 +124,7 @@ Total post-processing time: 1.168ms
 
 4. **Automated Testing**:
    ```powershell
-   .\scripts\test-phase7-windows.ps1
+   .\scripts\windows\test-phase7-windows.ps1
    ```
 
 ## Validation Checklist

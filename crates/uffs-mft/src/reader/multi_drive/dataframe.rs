@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use uffs_polars::{DataFrame, IntoLazy, col, lit};
 
-use super::{DriveReadResult, MultiDriveMftReader};
+use super::{DriveReadResult, MultiDriveMftReader, drive_reader_budget};
 use crate::error::{MftError, Result};
 use crate::reader::{MftProgress, MftReader};
 
@@ -51,19 +51,23 @@ impl MultiDriveMftReader {
         }
 
         let callback = callback.map(Arc::new);
+        let budget = drive_reader_budget(self.drives.len());
         let mut join_set = JoinSet::new();
+        let mut pending_drives = self.drives.iter().copied();
 
-        for &drive in &self.drives {
-            let cb = callback.clone();
+        for _ in 0..budget {
+            if let Some(drive) = pending_drives.next() {
+                let cb = callback.clone();
 
-            join_set.spawn(async move {
-                let result = Self::read_single_drive(drive, cb).await;
-                DriveReadResult {
-                    drive,
-                    dataframe: result.as_ref().ok().cloned(),
-                    error: result.err(),
-                }
-            });
+                join_set.spawn(async move {
+                    let result = Self::read_single_drive(drive, cb).await;
+                    DriveReadResult {
+                        drive,
+                        dataframe: result.as_ref().ok().cloned(),
+                        error: result.err(),
+                    }
+                });
+            }
         }
 
         let mut dataframes: Vec<DataFrame> = Vec::new();
@@ -90,6 +94,19 @@ impl MultiDriveMftReader {
                         MftError::InvalidInput(format!("Task failed: {join_err}")),
                     ));
                 }
+            }
+
+            if let Some(drive) = pending_drives.next() {
+                let cb = callback.clone();
+
+                join_set.spawn(async move {
+                    let result = Self::read_single_drive(drive, cb).await;
+                    DriveReadResult {
+                        drive,
+                        dataframe: result.as_ref().ok().cloned(),
+                        error: result.err(),
+                    }
+                });
             }
         }
 
@@ -162,17 +179,22 @@ impl MultiDriveMftReader {
             return Ok(Vec::new());
         }
 
+        let budget = drive_reader_budget(self.drives.len());
         let mut join_set = JoinSet::new();
+        let mut pending_drives = self.drives.iter().copied();
 
-        for &drive in &self.drives {
-            join_set.spawn(async move {
-                let result = Self::read_single_drive::<fn(char, MftProgress)>(drive, None).await;
-                DriveReadResult {
-                    drive,
-                    dataframe: result.as_ref().ok().cloned(),
-                    error: result.err(),
-                }
-            });
+        for _ in 0..budget {
+            if let Some(drive) = pending_drives.next() {
+                join_set.spawn(async move {
+                    let result =
+                        Self::read_single_drive::<fn(char, MftProgress)>(drive, None).await;
+                    DriveReadResult {
+                        drive,
+                        dataframe: result.as_ref().ok().cloned(),
+                        error: result.err(),
+                    }
+                });
+            }
         }
 
         let mut results = Vec::with_capacity(self.drives.len());
@@ -186,6 +208,18 @@ impl MultiDriveMftReader {
                         error: Some(MftError::InvalidInput(format!("Task failed: {join_err}"))),
                     });
                 }
+            }
+
+            if let Some(drive) = pending_drives.next() {
+                join_set.spawn(async move {
+                    let result =
+                        Self::read_single_drive::<fn(char, MftProgress)>(drive, None).await;
+                    DriveReadResult {
+                        drive,
+                        dataframe: result.as_ref().ok().cloned(),
+                        error: result.err(),
+                    }
+                });
             }
         }
 

@@ -4,11 +4,13 @@ Use this bucket for benchmark reports, optimization notes, and validation result
 
 ## Current entry points
 
-- [`../PHASE7_PERFORMANCE_ANALYSIS.md`](../PHASE7_PERFORMANCE_ANALYSIS.md)
-- [`../UFFS_PERFORMANCE_OPTIMIZATION_PHASE2.md`](../UFFS_PERFORMANCE_OPTIMIZATION_PHASE2.md)
+- [`MFTINDEX_OPTIMIZATION_PLAN.md`](MFTINDEX_OPTIMIZATION_PLAN.md)
+- [`UFFS_PERFORMANCE_OPTIMIZATION_PHASE2.md`](UFFS_PERFORMANCE_OPTIMIZATION_PHASE2.md)
+- [`uffs-mft-optimization-plan.md`](uffs-mft-optimization-plan.md)
+- [`uffs_mft_optimization_plan_review.md`](uffs_mft_optimization_plan_review.md)
 - [`../architecture/PHASE7_PERFORMANCE_VALIDATION.md`](../architecture/PHASE7_PERFORMANCE_VALIDATION.md)
 
-This landing page gives the performance work a stable home while older documents are incrementally normalized.
+This landing page gives the retained performance work a stable home after the docs-root cleanup.
 
 ## Focused cross-platform benchmark lane
 

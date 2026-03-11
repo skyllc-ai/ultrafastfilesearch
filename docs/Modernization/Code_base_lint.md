@@ -9,7 +9,7 @@
 | Property | Value |
 |---|---|
 | **Project** | UFFS — Ultra Fast File Search (NTFS MFT reader + Polars DataFrames) |
-| **Workspace members** | `uffs-polars`, `uffs-mft`, `uffs-core`, `uffs-cli`, `uffs-tui`, `uffs-gui`, `uffs-legacy`, `uffs-diag` |
+| **Workspace members** | `uffs-polars`, `uffs-mft`, `uffs-core`, `uffs-cli`, `uffs-tui`, `uffs-gui`, `uffs-diag` |
 | **Toolchain** | Pinned nightly (`rust-toolchain.toml` — `channel = "nightly-2025-12-15"`) |
 | **Edition** | 2024 |
 | **MSRV** | 1.85 |
@@ -18,7 +18,7 @@
 | **No `clippy.toml`** | Confirmed absent (one exists in `vendor/errno/` — irrelevant, vendored) |
 | **`.cargo/config.toml` present** | Yes — sets `sccache` wrapper, custom `target-dir`, per-target `rustflags` and linkers. **Do not modify** (see §3.4) |
 | **Vendored code** | `vendor/errno`, `vendor/fs4`, `vendor/mft-reader-rs`, `vendor/stacker`, `vendor/winapi-util` |
-| **Workflow tool** | `just` (justfile at repo root); also `rust-script scripts/ci-pipeline.rs` |
+| **Workflow tool** | `just` (justfile at repo root); also `rust-script scripts/ci/ci-pipeline.rs` |
 
 ---
 
@@ -80,10 +80,6 @@ cargo metadata --no-deps --format-version 1 | jq -r '.packages[].manifest_path' 
 
 - Do **not** refactor. These are excluded from the workspace already. If any workspace crate wraps vendored code via `mod` or `include!`, isolate with a module boundary and `#[expect]` only at that boundary, with a `// Vendored — suppression required` comment.
 
-**Legacy reference code** (`crates/uffs-legacy`):
-
-- Do **not** refactor. This crate exists for reference only. Suppress at crate root if needed, with a `// Legacy reference — not maintained` comment.
-
 ### 3.3 Toolchain & Edition — Pinned (Do Not Change)
 
 Use the repo's existing `rust-toolchain.toml` (`channel = "nightly-2025-12-15"`). **Do not change:**
@@ -102,7 +98,7 @@ If an MSRV/edition bump is desirable, file it as a separate, explicitly approved
 - `[workspace.lints]` or `[lints]` tables in any `Cargo.toml`
 - `clippy.toml` (do not create one)
 - `.cargo/config.toml` (exists; do not modify — it configures sccache, target-dir, and per-target linkers/rustflags)
-- CI scripts (`.github/workflows/*.yml`), `justfile`, `scripts/ci-pipeline.rs`, or any file that passes `-A` / `-W` flags or sets `RUSTFLAGS` to suppress lints
+- CI scripts (`.github/workflows/*.yml`), `justfile`, `scripts/ci/ci-pipeline.rs`, or any file that passes `-A` / `-W` flags or sets `RUSTFLAGS` to suppress lints
 - Do not add `#![allow(...)]` via `cfg_attr` or feature-gated lint suppression
 
 **Exception:** the existing `multiple_crate_versions = "allow"` in `[workspace.lints.clippy]` may remain (justified — Polars/Tokio ecosystem brings unavoidable version conflicts).
@@ -147,7 +143,7 @@ MEMBERS=$(cargo metadata --no-deps --format-version 1 \
   | xargs -I{} dirname {})
 
 # Directories to exclude from scanning
-# vendor/ is excluded from workspace; uffs-legacy is reference-only
+# vendor/ is excluded from workspace
 EXCLUDES="--exclude-dir=target --exclude-dir=vendor"
 
 echo "=== Total allow/expect attributes ==="
@@ -184,7 +180,6 @@ echo "$MEMBERS" | xargs -I{} grep -rn $EXCLUDES \
 ```
 
 > **Note:** counts are approximate for multi-line attributes. That is acceptable for the inventory — the goal is triage, not perfection.
-> **Note:** `crates/uffs-legacy/` will appear in per-crate counts but should be treated as exempt (§3.2).
 
 ### Phase A: Crate-Root `#![allow(...)]`
 
@@ -298,7 +293,6 @@ When running with Intent's parallel agents:
   | C | `uffs-core` | Query engine; platform-agnostic |
   | D | `uffs-cli`, `uffs-tui` | Binary crates; thinnest layers |
   | E | `uffs-gui`, `uffs-diag` | GUI placeholder + diagnostic tools |
-  | F | `uffs-legacy` | Reference-only — inventory count only, no fixes (see §3.2) |
 
 - Do **not** partition by lint category across the entire repo (this causes conflicts and duplicated work).
 - Each agent works on its **own branch**, keeping changes localized to its assigned crate(s).
@@ -408,7 +402,7 @@ The task is complete **only** when all of the following are true:
 | 10 | **No new direct dependencies** | `git diff Cargo.toml crates/*/Cargo.toml` shows no new `[dependencies]` entries (or any additions are justified in changelog) |
 | 11 | **No lockfile churn** | `cargo update` was not run; `Cargo.lock` changes only reflect `Cargo.toml` edits |
 | 12 | **Lint config unchanged** | `git diff` shows no changes to `[workspace.lints]`, `[lints]`, `clippy.toml`, `.cargo/config.toml`, `justfile`, or CI lint flags |
-| 13 | **Legacy crate untouched** | `git diff crates/uffs-legacy/` shows no source changes (inventory-only) |
+| 13 | **Workspace membership unchanged** | `git diff Cargo.toml` shows no unexpected workspace-member changes |
 
 ---
 

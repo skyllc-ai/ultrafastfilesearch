@@ -938,7 +938,7 @@ Processing time: 12.3s
 #### Usage
 
 ```bash
-rust-script scripts/analyze_trial_outputs.rs docs/trial_runs/d_disk
+rust-script scripts/dev/analyze_trial_outputs.rs docs/trial_runs/d_disk
 ```
 
 #### What It Does
@@ -1045,7 +1045,7 @@ File sizes:
 #### Usage
 
 ```bash
-rust-script scripts/diagnose_mft_counts.rs cpp_d.txt rust_d.txt
+rust-script scripts/dev/diagnose_mft_counts.rs cpp_d.txt rust_d.txt
 ```
 
 #### What It Analyzes
@@ -1111,7 +1111,7 @@ COMPARISON: C++ vs Rust
 #### Usage
 
 ```bash
-rust-script scripts/find_missing_paths.rs cpp_d.txt rust_d.txt
+rust-script scripts/dev/find_missing_paths.rs cpp_d.txt rust_d.txt
 ```
 
 #### What It Does
@@ -1330,13 +1330,13 @@ The script generates a markdown report (`PARITY_ANALYSIS_YYYY_MM_DD.md`) contain
 
 **`ci-pipeline.rs`** - Full CI pipeline runner
 ```bash
-rust-script scripts/ci-pipeline.rs go -v
+rust-script scripts/ci/ci-pipeline.rs go -v
 ```
 Runs complete CI pipeline: format check, clippy, tests, builds.
 
 **`build-local.rs`** - Local build helper
 ```bash
-rust-script scripts/build-local.rs
+rust-script scripts/dev/build-local.rs
 ```
 Builds all workspace crates in release mode.
 
@@ -1487,13 +1487,13 @@ python3 scripts/compare_outputs.py cpp_d.txt rust_d.txt
 rust-script scripts/analyze_cpp_stats.rs cpp_d.txt
 
 # 3. Analyze trial run directory
-rust-script scripts/analyze_trial_outputs.rs docs/trial_runs/d_disk
+rust-script scripts/dev/analyze_trial_outputs.rs docs/trial_runs/d_disk
 
 # 4. Detailed count diagnostics with Polars
-rust-script scripts/diagnose_mft_counts.rs cpp_d.txt rust_d.txt
+rust-script scripts/dev/diagnose_mft_counts.rs cpp_d.txt rust_d.txt
 
 # 5. Extract full CSV lines for missing paths
-rust-script scripts/find_missing_paths.rs cpp_d.txt rust_d.txt
+rust-script scripts/dev/find_missing_paths.rs cpp_d.txt rust_d.txt
 # Review missing_paths.txt for detailed analysis
 ```
 

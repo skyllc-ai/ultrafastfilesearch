@@ -29,6 +29,27 @@ pub(super) use self::multi_drive::search_multi_drive_filtered;
 #[cfg(windows)]
 use self::streaming::search_streaming;
 
+/// Maximum number of drive-level CLI search tasks to run concurrently.
+#[cfg(any(windows, test))]
+pub(super) const MAX_CONCURRENT_SEARCH_DRIVE_TASKS: usize = 4;
+
+/// Returns the bounded drive-level task budget for CLI multi-drive searches.
+#[cfg(any(windows, test))]
+pub(super) fn search_drive_task_budget(total_drives: usize) -> usize {
+    if total_drives == 0 {
+        return 0;
+    }
+
+    let hardware_budget = std::thread::available_parallelism().map_or(
+        MAX_CONCURRENT_SEARCH_DRIVE_TASKS,
+        core::num::NonZeroUsize::get,
+    );
+
+    total_drives
+        .min(hardware_budget.max(1))
+        .min(MAX_CONCURRENT_SEARCH_DRIVE_TASKS)
+}
+
 /// Determine if we should use the fast `MftIndex` query path.
 ///
 /// Returns `true` if:
@@ -328,4 +349,28 @@ pub(super) async fn search_multi_drive_filtered(
     _no_bitmap: bool,
 ) -> Result<uffs_mft::DataFrame> {
     bail!("Multi-drive search is only supported on Windows")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_CONCURRENT_SEARCH_DRIVE_TASKS, search_drive_task_budget};
+
+    #[test]
+    fn search_drive_task_budget_handles_empty_input() {
+        assert_eq!(search_drive_task_budget(0), 0);
+    }
+
+    #[test]
+    fn search_drive_task_budget_never_exceeds_drive_count() {
+        assert_eq!(search_drive_task_budget(1), 1);
+        assert!(search_drive_task_budget(3) <= 3);
+    }
+
+    #[test]
+    fn search_drive_task_budget_caps_drive_fan_out() {
+        assert!(
+            search_drive_task_budget(MAX_CONCURRENT_SEARCH_DRIVE_TASKS + 8)
+                <= MAX_CONCURRENT_SEARCH_DRIVE_TASKS
+        );
+    }
 }

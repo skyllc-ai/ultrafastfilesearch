@@ -12,6 +12,25 @@ mod dataframe;
 #[cfg(windows)]
 mod index;
 
+/// Maximum number of drive-level reader tasks to run at once.
+#[cfg(any(windows, test))]
+pub(super) const MAX_CONCURRENT_DRIVE_READERS: usize = 4;
+
+/// Returns the bounded drive-level task budget for multi-drive orchestration.
+#[cfg(any(windows, test))]
+pub(super) fn drive_reader_budget(total_drives: usize) -> usize {
+    if total_drives == 0 {
+        return 0;
+    }
+
+    let hardware_budget = std::thread::available_parallelism()
+        .map_or(MAX_CONCURRENT_DRIVE_READERS, core::num::NonZeroUsize::get);
+
+    total_drives
+        .min(hardware_budget.max(1))
+        .min(MAX_CONCURRENT_DRIVE_READERS)
+}
+
 /// Result from reading a single drive.
 #[derive(Debug)]
 pub struct DriveReadResult {
@@ -152,5 +171,28 @@ impl MultiDriveMftReader {
         _ttl_seconds: u64,
     ) -> Result<Vec<crate::index::MftIndex>> {
         Err(MftError::PlatformNotSupported)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_CONCURRENT_DRIVE_READERS, drive_reader_budget};
+
+    #[test]
+    fn drive_reader_budget_handles_empty_input() {
+        assert_eq!(drive_reader_budget(0), 0);
+    }
+
+    #[test]
+    fn drive_reader_budget_never_exceeds_drive_count() {
+        assert_eq!(drive_reader_budget(1), 1);
+        assert!(drive_reader_budget(3) <= 3);
+    }
+
+    #[test]
+    fn drive_reader_budget_caps_drive_fan_out() {
+        assert!(
+            drive_reader_budget(MAX_CONCURRENT_DRIVE_READERS + 8) <= MAX_CONCURRENT_DRIVE_READERS
+        );
     }
 }

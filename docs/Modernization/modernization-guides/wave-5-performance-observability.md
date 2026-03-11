@@ -282,7 +282,7 @@ open flamegraph.svg
 ### Final Validation
 ```bash
 cargo bench
-rust-script scripts/ci-pipeline.rs go -v
+rust-script scripts/ci/ci-pipeline.rs go -v
 ```
 
 ---
