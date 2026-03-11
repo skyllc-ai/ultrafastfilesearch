@@ -218,10 +218,7 @@ impl MultiDriveMftReader {
                 }
                 Err(join_err) => {
                     // Task panicked or was cancelled
-                    errors.push((
-                        '?',
-                        MftError::InvalidInput(format!("Task failed: {join_err}")),
-                    ));
+                    errors.push(('?', MftError::from_join_error("read_all", &join_err)));
                 }
             }
 
@@ -296,7 +293,7 @@ impl MultiDriveMftReader {
             }
         })
         .await
-        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
+        .map_err(|error| MftError::from_join_error("read_single_drive", &error))?
     }
 
     /// Read all drives and return individual results (for detailed error
@@ -343,7 +340,7 @@ impl MultiDriveMftReader {
                     results.push(DriveReadResult {
                         drive: '?',
                         dataframe: None,
-                        error: Some(MftError::InvalidInput(format!("Task failed: {join_err}"))),
+                        error: Some(MftError::from_join_error("read_all_detailed", &join_err)),
                     });
                 }
             }
@@ -536,7 +533,7 @@ impl MultiDriveMftReader {
                 Err(join_err) => {
                     errors.push((
                         '?',
-                        MftError::InvalidInput(format!("Task failed: {join_err}")),
+                        MftError::from_join_error("read_all_index_cached", &join_err),
                     ));
                 }
             }
@@ -655,7 +652,7 @@ impl MultiDriveMftReader {
                 Err(join_err) => {
                     errors.push((
                         '?',
-                        MftError::InvalidInput(format!("Task failed: {join_err}")),
+                        MftError::from_join_error("read_all_index_with_progress", &join_err),
                     ));
                 }
             }
@@ -701,7 +698,7 @@ impl MultiDriveMftReader {
             }
         })
         .await
-        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
+        .map_err(|error| MftError::from_join_error("read_single_drive_index", &error))?
     }
 
     /// Read a single drive and save to cache.
@@ -710,7 +707,7 @@ impl MultiDriveMftReader {
         // Use spawn_blocking to run blocking I/O on a dedicated thread pool.
         tokio::task::spawn_blocking(move || Self::read_and_cache_single_drive_sync(drive))
             .await
-            .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
+            .map_err(|error| MftError::from_join_error("read_and_cache_single_drive", &error))?
     }
 
     /// Synchronous implementation of read_and_cache_single_drive.
@@ -764,7 +761,7 @@ impl MultiDriveMftReader {
             Self::apply_usn_updates_to_cached_index_sync(drive, index, header)
         })
         .await
-        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
+        .map_err(|error| MftError::from_join_error("apply_usn_updates_to_cached_index", &error))?
     }
 
     /// Synchronous implementation of apply_usn_updates_to_cached_index.

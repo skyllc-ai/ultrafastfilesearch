@@ -62,6 +62,46 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 mod commands;
 
+/// Operation label used for CLI-wide shutdown classification.
+const CLI_OPERATION: &str = "uffs";
+
+/// Maps spawned CLI task failures onto the approved cancellation taxonomy.
+#[must_use]
+fn classify_cli_task_error(
+    operation: &'static str,
+    error: &tokio::task::JoinError,
+) -> uffs_mft::MftError {
+    if error.is_cancelled() {
+        return uffs_mft::MftError::Cancelled {
+            operation,
+            reason: error.to_string(),
+        };
+    }
+
+    uffs_mft::MftError::WaitFailed {
+        operation,
+        reason: error.to_string(),
+    }
+}
+
+/// Builds the explicit cancellation outcome for a Ctrl+C shutdown request.
+#[must_use]
+fn shutdown_requested_error(operation: &'static str) -> uffs_mft::MftError {
+    uffs_mft::MftError::Cancelled {
+        operation,
+        reason: "shutdown requested by Ctrl+C".to_owned(),
+    }
+}
+
+/// Builds a wait failure when the CLI cannot install a Ctrl+C listener.
+#[must_use]
+fn ctrl_c_listener_error(operation: &'static str, error: &io::Error) -> uffs_mft::MftError {
+    uffs_mft::MftError::WaitFailed {
+        operation,
+        reason: format!("failed to listen for Ctrl+C: {error}"),
+    }
+}
+
 /// Parse a drive letter from common CLI input formats.
 ///
 /// Accepts:
@@ -473,6 +513,33 @@ async fn run() -> Result<()> {
     Ok(())
 }
 
+/// Runs the CLI while listening for Ctrl+C so shutdown reaches long-running
+/// command flows started from the binary entrypoint.
+#[expect(
+    clippy::single_call_fn,
+    reason = "entrypoint wrapper exists solely to propagate shutdown into the spawned command task"
+)]
+async fn run_until_shutdown() -> Result<()> {
+    let mut run_task = tokio::spawn(run());
+
+    tokio::select! {
+        result = &mut run_task => {
+            match result {
+                Ok(outcome) => outcome,
+                Err(error) => Err(classify_cli_task_error(CLI_OPERATION, &error).into()),
+            }
+        }
+        signal = tokio::signal::ctrl_c() => {
+            run_task.abort();
+
+            match signal {
+                Ok(()) => Err(shutdown_requested_error(CLI_OPERATION).into()),
+                Err(error) => Err(ctrl_c_listener_error(CLI_OPERATION, &error).into()),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -486,7 +553,10 @@ mod tests {
 
     use clap::{CommandFactory, Parser};
 
-    use super::{Cli, Commands, parse_drive_letter};
+    use super::{
+        Cli, Commands, classify_cli_task_error, ctrl_c_listener_error, parse_drive_letter,
+        shutdown_requested_error,
+    };
 
     fn render_long_help(mut command: clap::Command) -> String {
         let mut buffer = Vec::new();
@@ -607,6 +677,56 @@ mod tests {
         assert!(help.contains("uffs index --drives C,D,E out.parquet"));
         assert!(help.contains("Creates myindex.parquet"));
     }
+
+    #[tokio::test]
+    async fn test_classify_cli_task_error_maps_cancelled_joins() {
+        let handle = tokio::spawn(async {
+            core::future::pending::<()>().await;
+        });
+        handle.abort();
+
+        let outcome = handle.await;
+        assert!(outcome.is_err(), "aborted task unexpectedly completed");
+        let Err(join_error) = outcome else {
+            return;
+        };
+
+        let error = classify_cli_task_error("uffs", &join_error);
+
+        assert!(matches!(
+            error,
+            uffs_mft::MftError::Cancelled {
+                operation: "uffs",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_shutdown_requested_error_is_cancelled() {
+        let error = shutdown_requested_error("uffs");
+
+        assert!(matches!(
+            error,
+            uffs_mft::MftError::Cancelled {
+                operation: "uffs",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_ctrl_c_listener_error_is_wait_failed() {
+        let error = ctrl_c_listener_error("uffs", &std::io::Error::other("listener unavailable"));
+
+        assert!(matches!(
+            error,
+            uffs_mft::MftError::WaitFailed {
+                operation: "uffs",
+                ..
+            }
+        ));
+    }
 }
 
 #[tokio::main]
@@ -615,7 +735,7 @@ mod tests {
     reason = "intentional user-facing error output to stderr"
 )]
 async fn main() {
-    if let Err(err) = run().await {
+    if let Err(err) = run_until_shutdown().await {
         // Print error without backtrace for clean user-facing output
         // Use anyhow's chain() to iterate through the error chain
         for (idx, cause) in err.chain().enumerate() {

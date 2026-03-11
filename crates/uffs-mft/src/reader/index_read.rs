@@ -76,7 +76,7 @@ impl MftReader {
             idx
         })
         .await
-        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?;
+        .map_err(|error| MftError::from_join_error("read_all_index", &error))?;
         trace!(volume = %volume, "read_all_index: EXIT");
         tracing::debug!(volume = %volume, "[TRIP] reader::read_all_index EXIT");
         result
@@ -187,7 +187,7 @@ impl MftReader {
             reader.read_mft_index_internal(Some(callback))
         })
         .await
-        .map_err(|e| MftError::InvalidInput(format!("Task join error: {e}")))?
+        .map_err(|error| MftError::from_join_error("read_index_with_progress", &error))?
     }
 
     /// Read MFT into lean index with progress (non-Windows stub).

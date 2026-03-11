@@ -37,12 +37,17 @@ impl ParallelMftReader {
     {
         use std::collections::VecDeque;
         use std::pin::Pin;
+        use std::time::Instant;
 
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
         use crate::index::MftIndex;
+        use crate::platform::{
+            IOCP_WAIT_COMPLETION_DEADLINE, IOCP_WAIT_POLL_INTERVAL_MS, WAIT_TIMEOUT_ERROR_CODE,
+            classify_wait_error_code, wait_deadline_exceeded,
+        };
 
         let record_size = self.extent_map.bytes_per_record as usize;
         let total_records = self.extent_map.total_records() as usize;
@@ -247,6 +252,9 @@ impl ParallelMftReader {
 
         // Process completions with inline parsing
         let bitmap_ref = self.bitmap.as_ref();
+        let mut last_completion_at = Instant::now();
+
+        const WAIT_OPERATION: &str = "read_all_sliding_window_iocp_to_index";
 
         while completed_count < total_io_ops {
             let mut bytes_transferred: u32 = 0;
@@ -260,15 +268,45 @@ impl ParallelMftReader {
                     &mut bytes_transferred,
                     &mut completion_key,
                     &mut overlapped_ptr,
-                    u32::MAX,
+                    IOCP_WAIT_POLL_INTERVAL_MS,
                 )
             };
 
             if result.is_err() {
-                let err = std::io::Error::last_os_error();
-                warn!(error = %err, "GetQueuedCompletionStatus failed");
-                continue;
+                let last_error = unsafe { GetLastError() };
+                if last_error.0 == WAIT_TIMEOUT_ERROR_CODE {
+                    let stalled_for = last_completion_at.elapsed();
+                    if stalled_for >= IOCP_WAIT_COMPLETION_DEADLINE {
+                        return Err(wait_deadline_exceeded(
+                            WAIT_OPERATION,
+                            stalled_for,
+                            format!(
+                                "GetQueuedCompletionStatus observed no inline IOCP completions after {completed_count} of {total_io_ops} reads"
+                            ),
+                        ));
+                    }
+                    continue;
+                }
+
+                return Err(classify_wait_error_code(
+                    WAIT_OPERATION,
+                    last_error.0,
+                    format!(
+                        "GetQueuedCompletionStatus failed after {completed_count} of {total_io_ops} inline IOCP reads completed"
+                    ),
+                ));
             }
+
+            if overlapped_ptr.is_null() {
+                return Err(MftError::WaitFailed {
+                    operation: WAIT_OPERATION,
+                    reason: format!(
+                        "GetQueuedCompletionStatus returned a null OVERLAPPED pointer after {completed_count} of {total_io_ops} inline IOCP reads completed"
+                    ),
+                });
+            }
+
+            last_completion_at = Instant::now();
 
             // Find completed slot
             let mut completed_slot = None;

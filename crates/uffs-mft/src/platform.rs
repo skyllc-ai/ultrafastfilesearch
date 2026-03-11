@@ -22,6 +22,10 @@ pub use system::{
     DriveType, detect_drive_type, detect_ntfs_drives, infer_drive_from_path, is_elevated,
     is_volume_read_only, volume_root_path,
 };
+pub(crate) use volume::{
+    IOCP_WAIT_COMPLETION_DEADLINE, IOCP_WAIT_POLL_INTERVAL_MS, WAIT_TIMEOUT_ERROR_CODE,
+    classify_wait_error_code, wait_deadline_exceeded,
+};
 pub use volume::{NtfsVolumeData, VolumeHandle};
 
 #[cfg(test)]

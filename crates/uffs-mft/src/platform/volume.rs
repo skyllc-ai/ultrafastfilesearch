@@ -1,6 +1,7 @@
 //! Windows NTFS volume handle and metadata access helpers.
 
 use std::mem::size_of;
+use std::time::Duration;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
@@ -20,6 +21,58 @@ use crate::ntfs::NtfsBootSector;
 /// FILE_READ_DATA access right (0x0001) - required to read data from a
 /// file/volume.
 const FILE_READ_DATA: u32 = 0x0001;
+
+/// Short poll interval for Windows completion waits in MFT hot paths.
+pub(crate) const IOCP_WAIT_POLL_INTERVAL_MS: u32 = 100;
+
+/// Maximum stall time allowed between Windows completion notifications.
+pub(crate) const IOCP_WAIT_COMPLETION_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Win32 error code reported when a wait interval expires.
+pub(crate) const WAIT_TIMEOUT_ERROR_CODE: u32 = 258;
+
+/// Win32 error code reported when an overlapped operation is aborted.
+const ERROR_OPERATION_ABORTED_CODE: u32 = 995;
+
+/// Classifies a Windows wait failure using the approved Wave 3A taxonomy.
+#[must_use]
+pub(crate) fn classify_wait_error_code(
+    operation: &'static str,
+    error_code: u32,
+    detail: impl Into<String>,
+) -> MftError {
+    let detail = detail.into();
+
+    match error_code {
+        ERROR_OPERATION_ABORTED_CODE => MftError::Cancelled {
+            operation,
+            reason: format!("{detail} (Win32 error {error_code})"),
+        },
+        _ => MftError::WaitFailed {
+            operation,
+            reason: format!("{detail} (Win32 error {error_code})"),
+        },
+    }
+}
+
+/// Builds a timeout error for a Windows completion wait that exceeded its
+/// deadline.
+#[must_use]
+pub(crate) fn wait_deadline_exceeded(
+    operation: &'static str,
+    waited: Duration,
+    detail: impl Into<String>,
+) -> MftError {
+    let detail = detail.into();
+
+    MftError::Timeout {
+        operation,
+        reason: format!(
+            "{detail} after {} ms without observing a completion",
+            waited.as_millis()
+        ),
+    }
+}
 
 /// A handle to an NTFS volume for direct disk access.
 ///
@@ -587,5 +640,53 @@ impl Drop for HandleGuard {
                 let _ = CloseHandle(self.0);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_wait_error_maps_aborted_waits_to_cancelled() {
+        let error = classify_wait_error_code("read_all_index", 995, "wait aborted");
+
+        assert!(matches!(
+            error,
+            MftError::Cancelled {
+                operation: "read_all_index",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn classify_wait_error_maps_other_wait_failures_to_wait_failed() {
+        let error = classify_wait_error_code("read_all_index", 123, "wait failed");
+
+        assert!(matches!(
+            error,
+            MftError::WaitFailed {
+                operation: "read_all_index",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn wait_deadline_helper_builds_timeout_error() {
+        let error = wait_deadline_exceeded(
+            "read_all_index",
+            Duration::from_secs(31),
+            "no completions arrived",
+        );
+
+        assert!(matches!(
+            error,
+            MftError::Timeout {
+                operation: "read_all_index",
+                ..
+            }
+        ));
     }
 }

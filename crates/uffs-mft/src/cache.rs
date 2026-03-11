@@ -342,7 +342,7 @@ pub async fn load_or_build_dataframe_cached(
         load_or_build_dataframe_cached_sync(drive, ttl_seconds)
     })
     .await
-    .map_err(|e| crate::MftError::InvalidInput(format!("Task join error: {e}")))?;
+    .map_err(|error| crate::MftError::from_join_error("load_or_build_dataframe_cached", &error))?;
     eprintln!("[DEBUG] load_or_build_dataframe_cached: EXIT drive={drive}");
     result
 }
