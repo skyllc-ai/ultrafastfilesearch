@@ -1,4 +1,4 @@
-//! Benchmark-oriented DataFrame timing entrypoints.
+//! Benchmark-oriented `DataFrame` timing entrypoints.
 
 #[cfg(windows)]
 use std::time::Instant;
@@ -8,16 +8,15 @@ use tracing::{debug, info, warn};
 use uffs_polars::DataFrame;
 
 #[cfg(windows)]
+use super::PhaseTimings;
+#[cfg(windows)]
 use super::benchmark::{
     build_benchmark_result, build_drive_characteristics, estimate_combined_phase_timings,
 };
 use super::{BenchmarkResult, MftReader};
-#[cfg(windows)]
-use super::PhaseTimings;
 use crate::error::{MftError, Result};
 
 impl MftReader {
-
     /// Read MFT with detailed phase timing for benchmarking.
     ///
     /// This method measures each phase of MFT reading separately:
@@ -240,4 +239,3 @@ impl MftReader {
         Ok((df, result))
     }
 }
-

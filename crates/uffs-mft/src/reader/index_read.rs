@@ -7,16 +7,15 @@ use std::time::Instant;
 use tracing::{debug, info, trace, warn};
 
 #[cfg(windows)]
+use super::MftReadMode;
+#[cfg(windows)]
 use super::read_mode::index_effective_mode;
 use super::{MftProgress, MftReader};
-#[cfg(windows)]
-use super::MftReadMode;
 use crate::error::{MftError, Result};
 #[cfg(windows)]
 use crate::platform::VolumeHandle;
 
 impl MftReader {
-
     /// Read the entire MFT into a lean `MftIndex` (fast path).
     ///
     /// This method builds a compact `MftIndex` structure instead of a Polars
@@ -651,4 +650,3 @@ impl MftReader {
         Ok(index)
     }
 }
-

@@ -119,7 +119,9 @@ impl IndexPattern {
                 if case_sensitive {
                     input.starts_with(prefix.as_str())
                 } else {
-                    input.to_ascii_lowercase().starts_with(prefix_lower.as_str())
+                    input
+                        .to_ascii_lowercase()
+                        .starts_with(prefix_lower.as_str())
                 }
             }
             Self::Suffix {
@@ -287,11 +289,12 @@ pub fn compile_parsed_pattern(parsed: &ParsedPattern) -> Result<IndexPattern> {
                 pattern: pattern_str.to_owned(),
                 reason: err.to_string(),
             })?;
-            let regex_lower =
-                Regex::new(&format!("(?i){pattern_str}")).map_err(|err| CoreError::InvalidRegex {
+            let regex_lower = Regex::new(&format!("(?i){pattern_str}")).map_err(|err| {
+                CoreError::InvalidRegex {
                     pattern: pattern_str.to_owned(),
                     reason: err.to_string(),
-                })?;
+                }
+            })?;
             Ok(IndexPattern::Regex { regex, regex_lower })
         }
         PatternType::Literal => {

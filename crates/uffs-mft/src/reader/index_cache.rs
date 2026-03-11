@@ -7,7 +7,6 @@ use super::MftReader;
 use crate::error::{MftError, Result};
 
 impl MftReader {
-
     /// Read MFT into lean `MftIndex` with automatic caching.
     ///
     /// This is the **recommended primary method** for CLI usage. It:
@@ -214,4 +213,3 @@ impl MftReader {
         Ok(index)
     }
 }
-

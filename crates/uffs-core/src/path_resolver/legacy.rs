@@ -123,7 +123,10 @@ impl PathResolver {
             .map(|frs| {
                 frs.map_or_else(
                     || "<null>".to_owned(),
-                    |frs_val| self.resolve(frs_val).unwrap_or_else(|_| "<unknown>".to_owned()),
+                    |frs_val| {
+                        self.resolve(frs_val)
+                            .unwrap_or_else(|_| "<unknown>".to_owned())
+                    },
                 )
             })
             .collect();
@@ -142,8 +145,8 @@ impl PathResolver {
 /// If the `DataFrame` is filtered (e.g., only matching files), parent
 /// directories may be missing, causing `<unknown>` paths.
 ///
-/// For correct path resolution, use [`super::add_paths_from_full_data`] instead,
-/// which builds the resolver from full MFT data before filtering.
+/// For correct path resolution, use [`super::add_paths_from_full_data`]
+/// instead, which builds the resolver from full MFT data before filtering.
 ///
 /// # Errors
 ///
@@ -180,11 +183,13 @@ pub fn add_path_column_multi_drive(df: &DataFrame) -> Result<DataFrame> {
             // Extract drive letter from "C:" format
             let drive_letter = drive_str.chars().next().unwrap_or('?');
 
-            let resolver = resolvers.entry(drive_letter).or_insert_with(|| PathResolver {
-                entries: HashMap::new(),
-                cache: HashMap::new(),
-                volume: drive_letter,
-            });
+            let resolver = resolvers
+                .entry(drive_letter)
+                .or_insert_with(|| PathResolver {
+                    entries: HashMap::new(),
+                    cache: HashMap::new(),
+                    volume: drive_letter,
+                });
 
             resolver.entries.insert(frs, (parent, name.to_owned()));
         }
@@ -201,7 +206,11 @@ pub fn add_path_column_multi_drive(df: &DataFrame) -> Result<DataFrame> {
                     let drive_letter = drive.chars().next().unwrap_or('?');
                     resolvers.get_mut(&drive_letter).map_or_else(
                         || "<unknown>".to_owned(),
-                        |resolver| resolver.resolve(frs_val).unwrap_or_else(|_| "<unknown>".to_owned()),
+                        |resolver| {
+                            resolver
+                                .resolve(frs_val)
+                                .unwrap_or_else(|_| "<unknown>".to_owned())
+                        },
                     )
                 }
                 _ => "<null>".to_owned(),

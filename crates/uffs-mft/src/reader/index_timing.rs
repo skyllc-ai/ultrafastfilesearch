@@ -7,18 +7,17 @@ use std::time::Instant;
 use tracing::{info, warn};
 
 #[cfg(windows)]
+use super::PhaseTimings;
+#[cfg(windows)]
 use super::benchmark::{
     build_benchmark_result, build_drive_characteristics, estimate_combined_phase_timings,
 };
 use super::{BenchmarkResult, MftReader};
-#[cfg(windows)]
-use super::PhaseTimings;
 use crate::error::{MftError, Result};
 #[cfg(windows)]
 use crate::platform::VolumeHandle;
 
 impl MftReader {
-
     /// Read MFT into lean index with detailed timing breakdown.
     ///
     /// This is the benchmarking version of `read_all_index()` that returns
@@ -270,4 +269,3 @@ impl MftReader {
         Ok((index, result))
     }
 }
-

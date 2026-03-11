@@ -128,13 +128,19 @@ fn test_extension_index_integration() {
 fn test_query_mode_from_str() {
     assert_eq!(QueryMode::from_str_opt("auto"), Some(QueryMode::Auto));
     assert_eq!(QueryMode::from_str_opt("hybrid"), Some(QueryMode::Auto));
-    assert_eq!(QueryMode::from_str_opt("index"), Some(QueryMode::ForceIndex));
+    assert_eq!(
+        QueryMode::from_str_opt("index"),
+        Some(QueryMode::ForceIndex)
+    );
     assert_eq!(QueryMode::from_str_opt("fast"), Some(QueryMode::ForceIndex));
     assert_eq!(
         QueryMode::from_str_opt("dataframe"),
         Some(QueryMode::ForceDataFrame)
     );
-    assert_eq!(QueryMode::from_str_opt("df"), Some(QueryMode::ForceDataFrame));
+    assert_eq!(
+        QueryMode::from_str_opt("df"),
+        Some(QueryMode::ForceDataFrame)
+    );
     assert_eq!(
         QueryMode::from_str_opt("polars"),
         Some(QueryMode::ForceDataFrame)

@@ -1,4 +1,4 @@
-//! DataFrame construction helpers for parsed MFT output.
+//! `DataFrame` construction helpers for parsed MFT output.
 
 use uffs_polars::DataFrame;
 
@@ -6,7 +6,6 @@ use super::MftReader;
 use crate::error::{MftError, Result};
 
 impl MftReader {
-
     /// Helper to build DataFrame from parsed records (legacy AoS path).
     ///
     /// NOTE: This function is superseded by `build_dataframe_from_columns`
@@ -463,4 +462,3 @@ impl MftReader {
         )
     }
 }
-

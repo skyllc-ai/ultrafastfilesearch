@@ -428,7 +428,6 @@ impl MftReader {
     pub const fn volume(&self) -> char {
         self.volume
     }
-
 }
 
 #[cfg(test)]

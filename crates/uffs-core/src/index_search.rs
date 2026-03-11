@@ -1,4 +1,5 @@
 //! Direct search on `MftIndex` without `DataFrame` conversion.
+//!
 //! This module keeps the optimized search execution pipeline together while
 //! splitting pattern compilation, routing helpers, and tests into focused
 //! submodules.
@@ -49,10 +50,7 @@ use uffs_mft::index::{FileRecord, MftIndex};
 pub use self::pattern::{
     IndexPattern, compile_extensions, compile_index_pattern, compile_parsed_pattern,
 };
-pub use self::routing::{
-    QueryComplexity, QueryFeatures, QueryMode, analyze_pattern_complexity,
-};
-
+pub use self::routing::{QueryComplexity, QueryFeatures, QueryMode, analyze_pattern_complexity};
 use crate::error::Result;
 
 // ============================================================================
@@ -704,4 +702,3 @@ impl<'a> IndexQuery<'a> {
             .count()
     }
 }
-
