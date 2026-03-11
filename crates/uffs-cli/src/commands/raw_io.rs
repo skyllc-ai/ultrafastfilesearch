@@ -18,6 +18,18 @@ use uffs_mft::MftReader;
 
 use super::output::results_to_dataframe;
 
+/// Native offline query results for direct `--mft-file` output.
+pub(super) struct NativeOfflineQueryResults {
+    /// Loaded offline index used for record metadata lookups during output.
+    pub(super) index: uffs_mft::MftIndex,
+    /// Native search results collected from `IndexQuery`.
+    pub(super) results: Vec<uffs_core::SearchResult>,
+    /// Raw MFT load duration in milliseconds.
+    pub(super) load_ms: u128,
+    /// Query/filter duration in milliseconds.
+    pub(super) query_ms: u128,
+}
+
 /// Query filter options for the search command.
 pub(super) struct QueryFilters<'a> {
     /// Parsed search pattern (glob, regex, or literal).
@@ -146,6 +158,42 @@ pub(super) fn load_and_filter_from_mft_file(
     profile: bool,
     debug_tree: bool,
 ) -> Result<uffs_mft::DataFrame> {
+    let native = load_and_filter_native_from_mft_file(
+        mft_path,
+        drive_letter,
+        filters,
+        needs_paths,
+        debug_tree,
+    )?;
+    let matches = native.results.len();
+    let records = native.index.len();
+    let df = results_to_dataframe(&native.index, native.results, needs_paths)?;
+
+    if profile {
+        let total_ms = native.load_ms + native.query_ms;
+        eprintln!("=== RAW MFT FILE TIMING ===");
+        eprintln!(
+            "  Load from file:  {:>6} ms  ({} records)",
+            native.load_ms, records
+        );
+        eprintln!(
+            "  Query/filter:    {:>6} ms  ({} matches)",
+            native.query_ms, matches
+        );
+        eprintln!("  TOTAL:           {total_ms:>6} ms");
+    }
+
+    Ok(df)
+}
+
+/// Load, query, and return native results from a raw offline MFT file.
+pub(super) fn load_and_filter_native_from_mft_file(
+    mft_path: &Path,
+    drive_letter: Option<char>,
+    filters: &QueryFilters<'_>,
+    needs_paths: bool,
+    debug_tree: bool,
+) -> Result<NativeOfflineQueryResults> {
     use uffs_mft::LoadRawOptions;
 
     let volume = drive_letter.unwrap_or('X');
@@ -166,24 +214,15 @@ pub(super) fn load_and_filter_from_mft_file(
     let load_ms = t_load.elapsed().as_millis();
 
     let t_query = std::time::Instant::now();
-    let results = execute_index_query(&index, filters, needs_paths)?;
+    let results = execute_index_query_native(&index, filters, needs_paths)?;
     let query_ms = t_query.elapsed().as_millis();
 
-    if profile {
-        let total_ms = load_ms + query_ms;
-        eprintln!("=== RAW MFT FILE TIMING ===");
-        eprintln!(
-            "  Load from file:  {load_ms:>6} ms  ({} records)",
-            index.len()
-        );
-        eprintln!(
-            "  Query/filter:    {query_ms:>6} ms  ({} matches)",
-            results.height()
-        );
-        eprintln!("  TOTAL:           {total_ms:>6} ms");
-    }
-
-    Ok(results)
+    Ok(NativeOfflineQueryResults {
+        index,
+        results,
+        load_ms,
+        query_ms,
+    })
 }
 
 /// Load raw MFT with debug output for tree metrics.
@@ -744,13 +783,12 @@ fn execute_query(
 
 /// Execute query using fast `IndexQuery` path (no `DataFrame` conversion).
 ///
-/// This is the fast path for simple queries. Returns results as a `DataFrame`
-/// for compatibility with the output pipeline.
-fn execute_index_query(
+/// This is the fast path for simple queries.
+fn execute_index_query_native(
     index: &uffs_mft::MftIndex,
     filters: &QueryFilters<'_>,
     resolve_paths: bool,
-) -> Result<uffs_mft::DataFrame> {
+) -> Result<Vec<uffs_core::SearchResult>> {
     use uffs_core::{IndexQuery, TypeFilter, compile_parsed_pattern};
 
     let mut query = IndexQuery::new(index);
@@ -789,6 +827,5 @@ fn execute_index_query(
     query = query.case_sensitive(filters.parsed.is_case_sensitive());
     query = query.with_resolve_paths(resolve_paths);
 
-    let results = query.collect();
-    results_to_dataframe(index, &results, resolve_paths)
+    Ok(query.collect())
 }

@@ -9,8 +9,11 @@ use uffs_core::output::OutputConfig;
 use uffs_core::pattern::ParsedPattern;
 use uffs_core::tree::add_tree_columns;
 
-use super::output::write_results;
-use super::raw_io::{QueryFilters, load_and_filter_data, load_and_filter_from_mft_file};
+use super::output::{can_write_native_results, write_native_results, write_results};
+use super::raw_io::{
+    QueryFilters, load_and_filter_data, load_and_filter_from_mft_file,
+    load_and_filter_native_from_mft_file,
+};
 #[cfg(windows)]
 use super::raw_io::{load_and_filter_data_index, load_and_filter_data_index_multi};
 
@@ -199,6 +202,64 @@ pub async fn search(
         .or_else(|| multi_drives.clone())
         .or_else(|| filters.parsed.drive().map(|drive| vec![drive]))
         .unwrap_or_default();
+
+    if let Some(mft_path) = mft_file.as_ref()
+        && !benchmark
+        && can_write_native_results(format, &output_config)
+    {
+        info!(
+            path = %mft_path.display(),
+            format,
+            "📂 Loading raw MFT file via native direct-output path"
+        );
+
+        let native = load_and_filter_native_from_mft_file(
+            mft_path,
+            single_drive,
+            &filters,
+            needs_paths,
+            debug_tree,
+        )?;
+
+        let t_output = std::time::Instant::now();
+        write_native_results(
+            &native.index,
+            &native.results,
+            format,
+            out,
+            &output_config,
+            &output_targets,
+        )?;
+        let output_ms = t_output.elapsed().as_millis();
+        let elapsed = start_time.elapsed();
+
+        if profile {
+            let raw_total_ms = native.load_ms + native.query_ms;
+            eprintln!("=== RAW MFT FILE TIMING ===");
+            eprintln!(
+                "  Load from file:  {:>6} ms  ({} records)",
+                native.load_ms,
+                native.index.len()
+            );
+            eprintln!(
+                "  Query/filter:    {:>6} ms  ({} matches)",
+                native.query_ms,
+                native.results.len()
+            );
+            eprintln!("  TOTAL:           {raw_total_ms:>6} ms");
+            eprintln!("=== PROFILE: Output ===");
+            eprintln!("  Tree columns:    {:>6} ms", 0_u128);
+            eprintln!(
+                "  Output/write:    {:>6} ms  ({} rows)",
+                output_ms,
+                native.results.len()
+            );
+            eprintln!("=== TOTAL: {} ms ===", elapsed.as_millis());
+        }
+
+        info!(count = native.results.len(), "Search complete");
+        return Ok(());
+    }
 
     let mut results = if let Some(mft_path) = mft_file.as_ref() {
         info!(path = %mft_path.display(), "📂 Loading from raw MFT file");
