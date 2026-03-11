@@ -680,6 +680,6 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
 pub fn parse_record(data: &[u8], frs: u64) -> Option<ParsedRecord> {
     match parse_record_full(data, frs) {
         ParseResult::Base(record) => Some(record),
-        _ => None,
+        ParseResult::Extension(_) | ParseResult::Skip => None,
     }
 }
