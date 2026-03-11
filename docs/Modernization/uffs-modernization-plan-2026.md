@@ -104,7 +104,6 @@ This document outlines a comprehensive modernization roadmap to elevate UFFS to 
 | `uffs-cli` | Command-line interface | 🟠 Major |
 | `uffs-tui` | Terminal UI | 🟡 Moderate |
 | `uffs-gui` | Graphical UI (future) | 🟢 Enhancement |
-| `uffs-legacy` | Legacy code (reference only) | ⚪ Reference |
 | `uffs-diag` | Diagnostic tools | 🟡 Moderate |
 
 ### What's Already Excellent ✅

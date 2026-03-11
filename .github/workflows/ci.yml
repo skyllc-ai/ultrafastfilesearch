@@ -72,7 +72,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run nightly clippy gate
-        run: cargo clippy --workspace --exclude uffs-legacy --all-targets --all-features --no-deps -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
 
   tests:
     name: Tier 1 / Tests
@@ -92,10 +92,10 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Run tests
-        run: cargo nextest run --workspace --exclude uffs-legacy --all-features --lib --bins --tests
+        run: cargo nextest run --workspace --all-features --lib --bins --tests
 
       - name: Run doc tests
-        run: RUSTDOCFLAGS="-Dwarnings" cargo test --doc --workspace --exclude uffs-legacy --all-features
+        run: RUSTDOCFLAGS="-Dwarnings" cargo test --doc --workspace --all-features
 
   security:
     name: Tier 1 / Security
