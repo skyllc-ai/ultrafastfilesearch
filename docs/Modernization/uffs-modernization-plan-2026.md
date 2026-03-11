@@ -64,7 +64,7 @@ Contact: 50460704+githubrobbi@users.noreply.github.com for licensing inquiries
 
 ```bash
 # Full CI pipeline - creates snapshot with git push, builds binaries, etc.
-rust-script scripts/ci-pipeline.rs go -v
+rust-script scripts/ci/ci-pipeline.rs go -v
 ```
 
 ### Healing Changelog Protocol

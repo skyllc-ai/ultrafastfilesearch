@@ -244,7 +244,7 @@ cargo bench -- --baseline main
 ### Final Validation
 ```bash
 cargo llvm-cov --workspace --fail-under 90
-rust-script scripts/ci-pipeline.rs go -v
+rust-script scripts/ci/ci-pipeline.rs go -v
 ```
 
 ---
