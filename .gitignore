@@ -165,6 +165,9 @@ bundles/
 docs/profiles/
 
 # Local intent/spec files (not tracked)
+INTENT_PROMPT.md
 INTENT_PROMPT_V2.md
 INTENT_SPEC_FAANG_CORE_INFRA.md
-INTENT_PROMPT.md
+FORGE_FOLLOWUP.md
+ANVIL_FOLLOWUP.md
+CRUCIBLE_FOLLOWUP.md
