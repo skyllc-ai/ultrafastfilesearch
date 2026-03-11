@@ -1,4 +1,6 @@
 //! Multi-drive reader orchestration and cache/update helpers.
+//! Exception: multi-drive orchestration, cache refresh, and USN update helpers
+//! remain co-located pending a dedicated split outside Wave 3C.
 
 #[cfg(windows)]
 use std::sync::Arc;
@@ -802,4 +804,3 @@ impl MultiDriveMftReader {
         Ok(index)
     }
 }
-
