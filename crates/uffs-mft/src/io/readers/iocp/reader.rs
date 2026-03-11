@@ -237,9 +237,9 @@ impl IocpMftReader {
 
             // Find which slot completed by matching the overlapped pointer
             let mut completed_slot: Option<usize> = None;
-            for (idx, slot) in in_flight.iter().enumerate() {
+            for (idx, slot) in in_flight.iter_mut().enumerate() {
                 if let Some(op) = slot {
-                    let op_ptr = &op.overlapped as *const _ as *mut _;
+                    let op_ptr = op.as_overlapped_ptr();
                     if op_ptr == overlapped_ptr {
                         completed_slot = Some(idx);
                         break;

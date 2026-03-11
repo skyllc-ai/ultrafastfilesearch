@@ -33,6 +33,10 @@ use crate::display::char_or_dot;
     clippy::fn_params_excessive_bools,
     reason = "bool params map directly to cli flags"
 )]
+#[expect(
+    unsafe_code,
+    reason = "FFI: SetFilePointerEx, ReadFile for raw volume I/O"
+)]
 pub async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     use std::time::Instant;
 

@@ -80,7 +80,7 @@ impl ParallelMftReader {
             }
         });
         let io_chunk_size = io_chunk_size.unwrap_or_else(|| self.drive_type.optimal_io_size());
-        let num_workers = num_workers.unwrap_or_else(num_cpus::get);
+        let num_workers = num_workers.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |p| p.get()));
 
         info!(
             total_records,
@@ -361,11 +361,11 @@ impl ParallelMftReader {
             let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
                 std::ptr::null_mut();
 
-            // SAFETY: `iocp.handle` is a live completion port and all out-pointers
+            // SAFETY: `iocp.raw_handle()` is a live completion port and all out-pointers
             // reference writable stack storage for the duration of the wait.
             let result = unsafe {
                 GetQueuedCompletionStatus(
-                    iocp.handle,
+                    iocp.raw_handle(),
                     &mut bytes_transferred,
                     &mut completion_key,
                     &mut overlapped_ptr,

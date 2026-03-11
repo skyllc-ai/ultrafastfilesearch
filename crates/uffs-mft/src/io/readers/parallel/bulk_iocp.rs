@@ -210,7 +210,7 @@ impl ParallelMftReader {
         // all synchronization is provided by the kernel-managed completion port.
         unsafe impl Sync for SendHandle {}
 
-        let iocp_handle_raw = SendHandle(iocp.handle.0 as isize);
+        let iocp_handle_raw = SendHandle(iocp.raw_handle().0 as isize);
 
         // Spawn worker threads
         let mut workers = Vec::with_capacity(num_workers);

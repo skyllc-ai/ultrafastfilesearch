@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 #[cfg(windows)]
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 #[cfg(windows)]
 use super::PhaseTimings;

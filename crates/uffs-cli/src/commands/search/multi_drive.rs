@@ -9,7 +9,7 @@ use tokio::task::JoinSet;
 use tracing::info;
 use uffs_mft::IntoLazy;
 
-use super::drive_search::{DriveResult, reorder_drive_column, search_single_drive};
+use super::drive_search::{reorder_drive_column, search_single_drive};
 use crate::commands::raw_io::{OwnedQueryFilters, QueryFilters};
 use crate::commands::{add_drive_progress, create_multi_progress};
 
@@ -29,7 +29,7 @@ use crate::commands::{add_drive_progress, create_multi_progress};
 ///
 /// * `no_bitmap` - If true, disables MFT bitmap optimization (reads all
 ///   records).
-pub(super) async fn search_multi_drive_filtered(
+pub(crate) async fn search_multi_drive_filtered(
     drives: &[char],
     filters: &QueryFilters<'_>,
     needs_paths: bool,

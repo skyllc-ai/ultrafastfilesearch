@@ -28,7 +28,7 @@ mod multi_drive;
 mod streaming;
 
 #[cfg(windows)]
-pub(super) use self::multi_drive::search_multi_drive_filtered;
+pub(crate) use self::multi_drive::search_multi_drive_filtered;
 #[cfg(windows)]
 use self::streaming::search_streaming;
 

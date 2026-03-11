@@ -248,11 +248,11 @@ impl ParallelMftReader {
             let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
                 std::ptr::null_mut();
 
-            // SAFETY: `iocp.handle` is a live completion port and all out-pointers
+            // SAFETY: `iocp.raw_handle()` is a live completion port and all out-pointers
             // reference writable stack storage for the duration of the wait.
             let result = unsafe {
                 GetQueuedCompletionStatus(
-                    iocp.handle,
+                    iocp.raw_handle(),
                     &mut bytes_transferred,
                     &mut completion_key,
                     &mut overlapped_ptr,

@@ -728,6 +728,58 @@ pub(super) async fn load_and_filter_data_index_multi(
     Ok(final_result)
 }
 
+/// Execute query against an `MftIndex` and return results as a `DataFrame`.
+///
+/// This function uses the fast `IndexQuery` path for filtering and then
+/// converts the results to a `DataFrame` for downstream processing.
+#[cfg(windows)]
+fn execute_index_query(
+    index: &uffs_mft::MftIndex,
+    filters: &QueryFilters<'_>,
+    resolve_paths: bool,
+) -> Result<uffs_mft::DataFrame> {
+    use uffs_core::{IndexQuery, TypeFilter, compile_parsed_pattern};
+
+    let mut query = IndexQuery::new(index);
+
+    let pattern = compile_parsed_pattern(filters.parsed);
+    query = query.with_pattern_result(pattern);
+
+    if let Some(ext_str) = filters.ext_filter {
+        let parsed_ext_filter = ExtensionFilter::parse(ext_str)
+            .map_err(|err| anyhow::anyhow!("Invalid extension filter: {err}"))?;
+        let exts: Vec<&str> = parsed_ext_filter
+            .extensions()
+            .iter()
+            .map(String::as_str)
+            .collect();
+        query = query.extensions(&exts);
+    }
+
+    if filters.files_only {
+        query = query.with_type_filter(TypeFilter::FilesOnly);
+    } else if filters.dirs_only {
+        query = query.with_type_filter(TypeFilter::DirsOnly);
+    }
+
+    if let Some(min) = filters.min_size {
+        query = query.min_size(min);
+    }
+    if let Some(max) = filters.max_size {
+        query = query.max_size(max);
+    }
+
+    if filters.limit > 0 {
+        query = query.limit(filters.limit as usize);
+    }
+
+    query = query.case_sensitive(filters.parsed.is_case_sensitive());
+    query = query.with_resolve_paths(resolve_paths);
+
+    let results = query.collect();
+    results_to_dataframe(index, results, resolve_paths)
+}
+
 /// Build and execute the MFT query with all filters applied.
 #[tracing::instrument(
     level = "debug",

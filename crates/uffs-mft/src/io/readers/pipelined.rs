@@ -1,6 +1,6 @@
 //! Pipelined reader implementation.
 
-use super::zero_copy::parse_buffer_to_results_zero_copy;
+use super::zero_copy::parse_buffer_zero_copy_inner;
 use super::*;
 
 /// Message sent from reader thread to parser thread.
@@ -396,7 +396,13 @@ impl PipelinedMftReader {
         let parse_results: Vec<ParseResult> = all_buffers
             .par_iter_mut()
             .flat_map(|read_buffer| {
-                parse_buffer_to_results_zero_copy(read_buffer, merge_extensions)
+                parse_buffer_zero_copy_inner(
+                    read_buffer.buffer.as_mut_slice(),
+                    read_buffer.bytes_read,
+                    &read_buffer.chunk,
+                    read_buffer.record_size,
+                    merge_extensions,
+                )
             })
             .collect();
 

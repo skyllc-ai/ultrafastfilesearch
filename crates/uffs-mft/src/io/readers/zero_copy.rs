@@ -2,29 +2,6 @@
 
 use super::*;
 
-/// Parses all records in a buffer using zero-copy in-place fixup.
-///
-/// This is an optimized version of `parse_buffer_to_results` that applies
-/// USA fixup directly on the shared buffer instead of copying each record.
-/// This eliminates per-record heap allocations in the hot path.
-///
-/// # Safety
-///
-/// This function mutates the buffer in-place. The buffer should not be
-/// reused after this call without re-reading the data from disk.
-pub(super) fn parse_buffer_to_results_zero_copy(
-    read_buffer: &mut ReadBuffer,
-    merge_extensions: bool,
-) -> Vec<ParseResult> {
-    parse_buffer_zero_copy_inner(
-        read_buffer.buffer.as_mut_slice(),
-        read_buffer.bytes_read,
-        &read_buffer.chunk,
-        read_buffer.record_size,
-        merge_extensions,
-    )
-}
-
 /// Inner zero-copy parsing function that works with raw parameters.
 ///
 /// This is used by both `ReadBuffer` and `OverlappedRead` parsing paths.
