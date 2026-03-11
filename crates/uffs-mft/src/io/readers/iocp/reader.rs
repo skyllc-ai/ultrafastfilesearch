@@ -176,6 +176,9 @@ impl IocpMftReader {
                 // pinned data for the OVERLAPPED pointer and buffer. The pin is maintained
                 // throughout the operation lifetime.
                 let overlapped_ptr = unsafe { op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
+                // SAFETY: `handle` is a live overlapped-capable file handle, the
+                // buffer slice lives inside the pinned operation for the duration of
+                // the async I/O, and `overlapped_ptr` points into the same pinned op.
                 let read_result = unsafe {
                     ReadFile(
                         handle,
@@ -190,6 +193,8 @@ impl IocpMftReader {
 
                 // Check for errors (ERROR_IO_PENDING is expected for async)
                 if read_result.is_err() {
+                    // SAFETY: `GetLastError` reads the calling thread's last-error
+                    // slot and does not dereference any Rust pointers.
                     let err = unsafe { GetLastError() };
                     if err != ERROR_IO_PENDING {
                         warn!(error = ?err, "Failed to issue overlapped read");
@@ -212,6 +217,8 @@ impl IocpMftReader {
             let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
                 std::ptr::null_mut();
 
+            // SAFETY: `iocp.raw_handle()` is a live completion port and all
+            // out-pointers reference writable stack storage for the duration of the wait.
             let wait_result = unsafe {
                 GetQueuedCompletionStatus(
                     iocp.raw_handle(),
@@ -243,6 +250,8 @@ impl IocpMftReader {
             if let Some(slot_idx) = completed_slot {
                 // Take the completed operation
                 if let Some(mut op) = in_flight[slot_idx].take() {
+                    // SAFETY: The `Pin<Box<_>>` is still pinned in this scope; we
+                    // only project a mutable reference without moving the allocation.
                     let op_mut = unsafe { op.as_mut().get_unchecked_mut() };
                     op_mut.bytes_read = bytes_transferred as usize;
 
@@ -298,6 +307,9 @@ impl IocpMftReader {
                         // pinned data for the OVERLAPPED pointer and buffer.
                         let overlapped_ptr =
                             unsafe { new_op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
+                        // SAFETY: `handle` is a live overlapped-capable file handle,
+                        // the buffer slice lives inside the pinned operation for the
+                        // duration of the async I/O, and `overlapped_ptr` points into it.
                         let read_result = unsafe {
                             ReadFile(
                                 handle,
@@ -311,6 +323,8 @@ impl IocpMftReader {
                         };
 
                         if read_result.is_err() {
+                            // SAFETY: `GetLastError` reads the calling thread's last-error
+                            // slot and does not dereference any Rust pointers.
                             let err = unsafe { GetLastError() };
                             if err != ERROR_IO_PENDING {
                                 warn!(error = ?err, "Failed to issue next overlapped read");

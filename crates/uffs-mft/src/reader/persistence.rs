@@ -209,6 +209,8 @@ impl MftReader {
                 }
 
                 let mut new_pos: i64 = 0;
+                // SAFETY: `handle` is a live raw MFT handle and `new_pos` is valid
+                // writable storage for the duration of this seek.
                 let seek_result = unsafe {
                     SetFilePointerEx(
                         handle,
@@ -222,6 +224,9 @@ impl MftReader {
                 }
 
                 let mut bytes_read: u32 = 0;
+                // SAFETY: `handle` is live, the aligned buffer slice covers
+                // `aligned_size` writable bytes, and `bytes_read` is a valid
+                // out-parameter for the call.
                 let read_result = unsafe {
                     ReadFile(
                         handle,

@@ -43,6 +43,19 @@ struct MultiSectorHeader {
     usa_count: u16,
 }
 
+/// Parses the leading multi-sector header from a raw MFT record.
+#[expect(
+    clippy::single_call_fn,
+    reason = "magic scanning keeps the header decode in one focused helper"
+)]
+fn parse_multi_sector_header(data: &[u8]) -> Option<MultiSectorHeader> {
+    Some(MultiSectorHeader {
+        magic: u32::from_le_bytes(data.get(0..4)?.try_into().ok()?),
+        usa_offset: u16::from_le_bytes(data.get(4..6)?.try_into().ok()?),
+        usa_count: u16::from_le_bytes(data.get(6..8)?.try_into().ok()?),
+    })
+}
+
 /// Classify the 4-byte NTFS magic as one of the known record types.
 #[expect(
     clippy::single_call_fn,
@@ -123,15 +136,9 @@ fn main() -> Result<()> {
                 continue;
             }
 
-            #[expect(
-                unsafe_code,
-                reason = "ptr::read from validated buffer for packed struct"
-            )]
-            // SAFETY: We've checked that the buffer is at least
-            // `size_of::<MultiSectorHeader>()` bytes long, and
-            // `MultiSectorHeader` is `#[repr(C, packed)]` with no padding
-            // or alignment requirements beyond u8.
-            let header: MultiSectorHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
+            let Some(header) = parse_multi_sector_header(data) else {
+                continue;
+            };
             let magic = header.magic;
             let class = classify_magic(magic);
 

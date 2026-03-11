@@ -4,6 +4,7 @@
 use core::mem::size_of;
 
 use smallvec::SmallVec;
+use zerocopy::FromBytes;
 
 use crate::ntfs::is_internal_windows_stream;
 
@@ -23,10 +24,6 @@ use crate::ntfs::is_internal_windows_stream;
 /// `true` if any names/streams were added, `false` otherwise.
 #[deprecated(note = "Use parse_record_full() + MftRecordMerger instead")]
 #[expect(
-    unsafe_code,
-    reason = "ptr::read for NTFS attribute parsing from raw bytes"
-)]
-#[expect(
     clippy::cast_possible_truncation,
     reason = "NTFS field sizes are bounded by u16/u32 record layout"
 )]
@@ -44,7 +41,10 @@ pub(super) fn parse_extension_to_fragment(
         return false;
     }
 
-    let header: FileRecordSegmentHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
+    let header = match FileRecordSegmentHeader::read_from_prefix(data) {
+        Ok((header, _)) => header,
+        Err(_) => return false,
+    };
 
     // Parse attributes to find $FILE_NAME and $DATA
     let mut offset = header.first_attribute_offset as usize;
@@ -55,8 +55,10 @@ pub(super) fn parse_extension_to_fragment(
     let mut streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
 
     while offset + size_of::<AttributeRecordHeader>() <= max_offset {
-        let attr_header: AttributeRecordHeader =
-            unsafe { core::ptr::read(data[offset..].as_ptr().cast()) };
+        let attr_header = match AttributeRecordHeader::read_from_prefix(&data[offset..]) {
+            Ok((attr_header, _)) => attr_header,
+            Err(_) => break,
+        };
 
         if attr_header.type_code == AttributeType::End as u32 {
             break;
@@ -75,8 +77,11 @@ pub(super) fn parse_extension_to_fragment(
                             as usize;
                     let fn_offset = offset + value_offset;
                     if fn_offset + size_of::<FileNameAttribute>() <= data.len() {
-                        let fn_attr: FileNameAttribute =
-                            unsafe { core::ptr::read(data[fn_offset..].as_ptr().cast()) };
+                        let fn_attr = match FileNameAttribute::read_from_prefix(&data[fn_offset..])
+                        {
+                            Ok((fn_attr, _)) => fn_attr,
+                            Err(_) => break,
+                        };
 
                         if fn_attr.file_name_namespace != 2 {
                             let name_len = fn_attr.file_name_length as usize;

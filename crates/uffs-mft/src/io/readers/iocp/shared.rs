@@ -25,6 +25,8 @@ impl IoCompletionPort {
         use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
         use windows::Win32::System::IO::CreateIoCompletionPort;
 
+        // SAFETY: This creates a new completion port with no associated file
+        // handle yet; the call takes no borrowed pointers.
         let handle = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, None, 0, concurrency) };
 
         match handle {
@@ -47,6 +49,8 @@ impl IoCompletionPort {
     pub fn associate(&self, file_handle: HANDLE, key: usize) -> Result<()> {
         use windows::Win32::System::IO::CreateIoCompletionPort;
 
+        // SAFETY: `self.handle` is a live IOCP handle and `file_handle` is an
+        // already-open file handle being associated with it.
         let result = unsafe { CreateIoCompletionPort(file_handle, Some(self.handle), key, 0) };
 
         match result {

@@ -45,6 +45,8 @@ use std::io;
 use std::path::PathBuf;
 
 use anyhow::Result;
+#[cfg(test)]
+use assert_cmd as _;
 use chrono as _;
 use clap::{Parser, Subcommand};
 use mimalloc::MiMalloc;

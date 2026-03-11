@@ -208,18 +208,25 @@ impl ParallelMftReader {
                     ));
                 };
                 let mut in_flight_op = Box::pin(InFlightOp {
+                    // SAFETY: `OVERLAPPED` is a plain Windows FFI struct and an
+                    // all-zero value is the required initial state before offsets are set.
                     overlapped: unsafe { std::mem::zeroed() },
                     buffer,
                     op,
                 });
 
                 let offset = in_flight_op.op.disk_offset;
+                // SAFETY: The pinned allocation remains in place while the I/O is in
+                // flight; this only projects a mutable reference without moving it.
                 let op_mut = unsafe { in_flight_op.as_mut().get_unchecked_mut() };
                 op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
                 op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
 
                 let overlapped_ptr = &mut op_mut.overlapped as *mut _;
                 let read_size = op_mut.op.size;
+                // SAFETY: `overlapped_handle` is a live overlapped-capable handle,
+                // the buffer slice spans `read_size` writable bytes in the pinned op,
+                // and `overlapped_ptr` points into that same pinned operation.
                 let result = unsafe {
                     ReadFile(
                         overlapped_handle,
@@ -232,6 +239,8 @@ impl ParallelMftReader {
                 match result {
                     Ok(_) => {}
                     Err(_) => {
+                        // SAFETY: `GetLastError` reads the calling thread's last-error
+                        // slot and does not dereference any Rust pointers.
                         let last_error = unsafe { GetLastError() };
                         if last_error != ERROR_IO_PENDING {
                             return Err(MftError::Io(std::io::Error::from_raw_os_error(
@@ -254,6 +263,8 @@ impl ParallelMftReader {
             let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
                 std::ptr::null_mut();
 
+            // SAFETY: `iocp.handle` is a live completion port and all out-pointers
+            // reference writable stack storage for the duration of the wait.
             let result = unsafe {
                 GetQueuedCompletionStatus(
                     iocp.handle,
@@ -285,6 +296,8 @@ impl ParallelMftReader {
 
             if let Some(slot_idx) = completed_slot {
                 if let Some(mut completed_op) = in_flight[slot_idx].take() {
+                    // SAFETY: The `Pin<Box<_>>` is still pinned in this scope; we
+                    // only project a mutable reference without moving the allocation.
                     let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
 
                     // UNIFIED PIPELINE: parse_record_full() → MftRecordMerger
@@ -334,12 +347,16 @@ impl ParallelMftReader {
                             ));
                         };
                         let mut new_in_flight = Box::pin(InFlightOp {
+                            // SAFETY: `OVERLAPPED` is a plain Windows FFI struct and an
+                            // all-zero value is the required initial state before offsets are set.
                             overlapped: unsafe { std::mem::zeroed() },
                             buffer,
                             op: next_op,
                         });
 
                         let offset = new_in_flight.op.disk_offset;
+                        // SAFETY: The pinned allocation remains in place while the I/O
+                        // is in flight; this only projects a mutable reference.
                         let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
                         new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
                         new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
@@ -347,6 +364,9 @@ impl ParallelMftReader {
 
                         let overlapped_ptr = &mut new_op_mut.overlapped as *mut _;
                         let read_size = new_op_mut.op.size;
+                        // SAFETY: `overlapped_handle` is a live overlapped-capable
+                        // handle, the buffer slice spans `read_size` writable bytes in
+                        // the pinned op, and `overlapped_ptr` points into that op.
                         let result = unsafe {
                             ReadFile(
                                 overlapped_handle,
@@ -359,6 +379,8 @@ impl ParallelMftReader {
                         match result {
                             Ok(_) => {}
                             Err(_) => {
+                                // SAFETY: `GetLastError` reads the calling thread's
+                                // last-error slot and does not dereference Rust pointers.
                                 let last_error = unsafe { GetLastError() };
                                 if last_error != ERROR_IO_PENDING {
                                     warn!(error = ?last_error, "Failed to queue next read");

@@ -1,6 +1,7 @@
 //! NTFS boot-sector layout and helpers.
 
 use core::mem::size_of;
+
 use zerocopy::{FromBytes, Immutable, KnownLayout};
 
 /// NTFS Boot Sector structure.

@@ -284,7 +284,7 @@ impl DriveType {
 #[must_use]
 #[expect(
     unsafe_code,
-    reason = "FFI: windows API (CreateFileW, DeviceIoControl) and unaligned descriptor read"
+    reason = "FFI: windows API (CreateFileW, DeviceIoControl) for drive classification"
 )]
 pub fn detect_drive_type(drive_letter: char) -> DriveType {
     use windows::Win32::Storage::FileSystem::{
@@ -297,29 +297,15 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
     const STORAGE_DEVICE_SEEK_PENALTY_PROPERTY: u32 = 7;
     const PROPERTY_STANDARD_QUERY: u32 = 0;
     const BUS_TYPE_NVME: u32 = 17;
+    const STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_OFFSET: usize = 28;
+    const STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_END: usize =
+        STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_OFFSET + size_of::<u32>();
 
     #[repr(C)]
     struct StoragePropertyQuery {
         property_id: u32,
         query_type: u32,
         additional_parameters: [u8; 1],
-    }
-
-    #[repr(C)]
-    struct StorageDeviceDescriptor {
-        version: u32,
-        size: u32,
-        device_type: u8,
-        device_type_modifier: u8,
-        removable_media: u8,
-        command_queueing: u8,
-        vendor_id_offset: u32,
-        product_id_offset: u32,
-        product_revision_offset: u32,
-        serial_number_offset: u32,
-        bus_type: u32,
-        raw_properties_length: u32,
-        raw_device_properties: [u8; 1],
     }
 
     #[repr(C)]
@@ -384,15 +370,15 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
                 )
             };
 
-            if result.is_ok() && bytes_returned >= size_of::<StorageDeviceDescriptor>() as u32 {
-                // SAFETY: `bytes_returned` proves the prefix needed for
-                // `StorageDeviceDescriptor` is present in `buffer`, the struct is
-                // `repr(C)` plain data, and `read_unaligned` handles the buffer's
-                // byte alignment.
-                let descriptor = unsafe {
-                    core::ptr::read_unaligned(buffer.as_ptr().cast::<StorageDeviceDescriptor>())
-                };
-                descriptor.bus_type == BUS_TYPE_NVME
+            if result.is_ok() && bytes_returned >= STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_END as u32 {
+                buffer
+                    .get(
+                        STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_OFFSET
+                            ..STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_END,
+                    )
+                    .and_then(|bytes| <[u8; size_of::<u32>()]>::try_from(bytes).ok())
+                    .map(u32::from_le_bytes)
+                    == Some(BUS_TYPE_NVME)
             } else {
                 false
             }

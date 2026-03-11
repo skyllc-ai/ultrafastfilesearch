@@ -94,6 +94,69 @@ impl FileRecordSegmentHeader {
     }
 }
 
+/// Reads a little-endian `u16` from `data` at `offset`.
+fn read_u16_le(data: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(
+        data.get(offset..offset + 2)?.try_into().ok()?,
+    ))
+}
+
+/// Reads a little-endian `u32` from `data` at `offset`.
+fn read_u32_le(data: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        data.get(offset..offset + 4)?.try_into().ok()?,
+    ))
+}
+
+/// Reads a little-endian `u64` from `data` at `offset`.
+#[expect(
+    clippy::single_call_fn,
+    reason = "packed header decoding needs a dedicated 64-bit helper"
+)]
+fn read_u64_le(data: &[u8], offset: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(
+        data.get(offset..offset + 8)?.try_into().ok()?,
+    ))
+}
+
+/// Reads a little-endian `i64` from `data` at `offset`.
+#[expect(
+    clippy::single_call_fn,
+    reason = "packed header decoding needs a dedicated signed 64-bit helper"
+)]
+fn read_i64_le(data: &[u8], offset: usize) -> Option<i64> {
+    Some(i64::from_le_bytes(
+        data.get(offset..offset + 8)?.try_into().ok()?,
+    ))
+}
+
+/// Parses the leading bytes of a record into a local file record segment
+/// header copy.
+#[expect(
+    clippy::single_call_fn,
+    reason = "record header parsing is centralized in one dedicated helper"
+)]
+fn parse_file_record_segment_header(data: &[u8]) -> Option<FileRecordSegmentHeader> {
+    Some(FileRecordSegmentHeader {
+        multi_sector_header: MultiSectorHeader {
+            magic: read_u32_le(data, 0)?,
+            usa_offset: read_u16_le(data, 4)?,
+            usa_count: read_u16_le(data, 6)?,
+        },
+        log_file_sequence_number: read_i64_le(data, 8)?,
+        sequence_number: read_u16_le(data, 16)?,
+        link_count: read_u16_le(data, 18)?,
+        first_attribute_offset: read_u16_le(data, 20)?,
+        flags: read_u16_le(data, 22)?,
+        bytes_in_use: read_u32_le(data, 24)?,
+        bytes_allocated: read_u32_le(data, 28)?,
+        base_file_record_segment: read_u64_le(data, 32)?,
+        next_attribute_number: read_u16_le(data, 40)?,
+        reserved: read_u16_le(data, 42)?,
+        segment_number_lower: read_u32_le(data, 44)?,
+    })
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
@@ -377,12 +440,8 @@ const DUMP_BYTES: usize = 256;
 
 /// Dump a single raw MFT record's header and a small hex preview.
 #[expect(
-    unsafe_code,
-    reason = "ptr::read from validated buffer for packed NTFS struct"
-)]
-#[expect(
     clippy::single_call_fn,
-    reason = "encapsulates unsafe dump routine, kept separate for clarity"
+    reason = "encapsulates header decoding and dump routine, kept separate for clarity"
 )]
 fn dump_record(frs: u64, data: &[u8]) {
     use core::mem::size_of;
@@ -394,8 +453,10 @@ fn dump_record(frs: u64, data: &[u8]) {
         return;
     }
 
-    // SAFETY: We've checked that the buffer is large enough for the header.
-    let header: FileRecordSegmentHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
+    let Some(header) = parse_file_record_segment_header(data) else {
+        println!("  Failed to decode FileRecordSegmentHeader");
+        return;
+    };
 
     // Copy out of the packed struct fields to avoid unaligned references.
     let ms = header.multi_sector_header;

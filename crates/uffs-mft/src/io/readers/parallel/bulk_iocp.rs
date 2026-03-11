@@ -121,6 +121,8 @@ impl ParallelMftReader {
                 let buffer_offset = chunk_buffer_offset + offset_within_chunk;
 
                 let mut op = Box::pin(BulkOverlappedRead {
+                    // SAFETY: `OVERLAPPED` is a plain Windows FFI struct and an
+                    // all-zero value is the required initial state before offsets are set.
                     overlapped: unsafe { std::mem::zeroed() },
                 });
 
@@ -129,6 +131,9 @@ impl ParallelMftReader {
                 op.overlapped.Anonymous.Anonymous.OffsetHigh = (disk_offset >> 32) as u32;
 
                 // Issue async read
+                // SAFETY: The pointer is derived from `mft_buffer`, `buffer_offset`
+                // and `io_size` are computed to stay within that allocation, and the
+                // slice is only handed to Windows for the duration of the async read.
                 let target_slice = unsafe {
                     std::slice::from_raw_parts_mut(
                         mft_buffer.as_mut_slice().as_mut_ptr().add(buffer_offset),
@@ -136,6 +141,9 @@ impl ParallelMftReader {
                     )
                 };
 
+                // SAFETY: `overlapped_handle` is a live overlapped-capable handle,
+                // `target_slice` is a valid writable region, and the `OVERLAPPED`
+                // pointer remains valid because `op` stays pinned in `operations`.
                 let result = unsafe {
                     ReadFile(
                         overlapped_handle,
@@ -151,6 +159,8 @@ impl ParallelMftReader {
                         pending_count += 1;
                     }
                     Err(_) => {
+                        // SAFETY: `GetLastError` reads the calling thread's last-error
+                        // slot and does not dereference any Rust pointers.
                         let last_error = unsafe { GetLastError() };
                         if last_error == ERROR_IO_PENDING {
                             // Queued successfully - this is expected for async I/O
@@ -191,10 +201,13 @@ impl ParallelMftReader {
 
         // Share IOCP handle across threads (IOCP is thread-safe)
         // We need to wrap the raw pointer in a Send-safe wrapper
-        // SAFETY: Windows IOCP handles are thread-safe by design
         #[derive(Clone, Copy)]
         struct SendHandle(isize);
+        // SAFETY: `SendHandle` only copies the raw IOCP handle value; the kernel
+        // object itself is thread-safe and ownership stays external to this wrapper.
         unsafe impl Send for SendHandle {}
+        // SAFETY: Sharing copied IOCP handle values across threads is sound because
+        // all synchronization is provided by the kernel-managed completion port.
         unsafe impl Sync for SendHandle {}
 
         let iocp_handle_raw = SendHandle(iocp.handle.0 as isize);
@@ -229,6 +242,8 @@ impl ParallelMftReader {
                         std::ptr::null_mut();
 
                     // Use short timeout to allow checking completion count
+                    // SAFETY: `iocp_handle` is live and all out-pointers reference
+                    // writable stack storage for the duration of the wait.
                     let result = unsafe {
                         GetQueuedCompletionStatus(
                             iocp_handle,
@@ -247,6 +262,8 @@ impl ParallelMftReader {
                             break;
                         }
                     } else {
+                        // SAFETY: `GetLastError` reads the calling thread's last-error
+                        // slot and does not dereference any Rust pointers.
                         let last_error = unsafe { GetLastError() };
                         // WAIT_TIMEOUT (258) is expected when using timeout
                         if last_error.0 != 258 {

@@ -115,6 +115,8 @@ impl MftRecordReader {
 
         // Seek to the aligned offset
         let mut new_position = 0_i64;
+        // SAFETY: `handle` is a live volume handle and `new_position` is valid
+        // writable storage for the duration of the seek.
         unsafe {
             SetFilePointerEx(
                 handle,
@@ -126,6 +128,8 @@ impl MftRecordReader {
 
         // Read the record
         let mut bytes_read = 0_u32;
+        // SAFETY: `handle` is live, the reusable aligned buffer is writable for
+        // its full length, and `bytes_read` is a valid out-parameter.
         unsafe {
             ReadFile(
                 handle,
@@ -277,6 +281,8 @@ impl BatchMftReader {
 
         // Seek to the aligned offset
         let mut new_position = 0_i64;
+        // SAFETY: `handle` is a live volume handle and `new_position` is valid
+        // writable storage for the duration of the seek.
         unsafe {
             SetFilePointerEx(
                 handle,
@@ -289,6 +295,8 @@ impl BatchMftReader {
         // Read the batch
         let read_size = bytes_to_read.min(self.buffer.len());
         let mut bytes_read = 0_u32;
+        // SAFETY: `handle` is live, the buffer slice spans `read_size` writable
+        // bytes, and `bytes_read` is a valid out-parameter.
         unsafe {
             ReadFile(
                 handle,

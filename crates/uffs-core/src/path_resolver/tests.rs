@@ -3,11 +3,13 @@
 //! Covers legacy and fast resolver path reconstruction, caching, and helper
 //! column generation.
 
+use uffs_polars::{Column, DataFrame};
+
 use super::*;
 
-type TestResult = core::result::Result<(), Box<dyn core::error::Error>>;
+type TestResult = Result<(), Box<dyn core::error::Error>>;
 
-fn create_test_df() -> core::result::Result<DataFrame, uffs_polars::PolarsError> {
+fn create_test_df() -> Result<DataFrame, uffs_polars::PolarsError> {
     DataFrame::new_infer_height(vec![
         Column::new("frs".into(), &[5_u64, 100, 101, 102]),
         Column::new("parent_frs".into(), &[0_u64, 5, 100, 101]),

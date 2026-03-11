@@ -116,6 +116,9 @@ impl ParallelMftReader {
 
             // Seek and read
             let mut new_pos: i64 = 0;
+            // SAFETY: `handle` is live, `new_pos` is valid writable storage for
+            // the seek, and `target_slice` is derived from `mft_buffer` as an
+            // in-bounds writable slice of `effective_bytes` bytes.
             unsafe {
                 SetFilePointerEx(handle, disk_offset as i64, Some(&mut new_pos), FILE_BEGIN)?;
 

@@ -1,6 +1,7 @@
 //! NTFS record headers, fixup, and attribute iteration.
 
 use core::mem::size_of;
+
 use zerocopy::{FromBytes, Immutable, KnownLayout};
 
 use crate::ntfs::extract_data_runs_from_attribute;
@@ -369,7 +370,8 @@ pub struct FileRecordSegmentHeader {
     pub segment_number_lower: u32,
 }
 
-/// Decodes `FileRecordSegmentHeader` from on-disk bytes without unaligned reads.
+/// Decodes `FileRecordSegmentHeader` from on-disk bytes without unaligned
+/// reads.
 #[inline]
 #[expect(
     clippy::single_call_fn,

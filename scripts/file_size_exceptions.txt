@@ -1,6 +1,4 @@
 # Copyright 2025-2026 Robert Nio
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # path|reason
-crates/uffs-cli/src/commands/search.rs|Search command flow remains consolidated pending a command split outside Wave 3C.
 crates/uffs-diag/src/bin/compare_scan_parity.rs|Diagnostic parity pipeline remains consolidated because the end-to-end workflow is reviewed as one unit.
-crates/uffs-mft/src/reader/multi_drive.rs|Multi-drive orchestration, cache refresh, and USN update helpers remain co-located pending a dedicated split outside Wave 3C.

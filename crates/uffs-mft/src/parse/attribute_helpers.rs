@@ -1,12 +1,13 @@
 //! Helpers for parsing core NTFS attributes from MFT record bytes.
 
+use zerocopy::FromBytes;
+
 use crate::ntfs::{ExtendedStandardInfo, NameInfo, StreamInfo};
 
 /// Parses `$STANDARD_INFORMATION` into `ExtendedStandardInfo`.
 ///
 /// Handles both NTFS 1.2 (36 bytes) and NTFS 3.0+ (72 bytes) formats.
 /// For NTFS 3.0+, also extracts `usn`, `security_id`, and `owner_id`.
-#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
 pub(super) fn parse_standard_info_full(
     data: &[u8],
     attr_offset: usize,
@@ -30,9 +31,9 @@ pub(super) fn parse_standard_info_full(
     if value_length >= STANDARD_INFO_SIZE_V30
         && si_offset + size_of::<StandardInformationExtended>() <= data.len()
     {
-        // SAFETY: `si_offset` bounds are validated above and the struct is read from packed NTFS bytes.
-        let si: StandardInformationExtended =
-            unsafe { core::ptr::read(data[si_offset..].as_ptr().cast()) };
+        let Ok((si, _)) = StandardInformationExtended::read_from_prefix(&data[si_offset..]) else {
+            return;
+        };
 
         *result = ExtendedStandardInfo {
             created: filetime_to_unix_micros(si.creation_time),
@@ -47,8 +48,9 @@ pub(super) fn parse_standard_info_full(
     } else if value_length >= STANDARD_INFO_SIZE_V12
         && si_offset + size_of::<StandardInformation>() <= data.len()
     {
-        // SAFETY: `si_offset` bounds are validated above and the struct is read from packed NTFS bytes.
-        let si: StandardInformation = unsafe { core::ptr::read(data[si_offset..].as_ptr().cast()) };
+        let Ok((si, _)) = StandardInformation::read_from_prefix(&data[si_offset..]) else {
+            return;
+        };
 
         *result = ExtendedStandardInfo {
             created: filetime_to_unix_micros(si.creation_time),
@@ -64,7 +66,6 @@ pub(super) fn parse_standard_info_full(
 }
 
 /// Parses `$FILE_NAME` and returns a `NameInfo` with timestamps.
-#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
 pub(super) fn parse_file_name_full(
     data: &[u8],
     attr_offset: usize,
@@ -84,8 +85,9 @@ pub(super) fn parse_file_name_full(
         return None;
     }
 
-    // SAFETY: `fn_offset` bounds are validated above and the struct is read from packed NTFS bytes.
-    let fn_attr: FileNameAttribute = unsafe { core::ptr::read(data[fn_offset..].as_ptr().cast()) };
+    let Ok((fn_attr, _)) = FileNameAttribute::read_from_prefix(&data[fn_offset..]) else {
+        return None;
+    };
 
     let name_len = fn_attr.file_name_length as usize;
     let name_offset = fn_offset + size_of::<FileNameAttribute>();

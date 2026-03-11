@@ -2,6 +2,8 @@
 
 use core::mem::size_of;
 
+use zerocopy::FromBytes;
+
 use crate::ntfs::{FILE_RECORD_MAGIC, MultiSectorHeader, SECTOR_SIZE};
 
 /// Applies the multi-sector fixup (Update Sequence Array) to a record.
@@ -17,14 +19,14 @@ use crate::ntfs::{FILE_RECORD_MAGIC, MultiSectorHeader, SECTOR_SIZE};
 /// # Returns
 ///
 /// `true` if the fixup was successful, `false` if the record is corrupted.
-#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS struct")]
 pub fn apply_fixup(data: &mut [u8]) -> bool {
     if data.len() < size_of::<MultiSectorHeader>() {
         return false;
     }
 
-    // SAFETY: We've verified the buffer is large enough.
-    let header: MultiSectorHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
+    let Ok((header, _)) = MultiSectorHeader::read_from_prefix(data) else {
+        return false;
+    };
 
     // Validate magic number
     if header.magic != FILE_RECORD_MAGIC {

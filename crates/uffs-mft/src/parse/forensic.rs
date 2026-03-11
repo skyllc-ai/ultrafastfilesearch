@@ -5,6 +5,7 @@ mod extension;
 
 use base::parse_base_record;
 use extension::parse_extension_record;
+use zerocopy::FromBytes;
 
 use super::{ParseOptions, ParseResult, ParsedRecord};
 
@@ -28,7 +29,6 @@ use super::{ParseOptions, ParseResult, ParsedRecord};
 /// `ParseResult::Base` for all records matching options, or
 /// `ParseResult::Skip`.
 #[must_use]
-#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS structs")]
 pub fn parse_record_forensic(
     data: &[u8],
     frs: u64,
@@ -55,8 +55,9 @@ pub fn parse_record_forensic(
         return ParseResult::Skip;
     }
 
-    // SAFETY: `data.len()` is validated above for the packed header size.
-    let header: FileRecordSegmentHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
+    let Ok((header, _)) = FileRecordSegmentHeader::read_from_prefix(data) else {
+        return ParseResult::Skip;
+    };
 
     let is_deleted = !header.is_in_use();
     if is_deleted && !options.include_deleted {

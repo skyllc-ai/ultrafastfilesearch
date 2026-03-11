@@ -161,8 +161,9 @@ impl MftIndex {
             frs_to_idx_bytes,
             "FRS table exceeds remaining data",
         )?;
-        let mut frs_to_idx =
-            Vec::with_capacity(usize::try_from(frs_to_idx_len).map_err(|_err| "FRS table too large")?);
+        let mut frs_to_idx = Vec::with_capacity(
+            usize::try_from(frs_to_idx_len).map_err(|_err| "FRS table too large")?,
+        );
         for _ in 0..frs_to_idx_len {
             frs_to_idx.push(read_u32!());
         }
@@ -177,11 +178,8 @@ impl MftIndex {
             8 => 195,
             _ => return Err("Unsupported index version"),
         };
-        let record_bytes = checked_section_bytes(
-            record_count,
-            record_size_bytes,
-            "Record section too large",
-        )?;
+        let record_bytes =
+            checked_section_bytes(record_count, record_size_bytes, "Record section too large")?;
         ensure_remaining(
             data.len(),
             pos,

@@ -223,6 +223,7 @@ mod windows_impl {
     use windows::Win32::System::IO::DeviceIoControl;
     use windows::Win32::System::Ioctl::{FSCTL_QUERY_USN_JOURNAL, FSCTL_READ_USN_JOURNAL};
     use windows::core::PCWSTR;
+    use zerocopy::{FromBytes, Immutable, KnownLayout};
 
     use super::*;
 
@@ -249,7 +250,7 @@ mod windows_impl {
     }
 
     #[repr(C, packed)]
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, FromBytes, Immutable, KnownLayout)]
     struct UsnRecordV2Header {
         record_length: u32,
         major_version: u16,
@@ -273,6 +274,9 @@ mod windows_impl {
             .chain(std::iter::once(0))
             .collect();
         // USN Journal operations require GENERIC_READ access
+        // SAFETY: `wide` is a NUL-terminated UTF-16 path buffer that lives for the
+        // duration of the call, optional parameters are `None`, and ownership of any
+        // returned handle is transferred to the caller.
         let handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(wide.as_ptr()),
@@ -296,6 +300,9 @@ mod windows_impl {
         let handle = open_volume_handle(volume)?;
         let mut journal_data = UsnJournalDataV0::default();
         let mut bytes_returned: u32 = 0;
+        // SAFETY: `handle` is a live volume handle, the output buffer points to
+        // writable `UsnJournalDataV0` storage, and `bytes_returned` is a valid
+        // out-parameter for the duration of the call.
         let result = unsafe {
             DeviceIoControl(
                 handle,
@@ -308,6 +315,8 @@ mod windows_impl {
                 None,                                          // Overlapped
             )
         };
+        // SAFETY: `handle` was returned by `open_volume_handle` and is closed once
+        // after the ioctl completes.
         let _ = unsafe { CloseHandle(handle) };
         if result.is_err() {
             return Err(std::io::Error::last_os_error());
@@ -340,6 +349,9 @@ mod windows_impl {
         };
         let mut buffer = vec![0u8; 64 * 1024];
         let mut bytes_returned: u32 = 0;
+        // SAFETY: `handle` is a live volume handle, `read_data` and `buffer`
+        // provide valid input/output storage for the advertised byte counts, and
+        // `bytes_returned` is a valid out-parameter for the call.
         let result = unsafe {
             DeviceIoControl(
                 handle,
@@ -352,6 +364,8 @@ mod windows_impl {
                 None,                                   // Overlapped
             )
         };
+        // SAFETY: `handle` was returned by `open_volume_handle` and is closed once
+        // after the ioctl completes.
         let _ = unsafe { CloseHandle(handle) };
         if result.is_err() {
             return Err(std::io::Error::last_os_error());
@@ -368,8 +382,12 @@ mod windows_impl {
         let mut records = Vec::new();
         let mut offset = 8usize;
         while offset + size_of::<UsnRecordV2Header>() <= bytes_returned as usize {
-            let header: UsnRecordV2Header =
-                unsafe { ptr::read_unaligned(buffer.as_ptr().add(offset).cast()) };
+            let header =
+                match UsnRecordV2Header::read_from_prefix(&buffer[offset..bytes_returned as usize])
+                {
+                    Ok((header, _)) => header,
+                    Err(_) => break,
+                };
             if header.record_length == 0 {
                 break;
             }

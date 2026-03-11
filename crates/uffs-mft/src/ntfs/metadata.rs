@@ -1,6 +1,7 @@
 //! NTFS attribute payloads and legacy-output metadata helpers.
 
 use core::mem::size_of;
+
 use zerocopy::{FromBytes, Immutable, KnownLayout};
 
 /// Standard Information attribute content (NTFS 1.2 - 36 bytes).

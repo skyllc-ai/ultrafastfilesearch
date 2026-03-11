@@ -1,5 +1,7 @@
 //! Base-record forensic parsing after record-header validation.
 
+use zerocopy::FromBytes;
+
 use super::super::{
     ParseResult, ParsedRecord, PrimaryNameTracker, parse_data_attribute_full, parse_file_name_full,
     parse_standard_info_full,
@@ -11,7 +13,6 @@ use crate::ntfs::{
 
 /// Parses the main forensic/base record path after header validation.
 #[must_use]
-#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS structs")]
 #[expect(
     clippy::too_many_lines,
     reason = "forensic base parsing still handles many attribute types sequentially"
@@ -53,9 +54,9 @@ pub(super) fn parse_base_record(
     let max_offset = core::cmp::min(header.bytes_in_use as usize, data.len());
 
     while offset + size_of::<AttributeRecordHeader>() <= max_offset {
-        // SAFETY: Bounds checked above; AttributeRecordHeader is repr(C) and packed.
-        let attr_header: AttributeRecordHeader =
-            unsafe { core::ptr::read(data[offset..].as_ptr().cast()) };
+        let Ok((attr_header, _)) = AttributeRecordHeader::read_from_prefix(&data[offset..]) else {
+            break;
+        };
 
         if attr_header.type_code == AttributeType::End as u32 {
             break;
@@ -107,10 +108,11 @@ pub(super) fn parse_base_record(
                     ) as usize;
                     let rp_offset = offset + value_offset;
                     if rp_offset + size_of::<ReparsePointHeader>() <= data.len() {
-                        // SAFETY: Bounds checked above; ReparsePointHeader is repr(C).
-                        let rp_header: ReparsePointHeader =
-                            unsafe { core::ptr::read(data[rp_offset..].as_ptr().cast()) };
-                        reparse_tag = rp_header.reparse_tag;
+                        if let Ok((rp_header, _)) =
+                            ReparsePointHeader::read_from_prefix(&data[rp_offset..])
+                        {
+                            reparse_tag = rp_header.reparse_tag;
+                        }
                     }
                     (value_length, 0_u64, true)
                 } else {

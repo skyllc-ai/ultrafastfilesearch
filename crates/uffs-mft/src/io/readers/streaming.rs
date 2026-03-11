@@ -166,6 +166,8 @@ impl StreamingMftReader {
 
         // Seek and read
         let mut new_position = 0_i64;
+        // SAFETY: `handle` is a live volume handle and `new_position` is valid
+        // writable storage for the duration of the seek.
         unsafe {
             SetFilePointerEx(
                 handle,
@@ -176,6 +178,9 @@ impl StreamingMftReader {
         }
 
         let mut bytes_read = 0_u32;
+        // SAFETY: `handle` is live, the aligned buffer slice spans
+        // `aligned_size` writable bytes, and `bytes_read` is a valid
+        // out-parameter.
         unsafe {
             ReadFile(
                 handle,

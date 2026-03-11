@@ -1,8 +1,9 @@
 //! Tests for compiled pattern classification, compilation, and lowering.
 
 use super::*;
+use crate::pattern::ParsedPattern;
 
-type TestResult = core::result::Result<(), Box<dyn core::error::Error>>;
+type TestResult = Result<(), Box<dyn core::error::Error>>;
 
 // ============================================================================
 // GlobKind Classification Tests

@@ -4,6 +4,7 @@
 use core::mem::size_of;
 
 use smallvec::SmallVec;
+use zerocopy::FromBytes;
 
 use super::fragment_extension::parse_extension_to_fragment;
 use crate::ntfs::is_internal_windows_stream;
@@ -17,10 +18,6 @@ use crate::ntfs::is_internal_windows_stream;
 ///
 /// `true` if a record was added to the fragment, `false` if skipped.
 #[deprecated(note = "Use parse_record_full() + MftRecordMerger + from_parsed_records() instead")]
-#[expect(
-    unsafe_code,
-    reason = "ptr::read for NTFS header and attribute parsing from raw bytes"
-)]
 #[expect(
     clippy::too_many_lines,
     reason = "monolithic parser kept for performance-critical hot path"
@@ -46,8 +43,10 @@ pub fn parse_record_to_fragment(
         return false;
     }
 
-    // SAFETY: We've verified the buffer is large enough for the header.
-    let header: FileRecordSegmentHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
+    let header = match FileRecordSegmentHeader::read_from_prefix(data) {
+        Ok((header, _)) => header,
+        Err(_) => return false,
+    };
 
     // Check if record is in use
     if !header.is_in_use() {
@@ -83,8 +82,10 @@ pub fn parse_record_to_fragment(
     let mut additional_streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
 
     while offset + size_of::<AttributeRecordHeader>() <= max_offset {
-        let attr_header: AttributeRecordHeader =
-            unsafe { core::ptr::read(data[offset..].as_ptr().cast()) };
+        let attr_header = match AttributeRecordHeader::read_from_prefix(&data[offset..]) {
+            Ok((attr_header, _)) => attr_header,
+            Err(_) => break,
+        };
 
         if attr_header.type_code == AttributeType::End as u32 {
             break;
@@ -103,8 +104,10 @@ pub fn parse_record_to_fragment(
                             as usize;
                     let si_offset = offset + value_offset;
                     if si_offset + size_of::<StandardInformation>() <= data.len() {
-                        let si: StandardInformation =
-                            unsafe { core::ptr::read(data[si_offset..].as_ptr().cast()) };
+                        let si = match StandardInformation::read_from_prefix(&data[si_offset..]) {
+                            Ok((si, _)) => si,
+                            Err(_) => break,
+                        };
                         let mut info = StandardInfo::from_attributes(si.file_attributes);
                         info.created = filetime_to_unix_micros(si.creation_time);
                         info.modified = filetime_to_unix_micros(si.modification_time);
@@ -122,8 +125,11 @@ pub fn parse_record_to_fragment(
                             as usize;
                     let fn_offset = offset + value_offset;
                     if fn_offset + size_of::<FileNameAttribute>() <= data.len() {
-                        let fn_attr: FileNameAttribute =
-                            unsafe { core::ptr::read(data[fn_offset..].as_ptr().cast()) };
+                        let fn_attr = match FileNameAttribute::read_from_prefix(&data[fn_offset..])
+                        {
+                            Ok((fn_attr, _)) => fn_attr,
+                            Err(_) => break,
+                        };
                         let name_len = fn_attr.file_name_length as usize;
                         let name_bytes_offset = fn_offset + size_of::<FileNameAttribute>();
                         if name_bytes_offset + name_len * 2 <= data.len() {

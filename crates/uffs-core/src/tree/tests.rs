@@ -1,3 +1,5 @@
+use uffs_polars::{Column, DataFrame};
+
 use super::*;
 
 /// Create a test `DataFrame` with a directory structure:

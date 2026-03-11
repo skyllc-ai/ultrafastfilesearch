@@ -176,6 +176,9 @@ impl MultiVolumeIocpReader {
                     let overlapped_ptr = std::ptr::addr_of_mut!(in_flight_op.overlapped);
                     let buffer_ptr = in_flight_op.buffer.as_mut_slice().as_mut_ptr();
 
+                    // SAFETY: `buffer_ptr` comes from the owned aligned buffer inside
+                    // `in_flight_op`, `op.size` stays within that allocation, and the
+                    // `OVERLAPPED` pointer remains valid while the pinned op is in flight.
                     let read_result = unsafe {
                         ReadFile(
                             vol.handle,
@@ -186,6 +189,8 @@ impl MultiVolumeIocpReader {
                     };
 
                     if read_result.is_err() {
+                        // SAFETY: `GetLastError` reads the calling thread's last-error
+                        // slot and does not dereference any Rust pointers.
                         let err = unsafe { GetLastError() };
                         if err != ERROR_IO_PENDING {
                             warn!(
@@ -218,6 +223,8 @@ impl MultiVolumeIocpReader {
             let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
                 std::ptr::null_mut();
 
+            // SAFETY: `iocp.raw_handle()` is live and all out-pointers reference
+            // writable stack storage for the duration of the wait.
             let wait_result = unsafe {
                 GetQueuedCompletionStatus(
                     iocp.raw_handle(),
@@ -229,6 +236,8 @@ impl MultiVolumeIocpReader {
             };
 
             if wait_result.is_err() || overlapped_ptr.is_null() {
+                // SAFETY: `GetLastError` reads the calling thread's last-error
+                // slot and does not dereference any Rust pointers.
                 let err = unsafe { GetLastError() };
                 warn!(error = ?err, "IOCP wait failed");
                 break;
@@ -316,6 +325,9 @@ impl MultiVolumeIocpReader {
                 let overlapped_ptr = std::ptr::addr_of_mut!(new_in_flight.overlapped);
                 let buffer_ptr = new_in_flight.buffer.as_mut_slice().as_mut_ptr();
 
+                // SAFETY: `buffer_ptr` comes from the owned aligned buffer inside
+                // `new_in_flight`, `next_op.size` stays within that allocation, and the
+                // `OVERLAPPED` pointer remains valid while the pinned op is in flight.
                 let read_result = unsafe {
                     ReadFile(
                         vol.handle,
@@ -326,6 +338,8 @@ impl MultiVolumeIocpReader {
                 };
 
                 if read_result.is_err() {
+                    // SAFETY: `GetLastError` reads the calling thread's last-error
+                    // slot and does not dereference any Rust pointers.
                     let err = unsafe { GetLastError() };
                     if err != ERROR_IO_PENDING {
                         warn!(

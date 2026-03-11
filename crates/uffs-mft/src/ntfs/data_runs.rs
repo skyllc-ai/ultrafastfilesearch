@@ -104,7 +104,8 @@ pub fn parse_data_runs(data: &[u8], lowest_vcn: i64) -> Vec<DataRun> {
     clippy::single_call_fn,
     reason = "extracted for clarity alongside parse_variable_length_signed"
 )]
-/// Parses a little-endian variable-length unsigned integer from a data run field.
+/// Parses a little-endian variable-length unsigned integer from a data run
+/// field.
 fn parse_variable_length_unsigned(data: &[u8]) -> u64 {
     let mut value: u64 = 0;
     for (i, &byte) in data.iter().enumerate() {
@@ -117,7 +118,8 @@ fn parse_variable_length_unsigned(data: &[u8]) -> u64 {
     clippy::single_call_fn,
     reason = "extracted for clarity alongside parse_variable_length_unsigned"
 )]
-/// Parses a sign-extended little-endian variable-length integer from a data run field.
+/// Parses a sign-extended little-endian variable-length integer from a data run
+/// field.
 fn parse_variable_length_signed(data: &[u8]) -> i64 {
     let Some(&last_byte) = data.last() else {
         return 0;

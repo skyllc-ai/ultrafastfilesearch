@@ -11,6 +11,7 @@ use windows::Win32::Storage::FileSystem::{
 };
 use windows::Win32::System::Ioctl::{FSCTL_GET_NTFS_VOLUME_DATA, NTFS_VOLUME_DATA_BUFFER};
 use windows::core::PCWSTR;
+use zerocopy::FromBytes;
 
 use super::bitmap::MftBitmap;
 use super::extents::{MftExtent, get_retrieval_pointers};
@@ -264,10 +265,7 @@ impl VolumeHandle {
     }
 
     /// Reads the boot sector from the volume.
-    #[expect(
-        unsafe_code,
-        reason = "FFI: windows API and ptr::read for packed struct"
-    )]
+    #[expect(unsafe_code, reason = "FFI: windows API to read the boot sector")]
     pub fn read_boot_sector(&self) -> Result<NtfsBootSector> {
         use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
@@ -294,9 +292,14 @@ impl VolumeHandle {
             )));
         }
 
-        // SAFETY: `NtfsBootSector` is `repr(C, packed)` (alignment 1), and we
-        // verified that `buffer` contains exactly one full 512-byte boot sector.
-        let boot_sector: NtfsBootSector = unsafe { core::ptr::read(buffer.as_ptr().cast()) };
+        let boot_sector = match NtfsBootSector::read_from_prefix(&buffer) {
+            Ok((boot_sector, _)) => boot_sector,
+            Err(_) => {
+                return Err(MftError::InvalidBootSector(
+                    "Unable to decode NTFS boot sector layout".to_owned(),
+                ));
+            }
+        };
 
         if !boot_sector.is_valid() {
             return Err(MftError::InvalidBootSector(

@@ -1,6 +1,7 @@
 //! Standard MFT record parsing for base and extension records.
 
 use tracing::debug;
+use zerocopy::FromBytes;
 
 use super::{
     ExtensionAttributes, ParseResult, ParsedRecord, PrimaryNameTracker, parse_data_attribute_full,
@@ -24,9 +25,7 @@ use crate::ntfs::{ExtendedStandardInfo, NameInfo, ReparsePointHeader, StreamInfo
 /// `ParseResult::Base` for base records, `ParseResult::Extension` for
 /// extension records, or `ParseResult::Skip` if invalid/not in use.
 #[must_use]
-// Required: ptr::read for packed NTFS structs
 // 101 lines: just over limit due to P2 reparse_tag extraction; splitting would hurt readability
-#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS structs")]
 #[expect(
     clippy::cognitive_complexity,
     reason = "NTFS attribute dispatch is inherently complex"
@@ -46,8 +45,9 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
         return ParseResult::Skip;
     }
 
-    // SAFETY: We've verified the buffer is large enough for the header.
-    let header: FileRecordSegmentHeader = unsafe { core::ptr::read(data.as_ptr().cast()) };
+    let Ok((header, _)) = FileRecordSegmentHeader::read_from_prefix(data) else {
+        return ParseResult::Skip;
+    };
 
     // Check if record is in use
     if !header.is_in_use() {
@@ -87,10 +87,9 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     let max_offset = core::cmp::min(header.bytes_in_use as usize, data.len());
 
     while offset + size_of::<AttributeRecordHeader>() <= max_offset {
-        // SAFETY: We've verified offset + size_of::<AttributeRecordHeader>() <=
-        // max_offset
-        let attr_header: AttributeRecordHeader =
-            unsafe { core::ptr::read(data[offset..].as_ptr().cast()) };
+        let Ok((attr_header, _)) = AttributeRecordHeader::read_from_prefix(&data[offset..]) else {
+            break;
+        };
 
         if attr_header.type_code == AttributeType::End as u32 {
             break;
@@ -143,10 +142,11 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                     ) as usize;
                     let rp_offset = offset + value_offset;
                     if rp_offset + size_of::<ReparsePointHeader>() <= data.len() {
-                        // SAFETY: We've verified the buffer is large enough
-                        let rp_header: ReparsePointHeader =
-                            unsafe { core::ptr::read(data[rp_offset..].as_ptr().cast()) };
-                        reparse_tag = rp_header.reparse_tag;
+                        if let Ok((rp_header, _)) =
+                            ReparsePointHeader::read_from_prefix(&data[rp_offset..])
+                        {
+                            reparse_tag = rp_header.reparse_tag;
+                        }
                     }
                     (value_length, 0_u64, true)
                 } else {

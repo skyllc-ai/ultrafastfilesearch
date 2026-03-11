@@ -61,12 +61,12 @@ use rustc_hash as _;
 // SmallVec for path chain building (used in index.rs PathResolver)
 use smallvec as _;
 use thiserror as _;
-use zerocopy as _;
 #[cfg(not(windows))]
 use tracing as _;
 #[cfg(not(windows))]
 use uffs_mft as _;
 use uffs_polars as _;
+use zerocopy as _;
 // Optional dependencies
 #[cfg(feature = "zstd")]
 use zstd as _;

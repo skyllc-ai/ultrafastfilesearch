@@ -1,7 +1,26 @@
 //! Tests for parse-module helpers, record decoding, and regressions.
 
 use super::*;
-use crate::ntfs::{ExtendedStandardInfo, FILE_RECORD_MAGIC, NameInfo};
+use crate::ntfs::{
+    AttributeType, ExtendedStandardInfo, FILE_RECORD_MAGIC, NameInfo, ReparseTag,
+    filetime_to_unix_micros,
+};
+
+fn write_u16_le(buffer: &mut [u8], offset: usize, value: u16) {
+    buffer[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_u32_le(buffer: &mut [u8], offset: usize, value: u32) {
+    buffer[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_u64_le(buffer: &mut [u8], offset: usize, value: u64) {
+    buffer[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_i64_le(buffer: &mut [u8], offset: usize, value: i64) {
+    buffer[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
 
 /// Create a minimal valid MFT record header for testing.
 /// This creates a 1024-byte record with proper fixup values.
@@ -73,6 +92,94 @@ fn create_test_record(frs: u64, in_use: bool, is_dir: bool) -> Vec<u8> {
     data
 }
 
+fn create_resident_attribute(attr_type: AttributeType, value: &[u8]) -> Vec<u8> {
+    let value_offset = 24_usize;
+    let length = (value_offset + value.len() + 7) & !7;
+    let mut attr = vec![0_u8; length];
+
+    write_u32_le(&mut attr, 0, attr_type as u32);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "test attributes are far smaller than u32::MAX"
+    )]
+    let length_u32 = length as u32;
+    write_u32_le(&mut attr, 4, length_u32);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "resident test attribute values are far smaller than u32::MAX"
+    )]
+    let value_length = value.len() as u32;
+    write_u32_le(&mut attr, 16, value_length);
+    write_u16_le(&mut attr, 20, 24);
+    attr[value_offset..value_offset + value.len()].copy_from_slice(value);
+
+    attr
+}
+
+#[expect(
+    clippy::single_call_fn,
+    reason = "test helper isolates FileName attribute layout for one targeted regression"
+)]
+fn create_file_name_value(parent_directory: u64, name: &str, namespace: u8) -> Vec<u8> {
+    let name_utf16: Vec<u16> = name.encode_utf16().collect();
+    let mut value = vec![0_u8; 66 + name_utf16.len() * 2];
+
+    write_u64_le(&mut value, 0, parent_directory);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "test names are short and fit into the NTFS filename length field"
+    )]
+    let name_length = name_utf16.len() as u8;
+    value[64] = name_length;
+    value[65] = namespace;
+
+    for (index, unit) in name_utf16.iter().copied().enumerate() {
+        let byte_offset = 66 + index * 2;
+        value[byte_offset..byte_offset + 2].copy_from_slice(&unit.to_le_bytes());
+    }
+
+    value
+}
+
+#[expect(
+    clippy::single_call_fn,
+    reason = "test helper isolates reparse payload layout for one targeted regression"
+)]
+fn create_reparse_point_value(reparse_tag: u32) -> Vec<u8> {
+    let mut value = vec![0_u8; 8];
+    write_u32_le(&mut value, 0, reparse_tag);
+
+    value
+}
+
+fn create_test_record_with_attributes(
+    frs: u64,
+    in_use: bool,
+    is_dir: bool,
+    base_file_record_segment: u64,
+    attributes: &[Vec<u8>],
+) -> Vec<u8> {
+    let mut data = create_test_record(frs, in_use, is_dir);
+    write_u64_le(&mut data, 32, base_file_record_segment);
+
+    let mut offset = 0x38_usize;
+    for attribute in attributes {
+        assert!(offset + attribute.len() + 4 <= data.len());
+        data[offset..offset + attribute.len()].copy_from_slice(attribute);
+        offset += attribute.len();
+    }
+
+    write_u32_le(&mut data, offset, 0xFFFF_FFFF);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "synthetic test record stays well under u32::MAX"
+    )]
+    let bytes_in_use = (offset + 4) as u32;
+    write_u32_le(&mut data, 24, bytes_in_use);
+
+    data
+}
+
 #[test]
 fn test_apply_fixup_valid_record() {
     let mut data = create_test_record(5, true, false);
@@ -115,6 +222,189 @@ fn test_apply_fixup_corrupted_check_value() {
 
     let result = apply_fixup(&mut data);
     assert!(!result, "Fixup should fail for corrupted check value");
+}
+
+#[test]
+fn test_apply_fixup_valid_record_on_unaligned_slice() {
+    let record = create_test_record(5, true, false);
+    let mut storage = vec![0_u8; record.len() + 1];
+    storage[1..].copy_from_slice(&record);
+
+    let result = apply_fixup(&mut storage[1..]);
+    assert!(result, "Fixup should succeed for an unaligned record slice");
+    assert_eq!(&storage[511..513], &0x1234_u16.to_le_bytes());
+    assert_eq!(&storage[1023..1025], &0x5678_u16.to_le_bytes());
+}
+
+#[test]
+fn test_parse_standard_info_full_reads_unaligned_v30_payload() {
+    let attr_offset = 1_usize;
+    let value_offset = 24_u16;
+    let si_offset = attr_offset + usize::from(value_offset);
+    let mut data = vec![0_u8; si_offset + 72];
+    let creation_time = 116_444_736_000_000_010_i64;
+    let modification_time = 116_444_736_000_000_020_i64;
+    let mft_change_time = 116_444_736_000_000_030_i64;
+    let access_time = 116_444_736_000_000_040_i64;
+    let owner_id = 44_u32;
+    let security_id = 55_u32;
+    let usn = 66_u64;
+
+    write_u32_le(&mut data, attr_offset + 16, 72);
+    write_u16_le(&mut data, attr_offset + 20, value_offset);
+    write_i64_le(&mut data, si_offset, creation_time);
+    write_i64_le(&mut data, si_offset + 8, modification_time);
+    write_i64_le(&mut data, si_offset + 16, mft_change_time);
+    write_i64_le(&mut data, si_offset + 24, access_time);
+    write_u32_le(&mut data, si_offset + 48, owner_id);
+    write_u32_le(&mut data, si_offset + 52, security_id);
+    write_u64_le(&mut data, si_offset + 64, usn);
+
+    let mut result = ExtendedStandardInfo::default();
+    parse_standard_info_full(&data, attr_offset, &mut result);
+
+    assert_eq!(result.created, filetime_to_unix_micros(creation_time));
+    assert_eq!(result.modified, filetime_to_unix_micros(modification_time));
+    assert_eq!(result.mft_changed, filetime_to_unix_micros(mft_change_time));
+    assert_eq!(result.accessed, filetime_to_unix_micros(access_time));
+    assert_eq!(result.owner_id, owner_id);
+    assert_eq!(result.security_id, security_id);
+    assert_eq!(result.usn, usn);
+}
+
+#[test]
+fn test_parse_file_name_full_reads_unaligned_payload() {
+    let attr_offset = 1_usize;
+    let value_offset = 24_u16;
+    let fn_offset = attr_offset + usize::from(value_offset);
+    let name = "abc.txt";
+    let name_utf16: Vec<u16> = name.encode_utf16().collect();
+    let mut data = vec![0_u8; fn_offset + 66 + name_utf16.len() * 2];
+    let parent_directory = (7_u64 << 48_u32) | 0x002a_u64;
+    let creation_time = 116_444_736_000_000_100_i64;
+    let modification_time = 116_444_736_000_000_200_i64;
+    let mft_change_time = 116_444_736_000_000_300_i64;
+    let access_time = 116_444_736_000_000_400_i64;
+    let name_len = 7_u8;
+
+    write_u16_le(&mut data, attr_offset + 20, value_offset);
+    write_u64_le(&mut data, fn_offset, parent_directory);
+    write_i64_le(&mut data, fn_offset + 8, creation_time);
+    write_i64_le(&mut data, fn_offset + 16, modification_time);
+    write_i64_le(&mut data, fn_offset + 24, mft_change_time);
+    write_i64_le(&mut data, fn_offset + 32, access_time);
+    data[fn_offset + 64] = name_len;
+    data[fn_offset + 65] = 1;
+
+    for (index, unit) in name_utf16.iter().copied().enumerate() {
+        let byte_offset = fn_offset + 66 + index * 2;
+        data[byte_offset..byte_offset + 2].copy_from_slice(&unit.to_le_bytes());
+    }
+
+    let result = parse_file_name_full(&data, attr_offset, 99);
+    assert!(
+        result.is_some(),
+        "File name parsing should succeed on unaligned data"
+    );
+
+    if let Some(name_info) = result {
+        assert_eq!(name_info.name, name);
+        assert_eq!(name_info.parent_frs, 42);
+        assert_eq!(name_info.namespace, 1);
+        assert_eq!(name_info.fn_created, filetime_to_unix_micros(creation_time));
+        assert_eq!(
+            name_info.fn_modified,
+            filetime_to_unix_micros(modification_time)
+        );
+        assert_eq!(name_info.fn_accessed, filetime_to_unix_micros(access_time));
+        assert_eq!(
+            name_info.fn_mft_changed,
+            filetime_to_unix_micros(mft_change_time)
+        );
+        assert_eq!(name_info.source_frs, 99);
+    }
+}
+
+#[test]
+fn test_parse_record_forensic_reads_unaligned_record_slice() {
+    let record = create_test_record(5, true, false);
+    let mut storage = vec![0_u8; record.len() + 1];
+    storage[1..].copy_from_slice(&record);
+
+    let result = parse_record_forensic(&storage[1..], 5, &ParseOptions::FORENSIC, false);
+    assert!(matches!(&result, ParseResult::Base(_)));
+
+    if let ParseResult::Base(parsed_record) = result {
+        assert_eq!(parsed_record.frs, 5);
+        assert_eq!(parsed_record.sequence_number, 1);
+        assert!(parsed_record.in_use);
+    }
+}
+
+#[test]
+fn test_parse_record_forensic_reads_unaligned_extension_record_slice() {
+    let extension_frs = 88_u64;
+    let base_frs = 77_u64;
+    let base_file_reference = (9_u64 << 48_u32) | base_frs;
+    let file_name_attr = create_resident_attribute(
+        AttributeType::FileName,
+        &create_file_name_value(42, "ext-name.txt", 1),
+    );
+    let record = create_test_record_with_attributes(
+        extension_frs,
+        true,
+        false,
+        base_file_reference,
+        &[file_name_attr],
+    );
+    let mut storage = vec![0_u8; record.len() + 1];
+    storage[1..].copy_from_slice(&record);
+
+    let merge_result =
+        parse_record_forensic(&storage[1..], extension_frs, &ParseOptions::DEFAULT, false);
+    assert!(matches!(&merge_result, ParseResult::Extension(_)));
+
+    if let ParseResult::Extension(extension) = merge_result {
+        assert_eq!(extension.base_frs, base_frs);
+        assert_eq!(extension.extension_frs, extension_frs);
+        assert_eq!(extension.names.len(), 1);
+        assert_eq!(extension.names[0].name, "ext-name.txt");
+        assert_eq!(extension.names[0].parent_frs, 42);
+    }
+
+    let forensic_result =
+        parse_record_forensic(&storage[1..], extension_frs, &ParseOptions::FORENSIC, false);
+    assert!(matches!(&forensic_result, ParseResult::Base(_)));
+
+    if let ParseResult::Base(parsed_record) = forensic_result {
+        assert!(parsed_record.is_extension);
+        assert_eq!(parsed_record.base_frs, base_frs);
+        assert_eq!(parsed_record.name, "ext-name.txt");
+    }
+}
+
+#[test]
+fn test_parse_record_forensic_reads_unaligned_resident_reparse_tag() {
+    let frs = 91_u64;
+    let reparse_attr = create_resident_attribute(
+        AttributeType::ReparsePoint,
+        &create_reparse_point_value(ReparseTag::SymbolicLink as u32),
+    );
+    let record = create_test_record_with_attributes(frs, true, false, 0, &[reparse_attr]);
+    let mut storage = vec![0_u8; record.len() + 1];
+    storage[1..].copy_from_slice(&record);
+
+    let result = parse_record_forensic(&storage[1..], frs, &ParseOptions::FORENSIC, false);
+    assert!(matches!(&result, ParseResult::Base(_)));
+
+    if let ParseResult::Base(parsed_record) = result {
+        assert_eq!(parsed_record.reparse_tag, ReparseTag::SymbolicLink as u32);
+        assert_eq!(parsed_record.size, 8);
+        assert_eq!(parsed_record.streams.len(), 1);
+        assert_eq!(parsed_record.streams[0].name, "$REPARSE");
+        assert_eq!(parsed_record.streams[0].size, 8);
+        assert!(parsed_record.streams[0].is_resident);
+    }
 }
 
 #[test]

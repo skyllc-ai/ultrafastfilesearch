@@ -449,6 +449,8 @@ fn read_chunk_into_buffer_static(
 
     // Seek to position
     let mut new_pos: i64 = 0;
+    // SAFETY: `handle` is a live volume handle and `new_pos` is valid writable
+    // storage for the duration of the seek.
     let seek_result = unsafe {
         SetFilePointerEx(
             handle,
@@ -464,6 +466,8 @@ fn read_chunk_into_buffer_static(
 
     // Read data
     let mut bytes_read: u32 = 0;
+    // SAFETY: `handle` is live, the aligned buffer slice spans `aligned_size`
+    // writable bytes, and `bytes_read` is a valid out-parameter.
     let read_result = unsafe {
         ReadFile(
             handle,

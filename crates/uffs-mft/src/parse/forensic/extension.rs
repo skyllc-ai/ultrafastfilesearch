@@ -1,5 +1,7 @@
 //! Extension-record forensic parsing for merge-oriented handling.
 
+use zerocopy::FromBytes;
+
 use super::super::{
     ExtensionAttributes, ParseResult, parse_data_attribute_full, parse_file_name_full,
 };
@@ -9,7 +11,6 @@ use crate::ntfs::{
 
 /// Parses an extension record for merge-mode handling.
 #[must_use]
-#[expect(unsafe_code, reason = "FFI: ptr::read for packed NTFS structs")]
 #[expect(
     clippy::too_many_lines,
     reason = "extension parsing still handles many attribute types sequentially"
@@ -41,9 +42,9 @@ pub(super) fn parse_extension_record(
     let max_offset = core::cmp::min(header.bytes_in_use as usize, data.len());
 
     while offset + size_of::<AttributeRecordHeader>() <= max_offset {
-        // SAFETY: Bounds checked above; AttributeRecordHeader is repr(C) and packed.
-        let attr_header: AttributeRecordHeader =
-            unsafe { core::ptr::read(data[offset..].as_ptr().cast()) };
+        let Ok((attr_header, _)) = AttributeRecordHeader::read_from_prefix(&data[offset..]) else {
+            break;
+        };
 
         if attr_header.type_code == AttributeType::End as u32 {
             break;
