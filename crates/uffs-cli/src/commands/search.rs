@@ -17,6 +17,8 @@ use std::sync::{
 use anyhow::{Context, Result, bail};
 #[cfg(windows)]
 use indicatif::ProgressBar;
+#[cfg(windows)]
+use tracing::debug;
 use tracing::info;
 use uffs_core::QueryMode;
 use uffs_core::output::OutputConfig;
@@ -80,17 +82,35 @@ fn should_use_index_path(
     match mode {
         QueryMode::ForceIndex => {
             if parquet_index.is_some() {
-                info!("⚠️ --query-mode=index ignored: using parquet index file");
+                info!(
+                    requested_mode = ?mode,
+                    has_parquet_index = true,
+                    decision = "dataframe",
+                    reason = "parquet_index_provided",
+                    "Ignoring forced index mode because a parquet index file was provided"
+                );
                 return false;
             }
             if multi_drives.is_some() {
-                info!("⚠️ --query-mode=index: multi-drive not yet supported, using single drive");
+                info!(
+                    requested_mode = ?mode,
+                    drive_scope = "multiple",
+                    decision = "index",
+                    "Forced index mode selected for multi-drive search"
+                );
             }
             true
         }
         QueryMode::ForceDataFrame => false,
         QueryMode::Auto => {
             if parquet_index.is_some() {
+                info!(
+                    requested_mode = ?mode,
+                    has_parquet_index = true,
+                    decision = "dataframe",
+                    reason = "parquet_index_provided",
+                    "Auto mode selected the DataFrame/parquet path"
+                );
                 return false;
             }
             true
@@ -193,6 +213,19 @@ pub async fn search(
 
     let needs_paths = !benchmark && output_config.needs_path_column();
     let use_index_path = should_use_index_path(mode, index.as_ref(), multi_drives.as_ref());
+    let execution_path = if mft_file.is_some() {
+        "raw_mft_file"
+    } else if use_index_path {
+        "mft_index"
+    } else {
+        "dataframe"
+    };
+
+    #[cfg(windows)]
+    let streaming_candidate = !benchmark
+        && !use_index_path
+        && index.is_none()
+        && (multi_drives.is_some() || (single_drive.is_none() && filters.parsed.drive().is_none()));
 
     #[cfg(windows)]
     let drives_to_search: Vec<char> = if let Some(ref drives) = multi_drives {
@@ -209,8 +242,76 @@ pub async fn search(
         .or_else(|| filters.parsed.drive().map(|drive| vec![drive]))
         .unwrap_or_default();
 
+    #[cfg(windows)]
+    let drive_selection_source = if multi_drives.is_some() {
+        "--drives"
+    } else if single_drive.is_some() {
+        "--drive"
+    } else if filters.parsed.drive().is_some() {
+        "pattern"
+    } else {
+        "detect_ntfs_drives"
+    };
+
+    #[cfg(windows)]
+    let requested_multi_drive_count = multi_drives.as_ref().map_or(0, |drives| drives.len());
+
+    #[cfg(windows)]
+    info!(
+        requested_mode = ?mode,
+        execution_path,
+        benchmark,
+        profile,
+        needs_paths,
+        has_parquet_index = index.is_some(),
+        has_raw_mft_file = mft_file.is_some(),
+        output_format = format,
+        output_target = out,
+        output_targets = ?output_targets,
+        limit,
+        no_cache,
+        no_bitmap,
+        streaming_candidate,
+        "Resolved search orchestration plan"
+    );
+
+    #[cfg(not(windows))]
+    info!(
+        requested_mode = ?mode,
+        execution_path,
+        benchmark,
+        profile,
+        needs_paths,
+        has_parquet_index = index.is_some(),
+        has_raw_mft_file = mft_file.is_some(),
+        output_format = format,
+        output_target = out,
+        output_targets = ?output_targets,
+        limit,
+        no_cache,
+        no_bitmap,
+        "Resolved search orchestration plan"
+    );
+
+    #[cfg(windows)]
+    info!(
+        drive_source = drive_selection_source,
+        requested_single_drive = ?single_drive,
+        requested_multi_drive_count,
+        pattern_drive = ?filters.parsed.drive(),
+        selected_drives = ?drives_to_search,
+        selected_drive_count = drives_to_search.len(),
+        "Resolved search drive set"
+    );
+
     let mut results = if let Some(mft_path) = mft_file.as_ref() {
-        info!(path = %mft_path.display(), "📂 Loading from raw MFT file");
+        info!(
+            execution_path = "raw_mft_file",
+            path = %mft_path.display(),
+            needs_paths,
+            debug_tree,
+            "Loading search source from raw MFT file"
+        );
         load_and_filter_from_mft_file(
             mft_path,
             single_drive,
@@ -220,7 +321,12 @@ pub async fn search(
             debug_tree,
         )?
     } else if use_index_path {
-        info!("🚀 Using fast cached MftIndex query path");
+        info!(
+            execution_path = "mft_index",
+            cache_enabled = !no_cache,
+            needs_paths,
+            "Using MftIndex query path"
+        );
         #[cfg(windows)]
         {
             if drives_to_search.is_empty() {
@@ -228,6 +334,12 @@ pub async fn search(
             }
 
             if drives_to_search.len() == 1 {
+                info!(
+                    drive = %drives_to_search[0],
+                    wait_strategy = "single_drive_index_query",
+                    cache_enabled = !no_cache,
+                    "Dispatching single-drive index search"
+                );
                 load_and_filter_data_index(
                     Some(drives_to_search[0]),
                     &filters,
@@ -237,6 +349,13 @@ pub async fn search(
                 )
                 .await?
             } else {
+                info!(
+                    drives = ?drives_to_search,
+                    drive_count = drives_to_search.len(),
+                    wait_strategy = "multi_drive_index_join_set",
+                    cache_enabled = !no_cache,
+                    "Dispatching multi-drive index search"
+                );
                 load_and_filter_data_index_multi(
                     &drives_to_search,
                     &filters,
@@ -253,14 +372,19 @@ pub async fn search(
             bail!("Index query mode is only available on Windows");
         }
     } else {
-        info!("📊 Using DataFrame query path");
+        info!(
+            execution_path = "dataframe",
+            needs_paths, "Using DataFrame query path"
+        );
         #[cfg(windows)]
         if !benchmark {
-            let needs_streaming = index.is_none()
-                && (multi_drives.is_some()
-                    || (single_drive.is_none() && filters.parsed.drive().is_none()));
+            let needs_streaming = streaming_candidate;
 
             if needs_streaming {
+                info!(
+                    wait_strategy = "streaming_multi_drive_join_set",
+                    limit, "Routing DataFrame search through streaming orchestration"
+                );
                 let result = search_streaming(
                     multi_drives.clone(),
                     single_drive,
@@ -356,6 +480,16 @@ async fn search_streaming(
     output_config: &OutputConfig,
     no_bitmap: bool,
 ) -> Result<()> {
+    let drive_selection_source = if multi_drives.is_some() {
+        "--drives"
+    } else if single_drive.is_some() {
+        "--drive"
+    } else if filters.parsed.drive().is_some() {
+        "pattern"
+    } else {
+        "detect_ntfs_drives"
+    };
+
     let drives: Vec<char> = if let Some(drives) = multi_drives {
         drives
     } else if let Some(drive) = single_drive.or_else(|| filters.parsed.drive()) {
@@ -381,6 +515,17 @@ async fn search_streaming(
     let is_console = matches!(
         out.to_lowercase().as_str(),
         "console" | "con" | "term" | "terminal"
+    );
+
+    info!(
+        drive_source = drive_selection_source,
+        drives = ?drives,
+        drive_count = drives.len(),
+        output_mode = if is_console { "console" } else { "file" },
+        output_target = out,
+        output_format = format,
+        limit = filters.limit,
+        "Resolved streaming search orchestration"
     );
 
     if is_console {
@@ -436,6 +581,11 @@ async fn run_drive_search_task(
         .and_then(|bars| bars.get(&drive_char));
 
     if cancelled.load(Ordering::Relaxed) {
+        debug!(
+            drive = %drive_char,
+            cancellation_phase = "before_cache_load",
+            "Skipping drive search task because streaming orchestration is cancelled"
+        );
         if let Some(progress_bar) = pb {
             progress_bar.finish_with_message("Cancelled");
         }
@@ -450,6 +600,16 @@ async fn run_drive_search_task(
     }
 
     let _ = no_bitmap;
+
+    debug!(
+        drive = %drive_char,
+        needs_paths,
+        progress_bar = pb.is_some(),
+        cache_mode = "dataframe_cache_with_ttl",
+        ttl_seconds = uffs_mft::INDEX_TTL_SECONDS,
+        wait_strategy = "await_cached_dataframe_load",
+        "Starting per-drive search task"
+    );
 
     let full_df =
         uffs_mft::load_or_build_dataframe_cached(drive_char, uffs_mft::INDEX_TTL_SECONDS).await;
@@ -472,11 +632,23 @@ async fn run_drive_search_task(
     };
 
     let records_read = full_df.height();
+    debug!(
+        drive = %drive_char,
+        records_read,
+        wait_strategy = "cached_dataframe_load_complete",
+        "Loaded drive snapshot for search task"
+    );
     if let Some(progress_bar) = pb {
         progress_bar.finish();
     }
 
     if cancelled.load(Ordering::Relaxed) {
+        debug!(
+            drive = %drive_char,
+            records_read,
+            cancellation_phase = "after_cache_load",
+            "Cancelling drive search task after cached DataFrame load"
+        );
         return DriveResult {
             drive: drive_char,
             df: None,
@@ -488,6 +660,11 @@ async fn run_drive_search_task(
     }
 
     let path_resolver = if needs_paths {
+        debug!(
+            drive = %drive_char,
+            records_read,
+            "Building path resolver from full drive snapshot before filtering"
+        );
         match uffs_core::FastPathResolver::build(&full_df, drive_char) {
             Ok(resolver) => Some(resolver),
             Err(error) => {
@@ -506,6 +683,13 @@ async fn run_drive_search_task(
     };
 
     if cancelled.load(Ordering::Relaxed) {
+        debug!(
+            drive = %drive_char,
+            records_read,
+            paths_resolved = path_resolver.is_some(),
+            cancellation_phase = "after_path_resolution",
+            "Cancelling drive search task after path-resolution setup"
+        );
         return DriveResult {
             drive: drive_char,
             df: None,
@@ -531,6 +715,13 @@ async fn run_drive_search_task(
     };
 
     let matches = filtered.height();
+    debug!(
+        drive = %drive_char,
+        records_read,
+        matches,
+        paths_resolved = path_resolver.is_some(),
+        "Drive filtering phase completed"
+    );
 
     let with_paths = if let Some(resolver) = &path_resolver {
         match resolver.add_path_column_with_dir_suffix(&filtered) {
@@ -681,10 +872,14 @@ pub(super) async fn search_multi_drive_filtered(
         bail!("No drives specified for multi-drive search");
     }
 
+    let budget = search_drive_task_budget(drives.len());
+
     info!(
+        drives = ?drives,
         count = drives.len(),
-        budget = search_drive_task_budget(drives.len()),
-        needs_paths = needs_paths,
+        budget,
+        needs_paths,
+        no_bitmap,
         "Searching drives with bounded multi-drive orchestration"
     );
 
@@ -701,12 +896,20 @@ pub(super) async fn search_multi_drive_filtered(
             Arc::new(pbs)
         });
 
-    let budget = search_drive_task_budget(drives.len());
     let mut pending_drives = drives.iter().copied();
     let mut join_set: JoinSet<DriveResult> = JoinSet::new();
+    let mut drives_dispatched = 0usize;
 
     for _ in 0..budget {
         if let Some(drive_char) = pending_drives.next() {
+            drives_dispatched += 1;
+            debug!(
+                drive = %drive_char,
+                dispatch_reason = "initial",
+                drives_dispatched,
+                drive_count = drives.len(),
+                "Queued drive search task"
+            );
             spawn_drive_search_task(
                 &mut join_set,
                 drive_char,
@@ -723,19 +926,40 @@ pub(super) async fn search_multi_drive_filtered(
     let mut total_matches = 0usize;
     let mut drives_processed = 0usize;
 
-    while let Some(join_result) = join_set.join_next().await {
+    while !join_set.is_empty() {
+        debug!(
+            drives_processed,
+            drives_dispatched,
+            drive_count = drives.len(),
+            in_flight = drives_dispatched.saturating_sub(drives_processed),
+            wait_strategy = "join_next",
+            "Waiting for next multi-drive search result"
+        );
+
+        let Some(join_result) = join_set.join_next().await else {
+            break;
+        };
+
         drives_processed += 1;
 
         let result = match join_result {
             Ok(result) => result,
-            Err(join_err) => DriveResult {
-                drive: '?',
-                df: None,
-                records_read: 0,
-                matches: 0,
-                error: Some(format!("Task failed: {join_err}")),
-                paths_resolved: false,
-            },
+            Err(join_err) => {
+                info!(
+                    error = %join_err,
+                    drives_processed,
+                    drives_dispatched,
+                    "Drive task join failed"
+                );
+                DriveResult {
+                    drive: '?',
+                    df: None,
+                    records_read: 0,
+                    matches: 0,
+                    error: Some(format!("Task failed: {join_err}")),
+                    paths_resolved: false,
+                }
+            }
         };
 
         if let Some(error) = result.error {
@@ -758,6 +982,14 @@ pub(super) async fn search_multi_drive_filtered(
         }
 
         if let Some(drive_char) = pending_drives.next() {
+            drives_dispatched += 1;
+            debug!(
+                drive = %drive_char,
+                dispatch_reason = "replenish",
+                drives_dispatched,
+                drive_count = drives.len(),
+                "Queued drive search task"
+            );
             spawn_drive_search_task(
                 &mut join_set,
                 drive_char,
@@ -799,7 +1031,9 @@ pub(super) async fn search_multi_drive_filtered(
     let result = lazy_result.collect().context("Failed to reorder columns")?;
 
     info!(
+        budget,
         total_matches = total_matches,
+        rows = result.height(),
         drives = drives.len(),
         "Parallel multi-drive search complete"
     );
@@ -846,9 +1080,14 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
         bail!("No drives specified for multi-drive search");
     }
 
+    let budget = search_drive_task_budget(drives.len());
+
     info!(
+        drives = ?drives,
         count = drives.len(),
-        budget = search_drive_task_budget(drives.len()),
+        budget,
+        format,
+        limit = filters.limit,
         "Streaming search across drives with bounded orchestration"
     );
 
@@ -861,12 +1100,20 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
         output_config.clone(),
     ));
 
-    let budget = search_drive_task_budget(drives.len());
     let mut pending_drives = drives.iter().copied();
     let mut join_set: JoinSet<DriveResult> = JoinSet::new();
+    let mut drives_dispatched = 0usize;
 
     for _ in 0..budget {
         if let Some(drive_char) = pending_drives.next() {
+            drives_dispatched += 1;
+            debug!(
+                drive = %drive_char,
+                dispatch_reason = "initial",
+                drives_dispatched,
+                drive_count = drives.len(),
+                "Queued streaming drive search task"
+            );
             spawn_drive_search_task(
                 &mut join_set,
                 drive_char,
@@ -882,19 +1129,40 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
     let mut total_matches = 0usize;
     let mut drives_processed = 0usize;
 
-    while let Some(join_result) = join_set.join_next().await {
+    while !join_set.is_empty() {
+        debug!(
+            drives_processed,
+            drives_dispatched,
+            drive_count = drives.len(),
+            in_flight = drives_dispatched.saturating_sub(drives_processed),
+            wait_strategy = "join_next",
+            "Waiting for next streaming drive result"
+        );
+
+        let Some(join_result) = join_set.join_next().await else {
+            break;
+        };
+
         drives_processed += 1;
 
         let result = match join_result {
             Ok(result) => result,
-            Err(join_err) => DriveResult {
-                drive: '?',
-                df: None,
-                records_read: 0,
-                matches: 0,
-                error: Some(format!("Task failed: {join_err}")),
-                paths_resolved: false,
-            },
+            Err(join_err) => {
+                info!(
+                    error = %join_err,
+                    drives_processed,
+                    drives_dispatched,
+                    "Streaming drive task join failed"
+                );
+                DriveResult {
+                    drive: '?',
+                    df: None,
+                    records_read: 0,
+                    matches: 0,
+                    error: Some(format!("Task failed: {join_err}")),
+                    paths_resolved: false,
+                }
+            }
         };
 
         if let Some(error) = result.error {
@@ -926,6 +1194,9 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
                 join_set.abort_all();
                 info!(
                     limit = filters.limit,
+                    rows_output = streaming_writer.total_rows(),
+                    drives_processed,
+                    drives_dispatched,
                     "Output limit reached, stopping early"
                 );
                 break;
@@ -941,6 +1212,14 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
         }
 
         if let Some(drive_char) = pending_drives.next() {
+            drives_dispatched += 1;
+            debug!(
+                drive = %drive_char,
+                dispatch_reason = "replenish",
+                drives_dispatched,
+                drive_count = drives.len(),
+                "Queued streaming drive search task"
+            );
             spawn_drive_search_task(
                 &mut join_set,
                 drive_char,
@@ -954,6 +1233,7 @@ async fn search_multi_drive_streaming<W: Write + Send + 'static>(
     }
 
     info!(
+        budget,
         total_matches = total_matches,
         rows_output = streaming_writer.total_rows(),
         drives = drives.len(),

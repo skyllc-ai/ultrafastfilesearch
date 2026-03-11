@@ -178,12 +178,30 @@ impl MultiDriveMftReader {
 
         // Keep only a bounded number of drive tasks in flight at once.
         let budget = drive_reader_budget(self.drives.len());
+        tracing::info!(
+            drives = ?self.drives,
+            drive_count = self.drives.len(),
+            budget,
+            progress_callback = callback.is_some(),
+            wait_strategy = "join_set + spawn_blocking",
+            "Starting multi-drive DataFrame read orchestration"
+        );
         let mut pending_drives = self.drives.iter().copied();
         let mut join_set = JoinSet::new();
+        let mut drives_dispatched = 0usize;
+        let mut drives_completed = 0usize;
 
         for _ in 0..budget {
             if let Some(drive) = pending_drives.next() {
                 let cb = callback.clone();
+                drives_dispatched += 1;
+                tracing::debug!(
+                    drive = %drive,
+                    dispatch_reason = "initial",
+                    drives_dispatched,
+                    drive_count = self.drives.len(),
+                    "Queued drive DataFrame read"
+                );
 
                 join_set.spawn(async move {
                     let result = Self::read_single_drive(drive, cb).await;
@@ -200,10 +218,29 @@ impl MultiDriveMftReader {
         let mut dataframes: Vec<DataFrame> = Vec::new();
         let mut errors: Vec<(char, MftError)> = Vec::new();
 
-        while let Some(result) = join_set.join_next().await {
+        while !join_set.is_empty() {
+            tracing::debug!(
+                drives_completed,
+                drives_dispatched,
+                drive_count = self.drives.len(),
+                in_flight = drives_dispatched.saturating_sub(drives_completed),
+                wait_strategy = "join_next",
+                "Waiting for next DataFrame drive read"
+            );
+
+            let Some(result) = join_set.join_next().await else {
+                break;
+            };
+
+            drives_completed += 1;
             match result {
                 Ok(drive_result) => {
                     if let Some(df) = drive_result.dataframe {
+                        tracing::debug!(
+                            drive = %drive_result.drive,
+                            rows = df.height(),
+                            "Drive DataFrame read completed"
+                        );
                         // Add "drive" column
                         let drive_str = format!("{}:", drive_result.drive);
                         let df_with_drive = df
@@ -213,10 +250,21 @@ impl MultiDriveMftReader {
                             .map_err(MftError::from)?;
                         dataframes.push(df_with_drive);
                     } else if let Some(err) = drive_result.error {
+                        tracing::warn!(
+                            drive = %drive_result.drive,
+                            error = %err,
+                            "Drive DataFrame read failed"
+                        );
                         errors.push((drive_result.drive, err));
                     }
                 }
                 Err(join_err) => {
+                    tracing::warn!(
+                        error = %join_err,
+                        drives_completed,
+                        drives_dispatched,
+                        "DataFrame drive task join failed"
+                    );
                     // Task panicked or was cancelled
                     errors.push(('?', MftError::from_join_error("read_all", &join_err)));
                 }
@@ -224,6 +272,14 @@ impl MultiDriveMftReader {
 
             if let Some(drive) = pending_drives.next() {
                 let cb = callback.clone();
+                drives_dispatched += 1;
+                tracing::debug!(
+                    drive = %drive,
+                    dispatch_reason = "replenish",
+                    drives_dispatched,
+                    drive_count = self.drives.len(),
+                    "Queued drive DataFrame read"
+                );
 
                 join_set.spawn(async move {
                     let result = Self::read_single_drive(drive, cb).await;
@@ -245,6 +301,9 @@ impl MultiDriveMftReader {
                 .unwrap_or(MftError::InvalidInput("No drives could be read".into())));
         }
 
+        let successful_drives = dataframes.len();
+        let failed_drives = errors.len();
+
         // Concatenate all DataFrames using vstack
         let mut result = dataframes.remove(0);
         for df in dataframes {
@@ -263,11 +322,21 @@ impl MultiDriveMftReader {
             .map(|s| col(&s))
             .collect();
 
-        result
+        let final_result = result
             .lazy()
             .select(columns)
             .collect()
-            .map_err(MftError::from)
+            .map_err(MftError::from)?;
+
+        tracing::info!(
+            drive_count = self.drives.len(),
+            successful_drives,
+            failed_drives,
+            rows = final_result.height(),
+            "Completed multi-drive DataFrame read orchestration"
+        );
+
+        Ok(final_result)
     }
 
     /// Read a single drive with optional progress callback.
@@ -279,9 +348,17 @@ impl MultiDriveMftReader {
     where
         F: Fn(char, MftProgress) + Send + Sync + 'static,
     {
+        let progress_callback = callback.is_some();
+        tracing::debug!(
+            drive = %drive,
+            progress_callback,
+            wait_strategy = "spawn_blocking",
+            "Dispatching DataFrame drive read to blocking pool"
+        );
+
         // Use spawn_blocking to run blocking I/O on a dedicated thread pool.
         // This avoids blocking the async runtime and prevents nested runtime panics.
-        tokio::task::spawn_blocking(move || {
+        let dataframe = tokio::task::spawn_blocking(move || {
             let reader = MftReader::open(drive)?;
 
             if let Some(cb) = callback {
@@ -293,7 +370,16 @@ impl MultiDriveMftReader {
             }
         })
         .await
-        .map_err(|error| MftError::from_join_error("read_single_drive", &error))?
+        .map_err(|error| MftError::from_join_error("read_single_drive", &error))?;
+
+        tracing::debug!(
+            drive = %drive,
+            progress_callback,
+            rows = dataframe.height(),
+            "Blocking DataFrame drive read completed"
+        );
+
+        Ok(dataframe)
     }
 
     /// Read all drives and return individual results (for detailed error
@@ -315,11 +401,28 @@ impl MultiDriveMftReader {
         }
 
         let budget = drive_reader_budget(self.drives.len());
+        tracing::info!(
+            drives = ?self.drives,
+            drive_count = self.drives.len(),
+            budget,
+            wait_strategy = "join_set + spawn_blocking",
+            "Starting multi-drive detailed read orchestration"
+        );
         let mut pending_drives = self.drives.iter().copied();
         let mut join_set = JoinSet::new();
+        let mut drives_dispatched = 0usize;
+        let mut drives_completed = 0usize;
 
         for _ in 0..budget {
             if let Some(drive) = pending_drives.next() {
+                drives_dispatched += 1;
+                tracing::debug!(
+                    drive = %drive,
+                    dispatch_reason = "initial",
+                    drives_dispatched,
+                    drive_count = self.drives.len(),
+                    "Queued detailed drive read"
+                );
                 join_set.spawn(async move {
                     let result =
                         Self::read_single_drive::<fn(char, MftProgress)>(drive, None).await;
@@ -333,10 +436,30 @@ impl MultiDriveMftReader {
         }
 
         let mut results = Vec::with_capacity(self.drives.len());
-        while let Some(result) = join_set.join_next().await {
+        while !join_set.is_empty() {
+            tracing::debug!(
+                drives_completed,
+                drives_dispatched,
+                drive_count = self.drives.len(),
+                in_flight = drives_dispatched.saturating_sub(drives_completed),
+                wait_strategy = "join_next",
+                "Waiting for next detailed drive read"
+            );
+
+            let Some(result) = join_set.join_next().await else {
+                break;
+            };
+
+            drives_completed += 1;
             match result {
                 Ok(drive_result) => results.push(drive_result),
                 Err(join_err) => {
+                    tracing::warn!(
+                        error = %join_err,
+                        drives_completed,
+                        drives_dispatched,
+                        "Detailed drive task join failed"
+                    );
                     results.push(DriveReadResult {
                         drive: '?',
                         dataframe: None,
@@ -346,6 +469,14 @@ impl MultiDriveMftReader {
             }
 
             if let Some(drive) = pending_drives.next() {
+                drives_dispatched += 1;
+                tracing::debug!(
+                    drive = %drive,
+                    dispatch_reason = "replenish",
+                    drives_dispatched,
+                    drive_count = self.drives.len(),
+                    "Queued detailed drive read"
+                );
                 join_set.spawn(async move {
                     let result =
                         Self::read_single_drive::<fn(char, MftProgress)>(drive, None).await;
@@ -357,6 +488,12 @@ impl MultiDriveMftReader {
                 });
             }
         }
+
+        tracing::info!(
+            drive_count = self.drives.len(),
+            results = results.len(),
+            "Completed multi-drive detailed read orchestration"
+        );
 
         Ok(results)
     }
@@ -466,7 +603,6 @@ impl MultiDriveMftReader {
         ttl_seconds: u64,
     ) -> Result<Vec<crate::index::MftIndex>> {
         use tokio::task::JoinSet;
-        use tracing::info;
 
         use crate::cache::{CacheStatus, check_cache_status};
 
@@ -475,45 +611,74 @@ impl MultiDriveMftReader {
         }
 
         let budget = drive_reader_budget(self.drives.len());
+        tracing::info!(
+            drives = ?self.drives,
+            drive_count = self.drives.len(),
+            budget,
+            cache_ttl_seconds = ttl_seconds,
+            wait_strategy = "join_set + cache_decision + spawn_blocking",
+            "Starting multi-drive cached index orchestration"
+        );
         let mut pending_drives = self.drives.iter().copied();
-        let mut join_set = JoinSet::new();
+        let mut join_set: JoinSet<(char, Result<crate::index::MftIndex>)> = JoinSet::new();
+        let mut drives_dispatched = 0usize;
+        let mut drives_completed = 0usize;
 
         for _ in 0..budget {
             if let Some(drive) = pending_drives.next() {
                 let ttl = ttl_seconds;
+                drives_dispatched += 1;
+                tracing::debug!(
+                    drive = %drive,
+                    dispatch_reason = "initial",
+                    drives_dispatched,
+                    drive_count = self.drives.len(),
+                    "Queued cached index drive read"
+                );
 
                 join_set.spawn(async move {
                     // Check cache first
                     let cache_result = check_cache_status(drive, ttl);
 
-                    match cache_result {
+                    let read_result = match cache_result {
                         CacheStatus::Fresh {
                             index,
                             header,
                             age_seconds,
                         } => {
-                            info!(
+                            tracing::info!(
                                 drive = %drive,
+                                cache_decision = "fresh",
                                 age_seconds,
                                 records = index.len(),
-                                "📦 Cache HIT - applying USN updates"
+                                refresh_strategy = "usn_incremental",
+                                "Cache fresh; checking USN journal for incremental refresh"
                             );
                             // Apply USN changes to bring index up to date
                             Self::apply_usn_updates_to_cached_index(drive, index, header).await
                         }
                         CacheStatus::Stale { age_seconds } => {
-                            info!(
+                            tracing::info!(
                                 drive = %drive,
+                                cache_decision = "stale",
                                 age_seconds = ?age_seconds,
-                                "🔄 Cache STALE - rebuilding index"
+                                refresh_strategy = "full_rebuild",
+                                "Cache stale; rebuilding index"
                             );
                             Self::read_and_cache_single_drive(drive).await
                         }
                         CacheStatus::Missing => {
-                            info!(drive = %drive, "🆕 Cache MISS - building index");
+                            tracing::info!(
+                                drive = %drive,
+                                cache_decision = "missing",
+                                refresh_strategy = "full_rebuild",
+                                "Cache missing; building index"
+                            );
                             Self::read_and_cache_single_drive(drive).await
                         }
-                    }
+                    };
+
+                    (drive, read_result)
                 });
             }
         }
@@ -522,15 +687,45 @@ impl MultiDriveMftReader {
         let mut indices: Vec<crate::index::MftIndex> = Vec::new();
         let mut errors: Vec<(char, MftError)> = Vec::new();
 
-        while let Some(result) = join_set.join_next().await {
+        while !join_set.is_empty() {
+            tracing::debug!(
+                drives_completed,
+                drives_dispatched,
+                drive_count = self.drives.len(),
+                in_flight = drives_dispatched.saturating_sub(drives_completed),
+                wait_strategy = "join_next",
+                "Waiting for next cached index drive result"
+            );
+
+            let Some(result) = join_set.join_next().await else {
+                break;
+            };
+
+            drives_completed += 1;
             match result {
-                Ok(Ok(index)) => {
+                Ok((drive, Ok(index))) => {
+                    tracing::debug!(
+                        drive = %drive,
+                        records = index.len(),
+                        "Cached index drive read completed"
+                    );
                     indices.push(index);
                 }
-                Ok(Err(e)) => {
-                    errors.push(('?', e));
+                Ok((drive, Err(error))) => {
+                    tracing::warn!(
+                        drive = %drive,
+                        error = %error,
+                        "Cached index drive read failed"
+                    );
+                    errors.push((drive, error));
                 }
                 Err(join_err) => {
+                    tracing::warn!(
+                        error = %join_err,
+                        drives_completed,
+                        drives_dispatched,
+                        "Cached index drive task join failed"
+                    );
                     errors.push((
                         '?',
                         MftError::from_join_error("read_all_index_cached", &join_err),
@@ -540,39 +735,58 @@ impl MultiDriveMftReader {
 
             if let Some(drive) = pending_drives.next() {
                 let ttl = ttl_seconds;
+                drives_dispatched += 1;
+                tracing::debug!(
+                    drive = %drive,
+                    dispatch_reason = "replenish",
+                    drives_dispatched,
+                    drive_count = self.drives.len(),
+                    "Queued cached index drive read"
+                );
 
                 join_set.spawn(async move {
                     // Check cache first
                     let cache_result = check_cache_status(drive, ttl);
 
-                    match cache_result {
+                    let read_result = match cache_result {
                         CacheStatus::Fresh {
                             index,
                             header,
                             age_seconds,
                         } => {
-                            info!(
+                            tracing::info!(
                                 drive = %drive,
+                                cache_decision = "fresh",
                                 age_seconds,
                                 records = index.len(),
-                                "📦 Cache HIT - applying USN updates"
+                                refresh_strategy = "usn_incremental",
+                                "Cache fresh; checking USN journal for incremental refresh"
                             );
                             // Apply USN changes to bring index up to date
                             Self::apply_usn_updates_to_cached_index(drive, index, header).await
                         }
                         CacheStatus::Stale { age_seconds } => {
-                            info!(
+                            tracing::info!(
                                 drive = %drive,
+                                cache_decision = "stale",
                                 age_seconds = ?age_seconds,
-                                "🔄 Cache STALE - rebuilding index"
+                                refresh_strategy = "full_rebuild",
+                                "Cache stale; rebuilding index"
                             );
                             Self::read_and_cache_single_drive(drive).await
                         }
                         CacheStatus::Missing => {
-                            info!(drive = %drive, "🆕 Cache MISS - building index");
+                            tracing::info!(
+                                drive = %drive,
+                                cache_decision = "missing",
+                                refresh_strategy = "full_rebuild",
+                                "Cache missing; building index"
+                            );
                             Self::read_and_cache_single_drive(drive).await
                         }
-                    }
+                    };
+
+                    (drive, read_result)
                 });
             }
         }
@@ -585,6 +799,13 @@ impl MultiDriveMftReader {
                 .map(|(_, e)| e)
                 .unwrap_or(MftError::InvalidInput("No drives could be read".into())));
         }
+
+        tracing::info!(
+            drive_count = self.drives.len(),
+            successful_drives = indices.len(),
+            failed_drives = errors.len(),
+            "Completed multi-drive cached index orchestration"
+        );
 
         Ok(indices)
     }
@@ -626,14 +847,33 @@ impl MultiDriveMftReader {
 
         // Keep only a bounded number of drive tasks in flight at once.
         let budget = drive_reader_budget(self.drives.len());
+        tracing::info!(
+            drives = ?self.drives,
+            drive_count = self.drives.len(),
+            budget,
+            progress_callback = callback.is_some(),
+            wait_strategy = "join_set + spawn_blocking",
+            "Starting multi-drive index read orchestration"
+        );
         let mut pending_drives = self.drives.iter().copied();
-        let mut join_set = JoinSet::new();
+        let mut join_set: JoinSet<(char, Result<crate::index::MftIndex>)> = JoinSet::new();
+        let mut drives_dispatched = 0usize;
+        let mut drives_completed = 0usize;
 
         for _ in 0..budget {
             if let Some(drive) = pending_drives.next() {
                 let cb = callback.clone();
+                drives_dispatched += 1;
+                tracing::debug!(
+                    drive = %drive,
+                    dispatch_reason = "initial",
+                    drives_dispatched,
+                    drive_count = self.drives.len(),
+                    "Queued drive index read"
+                );
 
-                join_set.spawn(async move { Self::read_single_drive_index(drive, cb).await });
+                join_set
+                    .spawn(async move { (drive, Self::read_single_drive_index(drive, cb).await) });
             }
         }
 
@@ -641,15 +881,45 @@ impl MultiDriveMftReader {
         let mut indices: Vec<crate::index::MftIndex> = Vec::new();
         let mut errors: Vec<(char, MftError)> = Vec::new();
 
-        while let Some(result) = join_set.join_next().await {
+        while !join_set.is_empty() {
+            tracing::debug!(
+                drives_completed,
+                drives_dispatched,
+                drive_count = self.drives.len(),
+                in_flight = drives_dispatched.saturating_sub(drives_completed),
+                wait_strategy = "join_next",
+                "Waiting for next index drive read"
+            );
+
+            let Some(result) = join_set.join_next().await else {
+                break;
+            };
+
+            drives_completed += 1;
             match result {
-                Ok(Ok(index)) => {
+                Ok((drive, Ok(index))) => {
+                    tracing::debug!(
+                        drive = %drive,
+                        records = index.len(),
+                        "Drive index read completed"
+                    );
                     indices.push(index);
                 }
-                Ok(Err(e)) => {
-                    errors.push(('?', e));
+                Ok((drive, Err(error))) => {
+                    tracing::warn!(
+                        drive = %drive,
+                        error = %error,
+                        "Drive index read failed"
+                    );
+                    errors.push((drive, error));
                 }
                 Err(join_err) => {
+                    tracing::warn!(
+                        error = %join_err,
+                        drives_completed,
+                        drives_dispatched,
+                        "Index drive task join failed"
+                    );
                     errors.push((
                         '?',
                         MftError::from_join_error("read_all_index_with_progress", &join_err),
@@ -659,8 +929,17 @@ impl MultiDriveMftReader {
 
             if let Some(drive) = pending_drives.next() {
                 let cb = callback.clone();
+                drives_dispatched += 1;
+                tracing::debug!(
+                    drive = %drive,
+                    dispatch_reason = "replenish",
+                    drives_dispatched,
+                    drive_count = self.drives.len(),
+                    "Queued drive index read"
+                );
 
-                join_set.spawn(async move { Self::read_single_drive_index(drive, cb).await });
+                join_set
+                    .spawn(async move { (drive, Self::read_single_drive_index(drive, cb).await) });
             }
         }
 
@@ -672,6 +951,13 @@ impl MultiDriveMftReader {
                 .map(|(_, e)| e)
                 .unwrap_or(MftError::InvalidInput("No drives could be read".into())));
         }
+
+        tracing::info!(
+            drive_count = self.drives.len(),
+            successful_drives = indices.len(),
+            failed_drives = errors.len(),
+            "Completed multi-drive index read orchestration"
+        );
 
         Ok(indices)
     }
@@ -685,8 +971,16 @@ impl MultiDriveMftReader {
     where
         F: Fn(char, MftProgress) + Send + Sync + 'static,
     {
+        let progress_callback = callback.is_some();
+        tracing::debug!(
+            drive = %drive,
+            progress_callback,
+            wait_strategy = "spawn_blocking",
+            "Dispatching index drive read to blocking pool"
+        );
+
         // Use spawn_blocking to run blocking I/O on a dedicated thread pool.
-        tokio::task::spawn_blocking(move || {
+        let index = tokio::task::spawn_blocking(move || {
             let reader = MftReader::open(drive)?;
 
             if let Some(cb) = callback {
@@ -698,26 +992,59 @@ impl MultiDriveMftReader {
             }
         })
         .await
-        .map_err(|error| MftError::from_join_error("read_single_drive_index", &error))?
+        .map_err(|error| MftError::from_join_error("read_single_drive_index", &error))?;
+
+        tracing::debug!(
+            drive = %drive,
+            progress_callback,
+            records = index.len(),
+            "Blocking index drive read completed"
+        );
+
+        Ok(index)
     }
 
     /// Read a single drive and save to cache.
     #[cfg(windows)]
     async fn read_and_cache_single_drive(drive: char) -> Result<crate::index::MftIndex> {
+        tracing::debug!(
+            drive = %drive,
+            refresh_strategy = "full_rebuild",
+            wait_strategy = "spawn_blocking",
+            "Dispatching full index rebuild to blocking pool"
+        );
+
         // Use spawn_blocking to run blocking I/O on a dedicated thread pool.
-        tokio::task::spawn_blocking(move || Self::read_and_cache_single_drive_sync(drive))
-            .await
-            .map_err(|error| MftError::from_join_error("read_and_cache_single_drive", &error))?
+        let index =
+            tokio::task::spawn_blocking(move || Self::read_and_cache_single_drive_sync(drive))
+                .await
+                .map_err(|error| {
+                    MftError::from_join_error("read_and_cache_single_drive", &error)
+                })?;
+
+        tracing::debug!(
+            drive = %drive,
+            records = index.len(),
+            refresh_strategy = "full_rebuild",
+            "Blocking full index rebuild completed"
+        );
+
+        Ok(index)
     }
 
     /// Synchronous implementation of read_and_cache_single_drive.
     #[cfg(windows)]
     fn read_and_cache_single_drive_sync(drive: char) -> Result<crate::index::MftIndex> {
-        use tracing::info;
-
         use crate::cache::save_to_cache;
         use crate::platform::VolumeHandle;
         use crate::usn::query_usn_journal;
+
+        tracing::info!(
+            drive = %drive,
+            refresh_strategy = "full_rebuild",
+            cache_write = true,
+            "Reading full index for cache refresh"
+        );
 
         let reader = MftReader::open(drive)?;
         let index = reader.read_all_index_sync()?;
@@ -729,15 +1056,23 @@ impl MultiDriveMftReader {
 
         let (usn_journal_id, next_usn) = match query_usn_journal(drive) {
             Ok(info) => (info.journal_id, info.next_usn),
-            Err(_) => (0, 0),
+            Err(error) => {
+                tracing::debug!(
+                    drive = %drive,
+                    error = %error,
+                    fallback = "zeroed_usn_checkpoint",
+                    "USN journal metadata unavailable while preparing cache header"
+                );
+                (0, 0)
+            }
         };
 
         // Save to cache
         if let Err(e) = save_to_cache(&index, drive, volume_serial, usn_journal_id, next_usn) {
             // Log but don't fail - caching is optional
-            info!(drive = %drive, error = %e, "⚠️ Failed to save to cache");
+            tracing::info!(drive = %drive, error = %e, "⚠️ Failed to save to cache");
         } else {
-            info!(drive = %drive, records = index.len(), "💾 Saved to cache");
+            tracing::info!(drive = %drive, records = index.len(), "💾 Saved to cache");
         }
 
         Ok(index)
@@ -756,12 +1091,31 @@ impl MultiDriveMftReader {
         index: crate::index::MftIndex,
         header: crate::index::IndexHeader,
     ) -> Result<crate::index::MftIndex> {
+        tracing::debug!(
+            drive = %drive,
+            cached_records = index.len(),
+            cached_next_usn = header.next_usn,
+            cached_journal_id = header.usn_journal_id,
+            refresh_strategy = "usn_incremental",
+            wait_strategy = "spawn_blocking",
+            "Dispatching cached index USN refresh to blocking pool"
+        );
+
         // Use spawn_blocking to run blocking I/O on a dedicated thread pool.
-        tokio::task::spawn_blocking(move || {
+        let refreshed_index = tokio::task::spawn_blocking(move || {
             Self::apply_usn_updates_to_cached_index_sync(drive, index, header)
         })
         .await
-        .map_err(|error| MftError::from_join_error("apply_usn_updates_to_cached_index", &error))?
+        .map_err(|error| MftError::from_join_error("apply_usn_updates_to_cached_index", &error))?;
+
+        tracing::debug!(
+            drive = %drive,
+            records = refreshed_index.len(),
+            refresh_strategy = "usn_incremental",
+            "Blocking cached index USN refresh completed"
+        );
+
+        Ok(refreshed_index)
     }
 
     /// Synchronous implementation of apply_usn_updates_to_cached_index.
@@ -771,19 +1125,27 @@ impl MultiDriveMftReader {
         mut index: crate::index::MftIndex,
         header: crate::index::IndexHeader,
     ) -> Result<crate::index::MftIndex> {
-        use tracing::{debug, info, warn};
-
         use crate::cache::save_to_cache;
         use crate::platform::VolumeHandle;
         use crate::usn::{aggregate_changes, query_usn_journal, read_usn_journal};
+
+        tracing::info!(
+            drive = %drive,
+            cached_records = index.len(),
+            cached_next_usn = header.next_usn,
+            cached_journal_id = header.usn_journal_id,
+            refresh_strategy = "usn_incremental",
+            "Refreshing cached index from USN journal"
+        );
 
         // Query current USN Journal state
         let current_info = match query_usn_journal(drive) {
             Ok(info) => info,
             Err(e) => {
-                warn!(
+                tracing::warn!(
                     drive = %drive,
                     error = %e,
+                    fallback = "use_cached_index_as_is",
                     "⚠️ USN Journal unavailable - using cached index as-is"
                 );
                 return Ok(index);
@@ -792,10 +1154,12 @@ impl MultiDriveMftReader {
 
         // Check if journal ID matches (journal may have been recreated)
         if header.usn_journal_id != 0 && current_info.journal_id != header.usn_journal_id {
-            info!(
+            tracing::info!(
                 drive = %drive,
                 cached_journal_id = header.usn_journal_id,
                 current_journal_id = current_info.journal_id,
+                refresh_strategy = "full_rebuild",
+                reason = "journal_id_changed",
                 "🔄 USN Journal ID changed - rebuilding index"
             );
             // Journal was recreated, need full rebuild
@@ -805,10 +1169,12 @@ impl MultiDriveMftReader {
         // Check if our checkpoint is still valid (not before first_usn)
         let start_usn = header.next_usn;
         if start_usn < current_info.first_usn {
-            info!(
+            tracing::info!(
                 drive = %drive,
                 cached_usn = start_usn,
                 first_usn = current_info.first_usn,
+                refresh_strategy = "full_rebuild",
+                reason = "journal_wrapped",
                 "🔄 USN Journal wrapped - rebuilding index"
             );
             // Journal wrapped, need full rebuild
@@ -817,9 +1183,10 @@ impl MultiDriveMftReader {
 
         // If we're already at the latest USN, no changes needed
         if start_usn >= current_info.next_usn {
-            debug!(
+            tracing::debug!(
                 drive = %drive,
                 usn = start_usn,
+                refresh_strategy = "no_op",
                 "✅ Index is already up to date"
             );
             return Ok(index);
@@ -830,9 +1197,10 @@ impl MultiDriveMftReader {
         {
             Ok(result) => result,
             Err(e) => {
-                warn!(
+                tracing::warn!(
                     drive = %drive,
                     error = %e,
+                    fallback = "use_cached_index_as_is",
                     "⚠️ Failed to read USN Journal - using cached index as-is"
                 );
                 return Ok(index);
@@ -840,8 +1208,9 @@ impl MultiDriveMftReader {
         };
 
         if records.is_empty() {
-            debug!(
+            tracing::debug!(
                 drive = %drive,
+                refresh_strategy = "no_op",
                 "✅ No USN changes since last cache"
             );
             return Ok(index);
@@ -850,17 +1219,18 @@ impl MultiDriveMftReader {
         // Aggregate changes (deduplicate by FRS)
         let changes_map = aggregate_changes(&records);
         let changes: Vec<_> = changes_map.into_values().collect();
-        info!(
+        tracing::info!(
             drive = %drive,
             usn_records = changes.len(),
             from_usn = start_usn,
             to_usn = next_usn,
+            refresh_strategy = "usn_incremental",
             "🔧 Applying USN changes"
         );
 
         // Apply changes to index
         let stats = index.apply_usn_changes(&changes);
-        debug!(
+        tracing::debug!(
             drive = %drive,
             created = stats.created,
             deleted = stats.deleted,
@@ -870,16 +1240,17 @@ impl MultiDriveMftReader {
         );
 
         // Recompute tree metrics after structural changes
-        debug!(drive = %drive, "🔨 Recomputing tree metrics after USN updates");
+        tracing::debug!(drive = %drive, "🔨 Recomputing tree metrics after USN updates");
         index.compute_tree_metrics();
 
         // Save updated index to cache with new checkpoint
         let handle = match VolumeHandle::open(drive) {
             Ok(h) => h,
             Err(e) => {
-                warn!(
+                tracing::warn!(
                     drive = %drive,
                     error = %e,
+                    fallback = "return_updated_index_without_cache_write",
                     "⚠️ Failed to open volume for cache update"
                 );
                 return Ok(index);
@@ -895,13 +1266,13 @@ impl MultiDriveMftReader {
             current_info.journal_id,
             next_usn,
         ) {
-            warn!(
+            tracing::warn!(
                 drive = %drive,
                 error = %e,
                 "⚠️ Failed to update cache"
             );
         } else {
-            debug!(
+            tracing::debug!(
                 drive = %drive,
                 next_usn,
                 "💾 Cache updated with new USN checkpoint"

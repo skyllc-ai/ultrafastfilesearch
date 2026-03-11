@@ -333,17 +333,26 @@ pub async fn load_or_build_dataframe_cached(
     drive: char,
     ttl_seconds: u64,
 ) -> crate::Result<uffs_polars::DataFrame> {
-    eprintln!("[DEBUG] load_or_build_dataframe_cached: ENTER drive={drive}");
+    tracing::debug!(drive = %drive, ttl_seconds, "Entering cached DataFrame load/build");
     // Use spawn_blocking to run all MFT reading and polars operations on a
     // dedicated blocking thread. This avoids nested tokio runtime issues since
     // polars uses tokio internally for some operations.
     let result = tokio::task::spawn_blocking(move || {
-        eprintln!("[DEBUG] load_or_build_dataframe_cached: INSIDE spawn_blocking drive={drive}");
+        tracing::debug!(
+            drive = %drive,
+            ttl_seconds,
+            "Running cached DataFrame load/build on blocking thread"
+        );
         load_or_build_dataframe_cached_sync(drive, ttl_seconds)
     })
     .await
     .map_err(|error| crate::MftError::from_join_error("load_or_build_dataframe_cached", &error))?;
-    eprintln!("[DEBUG] load_or_build_dataframe_cached: EXIT drive={drive}");
+    tracing::debug!(
+        drive = %drive,
+        ttl_seconds,
+        success = result.is_ok(),
+        "Completed cached DataFrame load/build"
+    );
     result
 }
 
@@ -360,29 +369,38 @@ fn load_or_build_dataframe_cached_sync(
     use crate::reader::MftReader;
     use crate::usn::query_usn_journal;
 
-    eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: ENTER drive={drive}");
+    tracing::debug!(
+        drive = %drive,
+        ttl_seconds,
+        "Entering synchronous cached DataFrame load/build"
+    );
 
     // Try to load from cache first
     if let Some((index, _header)) = load_cached_index(drive, ttl_seconds) {
-        eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: cache HIT, calling to_dataframe");
         tracing::info!(drive = %drive, records = index.records.len(), "📦 Cache hit - converting to DataFrame");
         let df = index.to_dataframe();
-        eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: to_dataframe done");
+        match &df {
+            Ok(dataframe) => tracing::debug!(
+                drive = %drive,
+                rows = dataframe.height(),
+                columns = dataframe.width(),
+                "Converted cached index to DataFrame"
+            ),
+            Err(error) => tracing::debug!(
+                drive = %drive,
+                error = %error,
+                "Cached index DataFrame conversion failed"
+            ),
+        }
         return df;
     }
 
     // Cache miss - read fresh
-    eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: cache MISS, reading MFT fresh");
     tracing::info!(drive = %drive, "📖 Cache miss - reading MFT fresh");
     let reader = MftReader::open(drive)?;
-    eprintln!(
-        "[DEBUG] load_or_build_dataframe_cached_sync: reader opened, calling read_all_index_sync"
-    );
+    tracing::debug!(drive = %drive, "Opened MFT reader; reading fresh index");
     let index = reader.read_all_index_sync()?;
-    eprintln!(
-        "[DEBUG] load_or_build_dataframe_cached_sync: read_all_index_sync done, records={}",
-        index.len()
-    );
+    tracing::debug!(drive = %drive, records = index.len(), "Completed fresh index read");
 
     // Save to cache for next time
     let handle = VolumeHandle::open(drive)?;
@@ -397,9 +415,21 @@ fn load_or_build_dataframe_cached_sync(
     }
 
     // Convert to DataFrame
-    eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: calling to_dataframe");
+    tracing::debug!(drive = %drive, records = index.len(), "Converting fresh index to DataFrame");
     let df = index.to_dataframe();
-    eprintln!("[DEBUG] load_or_build_dataframe_cached_sync: to_dataframe done");
+    match &df {
+        Ok(dataframe) => tracing::debug!(
+            drive = %drive,
+            rows = dataframe.height(),
+            columns = dataframe.width(),
+            "Converted fresh index to DataFrame"
+        ),
+        Err(error) => tracing::debug!(
+            drive = %drive,
+            error = %error,
+            "Fresh index DataFrame conversion failed"
+        ),
+    }
     df
 }
 
