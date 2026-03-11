@@ -38,18 +38,25 @@
 //! sha2 = "0.10"
 //! ```
 
-use sha2::{Digest, Sha256};
-use std::env;
-use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::{env, fs};
+
+use sha2::{Digest, Sha256};
 
 #[derive(Debug)]
 struct FileHashes {
     ordered_hash: String,
     sorted_hash: String,
     line_count: usize,
+}
+
+#[derive(Debug)]
+struct UffsReleaseArtifact {
+    workspace_root: PathBuf,
+    cargo_target_dir: PathBuf,
+    binary_path: PathBuf,
 }
 
 fn main() {
@@ -92,7 +99,10 @@ fn main() {
     let golden_baseline_file = find_golden_baseline_file(&data_dir, &drive_lower);
 
     if !rust_output.exists() {
-        eprintln!("ERROR: Rust output file not found: {}", rust_output.display());
+        eprintln!(
+            "ERROR: Rust output file not found: {}",
+            rust_output.display()
+        );
         std::process::exit(1);
     }
     println!("=== UFFS Strict Full-Output Parity Verification ===");
@@ -124,10 +134,7 @@ fn main() {
     }
 
     println!("Ordered hashes differ; checking full-file line-sort normalization...");
-    println!(
-        "Golden baseline (sorted): {}",
-        golden_hashes.sorted_hash
-    );
+    println!("Golden baseline (sorted): {}", golden_hashes.sorted_hash);
     println!("Rust output (sorted):    {}", rust_hashes.sorted_hash);
     println!();
 
@@ -164,7 +171,8 @@ fn find_golden_baseline_file(data_dir: &Path, drive_lower: &str) -> PathBuf {
     }
 
     let legacy_baseline_prefix = format!("{}{}{}{}", 'c', 'p', 'p', '_');
-    let legacy_baseline_file = data_dir.join(format!("{legacy_baseline_prefix}{}.txt", drive_lower));
+    let legacy_baseline_file =
+        data_dir.join(format!("{legacy_baseline_prefix}{}.txt", drive_lower));
     if legacy_baseline_file.exists() {
         return legacy_baseline_file;
     }
@@ -176,11 +184,20 @@ fn find_golden_baseline_file(data_dir: &Path, drive_lower: &str) -> PathBuf {
 }
 
 fn print_usage(prog: &str) {
-    eprintln!("Usage: {} <data_dir> <drive_letter> [--rust <rust_output> | --regenerate]", prog);
+    eprintln!(
+        "Usage: {} <data_dir> <drive_letter> [--rust <rust_output> | --regenerate]",
+        prog
+    );
     eprintln!();
     eprintln!("Examples:");
-    eprintln!("  {} /Users/rnio/uffs_data D --rust /tmp/rust_final_audit.txt", prog);
-    eprintln!("  {} /Users/rnio/uffs_data/drive_s S --rust /tmp/rust_s.txt", prog);
+    eprintln!(
+        "  {} /Users/rnio/uffs_data D --rust /tmp/rust_final_audit.txt",
+        prog
+    );
+    eprintln!(
+        "  {} /Users/rnio/uffs_data/drive_s S --rust /tmp/rust_s.txt",
+        prog
+    );
     eprintln!("  {} /Users/rnio/uffs_data D --regenerate", prog);
 }
 
@@ -197,22 +214,38 @@ fn regenerate_rust_output(data_dir: &Path, drive_letter: &str, drive_lower: &str
     }
     println!("MFT file:     {}", mft_file.display());
 
-    // Locate uffs binary
-    let uffs_bin = find_uffs_binary();
-    println!("UFFS binary:  {}", uffs_bin.display());
+    // Locate authoritative workspace release artifact
+    let artifact = find_workspace_release_artifact();
+    println!(
+        "Workspace root:        {}",
+        artifact.workspace_root.display()
+    );
+    println!(
+        "Cargo target dir:      {}",
+        artifact.cargo_target_dir.display()
+    );
+    println!("UFFS release artifact: {}", artifact.binary_path.display());
+    println!(
+        "Artifact provenance:   cargo metadata target_directory → release/{}",
+        uffs_binary_name()
+    );
     println!();
 
     // Generate output
     let rust_output = data_dir.join(format!("verify_rust_{}.txt", drive_lower));
     println!("Running uffs scan (baseline-compatible algorithms)...");
 
-    let status = Command::new(&uffs_bin)
+    let status = Command::new(&artifact.binary_path)
         .args([
             "*",
-            "--mft-file", &mft_file.to_string_lossy(),
-            "--drive", drive_letter,
-            "--tz-offset", "-8",
-            "--out", &rust_output.to_string_lossy(),
+            "--mft-file",
+            &mft_file.to_string_lossy(),
+            "--drive",
+            drive_letter,
+            "--tz-offset",
+            "-8",
+            "--out",
+            &rust_output.to_string_lossy(),
         ])
         .status();
 
@@ -234,53 +267,105 @@ fn regenerate_rust_output(data_dir: &Path, drive_letter: &str, drive_lower: &str
     rust_output
 }
 
-/// Find the uffs binary. Checks the literal `~` path from .cargo/config.toml.
-fn find_uffs_binary() -> PathBuf {
+/// Find the authoritative workspace release artifact via Cargo metadata.
+fn find_workspace_release_artifact() -> UffsReleaseArtifact {
     let workspace_root = find_workspace_root();
-
-    // Check release first, then debug
-    let release = workspace_root
-        .join("~")
-        .join("Library")
-        .join("Caches")
-        .join("uffs")
-        .join("target")
-        .join("release")
-        .join("uffs");
-    if release.exists() {
-        return release;
+    let cargo_target_dir = cargo_target_directory(&workspace_root);
+    let release_artifact = cargo_target_dir.join("release").join(uffs_binary_name());
+    if release_artifact.exists() {
+        return UffsReleaseArtifact {
+            workspace_root,
+            cargo_target_dir,
+            binary_path: release_artifact,
+        };
     }
 
-    let debug = workspace_root
-        .join("~")
-        .join("Library")
-        .join("Caches")
-        .join("uffs")
-        .join("target")
-        .join("debug")
-        .join("uffs");
-    if debug.exists() {
-        return debug;
-    }
-
-    // Fallback: try PATH
-    if let Ok(output) = Command::new("which").arg("uffs").output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return PathBuf::from(path);
-            }
-        }
-    }
-
-    eprintln!("ERROR: Could not find uffs binary.");
-    eprintln!("  Checked: {}", release.display());
-    eprintln!("  Checked: {}", debug.display());
-    eprintln!("  Also checked PATH.");
+    eprintln!("ERROR: Fresh workspace release artifact not found.");
+    eprintln!("  Workspace root: {}", workspace_root.display());
+    eprintln!("  Cargo target dir: {}", cargo_target_dir.display());
+    eprintln!(
+        "  Expected release artifact: {}",
+        release_artifact.display()
+    );
+    eprintln!("  Build it first with: cargo build --release -p uffs-cli --bin uffs");
     std::process::exit(1);
 }
 
-/// Find the workspace root by looking for Cargo.toml starting from the script location.
+fn cargo_target_directory(workspace_root: &Path) -> PathBuf {
+    let output = Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(workspace_root)
+        .output()
+        .unwrap_or_else(|error| {
+            eprintln!("ERROR: Failed to run cargo metadata: {error}");
+            std::process::exit(1);
+        });
+
+    if !output.status.success() {
+        eprintln!("ERROR: cargo metadata failed with status {}", output.status);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.trim().is_empty() {
+            eprintln!("  stderr: {}", stderr.trim());
+        }
+        std::process::exit(1);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let raw_target_dir =
+        extract_json_string_field(&stdout, "target_directory").unwrap_or_else(|| {
+            eprintln!("ERROR: cargo metadata output did not contain target_directory");
+            std::process::exit(1);
+        });
+
+    let target_dir = PathBuf::from(raw_target_dir);
+    if target_dir.is_absolute() {
+        target_dir
+    } else {
+        workspace_root.join(target_dir)
+    }
+}
+
+fn extract_json_string_field(json: &str, field_name: &str) -> Option<String> {
+    let needle = format!("\"{field_name}\":\"");
+    let start = json.find(&needle)? + needle.len();
+    let mut result = String::new();
+    let mut escaped = false;
+
+    for ch in json[start..].chars() {
+        if escaped {
+            match ch {
+                '"' | '\\' | '/' => result.push(ch),
+                'b' => result.push('\u{0008}'),
+                'f' => result.push('\u{000C}'),
+                'n' => result.push('\n'),
+                'r' => result.push('\r'),
+                't' => result.push('\t'),
+                _ => return None,
+            }
+            escaped = false;
+            continue;
+        }
+
+        match ch {
+            '\\' => escaped = true,
+            '"' => return Some(result),
+            _ => result.push(ch),
+        }
+    }
+
+    None
+}
+
+fn uffs_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "uffs.exe"
+    } else {
+        "uffs"
+    }
+}
+
+/// Find the workspace root by looking for Cargo.toml starting from the script
+/// location.
 fn find_workspace_root() -> PathBuf {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut dir = cwd.as_path();
@@ -306,8 +391,8 @@ fn compute_file_hashes(path: &Path) -> FileHashes {
 }
 
 fn read_lines(path: &Path) -> Vec<String> {
-    let file = fs::File::open(path)
-        .unwrap_or_else(|e| panic!("Failed to open {}: {}", path.display(), e));
+    let file =
+        fs::File::open(path).unwrap_or_else(|e| panic!("Failed to open {}: {}", path.display(), e));
     let reader = BufReader::new(file);
     reader
         .lines()
@@ -334,7 +419,8 @@ fn sha256_for_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// Show first few differences between the complete ordered outputs of two files.
+/// Show first few differences between the complete ordered outputs of two
+/// files.
 fn show_first_ordered_diffs(file_a: &Path, file_b: &Path) {
     let lines_a = read_lines(file_a);
     let lines_b = read_lines(file_b);
@@ -356,11 +442,19 @@ fn show_first_ordered_diffs(file_a: &Path, file_b: &Path) {
                 diff_count += 1;
             }
             (Some(line_a), None) => {
-                println!("  Line {} baseline only: {}", index + 1, truncate(line_a, 120));
+                println!(
+                    "  Line {} baseline only: {}",
+                    index + 1,
+                    truncate(line_a, 120)
+                );
                 diff_count += 1;
             }
             (None, Some(line_b)) => {
-                println!("  Line {} Rust only:     {}", index + 1, truncate(line_b, 120));
+                println!(
+                    "  Line {} Rust only:     {}",
+                    index + 1,
+                    truncate(line_b, 120)
+                );
                 diff_count += 1;
             }
             (None, None) => {}
@@ -431,7 +525,9 @@ fn truncate(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ordered_sha256, sorted_sha256};
+    use std::path::Path;
+
+    use super::{extract_json_string_field, ordered_sha256, sorted_sha256, uffs_binary_name};
 
     fn lines(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
@@ -439,15 +535,7 @@ mod tests {
 
     #[test]
     fn sorted_full_file_hash_still_detects_missing_footer_lines() {
-        let baseline = lines(&[
-            "header",
-            "",
-            "row-a",
-            "row-b",
-            "",
-            "Drives?\t1\tD:",
-            "",
-        ]);
+        let baseline = lines(&["header", "", "row-a", "row-b", "", "Drives?\t1\tD:", ""]);
         let rust = lines(&["header", "", "row-b", "row-a"]);
 
         assert_ne!(ordered_sha256(&baseline), ordered_sha256(&rust));
@@ -456,26 +544,43 @@ mod tests {
 
     #[test]
     fn sorted_full_file_hash_allows_row_reordering_when_full_line_set_matches() {
-        let baseline = lines(&[
-            "header",
-            "",
-            "row-a",
-            "row-b",
-            "",
-            "Drives?\t1\tD:",
-            "",
-        ]);
-        let rust = lines(&[
-            "header",
-            "",
-            "row-b",
-            "row-a",
-            "",
-            "Drives?\t1\tD:",
-            "",
-        ]);
+        let baseline = lines(&["header", "", "row-a", "row-b", "", "Drives?\t1\tD:", ""]);
+        let rust = lines(&["header", "", "row-b", "row-a", "", "Drives?\t1\tD:", ""]);
 
         assert_ne!(ordered_sha256(&baseline), ordered_sha256(&rust));
         assert_eq!(sorted_sha256(&baseline), sorted_sha256(&rust));
+    }
+
+    #[test]
+    fn extracts_target_directory_from_cargo_metadata_json() {
+        let metadata = r#"{"target_directory":"/tmp/workspace/~/Library/Caches/uffs/target"}"#;
+
+        assert_eq!(
+            extract_json_string_field(metadata, "target_directory"),
+            Some("/tmp/workspace/~/Library/Caches/uffs/target".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_escaped_windows_target_directory_from_cargo_metadata_json() {
+        let metadata = r#"{"target_directory":"C:\\rust-target\\uffs"}"#;
+
+        assert_eq!(
+            extract_json_string_field(metadata, "target_directory"),
+            Some(r"C:\rust-target\uffs".to_string())
+        );
+    }
+
+    #[test]
+    fn uffs_binary_name_matches_platform_expectation() {
+        let expected_suffix = if cfg!(windows) { "uffs.exe" } else { "uffs" };
+        assert_eq!(uffs_binary_name(), expected_suffix);
+        assert_eq!(
+            Path::new("release")
+                .join(uffs_binary_name())
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some(expected_suffix)
+        );
     }
 }
