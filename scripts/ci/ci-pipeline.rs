@@ -581,13 +581,11 @@ async fn execute_command_with_env(
         command.env(key, value);
     }
 
-    // nextest/llvm-cov fail if CARGO_INCREMENTAL is present at all while sccache wraps rustc.
-    let uses_nextest_or_llvm_cov = cmd == "cargo"
-        && args
-            .first()
-            .is_some_and(|subcommand| *subcommand == "nextest" || *subcommand == "llvm-cov");
-    if ctx.sccache_enabled && uses_nextest_or_llvm_cov {
-        command.env_remove("CARGO_INCREMENTAL");
+    // sccache prohibits incremental compilation - it conflicts with its caching model.
+    // Force CARGO_INCREMENTAL=0 for cargo and rust-script (which runs cargo internally).
+    // This overrides the `incremental = true` in profile.dev from Cargo.toml.
+    if ctx.sccache_enabled && (cmd == "cargo" || cmd == "rust-script") {
+        command.env("CARGO_INCREMENTAL", "0");
     }
 
     // In verbose mode, inherit stdio; otherwise capture to log file
@@ -809,12 +807,15 @@ async fn version_bump(ctx: &PipelineContext) -> Result<()> {
     Ok(())
 }
 
-/// Check if release build mode is enabled via UFFS_RELEASE_BUILD env var.
-/// Default is DEV mode for faster iteration during development.
+/// Check if release build mode is explicitly disabled via UFFS_DEV_BUILD env var.
+/// Default is RELEASE mode for the ship lane (phase2).
+/// Set UFFS_DEV_BUILD=1 to force dev mode in ship lane (not recommended).
 fn is_release_build() -> bool {
-    std::env::var("UFFS_RELEASE_BUILD")
+    // Only build dev if explicitly requested via UFFS_DEV_BUILD=1
+    let force_dev = std::env::var("UFFS_DEV_BUILD")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+        .unwrap_or(false);
+    !force_dev
 }
 
 async fn build_release(ctx: &PipelineContext) -> Result<()> {
@@ -1291,8 +1292,8 @@ async fn main() -> Result<()> {
         println!("{} Log file: {}", "📝".blue(), log_path.display());
     }
 
-    // Show build mode (DEV is default, set UFFS_RELEASE_BUILD=1 for release)
-    let build_mode = if is_release_build() { "RELEASE (optimized)" } else { "DEV (fast, default)" };
+    // Show build mode (RELEASE is default for ship lane, set UFFS_DEV_BUILD=1 to force dev)
+    let build_mode = if is_release_build() { "RELEASE (default for ship)" } else { "DEV (forced via UFFS_DEV_BUILD=1)" };
     println!("{} Build mode: {}", "🔧".blue(), build_mode);
 
     // Start sccache server early (no-op if already running). This is safe and fast.

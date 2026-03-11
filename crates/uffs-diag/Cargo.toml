@@ -84,7 +84,7 @@ rayon.workspace = true
 uffs-mft.workspace = true
 
 # Polars (for Parquet analysis)
-uffs-polars = { version = "0.2.9", path = "../uffs-polars" }
+uffs-polars.workspace = true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lints (inherit from workspace)

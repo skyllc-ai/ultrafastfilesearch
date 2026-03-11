@@ -48,7 +48,7 @@ tracing-appender.workspace = true
 dirs-next.workspace = true
 
 # Polars facade (for main CLI index/search commands)
-uffs-polars = { version = "0.2.9", path = "../uffs-polars" }
+uffs-polars.workspace = true
 
 # Time handling
 chrono.workspace = true
