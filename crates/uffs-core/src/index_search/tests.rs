@@ -10,10 +10,7 @@ use super::*;
 type TestError = Box<dyn core::error::Error>;
 type TestResult = Result<(), TestError>;
 
-fn push_name_ref(
-    index: &mut MftIndex,
-    name: &str,
-) -> Result<IndexNameRef, TestError> {
+fn push_name_ref(index: &mut MftIndex, name: &str) -> Result<IndexNameRef, TestError> {
     let offset = index.add_name(name);
     Ok(IndexNameRef::new(
         offset,
@@ -23,10 +20,7 @@ fn push_name_ref(
     ))
 }
 
-fn push_file_name_ref(
-    index: &mut MftIndex,
-    name: &str,
-) -> Result<IndexNameRef, TestError> {
+fn push_file_name_ref(index: &mut MftIndex, name: &str) -> Result<IndexNameRef, TestError> {
     let offset = index.add_name(name);
     let extension_id = index.intern_extension(name);
     Ok(IndexNameRef::new(
@@ -309,7 +303,10 @@ fn test_index_query_collect_respects_name_and_stream_expansion_toggles() -> Test
         .with_expand_streams(false)
         .collect();
     assert_eq!(no_expansion.len(), 1);
-    assert_eq!(no_expansion.first().map(|result| result.name.as_str()), Some("alpha.txt"));
+    assert_eq!(
+        no_expansion.first().map(|result| result.name.as_str()),
+        Some("alpha.txt")
+    );
 
     Ok(())
 }

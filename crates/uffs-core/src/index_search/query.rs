@@ -2,7 +2,9 @@
 
 mod builder;
 mod execution;
+mod expansion;
 mod filtering;
+mod planning;
 
 use uffs_mft::index::MftIndex;
 
