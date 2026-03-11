@@ -33,6 +33,7 @@
 //! - Reference `uffs.com` output (Windows `trial_run.ps1`)
 //! - Rust uffs
 //! - Rust uffs running on Mac with cached MFT data
+//!
 //! Exception: This diagnostic binary exceeds 800 lines because the end-to-end
 //! comparison and report pipeline are intentionally kept together for offline
 //! analysis; a structural split is deferred outside Wave 3C.

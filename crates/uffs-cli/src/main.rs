@@ -37,6 +37,7 @@
     clippy::single_call_fn,
     reason = "CLI entry point functions are called once from main"
 )]
+#![allow(clippy::items_after_test_module)]
 
 // Dependencies used in commands.rs for streaming output (Windows-only code
 // paths)
@@ -60,6 +61,46 @@ use uffs_polars as _;
 static GLOBAL: MiMalloc = MiMalloc;
 
 mod commands;
+
+/// Operation label used for CLI-wide shutdown classification.
+const CLI_OPERATION: &str = "uffs";
+
+/// Maps spawned CLI task failures onto the approved cancellation taxonomy.
+#[must_use]
+fn classify_cli_task_error(
+    operation: &'static str,
+    error: &tokio::task::JoinError,
+) -> uffs_mft::MftError {
+    if error.is_cancelled() {
+        return uffs_mft::MftError::Cancelled {
+            operation,
+            reason: error.to_string(),
+        };
+    }
+
+    uffs_mft::MftError::WaitFailed {
+        operation,
+        reason: error.to_string(),
+    }
+}
+
+/// Builds the explicit cancellation outcome for a Ctrl+C shutdown request.
+#[must_use]
+fn shutdown_requested_error(operation: &'static str) -> uffs_mft::MftError {
+    uffs_mft::MftError::Cancelled {
+        operation,
+        reason: "shutdown requested by Ctrl+C".to_owned(),
+    }
+}
+
+/// Builds a wait failure when the CLI cannot install a Ctrl+C listener.
+#[must_use]
+fn ctrl_c_listener_error(operation: &'static str, error: &io::Error) -> uffs_mft::MftError {
+    uffs_mft::MftError::WaitFailed {
+        operation,
+        reason: format!("failed to listen for Ctrl+C: {error}"),
+    }
+}
 
 /// Parse a drive letter from common CLI input formats.
 ///
@@ -401,6 +442,7 @@ fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
 ///
 /// This is separated from `main()` to allow custom error handling that
 /// doesn't show backtraces for user-facing errors like "file not found".
+#[tracing::instrument(level = "info", skip_all)]
 async fn run() -> Result<()> {
     // Check for -v/--verbose flag early to set log level before initializing
     // logging This allows `uffs -v ...` to show info-level logs without
@@ -472,11 +514,51 @@ async fn run() -> Result<()> {
     Ok(())
 }
 
+/// Runs the CLI while listening for Ctrl+C so shutdown reaches long-running
+/// command flows started from the binary entrypoint.
+#[expect(
+    clippy::single_call_fn,
+    reason = "entrypoint wrapper exists solely to propagate shutdown into the spawned command task"
+)]
+#[tracing::instrument(level = "debug", skip_all, fields(operation = CLI_OPERATION))]
+async fn run_until_shutdown() -> Result<()> {
+    let mut run_task = tokio::spawn(run());
+
+    tokio::select! {
+        result = &mut run_task => {
+            match result {
+                Ok(outcome) => outcome,
+                Err(error) => Err(classify_cli_task_error(CLI_OPERATION, &error).into()),
+            }
+        }
+        signal = tokio::signal::ctrl_c() => {
+            run_task.abort();
+
+            match signal {
+                Ok(()) => Err(shutdown_requested_error(CLI_OPERATION).into()),
+                Err(error) => Err(ctrl_c_listener_error(CLI_OPERATION, &error).into()),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use clap::CommandFactory;
+    #![allow(
+        clippy::default_numeric_fallback,
+        clippy::expect_used,
+        clippy::manual_let_else,
+        clippy::panic
+    )]
 
-    use super::Cli;
+    use std::path::{Path, PathBuf};
+
+    use clap::{CommandFactory, Parser};
+
+    use super::{
+        Cli, Commands, classify_cli_task_error, ctrl_c_listener_error, parse_drive_letter,
+        shutdown_requested_error,
+    };
 
     fn render_long_help(mut command: clap::Command) -> String {
         let mut buffer = Vec::new();
@@ -484,6 +566,10 @@ mod tests {
             .write_long_help(&mut buffer)
             .expect("CLI help should render successfully");
         String::from_utf8(buffer).expect("CLI help should be valid UTF-8")
+    }
+
+    fn parse_cli(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(args)
     }
 
     #[test]
@@ -501,6 +587,148 @@ mod tests {
         assert!(help.contains("uffs '*' --mft-file G_mft.bin --drive G"));
         assert!(help.contains("uffs index -d C index.parquet"));
     }
+
+    #[test]
+    fn test_parse_drive_letter_accepts_letter_colon_and_whitespace_variants() {
+        assert_eq!(parse_drive_letter("c"), Ok('C'));
+        assert_eq!(parse_drive_letter("C:"), Ok('C'));
+        assert_eq!(parse_drive_letter(" d: "), Ok('D'));
+    }
+
+    #[test]
+    fn test_parse_drive_letter_rejects_invalid_values() {
+        assert!(parse_drive_letter("").is_err());
+        assert!(parse_drive_letter("12").is_err());
+        assert!(parse_drive_letter("1:").is_err());
+        assert!(parse_drive_letter("CD").is_err());
+    }
+
+    #[test]
+    fn test_default_search_parses_offline_mft_mode_and_common_options() {
+        let cli = parse_cli(&[
+            "uffs",
+            "*.rs",
+            "--mft-file",
+            "raw.bin",
+            "--drive",
+            "g:",
+            "--format",
+            "json",
+            "--tz-offset",
+            "-8",
+        ])
+        .expect("default search args should parse");
+
+        assert!(cli.command.is_none());
+        assert_eq!(cli.pattern.as_deref(), Some("*.rs"));
+        assert_eq!(cli.drive, Some('G'));
+        assert_eq!(cli.drives, None);
+        assert_eq!(cli.mft_file.as_deref(), Some(Path::new("raw.bin")));
+        assert_eq!(cli.format, "json");
+        assert_eq!(cli.tz_offset, Some(-8));
+    }
+
+    #[test]
+    fn test_default_search_rejects_conflicting_search_sources() {
+        let err = match parse_cli(&[
+            "uffs",
+            "*.rs",
+            "--index",
+            "saved.parquet",
+            "--mft-file",
+            "raw.bin",
+        ]) {
+            Ok(_) => panic!("conflicting search source flags should fail"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn test_index_subcommand_normalizes_multi_drive_input() {
+        let cli = parse_cli(&["uffs", "index", "out.parquet", "--drives", "c:,d,e:"])
+            .expect("index args should parse");
+
+        match cli.command {
+            Some(Commands::Index {
+                output,
+                drive,
+                drives,
+            }) => {
+                assert_eq!(output, PathBuf::from("out.parquet"));
+                assert_eq!(drive, None);
+                assert_eq!(drives, Some(vec!['C', 'D', 'E']));
+            }
+            _ => panic!("expected index subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_index_help_includes_examples_and_multi_drive_guidance() {
+        let mut command = Cli::command();
+        let help = render_long_help(
+            command
+                .find_subcommand_mut("index")
+                .expect("index subcommand should exist")
+                .clone(),
+        );
+
+        assert!(help.contains("By default, indexes ALL available NTFS drives"));
+        assert!(help.contains("uffs index -d C index.parquet"));
+        assert!(help.contains("uffs index --drives C,D,E out.parquet"));
+        assert!(help.contains("Creates myindex.parquet"));
+    }
+
+    #[tokio::test]
+    async fn test_classify_cli_task_error_maps_cancelled_joins() {
+        let handle = tokio::spawn(async {
+            core::future::pending::<()>().await;
+        });
+        handle.abort();
+
+        let outcome = handle.await;
+        assert!(outcome.is_err(), "aborted task unexpectedly completed");
+        let Err(join_error) = outcome else {
+            return;
+        };
+
+        let error = classify_cli_task_error("uffs", &join_error);
+
+        assert!(matches!(
+            error,
+            uffs_mft::MftError::Cancelled {
+                operation: "uffs",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_shutdown_requested_error_is_cancelled() {
+        let error = shutdown_requested_error("uffs");
+
+        assert!(matches!(
+            error,
+            uffs_mft::MftError::Cancelled {
+                operation: "uffs",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_ctrl_c_listener_error_is_wait_failed() {
+        let error = ctrl_c_listener_error("uffs", &std::io::Error::other("listener unavailable"));
+
+        assert!(matches!(
+            error,
+            uffs_mft::MftError::WaitFailed {
+                operation: "uffs",
+                ..
+            }
+        ));
+    }
 }
 
 #[tokio::main]
@@ -509,7 +737,7 @@ mod tests {
     reason = "intentional user-facing error output to stderr"
 )]
 async fn main() {
-    if let Err(err) = run().await {
+    if let Err(err) = run_until_shutdown().await {
         // Print error without backtrace for clean user-facing output
         // Use anyhow's chain() to iterate through the error chain
         for (idx, cause) in err.chain().enumerate() {

@@ -477,6 +477,7 @@ impl MftQuery {
     /// # Errors
     ///
     /// Returns an error if query execution fails.
+    #[tracing::instrument(level = "debug", skip(self), fields(streaming = false))]
     pub fn collect(self) -> Result<DataFrame> {
         self.lazy.collect().map_err(CoreError::from)
     }
@@ -486,6 +487,7 @@ impl MftQuery {
     /// # Errors
     ///
     /// Returns an error if query execution fails.
+    #[tracing::instrument(level = "debug", skip(self), fields(streaming = true))]
     pub fn collect_streaming(self) -> Result<DataFrame> {
         self.lazy
             .with_new_streaming(true)

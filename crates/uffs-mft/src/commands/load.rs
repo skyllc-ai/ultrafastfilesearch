@@ -6,6 +6,13 @@ use anyhow::{Context, Result};
 
 use crate::display::{clean_path_for_display, format_bytes, format_duration, format_number_commas};
 
+/// Returns the already-validated export output path.
+fn required_output_path(output_path: Option<&Path>) -> Result<&Path> {
+    output_path.ok_or_else(|| {
+        anyhow::anyhow!("internal error: --output should have been validated before export")
+    })
+}
+
 /// Load MFT from a saved file and optionally export it.
 ///
 /// Works on all platforms - parses NTFS structures from saved file.
@@ -22,10 +29,6 @@ use crate::display::{clean_path_for_display, format_bytes, format_duration, form
 #[expect(
     clippy::min_ident_chars,
     reason = "short identifiers used for concise loop variables"
-)]
-#[expect(
-    clippy::expect_used,
-    reason = "expect used for file operations that should not fail after validation"
 )]
 #[expect(
     clippy::single_call_fn,
@@ -417,7 +420,7 @@ pub fn cmd_load(
     }
 
     // Parse and export (output is guaranteed to be Some by upfront validation)
-    let output = output_path.expect("output validated at function start");
+    let output = required_output_path(output_path)?;
 
     // Determine output format from extension
     let ext = output
@@ -509,4 +512,29 @@ pub fn cmd_load(
     println!("⏱️  Completed in {}", format_duration(elapsed));
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::required_output_path;
+
+    #[test]
+    fn test_required_output_path_accepts_validated_path() {
+        let path = Path::new("out.parquet");
+        assert_eq!(required_output_path(Some(path)).ok(), Some(path));
+    }
+
+    #[test]
+    fn test_required_output_path_rejects_missing_output() {
+        let missing_output_error = required_output_path(None).err();
+        assert!(matches!(
+            missing_output_error,
+            Some(error)
+                if error
+                    .to_string()
+                    .contains("internal error: --output should have been validated before export")
+        ));
+    }
 }

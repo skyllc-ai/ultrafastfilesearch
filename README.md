@@ -68,9 +68,16 @@ uffs "*.txt" --drives C,D,E
 uffs "project*"
 
 # Use a pre-built index for instant searches
-uffs index --drive C --output c_drive.parquet
-uffs search "*.rs" --index c_drive.parquet
+uffs index -d C c_drive.parquet
+uffs "*.rs" --index c_drive.parquet
+
+# Search a saved raw MFT file (cross-platform debugging)
+uffs "*" --mft-file c_mft.raw --drive C
 ```
+
+## 🤝 Contributing
+
+Want to contribute? Start with [CONTRIBUTING.md](CONTRIBUTING.md) for the pinned toolchain, `just`/`cargo` workflows, and Windows/Admin caveats. For the broader docs map, see [docs/README.md](docs/README.md) and [docs/dev/README.md](docs/dev/README.md).
 
 ---
 
@@ -148,11 +155,11 @@ uffs "*.rs" --format json
 
 ## 🛠️ Commands
 
-### `uffs search` (default)
-Search for files matching a pattern.
+### Search (default action)
+Search for files matching a pattern. `search` is not a subcommand; the pattern is passed directly to `uffs`.
 
 ```bash
-uffs search "*.rs" --drive C --files-only --limit 100
+uffs "*.rs" --drive C --files-only --limit 100
 ```
 
 ### `uffs index`
@@ -160,10 +167,10 @@ Build a persistent index for instant future searches.
 
 ```bash
 # Index a single drive
-uffs index --drive C --output c_drive.parquet
+uffs index -d C c_drive.parquet
 
 # Index multiple drives
-uffs index --drives C,D,E --output all_drives.parquet
+uffs index --drives C,D,E all_drives.parquet
 ```
 
 ### `uffs info`
@@ -177,21 +184,16 @@ uffs info c_drive.parquet
 Show statistics about indexed files.
 
 ```bash
-uffs stats --index c_drive.parquet --top 20
+uffs stats c_drive.parquet --top 20
 ```
 
-### `uffs save-raw`
-Save raw MFT bytes for offline analysis.
+### Raw MFT workflows
+For saved raw MFT data, use the low-level `uffs_mft` tool to save/load files, then use `uffs --mft-file` to search them.
 
 ```bash
-uffs save-raw --drive C --output c_mft.raw --compress
-```
-
-### `uffs load-raw`
-Load and parse a saved raw MFT file.
-
-```bash
-uffs load-raw c_mft.raw --output parsed.parquet
+uffs_mft save --drive C --output c_mft.raw
+uffs_mft load c_mft.raw --output parsed.parquet
+uffs "*.rs" --mft-file c_mft.raw --drive C
 ```
 
 ---

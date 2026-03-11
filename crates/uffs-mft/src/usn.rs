@@ -356,7 +356,15 @@ mod windows_impl {
         if result.is_err() {
             return Err(std::io::Error::last_os_error());
         }
-        let next_usn = i64::from_le_bytes(buffer[0..8].try_into().unwrap());
+        if bytes_returned < size_of::<i64>() as u32 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "FSCTL_READ_USN_JOURNAL returned fewer than 8 bytes",
+            ));
+        }
+        let mut next_usn_bytes = [0_u8; 8];
+        next_usn_bytes.copy_from_slice(&buffer[..8]);
+        let next_usn = i64::from_le_bytes(next_usn_bytes);
         let mut records = Vec::new();
         let mut offset = 8usize;
         while offset + size_of::<UsnRecordV2Header>() <= bytes_returned as usize {

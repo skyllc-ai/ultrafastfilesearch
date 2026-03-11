@@ -7,6 +7,14 @@ This directory is being normalized toward a small set of durable buckets:
 - [`user/`](user/README.md) — operator guides and testing walkthroughs
 - [`performance/`](performance/README.md) — benchmarks, performance analysis, and validation
 
+## CRUCIBLE baseline artifacts
+
+- [`ARCHITECTURE.md`](ARCHITECTURE.md)
+- [`CRUCIBLE_AUDIT_REPORT.md`](CRUCIBLE_AUDIT_REPORT.md)
+- [`PERFORMANCE.md`](PERFORMANCE.md)
+- [`RISKS.md`](RISKS.md)
+- [`../LOG/CHANGELOG_HEALING_CRUCIBLE.md`](../LOG/CHANGELOG_HEALING_CRUCIBLE.md)
+
 ## Notes for the Wave 3A sweep
 
 - Stable architecture documents stay canonical in `docs/architecture/`.

@@ -195,13 +195,15 @@ fn format_json_string(value: &str) -> String {
 
 #[cfg(any(windows, test))]
 fn push_json_unicode_escape(buf: &mut String, ch: char) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    const HEX: &[char; 16] = &[
+        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
+    ];
     let code = ch as u32;
     buf.push_str("\\u");
-    buf.push(HEX[((code >> 12) & 0xF) as usize] as char);
-    buf.push(HEX[((code >> 8) & 0xF) as usize] as char);
-    buf.push(HEX[((code >> 4) & 0xF) as usize] as char);
-    buf.push(HEX[(code & 0xF) as usize] as char);
+    for shift in [12_u32, 8_u32, 4_u32, 0_u32] {
+        let nibble = usize::try_from((code >> shift) & 0xF).unwrap_or_default();
+        buf.push(*HEX.get(nibble).unwrap_or(&'0'));
+    }
 }
 
 /// Format a cell value for JSON output.
@@ -209,19 +211,17 @@ fn push_json_unicode_escape(buf: &mut String, ch: char) {
 fn format_json_value(col: &uffs_polars::Column, row_idx: usize) -> String {
     use uffs_polars::{AnyValue, TimeUnit};
 
-    let val = col.get(row_idx);
-    match val {
-        Ok(AnyValue::Null) => "null".to_string(),
-        Ok(AnyValue::String(s)) => format_json_string(s),
-        Ok(AnyValue::Boolean(b)) => if b { "true" } else { "false" }.to_string(),
+    match col.get(row_idx) {
+        Ok(AnyValue::Null) | Err(_) => "null".to_owned(),
+        Ok(AnyValue::String(value)) => format_json_string(value),
+        Ok(AnyValue::Boolean(boolean)) => if boolean { "true" } else { "false" }.to_owned(),
         Ok(AnyValue::Datetime(ts, TimeUnit::Microseconds, _)) => {
-            let secs = ts / 1_000_000;
-            let micros = (ts % 1_000_000) as u32;
-            if let Some(dt) = chrono::DateTime::from_timestamp(secs, micros * 1000) {
-                format_json_string(&dt.format("%Y-%m-%d %H:%M:%S").to_string())
-            } else {
-                "null".to_string()
-            }
+            let secs = ts.div_euclid(1_000_000);
+            let micros = u32::try_from(ts.rem_euclid(1_000_000)).unwrap_or_default();
+            chrono::DateTime::from_timestamp(secs, micros * 1000).map_or_else(
+                || "null".to_owned(),
+                |datetime| format_json_string(&datetime.format("%Y-%m-%d %H:%M:%S").to_string()),
+            )
         }
         Ok(AnyValue::UInt8(n)) => n.to_string(),
         Ok(AnyValue::UInt16(n)) => n.to_string(),
@@ -233,8 +233,7 @@ fn format_json_value(col: &uffs_polars::Column, row_idx: usize) -> String {
         Ok(AnyValue::Int64(n)) => n.to_string(),
         Ok(AnyValue::Float32(n)) => n.to_string(),
         Ok(AnyValue::Float64(n)) => n.to_string(),
-        Ok(v) => format_json_string(&v.to_string()),
-        Err(_) => "null".to_string(),
+        Ok(value) => format_json_string(&value.to_string()),
     }
 }
 
@@ -462,16 +461,12 @@ pub(super) fn results_to_dataframe(
 }
 
 /// Write search results to console or file.
-#[expect(
-    clippy::single_call_fn,
-    reason = "extracted to reduce search() line count below clippy::too_many_lines limit"
-)]
 pub(super) fn write_results(
     results: &uffs_mft::DataFrame,
     format: &str,
     out: &str,
     output_config: &OutputConfig,
-    _output_targets: &[char],
+    output_targets: &[char],
 ) -> Result<()> {
     let is_console = matches!(
         out.to_lowercase().as_str(),
@@ -479,13 +474,18 @@ pub(super) fn write_results(
     );
 
     if is_console {
-        let stdout = std::io::stdout();
+        let stdout_handle = std::io::stdout();
+        let mut stdout = stdout_handle.lock();
         match format {
-            "json" => export_json(results, stdout)?,
-            "csv" => output_config.write(results, stdout)?,
-            "custom" => output_config.write(results, stdout)?,
-            _ => export_table(results, stdout)?,
+            "json" => export_json(results, &mut stdout)?,
+            "csv" => output_config.write(results, &mut stdout)?,
+            "custom" => {
+                output_config.write(results, &mut stdout)?;
+                write_cpp_drive_footer(&mut stdout, output_targets)?;
+            }
+            _ => export_table(results, &mut stdout)?,
         }
+        stdout.flush()?;
     } else {
         let file =
             File::create(out).with_context(|| format!("Failed to create output file: {out}"))?;
@@ -493,7 +493,10 @@ pub(super) fn write_results(
 
         match format {
             "json" => export_json(results, &mut writer)?,
-            "csv" => output_config.write(results, &mut writer)?,
+            "custom" => {
+                output_config.write(results, &mut writer)?;
+                write_cpp_drive_footer(&mut writer, output_targets)?;
+            }
             _ => output_config.write(results, &mut writer)?,
         }
         writer.flush()?;
@@ -502,6 +505,35 @@ pub(super) fn write_results(
     }
 
     Ok(())
+}
+
+/// Append the legacy C++ drive footer for baseline-compatible custom output.
+fn write_cpp_drive_footer<W: Write>(writer: &mut W, output_targets: &[char]) -> Result<()> {
+    if output_targets.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(writer)?;
+    writeln!(writer)?;
+    writeln!(
+        writer,
+        "Drives? \t{}\t{}",
+        output_targets.len(),
+        format_cpp_drive_letters(output_targets)
+    )?;
+    writeln!(writer)?;
+    Ok(())
+}
+
+/// Format drive letters using the legacy C++ footer style (for example `D:` or
+/// `C:|D:`).
+#[must_use]
+fn format_cpp_drive_letters(output_targets: &[char]) -> String {
+    output_targets
+        .iter()
+        .map(|drive| format!("{}:", drive.to_ascii_uppercase()))
+        .collect::<Vec<_>>()
+        .join("|")
 }
 
 #[cfg(test)]
@@ -543,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_results_csv_uses_output_config_without_footer() -> Result<()> {
+    fn test_write_results_csv_uses_output_config_without_cpp_footer() -> Result<()> {
         let path = temp_output_path("csv");
         let results = sample_df()?;
         let output_config = OutputConfig::new()
@@ -561,9 +593,41 @@ mod tests {
         )?;
 
         let written = fs::read_to_string(&path)?;
-        let _ = fs::remove_file(&path);
+        drop(fs::remove_file(&path));
 
         assert_eq!(written, "'C:\\Temp\\file.txt';'file.txt'\n");
+        Ok(())
+    }
+
+    #[test]
+    fn test_write_results_custom_file_appends_cpp_drive_footer() -> Result<()> {
+        let path = temp_output_path("txt");
+        let results = sample_df()?;
+        let output_config = OutputConfig::new()
+            .with_columns("path,name")
+            .with_header(false);
+
+        write_results(
+            &results,
+            "custom",
+            &path.to_string_lossy(),
+            &output_config,
+            &['C', 'D'],
+        )?;
+
+        let written = fs::read_to_string(&path)?;
+        drop(fs::remove_file(&path));
+
+        assert_eq!(
+            written,
+            concat!(
+                "\"C:\\Temp\\file.txt\",\"file.txt\"\n",
+                "\n",
+                "\n",
+                "Drives? \t2\tC:|D:\n",
+                "\n"
+            )
+        );
         Ok(())
     }
 
@@ -582,7 +646,7 @@ mod tests {
         )?;
 
         let written = fs::read_to_string(&path)?;
-        let _ = fs::remove_file(&path);
+        drop(fs::remove_file(&path));
 
         assert!(!written.contains("Drives?"));
         assert!(written.contains(r#""C:\\Temp\\file.txt""#));

@@ -2,16 +2,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # path|reason
 crates/uffs-cli/src/commands/search.rs|Search command flow remains consolidated pending a command split outside Wave 3C.
-crates/uffs-core/src/compiled_pattern.rs|Compiled pattern IR and lowering helpers remain co-located pending a pattern split outside Wave 3C.
-crates/uffs-core/src/index_search.rs|Optimized MftIndex search execution remains together for hot-path review pending a search split outside Wave 3C.
-crates/uffs-core/src/output.rs|Output schema and formatting helpers remain together pending an output split outside Wave 3C.
-crates/uffs-core/src/path_resolver.rs|Resolver variants and shared caching logic remain together pending a path split outside Wave 3C.
-crates/uffs-core/src/tree.rs|Tree traversal logic and public metric API remain co-located for hot-path review.
 crates/uffs-diag/src/bin/compare_scan_parity.rs|Diagnostic parity pipeline remains consolidated because the end-to-end workflow is reviewed as one unit.
-crates/uffs-mft/src/commands/windows.rs|Windows command entry points remain consolidated pending a dedicated command split outside Wave 3C.
-crates/uffs-mft/src/io/parser.rs|Windows parser adapters and direct-to-index fast paths remain together pending a parser split outside Wave 3C.
-crates/uffs-mft/src/io/readers.rs|Concrete reader types and shared async orchestration remain together pending the larger I/O decomposition outside Wave 3C.
-crates/uffs-mft/src/ntfs.rs|Packed NTFS structs, constants, and decoding helpers remain co-located for layout-audit review pending an NTFS split outside Wave 3C.
-crates/uffs-mft/src/platform.rs|Windows FFI wrappers and platform utilities remain in one audited surface pending a structural split outside Wave 3C.
-crates/uffs-mft/src/raw.rs|Raw snapshot format, persistence, and validation helpers remain together as one audited surface pending a split outside Wave 3C.
-crates/uffs-mft/src/reader.rs|Reader configuration, orchestration, and benchmarks still share one audited surface.
+crates/uffs-mft/src/reader/multi_drive.rs|Multi-drive orchestration, cache refresh, and USN update helpers remain co-located pending a dedicated split outside Wave 3C.

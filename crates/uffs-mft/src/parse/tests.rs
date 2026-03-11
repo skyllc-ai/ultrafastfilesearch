@@ -1,3 +1,5 @@
+//! Tests for parse-module helpers, record decoding, and regressions.
+
 use super::*;
 use crate::ntfs::{ExtendedStandardInfo, FILE_RECORD_MAGIC, NameInfo};
 

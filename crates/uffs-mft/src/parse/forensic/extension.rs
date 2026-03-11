@@ -1,3 +1,5 @@
+//! Extension-record forensic parsing for merge-oriented handling.
+
 use super::super::{
     ExtensionAttributes, ParseResult, parse_data_attribute_full, parse_file_name_full,
 };
@@ -15,6 +17,10 @@ use crate::ntfs::{
 #[expect(
     clippy::cognitive_complexity,
     reason = "extension parsing mirrors base attribute dispatch for parity"
+)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "kept separate from the dispatching entry point for forensic readability"
 )]
 pub(super) fn parse_extension_record(
     data: &[u8],
@@ -369,12 +375,12 @@ pub(super) fn parse_extension_record(
         offset += attr_header.length as usize;
     }
 
-    return ParseResult::Extension(ExtensionAttributes {
+    ParseResult::Extension(ExtensionAttributes {
         base_frs: base_frs_value,
         extension_frs: frs,
         names,
         streams,
         dir_index_size,
         dir_index_allocated,
-    });
+    })
 }

@@ -1,3 +1,5 @@
+//! Helpers for selecting the preferred primary file name during parsing.
+
 use crate::ntfs::NameInfo;
 
 /// Tracks the best primary name during parsing.

@@ -1,3 +1,5 @@
+//! Placeholder record creation for missing parent-directory references.
+
 use tracing::{debug, info, warn};
 
 use super::ParsedRecord;
@@ -5,11 +7,11 @@ use crate::ntfs::ExtendedStandardInfo;
 
 /// Creates a placeholder record for a missing parent directory.
 ///
-/// This matches established behavior where the `at()` method creates placeholder
-/// records for any referenced FRS that hasn't been seen yet. When a file
-/// references a parent directory that wasn't parsed (e.g., marked as not-in-use
-/// in bitmap but still referenced), we create a placeholder to ensure path
-/// resolution can complete.
+/// This matches established behavior where the `at()` method creates
+/// placeholder records for any referenced FRS that hasn't been seen yet. When a
+/// file references a parent directory that wasn't parsed (e.g., marked as
+/// not-in-use in bitmap but still referenced), we create a placeholder to
+/// ensure path resolution can complete.
 ///
 /// # Arguments
 ///
