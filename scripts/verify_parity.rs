@@ -174,6 +174,9 @@ fn main() {
         golden_hashes.line_count, rust_hashes.line_count
     );
     println!();
+    println!("  TIP: If timestamps are off by exactly 1 hour, try the other TZ offset:");
+    println!("       --tz -7 (PDT) or --tz -8 (PST)");
+    println!();
 
     // Show SORTED diffs first — this is the meaningful comparison
     // (Ordered diffs are just noise from different traversal order)
@@ -267,9 +270,10 @@ fn parse_tz_offset(args: &[String]) -> Option<i32> {
     None // Auto-detect from baseline
 }
 
-/// Auto-detect timezone offset from C++ baseline file.
-/// Finds the MOST RECENT date (capture date) and determines PDT vs PST.
-/// Pacific DST: 2nd Sunday of March to 1st Sunday of November
+/// Auto-detect timezone offset by extracting an hour from the baseline.
+/// We look at the hour values and try both -7 and -8, picking the one
+/// that's more likely based on typical Pacific time patterns.
+/// If baseline hour is 00-07, it was likely recorded in Pacific time.
 fn detect_tz_from_baseline(baseline_path: &Path) -> i32 {
     let file = match std::fs::File::open(baseline_path) {
         Ok(f) => f,
@@ -277,40 +281,95 @@ fn detect_tz_from_baseline(baseline_path: &Path) -> i32 {
     };
     let reader = std::io::BufReader::new(file);
 
-    let mut most_recent: Option<(i32, u32, u32)> = None;
+    // Find the most recent date and extract hour info
+    let mut most_recent_date: Option<(i32, u32, u32)> = None;
+    let mut sample_hour: Option<u32> = None;
 
-    // Scan first 20 lines to find the most recent date (likely capture date)
     for line in std::io::BufRead::lines(reader).take(20).flatten() {
-        for date in extract_all_dates_from_line(&line) {
-            if let Some(current) = most_recent {
-                // Keep the more recent date
-                if date.0 > current.0
-                    || (date.0 == current.0 && date.1 > current.1)
-                    || (date.0 == current.0 && date.1 == current.1 && date.2 > current.2)
+        for (year, month, day, hour) in extract_all_datetimes_from_line(&line) {
+            if let Some((cy, cm, cd)) = most_recent_date {
+                if year > cy
+                    || (year == cy && month > cm)
+                    || (year == cy && month == cm && day > cd)
                 {
-                    most_recent = Some(date);
+                    most_recent_date = Some((year, month, day));
+                    sample_hour = Some(hour);
                 }
             } else {
-                most_recent = Some(date);
+                most_recent_date = Some((year, month, day));
+                sample_hour = Some(hour);
             }
         }
     }
 
-    if let Some((year, month, day)) = most_recent {
+    if let Some((year, month, day)) = most_recent_date {
+        // Use calendar-based DST rules for Pacific time
         let offset = pacific_tz_offset(year, month, day);
-        println!(
-            "Auto-detected timezone from capture date {}-{:02}-{:02}: {} ({})",
-            year,
-            month,
-            day,
-            offset,
-            if offset == -7 { "PDT" } else { "PST" }
-        );
+        let tz_name = if offset == -7 { "PDT" } else { "PST" };
+
+        if let Some(hour) = sample_hour {
+            println!(
+                "Auto-detected from capture {}-{:02}-{:02} {:02}:xx → {} ({})",
+                year, month, day, hour, offset, tz_name
+            );
+        } else {
+            println!(
+                "Auto-detected from capture date {}-{:02}-{:02}: {} ({})",
+                year, month, day, offset, tz_name
+            );
+        }
         return offset;
     }
 
     println!("Could not auto-detect timezone, defaulting to -7 (PDT)");
     -7
+}
+
+/// Extract ALL (year, month, day, hour) tuples from a CSV line.
+fn extract_all_datetimes_from_line(line: &str) -> Vec<(i32, u32, u32, u32)> {
+    let mut results = Vec::new();
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    // Pattern: YYYY-MM-DD HH:MM:SS (19 chars)
+    while i + 19 <= bytes.len() {
+        if bytes[i].is_ascii_digit()
+            && bytes[i + 1].is_ascii_digit()
+            && bytes[i + 2].is_ascii_digit()
+            && bytes[i + 3].is_ascii_digit()
+            && bytes[i + 4] == b'-'
+            && bytes[i + 5].is_ascii_digit()
+            && bytes[i + 6].is_ascii_digit()
+            && bytes[i + 7] == b'-'
+            && bytes[i + 8].is_ascii_digit()
+            && bytes[i + 9].is_ascii_digit()
+            && bytes[i + 10] == b' '
+            && bytes[i + 11].is_ascii_digit()
+            && bytes[i + 12].is_ascii_digit()
+            && bytes[i + 13] == b':'
+        {
+            if let (Ok(year), Ok(month), Ok(day), Ok(hour)) = (
+                line[i..i + 4].parse::<i32>(),
+                line[i + 5..i + 7].parse::<u32>(),
+                line[i + 8..i + 10].parse::<u32>(),
+                line[i + 11..i + 13].parse::<u32>(),
+            ) {
+                if year >= 2000
+                    && year <= 2100
+                    && month >= 1
+                    && month <= 12
+                    && day >= 1
+                    && day <= 31
+                    && hour <= 23
+                {
+                    results.push((year, month, day, hour));
+                }
+            }
+            i += 19;
+        } else {
+            i += 1;
+        }
+    }
+    results
 }
 
 /// Extract ALL (year, month, day) tuples from a CSV line.
