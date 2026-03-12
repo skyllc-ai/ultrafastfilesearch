@@ -75,15 +75,22 @@ fn main() {
     // Resolve the actual drive data directory (supports drive_<letter> subdirs)
     let drive_dir = resolve_drive_dir(&base_dir, &drive_lower);
 
-    // Parse optional --tz argument (default: -7 for PDT)
+    // Parse optional arguments
     let tz_offset = parse_tz_offset(&args);
+    let custom_bin = parse_bin_path(&args);
 
     // Determine mode
     let mode = &args[3];
     let rust_output = match mode.as_str() {
         "--regenerate" => {
             // Regenerate mode: run uffs to produce fresh output
-            regenerate_rust_output(&drive_dir, &drive_letter, &drive_lower, tz_offset)
+            regenerate_rust_output(
+                &drive_dir,
+                &drive_letter,
+                &drive_lower,
+                tz_offset,
+                custom_bin.as_deref(),
+            )
         }
         "--rust" => {
             // Default mode: use provided Rust output file
@@ -212,13 +219,14 @@ fn find_golden_baseline_file(data_dir: &Path, drive_lower: &str) -> PathBuf {
 
 fn print_usage(prog: &str) {
     eprintln!(
-        "Usage: {} <base_dir> <drive_letter> [--rust <rust_output> | --regenerate] [--tz OFFSET]",
+        "Usage: {} <base_dir> <drive_letter> [--rust <rust_output> | --regenerate] [OPTIONS]",
         prog
     );
     eprintln!();
     eprintln!("Options:");
     eprintln!("  --tz OFFSET   Timezone offset in hours (default: -7 for PDT)");
     eprintln!("                Use -7 for PDT (Pacific Daylight), -8 for PST (Pacific Standard)");
+    eprintln!("  --bin PATH    Path to uffs binary (default: auto-detect from cargo metadata)");
     eprintln!();
     eprintln!("The script auto-detects the drive data directory:");
     eprintln!("  - New layout: <base_dir>/drive_<letter>/  (e.g., uffs_data/drive_d/)");
@@ -227,6 +235,10 @@ fn print_usage(prog: &str) {
     eprintln!("Examples:");
     eprintln!("  {} /Users/rnio/uffs_data F --regenerate", prog);
     eprintln!("  {} /Users/rnio/uffs_data F --regenerate --tz -8", prog);
+    eprintln!(
+        "  {} /Users/rnio/uffs_data F --regenerate --bin ./target/release/uffs",
+        prog
+    );
     eprintln!(
         "  {} /Users/rnio/uffs_data D --rust /tmp/rust_output.txt",
         prog
@@ -243,11 +255,22 @@ fn parse_tz_offset(args: &[String]) -> i32 {
     -7 // Default to PDT
 }
 
+/// Parse --bin argument from command line. Returns None if not specified.
+fn parse_bin_path(args: &[String]) -> Option<PathBuf> {
+    for i in 0..args.len() {
+        if args[i] == "--bin" && i + 1 < args.len() {
+            return Some(PathBuf::from(&args[i + 1]));
+        }
+    }
+    None
+}
+
 fn regenerate_rust_output(
     data_dir: &Path,
     drive_letter: &str,
     drive_lower: &str,
     tz_offset: i32,
+    custom_bin: Option<&Path>,
 ) -> PathBuf {
     let tz_str = format!("{}", tz_offset);
     let tz_label = match tz_offset {
@@ -271,31 +294,42 @@ fn regenerate_rust_output(
     }
     println!("MFT file:     {}", mft_file.display());
 
-    // Locate authoritative workspace release artifact
-    let artifact = find_workspace_release_artifact();
-    println!(
-        "Workspace root:        {}",
-        artifact.workspace_root.display()
-    );
-    println!(
-        "Cargo target dir:      {}",
-        artifact.cargo_target_dir.display()
-    );
-    println!("UFFS release artifact: {}", artifact.binary_path.display());
-    println!(
-        "Artifact provenance:   cargo metadata target_directory → release/{}",
-        uffs_binary_name()
-    );
-    if let Some(target_dir_warning) = artifact.target_dir_warning {
-        println!("Target dir note:       {target_dir_warning}");
-    }
+    // Determine which binary to use
+    let binary_path = if let Some(custom) = custom_bin {
+        println!("Using custom binary:   {}", custom.display());
+        if !custom.exists() {
+            eprintln!("ERROR: Custom binary not found: {}", custom.display());
+            std::process::exit(1);
+        }
+        custom.to_path_buf()
+    } else {
+        // Locate authoritative workspace release artifact
+        let artifact = find_workspace_release_artifact();
+        println!(
+            "Workspace root:        {}",
+            artifact.workspace_root.display()
+        );
+        println!(
+            "Cargo target dir:      {}",
+            artifact.cargo_target_dir.display()
+        );
+        println!("UFFS release artifact: {}", artifact.binary_path.display());
+        println!(
+            "Artifact provenance:   cargo metadata target_directory → release/{}",
+            uffs_binary_name()
+        );
+        if let Some(target_dir_warning) = artifact.target_dir_warning {
+            println!("Target dir note:       {target_dir_warning}");
+        }
+        artifact.binary_path
+    };
     println!();
 
     // Generate output
     let rust_output = data_dir.join(format!("verify_rust_{}.txt", drive_lower));
     println!("Running uffs scan (baseline-compatible algorithms)...");
 
-    let status = Command::new(&artifact.binary_path)
+    let status = Command::new(&binary_path)
         .args([
             "*",
             "--mft-file",
