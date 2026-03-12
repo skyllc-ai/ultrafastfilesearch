@@ -627,80 +627,72 @@ fn collect_sorted_diffs(file_a: &Path, file_b: &Path) -> (Vec<String>, Vec<Strin
     (only_a, only_b)
 }
 
-/// Show sampled sorted differences: first 5, last 5, and 10 random from middle.
+/// Show side-by-side comparison of sorted files at same line positions.
+/// Assumes line counts match. Shows first 5, last 5, and 10 random from middle.
 fn show_first_sorted_diffs(file_a: &Path, file_b: &Path) {
-    let (only_baseline, only_rust) = collect_sorted_diffs(file_a, file_b);
+    let sorted_baseline = read_sorted_lines(file_a);
+    let sorted_rust = read_sorted_lines(file_b);
 
-    if only_baseline.is_empty() && only_rust.is_empty() {
-        println!("No sorted differences found.");
+    let n = sorted_baseline.len().min(sorted_rust.len());
+    if n == 0 {
+        println!("No lines to compare.");
         return;
     }
 
-    println!("\n=== SORTED DIFF SUMMARY ===");
-    println!("  Lines only in BASELINE: {}", only_baseline.len());
-    println!("  Lines only in RUST:     {}", only_rust.len());
+    println!("\n=== SORTED SIDE-BY-SIDE COMPARISON ===");
+    println!("  Baseline lines: {}", sorted_baseline.len());
+    println!("  Rust lines:     {}", sorted_rust.len());
 
-    // Show baseline-only samples
-    if !only_baseline.is_empty() {
-        println!("\n--- BASELINE ONLY (first 5, last 5, 10 random middle) ---");
-        show_sampled_lines(&only_baseline, "BASELINE");
-    }
-
-    // Show rust-only samples
-    if !only_rust.is_empty() {
-        println!("\n--- RUST ONLY (first 5, last 5, 10 random middle) ---");
-        show_sampled_lines(&only_rust, "RUST");
-    }
-}
-
-fn show_sampled_lines(lines: &[String], label: &str) {
-    let n = lines.len();
     let first_n = 5.min(n);
     let last_n = 5.min(n);
 
-    // First 5
-    println!("\n  First {}:", first_n);
-    for line in lines.iter().take(first_n) {
-        println!("    {}", line);
+    // First 5 lines side by side
+    println!("\n--- FIRST {} LINES (sorted) ---", first_n);
+    for i in 0..first_n {
+        println!("  Line {}:", i + 1);
+        println!("    BASELINE: {}", sorted_baseline[i]);
+        println!("    RUST:     {}", sorted_rust[i]);
     }
 
-    if n <= 10 {
-        return;
-    }
-
-    // Last 5
-    let last_start = n.saturating_sub(last_n);
-    if last_start > first_n {
-        println!("\n  Last {}:", last_n);
-        for line in lines.iter().skip(last_start) {
-            println!("    {}", line);
+    // Last 5 lines side by side
+    if n > 10 {
+        let last_start = n.saturating_sub(last_n);
+        println!("\n--- LAST {} LINES (sorted) ---", last_n);
+        for i in last_start..n {
+            println!("  Line {}:", i + 1);
+            println!("    BASELINE: {}", sorted_baseline[i]);
+            println!("    RUST:     {}", sorted_rust[i]);
         }
     }
 
-    // 10 random from middle
+    // 10 random line positions from middle
     if n > 10 {
         let middle_start = first_n;
-        let middle_end = last_start;
+        let middle_end = n.saturating_sub(last_n);
         if middle_end > middle_start {
-            let middle: Vec<_> = lines[middle_start..middle_end].to_vec();
-            let sample_count = 10.min(middle.len());
-            if sample_count > 0 {
-                println!(
-                    "\n  Random {} from middle ({} label={}):",
-                    sample_count,
-                    middle.len(),
-                    label
-                );
-                let mut rng_seed = n as u64;
-                let mut indices: Vec<usize> = (0..middle.len()).collect();
-                for i in (1..indices.len()).rev() {
-                    rng_seed = rng_seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-                    let j = (rng_seed as usize) % (i + 1);
-                    indices.swap(i, j);
-                }
-                for &idx in indices.iter().take(sample_count) {
-                    println!("    {}", middle[idx]);
-                }
+            let middle_count = middle_end - middle_start;
+            let sample_count = 10.min(middle_count);
+
+            println!(
+                "\n--- {} RANDOM LINES FROM MIDDLE (sorted, lines {}-{}) ---",
+                sample_count,
+                middle_start + 1,
+                middle_end
+            );
+
+            // Deterministic shuffle using LCG
+            let mut rng_seed = n as u64;
+            let mut indices: Vec<usize> = (middle_start..middle_end).collect();
+            for i in (1..indices.len()).rev() {
+                rng_seed = rng_seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let j = (rng_seed as usize) % (i + 1);
+                indices.swap(i, j);
+            }
+
+            for &idx in indices.iter().take(sample_count) {
+                println!("  Line {}:", idx + 1);
+                println!("    BASELINE: {}", sorted_baseline[idx]);
+                println!("    RUST:     {}", sorted_rust[idx]);
             }
         }
     }
