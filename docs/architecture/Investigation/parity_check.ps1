@@ -97,21 +97,28 @@ foreach ($Drive in $Drives) {
     # ── 2. Run Rust ───────────────────────────────────────────────────────────
     Write-Host "  [2/4] Running Rust scan..." -NoNewline
     $rustStart = Get-Date
+    $rustLog = Join-Path $OutDir "parity_rust_${driveLower}_log_${timestamp}.txt"
     try {
-        $savedExp = $env:UFFS_EXPERIMENTAL
-        $env:UFFS_EXPERIMENTAL = "1"
-        & cmd.exe /c "`"$UffsExe`" `"*`" --drive $Drive --parse-algo=cpp_port --tree-algo=cpp --io-algo=cpp --chunk-algo=cpp --no-cache > `"$rustRaw`" 2>nul"
+        & cmd.exe /c "`"$UffsExe`" `"*`" --drive $Drive --no-cache > `"$rustRaw`" 2> `"$rustLog`""
         $rustExit = $LASTEXITCODE
-        $env:UFFS_EXPERIMENTAL = $savedExp
     } catch {
         $rustExit = -1
-        $env:UFFS_EXPERIMENTAL = $savedExp
     }
     $rustMs = [math]::Round((New-TimeSpan -Start $rustStart -End (Get-Date)).TotalMilliseconds)
     if ($rustExit -eq 0) {
         Write-Host " ✅ ($rustMs ms)" -ForegroundColor Green
     } else {
         Write-Host " ❌ (exit: $rustExit, $rustMs ms)" -ForegroundColor Red
+        # Show stderr log on failure
+        if (Test-Path -LiteralPath $rustLog) {
+            $logContent = Get-Content -LiteralPath $rustLog -TotalCount 10
+            if ($logContent) {
+                Write-Host "    Error log:" -ForegroundColor Yellow
+                foreach ($line in $logContent) {
+                    Write-Host "      $line" -ForegroundColor DarkYellow
+                }
+            }
+        }
     }
 
     # ── 3. Sort both outputs alphabetically ───────────────────────────────────
