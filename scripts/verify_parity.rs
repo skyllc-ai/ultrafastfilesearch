@@ -75,12 +75,15 @@ fn main() {
     // Resolve the actual drive data directory (supports drive_<letter> subdirs)
     let drive_dir = resolve_drive_dir(&base_dir, &drive_lower);
 
+    // Parse optional --tz argument (default: -7 for PDT)
+    let tz_offset = parse_tz_offset(&args);
+
     // Determine mode
     let mode = &args[3];
     let rust_output = match mode.as_str() {
         "--regenerate" => {
             // Regenerate mode: run uffs to produce fresh output
-            regenerate_rust_output(&drive_dir, &drive_letter, &drive_lower)
+            regenerate_rust_output(&drive_dir, &drive_letter, &drive_lower, tz_offset)
         }
         "--rust" => {
             // Default mode: use provided Rust output file
@@ -208,32 +211,49 @@ fn find_golden_baseline_file(data_dir: &Path, drive_lower: &str) -> PathBuf {
 
 fn print_usage(prog: &str) {
     eprintln!(
-        "Usage: {} <base_dir> <drive_letter> [--rust <rust_output> | --regenerate]",
+        "Usage: {} <base_dir> <drive_letter> [--rust <rust_output> | --regenerate] [--tz OFFSET]",
         prog
     );
+    eprintln!();
+    eprintln!("Options:");
+    eprintln!("  --tz OFFSET   Timezone offset in hours (default: -7 for PDT)");
+    eprintln!("                Use -7 for PDT (Pacific Daylight), -8 for PST (Pacific Standard)");
     eprintln!();
     eprintln!("The script auto-detects the drive data directory:");
     eprintln!("  - New layout: <base_dir>/drive_<letter>/  (e.g., uffs_data/drive_d/)");
     eprintln!("  - Legacy:     <base_dir>/                 (files directly in base)");
     eprintln!();
     eprintln!("Examples:");
-    eprintln!(
-        "  {} /Users/rnio/uffs_data D --regenerate",
-        prog
-    );
-    eprintln!(
-        "  {} /Users/rnio/uffs_data F --regenerate",
-        prog
-    );
-    eprintln!(
-        "  {} /Users/rnio/uffs_data D --rust /tmp/rust_output.txt",
-        prog
-    );
+    eprintln!("  {} /Users/rnio/uffs_data F --regenerate", prog);
+    eprintln!("  {} /Users/rnio/uffs_data F --regenerate --tz -8", prog);
+    eprintln!("  {} /Users/rnio/uffs_data D --rust /tmp/rust_output.txt", prog);
 }
 
-fn regenerate_rust_output(data_dir: &Path, drive_letter: &str, drive_lower: &str) -> PathBuf {
+/// Parse --tz argument from command line. Default: -7 (PDT).
+fn parse_tz_offset(args: &[String]) -> i32 {
+    for i in 0..args.len() {
+        if args[i] == "--tz" && i + 1 < args.len() {
+            return args[i + 1].parse().unwrap_or(-7);
+        }
+    }
+    -7 // Default to PDT
+}
+
+fn regenerate_rust_output(
+    data_dir: &Path,
+    drive_letter: &str,
+    drive_lower: &str,
+    tz_offset: i32,
+) -> PathBuf {
+    let tz_str = format!("{}", tz_offset);
+    let tz_label = match tz_offset {
+        -7 => "PDT (Pacific Daylight)",
+        -8 => "PST (Pacific Standard)",
+        _ => "custom",
+    };
+
     println!("Mode: --regenerate");
-    println!("Using --tz-offset -8 (PST) to match the golden baseline timezone.");
+    println!("Using --tz-offset {} ({}) to match the golden baseline timezone.", tz_offset, tz_label);
     println!();
 
     // Locate MFT file
@@ -276,7 +296,7 @@ fn regenerate_rust_output(data_dir: &Path, drive_letter: &str, drive_lower: &str
             "--drive",
             drive_letter,
             "--tz-offset",
-            "-8",
+            &tz_str,
             "--out",
             &rust_output.to_string_lossy(),
         ])
