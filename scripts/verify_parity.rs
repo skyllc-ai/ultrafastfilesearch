@@ -270,54 +270,89 @@ fn parse_tz_offset(args: &[String]) -> Option<i32> {
     None // Auto-detect from baseline
 }
 
-/// Auto-detect timezone offset by extracting an hour from the baseline.
-/// We look at the hour values and try both -7 and -8, picking the one
-/// that's more likely based on typical Pacific time patterns.
-/// If baseline hour is 00-07, it was likely recorded in Pacific time.
+/// Auto-detect timezone offset from trial_run.md metadata file.
+/// Falls back to baseline file scanning if trial_run.md not found.
+/// trial_run.md contains: **Started:** 2026-03-11T22:18:32.7876612-07:00
 fn detect_tz_from_baseline(baseline_path: &Path) -> i32 {
+    // First, try to read trial_run.md in the same directory
+    let drive_dir = baseline_path.parent().unwrap_or(baseline_path);
+    let trial_run_path = drive_dir.join("trial_run.md");
+
+    if let Some(offset) = detect_tz_from_trial_run(&trial_run_path) {
+        return offset;
+    }
+
+    // Fallback: scan baseline for most recent date
+    detect_tz_from_baseline_fallback(baseline_path)
+}
+
+/// Parse trial_run.md for the Started timestamp with explicit timezone.
+/// Format: **Started:** 2026-03-11T22:18:32.7876612-07:00
+fn detect_tz_from_trial_run(path: &Path) -> Option<i32> {
+    let content = std::fs::read_to_string(path).ok()?;
+
+    // Look for pattern: **Started:** YYYY-MM-DDTHH:MM:SS...+/-HH:00
+    for line in content.lines() {
+        if line.contains("**Started:**") {
+            // Find the timezone offset at the end: -07:00 or -08:00
+            if let Some(tz_pos) = line.rfind('-') {
+                let tz_part = &line[tz_pos..];
+                if tz_part.starts_with("-07:00") {
+                    println!("Auto-detected from trial_run.md: -7 (PDT)");
+                    println!("  {}", line.trim());
+                    return Some(-7);
+                } else if tz_part.starts_with("-08:00") {
+                    println!("Auto-detected from trial_run.md: -8 (PST)");
+                    println!("  {}", line.trim());
+                    return Some(-8);
+                }
+            }
+            // Also check for positive offsets (unlikely for Pacific but be safe)
+            if let Some(tz_pos) = line.rfind('+') {
+                let tz_part = &line[tz_pos..];
+                if let Ok(hours) = tz_part[1..3].parse::<i32>() {
+                    println!("Auto-detected from trial_run.md: +{}", hours);
+                    println!("  {}", line.trim());
+                    return Some(hours);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Fallback: scan baseline CSV for most recent datetime.
+fn detect_tz_from_baseline_fallback(baseline_path: &Path) -> i32 {
     let file = match std::fs::File::open(baseline_path) {
         Ok(f) => f,
         Err(_) => return -7,
     };
     let reader = std::io::BufReader::new(file);
 
-    // Find the most recent date and extract hour info
     let mut most_recent_date: Option<(i32, u32, u32)> = None;
-    let mut sample_hour: Option<u32> = None;
 
     for line in std::io::BufRead::lines(reader).take(20).flatten() {
-        for (year, month, day, hour) in extract_all_datetimes_from_line(&line) {
+        for (year, month, day, _hour) in extract_all_datetimes_from_line(&line) {
             if let Some((cy, cm, cd)) = most_recent_date {
                 if year > cy
                     || (year == cy && month > cm)
                     || (year == cy && month == cm && day > cd)
                 {
                     most_recent_date = Some((year, month, day));
-                    sample_hour = Some(hour);
                 }
             } else {
                 most_recent_date = Some((year, month, day));
-                sample_hour = Some(hour);
             }
         }
     }
 
     if let Some((year, month, day)) = most_recent_date {
-        // Use calendar-based DST rules for Pacific time
         let offset = pacific_tz_offset(year, month, day);
         let tz_name = if offset == -7 { "PDT" } else { "PST" };
-
-        if let Some(hour) = sample_hour {
-            println!(
-                "Auto-detected from capture {}-{:02}-{:02} {:02}:xx → {} ({})",
-                year, month, day, hour, offset, tz_name
-            );
-        } else {
-            println!(
-                "Auto-detected from capture date {}-{:02}-{:02}: {} ({})",
-                year, month, day, offset, tz_name
-            );
-        }
+        println!(
+            "Auto-detected from baseline date {}-{:02}-{:02}: {} ({}) [fallback]",
+            year, month, day, offset, tz_name
+        );
         return offset;
     }
 
