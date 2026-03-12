@@ -105,7 +105,7 @@ tracing-appender = "0.2.4"
 
 # ───── Time ─────
 # Note: chrono version constrained by Polars git dependency (requires <= 0.4.41)
-chrono = { version = "0.4.41", features = ["serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
 dirs-next = "2.0.0"
 
 # ───── Testing & Benchmarking ─────
