@@ -498,7 +498,10 @@ fn sha256_for_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// Collect all ordered differences between two files.
+// Note: ordered diff functions kept for debugging but not used in main flow.
+// Sorted comparison is the meaningful one since C++ and Rust walk differently.
+
+#[allow(dead_code)]
 fn collect_ordered_diffs(
     file_a: &Path,
     file_b: &Path,
@@ -520,7 +523,7 @@ fn collect_ordered_diffs(
     diffs
 }
 
-/// Show sampled differences: first 5, last 5, and 10 random from middle.
+#[allow(dead_code)]
 fn show_first_ordered_diffs(file_a: &Path, file_b: &Path) {
     let diffs = collect_ordered_diffs(file_a, file_b);
 
@@ -574,6 +577,7 @@ fn show_first_ordered_diffs(file_a: &Path, file_b: &Path) {
     }
 }
 
+#[allow(dead_code)]
 fn print_diff_pair(line_num: usize, baseline: Option<&str>, rust: Option<&str>) {
     match (baseline, rust) {
         (Some(b), Some(r)) => {
@@ -594,6 +598,7 @@ fn print_diff_pair(line_num: usize, baseline: Option<&str>, rust: Option<&str>) 
 }
 
 /// Collect all sorted multiset differences.
+#[allow(dead_code)]
 fn collect_sorted_diffs(file_a: &Path, file_b: &Path) -> (Vec<String>, Vec<String>) {
     let lines_a = read_sorted_lines(file_a);
     let lines_b = read_sorted_lines(file_b);
@@ -627,8 +632,9 @@ fn collect_sorted_diffs(file_a: &Path, file_b: &Path) -> (Vec<String>, Vec<Strin
     (only_a, only_b)
 }
 
-/// Show side-by-side comparison of sorted files at same line positions.
-/// Assumes line counts match. Shows first 5, last 5, and 10 random from middle.
+/// Show side-by-side comparison of DIFFERENT lines from sorted files.
+/// Only shows lines where baseline != rust. First 5 diffs, last 5 diffs, 10
+/// random from middle.
 fn show_first_sorted_diffs(file_a: &Path, file_b: &Path) {
     let sorted_baseline = read_sorted_lines(file_a);
     let sorted_rust = read_sorted_lines(file_b);
@@ -639,57 +645,68 @@ fn show_first_sorted_diffs(file_a: &Path, file_b: &Path) {
         return;
     }
 
-    println!("\n=== SORTED SIDE-BY-SIDE COMPARISON ===");
+    // Collect indices of lines that differ
+    let diff_indices: Vec<usize> = (0..n)
+        .filter(|&i| sorted_baseline[i] != sorted_rust[i])
+        .collect();
+
+    println!("\n=== SORTED SIDE-BY-SIDE COMPARISON (differences only) ===");
     println!("  Baseline lines: {}", sorted_baseline.len());
     println!("  Rust lines:     {}", sorted_rust.len());
+    println!("  Lines that differ: {}", diff_indices.len());
 
-    let first_n = 5.min(n);
-    let last_n = 5.min(n);
-
-    // First 5 lines side by side
-    println!("\n--- FIRST {} LINES (sorted) ---", first_n);
-    for i in 0..first_n {
-        println!("  Line {}:", i + 1);
-        println!("    BASELINE: {}", sorted_baseline[i]);
-        println!("    RUST:     {}", sorted_rust[i]);
+    if diff_indices.is_empty() {
+        println!("\n  ✅ All lines match!");
+        return;
     }
 
-    // Last 5 lines side by side
-    if n > 10 {
-        let last_start = n.saturating_sub(last_n);
-        println!("\n--- LAST {} LINES (sorted) ---", last_n);
-        for i in last_start..n {
-            println!("  Line {}:", i + 1);
-            println!("    BASELINE: {}", sorted_baseline[i]);
-            println!("    RUST:     {}", sorted_rust[i]);
+    let total_diffs = diff_indices.len();
+    let first_n = 5.min(total_diffs);
+    let last_n = 5.min(total_diffs);
+
+    // First 5 differences
+    println!("\n--- FIRST {} DIFFERENCES ---", first_n);
+    for &idx in diff_indices.iter().take(first_n) {
+        println!("  Line {}:", idx + 1);
+        println!("    BASELINE: {}", sorted_baseline[idx]);
+        println!("    RUST:     {}", sorted_rust[idx]);
+    }
+
+    // Last 5 differences (if different from first 5)
+    if total_diffs > 10 {
+        let last_start = total_diffs.saturating_sub(last_n);
+        println!("\n--- LAST {} DIFFERENCES ---", last_n);
+        for &idx in diff_indices.iter().skip(last_start) {
+            println!("  Line {}:", idx + 1);
+            println!("    BASELINE: {}", sorted_baseline[idx]);
+            println!("    RUST:     {}", sorted_rust[idx]);
         }
     }
 
-    // 10 random line positions from middle
-    if n > 10 {
+    // 10 random from middle differences
+    if total_diffs > 10 {
         let middle_start = first_n;
-        let middle_end = n.saturating_sub(last_n);
+        let middle_end = total_diffs.saturating_sub(last_n);
         if middle_end > middle_start {
-            let middle_count = middle_end - middle_start;
-            let sample_count = 10.min(middle_count);
+            let middle_diff_indices: Vec<usize> = diff_indices[middle_start..middle_end].to_vec();
+            let sample_count = 10.min(middle_diff_indices.len());
 
             println!(
-                "\n--- {} RANDOM LINES FROM MIDDLE (sorted, lines {}-{}) ---",
+                "\n--- {} RANDOM DIFFERENCES FROM MIDDLE ({} middle diffs) ---",
                 sample_count,
-                middle_start + 1,
-                middle_end
+                middle_diff_indices.len()
             );
 
             // Deterministic shuffle using LCG
-            let mut rng_seed = n as u64;
-            let mut indices: Vec<usize> = (middle_start..middle_end).collect();
-            for i in (1..indices.len()).rev() {
+            let mut rng_seed = total_diffs as u64;
+            let mut shuffled: Vec<usize> = middle_diff_indices;
+            for i in (1..shuffled.len()).rev() {
                 rng_seed = rng_seed.wrapping_mul(6364136223846793005).wrapping_add(1);
                 let j = (rng_seed as usize) % (i + 1);
-                indices.swap(i, j);
+                shuffled.swap(i, j);
             }
 
-            for &idx in indices.iter().take(sample_count) {
+            for &idx in shuffled.iter().take(sample_count) {
                 println!("  Line {}:", idx + 1);
                 println!("    BASELINE: {}", sorted_baseline[idx]);
                 println!("    RUST:     {}", sorted_rust[idx]);
