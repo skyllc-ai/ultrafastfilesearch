@@ -147,25 +147,22 @@ fn main() {
 
     if golden_hashes.sorted_hash == rust_hashes.sorted_hash {
         println!("RESULT: FULL OUTPUT MATCH AFTER LINE-SORT NORMALIZATION");
-        println!("  Exact line order differs, but the complete output line set matches.");
-        println!();
-        show_first_ordered_diffs(&golden_baseline_file, &rust_output);
+        println!("  Exact line order differs (different traversal order), but content matches.");
+        println!("  This is acceptable — C++ and Rust walk the MFT/tree in different orders.");
         std::process::exit(0);
     }
 
     println!("RESULT: STRICT FULL OUTPUT MISMATCH");
-    println!("  Ordered baseline: {}", golden_hashes.ordered_hash);
-    println!("  Ordered Rust:     {}", rust_hashes.ordered_hash);
     println!("  Sorted baseline:  {}", golden_hashes.sorted_hash);
     println!("  Sorted Rust:      {}", rust_hashes.sorted_hash);
     println!(
-        "  Line count diff:  {} (baseline) vs {} (Rust)",
+        "  Line count:       {} (baseline) vs {} (Rust)",
         golden_hashes.line_count, rust_hashes.line_count
     );
     println!();
 
-    show_first_ordered_diffs(&golden_baseline_file, &rust_output);
-    println!();
+    // Show SORTED diffs first — this is the meaningful comparison
+    // (Ordered diffs are just noise from different traversal order)
     show_first_sorted_diffs(&golden_baseline_file, &rust_output);
 
     std::process::exit(1);
@@ -175,7 +172,8 @@ fn main() {
 ///
 /// Supports two directory structures:
 /// 1. New: `<base>/drive_<letter>/` (e.g., `/Users/rnio/uffs_data/drive_d/`)
-/// 2. Legacy: `<base>/` with files directly in base (e.g., `/Users/rnio/uffs_data/D_mft.bin`)
+/// 2. Legacy: `<base>/` with files directly in base (e.g.,
+///    `/Users/rnio/uffs_data/D_mft.bin`)
 fn resolve_drive_dir(base_dir: &Path, drive_lower: &str) -> PathBuf {
     // Try new structure first: base/drive_<letter>/
     let new_style = base_dir.join(format!("drive_{}", drive_lower));
@@ -190,8 +188,8 @@ fn find_golden_baseline_file(data_dir: &Path, drive_lower: &str) -> PathBuf {
     // Try various naming conventions in order of preference
     let candidates = [
         format!("golden_{}.txt", drive_lower),
-        format!("cpp_{}.txt", drive_lower),  // C++ baseline output
-        format!("rust_live_{}.txt", drive_lower),  // Live scan output (when comparing offline)
+        format!("cpp_{}.txt", drive_lower), // C++ baseline output
+        format!("rust_live_{}.txt", drive_lower), // Live scan output (when comparing offline)
     ];
 
     for name in &candidates {
@@ -201,7 +199,10 @@ fn find_golden_baseline_file(data_dir: &Path, drive_lower: &str) -> PathBuf {
         }
     }
 
-    eprintln!("ERROR: Golden baseline file not found in {}", data_dir.display());
+    eprintln!(
+        "ERROR: Golden baseline file not found in {}",
+        data_dir.display()
+    );
     eprintln!("  Checked:");
     for name in &candidates {
         eprintln!("    - {}", name);
@@ -226,7 +227,10 @@ fn print_usage(prog: &str) {
     eprintln!("Examples:");
     eprintln!("  {} /Users/rnio/uffs_data F --regenerate", prog);
     eprintln!("  {} /Users/rnio/uffs_data F --regenerate --tz -8", prog);
-    eprintln!("  {} /Users/rnio/uffs_data D --rust /tmp/rust_output.txt", prog);
+    eprintln!(
+        "  {} /Users/rnio/uffs_data D --rust /tmp/rust_output.txt",
+        prog
+    );
 }
 
 /// Parse --tz argument from command line. Default: -7 (PDT).
@@ -253,7 +257,10 @@ fn regenerate_rust_output(
     };
 
     println!("Mode: --regenerate");
-    println!("Using --tz-offset {} ({}) to match the golden baseline timezone.", tz_offset, tz_label);
+    println!(
+        "Using --tz-offset {} ({}) to match the golden baseline timezone.",
+        tz_offset, tz_label
+    );
     println!();
 
     // Locate MFT file
@@ -492,7 +499,10 @@ fn sha256_for_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
 }
 
 /// Collect all ordered differences between two files.
-fn collect_ordered_diffs(file_a: &Path, file_b: &Path) -> Vec<(usize, Option<String>, Option<String>)> {
+fn collect_ordered_diffs(
+    file_a: &Path,
+    file_b: &Path,
+) -> Vec<(usize, Option<String>, Option<String>)> {
     let lines_a = read_lines(file_a);
     let lines_b = read_lines(file_b);
     let max_len = lines_a.len().max(lines_b.len());
@@ -675,7 +685,12 @@ fn show_sampled_lines(lines: &[String], label: &str) {
             let middle: Vec<_> = lines[middle_start..middle_end].to_vec();
             let sample_count = 10.min(middle.len());
             if sample_count > 0 {
-                println!("\n  Random {} from middle ({} label={}):", sample_count, middle.len(), label);
+                println!(
+                    "\n  Random {} from middle ({} label={}):",
+                    sample_count,
+                    middle.len(),
+                    label
+                );
                 let mut rng_seed = n as u64;
                 let mut indices: Vec<usize> = (0..middle.len()).collect();
                 for i in (1..indices.len()).rev() {
