@@ -268,38 +268,93 @@ fn parse_tz_offset(args: &[String]) -> Option<i32> {
 }
 
 /// Auto-detect timezone offset from C++ baseline file.
-/// Extracts a date from the baseline and determines PDT vs PST based on Pacific
-/// DST rules. Pacific DST: 2nd Sunday of March 2:00 AM to 1st Sunday of
-/// November 2:00 AM
+/// Finds the MOST RECENT date (capture date) and determines PDT vs PST.
+/// Pacific DST: 2nd Sunday of March to 1st Sunday of November
 fn detect_tz_from_baseline(baseline_path: &Path) -> i32 {
-    // Read first few lines to find a data line with a timestamp
     let file = match std::fs::File::open(baseline_path) {
         Ok(f) => f,
-        Err(_) => return -7, // Default to PDT if can't read
+        Err(_) => return -7,
     };
     let reader = std::io::BufReader::new(file);
 
-    for line in std::io::BufRead::lines(reader).take(10).flatten() {
-        // Look for a timestamp pattern: YYYY-MM-DD HH:MM:SS
-        if let Some(date_match) = extract_date_from_line(&line) {
-            let offset = pacific_tz_offset(date_match.0, date_match.1, date_match.2);
-            println!(
-                "Auto-detected timezone from baseline date {}-{:02}-{:02}: {} ({})",
-                date_match.0,
-                date_match.1,
-                date_match.2,
-                offset,
-                if offset == -7 { "PDT" } else { "PST" }
-            );
-            return offset;
+    let mut most_recent: Option<(i32, u32, u32)> = None;
+
+    // Scan first 20 lines to find the most recent date (likely capture date)
+    for line in std::io::BufRead::lines(reader).take(20).flatten() {
+        for date in extract_all_dates_from_line(&line) {
+            if let Some(current) = most_recent {
+                // Keep the more recent date
+                if date.0 > current.0
+                    || (date.0 == current.0 && date.1 > current.1)
+                    || (date.0 == current.0 && date.1 == current.1 && date.2 > current.2)
+                {
+                    most_recent = Some(date);
+                }
+            } else {
+                most_recent = Some(date);
+            }
         }
+    }
+
+    if let Some((year, month, day)) = most_recent {
+        let offset = pacific_tz_offset(year, month, day);
+        println!(
+            "Auto-detected timezone from capture date {}-{:02}-{:02}: {} ({})",
+            year,
+            month,
+            day,
+            offset,
+            if offset == -7 { "PDT" } else { "PST" }
+        );
+        return offset;
     }
 
     println!("Could not auto-detect timezone, defaulting to -7 (PDT)");
     -7
 }
 
-/// Extract (year, month, day) from a CSV line containing a timestamp.
+/// Extract ALL (year, month, day) tuples from a CSV line.
+fn extract_all_dates_from_line(line: &str) -> Vec<(i32, u32, u32)> {
+    let mut dates = Vec::new();
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i + 10 <= bytes.len() {
+        if bytes[i].is_ascii_digit()
+            && bytes[i + 1].is_ascii_digit()
+            && bytes[i + 2].is_ascii_digit()
+            && bytes[i + 3].is_ascii_digit()
+            && bytes[i + 4] == b'-'
+            && bytes[i + 5].is_ascii_digit()
+            && bytes[i + 6].is_ascii_digit()
+            && bytes[i + 7] == b'-'
+            && bytes[i + 8].is_ascii_digit()
+            && bytes[i + 9].is_ascii_digit()
+        {
+            if let (Ok(year), Ok(month), Ok(day)) = (
+                line[i..i + 4].parse::<i32>(),
+                line[i + 5..i + 7].parse::<u32>(),
+                line[i + 8..i + 10].parse::<u32>(),
+            ) {
+                if year >= 2000
+                    && year <= 2100
+                    && month >= 1
+                    && month <= 12
+                    && day >= 1
+                    && day <= 31
+                {
+                    dates.push((year, month, day));
+                }
+            }
+            i += 10; // Skip past this date
+        } else {
+            i += 1;
+        }
+    }
+    dates
+}
+
+/// Extract first (year, month, day) from a CSV line (kept for compatibility).
+#[allow(dead_code)]
 fn extract_date_from_line(line: &str) -> Option<(i32, u32, u32)> {
     // Look for pattern: YYYY-MM-DD (4 digits, dash, 2 digits, dash, 2 digits)
     let bytes = line.as_bytes();
