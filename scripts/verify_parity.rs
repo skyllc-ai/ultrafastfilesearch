@@ -76,13 +76,20 @@ fn main() {
     let drive_dir = resolve_drive_dir(&base_dir, &drive_lower);
 
     // Parse optional arguments
-    let tz_offset = parse_tz_offset(&args);
+    let explicit_tz = parse_tz_offset(&args);
     let custom_bin = parse_bin_path(&args);
 
     // Determine mode
     let mode = &args[3];
     let rust_output = match mode.as_str() {
         "--regenerate" => {
+            // Find baseline first for tz auto-detection
+            let golden_baseline = find_golden_baseline_file(&drive_dir, &drive_lower);
+
+            // Auto-detect or use explicit tz
+            let tz_offset =
+                explicit_tz.unwrap_or_else(|| detect_tz_from_baseline(&golden_baseline));
+
             // Regenerate mode: run uffs to produce fresh output
             regenerate_rust_output(
                 &drive_dir,
@@ -224,8 +231,9 @@ fn print_usage(prog: &str) {
     );
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --tz OFFSET   Timezone offset in hours (default: -7 for PDT)");
-    eprintln!("                Use -7 for PDT (Pacific Daylight), -8 for PST (Pacific Standard)");
+    eprintln!("  --tz OFFSET   Timezone offset in hours (default: auto-detect from baseline)");
+    eprintln!("                Auto-detection uses Pacific time DST rules based on capture date.");
+    eprintln!("                Override with -7 for PDT (Mar-Nov), -8 for PST (Nov-Mar)");
     eprintln!("  --bin PATH    Path to uffs binary (default: auto-detect from cargo metadata)");
     eprintln!();
     eprintln!("The script auto-detects the drive data directory:");
@@ -234,7 +242,10 @@ fn print_usage(prog: &str) {
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  {} /Users/rnio/uffs_data F --regenerate", prog);
-    eprintln!("  {} /Users/rnio/uffs_data F --regenerate --tz -8", prog);
+    eprintln!(
+        "  {} /Users/rnio/uffs_data F --regenerate --tz -8  # override auto-detect",
+        prog
+    );
     eprintln!(
         "  {} /Users/rnio/uffs_data F --regenerate --bin ./target/release/uffs",
         prog
@@ -245,14 +256,95 @@ fn print_usage(prog: &str) {
     );
 }
 
-/// Parse --tz argument from command line. Default: -7 (PDT).
-fn parse_tz_offset(args: &[String]) -> i32 {
+/// Parse --tz argument from command line. Returns None if not specified
+/// (auto-detect).
+fn parse_tz_offset(args: &[String]) -> Option<i32> {
     for i in 0..args.len() {
         if args[i] == "--tz" && i + 1 < args.len() {
-            return args[i + 1].parse().unwrap_or(-7);
+            return Some(args[i + 1].parse().unwrap_or(-7));
         }
     }
-    -7 // Default to PDT
+    None // Auto-detect from baseline
+}
+
+/// Auto-detect timezone offset from C++ baseline file.
+/// Extracts a date from the baseline and determines PDT vs PST based on Pacific
+/// DST rules. Pacific DST: 2nd Sunday of March 2:00 AM to 1st Sunday of
+/// November 2:00 AM
+fn detect_tz_from_baseline(baseline_path: &Path) -> i32 {
+    // Read first few lines to find a data line with a timestamp
+    let file = match std::fs::File::open(baseline_path) {
+        Ok(f) => f,
+        Err(_) => return -7, // Default to PDT if can't read
+    };
+    let reader = std::io::BufReader::new(file);
+
+    for line in std::io::BufRead::lines(reader).take(10).flatten() {
+        // Look for a timestamp pattern: YYYY-MM-DD HH:MM:SS
+        if let Some(date_match) = extract_date_from_line(&line) {
+            let offset = pacific_tz_offset(date_match.0, date_match.1, date_match.2);
+            println!(
+                "Auto-detected timezone from baseline date {}-{:02}-{:02}: {} ({})",
+                date_match.0,
+                date_match.1,
+                date_match.2,
+                offset,
+                if offset == -7 { "PDT" } else { "PST" }
+            );
+            return offset;
+        }
+    }
+
+    println!("Could not auto-detect timezone, defaulting to -7 (PDT)");
+    -7
+}
+
+/// Extract (year, month, day) from a CSV line containing a timestamp.
+fn extract_date_from_line(line: &str) -> Option<(i32, u32, u32)> {
+    // Look for pattern: YYYY-MM-DD (4 digits, dash, 2 digits, dash, 2 digits)
+    let bytes = line.as_bytes();
+    for i in 0..bytes.len().saturating_sub(10) {
+        if bytes[i].is_ascii_digit()
+            && bytes[i + 1].is_ascii_digit()
+            && bytes[i + 2].is_ascii_digit()
+            && bytes[i + 3].is_ascii_digit()
+            && bytes[i + 4] == b'-'
+            && bytes[i + 5].is_ascii_digit()
+            && bytes[i + 6].is_ascii_digit()
+            && bytes[i + 7] == b'-'
+            && bytes[i + 8].is_ascii_digit()
+            && bytes[i + 9].is_ascii_digit()
+        {
+            let year: i32 = line[i..i + 4].parse().ok()?;
+            let month: u32 = line[i + 5..i + 7].parse().ok()?;
+            let day: u32 = line[i + 8..i + 10].parse().ok()?;
+            if year >= 2000 && year <= 2100 && month >= 1 && month <= 12 && day >= 1 && day <= 31 {
+                return Some((year, month, day));
+            }
+        }
+    }
+    None
+}
+
+/// Determine Pacific timezone offset for a given date.
+/// Returns -7 for PDT (Daylight), -8 for PST (Standard).
+/// Pacific DST: 2nd Sunday of March 2:00 AM to 1st Sunday of November 2:00 AM
+fn pacific_tz_offset(year: i32, month: u32, day: u32) -> i32 {
+    // Simple rule: March 15 - November 1 is approximately PDT
+    // More precise would calculate exact Sunday transitions, but this is close
+    // enough
+    let dst_start = (3, 8); // March 8 (earliest 2nd Sunday)
+    let dst_end = (11, 1); // November 1 (earliest 1st Sunday)
+
+    if month > dst_start.0 && month < dst_end.0 {
+        -7 // PDT: April through October
+    } else if month == dst_start.0 && day >= 8 {
+        -7 // PDT: March 8+ (approx 2nd Sunday)
+    } else if month == dst_end.0 && day < 8 {
+        -7 // PDT: November 1-7 (before 1st Sunday ends DST)
+    } else {
+        -8 // PST: November 8+ through early March
+    }
 }
 
 /// Parse --bin argument from command line. Returns None if not specified.
