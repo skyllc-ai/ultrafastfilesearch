@@ -471,93 +471,203 @@ fn sha256_for_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// Show first few differences between the complete ordered outputs of two
-/// files.
-fn show_first_ordered_diffs(file_a: &Path, file_b: &Path) {
+/// Collect all ordered differences between two files.
+fn collect_ordered_diffs(file_a: &Path, file_b: &Path) -> Vec<(usize, Option<String>, Option<String>)> {
     let lines_a = read_lines(file_a);
     let lines_b = read_lines(file_b);
-
-    println!("First 5 differences in full output order:");
-    let mut diff_count = 0;
     let max_len = lines_a.len().max(lines_b.len());
+    let mut diffs = Vec::new();
 
     for index in 0..max_len {
-        if diff_count >= 5 {
-            break;
-        }
-
         match (lines_a.get(index), lines_b.get(index)) {
-            (Some(line_a), Some(line_b)) if line_a == line_b => {}
-            (Some(line_a), Some(line_b)) => {
-                println!("  Line {} baseline: {}", index + 1, truncate(line_a, 120));
-                println!("  Line {} Rust:     {}", index + 1, truncate(line_b, 120));
-                diff_count += 1;
-            }
-            (Some(line_a), None) => {
-                println!(
-                    "  Line {} baseline only: {}",
-                    index + 1,
-                    truncate(line_a, 120)
-                );
-                diff_count += 1;
-            }
-            (None, Some(line_b)) => {
-                println!(
-                    "  Line {} Rust only:     {}",
-                    index + 1,
-                    truncate(line_b, 120)
-                );
-                diff_count += 1;
-            }
+            (Some(a), Some(b)) if a == b => {}
+            (Some(a), Some(b)) => diffs.push((index + 1, Some(a.clone()), Some(b.clone()))),
+            (Some(a), None) => diffs.push((index + 1, Some(a.clone()), None)),
+            (None, Some(b)) => diffs.push((index + 1, None, Some(b.clone()))),
             (None, None) => {}
         }
     }
+    diffs
+}
 
-    if diff_count == 0 {
-        println!("  No ordered differences found after newline normalization.");
+/// Show sampled differences: first 5, last 5, and 10 random from middle.
+fn show_first_ordered_diffs(file_a: &Path, file_b: &Path) {
+    let diffs = collect_ordered_diffs(file_a, file_b);
+
+    if diffs.is_empty() {
+        println!("No ordered differences found.");
+        return;
+    }
+
+    println!("Total ordered differences: {}", diffs.len());
+    println!();
+
+    // First 5
+    let first_n = 5.min(diffs.len());
+    println!("=== FIRST {} DIFFERENCES ===", first_n);
+    for (line_num, baseline, rust) in diffs.iter().take(first_n) {
+        print_diff_pair(*line_num, baseline.as_deref(), rust.as_deref());
+    }
+
+    if diffs.len() <= 10 {
+        return; // Already showed everything
+    }
+
+    // Last 5
+    let last_start = diffs.len().saturating_sub(5);
+    println!("\n=== LAST 5 DIFFERENCES ===");
+    for (line_num, baseline, rust) in diffs.iter().skip(last_start) {
+        print_diff_pair(*line_num, baseline.as_deref(), rust.as_deref());
+    }
+
+    // 10 random from middle (if enough diffs)
+    if diffs.len() > 10 {
+        let middle_start = first_n;
+        let middle_end = last_start;
+        if middle_end > middle_start {
+            println!("\n=== 10 RANDOM MIDDLE DIFFERENCES ===");
+            let middle: Vec<_> = diffs[middle_start..middle_end].to_vec();
+            let sample_count = 10.min(middle.len());
+            let mut rng_seed = diffs.len() as u64; // deterministic seed
+            let mut indices: Vec<usize> = (0..middle.len()).collect();
+            // Simple shuffle with LCG
+            for i in (1..indices.len()).rev() {
+                rng_seed = rng_seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let j = (rng_seed as usize) % (i + 1);
+                indices.swap(i, j);
+            }
+            for &idx in indices.iter().take(sample_count) {
+                let (line_num, baseline, rust) = &middle[idx];
+                print_diff_pair(*line_num, baseline.as_deref(), rust.as_deref());
+            }
+        }
     }
 }
 
-/// Show first few multiset differences after sorting complete output lines.
-fn show_first_sorted_diffs(file_a: &Path, file_b: &Path) {
+fn print_diff_pair(line_num: usize, baseline: Option<&str>, rust: Option<&str>) {
+    match (baseline, rust) {
+        (Some(b), Some(r)) => {
+            println!("  Line {}:", line_num);
+            println!("    BASELINE: {}", b);
+            println!("    RUST:     {}", r);
+        }
+        (Some(b), None) => {
+            println!("  Line {} BASELINE ONLY:", line_num);
+            println!("    {}", b);
+        }
+        (None, Some(r)) => {
+            println!("  Line {} RUST ONLY:", line_num);
+            println!("    {}", r);
+        }
+        (None, None) => {}
+    }
+}
+
+/// Collect all sorted multiset differences.
+fn collect_sorted_diffs(file_a: &Path, file_b: &Path) -> (Vec<String>, Vec<String>) {
     let lines_a = read_sorted_lines(file_a);
     let lines_b = read_sorted_lines(file_b);
 
-    println!("First 5 differences after full-file line sort:");
-    let mut diff_count = 0;
+    let mut only_a = Vec::new();
+    let mut only_b = Vec::new();
 
     let mut ia = 0;
     let mut ib = 0;
 
-    while ia < lines_a.len() && ib < lines_b.len() && diff_count < 5 {
+    while ia < lines_a.len() && ib < lines_b.len() {
         if lines_a[ia] == lines_b[ib] {
             ia += 1;
             ib += 1;
         } else if lines_a[ia] < lines_b[ib] {
-            println!("  Baseline only: {}", truncate(&lines_a[ia], 120));
+            only_a.push(lines_a[ia].clone());
             ia += 1;
-            diff_count += 1;
         } else {
-            println!("  Rust only: {}", truncate(&lines_b[ib], 120));
+            only_b.push(lines_b[ib].clone());
             ib += 1;
-            diff_count += 1;
+        }
+    }
+    while ia < lines_a.len() {
+        only_a.push(lines_a[ia].clone());
+        ia += 1;
+    }
+    while ib < lines_b.len() {
+        only_b.push(lines_b[ib].clone());
+        ib += 1;
+    }
+    (only_a, only_b)
+}
+
+/// Show sampled sorted differences: first 5, last 5, and 10 random from middle.
+fn show_first_sorted_diffs(file_a: &Path, file_b: &Path) {
+    let (only_baseline, only_rust) = collect_sorted_diffs(file_a, file_b);
+
+    if only_baseline.is_empty() && only_rust.is_empty() {
+        println!("No sorted differences found.");
+        return;
+    }
+
+    println!("\n=== SORTED DIFF SUMMARY ===");
+    println!("  Lines only in BASELINE: {}", only_baseline.len());
+    println!("  Lines only in RUST:     {}", only_rust.len());
+
+    // Show baseline-only samples
+    if !only_baseline.is_empty() {
+        println!("\n--- BASELINE ONLY (first 5, last 5, 10 random middle) ---");
+        show_sampled_lines(&only_baseline, "BASELINE");
+    }
+
+    // Show rust-only samples
+    if !only_rust.is_empty() {
+        println!("\n--- RUST ONLY (first 5, last 5, 10 random middle) ---");
+        show_sampled_lines(&only_rust, "RUST");
+    }
+}
+
+fn show_sampled_lines(lines: &[String], label: &str) {
+    let n = lines.len();
+    let first_n = 5.min(n);
+    let last_n = 5.min(n);
+
+    // First 5
+    println!("\n  First {}:", first_n);
+    for line in lines.iter().take(first_n) {
+        println!("    {}", line);
+    }
+
+    if n <= 10 {
+        return;
+    }
+
+    // Last 5
+    let last_start = n.saturating_sub(last_n);
+    if last_start > first_n {
+        println!("\n  Last {}:", last_n);
+        for line in lines.iter().skip(last_start) {
+            println!("    {}", line);
         }
     }
 
-    while ia < lines_a.len() && diff_count < 5 {
-        println!("  Baseline only: {}", truncate(&lines_a[ia], 120));
-        ia += 1;
-        diff_count += 1;
-    }
-
-    while ib < lines_b.len() && diff_count < 5 {
-        println!("  Rust only: {}", truncate(&lines_b[ib], 120));
-        ib += 1;
-        diff_count += 1;
-    }
-
-    if diff_count == 0 {
-        println!("  No sorted differences found after newline normalization.");
+    // 10 random from middle
+    if n > 10 {
+        let middle_start = first_n;
+        let middle_end = last_start;
+        if middle_end > middle_start {
+            let middle: Vec<_> = lines[middle_start..middle_end].to_vec();
+            let sample_count = 10.min(middle.len());
+            if sample_count > 0 {
+                println!("\n  Random {} from middle ({} label={}):", sample_count, middle.len(), label);
+                let mut rng_seed = n as u64;
+                let mut indices: Vec<usize> = (0..middle.len()).collect();
+                for i in (1..indices.len()).rev() {
+                    rng_seed = rng_seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    let j = (rng_seed as usize) % (i + 1);
+                    indices.swap(i, j);
+                }
+                for &idx in indices.iter().take(sample_count) {
+                    println!("    {}", middle[idx]);
+                }
+            }
+        }
     }
 }
 
@@ -565,14 +675,6 @@ fn read_sorted_lines(path: &Path) -> Vec<String> {
     let mut all_lines = read_lines(path);
     all_lines.sort_unstable();
     all_lines
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max])
-    }
 }
 
 #[cfg(test)]
