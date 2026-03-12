@@ -68,16 +68,19 @@ fn main() {
         std::process::exit(1);
     }
 
-    let data_dir = PathBuf::from(&args[1]);
+    let base_dir = PathBuf::from(&args[1]);
     let drive_letter = args[2].to_uppercase();
     let drive_lower = drive_letter.to_lowercase();
+
+    // Resolve the actual drive data directory (supports drive_<letter> subdirs)
+    let drive_dir = resolve_drive_dir(&base_dir, &drive_lower);
 
     // Determine mode
     let mode = &args[3];
     let rust_output = match mode.as_str() {
         "--regenerate" => {
             // Regenerate mode: run uffs to produce fresh output
-            regenerate_rust_output(&data_dir, &drive_letter, &drive_lower)
+            regenerate_rust_output(&drive_dir, &drive_letter, &drive_lower)
         }
         "--rust" => {
             // Default mode: use provided Rust output file
@@ -96,7 +99,7 @@ fn main() {
     };
 
     // Validate files exist
-    let golden_baseline_file = find_golden_baseline_file(&data_dir, &drive_lower);
+    let golden_baseline_file = find_golden_baseline_file(&drive_dir, &drive_lower);
 
     if !rust_output.exists() {
         eprintln!(
@@ -106,7 +109,8 @@ fn main() {
         std::process::exit(1);
     }
     println!("=== UFFS Strict Full-Output Parity Verification ===");
-    println!("Data dir:      {}", data_dir.display());
+    println!("Base dir:      {}", base_dir.display());
+    println!("Drive dir:     {}", drive_dir.display());
     println!("Drive letter:  {}", drive_letter);
     println!("Baseline file: {}", golden_baseline_file.display());
     println!("Rust output:   {}", rust_output.display());
@@ -164,41 +168,67 @@ fn main() {
     std::process::exit(1);
 }
 
+/// Resolves the drive data directory.
+///
+/// Supports two directory structures:
+/// 1. New: `<base>/drive_<letter>/` (e.g., `/Users/rnio/uffs_data/drive_d/`)
+/// 2. Legacy: `<base>/` with files directly in base (e.g., `/Users/rnio/uffs_data/D_mft.bin`)
+fn resolve_drive_dir(base_dir: &Path, drive_lower: &str) -> PathBuf {
+    // Try new structure first: base/drive_<letter>/
+    let new_style = base_dir.join(format!("drive_{}", drive_lower));
+    if new_style.exists() && new_style.is_dir() {
+        return new_style;
+    }
+    // Fall back to legacy: files directly in base_dir
+    base_dir.to_path_buf()
+}
+
 fn find_golden_baseline_file(data_dir: &Path, drive_lower: &str) -> PathBuf {
-    let golden_baseline_file = data_dir.join(format!("golden_{}.txt", drive_lower));
-    if golden_baseline_file.exists() {
-        return golden_baseline_file;
+    // Try various naming conventions in order of preference
+    let candidates = [
+        format!("golden_{}.txt", drive_lower),
+        format!("cpp_{}.txt", drive_lower),  // C++ baseline output
+        format!("rust_live_{}.txt", drive_lower),  // Live scan output (when comparing offline)
+    ];
+
+    for name in &candidates {
+        let path = data_dir.join(name);
+        if path.exists() {
+            return path;
+        }
     }
 
-    let legacy_baseline_prefix = format!("{}{}{}{}", 'c', 'p', 'p', '_');
-    let legacy_baseline_file =
-        data_dir.join(format!("{legacy_baseline_prefix}{}.txt", drive_lower));
-    if legacy_baseline_file.exists() {
-        return legacy_baseline_file;
+    eprintln!("ERROR: Golden baseline file not found in {}", data_dir.display());
+    eprintln!("  Checked:");
+    for name in &candidates {
+        eprintln!("    - {}", name);
     }
-
-    eprintln!("ERROR: Golden baseline file not found.");
-    eprintln!("  Checked: {}", golden_baseline_file.display());
-    eprintln!("  Checked legacy name: {}", legacy_baseline_file.display());
     std::process::exit(1);
 }
 
 fn print_usage(prog: &str) {
     eprintln!(
-        "Usage: {} <data_dir> <drive_letter> [--rust <rust_output> | --regenerate]",
+        "Usage: {} <base_dir> <drive_letter> [--rust <rust_output> | --regenerate]",
         prog
     );
     eprintln!();
+    eprintln!("The script auto-detects the drive data directory:");
+    eprintln!("  - New layout: <base_dir>/drive_<letter>/  (e.g., uffs_data/drive_d/)");
+    eprintln!("  - Legacy:     <base_dir>/                 (files directly in base)");
+    eprintln!();
     eprintln!("Examples:");
     eprintln!(
-        "  {} /Users/rnio/uffs_data D --rust /tmp/rust_final_audit.txt",
+        "  {} /Users/rnio/uffs_data D --regenerate",
         prog
     );
     eprintln!(
-        "  {} /Users/rnio/uffs_data/drive_s S --rust /tmp/rust_s.txt",
+        "  {} /Users/rnio/uffs_data F --regenerate",
         prog
     );
-    eprintln!("  {} /Users/rnio/uffs_data D --regenerate", prog);
+    eprintln!(
+        "  {} /Users/rnio/uffs_data D --rust /tmp/rust_output.txt",
+        prog
+    );
 }
 
 fn regenerate_rust_output(data_dir: &Path, drive_letter: &str, drive_lower: &str) -> PathBuf {
