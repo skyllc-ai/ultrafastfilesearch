@@ -103,19 +103,38 @@ fn sha(lines: &[String]) -> String {
 fn diff(cfg: &Config, drv: &str, cpp: &[String], rust: &[String], ch: &str, rh: &str, t: u64) {
     println!("\n  ╔══════════════════════════════════════════╗\n  ║  PARITY: FAIL                            ║\n  ╚══════════════════════════════════════════╝");
     println!("    C++ SHA256 : {}\n    Rust SHA256: {}", ch, rh);
+
+    // Find and show header (first line, usually column names)
+    let hdr = cpp.first().map(|s| s.as_str()).unwrap_or("");
+    if !hdr.is_empty() && hdr.contains("Path") {
+        println!("\n    Header: {}", hdr);
+    }
+
     let cs: HashSet<&str> = cpp.iter().map(|s| s.as_str()).collect();
     let rs: HashSet<&str> = rust.iter().map(|s| s.as_str()).collect();
     let oc: Vec<_> = cpp.iter().filter(|l| !rs.contains(l.as_str())).collect();
     let or: Vec<_> = rust.iter().filter(|l| !cs.contains(l.as_str())).collect();
     println!("\n    Only C++: {} | Only Rust: {}", oc.len(), or.len());
-    if !oc.is_empty() { println!("\n    C++ only (first 5):"); for l in oc.iter().take(5) { println!("      < {}", &l[..l.len().min(100)]); } }
-    if !or.is_empty() { println!("    Rust only (first 5):"); for l in or.iter().take(5) { println!("      > {}", &l[..l.len().min(100)]); } }
+
+    // Show full lines, no truncation
+    if !oc.is_empty() {
+        println!("\n    C++ only (first 5):");
+        for l in oc.iter().take(5) { println!("      < {}", l); }
+    }
+    if !or.is_empty() {
+        println!("\n    Rust only (first 5):");
+        for l in or.iter().take(5) { println!("      > {}", l); }
+    }
+
     let dp = cfg.out.join(format!("parity_diff_{}_{}.txt", drv.to_lowercase(), t));
     if let Ok(mut f) = File::create(&dp) {
         writeln!(f, "# Drive {} | C++ SHA256: {} | Rust SHA256: {}", drv, ch, rh).ok();
-        writeln!(f, "# C++ lines: {} | Rust lines: {} | Only C++: {} | Only Rust: {}\n", cpp.len(), rust.len(), oc.len(), or.len()).ok();
-        writeln!(f, "=== C++ ONLY ({}) ===", oc.len()).ok(); for l in oc.iter().take(cfg.sample) { writeln!(f, "< {}", l).ok(); }
-        writeln!(f, "\n=== RUST ONLY ({}) ===", or.len()).ok(); for l in or.iter().take(cfg.sample) { writeln!(f, "> {}", l).ok(); }
+        writeln!(f, "# C++ lines: {} | Rust lines: {} | Only C++: {} | Only Rust: {}", cpp.len(), rust.len(), oc.len(), or.len()).ok();
+        if !hdr.is_empty() { writeln!(f, "# Header: {}\n", hdr).ok(); }
+        writeln!(f, "=== C++ ONLY ({}) ===", oc.len()).ok();
+        for l in oc.iter().take(cfg.sample) { writeln!(f, "< {}", l).ok(); }
+        writeln!(f, "\n=== RUST ONLY ({}) ===", or.len()).ok();
+        for l in or.iter().take(cfg.sample) { writeln!(f, "> {}", l).ok(); }
         println!("\n    Diff: {}", dp.display());
     }
     println!();
