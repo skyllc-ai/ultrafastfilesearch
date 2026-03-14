@@ -5,6 +5,17 @@ use crate::ntfs::StreamInfo;
 
 /// Merges extension record attributes into base records.
 ///
+/// **LEGACY MULTI-PASS PIPELINE:** This type is part of the old
+/// `parse_record_full → MftRecordMerger → from_parsed_records` pipeline.
+/// The hot path (`SlidingIocpInline`) now uses direct-to-index parsers that
+/// create parent placeholders on-demand without this intermediate allocation.
+/// This merger is still used by:
+/// - Legacy read modes (`Parallel`, `Pipelined`, `PipelinedParallel`,
+///   `SlidingIocp`)
+/// - File-based readers (`load_raw_to_index_with_options`)
+/// - Tests and diagnostic tools
+/// - `UFFS_LEGACY_PARSE=1` escape hatch
+///
 /// This implements the C++ behavior where attributes from extension
 /// records are merged into their base records.
 ///

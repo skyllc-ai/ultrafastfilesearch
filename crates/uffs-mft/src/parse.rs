@@ -44,6 +44,8 @@
 
 mod attribute_helpers;
 mod columns;
+mod direct_index;
+mod direct_index_extension;
 mod fixup;
 mod forensic;
 mod full;
@@ -59,6 +61,7 @@ use attribute_helpers::{
     parse_data_attribute_full, parse_file_name_full, parse_standard_info_full,
 };
 pub use columns::ParsedColumns;
+pub use direct_index::parse_record_to_index;
 pub use fixup::apply_fixup;
 pub use forensic::parse_record_forensic;
 pub use full::{parse_record, parse_record_full};

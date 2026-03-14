@@ -7,15 +7,52 @@
 //!
 //! This module implements the high-performance single-pass parser that matches
 //! the C++ architecture. It parses MFT records directly into `MftIndex` without
-//! creating intermediate `ParsedRecord` allocations, which is critical for IOCP
-//! performance.
+//! creating intermediate `ParsedRecord` allocations.
+//!
+//! This is a cross-platform parser used for both Windows IOCP and file-based
+//! loading.
+
+// Performance-critical hot-path parser — lint suppressions match the style of
+// other NTFS parser modules in this crate.
+#![expect(
+    clippy::unseparated_literal_suffix,
+    reason = "literal suffixes like 0u32 are common in NTFS struct parsing"
+)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "NTFS terminology like MftIndex does not need backticks in internal docs"
+)]
+#![expect(
+    clippy::manual_let_else,
+    reason = "explicit match is clearer in NTFS attribute dispatch"
+)]
+#![expect(
+    clippy::missing_asserts_for_indexing,
+    reason = "bounds are verified by size checks before all index access"
+)]
+#![expect(
+    clippy::single_match_else,
+    reason = "explicit match arms are clearer for attribute type dispatch"
+)]
+#![expect(
+    clippy::shadow_unrelated,
+    reason = "reusing common names like 'record' in nested scopes is idiomatic here"
+)]
+#![expect(
+    clippy::let_underscore_untyped,
+    reason = "let _ = expr is used for intentionally ignoring results"
+)]
+#![expect(
+    clippy::explicit_iter_loop,
+    reason = ".iter() is explicit and intentional"
+)]
 
 use core::mem::size_of;
 
 use smallvec::SmallVec;
 use zerocopy::FromBytes;
 
-use super::index_extension::parse_extension_to_index;
+use super::direct_index_extension::parse_extension_to_index;
 use crate::ntfs::is_internal_windows_stream;
 
 /// Parses a record directly into `MftIndex` (single-pass inline parsing).

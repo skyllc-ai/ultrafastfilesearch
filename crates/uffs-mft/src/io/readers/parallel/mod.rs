@@ -218,6 +218,12 @@ impl ParallelMftReader {
 
     /// Reads and parses all MFT records in parallel with progress callback.
     ///
+    /// **LEGACY MULTI-PASS PIPELINE:** This function uses
+    /// `parse_record_full → MftRecordMerger → Vec<ParsedRecord>`.
+    /// The hot path (`SlidingIocpInline`) uses direct-to-index parsing instead.
+    /// This function is used by legacy read modes (`Parallel`, `Auto` when not
+    /// inline).
+    ///
     /// This function handles extension records by merging their attributes
     /// into the base records, matching the legacy implementation behavior.
     /// The progress callback is called during the I/O phase with (bytes_read,

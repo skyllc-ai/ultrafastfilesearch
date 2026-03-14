@@ -8,6 +8,37 @@
 //! names, streams, and all attribute types from extension records and merging
 //! them into base records in the index.
 
+// Performance-critical hot-path parser — lint suppressions match the style of
+// other NTFS parser modules in this crate.
+#![expect(
+    clippy::manual_let_else,
+    reason = "explicit match is clearer in NTFS attribute dispatch"
+)]
+#![expect(
+    clippy::missing_asserts_for_indexing,
+    reason = "bounds are verified by size checks before all index access"
+)]
+#![expect(
+    clippy::shadow_unrelated,
+    reason = "reusing common names like 'record' in nested scopes is idiomatic here"
+)]
+#![expect(
+    clippy::let_underscore_untyped,
+    reason = "let _ = expr is used for intentionally ignoring results"
+)]
+#![expect(
+    clippy::if_not_else,
+    reason = "!condition checks are clearer for NTFS flag testing"
+)]
+#![expect(
+    clippy::if_then_some_else_none,
+    reason = "explicit if/else is clearer than bool::then in complex NTFS logic"
+)]
+#![expect(
+    clippy::single_call_fn,
+    reason = "parse_extension_to_index is a separate function for code organization"
+)]
+
 use core::mem::size_of;
 
 use smallvec::SmallVec;

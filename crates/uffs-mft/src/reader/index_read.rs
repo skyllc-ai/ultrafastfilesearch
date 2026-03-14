@@ -262,6 +262,15 @@ impl MftReader {
         use crate::platform::detect_drive_type;
 
         tracing::debug!(volume = %self.volume, "[TRIP] reader::read_mft_index_internal ENTER");
+
+        // Check for legacy parse mode escape hatch
+        // UFFS_LEGACY_PARSE=1 forces the old multi-pass pipeline for
+        // debugging/comparison
+        let use_legacy_parse = std::env::var("UFFS_LEGACY_PARSE").is_ok();
+        if use_legacy_parse {
+            warn!(volume = %self.volume, "⚠️  UFFS_LEGACY_PARSE=1 detected - using legacy multi-pass pipeline");
+        }
+
         info!(volume = %self.volume, "Starting MFT read (lean index)");
 
         let start_time = Instant::now();
@@ -328,7 +337,13 @@ impl MftReader {
         // For lean index (MftIndex), use SlidingIocpInline for NVMe/SSD - this uses
         // IOCP with multiple reads in flight and inline parsing, matching C++
         // performance.
-        let effective_mode = index_effective_mode(self.mode, drive_type);
+        let mut effective_mode = index_effective_mode(self.mode, drive_type);
+
+        // Apply legacy parse mode override if escape hatch is set
+        if use_legacy_parse && effective_mode == MftReadMode::SlidingIocpInline {
+            warn!("🔄 Forcing SlidingIocp mode (legacy pipeline) due to UFFS_LEGACY_PARSE=1");
+            effective_mode = MftReadMode::SlidingIocp;
+        }
 
         info!(mode = %effective_mode, "🚀 Using read mode (lean index)");
 

@@ -35,6 +35,58 @@ impl MftIndex {
         }
     }
 
+    /// Create with optimized pre-allocation matching C++ ratios.
+    ///
+    /// This method pre-allocates all vectors based on the MFT bitmap popcount
+    /// to eliminate Vec resizing during the parse loop. The sizing ratios match
+    /// the C++ implementation in `ntfs_index_accessors.hpp` lines 525-544.
+    ///
+    /// # Arguments
+    ///
+    /// * `volume` - Volume letter (e.g., 'C')
+    /// * `estimated_records` - Number of valid records from bitmap popcount
+    /// * `max_frs` - Highest FRS number from bitmap (used for `frs_to_idx`
+    ///   sizing)
+    ///
+    /// # Pre-allocation Strategy
+    ///
+    /// - `records`: `estimated_records * 1.05` (5% safety margin for
+    ///   placeholders)
+    /// - `frs_to_idx`: `max_frs + 1` (sparse array indexed by FRS)
+    /// - `names`: `estimated_records * 23` (~23 chars avg per name)
+    /// - `links`: `estimated_records / 16` (~6% have hardlinks)
+    /// - `streams`: `estimated_records / 4` (~25% have additional streams)
+    /// - `internal_streams`: `estimated_records / 20` (~5% have internal
+    ///   streams)
+    /// - `children`: `estimated_records * 3 / 2` (directories have multiple
+    ///   children)
+    #[must_use]
+    pub fn with_capacity_optimized(volume: char, estimated_records: usize, max_frs: u64) -> Self {
+        // Safety margin for placeholder records added during path resolution
+        let records_capacity = estimated_records + (estimated_records / 20);
+
+        // frs_to_idx is a sparse lookup array indexed by FRS
+        let frs_to_idx_capacity = usize::try_from(max_frs)
+            .ok()
+            .and_then(|max_frs_usize| max_frs_usize.checked_add(1))
+            .unwrap_or(estimated_records);
+
+        Self {
+            volume,
+            records: Vec::with_capacity(records_capacity),
+            frs_to_idx: Vec::with_capacity(frs_to_idx_capacity),
+            names: String::with_capacity(estimated_records * 23),
+            links: Vec::with_capacity(estimated_records / 16),
+            streams: Vec::with_capacity(estimated_records / 4),
+            internal_streams: Vec::with_capacity(estimated_records / 20),
+            children: Vec::with_capacity(estimated_records * 3 / 2),
+            stats: MftStats::new(),
+            extensions: ExtensionTable::new(),
+            extension_index: None,
+            forensic_mode: false,
+        }
+    }
+
     /// Recompute stats from the current index data.
     ///
     /// This is useful after deserializing an index from disk,
