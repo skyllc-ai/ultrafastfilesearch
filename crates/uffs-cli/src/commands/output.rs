@@ -24,10 +24,10 @@ use uffs_core::{export_json, export_table};
 pub(super) struct CppFooterContext<'a> {
     /// Drive letters to include in the footer (e.g., `['C', 'D']`).
     pub(super) output_targets: &'a [char],
-    /// Elapsed time since search started.
-    pub(super) elapsed: Duration,
     /// Original search pattern string.
     pub(super) pattern: &'a str,
+    /// Total result row count for fast-scan heuristic.
+    pub(super) row_count: usize,
 }
 
 /// Streaming output writer for multi-drive search.
@@ -896,7 +896,7 @@ pub(super) fn write_results(
     out: &str,
     output_config: &OutputConfig,
     output_targets: &[char],
-    elapsed: Duration,
+    _elapsed: Duration,
     pattern: &str,
 ) -> Result<()> {
     let is_console = matches!(
@@ -904,10 +904,12 @@ pub(super) fn write_results(
         "console" | "con" | "term" | "terminal"
     );
 
+    let row_count = results.height();
+
     let footer_ctx = CppFooterContext {
         output_targets,
-        elapsed,
         pattern,
+        row_count,
     };
 
     if is_console {
@@ -947,7 +949,7 @@ pub(super) fn write_results(
 /// Append the legacy C++ drive footer for baseline-compatible custom output.
 ///
 /// Uses CRLF line endings (`\r\n`) to match C++ baseline behavior.
-/// When `elapsed` is <= 1 second, appends the fast-scan message.
+/// When `row_count` is < 20,000, appends the fast-scan message.
 fn write_cpp_drive_footer<W: Write>(writer: &mut W, ctx: &CppFooterContext<'_>) -> Result<()> {
     if ctx.output_targets.is_empty() {
         return Ok(());
@@ -963,7 +965,7 @@ fn write_cpp_drive_footer<W: Write>(writer: &mut W, ctx: &CppFooterContext<'_>) 
     )?;
     write!(writer, "\r\n")?;
 
-    if ctx.elapsed.as_secs() <= 1 {
+    if ctx.row_count < 20_000 {
         write!(
             writer,
             "MMMmmm that was FAST ... maybe your searchstring was wrong?\t{pattern}\r\n",
@@ -1014,6 +1016,24 @@ mod tests {
         DataFrame::new_infer_height(vec![
             Column::new("path".into(), &["C:\\Temp\\file.txt"]),
             Column::new("name".into(), &["file.txt"]),
+        ])
+        .map_err(Into::into)
+    }
+
+    /// Create a large sample DataFrame (20,000+ rows) for testing slow-scan footer.
+    fn large_sample_df() -> Result<DataFrame> {
+        let count = 20_000;
+        let paths: Vec<String> = (0..count)
+            .map(|i| format!("C:\\Temp\\file{}.txt", i))
+            .collect();
+        let names: Vec<String> = (0..count).map(|i| format!("file{}.txt", i)).collect();
+
+        let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+
+        DataFrame::new_infer_height(vec![
+            Column::new("path".into(), &path_refs),
+            Column::new("name".into(), &name_refs),
         ])
         .map_err(Into::into)
     }
@@ -1100,14 +1120,14 @@ mod tests {
         format: &str,
         output_config: &OutputConfig,
         output_targets: &[char],
-        elapsed: Duration,
+        _elapsed: Duration,
         pattern: &str,
     ) -> Result<String> {
         let mut output = Vec::new();
         let footer_ctx = CppFooterContext {
             output_targets,
-            elapsed,
             pattern,
+            row_count: results.height(),
         };
         match format {
             "json" => export_json(results, &mut output)?,
@@ -1126,14 +1146,14 @@ mod tests {
         format: &str,
         output_config: &OutputConfig,
         output_targets: &[char],
-        elapsed: Duration,
+        _elapsed: Duration,
         pattern: &str,
     ) -> Result<String> {
         let mut output = Vec::new();
         let footer_ctx = CppFooterContext {
             output_targets,
-            elapsed,
             pattern,
+            row_count: results.len(),
         };
         write_native_results_to(
             index,
@@ -1204,6 +1224,7 @@ mod tests {
         let written = fs::read_to_string(&path)?;
         drop(fs::remove_file(&path));
 
+        // With 1 row (< 20,000), should include fast-scan message
         assert_eq!(
             written,
             concat!(
@@ -1211,7 +1232,9 @@ mod tests {
                 "\r\n",
                 "\r\n",
                 "Drives? \t2\tC:|D:\r\n",
-                "\r\n"
+                "\r\n",
+                "MMMmmm that was FAST ... maybe your searchstring was wrong?\t*.txt\r\n",
+                "Search path. E.g. 'C:/' or 'C:\\Prog**' \r\n"
             )
         );
         Ok(())
@@ -1392,7 +1415,7 @@ mod tests {
     #[test]
     fn test_cpp_footer_omits_fast_scan_message_when_elapsed_gt_1s() -> TestResult {
         let path = temp_output_path("txt");
-        let results = sample_df()?;
+        let results = large_sample_df()?; // Use 20,000 rows to trigger slow scan
         let output_config = OutputConfig::new()
             .with_columns("path,name")
             .with_header(false);
@@ -1410,16 +1433,14 @@ mod tests {
         let written = fs::read_to_string(&path)?;
         drop(fs::remove_file(&path));
 
-        assert_eq!(
-            written,
-            concat!(
-                "\"C:\\Temp\\file.txt\",\"file.txt\"\n",
-                "\r\n",
-                "\r\n",
-                "Drives? \t1\tG:\r\n",
-                "\r\n"
-            )
-        );
+        // Should NOT contain fast-scan message (row_count >= 20,000)
+        // Only check footer structure - first row will be "C:\Temp\file0.txt","file0.txt"
+        let lines: Vec<&str> = written.lines().collect();
+        let footer_start = lines.len().saturating_sub(4);
+        assert_eq!(lines[footer_start], "");
+        assert_eq!(lines[footer_start + 1], "");
+        assert_eq!(lines[footer_start + 2], "Drives? \t1\tG:");
+        assert_eq!(lines[footer_start + 3], "");
         Ok(())
     }
 }
