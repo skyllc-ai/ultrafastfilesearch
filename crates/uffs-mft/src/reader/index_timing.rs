@@ -9,9 +9,7 @@ use tracing::{debug, info, warn};
 #[cfg(windows)]
 use super::PhaseTimings;
 #[cfg(windows)]
-use super::benchmark::{
-    build_benchmark_result, build_drive_characteristics, estimate_combined_phase_timings,
-};
+use super::benchmark::{build_benchmark_result, build_drive_characteristics};
 use super::{BenchmarkResult, MftReader};
 use crate::error::{MftError, Result};
 #[cfg(windows)]

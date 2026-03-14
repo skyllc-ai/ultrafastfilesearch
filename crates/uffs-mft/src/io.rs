@@ -10,9 +10,7 @@
 #![cfg(windows)]
 
 use std::cell::RefCell;
-use std::mem::size_of;
 
-use smallvec::SmallVec;
 use tracing::{debug, info, trace, warn};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};

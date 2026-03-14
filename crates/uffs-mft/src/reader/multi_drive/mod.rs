@@ -2,8 +2,7 @@
 
 use uffs_polars::DataFrame;
 
-use super::MftProgress;
-use crate::error::{MftError, Result};
+use crate::error::MftError;
 
 /// DataFrame-backed multi-drive read helpers.
 #[cfg(windows)]

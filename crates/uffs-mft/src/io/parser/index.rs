@@ -337,7 +337,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 
                 // Extract attribute name
                 let name_len = attr_header.name_length as usize;
-                let (is_i30, attr_name) = if name_len > 0 {
+                let (is_i30, _attr_name) = if name_len > 0 {
                     let name_offset = offset + attr_header.name_offset as usize;
                     if name_offset + name_len * 2 <= data.len() {
                         let name_bytes = &data[name_offset..name_offset + name_len * 2];

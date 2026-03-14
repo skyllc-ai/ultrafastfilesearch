@@ -12,7 +12,7 @@ pub use index::parse_record_to_index;
 
 pub use crate::parse::{
     ExtensionAttributes, ParseResult, ParsedColumns, ParsedRecord,
-    add_missing_parent_placeholders_to_vec, apply_fixup, create_placeholder_record, parse_record,
+    add_missing_parent_placeholders_to_vec, create_placeholder_record, parse_record,
     parse_record_full, parse_record_zero_alloc,
 };
 

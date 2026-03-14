@@ -1,7 +1,5 @@
 //! Chunk planning helpers for extent-aware MFT reads.
 
-use rayon::prelude::*;
-
 use super::*;
 
 /// A read chunk representing a contiguous range of MFT records.

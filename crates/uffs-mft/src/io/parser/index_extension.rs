@@ -232,7 +232,7 @@ pub(super) fn parse_extension_to_index(
             ) => {
                 // Extract attribute name
                 let name_len = attr_header.name_length as usize;
-                let (is_i30, attr_name) = if name_len > 0 {
+                let (is_i30, _attr_name) = if name_len > 0 {
                     let name_offset = offset + attr_header.name_offset as usize;
                     if name_offset + name_len * 2 <= data.len() {
                         let name_bytes = &data[name_offset..name_offset + name_len * 2];
@@ -374,7 +374,7 @@ pub(super) fn parse_extension_to_index(
             }
             _ => {
                 // Unknown attribute types - count as streams (C++ default: case)
-                let type_code = attr_header.type_code;
+                let _type_code = attr_header.type_code;
 
                 let is_primary = if attr_header.is_non_resident == 0 {
                     true
@@ -618,7 +618,7 @@ pub(super) fn parse_extension_to_index(
                 index
                     .internal_streams
                     .push(crate::index::InternalStreamInfo {
-                        size: crate::index::SizeInfo {
+                        size: SizeInfo {
                             length: *ist_size,
                             allocated: *ist_allocated,
                         },

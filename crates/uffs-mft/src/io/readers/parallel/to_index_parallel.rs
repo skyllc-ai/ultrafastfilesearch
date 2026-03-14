@@ -509,7 +509,7 @@ impl ParallelMftReader {
 
         // Build index from merged records
         let parsed_records = merger.merge();
-        let index = MftIndex::from_parsed_records(volume, parsed_records);
+        let mut index = MftIndex::from_parsed_records(volume, parsed_records);
 
         let merge_ms = merge_start.elapsed().as_millis();
         let total_ms = read_start.elapsed().as_millis();

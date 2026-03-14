@@ -211,7 +211,7 @@ impl ParallelMftReader {
         let mut index = MftIndex::with_capacity_optimized(volume, estimated_records, max_frs);
 
         // Create IOCP
-        let read_start = std::time::Instant::now();
+        let read_start = Instant::now();
         let iocp = IoCompletionPort::new(0)?;
         iocp.associate(overlapped_handle, 0)?;
 
