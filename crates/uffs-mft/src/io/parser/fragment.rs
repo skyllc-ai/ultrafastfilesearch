@@ -299,7 +299,8 @@ pub fn parse_record_to_fragment(
                     },
                     next_entry: NO_ENTRY,
                     name: stream_name_ref,
-                    flags: 0,
+                    // type_name_id=8 for $DATA (0x80 >> 4), stored in bits 2-7
+                    flags: 8 << 2,
                 });
                 stream_indices.push(stream_idx);
             }
@@ -385,7 +386,8 @@ pub fn parse_record_to_fragment(
             },
             next_entry: NO_ENTRY,
             name: stream_name_ref,
-            flags: 0,
+            // type_name_id=8 for $DATA (0x80 >> 4), stored in bits 2-7
+            flags: 8 << 2,
         });
         stream_indices.push(stream_idx);
     }

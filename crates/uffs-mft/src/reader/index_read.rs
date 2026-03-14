@@ -618,7 +618,17 @@ impl MftReader {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 }
 
-                let index = result?;
+                let mut index = result?;
+
+                // Compute tree metrics (directory sizes, descendant counts).
+                // The legacy path gets this from `from_parsed_records()`, but the
+                // inline path bypasses that, so we must call it explicitly.
+                let tree_start = Instant::now();
+                index.compute_tree_metrics();
+                info!(
+                    tree_metrics_ms = tree_start.elapsed().as_millis(),
+                    "✅ Tree metrics computed for inline index"
+                );
 
                 // Report final progress
                 if let Some(ref cb) = callback {
