@@ -10,7 +10,8 @@ use crate::ntfs::StreamInfo;
 /// The hot path (`SlidingIocpInline`) now uses direct-to-index parsers that
 /// create parent placeholders on-demand without this intermediate allocation.
 /// This merger is still used by:
-/// - Legacy read modes (`Parallel`, `Pipelined`, `PipelinedParallel`, `SlidingIocp`)
+/// - Legacy read modes (`Parallel`, `Pipelined`, `PipelinedParallel`,
+///   `SlidingIocp`)
 /// - File-based readers (`load_raw_to_index_with_options`)
 /// - Tests and diagnostic tools
 /// - `UFFS_LEGACY_PARSE=1` escape hatch

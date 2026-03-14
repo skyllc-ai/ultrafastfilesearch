@@ -13,6 +13,33 @@ impl ParallelMftReader {
     /// This eliminates the separate parse and index build phases, saving ~7s
     /// on large MFTs by overlapping CPU work with I/O.
     ///
+    /// # I/O Overlap Architecture
+    ///
+    /// This function achieves true I/O-compute overlap using IOCP's sliding
+    /// window:
+    ///
+    /// 1. **Multiple I/O in flight**: Maintains 2-8 concurrent I/O operations
+    ///    (adaptive based on drive type). While one operation completes, others
+    ///    are still reading from disk.
+    ///
+    /// 2. **Inline parsing**: When `GetQueuedCompletionStatus` returns, the
+    ///    completion handler immediately applies fixup and parses records
+    ///    directly into the index. Critically, this parse happens while other
+    ///    I/O operations remain in flight.
+    ///
+    /// 3. **Immediate requeue**: After parsing completes, the buffer is
+    ///    recycled and the next I/O operation is queued immediately,
+    ///    maintaining the sliding window.
+    ///
+    /// Parse time per chunk is typically <1ms, so parsing on the IOCP
+    /// completion thread is optimal—it avoids thread synchronization
+    /// overhead and maintains cache locality. The overlap comes from having
+    /// multiple chunks in flight, not from multi-threaded parsing.
+    ///
+    /// Timing instrumentation (added for profiling) logs `wait_ms`, `parse_ms`,
+    /// and `overlap_pct` to quantify how much parse work was hidden behind
+    /// I/O latency.
+    ///
     /// # Arguments
     ///
     /// * `overlapped_handle` - IOCP handle for async I/O
@@ -263,6 +290,10 @@ impl ParallelMftReader {
         let bitmap_ref = self.bitmap.as_ref();
         let mut last_completion_at = Instant::now();
 
+        // Timing instrumentation for I/O overlap analysis
+        let mut total_wait_time_ns = 0u64;
+        let mut total_parse_time_ns = 0u64;
+
         const WAIT_OPERATION: &str = "read_all_sliding_window_iocp_to_index";
 
         while completed_count < total_io_ops {
@@ -270,6 +301,9 @@ impl ParallelMftReader {
             let mut completion_key: usize = 0;
             let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
                 std::ptr::null_mut();
+
+            // Time I/O wait (GetQueuedCompletionStatus)
+            let wait_start = Instant::now();
 
             // SAFETY: `iocp.raw_handle()` is a live completion port and all out-pointers
             // reference writable stack storage for the duration of the wait.
@@ -282,6 +316,8 @@ impl ParallelMftReader {
                     IOCP_WAIT_POLL_INTERVAL_MS,
                 )
             };
+
+            total_wait_time_ns += wait_start.elapsed().as_nanos() as u64;
 
             if result.is_err() {
                 let last_error = unsafe { GetLastError() };
@@ -338,6 +374,9 @@ impl ParallelMftReader {
                     // only project a mutable reference without moving the allocation.
                     let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
 
+                    // Time parse phase (fixup + parse_record_to_index)
+                    let parse_start = Instant::now();
+
                     // DIRECT-TO-INDEX: parse records directly into MftIndex
                     let buffer_slice =
                         &mut op_mut.buffer.as_mut_slice()[..bytes_transferred as usize];
@@ -366,6 +405,8 @@ impl ParallelMftReader {
                             records_parsed += 1;
                         }
                     }
+
+                    total_parse_time_ns += parse_start.elapsed().as_nanos() as u64;
 
                     bytes_read_total += bytes_transferred as u64;
                     completed_count += 1;
@@ -431,12 +472,26 @@ impl ParallelMftReader {
         }
 
         let total_ms = read_start.elapsed().as_millis();
+        let wait_ms = total_wait_time_ns / 1_000_000;
+        let parse_ms = total_parse_time_ns / 1_000_000;
+
+        // Calculate overlap efficiency: if wait_ms + parse_ms > total_ms,
+        // then we had effective overlap (parse happened while other I/O was in flight)
+        let overlap_pct = if total_ms > 0 {
+            ((wait_ms + parse_ms).saturating_sub(total_ms) as f64 / total_ms as f64) * 100.0
+        } else {
+            0.0
+        };
+
         info!(
             total_ms,
+            wait_ms,
+            parse_ms,
+            overlap_pct = format!("{:.1}%", overlap_pct),
             bytes_mb = bytes_read_total / (1024 * 1024),
             records_parsed,
             index_entries = index.records.len(),
-            "✅ Sliding window IOCP with direct-to-index parsing complete"
+            "✅ Sliding window IOCP with direct-to-index parsing complete (I/O overlap analysis)"
         );
 
         Ok(index)

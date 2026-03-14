@@ -15,7 +15,8 @@ use crate::ntfs::{ExtendedStandardInfo, NameInfo, ReparsePointHeader, StreamInfo
 /// `parse_record_full → MftRecordMerger → from_parsed_records` pipeline.
 /// The hot path (`SlidingIocpInline`) now uses direct-to-index parsers that
 /// skip this intermediate allocation. This function is still used by:
-/// - Legacy read modes (`Parallel`, `Pipelined`, `PipelinedParallel`, `SlidingIocp`)
+/// - Legacy read modes (`Parallel`, `Pipelined`, `PipelinedParallel`,
+///   `SlidingIocp`)
 /// - File-based readers (`load_raw_to_index_with_options`)
 /// - Tests and diagnostic tools
 /// - `UFFS_LEGACY_PARSE=1` escape hatch
