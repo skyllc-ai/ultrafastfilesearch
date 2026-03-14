@@ -311,23 +311,15 @@ fn show_diff(cfg: &Config, drive: &str, cpp: &[String], rust: &[String],
     println!("    C++ SHA256:  {}", cpp_hash);
     println!("    Rust SHA256: {}", rust_hash);
 
+    // Show sorted side-by-side comparison (most useful for debugging)
+    let diff_count = show_sorted_side_by_side_diffs(cpp, rust);
+
+    // Also compute set-based diffs for the file output
     let cpp_set: HashSet<&str> = cpp.iter().map(|s| s.as_str()).collect();
     let rust_set: HashSet<&str> = rust.iter().map(|s| s.as_str()).collect();
 
     let only_cpp: Vec<_> = cpp.iter().filter(|l| !rust_set.contains(l.as_str())).collect();
     let only_rust: Vec<_> = rust.iter().filter(|l| !cpp_set.contains(l.as_str())).collect();
-
-    println!("\n    Only in C++:  {}", only_cpp.len());
-    println!("    Only in Rust: {}", only_rust.len());
-
-    if !only_cpp.is_empty() {
-        println!("\n    C++ only (first 5):");
-        for l in only_cpp.iter().take(5) { println!("      < {}", l); }
-    }
-    if !only_rust.is_empty() {
-        println!("\n    Rust only (first 5):");
-        for l in only_rust.iter().take(5) { println!("      > {}", l); }
-    }
 
     // Write detailed diff to file
     let diff_path = cfg.out_dir.join(format!("parity_diff_{}_{}.txt", drive.to_lowercase(), ts));
@@ -342,7 +334,88 @@ fn show_diff(cfg: &Config, drive: &str, cpp: &[String], rust: &[String],
         println!("\n    Diff file: {}", diff_path.display());
     }
 
-    only_cpp.len() + only_rust.len()
+    diff_count
+}
+
+/// Show side-by-side comparison of DIFFERENT lines from sorted files.
+/// Only shows lines where C++ != Rust. First 5 diffs, last 5 diffs, 10 random from middle.
+fn show_sorted_side_by_side_diffs(cpp_sorted: &[String], rust_sorted: &[String]) -> usize {
+    let n = cpp_sorted.len().min(rust_sorted.len());
+    if n == 0 {
+        println!("\n    No lines to compare.");
+        return 0;
+    }
+
+    // Collect indices of lines that differ
+    let diff_indices: Vec<usize> = (0..n)
+        .filter(|&i| cpp_sorted[i] != rust_sorted[i])
+        .collect();
+
+    println!("\n=== SORTED SIDE-BY-SIDE COMPARISON (differences only) ===");
+    println!("  C++ lines:        {}", cpp_sorted.len());
+    println!("  Rust lines:       {}", rust_sorted.len());
+    println!("  Lines that differ: {}", diff_indices.len());
+
+    if diff_indices.is_empty() {
+        println!("\n  ✅ All lines match!");
+        return 0;
+    }
+
+    let total_diffs = diff_indices.len();
+    let first_n = 5.min(total_diffs);
+    let last_n = 5.min(total_diffs);
+
+    // First 5 differences
+    println!("\n--- FIRST {} DIFFERENCES ---", first_n);
+    for &idx in diff_indices.iter().take(first_n) {
+        println!("  Line {}:", idx + 1);
+        println!("    C++:  {}", cpp_sorted[idx]);
+        println!("    RUST: {}", rust_sorted[idx]);
+    }
+
+    // Last 5 differences (if different from first 5)
+    if total_diffs > 10 {
+        let last_start = total_diffs.saturating_sub(last_n);
+        println!("\n--- LAST {} DIFFERENCES ---", last_n);
+        for &idx in diff_indices.iter().skip(last_start) {
+            println!("  Line {}:", idx + 1);
+            println!("    C++:  {}", cpp_sorted[idx]);
+            println!("    RUST: {}", rust_sorted[idx]);
+        }
+    }
+
+    // 10 random from middle differences
+    if total_diffs > 10 {
+        let middle_start = first_n;
+        let middle_end = total_diffs.saturating_sub(last_n);
+        if middle_end > middle_start {
+            let middle_diff_indices: Vec<usize> = diff_indices[middle_start..middle_end].to_vec();
+            let sample_count = 10.min(middle_diff_indices.len());
+
+            println!(
+                "\n--- {} RANDOM DIFFERENCES FROM MIDDLE ({} middle diffs) ---",
+                sample_count,
+                middle_diff_indices.len()
+            );
+
+            // Deterministic shuffle using LCG
+            let mut rng_seed = total_diffs as u64;
+            let mut shuffled: Vec<usize> = middle_diff_indices;
+            for i in (1..shuffled.len()).rev() {
+                rng_seed = rng_seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let j = (rng_seed as usize) % (i + 1);
+                shuffled.swap(i, j);
+            }
+
+            for &idx in shuffled.iter().take(sample_count) {
+                println!("  Line {}:", idx + 1);
+                println!("    C++:  {}", cpp_sorted[idx]);
+                println!("    RUST: {}", rust_sorted[idx]);
+            }
+        }
+    }
+
+    total_diffs
 }
 
 fn print_summary(results: &[DriveResult]) {
