@@ -1,30 +1,30 @@
 #!/usr/bin/env rust-script
-//! Drive-agnostic strict full-output SHA256 verification for UFFS.
+//! Multi-drive strict full-output SHA256 verification for UFFS.
 //!
-//! Compares Rust output against a golden baseline using the complete output
-//! file, including any non-CSV lines above or below the data rows.
+//! Discovers all `drive_*` directories in the data directory and runs
+//! parity verification on each one sequentially.
 //!
 //! # Usage
 //!
 //! ```bash
-//! # Default mode: compare existing Rust output against a golden baseline
-//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data D --rust /tmp/rust_final_audit.txt
-//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data/drive_s S --rust /tmp/rust_s.txt
+//! # Auto-discover and verify all drives (regenerate mode)
+//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data --regenerate
 //!
-//! # Regenerate mode: run uffs to generate fresh output, then compare
+//! # Verify a specific drive only
+//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data --drive D --regenerate
+//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data --drive D --rust /tmp/rust_d.txt
+//!
+//! # Legacy single-drive mode (still supported)
 //! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data D --regenerate
-//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data/drive_s S --regenerate
 //! ```
 //!
 //! # Modes
 //!
-//! **Default (--rust <path>)**: Compares the provided Rust output file against
-//! the golden baseline. This is the safe mode since both files were generated
-//! in the same timezone/DST period.
+//! **--regenerate**: Runs uffs with auto-detected timezone to produce fresh
+//! Rust output matching the golden baseline timezone, then compares.
 //!
-//! **--regenerate**: Runs uffs with `--tz-offset -8` (PST) to produce fresh
-//! Rust output matching the golden baseline timezone, then compares. This
-//! ensures SHA256 alignment regardless of the current local DST state.
+//! **--rust <path>**: Compares the provided Rust output file against the golden
+//! baseline. Only valid when a single drive is specified.
 //!
 //! # Strict parity contract
 //!
@@ -45,6 +45,22 @@ use std::{env, fs};
 
 use sha2::{Digest, Sha256};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifyResult {
+    StrictMatch,
+    SortedMatch,
+    Mismatch,
+    Skipped,
+}
+
+#[derive(Debug)]
+struct DriveResult {
+    drive_letter: String,
+    result: VerifyResult,
+    baseline_lines: usize,
+    rust_lines: usize,
+}
+
 #[derive(Debug)]
 struct FileHashes {
     ordered_hash: String,
@@ -59,38 +75,51 @@ struct UffsReleaseArtifact {
     binary_path: PathBuf,
     target_dir_warning: Option<&'static str>,
 }
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     // Parse arguments
-    if args.len() < 4 {
+    if args.len() < 3 {
         print_usage(&args[0]);
         std::process::exit(1);
     }
 
     let base_dir = PathBuf::from(&args[1]);
+
+    // Check if this is legacy mode (second arg is a drive letter)
+    let is_legacy_mode = args.len() >= 4
+        && args[2].len() == 1
+        && args[2].chars().next().map_or(false, |c| c.is_ascii_alphabetic());
+
+    if is_legacy_mode {
+        // Legacy single-drive mode
+        run_legacy_mode(&args, &base_dir);
+    } else {
+        // New multi-drive mode
+        run_multi_drive_mode(&args, &base_dir);
+    }
+}
+
+/// Legacy single-drive mode for backwards compatibility
+fn run_legacy_mode(args: &[String], base_dir: &Path) {
     let drive_letter = args[2].to_uppercase();
     let drive_lower = drive_letter.to_lowercase();
 
-    // Resolve the actual drive data directory (supports drive_<letter> subdirs)
-    let drive_dir = resolve_drive_dir(&base_dir, &drive_lower);
+    // Resolve the actual drive data directory
+    let drive_dir = resolve_drive_dir(base_dir, &drive_lower);
 
     // Parse optional arguments
-    let explicit_tz = parse_tz_offset(&args);
-    let custom_bin = parse_bin_path(&args);
+    let explicit_tz = parse_tz_offset(args);
+    let custom_bin = parse_bin_path(args);
 
     // Determine mode
     let mode = &args[3];
     let rust_output = match mode.as_str() {
         "--regenerate" => {
-            // Find baseline first for tz auto-detection
             let golden_baseline = find_golden_baseline_file(&drive_dir, &drive_lower);
-
-            // Auto-detect or use explicit tz
             let tz_offset =
                 explicit_tz.unwrap_or_else(|| detect_tz_from_baseline(&golden_baseline));
-
-            // Regenerate mode: run uffs to produce fresh output
             regenerate_rust_output(
                 &drive_dir,
                 &drive_letter,
@@ -100,7 +129,6 @@ fn main() {
             )
         }
         "--rust" => {
-            // Default mode: use provided Rust output file
             if args.len() < 5 {
                 eprintln!("ERROR: --rust requires a path argument");
                 print_usage(&args[0]);
@@ -115,74 +143,304 @@ fn main() {
         }
     };
 
-    // Validate files exist
-    let golden_baseline_file = find_golden_baseline_file(&drive_dir, &drive_lower);
+    let result = verify_single_drive(base_dir, &drive_dir, &drive_letter, &rust_output);
+    std::process::exit(if result.result == VerifyResult::Mismatch {
+        1
+    } else {
+        0
+    });
+}
+
+/// New multi-drive discovery mode
+fn run_multi_drive_mode(args: &[String], base_dir: &Path) {
+    // Parse optional arguments
+    let explicit_tz = parse_tz_offset(args);
+    let custom_bin = parse_bin_path(args);
+    let specific_drive = parse_drive_filter(args);
+    let rust_output_path = parse_rust_path(args);
+    let regenerate = args.iter().any(|a| a == "--regenerate");
+
+    if !regenerate && rust_output_path.is_none() {
+        eprintln!("ERROR: Must specify either --regenerate or --rust <path>");
+        print_usage(&args[0]);
+        std::process::exit(1);
+    }
+
+    if rust_output_path.is_some() && specific_drive.is_none() {
+        eprintln!("ERROR: --rust mode requires --drive to specify which drive");
+        print_usage(&args[0]);
+        std::process::exit(1);
+    }
+
+    // Discover all drive directories
+    let drives = discover_drives(base_dir, specific_drive.as_deref());
+
+    if drives.is_empty() {
+        eprintln!("ERROR: No drive directories found in {}", base_dir.display());
+        eprintln!("  Expected directories like: drive_d, drive_e, drive_f, ...");
+        std::process::exit(1);
+    }
+
+    println!("╔══════════════════════════════════════════════════════════════════╗");
+    println!("║         UFFS Multi-Drive Parity Verification                     ║");
+    println!("╚══════════════════════════════════════════════════════════════════╝");
+    println!();
+    println!("Base directory: {}", base_dir.display());
+    println!("Drives found:   {} ({:?})", drives.len(), drives);
+    println!();
+
+    let mut results: Vec<DriveResult> = Vec::new();
+
+    for (index, drive_lower) in drives.iter().enumerate() {
+        let drive_letter = drive_lower.to_uppercase();
+        let drive_dir = base_dir.join(format!("drive_{}", drive_lower));
+
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!(
+            "  [{}/{}] DRIVE {} - {}",
+            index + 1,
+            drives.len(),
+            drive_letter,
+            drive_dir.display()
+        );
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!();
+
+        // Check if this drive has the necessary files
+        let golden_baseline = match find_golden_baseline_file_optional(&drive_dir, drive_lower) {
+            Some(path) => path,
+            None => {
+                println!("  ⚠️  SKIPPED: No golden baseline found");
+                println!();
+                results.push(DriveResult {
+                    drive_letter: drive_letter.clone(),
+                    result: VerifyResult::Skipped,
+                    baseline_lines: 0,
+                    rust_lines: 0,
+                });
+                continue;
+            }
+        };
+
+        // Generate or use provided rust output
+        let rust_output = if let Some(ref path) = rust_output_path {
+            PathBuf::from(path)
+        } else {
+            let tz_offset =
+                explicit_tz.unwrap_or_else(|| detect_tz_from_baseline(&golden_baseline));
+            regenerate_rust_output(
+                &drive_dir,
+                &drive_letter,
+                drive_lower,
+                tz_offset,
+                custom_bin.as_deref(),
+            )
+        };
+
+        let result = verify_single_drive(base_dir, &drive_dir, &drive_letter, &rust_output);
+        results.push(result);
+        println!();
+    }
+
+    // Print summary
+    print_summary(&results);
+
+    // Exit with failure if any drive mismatched
+    let any_mismatch = results.iter().any(|r| r.result == VerifyResult::Mismatch);
+    std::process::exit(if any_mismatch { 1 } else { 0 });
+}
+
+/// Discover all drive_* directories in the base directory
+fn discover_drives(base_dir: &Path, filter: Option<&str>) -> Vec<String> {
+    let mut drives = Vec::new();
+
+    let entries = match fs::read_dir(base_dir) {
+        Ok(e) => e,
+        Err(_) => return drives,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        if let Some(letter) = name.strip_prefix("drive_") {
+            if letter.len() == 1 && letter.chars().next().map_or(false, |c| c.is_ascii_alphabetic())
+            {
+                // Apply filter if specified
+                if let Some(f) = filter {
+                    if letter.to_lowercase() != f.to_lowercase() {
+                        continue;
+                    }
+                }
+                drives.push(letter.to_lowercase());
+            }
+        }
+    }
+
+    drives.sort();
+    drives
+}
+
+/// Verify a single drive and return the result
+fn verify_single_drive(
+    base_dir: &Path,
+    drive_dir: &Path,
+    drive_letter: &str,
+    rust_output: &Path,
+) -> DriveResult {
+    let drive_lower = drive_letter.to_lowercase();
+    let golden_baseline_file = find_golden_baseline_file(drive_dir, &drive_lower);
 
     if !rust_output.exists() {
         eprintln!(
-            "ERROR: Rust output file not found: {}",
+            "  ERROR: Rust output file not found: {}",
             rust_output.display()
         );
-        std::process::exit(1);
+        return DriveResult {
+            drive_letter: drive_letter.to_string(),
+            result: VerifyResult::Mismatch,
+            baseline_lines: 0,
+            rust_lines: 0,
+        };
     }
-    println!("=== UFFS Strict Full-Output Parity Verification ===");
-    println!("Base dir:      {}", base_dir.display());
-    println!("Drive dir:     {}", drive_dir.display());
-    println!("Drive letter:  {}", drive_letter);
-    println!("Baseline file: {}", golden_baseline_file.display());
-    println!("Rust output:   {}", rust_output.display());
+
+    println!("  Base dir:      {}", base_dir.display());
+    println!("  Drive dir:     {}", drive_dir.display());
+    println!("  Drive letter:  {}", drive_letter);
+    println!("  Baseline file: {}", golden_baseline_file.display());
+    println!("  Rust output:   {}", rust_output.display());
     println!();
 
-    println!("Computing ordered full-file SHA256...");
+    println!("  Computing ordered full-file SHA256...");
     let golden_hashes = compute_file_hashes(&golden_baseline_file);
-    let rust_hashes = compute_file_hashes(&rust_output);
+    let rust_hashes = compute_file_hashes(rust_output);
 
     println!();
     println!(
-        "Golden baseline: {} ({} lines)",
+        "  Golden baseline: {} ({} lines)",
         golden_hashes.ordered_hash, golden_hashes.line_count
     );
     println!(
-        "Rust output:    {} ({} lines)",
+        "  Rust output:     {} ({} lines)",
         rust_hashes.ordered_hash, rust_hashes.line_count
     );
     println!();
 
     if golden_hashes.ordered_hash == rust_hashes.ordered_hash {
-        println!("RESULT: STRICT FULL OUTPUT MATCH");
-        println!("  Golden baseline verified for drive {}.", drive_letter);
-        std::process::exit(0);
+        println!("  ✅ RESULT: STRICT FULL OUTPUT MATCH");
+        println!("     Golden baseline verified for drive {}.", drive_letter);
+        return DriveResult {
+            drive_letter: drive_letter.to_string(),
+            result: VerifyResult::StrictMatch,
+            baseline_lines: golden_hashes.line_count,
+            rust_lines: rust_hashes.line_count,
+        };
     }
 
-    println!("Ordered hashes differ; checking full-file line-sort normalization...");
-    println!("Golden baseline (sorted): {}", golden_hashes.sorted_hash);
-    println!("Rust output (sorted):    {}", rust_hashes.sorted_hash);
+    println!("  Ordered hashes differ; checking full-file line-sort normalization...");
+    println!(
+        "  Golden baseline (sorted): {}",
+        golden_hashes.sorted_hash
+    );
+    println!("  Rust output (sorted):     {}", rust_hashes.sorted_hash);
     println!();
 
     if golden_hashes.sorted_hash == rust_hashes.sorted_hash {
-        println!("RESULT: FULL OUTPUT MATCH AFTER LINE-SORT NORMALIZATION");
-        println!("  Exact line order differs (different traversal order), but content matches.");
-        println!("  This is acceptable — C++ and Rust walk the MFT/tree in different orders.");
-        std::process::exit(0);
+        println!("  ✅ RESULT: FULL OUTPUT MATCH AFTER LINE-SORT NORMALIZATION");
+        println!("     Exact line order differs (different traversal order), but content matches.");
+        println!("     This is acceptable — C++ and Rust walk the MFT/tree in different orders.");
+        return DriveResult {
+            drive_letter: drive_letter.to_string(),
+            result: VerifyResult::SortedMatch,
+            baseline_lines: golden_hashes.line_count,
+            rust_lines: rust_hashes.line_count,
+        };
     }
 
-    println!("RESULT: STRICT FULL OUTPUT MISMATCH");
-    println!("  Sorted baseline:  {}", golden_hashes.sorted_hash);
-    println!("  Sorted Rust:      {}", rust_hashes.sorted_hash);
+    println!("  ❌ RESULT: STRICT FULL OUTPUT MISMATCH");
+    println!("     Sorted baseline:  {}", golden_hashes.sorted_hash);
+    println!("     Sorted Rust:      {}", rust_hashes.sorted_hash);
     println!(
-        "  Line count:       {} (baseline) vs {} (Rust)",
+        "     Line count:       {} (baseline) vs {} (Rust)",
         golden_hashes.line_count, rust_hashes.line_count
     );
     println!();
-    println!("  TIP: If timestamps are off by exactly 1 hour, try the other TZ offset:");
-    println!("       --tz -7 (PDT) or --tz -8 (PST)");
+    println!("     TIP: If timestamps are off by exactly 1 hour, try the other TZ offset:");
+    println!("          --tz -7 (PDT) or --tz -8 (PST)");
     println!();
 
     // Show SORTED diffs first — this is the meaningful comparison
-    // (Ordered diffs are just noise from different traversal order)
-    show_first_sorted_diffs(&golden_baseline_file, &rust_output);
+    show_first_sorted_diffs(&golden_baseline_file, rust_output);
 
-    std::process::exit(1);
+    DriveResult {
+        drive_letter: drive_letter.to_string(),
+        result: VerifyResult::Mismatch,
+        baseline_lines: golden_hashes.line_count,
+        rust_lines: rust_hashes.line_count,
+    }
+}
+
+/// Print final summary of all drive results
+fn print_summary(results: &[DriveResult]) {
+    println!();
+    println!("╔══════════════════════════════════════════════════════════════════╗");
+    println!("║                         SUMMARY                                  ║");
+    println!("╚══════════════════════════════════════════════════════════════════╝");
+    println!();
+
+    let mut strict_match = 0;
+    let mut sorted_match = 0;
+    let mut mismatch = 0;
+    let mut skipped = 0;
+
+    for result in results {
+        let (icon, status) = match result.result {
+            VerifyResult::StrictMatch => {
+                strict_match += 1;
+                ("✅", "STRICT MATCH")
+            }
+            VerifyResult::SortedMatch => {
+                sorted_match += 1;
+                ("✅", "SORTED MATCH")
+            }
+            VerifyResult::Mismatch => {
+                mismatch += 1;
+                ("❌", "MISMATCH")
+            }
+            VerifyResult::Skipped => {
+                skipped += 1;
+                ("⚠️ ", "SKIPPED")
+            }
+        };
+        println!(
+            "  {} Drive {}: {} ({} / {} lines)",
+            icon, result.drive_letter, status, result.baseline_lines, result.rust_lines
+        );
+    }
+
+    println!();
+    println!("  Total drives:    {}", results.len());
+    println!("  Strict matches:  {}", strict_match);
+    println!("  Sorted matches:  {}", sorted_match);
+    println!("  Mismatches:      {}", mismatch);
+    println!("  Skipped:         {}", skipped);
+    println!();
+
+    if mismatch == 0 && skipped == 0 {
+        println!("  🎉 ALL DRIVES VERIFIED SUCCESSFULLY!");
+    } else if mismatch == 0 {
+        println!("  ✅ All verified drives passed (some skipped)");
+    } else {
+        println!("  ⚠️  {} drive(s) had mismatches", mismatch);
+    }
+    println!();
 }
 
 /// Resolves the drive data directory.
@@ -202,61 +460,96 @@ fn resolve_drive_dir(base_dir: &Path, drive_lower: &str) -> PathBuf {
 }
 
 fn find_golden_baseline_file(data_dir: &Path, drive_lower: &str) -> PathBuf {
-    // Try various naming conventions in order of preference
-    let candidates = [
-        format!("golden_{}.txt", drive_lower),
-        format!("cpp_{}.txt", drive_lower), // C++ baseline output
-        format!("rust_live_{}.txt", drive_lower), // Live scan output (when comparing offline)
-    ];
+    match find_golden_baseline_file_optional(data_dir, drive_lower) {
+        Some(path) => path,
+        None => {
+            let candidates = baseline_candidates(drive_lower);
+            eprintln!(
+                "ERROR: Golden baseline file not found in {}",
+                data_dir.display()
+            );
+            eprintln!("  Checked:");
+            for name in &candidates {
+                eprintln!("    - {}", name);
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Try to find a golden baseline file, returning None if not found
+fn find_golden_baseline_file_optional(data_dir: &Path, drive_lower: &str) -> Option<PathBuf> {
+    let candidates = baseline_candidates(drive_lower);
 
     for name in &candidates {
         let path = data_dir.join(name);
         if path.exists() {
-            return path;
+            return Some(path);
         }
     }
+    None
+}
 
-    eprintln!(
-        "ERROR: Golden baseline file not found in {}",
-        data_dir.display()
-    );
-    eprintln!("  Checked:");
-    for name in &candidates {
-        eprintln!("    - {}", name);
-    }
-    std::process::exit(1);
+/// List of candidate baseline filenames to check
+fn baseline_candidates(drive_lower: &str) -> [String; 3] {
+    [
+        format!("golden_{}.txt", drive_lower),
+        format!("cpp_{}.txt", drive_lower), // C++ baseline output
+        format!("rust_live_{}.txt", drive_lower), // Live scan output (when comparing offline)
+    ]
 }
 
 fn print_usage(prog: &str) {
-    eprintln!(
-        "Usage: {} <base_dir> <drive_letter> [--rust <rust_output> | --regenerate] [OPTIONS]",
-        prog
-    );
+    eprintln!("UFFS Multi-Drive Parity Verification");
+    eprintln!();
+    eprintln!("Usage:");
+    eprintln!("  {} <base_dir> --regenerate                   # Verify all drives", prog);
+    eprintln!("  {} <base_dir> --drive D --regenerate         # Verify drive D only", prog);
+    eprintln!("  {} <base_dir> --drive D --rust <path>        # Compare existing output", prog);
+    eprintln!("  {} <base_dir> D --regenerate                 # Legacy single-drive mode", prog);
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --tz OFFSET   Timezone offset in hours (default: auto-detect from baseline)");
-    eprintln!("                Auto-detection uses Pacific time DST rules based on capture date.");
-    eprintln!("                Override with -7 for PDT (Mar-Nov), -8 for PST (Nov-Mar)");
-    eprintln!("  --bin PATH    Path to uffs binary (default: auto-detect from cargo metadata)");
+    eprintln!("  --regenerate       Run uffs to generate fresh output, then compare");
+    eprintln!("  --rust <path>      Compare existing Rust output (requires --drive)");
+    eprintln!("  --drive <letter>   Verify only the specified drive");
+    eprintln!("  --tz <offset>      Timezone offset in hours (default: auto-detect)");
+    eprintln!("                     Use -7 for PDT (Mar-Nov), -8 for PST (Nov-Mar)");
+    eprintln!("  --bin <path>       Path to uffs binary (default: auto-detect)");
     eprintln!();
-    eprintln!("The script auto-detects the drive data directory:");
-    eprintln!("  - New layout: <base_dir>/drive_<letter>/  (e.g., uffs_data/drive_d/)");
-    eprintln!("  - Legacy:     <base_dir>/                 (files directly in base)");
+    eprintln!("The script discovers drive directories automatically:");
+    eprintln!("  <base_dir>/drive_d/  →  Drive D");
+    eprintln!("  <base_dir>/drive_e/  →  Drive E");
+    eprintln!("  ...");
     eprintln!();
     eprintln!("Examples:");
-    eprintln!("  {} /Users/rnio/uffs_data F --regenerate", prog);
-    eprintln!(
-        "  {} /Users/rnio/uffs_data F --regenerate --tz -8  # override auto-detect",
-        prog
-    );
-    eprintln!(
-        "  {} /Users/rnio/uffs_data F --regenerate --bin ./target/release/uffs",
-        prog
-    );
-    eprintln!(
-        "  {} /Users/rnio/uffs_data D --rust /tmp/rust_output.txt",
-        prog
-    );
+    eprintln!("  # Verify all drives in uffs_data");
+    eprintln!("  {} /Users/rnio/uffs_data --regenerate", prog);
+    eprintln!();
+    eprintln!("  # Verify only drive F");
+    eprintln!("  {} /Users/rnio/uffs_data --drive F --regenerate", prog);
+    eprintln!();
+    eprintln!("  # Override timezone detection");
+    eprintln!("  {} /Users/rnio/uffs_data --regenerate --tz -8", prog);
+}
+
+/// Parse --drive argument from command line
+fn parse_drive_filter(args: &[String]) -> Option<String> {
+    for i in 0..args.len() {
+        if args[i] == "--drive" && i + 1 < args.len() {
+            return Some(args[i + 1].to_lowercase());
+        }
+    }
+    None
+}
+
+/// Parse --rust argument from command line
+fn parse_rust_path(args: &[String]) -> Option<String> {
+    for i in 0..args.len() {
+        if args[i] == "--rust" && i + 1 < args.len() {
+            return Some(args[i + 1].clone());
+        }
+    }
+    None
 }
 
 /// Parse --tz argument from command line. Returns None if not specified
