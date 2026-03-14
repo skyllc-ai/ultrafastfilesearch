@@ -59,6 +59,23 @@ impl MftBitmap {
             .sum()
     }
 
+    /// Returns the highest FRS number that is marked as in use.
+    ///
+    /// This scans the bitmap backwards to find the last set bit.
+    /// Returns 0 if no records are in use.
+    #[must_use]
+    pub fn max_frs_in_use(&self) -> u64 {
+        // Scan backwards through bytes to find the last non-zero byte
+        for (byte_idx, &byte) in self.data.iter().enumerate().rev() {
+            if byte != 0 {
+                // Found a non-zero byte, find the highest bit set
+                let bit_idx = 7 - byte.leading_zeros() as usize;
+                return (byte_idx * 8 + bit_idx) as u64;
+            }
+        }
+        0
+    }
+
     /// Returns the total number of records this bitmap covers.
     #[must_use]
     pub fn record_count(&self) -> usize {

@@ -181,10 +181,11 @@ impl ParallelMftReader {
         }
 
         let total_io_ops = io_ops.len();
-        let estimated_records = if let Some(ref bm) = self.bitmap {
-            bm.count_in_use()
+        let (estimated_records, max_frs) = if let Some(ref bm) = self.bitmap {
+            (bm.count_in_use(), bm.max_frs_in_use())
         } else {
-            total_records
+            // No bitmap: use total records as both count and max FRS
+            (total_records, total_records.saturating_sub(1) as u64)
         };
 
         // Calculate total bytes to read and max I/O size for buffer allocation
@@ -198,14 +199,16 @@ impl ParallelMftReader {
         info!(
             io_ops = total_io_ops,
             estimated_records,
+            max_frs,
             bytes_to_read_mb = total_bytes_to_read / (1024 * 1024),
             max_io_size_kb = max_io_size / 1024,
             direct_io = use_direct_chunk_io,
             "📊 Generated I/O operations for inline parsing"
         );
 
-        // Pre-allocate MftIndex and build it incrementally during I/O
-        let mut index = MftIndex::with_capacity(volume, estimated_records);
+        // Pre-allocate MftIndex with C++-matching ratios to eliminate resizing during
+        // parse
+        let mut index = MftIndex::with_capacity_optimized(volume, estimated_records, max_frs);
 
         // Create IOCP
         let read_start = std::time::Instant::now();
