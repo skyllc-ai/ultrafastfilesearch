@@ -224,7 +224,8 @@ pub async fn search(
         let t_output = std::time::Instant::now();
         let elapsed = start_time.elapsed();
         let row_count = native.results.len();
-        let cpp_pattern = format!(">{}:{}", native.index.volume, pattern);
+        // Convert glob pattern to regex format for C++ footer (e.g., * -> .*)
+        let cpp_pattern = format!(">{}:{}", native.index.volume, pattern.replace('*', ".*"));
         let footer_ctx = crate::commands::output::CppFooterContext {
             output_targets: &output_targets,
             pattern: &cpp_pattern,

@@ -1020,7 +1020,8 @@ mod tests {
         .map_err(Into::into)
     }
 
-    /// Create a large sample DataFrame (20,000+ rows) for testing slow-scan footer.
+    /// Create a large sample DataFrame (20,000+ rows) for testing slow-scan
+    /// footer.
     fn large_sample_df() -> Result<DataFrame> {
         let count = 20_000;
         let paths: Vec<String> = (0..count)
@@ -1434,7 +1435,8 @@ mod tests {
         drop(fs::remove_file(&path));
 
         // Should NOT contain fast-scan message (row_count >= 20,000)
-        // Only check footer structure - first row will be "C:\Temp\file0.txt","file0.txt"
+        // Only check footer structure - first row will be
+        // "C:\Temp\file0.txt","file0.txt"
         let lines: Vec<&str> = written.lines().collect();
         let footer_start = lines.len().saturating_sub(4);
         assert_eq!(lines[footer_start], "");
