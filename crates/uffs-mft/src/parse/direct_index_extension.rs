@@ -31,20 +31,12 @@
     reason = "!condition checks are clearer for NTFS flag testing"
 )]
 #![expect(
-    clippy::unseparated_literal_suffix,
-    reason = "literal suffixes like 0u32 are common in NTFS struct parsing"
-)]
-#![expect(
-    clippy::doc_markdown,
-    reason = "NTFS terminology like MftIndex does not need backticks in internal docs"
-)]
-#![expect(
     clippy::if_then_some_else_none,
     reason = "explicit if/else is clearer than bool::then in complex NTFS logic"
 )]
 #![expect(
-    clippy::explicit_iter_loop,
-    reason = ".iter() is explicit and intentional"
+    clippy::single_call_fn,
+    reason = "parse_extension_to_index is a separate function for code organization"
 )]
 
 use core::mem::size_of;

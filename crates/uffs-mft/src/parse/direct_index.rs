@@ -39,24 +39,12 @@
     reason = "reusing common names like 'record' in nested scopes is idiomatic here"
 )]
 #![expect(
-    clippy::single_call_fn,
-    reason = "parse_extension_to_index is a separate function for code organization"
-)]
-#![expect(
     clippy::let_underscore_untyped,
     reason = "let _ = expr is used for intentionally ignoring results"
 )]
 #![expect(
-    clippy::if_not_else,
-    reason = "!condition checks are clearer for NTFS flag testing"
-)]
-#![expect(
     clippy::explicit_iter_loop,
     reason = ".iter() is explicit and intentional"
-)]
-#![expect(
-    clippy::if_then_some_else_none,
-    reason = "explicit if/else is clearer than bool::then in complex NTFS logic"
 )]
 
 use core::mem::size_of;
