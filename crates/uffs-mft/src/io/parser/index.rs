@@ -97,8 +97,12 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let mut name_parse_counter: u16 = 0;
     let mut default_size = 0u64;
     let mut default_allocated = 0u64;
-    // ADS: (stream_name, size, allocated)
+    // User-visible ADS: (stream_name, size, allocated)
     let mut additional_streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
+    // Internal NTFS streams (e.g. $REPARSE, $EA, $OBJECT_ID) — not emitted as
+    // output rows but still tracked for tree-metrics accounting.
+    // (size, allocated)
+    let mut internal_streams: SmallVec<[(u64, u64); 4]> = SmallVec::new();
     let mut reparse_tag: u32 = 0;
     let mut dir_index_size: u64 = 0;
     let mut dir_index_allocated: u64 = 0;
@@ -321,8 +325,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     }
                 };
 
-                // Add $REPARSE_POINT as a stream (matches C++ stream counting)
-                additional_streams.push((String::from("$REPARSE"), rp_size, rp_allocated));
+                // $REPARSE_POINT is an internal stream — tracked for tree metrics
+                // but not emitted as a user-visible output row
+                internal_streams.push((rp_size, rp_allocated));
             }
             Some(
                 AttributeType::IndexRoot | AttributeType::IndexAllocation | AttributeType::Bitmap,
@@ -417,19 +422,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                             }
                         };
 
-                        let stream_name = if attr_name.is_empty() {
-                            match attr_type {
-                                Some(AttributeType::Bitmap) => String::from("$BITMAP"),
-                                Some(AttributeType::IndexRoot) => String::from("$INDEX_ROOT"),
-                                Some(AttributeType::IndexAllocation) => {
-                                    String::from("$INDEX_ALLOCATION")
-                                }
-                                _ => String::new(),
-                            }
-                        } else {
-                            attr_name
-                        };
-                        additional_streams.push((stream_name, size, allocated));
+                        // Non-$I30 index attributes are internal streams
+                        internal_streams.push((size, allocated));
                     }
                 }
             }
@@ -444,7 +438,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 | AttributeType::SecurityDescriptor
                 | AttributeType::AttributeList,
             ) => {
-                // All these are counted as streams in C++
+                // All these are internal streams — tracked for tree metrics but
+                // not emitted as user-visible output rows.
                 // Check if primary attribute (LowestVCN == 0)
                 let is_primary = if attr_header.is_non_resident == 0 {
                     true
@@ -461,24 +456,6 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 };
 
                 if is_primary {
-                    // Extract attribute name (if any)
-                    let attr_name = if attr_header.name_length > 0 {
-                        let name_offset = offset + attr_header.name_offset as usize;
-                        let name_len = attr_header.name_length as usize;
-                        if name_offset + name_len * 2 <= data.len() {
-                            let name_bytes = &data[name_offset..name_offset + name_len * 2];
-                            let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                                .collect();
-                            String::from_utf16_lossy(&name_u16)
-                        } else {
-                            String::new()
-                        }
-                    } else {
-                        String::new()
-                    };
-
                     let (size, allocated) = if attr_header.is_non_resident == 0 {
                         let value_length_bytes = &data[offset + 16..offset + 20];
                         let value_length =
@@ -500,36 +477,12 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                         }
                     };
 
-                    let stream_name = if attr_name.is_empty() {
-                        match attr_type {
-                            Some(AttributeType::ObjectId) => String::from("$OBJECT_ID"),
-                            Some(AttributeType::VolumeName) => String::from("$VOLUME_NAME"),
-                            Some(AttributeType::VolumeInformation) => {
-                                String::from("$VOLUME_INFORMATION")
-                            }
-                            Some(AttributeType::PropertySet) => String::from("$PROPERTY_SET"),
-                            Some(AttributeType::Ea) => String::from("$EA"),
-                            Some(AttributeType::EaInformation) => String::from("$EA_INFORMATION"),
-                            Some(AttributeType::LoggedUtilityStream) => {
-                                String::from("$LOGGED_UTILITY_STREAM")
-                            }
-                            Some(AttributeType::SecurityDescriptor) => {
-                                String::from("$SECURITY_DESCRIPTOR")
-                            }
-                            Some(AttributeType::AttributeList) => String::from("$ATTRIBUTE_LIST"),
-                            _ => String::new(),
-                        }
-                    } else {
-                        attr_name
-                    };
-                    additional_streams.push((stream_name, size, allocated));
+                    internal_streams.push((size, allocated));
                 }
             }
             _ => {
-                // C++ counts ALL attribute types as streams via default: case
-                // This includes truly unknown types
-                let type_code = attr_header.type_code;
-
+                // Unknown attribute types are internal streams — tracked for
+                // tree metrics but not emitted as user-visible output rows.
                 // Check if primary attribute (LowestVCN == 0)
                 let is_primary = if attr_header.is_non_resident == 0 {
                     true
@@ -546,24 +499,6 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 };
 
                 if is_primary {
-                    // Extract attribute name (if any)
-                    let attr_name = if attr_header.name_length > 0 {
-                        let name_offset = offset + attr_header.name_offset as usize;
-                        let name_len = attr_header.name_length as usize;
-                        if name_offset + name_len * 2 <= data.len() {
-                            let name_bytes = &data[name_offset..name_offset + name_len * 2];
-                            let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                                .collect();
-                            String::from_utf16_lossy(&name_u16)
-                        } else {
-                            String::new()
-                        }
-                    } else {
-                        String::new()
-                    };
-
                     let (size, allocated) = if attr_header.is_non_resident == 0 {
                         let value_length_bytes = &data[offset + 16..offset + 20];
                         let value_length =
@@ -585,12 +520,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                         }
                     };
 
-                    let stream_name = if attr_name.is_empty() {
-                        format!("$UNKNOWN_0x{type_code:X}")
-                    } else {
-                        attr_name
-                    };
-                    additional_streams.push((stream_name, size, allocated));
+                    internal_streams.push((size, allocated));
                 }
             }
         }
@@ -621,7 +551,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             // The $FILE_NAME may be in an extension record, but the ADS are here.
             // Without this, ADS on files/directories with extension records are lost.
 
-            // Pre-process ADS streams BEFORE creating the record
+            // Pre-process user-visible ADS streams BEFORE creating the record
             let additional_stream_count = additional_streams.len();
             let mut stream_indices: Vec<u32> = Vec::with_capacity(additional_stream_count);
             for (stream_name, stream_size, stream_allocated) in additional_streams {
@@ -644,9 +574,38 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     },
                     next_entry: NO_ENTRY,
                     name: stream_name_ref,
-                    flags: 0,
+                    // type_name_id=8 for $DATA (0x80 >> 4), stored in bits 2-7
+                    flags: 8 << 2,
                 });
                 stream_indices.push(stream_idx);
+            }
+
+            // Build internal stream chain for tree-metrics accounting
+            let internal_stream_count = internal_streams.len();
+            let mut internal_size_total = 0_u64;
+            let mut internal_alloc_total = 0_u64;
+            let mut first_internal = NO_ENTRY;
+            let mut last_internal = NO_ENTRY;
+            for (ist_size, ist_allocated) in internal_streams {
+                internal_size_total = internal_size_total.saturating_add(ist_size);
+                internal_alloc_total = internal_alloc_total.saturating_add(ist_allocated);
+                let new_idx = index.internal_streams.len() as u32;
+                index
+                    .internal_streams
+                    .push(crate::index::InternalStreamInfo {
+                        size: SizeInfo {
+                            length: ist_size,
+                            allocated: ist_allocated,
+                        },
+                        next_entry: NO_ENTRY,
+                        flags: 0,
+                    });
+                if last_internal == NO_ENTRY {
+                    first_internal = new_idx;
+                } else {
+                    index.internal_streams[last_internal as usize].next_entry = new_idx;
+                }
+                last_internal = new_idx;
             }
 
             // Now create the record and set up streams
@@ -656,8 +615,17 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 length: default_size,
                 allocated: default_allocated,
             };
+            // Set type_name_id for first_stream: 0 for directories ($I30), 8 for files ($DATA)
+            record.first_stream.flags = if record.stdinfo.is_directory() {
+                0 // type_name_id=0 for directory index ($I30)
+            } else {
+                8 << 2 // type_name_id=8 for $DATA (0x80 >> 4), stored in bits 2-7
+            };
+            record.internal_streams_size = internal_size_total;
+            record.internal_streams_allocated = internal_alloc_total;
+            record.first_internal_stream = first_internal;
 
-            // Chain ADS streams to first_stream
+            // Chain user-visible ADS streams to first_stream
             if !stream_indices.is_empty() {
                 // Chain the streams together
                 for i in 0..stream_indices.len().saturating_sub(1) {
@@ -668,8 +636,14 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 // Attach to first_stream
                 let record = index.get_or_create(frs);
                 record.first_stream.next_entry = stream_indices[0];
-                record.stream_count = 1 + additional_stream_count as u16;
             }
+
+            // stream_count = user-visible streams only (1 default + ADS)
+            let record = index.get_or_create(frs);
+            record.stream_count = 1 + additional_stream_count as u16;
+            // total_stream_count = ALL streams including internal
+            record.total_stream_count =
+                1 + additional_stream_count as u16 + internal_stream_count as u16;
 
             // Leave first_name empty - extension record will fill it
             return false;
@@ -709,7 +683,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         link_indices.push(link_idx);
     }
 
-    // Pre-process additional streams (ADS): add to names buffer and streams list
+    // Pre-process user-visible ADS streams: add to names buffer and streams list
     let additional_stream_count = additional_streams.len();
     let mut stream_indices: Vec<u32> = Vec::with_capacity(additional_stream_count);
     for (stream_name, stream_size, stream_allocated) in additional_streams {
@@ -732,9 +706,38 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             },
             next_entry: NO_ENTRY, // Will be patched below
             name: stream_name_ref,
-            flags: 0,
+            // type_name_id=8 for $DATA (0x80 >> 4), stored in bits 2-7
+            flags: 8 << 2,
         });
         stream_indices.push(stream_idx);
+    }
+
+    // Build internal stream chain for tree-metrics accounting
+    let internal_stream_count = internal_streams.len();
+    let mut internal_size_total = 0_u64;
+    let mut internal_alloc_total = 0_u64;
+    let mut first_internal = NO_ENTRY;
+    let mut last_internal = NO_ENTRY;
+    for (ist_size, ist_allocated) in internal_streams {
+        internal_size_total = internal_size_total.saturating_add(ist_size);
+        internal_alloc_total = internal_alloc_total.saturating_add(ist_allocated);
+        let new_idx = index.internal_streams.len() as u32;
+        index
+            .internal_streams
+            .push(crate::index::InternalStreamInfo {
+                size: SizeInfo {
+                    length: ist_size,
+                    allocated: ist_allocated,
+                },
+                next_entry: NO_ENTRY,
+                flags: 0,
+            });
+        if last_internal == NO_ENTRY {
+            first_internal = new_idx;
+        } else {
+            index.internal_streams[last_internal as usize].next_entry = new_idx;
+        }
+        last_internal = new_idx;
     }
 
     // Ensure parent exists (create placeholder if needed) - do this before getting
@@ -751,17 +754,26 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         length: default_size,
         allocated: default_allocated,
     };
+    // Set type_name_id for first_stream: 0 for directories ($I30), 8 for files ($DATA)
+    record.first_stream.flags = if record.stdinfo.is_directory() {
+        0 // type_name_id=0 for directory index ($I30)
+    } else {
+        8 << 2 // type_name_id=8 for $DATA (0x80 >> 4), stored in bits 2-7
+    };
     record.first_name = LinkInfo {
         next_entry: NO_ENTRY,
         name: name_ref,
         parent_frs,
     };
     record.name_count = 1 + additional_count as u16;
-    // stream_count = 1 (default) + additional ADS
+    // stream_count = user-visible streams only (1 default + ADS)
     record.stream_count = 1 + additional_stream_count as u16;
-    // total_stream_count includes all streams (including internal ones like
-    // $REPARSE)
-    record.total_stream_count = 1 + additional_stream_count as u16;
+    // total_stream_count = ALL streams including internal (for tree metrics)
+    record.total_stream_count = 1 + additional_stream_count as u16 + internal_stream_count as u16;
+    // Internal stream metadata for tree metrics
+    record.internal_streams_size = internal_size_total;
+    record.internal_streams_allocated = internal_alloc_total;
+    record.first_internal_stream = first_internal;
     // Set reparse tag if this is a reparse point
     record.reparse_tag = reparse_tag;
 

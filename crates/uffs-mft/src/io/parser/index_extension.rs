@@ -75,7 +75,10 @@ pub(super) fn parse_extension_to_index(
 
     // Collect names and streams from extension record
     let mut names: SmallVec<[(String, u64); 4]> = SmallVec::new();
+    // User-visible ADS only
     let mut streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
+    // Internal NTFS streams (for tree-metrics accounting)
+    let mut ext_internal_streams: SmallVec<[(u64, u64); 4]> = SmallVec::new();
     let mut dir_index_size: u64 = 0;
     let mut dir_index_allocated: u64 = 0;
 
@@ -222,7 +225,7 @@ pub(super) fn parse_extension_to_index(
                         (0_u64, 0_u64)
                     }
                 };
-                streams.push((String::from("$REPARSE"), rp_size, rp_allocated));
+                ext_internal_streams.push((rp_size, rp_allocated));
             }
             Some(
                 AttributeType::IndexRoot | AttributeType::IndexAllocation | AttributeType::Bitmap,
@@ -274,7 +277,7 @@ pub(super) fn parse_extension_to_index(
                         }
                     }
                 } else {
-                    // Non-$I30 index - count as stream
+                    // Non-$I30 index — internal stream for tree metrics
                     let is_primary = if attr_header.is_non_resident == 0 {
                         true
                     } else {
@@ -311,19 +314,7 @@ pub(super) fn parse_extension_to_index(
                             }
                         };
 
-                        let stream_name = if attr_name.is_empty() {
-                            match attr_type {
-                                Some(AttributeType::Bitmap) => String::from("$BITMAP"),
-                                Some(AttributeType::IndexRoot) => String::from("$INDEX_ROOT"),
-                                Some(AttributeType::IndexAllocation) => {
-                                    String::from("$INDEX_ALLOCATION")
-                                }
-                                _ => String::new(),
-                            }
-                        } else {
-                            attr_name
-                        };
-                        streams.push((stream_name, size, allocated));
+                        ext_internal_streams.push((size, allocated));
                     }
                 }
             }
@@ -354,23 +345,6 @@ pub(super) fn parse_extension_to_index(
                 };
 
                 if is_primary {
-                    let attr_name = if attr_header.name_length > 0 {
-                        let name_offset = offset + attr_header.name_offset as usize;
-                        let name_len = attr_header.name_length as usize;
-                        if name_offset + name_len * 2 <= data.len() {
-                            let name_bytes = &data[name_offset..name_offset + name_len * 2];
-                            let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                                .collect();
-                            String::from_utf16_lossy(&name_u16)
-                        } else {
-                            String::new()
-                        }
-                    } else {
-                        String::new()
-                    };
-
                     let (size, allocated) = if attr_header.is_non_resident == 0 {
                         let value_length_bytes = &data[offset + 16..offset + 20];
                         let value_length =
@@ -392,29 +366,7 @@ pub(super) fn parse_extension_to_index(
                         }
                     };
 
-                    let stream_name = if attr_name.is_empty() {
-                        match attr_type {
-                            Some(AttributeType::ObjectId) => String::from("$OBJECT_ID"),
-                            Some(AttributeType::VolumeName) => String::from("$VOLUME_NAME"),
-                            Some(AttributeType::VolumeInformation) => {
-                                String::from("$VOLUME_INFORMATION")
-                            }
-                            Some(AttributeType::PropertySet) => String::from("$PROPERTY_SET"),
-                            Some(AttributeType::Ea) => String::from("$EA"),
-                            Some(AttributeType::EaInformation) => String::from("$EA_INFORMATION"),
-                            Some(AttributeType::LoggedUtilityStream) => {
-                                String::from("$LOGGED_UTILITY_STREAM")
-                            }
-                            Some(AttributeType::SecurityDescriptor) => {
-                                String::from("$SECURITY_DESCRIPTOR")
-                            }
-                            Some(AttributeType::AttributeList) => String::from("$ATTRIBUTE_LIST"),
-                            _ => String::new(),
-                        }
-                    } else {
-                        attr_name
-                    };
-                    streams.push((stream_name, size, allocated));
+                    ext_internal_streams.push((size, allocated));
                 }
             }
             Some(AttributeType::StandardInformation) => {
@@ -439,23 +391,6 @@ pub(super) fn parse_extension_to_index(
                 };
 
                 if is_primary {
-                    let attr_name = if attr_header.name_length > 0 {
-                        let name_offset = offset + attr_header.name_offset as usize;
-                        let name_len = attr_header.name_length as usize;
-                        if name_offset + name_len * 2 <= data.len() {
-                            let name_bytes = &data[name_offset..name_offset + name_len * 2];
-                            let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                                .collect();
-                            String::from_utf16_lossy(&name_u16)
-                        } else {
-                            String::new()
-                        }
-                    } else {
-                        String::new()
-                    };
-
                     let (size, allocated) = if attr_header.is_non_resident == 0 {
                         let value_length_bytes = &data[offset + 16..offset + 20];
                         let value_length =
@@ -477,12 +412,7 @@ pub(super) fn parse_extension_to_index(
                         }
                     };
 
-                    let stream_name = if attr_name.is_empty() {
-                        format!("$UNKNOWN_0x{type_code:X}")
-                    } else {
-                        attr_name
-                    };
-                    streams.push((stream_name, size, allocated));
+                    ext_internal_streams.push((size, allocated));
                 }
             }
         }
@@ -490,8 +420,8 @@ pub(super) fn parse_extension_to_index(
         offset += attr_header.length as usize;
     }
 
-    // If no names or streams found, nothing to do
-    if names.is_empty() && streams.is_empty() {
+    // If no names, user-visible streams, or internal streams found, nothing to do
+    if names.is_empty() && streams.is_empty() && ext_internal_streams.is_empty() {
         return false;
     }
 
@@ -531,7 +461,8 @@ pub(super) fn parse_extension_to_index(
             },
             next_entry: NO_ENTRY,
             name: name_ref,
-            flags: 0,
+            // type_name_id=8 for $DATA (0x80 >> 4), stored in bits 2-7
+            flags: 8 << 2,
         });
         stream_indices.push(stream_idx);
     }
@@ -653,10 +584,68 @@ pub(super) fn parse_extension_to_index(
                 record.first_stream.next_entry = stream_indices[0];
             }
 
-            // Update stream count
+            // Update stream count (user-visible only)
             let record = &mut index.records[record_idx as usize];
             record.stream_count += stream_indices.len() as u16;
             record.total_stream_count += stream_indices.len() as u16;
+        }
+
+        // Build internal stream chain for extension record attributes
+        if !ext_internal_streams.is_empty() {
+            let record = &mut index.records[record_idx as usize];
+
+            // Find end of existing internal stream chain
+            let last_internal_idx = if record.first_internal_stream != NO_ENTRY {
+                let mut idx = record.first_internal_stream;
+                while index.internal_streams[idx as usize].next_entry != NO_ENTRY {
+                    idx = index.internal_streams[idx as usize].next_entry;
+                }
+                Some(idx)
+            } else {
+                None
+            };
+
+            let mut first_new_internal = NO_ENTRY;
+            let mut prev_internal = NO_ENTRY;
+            for (ist_size, ist_allocated) in &ext_internal_streams {
+                record.internal_streams_size =
+                    record.internal_streams_size.saturating_add(*ist_size);
+                record.internal_streams_allocated = record
+                    .internal_streams_allocated
+                    .saturating_add(*ist_allocated);
+
+                let new_idx = index.internal_streams.len() as u32;
+                index
+                    .internal_streams
+                    .push(crate::index::InternalStreamInfo {
+                        size: crate::index::SizeInfo {
+                            length: *ist_size,
+                            allocated: *ist_allocated,
+                        },
+                        next_entry: NO_ENTRY,
+                        flags: 0,
+                    });
+
+                if first_new_internal == NO_ENTRY {
+                    first_new_internal = new_idx;
+                }
+                if prev_internal != NO_ENTRY {
+                    index.internal_streams[prev_internal as usize].next_entry = new_idx;
+                }
+                prev_internal = new_idx;
+            }
+
+            // Attach to existing chain or set as head
+            if let Some(last_idx) = last_internal_idx {
+                index.internal_streams[last_idx as usize].next_entry = first_new_internal;
+            } else {
+                let record = &mut index.records[record_idx as usize];
+                record.first_internal_stream = first_new_internal;
+            }
+
+            // Update total_stream_count to include new internal streams
+            let record = &mut index.records[record_idx as usize];
+            record.total_stream_count += ext_internal_streams.len() as u16;
         }
 
         // Merge directory index sizes from extension records
@@ -720,5 +709,5 @@ pub(super) fn parse_extension_to_index(
         }
     }
 
-    !names.is_empty() || !streams.is_empty()
+    !names.is_empty() || !streams.is_empty() || !ext_internal_streams.is_empty()
 }
