@@ -102,33 +102,22 @@ impl ParallelMftReader {
         );
 
         // Generate read chunks with bitmap skip optimization
-        // For NVMe/SSD, use precise chunk generation to skip unused regions entirely
+        // CRITICAL: Use standard chunking for ALL drive types (bitmap is advisory, not
+        // authoritative) The bitmap should be used for I/O optimization (skip
+        // ranges, pre-allocation), NOT as an authoritative filter for which
+        // regions to read. If the bitmap is stale (common on live filesystems),
+        // treating it as authoritative causes record loss. Evidence: HDD path
+        // (using advisory bitmap) has only 6 missing records vs 10K+ on NVMe/SSD.
         let use_direct_chunk_io = matches!(
             self.drive_type,
             crate::platform::DriveType::Nvme | crate::platform::DriveType::Ssd
         );
 
-        // For NVMe/SSD: use larger max to allow direct chunk-to-I/O mapping
-        // For HDD: use standard io_chunk_size for predictable sequential reads
-        const MAX_DIRECT_IO_SIZE: usize = 16 * 1024 * 1024; // 16MB max for direct I/O
-
-        let sorted_chunks: Vec<ReadChunk> = match (&self.drive_type, &self.bitmap) {
-            (crate::platform::DriveType::Nvme | crate::platform::DriveType::Ssd, Some(bitmap)) => {
-                // NVMe/SSD: Use precise chunks that skip unused regions
-                // min_gap_records=64 means gaps smaller than 64KB are read through
-                // Use MAX_DIRECT_IO_SIZE as the max chunk size for direct I/O
-                let mut chunks =
-                    generate_precise_read_chunks(&self.extent_map, bitmap, MAX_DIRECT_IO_SIZE, 64);
-                chunks.sort_by_key(|c| c.disk_offset);
-                chunks
-            }
-            _ => {
-                // HDD or no bitmap: Use standard chunk generation
-                let mut chunks =
-                    generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
-                chunks.sort_by_key(|c| c.disk_offset);
-                chunks
-            }
+        let sorted_chunks: Vec<ReadChunk> = {
+            let mut chunks =
+                generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
+            chunks.sort_by_key(|c| c.disk_offset);
+            chunks
         };
 
         // Build I/O operations with FRS tracking for inline parsing

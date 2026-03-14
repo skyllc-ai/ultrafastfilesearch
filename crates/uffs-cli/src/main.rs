@@ -237,7 +237,7 @@ struct Cli {
     limit: u32,
 
     /// Output format: table, json, csv, custom
-    #[arg(short, long, default_value = "custom")]
+    #[arg(short, long, default_value = "csv")]
     format: String,
 
     /// Case-sensitive matching (default: off)
