@@ -177,8 +177,8 @@ impl ParallelMftReader {
             "📊 Generated I/O operations for inline parsing"
         );
 
-        // Create merger to accumulate parsed records (unified pipeline)
-        let mut merger = MftRecordMerger::with_capacity(total_records);
+        // Pre-allocate MftIndex and build it incrementally during I/O
+        let mut index = MftIndex::with_capacity(volume, estimated_records);
 
         // Create IOCP
         let read_start = std::time::Instant::now();
@@ -338,7 +338,7 @@ impl ParallelMftReader {
                     // only project a mutable reference without moving the allocation.
                     let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
 
-                    // UNIFIED PIPELINE: parse_record_full() → MftRecordMerger
+                    // DIRECT-TO-INDEX: parse records directly into MftIndex
                     let buffer_slice =
                         &mut op_mut.buffer.as_mut_slice()[..bytes_transferred as usize];
                     let records_in_buffer = bytes_transferred as usize / record_size;
@@ -361,12 +361,10 @@ impl ParallelMftReader {
                             continue;
                         }
 
-                        // Parse using unified pipeline and accumulate in merger
-                        let result = parse_record_full(record_slice, frs);
-                        if !matches!(result, ParseResult::Skip) {
+                        // Parse directly into index (single-pass, no intermediates)
+                        if parse_record_to_index(record_slice, frs, &mut index) {
                             records_parsed += 1;
                         }
-                        merger.add_result(result);
                     }
 
                     bytes_read_total += bytes_transferred as u64;
@@ -432,27 +430,13 @@ impl ParallelMftReader {
             }
         }
 
-        let io_ms = read_start.elapsed().as_millis();
-        info!(
-            io_ms,
-            bytes_mb = bytes_read_total / (1024 * 1024),
-            records_parsed,
-            base_records = merger.base_count(),
-            extensions = merger.extension_count(),
-            "✅ Sliding window IOCP I/O + parse complete, merging..."
-        );
-
-        // Merge extensions and build index using unified pipeline
-        let parsed_records = merger.merge();
-        let index = MftIndex::from_parsed_records(volume, parsed_records);
-
         let total_ms = read_start.elapsed().as_millis();
         info!(
             total_ms,
-            io_ms,
-            merge_ms = total_ms - io_ms,
+            bytes_mb = bytes_read_total / (1024 * 1024),
+            records_parsed,
             index_entries = index.records.len(),
-            "✅ Sliding window IOCP with unified pipeline complete"
+            "✅ Sliding window IOCP with direct-to-index parsing complete"
         );
 
         Ok(index)
