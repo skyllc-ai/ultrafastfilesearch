@@ -222,16 +222,21 @@ pub async fn search(
         )?;
 
         let t_output = std::time::Instant::now();
+        let elapsed = start_time.elapsed();
+        let footer_ctx = crate::commands::output::CppFooterContext {
+            output_targets: &output_targets,
+            elapsed,
+            pattern,
+        };
         write_native_results(
             &native.index,
             &native.results,
             format,
             out,
             &output_config,
-            &output_targets,
+            &footer_ctx,
         )?;
         let output_ms = t_output.elapsed().as_millis();
-        let elapsed = start_time.elapsed();
 
         if profile {
             let raw_total_ms = native.load_ms + native.query_ms;
@@ -355,13 +360,20 @@ pub async fn search(
     }
     let tree_ms = t_tree.elapsed().as_millis();
 
+    let elapsed = start_time.elapsed();
     let t_output = std::time::Instant::now();
     if !benchmark {
-        write_results(&results, format, out, &output_config, &output_targets)?;
+        write_results(
+            &results,
+            format,
+            out,
+            &output_config,
+            &output_targets,
+            elapsed,
+            pattern,
+        )?;
     }
     let output_ms = t_output.elapsed().as_millis();
-
-    let elapsed = start_time.elapsed();
 
     if benchmark {
         let row_count = results.height();

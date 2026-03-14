@@ -1,9 +1,13 @@
 //! Output helpers for CLI search commands.
+//!
+//! Exception: This file exceeds 800 lines due to comprehensive test suite
+//! covering DataFrame/native output parity and footer formatting variations.
 
 extern crate alloc;
 
 use alloc::borrow::Cow;
 use core::fmt::Write as _;
+use core::time::Duration;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 #[cfg(windows)]
@@ -15,6 +19,16 @@ use anyhow::{Context, Result};
 use tracing::info;
 use uffs_core::output::{CPP_COLUMN_ORDER, OutputColumn, OutputConfig};
 use uffs_core::{export_json, export_table};
+
+/// Context for C++ baseline-compatible footer formatting.
+pub(super) struct CppFooterContext<'a> {
+    /// Drive letters to include in the footer (e.g., `['C', 'D']`).
+    pub(super) output_targets: &'a [char],
+    /// Elapsed time since search started.
+    pub(super) elapsed: Duration,
+    /// Original search pattern string.
+    pub(super) pattern: &'a str,
+}
 
 /// Streaming output writer for multi-drive search.
 ///
@@ -257,7 +271,7 @@ pub(super) fn write_native_results(
     format: &str,
     out: &str,
     output_config: &OutputConfig,
-    output_targets: &[char],
+    footer_ctx: &CppFooterContext<'_>,
 ) -> Result<()> {
     let normalized_format = format.to_ascii_lowercase();
     let is_console = matches!(
@@ -274,7 +288,7 @@ pub(super) fn write_native_results(
             &normalized_format,
             &mut stdout,
             output_config,
-            output_targets,
+            footer_ctx,
         )?;
         stdout.flush()?;
     } else {
@@ -287,7 +301,7 @@ pub(super) fn write_native_results(
             &normalized_format,
             &mut writer,
             output_config,
-            output_targets,
+            footer_ctx,
         )?;
         writer.flush()?;
 
@@ -304,7 +318,7 @@ fn write_native_results_to<W: Write>(
     format: &str,
     writer: &mut W,
     output_config: &OutputConfig,
-    output_targets: &[char],
+    footer_ctx: &CppFooterContext<'_>,
 ) -> Result<()> {
     let output_cols = selected_output_columns(output_config);
     let fixed_tz = chrono::FixedOffset::east_opt(output_config.timezone_offset_secs);
@@ -338,7 +352,7 @@ fn write_native_results_to<W: Write>(
     }
 
     if format == "custom" {
-        write_cpp_drive_footer(writer, output_targets)?;
+        write_cpp_drive_footer(writer, footer_ctx)?;
     }
 
     Ok(())
@@ -882,11 +896,19 @@ pub(super) fn write_results(
     out: &str,
     output_config: &OutputConfig,
     output_targets: &[char],
+    elapsed: Duration,
+    pattern: &str,
 ) -> Result<()> {
     let is_console = matches!(
         out.to_lowercase().as_str(),
         "console" | "con" | "term" | "terminal"
     );
+
+    let footer_ctx = CppFooterContext {
+        output_targets,
+        elapsed,
+        pattern,
+    };
 
     if is_console {
         let stdout_handle = std::io::stdout();
@@ -896,7 +918,7 @@ pub(super) fn write_results(
             "csv" => output_config.write(results, &mut stdout)?,
             "custom" => {
                 output_config.write(results, &mut stdout)?;
-                write_cpp_drive_footer(&mut stdout, output_targets)?;
+                write_cpp_drive_footer(&mut stdout, &footer_ctx)?;
             }
             _ => export_table(results, &mut stdout)?,
         }
@@ -910,7 +932,7 @@ pub(super) fn write_results(
             "json" => export_json(results, &mut writer)?,
             "custom" => {
                 output_config.write(results, &mut writer)?;
-                write_cpp_drive_footer(&mut writer, output_targets)?;
+                write_cpp_drive_footer(&mut writer, &footer_ctx)?;
             }
             _ => output_config.write(results, &mut writer)?,
         }
@@ -923,20 +945,33 @@ pub(super) fn write_results(
 }
 
 /// Append the legacy C++ drive footer for baseline-compatible custom output.
-fn write_cpp_drive_footer<W: Write>(writer: &mut W, output_targets: &[char]) -> Result<()> {
-    if output_targets.is_empty() {
+///
+/// Uses CRLF line endings (`\r\n`) to match C++ baseline behavior.
+/// When `elapsed` is <= 1 second, appends the fast-scan message.
+fn write_cpp_drive_footer<W: Write>(writer: &mut W, ctx: &CppFooterContext<'_>) -> Result<()> {
+    if ctx.output_targets.is_empty() {
         return Ok(());
     }
 
-    writeln!(writer)?;
-    writeln!(writer)?;
-    writeln!(
+    write!(writer, "\r\n")?;
+    write!(writer, "\r\n")?;
+    write!(
         writer,
-        "Drives? \t{}\t{}",
-        output_targets.len(),
-        format_cpp_drive_letters(output_targets)
+        "Drives? \t{}\t{}\r\n",
+        ctx.output_targets.len(),
+        format_cpp_drive_letters(ctx.output_targets)
     )?;
-    writeln!(writer)?;
+    write!(writer, "\r\n")?;
+
+    if ctx.elapsed.as_secs() <= 1 {
+        write!(
+            writer,
+            "MMMmmm that was FAST ... maybe your searchstring was wrong?\t{pattern}\r\n",
+            pattern = ctx.pattern
+        )?;
+        write!(writer, "Search path. E.g. 'C:/' or 'C:\\Prog**' \r\n")?;
+    }
+
     Ok(())
 }
 
@@ -1065,13 +1100,20 @@ mod tests {
         format: &str,
         output_config: &OutputConfig,
         output_targets: &[char],
+        elapsed: Duration,
+        pattern: &str,
     ) -> Result<String> {
         let mut output = Vec::new();
+        let footer_ctx = CppFooterContext {
+            output_targets,
+            elapsed,
+            pattern,
+        };
         match format {
             "json" => export_json(results, &mut output)?,
             "custom" => {
                 output_config.write(results, &mut output)?;
-                write_cpp_drive_footer(&mut output, output_targets)?;
+                write_cpp_drive_footer(&mut output, &footer_ctx)?;
             }
             _ => output_config.write(results, &mut output)?,
         }
@@ -1084,15 +1126,22 @@ mod tests {
         format: &str,
         output_config: &OutputConfig,
         output_targets: &[char],
+        elapsed: Duration,
+        pattern: &str,
     ) -> Result<String> {
         let mut output = Vec::new();
+        let footer_ctx = CppFooterContext {
+            output_targets,
+            elapsed,
+            pattern,
+        };
         write_native_results_to(
             index,
             results,
             format,
             &mut output,
             output_config,
-            output_targets,
+            &footer_ctx,
         )?;
         String::from_utf8(output).map_err(Into::into)
     }
@@ -1123,6 +1172,8 @@ mod tests {
             &path.to_string_lossy(),
             &output_config,
             &['C', 'D'],
+            Duration::from_secs(2),
+            "*.txt",
         )?;
 
         let written = fs::read_to_string(&path)?;
@@ -1146,6 +1197,8 @@ mod tests {
             &path.to_string_lossy(),
             &output_config,
             &['C', 'D'],
+            Duration::from_secs(2),
+            "*.txt",
         )?;
 
         let written = fs::read_to_string(&path)?;
@@ -1155,10 +1208,10 @@ mod tests {
             written,
             concat!(
                 "\"C:\\Temp\\file.txt\",\"file.txt\"\n",
-                "\n",
-                "\n",
-                "Drives? \t2\tC:|D:\n",
-                "\n"
+                "\r\n",
+                "\r\n",
+                "Drives? \t2\tC:|D:\r\n",
+                "\r\n"
             )
         );
         Ok(())
@@ -1176,6 +1229,8 @@ mod tests {
             &path.to_string_lossy(),
             &output_config,
             &['C', 'D'],
+            Duration::from_secs(2),
+            "*.txt",
         )?;
 
         let written = fs::read_to_string(&path)?;
@@ -1239,15 +1294,26 @@ mod tests {
         let output_config = OutputConfig::new().with_columns(
             "path,name,pathonly,size,sizeondisk,created,readonly,archive,hidden,directory,descendants,treesize,treeallocated,type",
         );
+        let elapsed = Duration::from_secs(2);
+        let pattern = "*.txt";
 
         let expected = write_results_to_string(
             &results_to_dataframe(&index, results.clone(), true)?,
             "custom",
             &output_config,
             &['C'],
+            elapsed,
+            pattern,
         )?;
-        let actual =
-            write_native_results_to_string(&index, &results, "custom", &output_config, &['C'])?;
+        let actual = write_native_results_to_string(
+            &index,
+            &results,
+            "custom",
+            &output_config,
+            &['C'],
+            elapsed,
+            pattern,
+        )?;
 
         assert_eq!(actual, expected);
         Ok(())
@@ -1262,17 +1328,98 @@ mod tests {
             .with_separator(";")
             .with_quote("'")
             .with_header(false);
+        let elapsed = Duration::from_secs(2);
+        let pattern = "*.txt";
 
         let expected = write_results_to_string(
             &results_to_dataframe(&index, results.clone(), true)?,
             "csv",
             &output_config,
             &['C'],
+            elapsed,
+            pattern,
         )?;
-        let actual =
-            write_native_results_to_string(&index, &results, "csv", &output_config, &['C'])?;
+        let actual = write_native_results_to_string(
+            &index,
+            &results,
+            "csv",
+            &output_config,
+            &['C'],
+            elapsed,
+            pattern,
+        )?;
 
         assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_cpp_footer_includes_fast_scan_message_when_elapsed_le_1s() -> TestResult {
+        let path = temp_output_path("txt");
+        let results = sample_df()?;
+        let output_config = OutputConfig::new()
+            .with_columns("path,name")
+            .with_header(false);
+
+        write_results(
+            &results,
+            "custom",
+            &path.to_string_lossy(),
+            &output_config,
+            &['G'],
+            Duration::from_millis(999),
+            ">G:.*",
+        )?;
+
+        let written = fs::read_to_string(&path)?;
+        drop(fs::remove_file(&path));
+
+        assert_eq!(
+            written,
+            concat!(
+                "\"C:\\Temp\\file.txt\",\"file.txt\"\n",
+                "\r\n",
+                "\r\n",
+                "Drives? \t1\tG:\r\n",
+                "\r\n",
+                "MMMmmm that was FAST ... maybe your searchstring was wrong?\t>G:.*\r\n",
+                "Search path. E.g. 'C:/' or 'C:\\Prog**' \r\n"
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cpp_footer_omits_fast_scan_message_when_elapsed_gt_1s() -> TestResult {
+        let path = temp_output_path("txt");
+        let results = sample_df()?;
+        let output_config = OutputConfig::new()
+            .with_columns("path,name")
+            .with_header(false);
+
+        write_results(
+            &results,
+            "custom",
+            &path.to_string_lossy(),
+            &output_config,
+            &['G'],
+            Duration::from_secs(2),
+            ">G:.*",
+        )?;
+
+        let written = fs::read_to_string(&path)?;
+        drop(fs::remove_file(&path));
+
+        assert_eq!(
+            written,
+            concat!(
+                "\"C:\\Temp\\file.txt\",\"file.txt\"\n",
+                "\r\n",
+                "\r\n",
+                "Drives? \t1\tG:\r\n",
+                "\r\n"
+            )
+        );
         Ok(())
     }
 }

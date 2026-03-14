@@ -2,9 +2,9 @@
 
 use anyhow::{Context, Result};
 use tracing::info;
+use uffs_mft::MftReader;
 
 use super::shared::drive_type_label;
-use uffs_mft::MftReader;
 use crate::display::{format_bytes, format_duration, format_number_commas, truncate_string};
 
 #[cfg(windows)]

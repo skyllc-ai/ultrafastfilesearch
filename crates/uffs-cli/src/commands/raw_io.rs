@@ -1,4 +1,8 @@
 //! Raw MFT and data-loading helpers for CLI search commands.
+//!
+//! Exception: This file consolidates MFT reading, query filtering, and
+//! multi-drive orchestration logic which are tightly coupled in the CLI command
+//! pipeline.
 
 #![expect(
     clippy::single_call_fn,

@@ -2,3 +2,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # path|reason
 crates/uffs-diag/src/bin/compare_scan_parity.rs|Diagnostic parity pipeline remains consolidated because the end-to-end workflow is reviewed as one unit.
+crates/uffs-cli/src/commands/output.rs|Output formatting module with comprehensive test suite for DataFrame/native output parity and footer formatting.
+crates/uffs-cli/src/commands/raw_io.rs|I/O coordination module consolidating MFT reading, query filtering, and multi-drive orchestration logic.

@@ -214,6 +214,51 @@ impl TreeTraversal<'_> {
         );
     }
 
+    /// Finds the `WofCompressedData` stream in the named-stream chain.
+    ///
+    /// Returns the stream index if found, or `NO_ENTRY` if not present.
+    /// This is only called for files with `reparse_tag == 0x8000_0017`.
+    fn find_wof_stream(&self, first_stream_next: u32) -> u32 {
+        const WOF_NAME: &str = "WofCompressedData";
+        let mut idx = first_stream_next;
+        while idx != NO_ENTRY {
+            let stream = &self.index.streams[idx as usize];
+            if self.index.get_name(&stream.name) == WOF_NAME {
+                return idx;
+            }
+            idx = stream.next_entry;
+        }
+        NO_ENTRY
+    }
+
+    /// Merges `WoF` stream's `allocated_size` into the default stream for files
+    /// with `reparse_tag == 0x8000_0017`. Returns the `WoF` stream index (for
+    /// exclusion from Channel-A propagation) and the updated `first_alloc`.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "bounds checked: wof_stream_idx < streams.len() (from find_wof_stream)"
+    )]
+    fn merge_wof_alloc(
+        &mut self,
+        record_idx: usize,
+        reparse_tag: u32,
+        first_stream_next: u32,
+        mut first_alloc: u64,
+    ) -> (u32, u64) {
+        let wof_idx = if reparse_tag == 0x8000_0017 {
+            self.find_wof_stream(first_stream_next)
+        } else {
+            NO_ENTRY
+        };
+        if wof_idx != NO_ENTRY {
+            let wof_alloc = self.index.streams[wof_idx as usize].size.allocated;
+            first_alloc = first_alloc.saturating_add(wof_alloc);
+            // Persist the merged value so output shows the correct SizeOnDisk
+            self.index.records[record_idx].first_stream.size.allocated = first_alloc;
+        }
+        (wof_idx, first_alloc)
+    }
+
     /// Recursively computes tree metrics for a record and its children.
     ///
     /// Returns the Channel-A aggregate (length, allocated, treesize) for this
@@ -235,7 +280,8 @@ impl TreeTraversal<'_> {
             first_internal_stream,
             total_stream_count,
             first_len,
-            first_alloc,
+            mut first_alloc,
+            reparse_tag,
         ) = {
             let rec = &self.index.records[record_idx];
             (
@@ -246,8 +292,16 @@ impl TreeTraversal<'_> {
                 rec.total_stream_count,
                 rec.first_stream.size.length,
                 rec.first_stream.size.allocated,
+                rec.reparse_tag,
             )
         };
+
+        // WoF (Windows Overlay Filter) compression merging.
+        // C++ merges WofCompressedData's allocated into the default stream
+        // (ntfs_index_load.hpp L686-695), then excludes it from propagation.
+        let wof_stream_idx;
+        (wof_stream_idx, first_alloc) =
+            self.merge_wof_alloc(record_idx, reparse_tag, first_stream_next, first_alloc);
 
         // 1) Aggregate children (Channel A outputs from children).
         let mut children = Agg::default();
@@ -303,9 +357,14 @@ impl TreeTraversal<'_> {
         let mut stream_idx = first_stream_next;
         while stream_idx != NO_ENTRY {
             let stream = &self.index.streams[stream_idx as usize];
-            own_len = own_len.saturating_add(delta(stream.size.length, name_info, total_names));
-            own_alloc =
-                own_alloc.saturating_add(delta(stream.size.allocated, name_info, total_names));
+            // WoF stream: C++ uses 0 for both length and allocated in
+            // the Channel-A propagation. The allocated is already merged
+            // into first_alloc; the length is suppressed entirely.
+            let is_wof = stream_idx == wof_stream_idx;
+            let stream_len = if is_wof { 0 } else { stream.size.length };
+            let stream_alloc = if is_wof { 0 } else { stream.size.allocated };
+            own_len = own_len.saturating_add(delta(stream_len, name_info, total_names));
+            own_alloc = own_alloc.saturating_add(delta(stream_alloc, name_info, total_names));
             stream_idx = stream.next_entry;
         }
 
