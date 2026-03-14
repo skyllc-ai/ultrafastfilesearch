@@ -1027,9 +1027,7 @@ mod tests {
         let paths: Vec<String> = (0_i32..count)
             .map(|idx| format!("C:\\Temp\\file{idx}.txt"))
             .collect();
-        let names: Vec<String> = (0_i32..count)
-            .map(|idx| format!("file{idx}.txt"))
-            .collect();
+        let names: Vec<String> = (0_i32..count).map(|idx| format!("file{idx}.txt")).collect();
 
         let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
         let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();

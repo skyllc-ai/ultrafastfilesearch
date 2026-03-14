@@ -47,6 +47,23 @@ go:
     @echo "========================================================"
     rust-script scripts/ci/ci-pipeline.rs go
 
+# Full ship pipeline: Phase 1 validation + Phase 2 deploy (resumable).
+# Re-runs automatically skip already-completed steps.
+# Pass flags like: just ship -v, just ship --coverage-report
+ship *ARGS:
+    @printf "\033[0;34m🚢 Full Ship Pipeline (Phase 1 + Phase 2, Resumable)\033[0m\n"
+    @printf "\033[1;33mValidates and ships. Re-runs skip completed steps.\033[0m\n"
+    @echo "========================================================"
+    rust-script scripts/ci/ci-pipeline.rs ship {{ ARGS }}
+
+# Full ship pipeline from scratch (ignores previous progress).
+# Pass flags like: just ship-fresh -v
+ship-fresh *ARGS:
+    @printf "\033[0;34m🚢 Full Ship Pipeline (Fresh Start)\033[0m\n"
+    @printf "\033[1;33mIgnoring previous progress, starting from scratch.\033[0m\n"
+    @echo "========================================================"
+    rust-script scripts/ci/ci-pipeline.rs ship --fresh {{ ARGS }}
+
 # Safe-by-default validation workflow (justfile fallback).
 go-justfile:
     #!/usr/bin/env bash

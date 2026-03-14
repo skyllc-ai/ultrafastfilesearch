@@ -418,12 +418,20 @@ struct Cli {
     /// Disable sccache auto-detection/integration even if it is installed.
     #[arg(long, global = true)]
     no_sccache: bool,
+
+    /// Force a fresh run, ignoring any previously completed steps.
+    /// Use this to start the pipeline from scratch.
+    #[arg(long, global = true)]
+    fresh: bool,
 }
 
 #[derive(Subcommand)]
 enum Commands {
     /// Safe-by-default validation workflow (no version bump, deploy, commit, or push)
     Go,
+    /// Full ship pipeline: Phase 1 validation + Phase 2 deploy (resumable)
+    /// Re-runs skip already-completed steps. Use --fresh to start from scratch.
+    Ship,
     /// Comprehensive nightly-grade validation with parallel execution
     CheckAll,
     /// Phase 1 nightly validation gates with maximum parallelism
@@ -463,9 +471,12 @@ struct PipelineContext {
     global_env: Vec<(String, String)>,
     /// Log file for capturing output in non-verbose mode.
     log_file: Option<PathBuf>,
+    /// Force a fresh run, ignoring any previously completed steps.
+    fresh: bool,
 }
 
 impl PipelineContext {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         verbose: bool,
         coverage_report: bool,
@@ -476,6 +487,7 @@ impl PipelineContext {
         jobs: Option<usize>,
         parallel_jobs: Option<usize>,
         no_sccache: bool,
+        fresh: bool,
     ) -> Self {
         let max_jobs = jobs.unwrap_or_else(|| num_cpus::get().min(16));
         let par_jobs = parallel_jobs.unwrap_or_else(|| (max_jobs / 2).max(2));
@@ -521,6 +533,7 @@ impl PipelineContext {
             sccache_enabled: sccache_available,
             global_env,
             log_file,
+            fresh,
         }
     }
 }
@@ -1190,6 +1203,102 @@ async fn run_enhanced_phase2(state: &mut WorkflowState, ctx: &PipelineContext) -
     Ok(())
 }
 
+/// Combined ship pipeline: Phase 1 (validation) + Phase 2 (deploy)
+/// Supports resumable execution - re-runs skip already-completed steps.
+/// Use --fresh flag to reset state and start from scratch.
+async fn run_ship_pipeline(ctx: &PipelineContext) -> Result<()> {
+    println!("{}", "🚢 UFFS Ship Pipeline (Phase 1 + Phase 2, Resumable)".blue().bold());
+    println!("═══════════════════════════════════════════════════════════════════");
+
+    // Load or create workflow state
+    let mut state = if ctx.fresh {
+        println!("{} Fresh run requested - resetting workflow state", "🔄".yellow());
+        let current_version = get_current_version().unwrap_or_else(|_| "unknown".to_string());
+        let new_state = WorkflowState::new_workflow(current_version);
+        new_state.save().context("Failed to save fresh workflow state")?;
+        new_state
+    } else {
+        WorkflowState::load().unwrap_or_else(|_| {
+            let current_version = get_current_version().unwrap_or_else(|_| "unknown".to_string());
+            WorkflowState::new_workflow(current_version)
+        })
+    };
+
+    // Show current progress
+    let completed_count = state.step_tracker.completed_steps.len();
+    let total_steps = ALL_STEPS.len();
+    let pending_steps = state.get_pending_steps(ALL_STEPS);
+
+    if completed_count > 0 && !ctx.fresh {
+        println!("{} Resuming from previous run: {}/{} steps completed", "📋".cyan(), completed_count, total_steps);
+        if !state.step_tracker.completed_steps.is_empty() {
+            println!("   Already completed:");
+            for step in &state.step_tracker.completed_steps {
+                println!("     {} {}", "✓".green(), step);
+            }
+        }
+        if !pending_steps.is_empty() {
+            println!("   Remaining:");
+            for step in &pending_steps {
+                println!("     {} {}", "○".dimmed(), step);
+            }
+        }
+        println!();
+    }
+
+    // Run Phase 1: Validation
+    println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".dimmed());
+    run_enhanced_phase1(&mut state, ctx).await.context("Phase 1 (validation) failed")?;
+
+    // Run Phase 2: Deploy
+    println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".dimmed());
+    run_enhanced_phase2(&mut state, ctx).await.context("Phase 2 (deploy) failed")?;
+
+    // Mark workflow as completed
+    state.advance_phase(WorkflowPhase::Completed)?;
+
+    // Print summary
+    let total_time = ctx.start_time.elapsed();
+    println!();
+    println!("{}", "═══════════════════════════════════════════════════════════════════".green());
+    println!("{} Ship Pipeline Complete!", "🎉".green().bold());
+    println!("═══════════════════════════════════════════════════════════════════");
+    println!("   Version:    {}", state.current_version.cyan());
+    println!("   Total time: {}s", total_time.as_secs());
+    println!("   Steps:      {}/{} completed", state.step_tracker.completed_steps.len(), total_steps);
+
+    // Show step timing breakdown
+    if !state.step_durations_secs.is_empty() {
+        println!();
+        println!("   Step Timings:");
+        for (step, secs) in &state.step_durations_secs {
+            let mins = secs / 60;
+            let remaining_secs = secs % 60;
+            if mins > 0 {
+                println!("     {} {}m {}s", step, mins, remaining_secs);
+            } else {
+                println!("     {} {}s", step, secs);
+            }
+        }
+    }
+
+    // Show sccache stats if enabled
+    if ctx.sccache_enabled {
+        if let Ok(out) = Command::new("sccache").arg("-s").output().await {
+            if ctx.verbose {
+                println!();
+                println!("{} sccache stats:\n{}", "⚡".green(), String::from_utf8_lossy(&out.stdout));
+            }
+        }
+    }
+
+    println!();
+    println!("{} Binary deployed to dist/ and ~/bin", "📦".green());
+    println!("{} Changes committed and pushed", "📤".green());
+
+    Ok(())
+}
+
 fn print_workflow_status(state: &WorkflowState) {
     println!("📊 UFFS Workflow Status");
     println!("═══════════════════════════════════════");
@@ -1246,11 +1355,13 @@ fn print_workflow_status(state: &WorkflowState) {
 
     match state.phase {
         WorkflowPhase::Clean | WorkflowPhase::Completed => {
-            println!("\n💡 Ready to validate safely: rust-script scripts/ci/ci-pipeline.rs go");
-            println!("💡 Explicit ship lane: rust-script scripts/ci/ci-pipeline.rs phase2");
+            println!("\n💡 Validate only:    rust-script scripts/ci/ci-pipeline.rs go");
+            println!("💡 Full ship lane:   rust-script scripts/ci/ci-pipeline.rs ship");
+            println!("💡 Fresh ship run:   rust-script scripts/ci/ci-pipeline.rs ship --fresh");
         }
         _ => {
-            println!("\n💡 Ship workflow in progress - resume with: rust-script scripts/ci/ci-pipeline.rs phase2");
+            println!("\n💡 Resume ship workflow: rust-script scripts/ci/ci-pipeline.rs ship");
+            println!("💡 Start fresh:          rust-script scripts/ci/ci-pipeline.rs ship --fresh");
         }
     }
 }
@@ -1273,6 +1384,7 @@ async fn main() -> Result<()> {
         cli.jobs,
         cli.parallel_jobs,
         cli.no_sccache || validation_command,
+        cli.fresh,
     );
 
     if ctx.verbose {
@@ -1322,6 +1434,9 @@ async fn main() -> Result<()> {
                 println!("{} Tip: Use --coverage-report to generate HTML coverage report", "💡".blue());
             }
             println!("{} Run 'rust-script scripts/ci/ci-pipeline.rs phase2' or 'just phase2-ship' when ready to ship", "💡".blue());
+        }
+        Commands::Ship => {
+            run_ship_pipeline(&ctx).await.context("Ship pipeline failed")?;
         }
         Commands::CheckAll => {
             println!("{}", "📋 Comprehensive Validation (PARALLEL)".blue().bold());
