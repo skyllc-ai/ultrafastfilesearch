@@ -11,6 +11,15 @@ use crate::ntfs::{ExtendedStandardInfo, NameInfo, ReparsePointHeader, StreamInfo
 
 /// Parses an MFT record and extracts relevant information.
 ///
+/// **LEGACY MULTI-PASS PIPELINE:** This function is part of the old
+/// `parse_record_full → MftRecordMerger → from_parsed_records` pipeline.
+/// The hot path (`SlidingIocpInline`) now uses direct-to-index parsers that
+/// skip this intermediate allocation. This function is still used by:
+/// - Legacy read modes (`Parallel`, `Pipelined`, `PipelinedParallel`, `SlidingIocp`)
+/// - File-based readers (`load_raw_to_index_with_options`)
+/// - Tests and diagnostic tools
+/// - `UFFS_LEGACY_PARSE=1` escape hatch
+///
 /// This function handles both base records and extension records.
 /// Extension records return `ParseResult::Extension` which must be
 /// merged into the base record later.
