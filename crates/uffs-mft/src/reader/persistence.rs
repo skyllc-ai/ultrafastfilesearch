@@ -553,4 +553,80 @@ impl MftReader {
             }
         }
     }
+
+    /// Load raw MFT from file and build `MftIndex` using direct-to-index
+    /// parser.
+    ///
+    /// This is a single-pass implementation that parses records directly into
+    /// the index without creating intermediate `ParsedRecord` allocations. It
+    /// uses the modernized `parse_record_to_index()` from Wave 1.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the raw file cannot be loaded or if record parsing
+    /// or index construction fails.
+    pub fn load_raw_to_index_direct<P: AsRef<Path>>(
+        path: P,
+        options: &crate::raw::LoadRawOptions,
+    ) -> Result<crate::index::MftIndex> {
+        use std::time::Instant;
+
+        use tracing::info;
+
+        use crate::index::MftIndex;
+        use crate::parse::{apply_fixup, parse_record_to_index};
+
+        let parse_start = Instant::now();
+
+        // Load raw MFT data
+        let mut raw = crate::raw::load_raw_mft(path, options)?;
+        let capacity = usize::try_from(raw.header.record_count).unwrap_or(0);
+        let total_records_in_file = capacity;
+        let record_size = raw.header.record_size as usize;
+
+        // Create index with pre-allocated capacity
+        let mut index = MftIndex::with_capacity(raw.header.volume_letter, capacity);
+
+        // Parse records directly into index
+        let mut fixup_success: u64 = 0;
+        let mut fixup_failed: u64 = 0;
+        let mut records_added: u64 = 0;
+
+        let buffer_slice = raw.data.as_mut_slice();
+        for (frs, chunk) in buffer_slice.chunks_exact_mut(record_size).enumerate() {
+            // Apply fixup in place
+            if !apply_fixup(chunk) {
+                fixup_failed += 1;
+                continue;
+            }
+            fixup_success += 1;
+
+            // Parse record directly into index
+            // parse_record_to_index handles both base and extension records internally
+            let added = parse_record_to_index(chunk, frs as u64, &mut index);
+            if added {
+                records_added += 1;
+            }
+        }
+
+        // Compute tree metrics
+        index.compute_tree_metrics();
+
+        // Sort directory children
+        index.sort_directory_children();
+
+        let parse_time = parse_start.elapsed();
+
+        info!(
+            total_records_in_file,
+            parse_ms = parse_time.as_millis(),
+            fixup_success,
+            fixup_failed,
+            records_added,
+            final_index_size = index.len(),
+            "Direct-to-index parse complete"
+        );
+
+        Ok(index)
+    }
 }

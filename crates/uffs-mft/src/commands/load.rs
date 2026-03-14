@@ -244,8 +244,15 @@ pub fn cmd_load(
         println!("🔨 BUILDING MFTINDEX...");
 
         let build_start = Instant::now();
-        let index = MftReader::load_raw_to_index_with_options(input, &data_load_options)
-            .with_context(|| format!("Failed to build index from {}", input.display()))?;
+        // Use new direct-to-index parser by default, legacy multi-pass with env var
+        let index = if std::env::var("UFFS_LEGACY_PARSE").is_ok() {
+            println!("  Using legacy multi-pass parser (UFFS_LEGACY_PARSE=1)");
+            MftReader::load_raw_to_index_with_options(input, &data_load_options)
+                .with_context(|| format!("Failed to build index from {}", input.display()))?
+        } else {
+            MftReader::load_raw_to_index_direct(input, &data_load_options)
+                .with_context(|| format!("Failed to build index from {}", input.display()))?
+        };
         let build_time = build_start.elapsed();
 
         println!();
@@ -436,8 +443,15 @@ pub fn cmd_load(
 
     // Build MftIndex (includes tree metrics computation)
     let build_start = Instant::now();
-    let index = MftReader::load_raw_to_index_with_options(input, &data_load_options)
-        .with_context(|| format!("Failed to build index from {}", input.display()))?;
+    // Use new direct-to-index parser by default, legacy multi-pass with env var
+    let index = if std::env::var("UFFS_LEGACY_PARSE").is_ok() {
+        println!("  Using legacy multi-pass parser (UFFS_LEGACY_PARSE=1)");
+        MftReader::load_raw_to_index_with_options(input, &data_load_options)
+            .with_context(|| format!("Failed to build index from {}", input.display()))?
+    } else {
+        MftReader::load_raw_to_index_direct(input, &data_load_options)
+            .with_context(|| format!("Failed to build index from {}", input.display()))?
+    };
     let build_time = build_start.elapsed();
 
     println!(
