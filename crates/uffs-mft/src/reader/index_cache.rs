@@ -1,7 +1,7 @@
 //! Cached lean-index read helpers.
 
 use super::MftReader;
-use crate::error::Result;
+use crate::error::{MftError, Result};
 
 impl MftReader {
     /// Read MFT into lean `MftIndex` with automatic caching.
