@@ -161,7 +161,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                         if name_bytes_offset + name_len * 2 <= data.len() {
                             let name_bytes =
                                 &data[name_bytes_offset..name_bytes_offset + name_len * 2];
-                            let name_u16: Vec<u16> = name_bytes
+                            // SmallVec avoids heap allocation for typical filenames (<= 64 chars)
+                            let name_u16: SmallVec<[u16; 64]> = name_bytes
                                 .chunks_exact(2)
                                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                                 .collect();
