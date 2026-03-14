@@ -620,6 +620,11 @@ impl MftReader {
 
                 let mut index = result?;
 
+                // Sort directory children first so tree metrics traverse in correct order.
+                // Tree metrics computation depends on children being in sorted order to
+                // produce accurate directory sizes and descendant counts.
+                index.sort_directory_children();
+
                 // Compute tree metrics (directory sizes, descendant counts).
                 // The legacy path gets this from `from_parsed_records()`, but the
                 // inline path bypasses that, so we must call it explicitly.
