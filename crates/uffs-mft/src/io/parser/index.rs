@@ -615,7 +615,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 length: default_size,
                 allocated: default_allocated,
             };
-            // Set type_name_id for first_stream: 0 for directories ($I30), 8 for files ($DATA)
+            // Set type_name_id for first_stream: 0 for directories ($I30), 8 for files
+            // ($DATA)
             record.first_stream.flags = if record.stdinfo.is_directory() {
                 0 // type_name_id=0 for directory index ($I30)
             } else {
@@ -754,7 +755,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         length: default_size,
         allocated: default_allocated,
     };
-    // Set type_name_id for first_stream: 0 for directories ($I30), 8 for files ($DATA)
+    // Set type_name_id for first_stream: 0 for directories ($I30), 8 for files
+    // ($DATA)
     record.first_stream.flags = if record.stdinfo.is_directory() {
         0 // type_name_id=0 for directory index ($I30)
     } else {
