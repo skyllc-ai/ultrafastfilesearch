@@ -1020,17 +1020,19 @@ mod tests {
         .map_err(Into::into)
     }
 
-    /// Create a large sample DataFrame (20,000+ rows) for testing slow-scan
+    /// Create a large sample `DataFrame` (20,000+ rows) for testing slow-scan
     /// footer.
     fn large_sample_df() -> Result<DataFrame> {
-        let count = 20_000;
-        let paths: Vec<String> = (0..count)
-            .map(|i| format!("C:\\Temp\\file{}.txt", i))
+        let count: i32 = 20_000;
+        let paths: Vec<String> = (0_i32..count)
+            .map(|idx| format!("C:\\Temp\\file{idx}.txt"))
             .collect();
-        let names: Vec<String> = (0..count).map(|i| format!("file{}.txt", i)).collect();
+        let names: Vec<String> = (0_i32..count)
+            .map(|idx| format!("file{idx}.txt"))
+            .collect();
 
-        let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
-        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
 
         DataFrame::new_infer_height(vec![
             Column::new("path".into(), &path_refs),
@@ -1439,10 +1441,10 @@ mod tests {
         // "C:\Temp\file0.txt","file0.txt"
         let lines: Vec<&str> = written.lines().collect();
         let footer_start = lines.len().saturating_sub(4);
-        assert_eq!(lines[footer_start], "");
-        assert_eq!(lines[footer_start + 1], "");
-        assert_eq!(lines[footer_start + 2], "Drives? \t1\tG:");
-        assert_eq!(lines[footer_start + 3], "");
+        assert_eq!(lines.get(footer_start), Some(&""));
+        assert_eq!(lines.get(footer_start + 1), Some(&""));
+        assert_eq!(lines.get(footer_start + 2), Some(&"Drives? \t1\tG:"));
+        assert_eq!(lines.get(footer_start + 3), Some(&""));
         Ok(())
     }
 }
