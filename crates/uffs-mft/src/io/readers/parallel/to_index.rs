@@ -474,7 +474,7 @@ impl ParallelMftReader {
             }
         }
 
-        let total_ms = read_start.elapsed().as_millis();
+        let total_ms = read_start.elapsed().as_millis() as u64;
         let wait_ms = total_wait_time_ns / 1_000_000;
         let parse_ms = total_parse_time_ns / 1_000_000;
 

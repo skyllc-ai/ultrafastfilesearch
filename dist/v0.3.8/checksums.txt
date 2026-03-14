@@ -1,0 +1,4 @@
+f0558f8361cd5857643106420880a7d426c7fe3467fbebf573023da3b403102c  dist/v0.3.8/uffs/uffs-windows-x64.exe (69705728 bytes)
+f5d4330fd89201773dcfe0fcbdb517ccc56e1cc33d402b8ee722e62fe9955a11  dist/v0.3.8/uffs_mft/uffs_mft-windows-x64.exe (23134720 bytes)
+618951792c198205749d457c182ca5ca62cb203dfc16800651818937c51390b0  dist/v0.3.8/uffs_tui/uffs_tui-windows-x64.exe (67120128 bytes)
+a622aec72c3d9ab9d2e792f7aba9498a351a027b554ef748a7b8969d5e5cc69b  dist/v0.3.8/uffs_gui/uffs_gui-windows-x64.exe (1679360 bytes)
