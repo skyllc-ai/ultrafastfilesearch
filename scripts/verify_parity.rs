@@ -41,6 +41,7 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 use std::{env, fs};
 
 use sha2::{Digest, Sha256};
@@ -59,6 +60,16 @@ struct DriveResult {
     result: VerifyResult,
     baseline_lines: usize,
     rust_lines: usize,
+    mft_size_bytes: u64,
+    parse_duration: Option<Duration>,
+}
+
+/// Result from running uffs to regenerate output
+#[derive(Debug)]
+struct RegenerateResult {
+    output_path: PathBuf,
+    parse_duration: Duration,
+    mft_size_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -115,18 +126,19 @@ fn run_legacy_mode(args: &[String], base_dir: &Path) {
 
     // Determine mode
     let mode = &args[3];
-    let rust_output = match mode.as_str() {
+    let (rust_output, parse_duration, mft_size) = match mode.as_str() {
         "--regenerate" => {
             let golden_baseline = find_golden_baseline_file(&drive_dir, &drive_lower);
             let tz_offset =
                 explicit_tz.unwrap_or_else(|| detect_tz_from_baseline(&golden_baseline));
-            regenerate_rust_output(
+            let regen = regenerate_rust_output(
                 &drive_dir,
                 &drive_letter,
                 &drive_lower,
                 tz_offset,
                 custom_bin.as_deref(),
-            )
+            );
+            (regen.output_path, Some(regen.parse_duration), regen.mft_size_bytes)
         }
         "--rust" => {
             if args.len() < 5 {
@@ -134,7 +146,7 @@ fn run_legacy_mode(args: &[String], base_dir: &Path) {
                 print_usage(&args[0]);
                 std::process::exit(1);
             }
-            PathBuf::from(&args[4])
+            (PathBuf::from(&args[4]), None, 0)
         }
         _ => {
             eprintln!("ERROR: Unknown mode: {}", mode);
@@ -143,7 +155,19 @@ fn run_legacy_mode(args: &[String], base_dir: &Path) {
         }
     };
 
-    let result = verify_single_drive(base_dir, &drive_dir, &drive_letter, &rust_output);
+    let result = verify_single_drive(base_dir, &drive_dir, &drive_letter, &rust_output, parse_duration, mft_size);
+
+    // Print timing for single drive if available
+    if let Some(duration) = result.parse_duration {
+        println!();
+        println!("⏱️  MFT Parse Time: {}", format_duration(duration));
+        if result.mft_size_bytes > 0 {
+            let mb = result.mft_size_bytes as f64 / (1024.0 * 1024.0);
+            let throughput = mb / duration.as_secs_f64();
+            println!("   MFT Size: {:.1} MB, Throughput: {:.1} MB/s", mb, throughput);
+        }
+    }
+
     std::process::exit(if result.result == VerifyResult::Mismatch {
         1
     } else {
@@ -217,27 +241,30 @@ fn run_multi_drive_mode(args: &[String], base_dir: &Path) {
                     result: VerifyResult::Skipped,
                     baseline_lines: 0,
                     rust_lines: 0,
+                    mft_size_bytes: 0,
+                    parse_duration: None,
                 });
                 continue;
             }
         };
 
         // Generate or use provided rust output
-        let rust_output = if let Some(ref path) = rust_output_path {
-            PathBuf::from(path)
+        let (rust_output, parse_duration, mft_size) = if let Some(ref path) = rust_output_path {
+            (PathBuf::from(path), None, 0u64)
         } else {
             let tz_offset =
                 explicit_tz.unwrap_or_else(|| detect_tz_from_baseline(&golden_baseline));
-            regenerate_rust_output(
+            let regen = regenerate_rust_output(
                 &drive_dir,
                 &drive_letter,
                 drive_lower,
                 tz_offset,
                 custom_bin.as_deref(),
-            )
+            );
+            (regen.output_path, Some(regen.parse_duration), regen.mft_size_bytes)
         };
 
-        let result = verify_single_drive(base_dir, &drive_dir, &drive_letter, &rust_output);
+        let result = verify_single_drive(base_dir, &drive_dir, &drive_letter, &rust_output, parse_duration, mft_size);
         results.push(result);
         println!();
     }
@@ -294,6 +321,8 @@ fn verify_single_drive(
     drive_dir: &Path,
     drive_letter: &str,
     rust_output: &Path,
+    parse_duration: Option<Duration>,
+    mft_size_bytes: u64,
 ) -> DriveResult {
     let drive_lower = drive_letter.to_lowercase();
     let golden_baseline_file = find_golden_baseline_file(drive_dir, &drive_lower);
@@ -308,6 +337,8 @@ fn verify_single_drive(
             result: VerifyResult::Mismatch,
             baseline_lines: 0,
             rust_lines: 0,
+            mft_size_bytes,
+            parse_duration,
         };
     }
 
@@ -341,6 +372,8 @@ fn verify_single_drive(
             result: VerifyResult::StrictMatch,
             baseline_lines: golden_hashes.line_count,
             rust_lines: rust_hashes.line_count,
+            mft_size_bytes,
+            parse_duration,
         };
     }
 
@@ -361,6 +394,8 @@ fn verify_single_drive(
             result: VerifyResult::SortedMatch,
             baseline_lines: golden_hashes.line_count,
             rust_lines: rust_hashes.line_count,
+            mft_size_bytes,
+            parse_duration,
         };
     }
 
@@ -384,6 +419,8 @@ fn verify_single_drive(
         result: VerifyResult::Mismatch,
         baseline_lines: golden_hashes.line_count,
         rust_lines: rust_hashes.line_count,
+        mft_size_bytes,
+        parse_duration,
     }
 }
 
@@ -440,7 +477,82 @@ fn print_summary(results: &[DriveResult]) {
     } else {
         println!("  ⚠️  {} drive(s) had mismatches", mismatch);
     }
+
+    // Print timing table if any drives have timing data
+    let timed_results: Vec<_> = results.iter().filter(|r| r.parse_duration.is_some()).collect();
+    if !timed_results.is_empty() {
+        print_timing_table(&timed_results);
+    }
     println!();
+}
+
+/// Print a timing table for MFT parsing performance
+fn print_timing_table(results: &[&DriveResult]) {
+    println!();
+    println!("╔══════════════════════════════════════════════════════════════════════════════╗");
+    println!("║                      MFT PARSING PERFORMANCE                                 ║");
+    println!("╠═══════════╦══════════════╦═══════════════╦═══════════════╦══════════════════╣");
+    println!("║   Drive   ║   MFT Size   ║  Parse Time   ║  Throughput   ║   Files/sec      ║");
+    println!("╠═══════════╬══════════════╬═══════════════╬═══════════════╬══════════════════╣");
+
+    let mut total_bytes: u64 = 0;
+    let mut total_duration = Duration::ZERO;
+    let mut total_files: usize = 0;
+
+    for result in results {
+        if let Some(duration) = result.parse_duration {
+            let mft_mb = result.mft_size_bytes as f64 / (1024.0 * 1024.0);
+            let secs = duration.as_secs_f64();
+            let throughput_mb = if secs > 0.0 { mft_mb / secs } else { 0.0 };
+            let files_per_sec = if secs > 0.0 { result.rust_lines as f64 / secs } else { 0.0 };
+
+            total_bytes += result.mft_size_bytes;
+            total_duration += duration;
+            total_files += result.rust_lines;
+
+            println!(
+                "║     {}     ║ {:>10.1} MB ║ {:>13} ║ {:>10.1} MB/s ║ {:>14.0}/s ║",
+                result.drive_letter,
+                mft_mb,
+                format_duration(duration),
+                throughput_mb,
+                files_per_sec
+            );
+        }
+    }
+
+    // Print totals
+    if results.len() > 1 {
+        println!("╠═══════════╬══════════════╬═══════════════╬═══════════════╬══════════════════╣");
+        let total_mb = total_bytes as f64 / (1024.0 * 1024.0);
+        let total_secs = total_duration.as_secs_f64();
+        let avg_throughput = if total_secs > 0.0 { total_mb / total_secs } else { 0.0 };
+        let avg_files_per_sec = if total_secs > 0.0 { total_files as f64 / total_secs } else { 0.0 };
+
+        println!(
+            "║   TOTAL   ║ {:>10.1} MB ║ {:>13} ║ {:>10.1} MB/s ║ {:>14.0}/s ║",
+            total_mb,
+            format_duration(total_duration),
+            avg_throughput,
+            avg_files_per_sec
+        );
+    }
+
+    println!("╚═══════════╩══════════════╩═══════════════╩═══════════════╩══════════════════╝");
+}
+
+/// Format a Duration as a human-readable string
+fn format_duration(duration: Duration) -> String {
+    let total_secs = duration.as_secs_f64();
+    if total_secs < 1.0 {
+        format!("{:.0}ms", duration.as_millis())
+    } else if total_secs < 60.0 {
+        format!("{:.2}s", total_secs)
+    } else {
+        let mins = (total_secs / 60.0).floor() as u64;
+        let secs = total_secs % 60.0;
+        format!("{}m {:.1}s", mins, secs)
+    }
 }
 
 /// Resolves the drive data directory.
@@ -805,7 +917,7 @@ fn regenerate_rust_output(
     drive_lower: &str,
     tz_offset: i32,
     custom_bin: Option<&Path>,
-) -> PathBuf {
+) -> RegenerateResult {
     let tz_str = format!("{}", tz_offset);
     let tz_label = match tz_offset {
         -7 => "PDT (Pacific Daylight)",
@@ -826,7 +938,14 @@ fn regenerate_rust_output(
         eprintln!("ERROR: MFT file not found: {}", mft_file.display());
         std::process::exit(1);
     }
-    println!("MFT file:     {}", mft_file.display());
+
+    // Get MFT file size
+    let mft_size_bytes = fs::metadata(&mft_file)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let mft_mb = mft_size_bytes as f64 / (1024.0 * 1024.0);
+
+    println!("MFT file:     {} ({:.1} MB)", mft_file.display(), mft_mb);
 
     // Determine which binary to use
     let binary_path = if let Some(custom) = custom_bin {
@@ -863,6 +982,9 @@ fn regenerate_rust_output(
     let rust_output = data_dir.join(format!("verify_rust_{}.txt", drive_lower));
     println!("Running uffs scan (baseline-compatible algorithms)...");
 
+    // Time the uffs execution
+    let start_time = Instant::now();
+
     let status = Command::new(&binary_path)
         .args([
             "*",
@@ -877,9 +999,16 @@ fn regenerate_rust_output(
         ])
         .status();
 
+    let parse_duration = start_time.elapsed();
+
     match status {
         Ok(s) if s.success() => {
-            println!("  uffs scan completed successfully.");
+            let throughput = mft_mb / parse_duration.as_secs_f64();
+            println!(
+                "  ✅ uffs scan completed in {} ({:.1} MB/s)",
+                format_duration(parse_duration),
+                throughput
+            );
             println!();
         }
         Ok(s) => {
@@ -892,7 +1021,11 @@ fn regenerate_rust_output(
         }
     }
 
-    rust_output
+    RegenerateResult {
+        output_path: rust_output,
+        parse_duration,
+        mft_size_bytes,
+    }
 }
 
 /// Find the authoritative workspace release artifact via Cargo metadata.
