@@ -1,5 +1,14 @@
-//! Legacy direct-to-index parser bridge.
-//! Preserves the `io` parser surface for the IOCP fast path.
+//! Single-pass direct-to-index parser (C++-style inline approach).
+//!
+//! Exception: This file is intentionally monolithic (840+ LOC) because it
+//! implements a performance-critical hot path that handles all NTFS attribute
+//! types inline. Splitting would introduce indirection overhead and hurt
+//! performance. See `scripts/ci/file_size_exceptions.txt`.
+//!
+//! This module implements the high-performance single-pass parser that matches
+//! the C++ architecture. It parses MFT records directly into `MftIndex` without
+//! creating intermediate `ParsedRecord` allocations, which is critical for IOCP
+//! performance.
 
 use core::mem::size_of;
 
@@ -9,19 +18,31 @@ use zerocopy::FromBytes;
 use super::index_extension::parse_extension_to_index;
 use crate::ntfs::is_internal_windows_stream;
 
-/// Parses a record directly into MftIndex (inline parsing for IOCP).
+/// Parses a record directly into `MftIndex` (single-pass inline parsing).
 ///
 /// This function parses the record and adds it directly to the index,
-/// creating parent placeholders on-demand. This is the legacy-output parity
+/// creating parent placeholders on-demand. This is the C++-style single-pass
 /// approach that eliminates the intermediate `ParsedRecord` allocation.
+///
+/// Handles ALL attribute types that `parse_record_full()` handles, including:
+/// - `$STANDARD_INFORMATION`, `$FILE_NAME`, `$DATA` (default + ADS)
+/// - `$REPARSE_POINT` (for WoF detection and junctions/symlinks)
+/// - `$INDEX_ROOT`, `$INDEX_ALLOCATION`, `$BITMAP` (directory indexes)
+/// - `$OBJECT_ID`, `$VOLUME_NAME`, `$VOLUME_INFORMATION`, `$PROPERTY_SET`
+/// - `$EA`, `$EA_INFORMATION`, `$LOGGED_UTILITY_STREAM`
+/// - `$SECURITY_DESCRIPTOR`, `$ATTRIBUTE_LIST`
+/// - Unknown attribute types (counted as streams for C++ parity)
 ///
 /// # Returns
 ///
 /// `true` if a record was added to the index, `false` if skipped.
-#[deprecated(note = "Use parse_record_full() + MftRecordMerger + from_parsed_records() instead")]
 #[expect(
     clippy::too_many_lines,
     reason = "monolithic parser kept for performance-critical hot path"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "NTFS attribute dispatch is inherently complex"
 )]
 #[expect(
     clippy::cast_possible_truncation,
@@ -78,6 +99,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let mut default_allocated = 0u64;
     // ADS: (stream_name, size, allocated)
     let mut additional_streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
+    let mut reparse_tag: u32 = 0;
+    let mut dir_index_size: u64 = 0;
+    let mut dir_index_allocated: u64 = 0;
 
     while offset + size_of::<AttributeRecordHeader>() <= max_offset {
         let attr_header = match AttributeRecordHeader::read_from_prefix(&data[offset..]) {
@@ -93,7 +117,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             break;
         }
 
-        match AttributeType::from_u32(attr_header.type_code) {
+        let attr_type = AttributeType::from_u32(attr_header.type_code);
+        match attr_type {
             Some(AttributeType::StandardInformation) => {
                 if attr_header.is_non_resident == 0 {
                     // Parse $STANDARD_INFORMATION
@@ -257,7 +282,319 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     }
                 }
             }
-            _ => {}
+            Some(AttributeType::ReparsePoint) => {
+                // Parse $REPARSE_POINT to get the reparse tag
+                // C++ handles both resident and non-resident reparse points
+                // C++ also counts $REPARSE_POINT as a stream (for descendants)
+                let (rp_size, rp_allocated) = if attr_header.is_non_resident == 0 {
+                    // Resident reparse point (common case)
+                    let value_length_bytes = &data[offset + 16..offset + 20];
+                    let value_length =
+                        u32::from_le_bytes(value_length_bytes.try_into().unwrap_or([0, 0, 0, 0]))
+                            as u64;
+
+                    let value_offset_bytes = &data[offset + 20..offset + 22];
+                    let value_offset =
+                        u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0]))
+                            as usize;
+                    let rp_offset = offset + value_offset;
+                    if rp_offset + 4 <= data.len() {
+                        // Read reparse tag (first 4 bytes of reparse point data)
+                        let tag_bytes = &data[rp_offset..rp_offset + 4];
+                        reparse_tag =
+                            u32::from_le_bytes(tag_bytes.try_into().unwrap_or([0, 0, 0, 0]));
+                    }
+                    (value_length, 0_u64) // Resident, allocated=0
+                } else {
+                    // Non-resident reparse point (rare - large reparse data)
+                    let nr_offset = offset + 16;
+                    if nr_offset + 48 <= data.len() {
+                        let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
+                        let allocated =
+                            i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
+                        let size_bytes = &data[nr_offset + 32..nr_offset + 40];
+                        let data_size = i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
+                        (data_size.max(0) as u64, allocated.max(0) as u64)
+                    } else {
+                        (0_u64, 0_u64)
+                    }
+                };
+
+                // Add $REPARSE_POINT as a stream (matches C++ stream counting)
+                additional_streams.push((String::from("$REPARSE"), rp_size, rp_allocated));
+            }
+            Some(
+                AttributeType::IndexRoot | AttributeType::IndexAllocation | AttributeType::Bitmap,
+            ) => {
+                // C++ includes $INDEX_ROOT and $INDEX_ALLOCATION with name $I30
+                // in directory size. For non-$I30 indexes, C++ counts them as streams.
+
+                // Extract attribute name
+                let name_len = attr_header.name_length as usize;
+                let (is_i30, attr_name) = if name_len > 0 {
+                    let name_offset = offset + attr_header.name_offset as usize;
+                    if name_offset + name_len * 2 <= data.len() {
+                        let name_bytes = &data[name_offset..name_offset + name_len * 2];
+                        // Check for "$I30" in UTF-16LE
+                        let is_i30 =
+                            attr_header.name_length == 4 && name_bytes == b"$\x00I\x003\x000\x00";
+                        // Decode name for non-$I30 indexes
+                        let name = if is_i30 {
+                            String::new()
+                        } else {
+                            let name_u16: SmallVec<[u16; 64]> = name_bytes
+                                .chunks_exact(2)
+                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .collect();
+                            String::from_utf16_lossy(&name_u16)
+                        };
+                        (is_i30, name)
+                    } else {
+                        (false, String::new())
+                    }
+                } else {
+                    (false, String::new())
+                };
+
+                if is_i30 {
+                    // Accumulate $I30 sizes for directories
+                    if attr_header.is_non_resident == 0 {
+                        let value_length_bytes = &data[offset + 16..offset + 20];
+                        let value_length =
+                            u32::from_le_bytes(value_length_bytes.try_into().unwrap_or([0; 4]))
+                                as u64;
+                        dir_index_size += value_length;
+                    } else {
+                        let nr_offset = offset + 16;
+                        if nr_offset + 48 <= data.len() {
+                            let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
+                            let allocated =
+                                i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
+                            let size_bytes = &data[nr_offset + 32..nr_offset + 40];
+                            let data_size =
+                                i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
+                            dir_index_size += data_size.max(0) as u64;
+                            dir_index_allocated += allocated.max(0) as u64;
+                        }
+                    }
+                } else {
+                    // Non-$I30 index - count as stream
+                    // Check if primary attribute (LowestVCN == 0)
+                    let is_primary = if attr_header.is_non_resident == 0 {
+                        true
+                    } else {
+                        let nr_offset = offset + 16;
+                        if nr_offset + 8 <= data.len() {
+                            let lowest_vcn = i64::from_le_bytes(
+                                data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
+                            );
+                            lowest_vcn == 0
+                        } else {
+                            false
+                        }
+                    };
+
+                    if is_primary {
+                        let (size, allocated) = if attr_header.is_non_resident == 0 {
+                            let value_length_bytes = &data[offset + 16..offset + 20];
+                            let value_length =
+                                u32::from_le_bytes(value_length_bytes.try_into().unwrap_or([0; 4]))
+                                    as u64;
+                            (value_length, 0_u64)
+                        } else {
+                            let nr_offset = offset + 16;
+                            if nr_offset + 48 <= data.len() {
+                                let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
+                                let allocated =
+                                    i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
+                                let size_bytes = &data[nr_offset + 32..nr_offset + 40];
+                                let data_size =
+                                    i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
+                                (data_size.max(0) as u64, allocated.max(0) as u64)
+                            } else {
+                                (0_u64, 0_u64)
+                            }
+                        };
+
+                        let stream_name = if attr_name.is_empty() {
+                            match attr_type {
+                                Some(AttributeType::Bitmap) => String::from("$BITMAP"),
+                                Some(AttributeType::IndexRoot) => String::from("$INDEX_ROOT"),
+                                Some(AttributeType::IndexAllocation) => {
+                                    String::from("$INDEX_ALLOCATION")
+                                }
+                                _ => String::new(),
+                            }
+                        } else {
+                            attr_name
+                        };
+                        additional_streams.push((stream_name, size, allocated));
+                    }
+                }
+            }
+            Some(
+                AttributeType::ObjectId
+                | AttributeType::VolumeName
+                | AttributeType::VolumeInformation
+                | AttributeType::PropertySet
+                | AttributeType::Ea
+                | AttributeType::EaInformation
+                | AttributeType::LoggedUtilityStream
+                | AttributeType::SecurityDescriptor
+                | AttributeType::AttributeList,
+            ) => {
+                // All these are counted as streams in C++
+                // Check if primary attribute (LowestVCN == 0)
+                let is_primary = if attr_header.is_non_resident == 0 {
+                    true
+                } else {
+                    let nr_offset = offset + 16;
+                    if nr_offset + 8 <= data.len() {
+                        let lowest_vcn = i64::from_le_bytes(
+                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
+                        );
+                        lowest_vcn == 0
+                    } else {
+                        false
+                    }
+                };
+
+                if is_primary {
+                    // Extract attribute name (if any)
+                    let attr_name = if attr_header.name_length > 0 {
+                        let name_offset = offset + attr_header.name_offset as usize;
+                        let name_len = attr_header.name_length as usize;
+                        if name_offset + name_len * 2 <= data.len() {
+                            let name_bytes = &data[name_offset..name_offset + name_len * 2];
+                            let name_u16: SmallVec<[u16; 64]> = name_bytes
+                                .chunks_exact(2)
+                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .collect();
+                            String::from_utf16_lossy(&name_u16)
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    };
+
+                    let (size, allocated) = if attr_header.is_non_resident == 0 {
+                        let value_length_bytes = &data[offset + 16..offset + 20];
+                        let value_length =
+                            u32::from_le_bytes(value_length_bytes.try_into().unwrap_or([0; 4]))
+                                as u64;
+                        (value_length, 0_u64)
+                    } else {
+                        let nr_offset = offset + 16;
+                        if nr_offset + 48 <= data.len() {
+                            let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
+                            let allocated =
+                                i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
+                            let size_bytes = &data[nr_offset + 32..nr_offset + 40];
+                            let data_size =
+                                i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
+                            (data_size.max(0) as u64, allocated.max(0) as u64)
+                        } else {
+                            (0_u64, 0_u64)
+                        }
+                    };
+
+                    let stream_name = if attr_name.is_empty() {
+                        match attr_type {
+                            Some(AttributeType::ObjectId) => String::from("$OBJECT_ID"),
+                            Some(AttributeType::VolumeName) => String::from("$VOLUME_NAME"),
+                            Some(AttributeType::VolumeInformation) => {
+                                String::from("$VOLUME_INFORMATION")
+                            }
+                            Some(AttributeType::PropertySet) => String::from("$PROPERTY_SET"),
+                            Some(AttributeType::Ea) => String::from("$EA"),
+                            Some(AttributeType::EaInformation) => String::from("$EA_INFORMATION"),
+                            Some(AttributeType::LoggedUtilityStream) => {
+                                String::from("$LOGGED_UTILITY_STREAM")
+                            }
+                            Some(AttributeType::SecurityDescriptor) => {
+                                String::from("$SECURITY_DESCRIPTOR")
+                            }
+                            Some(AttributeType::AttributeList) => String::from("$ATTRIBUTE_LIST"),
+                            _ => String::new(),
+                        }
+                    } else {
+                        attr_name
+                    };
+                    additional_streams.push((stream_name, size, allocated));
+                }
+            }
+            Some(AttributeType::StandardInformation | AttributeType::FileName) => {
+                // Already handled above
+            }
+            _ => {
+                // C++ counts ALL attribute types as streams via default: case
+                // This includes truly unknown types
+                let type_code = attr_header.type_code;
+
+                // Check if primary attribute (LowestVCN == 0)
+                let is_primary = if attr_header.is_non_resident == 0 {
+                    true
+                } else {
+                    let nr_offset = offset + 16;
+                    if nr_offset + 8 <= data.len() {
+                        let lowest_vcn = i64::from_le_bytes(
+                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
+                        );
+                        lowest_vcn == 0
+                    } else {
+                        false
+                    }
+                };
+
+                if is_primary {
+                    // Extract attribute name (if any)
+                    let attr_name = if attr_header.name_length > 0 {
+                        let name_offset = offset + attr_header.name_offset as usize;
+                        let name_len = attr_header.name_length as usize;
+                        if name_offset + name_len * 2 <= data.len() {
+                            let name_bytes = &data[name_offset..name_offset + name_len * 2];
+                            let name_u16: SmallVec<[u16; 64]> = name_bytes
+                                .chunks_exact(2)
+                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .collect();
+                            String::from_utf16_lossy(&name_u16)
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    };
+
+                    let (size, allocated) = if attr_header.is_non_resident == 0 {
+                        let value_length_bytes = &data[offset + 16..offset + 20];
+                        let value_length =
+                            u32::from_le_bytes(value_length_bytes.try_into().unwrap_or([0; 4]))
+                                as u64;
+                        (value_length, 0_u64)
+                    } else {
+                        let nr_offset = offset + 16;
+                        if nr_offset + 48 <= data.len() {
+                            let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
+                            let allocated =
+                                i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
+                            let size_bytes = &data[nr_offset + 32..nr_offset + 40];
+                            let data_size =
+                                i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
+                            (data_size.max(0) as u64, allocated.max(0) as u64)
+                        } else {
+                            (0_u64, 0_u64)
+                        }
+                    };
+
+                    let stream_name = if attr_name.is_empty() {
+                        format!("$UNKNOWN_0x{type_code:X}")
+                    } else {
+                        attr_name
+                    };
+                    additional_streams.push((stream_name, size, allocated));
+                }
+            }
         }
 
         offset += attr_header.length as usize;
@@ -267,6 +604,11 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     // This ensures is_directory is set even when $FILE_NAME is in extension record
     if is_directory {
         std_info.set_directory(true);
+        // For directories, set default size to directory index size
+        if dir_index_size > 0 {
+            default_size = dir_index_size;
+            default_allocated = dir_index_allocated;
+        }
     }
 
     // Handle records without a filename in the base record
@@ -419,6 +761,11 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     record.name_count = 1 + additional_count as u16;
     // stream_count = 1 (default) + additional ADS
     record.stream_count = 1 + additional_stream_count as u16;
+    // total_stream_count includes all streams (including internal ones like
+    // $REPARSE)
+    record.total_stream_count = 1 + additional_stream_count as u16;
+    // Set reparse tag if this is a reparse point
+    record.reparse_tag = reparse_tag;
 
     // Chain the additional links: first_name -> link[0] -> link[1] -> ... ->
     // NO_ENTRY The links were pushed with next_entry = NO_ENTRY, now we chain

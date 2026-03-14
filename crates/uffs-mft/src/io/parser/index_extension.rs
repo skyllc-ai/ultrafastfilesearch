@@ -1,5 +1,12 @@
-//! Legacy extension-record helper for direct-to-index parsing.
-//! Extracts names and streams from extension records into the index.
+//! Extension record parser for direct-to-index path.
+//!
+//! Exception: This file is intentionally large (720+ LOC) to match the
+//! completeness of `index.rs` - it handles all the same attribute types that
+//! can appear in extension records. See `scripts/ci/file_size_exceptions.txt`.
+//!
+//! This module handles extension records for the single-pass parser, extracting
+//! names, streams, and all attribute types from extension records and merging
+//! them into base records in the index.
 
 use core::mem::size_of;
 
@@ -11,9 +18,16 @@ use crate::ntfs::is_internal_windows_stream;
 /// Parses an extension record and adds its names/streams to the base record.
 ///
 /// Extension records contain additional `$FILE_NAME` attributes (hard links)
-/// and `$DATA` attributes (ADS) that don't fit in the base record. This
-/// function extracts those attributes and adds them to the base record in the
-/// index.
+/// and additional attributes (ADS, system attributes, etc.) that don't fit
+/// in the base record. This function extracts those attributes and adds them
+/// to the base record in the index.
+///
+/// Handles ALL attribute types that `parse_record_full()` handles, including:
+/// - `$FILE_NAME` (hard links)
+/// - `$DATA` (ADS)
+/// - `$REPARSE_POINT`, `$INDEX_ROOT`, `$INDEX_ALLOCATION`, `$BITMAP`
+/// - `$OBJECT_ID`, `$EA`, `$LOGGED_UTILITY_STREAM`, etc.
+/// - Unknown attribute types
 ///
 /// # Arguments
 ///
@@ -24,10 +38,17 @@ use crate::ntfs::is_internal_windows_stream;
 /// # Returns
 ///
 /// `true` if any names/streams were added, `false` otherwise.
-#[deprecated(note = "Use parse_record_full() + MftRecordMerger instead")]
 #[expect(
     clippy::cast_possible_truncation,
     reason = "NTFS field sizes are bounded by u16/u32 record layout"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "NTFS attribute dispatch is inherently complex"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "monolithic extension parser for performance"
 )]
 pub(super) fn parse_extension_to_index(
     data: &[u8],
@@ -55,6 +76,8 @@ pub(super) fn parse_extension_to_index(
     // Collect names and streams from extension record
     let mut names: SmallVec<[(String, u64); 4]> = SmallVec::new();
     let mut streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
+    let mut dir_index_size: u64 = 0;
+    let mut dir_index_allocated: u64 = 0;
 
     while offset + size_of::<AttributeRecordHeader>() <= max_offset {
         let attr_header = match AttributeRecordHeader::read_from_prefix(&data[offset..]) {
@@ -70,7 +93,8 @@ pub(super) fn parse_extension_to_index(
             break;
         }
 
-        match AttributeType::from_u32(attr_header.type_code) {
+        let attr_type = AttributeType::from_u32(attr_header.type_code);
+        match attr_type {
             Some(AttributeType::FileName) => {
                 // Parse $FILE_NAME attribute
                 if attr_header.is_non_resident == 0 {
@@ -178,7 +202,289 @@ pub(super) fn parse_extension_to_index(
                     }
                 }
             }
-            _ => {}
+            Some(AttributeType::ReparsePoint) => {
+                // Parse $REPARSE_POINT - add as stream
+                let (rp_size, rp_allocated) = if attr_header.is_non_resident == 0 {
+                    let value_length_bytes = &data[offset + 16..offset + 20];
+                    let value_length =
+                        u32::from_le_bytes(value_length_bytes.try_into().unwrap_or([0; 4])) as u64;
+                    (value_length, 0_u64)
+                } else {
+                    let nr_offset = offset + 16;
+                    if nr_offset + 48 <= data.len() {
+                        let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
+                        let allocated =
+                            i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
+                        let size_bytes = &data[nr_offset + 32..nr_offset + 40];
+                        let data_size = i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
+                        (data_size.max(0) as u64, allocated.max(0) as u64)
+                    } else {
+                        (0_u64, 0_u64)
+                    }
+                };
+                streams.push((String::from("$REPARSE"), rp_size, rp_allocated));
+            }
+            Some(
+                AttributeType::IndexRoot | AttributeType::IndexAllocation | AttributeType::Bitmap,
+            ) => {
+                // Extract attribute name
+                let name_len = attr_header.name_length as usize;
+                let (is_i30, attr_name) = if name_len > 0 {
+                    let name_offset = offset + attr_header.name_offset as usize;
+                    if name_offset + name_len * 2 <= data.len() {
+                        let name_bytes = &data[name_offset..name_offset + name_len * 2];
+                        let is_i30 =
+                            attr_header.name_length == 4 && name_bytes == b"$\x00I\x003\x000\x00";
+                        let name = if is_i30 {
+                            String::new()
+                        } else {
+                            let name_u16: SmallVec<[u16; 64]> = name_bytes
+                                .chunks_exact(2)
+                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .collect();
+                            String::from_utf16_lossy(&name_u16)
+                        };
+                        (is_i30, name)
+                    } else {
+                        (false, String::new())
+                    }
+                } else {
+                    (false, String::new())
+                };
+
+                if is_i30 {
+                    // Accumulate $I30 sizes
+                    if attr_header.is_non_resident == 0 {
+                        let value_length_bytes = &data[offset + 16..offset + 20];
+                        let value_length =
+                            u32::from_le_bytes(value_length_bytes.try_into().unwrap_or([0; 4]))
+                                as u64;
+                        dir_index_size += value_length;
+                    } else {
+                        let nr_offset = offset + 16;
+                        if nr_offset + 48 <= data.len() {
+                            let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
+                            let allocated =
+                                i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
+                            let size_bytes = &data[nr_offset + 32..nr_offset + 40];
+                            let data_size =
+                                i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
+                            dir_index_size += data_size.max(0) as u64;
+                            dir_index_allocated += allocated.max(0) as u64;
+                        }
+                    }
+                } else {
+                    // Non-$I30 index - count as stream
+                    let is_primary = if attr_header.is_non_resident == 0 {
+                        true
+                    } else {
+                        let nr_offset = offset + 16;
+                        if nr_offset + 8 <= data.len() {
+                            let lowest_vcn = i64::from_le_bytes(
+                                data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
+                            );
+                            lowest_vcn == 0
+                        } else {
+                            false
+                        }
+                    };
+
+                    if is_primary {
+                        let (size, allocated) = if attr_header.is_non_resident == 0 {
+                            let value_length_bytes = &data[offset + 16..offset + 20];
+                            let value_length =
+                                u32::from_le_bytes(value_length_bytes.try_into().unwrap_or([0; 4]))
+                                    as u64;
+                            (value_length, 0_u64)
+                        } else {
+                            let nr_offset = offset + 16;
+                            if nr_offset + 48 <= data.len() {
+                                let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
+                                let allocated =
+                                    i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
+                                let size_bytes = &data[nr_offset + 32..nr_offset + 40];
+                                let data_size =
+                                    i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
+                                (data_size.max(0) as u64, allocated.max(0) as u64)
+                            } else {
+                                (0_u64, 0_u64)
+                            }
+                        };
+
+                        let stream_name = if attr_name.is_empty() {
+                            match attr_type {
+                                Some(AttributeType::Bitmap) => String::from("$BITMAP"),
+                                Some(AttributeType::IndexRoot) => String::from("$INDEX_ROOT"),
+                                Some(AttributeType::IndexAllocation) => {
+                                    String::from("$INDEX_ALLOCATION")
+                                }
+                                _ => String::new(),
+                            }
+                        } else {
+                            attr_name
+                        };
+                        streams.push((stream_name, size, allocated));
+                    }
+                }
+            }
+            Some(
+                AttributeType::ObjectId
+                | AttributeType::VolumeName
+                | AttributeType::VolumeInformation
+                | AttributeType::PropertySet
+                | AttributeType::Ea
+                | AttributeType::EaInformation
+                | AttributeType::LoggedUtilityStream
+                | AttributeType::SecurityDescriptor
+                | AttributeType::AttributeList,
+            ) => {
+                // All counted as streams
+                let is_primary = if attr_header.is_non_resident == 0 {
+                    true
+                } else {
+                    let nr_offset = offset + 16;
+                    if nr_offset + 8 <= data.len() {
+                        let lowest_vcn = i64::from_le_bytes(
+                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
+                        );
+                        lowest_vcn == 0
+                    } else {
+                        false
+                    }
+                };
+
+                if is_primary {
+                    let attr_name = if attr_header.name_length > 0 {
+                        let name_offset = offset + attr_header.name_offset as usize;
+                        let name_len = attr_header.name_length as usize;
+                        if name_offset + name_len * 2 <= data.len() {
+                            let name_bytes = &data[name_offset..name_offset + name_len * 2];
+                            let name_u16: SmallVec<[u16; 64]> = name_bytes
+                                .chunks_exact(2)
+                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .collect();
+                            String::from_utf16_lossy(&name_u16)
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    };
+
+                    let (size, allocated) = if attr_header.is_non_resident == 0 {
+                        let value_length_bytes = &data[offset + 16..offset + 20];
+                        let value_length =
+                            u32::from_le_bytes(value_length_bytes.try_into().unwrap_or([0; 4]))
+                                as u64;
+                        (value_length, 0_u64)
+                    } else {
+                        let nr_offset = offset + 16;
+                        if nr_offset + 48 <= data.len() {
+                            let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
+                            let allocated =
+                                i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
+                            let size_bytes = &data[nr_offset + 32..nr_offset + 40];
+                            let data_size =
+                                i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
+                            (data_size.max(0) as u64, allocated.max(0) as u64)
+                        } else {
+                            (0_u64, 0_u64)
+                        }
+                    };
+
+                    let stream_name = if attr_name.is_empty() {
+                        match attr_type {
+                            Some(AttributeType::ObjectId) => String::from("$OBJECT_ID"),
+                            Some(AttributeType::VolumeName) => String::from("$VOLUME_NAME"),
+                            Some(AttributeType::VolumeInformation) => {
+                                String::from("$VOLUME_INFORMATION")
+                            }
+                            Some(AttributeType::PropertySet) => String::from("$PROPERTY_SET"),
+                            Some(AttributeType::Ea) => String::from("$EA"),
+                            Some(AttributeType::EaInformation) => String::from("$EA_INFORMATION"),
+                            Some(AttributeType::LoggedUtilityStream) => {
+                                String::from("$LOGGED_UTILITY_STREAM")
+                            }
+                            Some(AttributeType::SecurityDescriptor) => {
+                                String::from("$SECURITY_DESCRIPTOR")
+                            }
+                            Some(AttributeType::AttributeList) => String::from("$ATTRIBUTE_LIST"),
+                            _ => String::new(),
+                        }
+                    } else {
+                        attr_name
+                    };
+                    streams.push((stream_name, size, allocated));
+                }
+            }
+            Some(AttributeType::StandardInformation) => {
+                // Skip - not expected in extension records
+            }
+            _ => {
+                // Unknown attribute types - count as streams (C++ default: case)
+                let type_code = attr_header.type_code;
+
+                let is_primary = if attr_header.is_non_resident == 0 {
+                    true
+                } else {
+                    let nr_offset = offset + 16;
+                    if nr_offset + 8 <= data.len() {
+                        let lowest_vcn = i64::from_le_bytes(
+                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
+                        );
+                        lowest_vcn == 0
+                    } else {
+                        false
+                    }
+                };
+
+                if is_primary {
+                    let attr_name = if attr_header.name_length > 0 {
+                        let name_offset = offset + attr_header.name_offset as usize;
+                        let name_len = attr_header.name_length as usize;
+                        if name_offset + name_len * 2 <= data.len() {
+                            let name_bytes = &data[name_offset..name_offset + name_len * 2];
+                            let name_u16: SmallVec<[u16; 64]> = name_bytes
+                                .chunks_exact(2)
+                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .collect();
+                            String::from_utf16_lossy(&name_u16)
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    };
+
+                    let (size, allocated) = if attr_header.is_non_resident == 0 {
+                        let value_length_bytes = &data[offset + 16..offset + 20];
+                        let value_length =
+                            u32::from_le_bytes(value_length_bytes.try_into().unwrap_or([0; 4]))
+                                as u64;
+                        (value_length, 0_u64)
+                    } else {
+                        let nr_offset = offset + 16;
+                        if nr_offset + 48 <= data.len() {
+                            let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
+                            let allocated =
+                                i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
+                            let size_bytes = &data[nr_offset + 32..nr_offset + 40];
+                            let data_size =
+                                i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
+                            (data_size.max(0) as u64, allocated.max(0) as u64)
+                        } else {
+                            (0_u64, 0_u64)
+                        }
+                    };
+
+                    let stream_name = if attr_name.is_empty() {
+                        format!("$UNKNOWN_0x{type_code:X}")
+                    } else {
+                        attr_name
+                    };
+                    streams.push((stream_name, size, allocated));
+                }
+            }
         }
 
         offset += attr_header.length as usize;
@@ -351,6 +657,15 @@ pub(super) fn parse_extension_to_index(
             let record = &mut index.records[record_idx as usize];
             record.stream_count += stream_indices.len() as u16;
             record.total_stream_count += stream_indices.len() as u16;
+        }
+
+        // Merge directory index sizes from extension records
+        if dir_index_size > 0 || dir_index_allocated > 0 {
+            let record = &mut index.records[record_idx as usize];
+            // Add to the first_stream size (which represents the default stream for
+            // directories)
+            record.first_stream.size.length += dir_index_size;
+            record.first_stream.size.allocated += dir_index_allocated;
         }
 
         // Build parent-child relationship for names added from extension records
