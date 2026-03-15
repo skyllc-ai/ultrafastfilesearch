@@ -121,6 +121,12 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             break;
         }
 
+        // Validate that the attribute's declared length fits within the record data
+        // This prevents reading past record boundaries when attributes are truncated
+        if offset + attr_header.length as usize > data.len() {
+            break; // Attribute extends past record — stop processing
+        }
+
         let attr_type = AttributeType::from_u32(attr_header.type_code);
         match attr_type {
             Some(AttributeType::StandardInformation) => {
@@ -217,7 +223,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                         );
                         lowest_vcn == 0
                     } else {
-                        false // Can't verify, skip to be safe
+                        // Can't read LowestVCN — assume primary (LowestVCN == 0 is common case)
+                        // This prevents skipping valid $DATA attributes near record boundaries
+                        true
                     }
                 };
 
@@ -245,6 +253,15 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                                 .unwrap_or([0; 8]),
                         );
                         (size, allocated)
+                    } else if alloc_offset + 8 <= data.len() {
+                        // Can read AllocatedSize but not DataSize — use AllocatedSize for both
+                        // This handles attributes truncated near record boundary
+                        let allocated = u64::from_le_bytes(
+                            data[alloc_offset..alloc_offset + 8]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        );
+                        (allocated, allocated)
                     } else {
                         (0, 0)
                     }
