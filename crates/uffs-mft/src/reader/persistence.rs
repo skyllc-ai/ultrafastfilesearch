@@ -609,11 +609,11 @@ impl MftReader {
             }
         }
 
-        // Compute tree metrics
-        index.compute_tree_metrics();
-
         // Sort directory children
         index.sort_directory_children();
+
+        // Compute tree metrics
+        index.compute_tree_metrics();
 
         let parse_time = parse_start.elapsed();
 

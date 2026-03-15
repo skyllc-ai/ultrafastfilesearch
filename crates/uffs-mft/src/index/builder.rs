@@ -465,16 +465,16 @@ impl MftIndex {
         tracing::debug!("[TRIP] MftIndex::from_parsed_records -> Phase 2: ExtensionIndex::build");
         index.extension_index = Some(ExtensionIndex::build(&index));
 
-        // 2. Compute tree metrics for directory statistics (Phase 5)
-        // CRITICAL: Must run BEFORE sorting to match C++ MFT insertion order.
-        // Hardlink delta rounding depends on child traversal order.
-        tracing::debug!("[TRIP] MftIndex::from_parsed_records -> Phase 5: compute_tree_metrics");
-        index.compute_tree_metrics();
-
-        // 3. Sort directory children for natural ordering (Phase 4)
-        // This is purely for display/output - tree metrics must run first.
+        // 2. Sort directory children for natural ordering (Phase 4)
+        // CRITICAL: Must run BEFORE computing tree metrics for correct size
+        // aggregation.
         tracing::debug!("[TRIP] MftIndex::from_parsed_records -> Phase 4: sort_directory_children");
         index.sort_directory_children();
+
+        // 3. Compute tree metrics for directory statistics (Phase 5)
+        // Must run AFTER sorting - depends on sorted child traversal order.
+        tracing::debug!("[TRIP] MftIndex::from_parsed_records -> Phase 5: compute_tree_metrics");
+        index.compute_tree_metrics();
 
         // 4. Set forensic mode flag if any forensic records were included
         index.forensic_mode = has_forensic_records;
