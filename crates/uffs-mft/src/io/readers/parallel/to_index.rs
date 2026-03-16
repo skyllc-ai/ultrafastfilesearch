@@ -486,6 +486,29 @@ impl ParallelMftReader {
             "✅ Sliding window IOCP with direct-to-index parsing complete (I/O overlap analysis)"
         );
 
+        // Parity debug: count files with size=0 vs size>0
+        if std::env::var("UFFS_PARITY_DEBUG").is_ok() {
+            let mut files_with_size = 0usize;
+            let mut files_with_zero_size = 0usize;
+            let mut dirs = 0usize;
+            for record in &index.records {
+                if record.stdinfo.is_directory() {
+                    dirs += 1;
+                } else if record.first_stream.size.length > 0 {
+                    files_with_size += 1;
+                } else {
+                    files_with_zero_size += 1;
+                }
+            }
+            eprintln!(
+                "[PARITY_DEBUG] Summary: total_records={}, directories={}, files_with_size={}, files_with_zero_size={}",
+                index.records.len(),
+                dirs,
+                files_with_size,
+                files_with_zero_size
+            );
+        }
+
         Ok(index)
     }
 }

@@ -57,6 +57,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         StandardInformation, file_reference_to_frs, filetime_to_unix_micros,
     };
 
+    // Check for parity debug logging
+    let debug_parity = std::env::var("UFFS_PARITY_DEBUG").is_ok();
+
     if data.len() < size_of::<FileRecordSegmentHeader>() {
         return false;
     }
@@ -97,6 +100,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let mut name_parse_counter: u16 = 0;
     let mut default_size = 0u64;
     let mut default_allocated = 0u64;
+    let mut found_data_attr = false;
     // User-visible ADS: (stream_name, size, allocated)
     let mut additional_streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
     // Internal NTFS streams (e.g. $REPARSE, $EA, $OBJECT_ID) — not emitted as
@@ -221,10 +225,23 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                         let lowest_vcn = i64::from_le_bytes(
                             data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
                         );
-                        lowest_vcn == 0
+                        let is_primary = lowest_vcn == 0;
+                        if debug_parity && !is_primary {
+                            eprintln!(
+                                "[PARITY_DEBUG] FRS={}: $DATA LowestVCN={}, SKIPPED (continuation extent)",
+                                frs, lowest_vcn
+                            );
+                        }
+                        is_primary
                     } else {
                         // Can't read LowestVCN — assume primary (LowestVCN == 0 is common case)
                         // This prevents skipping valid $DATA attributes near record boundaries
+                        if debug_parity {
+                            eprintln!(
+                                "[PARITY_DEBUG] FRS={}: $DATA can't read LowestVCN (nr_offset + 8 > data.len()), assuming primary",
+                                frs
+                            );
+                        }
                         true
                     }
                 };
@@ -252,6 +269,12 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                                 .try_into()
                                 .unwrap_or([0; 8]),
                         );
+                        if debug_parity && name_len == 0 {
+                            eprintln!(
+                                "[PARITY_DEBUG] FRS={}: $DATA non-resident, size={}, allocated={}",
+                                frs, size, allocated
+                            );
+                        }
                         (size, allocated)
                     } else if alloc_offset + 8 <= data.len() {
                         // Can read AllocatedSize but not DataSize — use AllocatedSize for both
@@ -261,8 +284,20 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                                 .try_into()
                                 .unwrap_or([0; 8]),
                         );
+                        if debug_parity && name_len == 0 {
+                            eprintln!(
+                                "[PARITY_DEBUG] FRS={}: $DATA non-resident (truncated), allocated={}",
+                                frs, allocated
+                            );
+                        }
                         (allocated, allocated)
                     } else {
+                        if debug_parity && name_len == 0 {
+                            eprintln!(
+                                "[PARITY_DEBUG] FRS={}: $DATA non-resident, but can't read size/allocated (offset beyond data.len()), size=0",
+                                frs
+                            );
+                        }
                         (0, 0)
                     }
                 } else {
@@ -276,8 +311,17 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                                 .try_into()
                                 .unwrap_or([0; 4]),
                         ) as u64;
+                        if debug_parity && name_len == 0 {
+                            eprintln!("[PARITY_DEBUG] FRS={}: $DATA resident, size={}", frs, len);
+                        }
                         (len, 0) // allocated_size = 0 for resident files
                     } else {
+                        if debug_parity && name_len == 0 {
+                            eprintln!(
+                                "[PARITY_DEBUG] FRS={}: $DATA resident, but can't read value_length, size=0",
+                                frs
+                            );
+                        }
                         (0, 0)
                     }
                 };
@@ -286,6 +330,13 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     // Default stream
                     default_size = size;
                     default_allocated = allocated;
+                    found_data_attr = true;
+                    if debug_parity && size == 0 {
+                        eprintln!(
+                            "[PARITY_DEBUG] FRS={}: Default $DATA stream has ZERO size",
+                            frs
+                        );
+                    }
                 } else {
                     // Alternate Data Stream (ADS)
                     let name_offset = offset + attr_header.name_offset as usize;
@@ -554,6 +605,11 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             default_size = dir_index_size;
             default_allocated = dir_index_allocated;
         }
+    } else if debug_parity && !found_data_attr && default_size == 0 {
+        eprintln!(
+            "[PARITY_DEBUG] FRS={}: Non-directory file has NO $DATA attribute, size will be 0",
+            frs
+        );
     }
 
     // Handle records without a filename in the base record
