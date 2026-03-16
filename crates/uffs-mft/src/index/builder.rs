@@ -465,14 +465,7 @@ impl MftIndex {
         tracing::debug!("[TRIP] MftIndex::from_parsed_records -> Phase 2: ExtensionIndex::build");
         index.extension_index = Some(ExtensionIndex::build(&index));
 
-        // 2. Sort directory children for natural ordering (Phase 4)
-        // CRITICAL: Must run BEFORE computing tree metrics for correct size
-        // aggregation.
-        tracing::debug!("[TRIP] MftIndex::from_parsed_records -> Phase 4: sort_directory_children");
-        index.sort_directory_children();
-
-        // 3. Compute tree metrics for directory statistics (Phase 5)
-        // Must run AFTER sorting - depends on sorted child traversal order.
+        // 2. Compute tree metrics for directory statistics (Phase 5)
         tracing::debug!("[TRIP] MftIndex::from_parsed_records -> Phase 5: compute_tree_metrics");
         index.compute_tree_metrics();
 
