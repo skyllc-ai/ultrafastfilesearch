@@ -505,6 +505,8 @@ pub(super) fn parse_extension_to_index(
     let record_idx = index.frs_to_idx[base_frs_usize];
     if record_idx != NO_ENTRY {
         let record = &mut index.records[record_idx as usize];
+        // Snapshot name_count BEFORE link-chaining modifies it (for child entries)
+        let pre_chain_name_count = record.name_count;
 
         // Add new links to the record
         if !link_indices.is_empty() {
@@ -682,9 +684,8 @@ pub(super) fn parse_extension_to_index(
 
         // Build parent-child relationship for names added from extension records
         // This is critical for compute_tree_metrics() to work correctly.
-        // Get the current name_count to determine the name_index for each new name
-        let record = &index.records[record_idx as usize];
-        let existing_name_count = record.name_count;
+        // Use the name_count from BEFORE link-chaining to avoid overflow
+        let existing_name_count = pre_chain_name_count;
 
         for (name_idx, (_, parent_frs)) in names.iter().enumerate() {
             let p_frs = *parent_frs;
