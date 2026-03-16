@@ -107,42 +107,32 @@ pub fn generate_read_chunks(
             let chunk_frs_start = extent_start_frs + chunk_start;
             let chunk_frs_end = chunk_frs_start + chunk_records;
 
-            // Calculate skip ranges using bitmap (for I/O optimization only).
+            // Bitmap edge-trimming disabled: skip_begin/skip_end caused 98 valid
+            // records to be missed on Drive D (33 ADS streams + 65 files/dirs).
+            // The bitmap is stale for records at chunk boundaries — the IN_USE flag
+            // in each record header is the authoritative filter.
             //
-            // IMPORTANT: We ALWAYS add chunks regardless of bitmap status.
-            // The bitmap is used for I/O optimization (skip_begin/skip_end) to reduce
-            // disk reads, but we still parse all records and check the IN_USE flag
-            // in each record header. This matches established behavior where bitmap is
-            // advisory, not authoritative.
+            // Previously, bitmap.calculate_skip_range() was used to skip records at
+            // the beginning/end of chunks where the bitmap said "not in use". However,
+            // 98 of these skipped records actually had IN_USE flags set in their headers.
+            // This is a timing issue: the filesystem is modified between bitmap read
+            // and MFT read, making the bitmap advisory at best.
             //
-            // The legacy implementation (line 7489) defaults to reading all records:
-            //   this->mft_bitmap.resize(..., ~Bitmap::value_type() /*default should be to
-            // read unused slots too */);
-            //
-            // Previously, Rust skipped entire chunks if all records were marked as
-            // not-in-use in the bitmap. This caused ~5-6M files to be missed because:
-            // 1. Bitmap may be stale or inconsistent with record headers
-            // 2. Parent directories marked not-in-use are still referenced by children
-            // 3. Extension records may be in different chunks than their base records
-            let (skip_begin, skip_end) = if let Some(bm) = bitmap {
+            // The I/O cost increase is minimal (~100MB extra reads on a 4.5GB MFT).
+            // Full chunks are always read; the IN_USE flag is checked during parsing.
+            let (skip_begin, skip_end) = (0_u64, 0_u64);
+            if let Some(bm) = bitmap {
                 let skip_range = bm.calculate_skip_range(chunk_frs_start, chunk_frs_end);
                 if skip_range.0 > 0 || skip_range.1 > 0 {
-                    debug!(
+                    trace!(
                         chunk_frs_start,
                         chunk_frs_end,
-                        skip_begin = skip_range.0,
-                        skip_end = skip_range.1,
-                        "📊 Bitmap skip range calculated (bitmap is Some)"
+                        bitmap_skip_begin = skip_range.0,
+                        bitmap_skip_end = skip_range.1,
+                        "Bitmap suggests skipping (ignored — reading full chunk for correctness)"
                     );
                 }
-                skip_range
-            } else {
-                trace!(
-                    chunk_frs_start,
-                    chunk_frs_end, "📊 No bitmap - skip_begin=0, skip_end=0"
-                );
-                (0, 0)
-            };
+            }
 
             // ALWAYS add chunk - bitmap is for I/O optimization, not filtering
             // The IN_USE flag in each record header is the authoritative source
@@ -313,9 +303,20 @@ pub fn generate_precise_read_chunks(
                 let chunk_frs_start = clipped_start_frs + chunk_start;
                 let chunk_frs_end = chunk_frs_start + chunk_records;
 
-                // Calculate precise skip ranges within this chunk
-                let (skip_begin, skip_end) =
-                    bitmap.calculate_skip_range(chunk_frs_start, chunk_frs_end);
+                // Bitmap edge-trimming disabled: same rationale as generate_read_chunks().
+                // The bitmap is stale at chunk boundaries, causing valid IN_USE records
+                // to be skipped. Always read full chunks; IN_USE flag is authoritative.
+                let (skip_begin, skip_end) = (0_u64, 0_u64);
+                let _diagnostic_skip = bitmap.calculate_skip_range(chunk_frs_start, chunk_frs_end);
+                if _diagnostic_skip.0 > 0 || _diagnostic_skip.1 > 0 {
+                    trace!(
+                        chunk_frs_start,
+                        chunk_frs_end,
+                        bitmap_skip_begin = _diagnostic_skip.0,
+                        bitmap_skip_end = _diagnostic_skip.1,
+                        "Bitmap suggests skipping (ignored — reading full chunk for correctness)"
+                    );
+                }
 
                 let effective_records = chunk_records - skip_begin - skip_end;
                 if effective_records > 0 {
