@@ -994,6 +994,8 @@ fn regenerate_rust_output(
             drive_letter,
             "--tz-offset",
             &tz_str,
+            "--format",
+            "custom",  // Match C++ baseline footer format
             "--out",
             &rust_output.to_string_lossy(),
         ])

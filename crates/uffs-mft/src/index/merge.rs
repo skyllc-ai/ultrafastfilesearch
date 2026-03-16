@@ -54,6 +54,9 @@ impl MftIndex {
         debug!("🔨 Building extension index...");
         self.extension_index = Some(ExtensionIndex::build(self));
 
+        debug!("🔨 Sorting directory children...");
+        self.sort_directory_children();
+
         debug!("🔨 Computing tree metrics...");
         self.compute_tree_metrics();
 
