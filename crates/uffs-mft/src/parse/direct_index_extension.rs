@@ -109,6 +109,10 @@ pub(super) fn parse_extension_to_index(
     let mut streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
     let mut dir_index_size: u64 = 0;
     let mut dir_index_allocated: u64 = 0;
+    // Default $DATA stream (unnamed, name_len == 0) found in extension record
+    let mut default_data_size: u64 = 0;
+    let mut default_data_allocated: u64 = 0;
+    let mut found_default_data = false;
 
     while offset + size_of::<AttributeRecordHeader>() <= max_offset {
         let attr_header = match AttributeRecordHeader::read_from_prefix(&data[offset..]) {
@@ -183,41 +187,46 @@ pub(super) fn parse_extension_to_index(
                     continue;
                 }
 
-                // Parse $DATA attribute (ADS only - named streams)
+                // Parse $DATA attribute — default stream (unnamed) or ADS (named)
                 let name_len = attr_header.name_length as usize;
-                if name_len > 0 {
-                    // This is an ADS (named stream)
-                    let (size, allocated) = if attr_header.is_non_resident != 0 {
-                        let nr_offset = offset + 16;
-                        if nr_offset + 48 <= data.len() {
-                            let allocated = i64::from_le_bytes(
-                                data[nr_offset + 24..nr_offset + 32]
-                                    .try_into()
-                                    .unwrap_or([0; 8]),
-                            );
-                            let size = i64::from_le_bytes(
-                                data[nr_offset + 32..nr_offset + 40]
-                                    .try_into()
-                                    .unwrap_or([0; 8]),
-                            );
-                            (size.max(0) as u64, allocated.max(0) as u64)
-                        } else {
-                            (0, 0)
-                        }
+                let (size, allocated) = if attr_header.is_non_resident != 0 {
+                    let nr_offset = offset + 16;
+                    if nr_offset + 48 <= data.len() {
+                        let allocated = i64::from_le_bytes(
+                            data[nr_offset + 24..nr_offset + 32]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        );
+                        let size = i64::from_le_bytes(
+                            data[nr_offset + 32..nr_offset + 40]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        );
+                        (size.max(0) as u64, allocated.max(0) as u64)
                     } else {
-                        let len_offset = offset + 16;
-                        if len_offset + 4 <= data.len() {
-                            let len = u32::from_le_bytes(
-                                data[len_offset..len_offset + 4]
-                                    .try_into()
-                                    .unwrap_or([0; 4]),
-                            ) as u64;
-                            (len, 0)
-                        } else {
-                            (0, 0)
-                        }
-                    };
+                        (0, 0)
+                    }
+                } else {
+                    let len_offset = offset + 16;
+                    if len_offset + 4 <= data.len() {
+                        let len = u32::from_le_bytes(
+                            data[len_offset..len_offset + 4]
+                                .try_into()
+                                .unwrap_or([0; 4]),
+                        ) as u64;
+                        (len, 0)
+                    } else {
+                        (0, 0)
+                    }
+                };
 
+                if name_len == 0 {
+                    // Default $DATA stream — update base record size
+                    default_data_size = size;
+                    default_data_allocated = allocated;
+                    found_default_data = true;
+                } else {
+                    // ADS (named stream)
                     let name_offset = offset + attr_header.name_offset as usize;
                     if name_offset + name_len * 2 <= data.len() {
                         let name_bytes = &data[name_offset..name_offset + name_len * 2];
@@ -521,8 +530,8 @@ pub(super) fn parse_extension_to_index(
         offset += attr_header.length as usize;
     }
 
-    // If no names or streams found, nothing to do
-    if names.is_empty() && streams.is_empty() {
+    // If no names, streams, or default data found, nothing to do
+    if names.is_empty() && streams.is_empty() && !found_default_data {
         return false;
     }
 
@@ -690,6 +699,15 @@ pub(super) fn parse_extension_to_index(
             record.total_stream_count += stream_indices.len() as u16;
         }
 
+        // Merge default $DATA stream from extension record into base record.
+        // This handles files whose $DATA attribute doesn't fit in the base MFT
+        // record (e.g., large files with extensive run lists).
+        if found_default_data {
+            let record = &mut index.records[record_idx as usize];
+            record.first_stream.size.length = default_data_size;
+            record.first_stream.size.allocated = default_data_allocated;
+        }
+
         // Merge directory index sizes from extension records
         if dir_index_size > 0 || dir_index_allocated > 0 {
             let record = &mut index.records[record_idx as usize];
@@ -751,5 +769,5 @@ pub(super) fn parse_extension_to_index(
         }
     }
 
-    !names.is_empty() || !streams.is_empty()
+    !names.is_empty() || !streams.is_empty() || found_default_data
 }
