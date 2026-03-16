@@ -256,14 +256,45 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 let name_len = attr_header.name_length as usize;
                 let (size, allocated) = if attr_header.is_non_resident != 0 {
                     // Non-resident: size at offset 48, allocated at offset 40
+                    // For compressed/sparse files, use CompressedSize at offset 64
+                    let nr_offset = offset + 16;
                     let alloc_offset = offset + 40;
                     let size_offset = offset + 48;
                     if size_offset + 8 <= data.len() {
-                        let allocated = u64::from_le_bytes(
-                            data[alloc_offset..alloc_offset + 8]
-                                .try_into()
-                                .unwrap_or([0; 8]),
-                        );
+                        // Check if compressed or sparse
+                        let is_compressed_or_sparse = (attr_header.flags & 0x8001) != 0;
+                        let compression_unit_offset = nr_offset + 18;
+                        let has_compression_unit = if compression_unit_offset + 2 <= data.len() {
+                            let compression_unit = u16::from_le_bytes(
+                                data[compression_unit_offset..compression_unit_offset + 2]
+                                    .try_into()
+                                    .unwrap_or([0; 2]),
+                            );
+                            compression_unit > 0
+                        } else {
+                            false
+                        };
+
+                        let use_compressed_size = is_compressed_or_sparse || has_compression_unit;
+                        let compressed_size_offset = nr_offset + 48; // offset + 64
+
+                        let allocated =
+                            if use_compressed_size && compressed_size_offset + 8 <= data.len() {
+                                // Read CompressedSize for compressed/sparse files
+                                u64::from_le_bytes(
+                                    data[compressed_size_offset..compressed_size_offset + 8]
+                                        .try_into()
+                                        .unwrap_or([0; 8]),
+                                )
+                            } else {
+                                // Read AllocatedLength for normal files
+                                u64::from_le_bytes(
+                                    data[alloc_offset..alloc_offset + 8]
+                                        .try_into()
+                                        .unwrap_or([0; 8]),
+                                )
+                            };
+
                         let size = u64::from_le_bytes(
                             data[size_offset..size_offset + 8]
                                 .try_into()
@@ -271,8 +302,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                         );
                         if debug_parity && name_len == 0 {
                             eprintln!(
-                                "[PARITY_DEBUG] FRS={}: $DATA non-resident, size={}, allocated={}",
-                                frs, size, allocated
+                                "[PARITY_DEBUG] FRS={}: $DATA non-resident, size={}, allocated={} (compressed/sparse={})",
+                                frs, size, allocated, use_compressed_size
                             );
                         }
                         (size, allocated)

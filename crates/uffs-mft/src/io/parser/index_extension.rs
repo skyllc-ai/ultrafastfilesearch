@@ -164,11 +164,40 @@ pub(super) fn parse_extension_to_index(
                 let (size, allocated) = if attr_header.is_non_resident != 0 {
                     let nr_offset = offset + 16;
                     if nr_offset + 48 <= data.len() {
-                        let allocated = i64::from_le_bytes(
-                            data[nr_offset + 24..nr_offset + 32]
-                                .try_into()
-                                .unwrap_or([0; 8]),
-                        );
+                        // Check if compressed or sparse
+                        let is_compressed_or_sparse = (attr_header.flags & 0x8001) != 0;
+                        let compression_unit_offset = nr_offset + 18;
+                        let has_compression_unit = if compression_unit_offset + 2 <= data.len() {
+                            let compression_unit = u16::from_le_bytes(
+                                data[compression_unit_offset..compression_unit_offset + 2]
+                                    .try_into()
+                                    .unwrap_or([0; 2]),
+                            );
+                            compression_unit > 0
+                        } else {
+                            false
+                        };
+
+                        let use_compressed_size = is_compressed_or_sparse || has_compression_unit;
+                        let compressed_size_offset = nr_offset + 48; // offset + 64
+
+                        let allocated =
+                            if use_compressed_size && compressed_size_offset + 8 <= data.len() {
+                                // Read CompressedSize for compressed/sparse files
+                                i64::from_le_bytes(
+                                    data[compressed_size_offset..compressed_size_offset + 8]
+                                        .try_into()
+                                        .unwrap_or([0; 8]),
+                                )
+                            } else {
+                                // Read AllocatedLength for normal files
+                                i64::from_le_bytes(
+                                    data[nr_offset + 24..nr_offset + 32]
+                                        .try_into()
+                                        .unwrap_or([0; 8]),
+                                )
+                            };
+
                         let size = i64::from_le_bytes(
                             data[nr_offset + 32..nr_offset + 40]
                                 .try_into()
