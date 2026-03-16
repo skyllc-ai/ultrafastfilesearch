@@ -609,6 +609,10 @@ impl MftReader {
             }
         }
 
+        // Sort directory children for deterministic output
+        // CRITICAL for OFFLINE path: ensures consistent ordering across runs
+        index.sort_directory_children();
+
         // Compute tree metrics
         index.compute_tree_metrics();
 
