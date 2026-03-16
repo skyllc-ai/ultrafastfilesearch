@@ -609,9 +609,6 @@ impl MftReader {
             }
         }
 
-        // Sort directory children
-        index.sort_directory_children();
-
         // Compute tree metrics
         index.compute_tree_metrics();
 

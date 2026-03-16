@@ -525,13 +525,6 @@ impl ParallelMftReader {
             "✅ Parallel parsing IOCP with unified pipeline complete"
         );
 
-        // Compute tree metrics (size/allocated_size/descendant_count) for all
-        // directories This is required for parity with the legacy multi-pass
-        // pipeline, which called this in MftIndex::from_parsed_records(). The
-        // direct-to-index path must call it explicitly after all records are
-        // parsed and parent-child relationships are built.
-        index.compute_tree_metrics();
-
         Ok(index)
     }
 }
