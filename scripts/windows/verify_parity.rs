@@ -32,7 +32,7 @@
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 use std::{env, fs};
@@ -181,6 +181,7 @@ fn discover_ntfs_drives() -> Vec<String> {
     drives
 }
 
+#[allow(clippy::too_many_lines)]
 fn verify_drive(cfg: &Config, drive: &str) -> DriveResult {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -189,6 +190,7 @@ fn verify_drive(cfg: &Config, drive: &str) -> DriveResult {
 
     let cpp_file = cfg.out_dir.join(format!("parity_cpp_{dl}_{ts}.txt"));
     let rust_file = cfg.out_dir.join(format!("parity_rust_{dl}_{ts}.txt"));
+    let rust_log_file = cfg.out_dir.join(format!("parity_rust_log_{dl}_{ts}.txt"));
 
     // Run C++ scan
     print!("  [1/4] C++ scan...  ");
@@ -211,14 +213,15 @@ fn verify_drive(cfg: &Config, drive: &str) -> DriveResult {
         };
     }
 
-    // Run Rust scan
+    // Run Rust scan with trace logging
     print!("  [2/4] Rust scan... ");
     flush();
     let rust_start = Instant::now();
-    let rust_ok = run_scan(
+    let rust_ok = run_scan_with_log(
         &cfg.rust_bin,
         &["*", "--drive", drive, "--no-cache", "--format", "custom"],
         &rust_file,
+        &rust_log_file,
     );
     let rust_time = rust_start.elapsed();
     if rust_ok {
@@ -263,26 +266,53 @@ fn verify_drive(cfg: &Config, drive: &str) -> DriveResult {
         // Cleanup temp files on success
         fs::remove_file(&cpp_file).ok();
         fs::remove_file(&rust_file).ok();
+        fs::remove_file(&rust_log_file).ok();
 
         return DriveResult {
-            drive: drive.to_string(), result: VerifyResult::SortedMatch,
-            cpp_lines: cpp_lines.len(), rust_lines: rust_lines.len(),
-            cpp_time, rust_time, diff_count: 0,
+            drive: drive.to_string(),
+            result: VerifyResult::SortedMatch,
+            cpp_lines: cpp_lines.len(),
+            rust_lines: rust_lines.len(),
+            cpp_time,
+            rust_time,
+            diff_count: 0,
         };
     }
 
-    // Mismatch - show diff
+    // Mismatch - save sorted files and keep log for debugging
     println!("❌ MISMATCH");
-    let diff_count = show_diff(cfg, drive, &cpp_lines, &rust_lines, &cpp_hash, &rust_hash, ts);
+
+    // Save sorted output files for debugging
+    let cpp_sorted_file = cfg.out_dir.join(format!("parity_cpp_sorted_{dl}_{ts}.txt"));
+    let rust_sorted_file = cfg.out_dir.join(format!("parity_rust_sorted_{dl}_{ts}.txt"));
+    save_sorted_lines(&cpp_sorted_file, &cpp_lines);
+    save_sorted_lines(&rust_sorted_file, &rust_lines);
+
+    let diff_count = show_diff(
+        cfg,
+        drive,
+        &cpp_lines,
+        &rust_lines,
+        &cpp_hash,
+        &rust_hash,
+        ts,
+        &cpp_sorted_file,
+        &rust_sorted_file,
+        &rust_log_file,
+    );
 
     DriveResult {
-        drive: drive.to_string(), result: VerifyResult::Mismatch,
-        cpp_lines: cpp_lines.len(), rust_lines: rust_lines.len(),
-        cpp_time, rust_time, diff_count,
+        drive: drive.to_string(),
+        result: VerifyResult::Mismatch,
+        cpp_lines: cpp_lines.len(),
+        rust_lines: rust_lines.len(),
+        cpp_time,
+        rust_time,
+        diff_count,
     }
 }
 
-fn run_scan(bin: &PathBuf, args: &[&str], out_file: &PathBuf) -> bool {
+fn run_scan(bin: &Path, args: &[&str], out_file: &Path) -> bool {
     match Command::new(bin).args(args).output() {
         Ok(output) if output.status.success() => fs::write(out_file, &output.stdout).is_ok(),
         Ok(output) => {
@@ -302,7 +332,47 @@ fn run_scan(bin: &PathBuf, args: &[&str], out_file: &PathBuf) -> bool {
     }
 }
 
-fn read_and_sort(path: &PathBuf) -> Vec<String> {
+/// Run Rust scan with trace-level logging captured to a log file.
+fn run_scan_with_log(bin: &Path, args: &[&str], out_file: &Path, log_file: &Path) -> bool {
+    match Command::new(bin)
+        .args(args)
+        .env("RUST_LOG", "trace")
+        .env("UFFS_LOG_FILE", log_file.as_os_str())
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            // Save stdout to output file
+            if fs::write(out_file, &output.stdout).is_err() {
+                return false;
+            }
+            // Save stderr (contains trace logs) to log file if UFFS_LOG_FILE not used
+            if !log_file.exists() && !output.stderr.is_empty() {
+                fs::write(log_file, &output.stderr).ok();
+            }
+            true
+        }
+        Ok(output) => {
+            let code = output.status.code().unwrap_or(-1);
+            let stderr_preview: String = String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(" ");
+            eprintln!("\n    Exit {code}: {stderr_preview}");
+            // Still save stderr for debugging
+            if !output.stderr.is_empty() {
+                fs::write(log_file, &output.stderr).ok();
+            }
+            false
+        }
+        Err(e) => {
+            eprintln!("\n    Error: {e}");
+            false
+        }
+    }
+}
+
+fn read_and_sort(path: &Path) -> Vec<String> {
     let Ok(file) = fs::File::open(path) else {
         return Vec::new();
     };
@@ -313,6 +383,14 @@ fn read_and_sort(path: &PathBuf) -> Vec<String> {
         .collect();
     lines.sort_unstable();
     lines
+}
+
+fn save_sorted_lines(path: &Path, lines: &[String]) {
+    if let Ok(mut f) = fs::File::create(path) {
+        for line in lines {
+            writeln!(f, "{line}").ok();
+        }
+    }
 }
 
 fn compute_hash(lines: &[String]) -> String {
@@ -328,6 +406,7 @@ fn flush() {
     std::io::stdout().flush().ok();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn show_diff(
     cfg: &Config,
     drive: &str,
@@ -336,6 +415,9 @@ fn show_diff(
     cpp_hash: &str,
     rust_hash: &str,
     ts: u64,
+    cpp_sorted_file: &Path,
+    rust_sorted_file: &Path,
+    rust_log_file: &Path,
 ) -> usize {
     println!("\n  ╔══════════════════════════════════════════╗");
     println!("  ║  ❌ PARITY: FAIL                         ║");
@@ -375,7 +457,15 @@ fn show_diff(
         for l in only_rust.iter().take(cfg.sample) {
             writeln!(f, "> {l}").ok();
         }
-        println!("\n    Diff file: {}", diff_path.display());
+    }
+
+    // Print artifact locations
+    println!("\n  📁 MISMATCH ARTIFACTS:");
+    println!("    Diff file:        {}", diff_path.display());
+    println!("    C++ sorted:       {}", cpp_sorted_file.display());
+    println!("    Rust sorted:      {}", rust_sorted_file.display());
+    if rust_log_file.exists() {
+        println!("    Rust trace log:   {}", rust_log_file.display());
     }
 
     diff_count
