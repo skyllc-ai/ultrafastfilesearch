@@ -30,7 +30,6 @@
 //! ```
 
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -59,7 +58,6 @@ struct Config {
     drives: Vec<String>,
     cpp_bin: PathBuf,
     rust_bin: PathBuf,
-    sample: usize,
     out_dir: PathBuf,
 }
 
@@ -100,23 +98,31 @@ fn parse_args() -> Config {
     let args: Vec<String> = env::args().collect();
     let mut drives = Vec::new();
     let mut bin_dir = home_dir().join("bin");
-    let mut sample = 30usize;
     let mut discover_all = false;
 
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--all" => discover_all = true,
-            "--bin-dir" => { i += 1; if i < args.len() { bin_dir = PathBuf::from(&args[i]); } }
-            "--sample" => { i += 1; if i < args.len() { sample = args[i].parse().unwrap_or(30); } }
-            "--help" | "-h" => { print_usage(&args[0]); std::process::exit(0); }
+            "--bin-dir" => {
+                i += 1;
+                if i < args.len() {
+                    bin_dir = PathBuf::from(&args[i]);
+                }
+            }
+            "--help" | "-h" => {
+                print_usage(&args[0]);
+                std::process::exit(0);
+            }
             a if !a.starts_with('-') && a.len() == 1 => drives.push(a.to_uppercase()),
             _ => {}
         }
         i += 1;
     }
 
-    if discover_all { drives = discover_ntfs_drives(); }
+    if discover_all {
+        drives = discover_ntfs_drives();
+    }
     if drives.is_empty() {
         eprintln!("ERROR: No drives specified. Use drive letters (D E F) or --all");
         print_usage(&args[0]);
@@ -139,7 +145,6 @@ fn parse_args() -> Config {
         drives,
         cpp_bin,
         rust_bin,
-        sample,
         out_dir: env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     }
 }
@@ -151,7 +156,6 @@ fn print_usage(prog: &str) {
     eprintln!("\nOptions:");
     eprintln!("  --all           Discover and verify all NTFS drives");
     eprintln!("  --bin-dir DIR   Directory containing uffs.com and uffs.exe (default: ~/bin)");
-    eprintln!("  --sample N      Number of diff samples to show (default: 30)");
     eprintln!("  -h, --help      Show this help\n");
     eprintln!("Examples:");
     eprintln!("  {prog} D E F              # Verify drives D, E, F");
@@ -425,39 +429,26 @@ fn show_diff(
     println!("    C++ SHA256:  {cpp_hash}");
     println!("    Rust SHA256: {rust_hash}");
 
-    // Show sorted side-by-side comparison (most useful for debugging)
-    let diff_count = show_sorted_side_by_side_diffs(cpp, rust);
+    // Collect all differing line indices
+    let n = cpp.len().min(rust.len());
+    let diff_indices: Vec<usize> = (0..n).filter(|&i| cpp[i] != rust[i]).collect();
+    let diff_count = diff_indices.len();
 
-    // Also compute set-based diffs for the file output
-    let cpp_set: HashSet<&str> = cpp.iter().map(String::as_str).collect();
-    let rust_set: HashSet<&str> = rust.iter().map(String::as_str).collect();
+    // Show summary on screen
+    let cpp_len = cpp.len();
+    let rust_len = rust.len();
+    println!("\n=== SORTED SIDE-BY-SIDE COMPARISON (differences only) ===");
+    println!("  C++ lines:        {cpp_len}");
+    println!("  Rust lines:       {rust_len}");
+    println!("  Lines that differ: {diff_count}");
 
-    let only_cpp: Vec<_> = cpp.iter().filter(|l| !rust_set.contains(l.as_str())).collect();
-    let only_rust: Vec<_> = rust.iter().filter(|l| !cpp_set.contains(l.as_str())).collect();
+    // Show sample on screen (first 5, last 5, 10 random middle)
+    show_diff_sample_on_screen(cpp, rust, &diff_indices);
 
-    // Write detailed diff to file
+    // Write COMPLETE diff to file (all differences, not just sample)
     let dl = drive.to_lowercase();
     let diff_path = cfg.out_dir.join(format!("parity_diff_{dl}_{ts}.txt"));
-    if let Ok(mut f) = fs::File::create(&diff_path) {
-        let cpp_len = cpp.len();
-        let rust_len = rust.len();
-        let only_cpp_len = only_cpp.len();
-        let only_rust_len = only_rust.len();
-        writeln!(f, "# Drive {drive} | C++ SHA256: {cpp_hash} | Rust SHA256: {rust_hash}").ok();
-        writeln!(
-            f,
-            "# C++ lines: {cpp_len} | Rust lines: {rust_len} | Only C++: {only_cpp_len} | Only Rust: {only_rust_len}\n"
-        )
-        .ok();
-        writeln!(f, "=== C++ ONLY ({only_cpp_len}) ===").ok();
-        for l in only_cpp.iter().take(cfg.sample) {
-            writeln!(f, "< {l}").ok();
-        }
-        writeln!(f, "\n=== RUST ONLY ({only_rust_len}) ===").ok();
-        for l in only_rust.iter().take(cfg.sample) {
-            writeln!(f, "> {l}").ok();
-        }
-    }
+    write_complete_diff_file(&diff_path, drive, cpp, rust, cpp_hash, rust_hash, &diff_indices);
 
     // Print artifact locations
     println!("\n  📁 MISMATCH ARTIFACTS:");
@@ -471,31 +462,58 @@ fn show_diff(
     diff_count
 }
 
-/// Show side-by-side comparison of DIFFERENT lines from sorted files.
-/// Only shows lines where C++ != Rust. First 5 diffs, last 5 diffs, 10 random from middle.
-fn show_sorted_side_by_side_diffs(cpp_sorted: &[String], rust_sorted: &[String]) -> usize {
-    let n = cpp_sorted.len().min(rust_sorted.len());
-    if n == 0 {
-        println!("\n    No lines to compare.");
-        return 0;
-    }
+/// Write complete sorted side-by-side diff to file (ALL differences).
+fn write_complete_diff_file(
+    path: &Path,
+    drive: &str,
+    cpp: &[String],
+    rust: &[String],
+    cpp_hash: &str,
+    rust_hash: &str,
+    diff_indices: &[usize],
+) {
+    let Ok(mut f) = fs::File::create(path) else {
+        return;
+    };
 
-    // Collect indices of lines that differ
-    let diff_indices: Vec<usize> = (0..n)
-        .filter(|&i| cpp_sorted[i] != rust_sorted[i])
-        .collect();
+    let cpp_len = cpp.len();
+    let rust_len = rust.len();
+    let diff_count = diff_indices.len();
 
-    let cpp_count = cpp_sorted.len();
-    let rust_count = rust_sorted.len();
-    let diff_line_count = diff_indices.len();
-    println!("\n=== SORTED SIDE-BY-SIDE COMPARISON (differences only) ===");
-    println!("  C++ lines:        {cpp_count}");
-    println!("  Rust lines:       {rust_count}");
-    println!("  Lines that differ: {diff_line_count}");
+    // Header
+    writeln!(f, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━").ok();
+    writeln!(f, "  DRIVE {drive} - PARITY MISMATCH REPORT").ok();
+    writeln!(f, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━").ok();
+    writeln!(f).ok();
+    writeln!(f, "  C++ SHA256:  {cpp_hash}").ok();
+    writeln!(f, "  Rust SHA256: {rust_hash}").ok();
+    writeln!(f).ok();
+    writeln!(f, "=== SORTED SIDE-BY-SIDE COMPARISON (differences only) ===").ok();
+    writeln!(f, "  C++ lines:        {cpp_len}").ok();
+    writeln!(f, "  Rust lines:       {rust_len}").ok();
+    writeln!(f, "  Lines that differ: {diff_count}").ok();
+    writeln!(f).ok();
 
     if diff_indices.is_empty() {
+        writeln!(f, "  ✅ All lines match!").ok();
+        return;
+    }
+
+    // Write ALL differences
+    writeln!(f, "--- ALL {diff_count} DIFFERENCES ---").ok();
+    for &idx in diff_indices {
+        let line_num = idx + 1;
+        writeln!(f, "  Line {line_num}:").ok();
+        writeln!(f, "    C++:  {}", cpp[idx]).ok();
+        writeln!(f, "    RUST: {}", rust[idx]).ok();
+    }
+}
+
+/// Show diff sample on screen (first 5, last 5, 10 random from middle).
+fn show_diff_sample_on_screen(cpp: &[String], rust: &[String], diff_indices: &[usize]) {
+    if diff_indices.is_empty() {
         println!("\n  ✅ All lines match!");
-        return 0;
+        return;
     }
 
     let total_diffs = diff_indices.len();
@@ -507,8 +525,8 @@ fn show_sorted_side_by_side_diffs(cpp_sorted: &[String], rust_sorted: &[String])
     for &idx in diff_indices.iter().take(first_n) {
         let line_num = idx + 1;
         println!("  Line {line_num}:");
-        println!("    C++:  {}", cpp_sorted[idx]);
-        println!("    RUST: {}", rust_sorted[idx]);
+        println!("    C++:  {}", cpp[idx]);
+        println!("    RUST: {}", rust[idx]);
     }
 
     // Last 5 differences (if different from first 5)
@@ -518,8 +536,8 @@ fn show_sorted_side_by_side_diffs(cpp_sorted: &[String], rust_sorted: &[String])
         for &idx in diff_indices.iter().skip(last_start) {
             let line_num = idx + 1;
             println!("  Line {line_num}:");
-            println!("    C++:  {}", cpp_sorted[idx]);
-            println!("    RUST: {}", rust_sorted[idx]);
+            println!("    C++:  {}", cpp[idx]);
+            println!("    RUST: {}", rust[idx]);
         }
     }
 
@@ -533,6 +551,7 @@ fn show_sorted_side_by_side_diffs(cpp_sorted: &[String], rust_sorted: &[String])
             let middle_count = middle_diff_indices.len();
 
             println!("\n--- {sample_count} RANDOM DIFFERENCES FROM MIDDLE ({middle_count} middle diffs) ---");
+
             // Deterministic shuffle using LCG
             let mut rng_seed = total_diffs as u64;
             let mut shuffled: Vec<usize> = middle_diff_indices;
@@ -546,13 +565,11 @@ fn show_sorted_side_by_side_diffs(cpp_sorted: &[String], rust_sorted: &[String])
             for &idx in shuffled.iter().take(sample_count) {
                 let line_num = idx + 1;
                 println!("  Line {line_num}:");
-                println!("    C++:  {}", cpp_sorted[idx]);
-                println!("    RUST: {}", rust_sorted[idx]);
+                println!("    C++:  {}", cpp[idx]);
+                println!("    RUST: {}", rust[idx]);
             }
         }
     }
-
-    total_diffs
 }
 
 fn print_summary(results: &[DriveResult]) {
