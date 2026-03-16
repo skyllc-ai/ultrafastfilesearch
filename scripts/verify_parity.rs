@@ -38,6 +38,7 @@
 //! sha2 = "0.10"
 //! ```
 
+use std::cmp::Ordering;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -45,6 +46,9 @@ use std::time::{Duration, Instant};
 use std::{env, fs};
 
 use sha2::{Digest, Sha256};
+
+/// LCG (Linear Congruential Generator) multiplier - Knuth's MMIX constant.
+const LCG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VerifyResult {
@@ -88,6 +92,10 @@ struct UffsReleaseArtifact {
 }
 
 fn main() {
+    // On macOS, always rebuild the release binary before verification
+    #[cfg(target_os = "macos")]
+    ensure_fresh_release_build();
+
     let args: Vec<String> = env::args().collect();
 
     // Parse arguments
@@ -101,7 +109,7 @@ fn main() {
     // Check if this is legacy mode (second arg is a drive letter)
     let is_legacy_mode = args.len() >= 4
         && args[2].len() == 1
-        && args[2].chars().next().map_or(false, |c| c.is_ascii_alphabetic());
+        && args[2].chars().next().is_some_and(|c| c.is_ascii_alphabetic());
 
     if is_legacy_mode {
         // Legacy single-drive mode
@@ -109,6 +117,50 @@ fn main() {
     } else {
         // New multi-drive mode
         run_multi_drive_mode(&args, &base_dir);
+    }
+}
+
+/// Ensure a fresh release build exists (macOS only).
+///
+/// Runs `cargo build --release` from the workspace root before verification
+/// to guarantee the binary matches the current source code.
+#[cfg(target_os = "macos")]
+fn ensure_fresh_release_build() {
+    let workspace_root = find_workspace_root();
+
+    println!("╔══════════════════════════════════════════════════════════════════╗");
+    println!("║  Building fresh release binary (cargo build --release)...        ║");
+    println!("╚══════════════════════════════════════════════════════════════════╝");
+    println!();
+    println!("Workspace: {}", workspace_root.display());
+    println!();
+
+    let start_time = Instant::now();
+
+    let status = Command::new("cargo")
+        .args(["build", "--release"])
+        .current_dir(&workspace_root)
+        .status();
+
+    let elapsed = start_time.elapsed();
+
+    match status {
+        Ok(s) if s.success() => {
+            println!();
+            println!(
+                "✅ Release build completed in {}",
+                format_duration(elapsed)
+            );
+            println!();
+        }
+        Ok(s) => {
+            eprintln!("ERROR: cargo build --release failed with status {s}");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("ERROR: Failed to run cargo build --release: {e}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -149,7 +201,7 @@ fn run_legacy_mode(args: &[String], base_dir: &Path) {
             (PathBuf::from(&args[4]), None, 0)
         }
         _ => {
-            eprintln!("ERROR: Unknown mode: {}", mode);
+            eprintln!("ERROR: Unknown mode: {mode}");
             print_usage(&args[0]);
             std::process::exit(1);
         }
@@ -162,17 +214,14 @@ fn run_legacy_mode(args: &[String], base_dir: &Path) {
         println!();
         println!("⏱️  MFT Parse Time: {}", format_duration(duration));
         if result.mft_size_bytes > 0 {
+            #[allow(clippy::cast_precision_loss)] // File sizes don't need full u64 precision
             let mb = result.mft_size_bytes as f64 / (1024.0 * 1024.0);
             let throughput = mb / duration.as_secs_f64();
-            println!("   MFT Size: {:.1} MB, Throughput: {:.1} MB/s", mb, throughput);
+            println!("   MFT Size: {mb:.1} MB, Throughput: {throughput:.1} MB/s");
         }
     }
 
-    std::process::exit(if result.result == VerifyResult::Mismatch {
-        1
-    } else {
-        0
-    });
+    std::process::exit(i32::from(result.result == VerifyResult::Mismatch));
 }
 
 /// New multi-drive discovery mode
@@ -217,7 +266,7 @@ fn run_multi_drive_mode(args: &[String], base_dir: &Path) {
 
     for (index, drive_lower) in drives.iter().enumerate() {
         let drive_letter = drive_lower.to_uppercase();
-        let drive_dir = base_dir.join(format!("drive_{}", drive_lower));
+        let drive_dir = base_dir.join(format!("drive_{drive_lower}"));
 
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!(
@@ -231,21 +280,19 @@ fn run_multi_drive_mode(args: &[String], base_dir: &Path) {
         println!();
 
         // Check if this drive has the necessary files
-        let golden_baseline = match find_golden_baseline_file_optional(&drive_dir, drive_lower) {
-            Some(path) => path,
-            None => {
-                println!("  ⚠️  SKIPPED: No golden baseline found");
-                println!();
-                results.push(DriveResult {
-                    drive_letter: drive_letter.clone(),
-                    result: VerifyResult::Skipped,
-                    baseline_lines: 0,
-                    rust_lines: 0,
-                    mft_size_bytes: 0,
-                    parse_duration: None,
-                });
-                continue;
-            }
+        let Some(golden_baseline) = find_golden_baseline_file_optional(&drive_dir, drive_lower)
+        else {
+            println!("  ⚠️  SKIPPED: No golden baseline found");
+            println!();
+            results.push(DriveResult {
+                drive_letter: drive_letter.clone(),
+                result: VerifyResult::Skipped,
+                baseline_lines: 0,
+                rust_lines: 0,
+                mft_size_bytes: 0,
+                parse_duration: None,
+            });
+            continue;
         };
 
         // Generate or use provided rust output
@@ -274,16 +321,15 @@ fn run_multi_drive_mode(args: &[String], base_dir: &Path) {
 
     // Exit with failure if any drive mismatched
     let any_mismatch = results.iter().any(|r| r.result == VerifyResult::Mismatch);
-    std::process::exit(if any_mismatch { 1 } else { 0 });
+    std::process::exit(i32::from(any_mismatch));
 }
 
 /// Discover all drive_* directories in the base directory
 fn discover_drives(base_dir: &Path, filter: Option<&str>) -> Vec<String> {
     let mut drives = Vec::new();
 
-    let entries = match fs::read_dir(base_dir) {
-        Ok(e) => e,
-        Err(_) => return drives,
+    let Ok(entries) = fs::read_dir(base_dir) else {
+        return drives;
     };
 
     for entry in entries.flatten() {
@@ -292,13 +338,12 @@ fn discover_drives(base_dir: &Path, filter: Option<&str>) -> Vec<String> {
             continue;
         }
 
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => continue,
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
         };
 
         if let Some(letter) = name.strip_prefix("drive_") {
-            if letter.len() == 1 && letter.chars().next().map_or(false, |c| c.is_ascii_alphabetic())
+            if letter.len() == 1 && letter.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
             {
                 // Apply filter if specified
                 if let Some(f) = filter {
@@ -344,7 +389,7 @@ fn verify_single_drive(
 
     println!("  Base dir:      {}", base_dir.display());
     println!("  Drive dir:     {}", drive_dir.display());
-    println!("  Drive letter:  {}", drive_letter);
+    println!("  Drive letter:  {drive_letter}");
     println!("  Baseline file: {}", golden_baseline_file.display());
     println!("  Rust output:   {}", rust_output.display());
     println!();
@@ -463,11 +508,12 @@ fn print_summary(results: &[DriveResult]) {
     }
 
     println!();
-    println!("  Total drives:    {}", results.len());
-    println!("  Strict matches:  {}", strict_match);
-    println!("  Sorted matches:  {}", sorted_match);
-    println!("  Mismatches:      {}", mismatch);
-    println!("  Skipped:         {}", skipped);
+    let total_drives = results.len();
+    println!("  Total drives:    {total_drives}");
+    println!("  Strict matches:  {strict_match}");
+    println!("  Sorted matches:  {sorted_match}");
+    println!("  Mismatches:      {mismatch}");
+    println!("  Skipped:         {skipped}");
     println!();
 
     if mismatch == 0 && skipped == 0 {
@@ -475,7 +521,7 @@ fn print_summary(results: &[DriveResult]) {
     } else if mismatch == 0 {
         println!("  ✅ All verified drives passed (some skipped)");
     } else {
-        println!("  ⚠️  {} drive(s) had mismatches", mismatch);
+        println!("  ⚠️  {mismatch} drive(s) had mismatches");
     }
 
     // Print timing table if any drives have timing data
@@ -501,22 +547,21 @@ fn print_timing_table(results: &[&DriveResult]) {
 
     for result in results {
         if let Some(duration) = result.parse_duration {
+            #[allow(clippy::cast_precision_loss)] // File sizes don't need full precision
             let mft_mb = result.mft_size_bytes as f64 / (1024.0 * 1024.0);
             let secs = duration.as_secs_f64();
             let throughput_mb = if secs > 0.0 { mft_mb / secs } else { 0.0 };
+            #[allow(clippy::cast_precision_loss)] // Line counts don't need full precision
             let files_per_sec = if secs > 0.0 { result.rust_lines as f64 / secs } else { 0.0 };
 
             total_bytes += result.mft_size_bytes;
             total_duration += duration;
             total_files += result.rust_lines;
 
+            let drive = &result.drive_letter;
+            let time_str = format_duration(duration);
             println!(
-                "║     {}     ║ {:>10.1} MB ║ {:>13} ║ {:>10.1} MB/s ║ {:>14.0}/s ║",
-                result.drive_letter,
-                mft_mb,
-                format_duration(duration),
-                throughput_mb,
-                files_per_sec
+                "║     {drive}     ║ {mft_mb:>10.1} MB ║ {time_str:>13} ║ {throughput_mb:>10.1} MB/s ║ {files_per_sec:>14.0}/s ║",
             );
         }
     }
@@ -524,17 +569,16 @@ fn print_timing_table(results: &[&DriveResult]) {
     // Print totals
     if results.len() > 1 {
         println!("╠═══════════╬══════════════╬═══════════════╬═══════════════╬══════════════════╣");
+        #[allow(clippy::cast_precision_loss)] // File sizes don't need full precision
         let total_mb = total_bytes as f64 / (1024.0 * 1024.0);
         let total_secs = total_duration.as_secs_f64();
         let avg_throughput = if total_secs > 0.0 { total_mb / total_secs } else { 0.0 };
+        #[allow(clippy::cast_precision_loss)] // Line counts don't need full precision
         let avg_files_per_sec = if total_secs > 0.0 { total_files as f64 / total_secs } else { 0.0 };
 
+        let time_str = format_duration(total_duration);
         println!(
-            "║   TOTAL   ║ {:>10.1} MB ║ {:>13} ║ {:>10.1} MB/s ║ {:>14.0}/s ║",
-            total_mb,
-            format_duration(total_duration),
-            avg_throughput,
-            avg_files_per_sec
+            "║   TOTAL   ║ {total_mb:>10.1} MB ║ {time_str:>13} ║ {avg_throughput:>10.1} MB/s ║ {avg_files_per_sec:>14.0}/s ║",
         );
     }
 
@@ -545,13 +589,15 @@ fn print_timing_table(results: &[&DriveResult]) {
 fn format_duration(duration: Duration) -> String {
     let total_secs = duration.as_secs_f64();
     if total_secs < 1.0 {
-        format!("{:.0}ms", duration.as_millis())
+        let ms = duration.as_millis();
+        format!("{ms:.0}ms")
     } else if total_secs < 60.0 {
-        format!("{:.2}s", total_secs)
+        format!("{total_secs:.2}s")
     } else {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let mins = (total_secs / 60.0).floor() as u64;
         let secs = total_secs % 60.0;
-        format!("{}m {:.1}s", mins, secs)
+        format!("{mins}m {secs:.1}s")
     }
 }
 
@@ -563,7 +609,7 @@ fn format_duration(duration: Duration) -> String {
 ///    `/Users/rnio/uffs_data/D_mft.bin`)
 fn resolve_drive_dir(base_dir: &Path, drive_lower: &str) -> PathBuf {
     // Try new structure first: base/drive_<letter>/
-    let new_style = base_dir.join(format!("drive_{}", drive_lower));
+    let new_style = base_dir.join(format!("drive_{drive_lower}"));
     if new_style.exists() && new_style.is_dir() {
         return new_style;
     }
@@ -572,21 +618,16 @@ fn resolve_drive_dir(base_dir: &Path, drive_lower: &str) -> PathBuf {
 }
 
 fn find_golden_baseline_file(data_dir: &Path, drive_lower: &str) -> PathBuf {
-    match find_golden_baseline_file_optional(data_dir, drive_lower) {
-        Some(path) => path,
-        None => {
-            let candidates = baseline_candidates(drive_lower);
-            eprintln!(
-                "ERROR: Golden baseline file not found in {}",
-                data_dir.display()
-            );
-            eprintln!("  Checked:");
-            for name in &candidates {
-                eprintln!("    - {}", name);
-            }
-            std::process::exit(1);
-        }
+    if let Some(path) = find_golden_baseline_file_optional(data_dir, drive_lower) {
+        return path;
     }
+    let candidates = baseline_candidates(drive_lower);
+    eprintln!("ERROR: Golden baseline file not found in {}", data_dir.display());
+    eprintln!("  Checked:");
+    for name in &candidates {
+        eprintln!("    - {name}");
+    }
+    std::process::exit(1);
 }
 
 /// Try to find a golden baseline file, returning None if not found
@@ -605,9 +646,9 @@ fn find_golden_baseline_file_optional(data_dir: &Path, drive_lower: &str) -> Opt
 /// List of candidate baseline filenames to check
 fn baseline_candidates(drive_lower: &str) -> [String; 3] {
     [
-        format!("golden_{}.txt", drive_lower),
-        format!("cpp_{}.txt", drive_lower), // C++ baseline output
-        format!("rust_live_{}.txt", drive_lower), // Live scan output (when comparing offline)
+        format!("golden_{drive_lower}.txt"),
+        format!("cpp_{drive_lower}.txt"),       // C++ baseline output
+        format!("rust_live_{drive_lower}.txt"), // Live scan output (when comparing offline)
     ]
 }
 
@@ -615,10 +656,10 @@ fn print_usage(prog: &str) {
     eprintln!("UFFS Multi-Drive Parity Verification");
     eprintln!();
     eprintln!("Usage:");
-    eprintln!("  {} <base_dir> --regenerate                   # Verify all drives", prog);
-    eprintln!("  {} <base_dir> --drive D --regenerate         # Verify drive D only", prog);
-    eprintln!("  {} <base_dir> --drive D --rust <path>        # Compare existing output", prog);
-    eprintln!("  {} <base_dir> D --regenerate                 # Legacy single-drive mode", prog);
+    eprintln!("  {prog} <base_dir> --regenerate                   # Verify all drives");
+    eprintln!("  {prog} <base_dir> --drive D --regenerate         # Verify drive D only");
+    eprintln!("  {prog} <base_dir> --drive D --rust <path>        # Compare existing output");
+    eprintln!("  {prog} <base_dir> D --regenerate                 # Legacy single-drive mode");
     eprintln!();
     eprintln!("Options:");
     eprintln!("  --regenerate       Run uffs to generate fresh output, then compare");
@@ -635,13 +676,13 @@ fn print_usage(prog: &str) {
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  # Verify all drives in uffs_data");
-    eprintln!("  {} /Users/rnio/uffs_data --regenerate", prog);
+    eprintln!("  {prog} /Users/rnio/uffs_data --regenerate");
     eprintln!();
     eprintln!("  # Verify only drive F");
-    eprintln!("  {} /Users/rnio/uffs_data --drive F --regenerate", prog);
+    eprintln!("  {prog} /Users/rnio/uffs_data --drive F --regenerate");
     eprintln!();
     eprintln!("  # Override timezone detection");
-    eprintln!("  {} /Users/rnio/uffs_data --regenerate --tz -8", prog);
+    eprintln!("  {prog} /Users/rnio/uffs_data --regenerate --tz -8");
 }
 
 /// Parse --drive argument from command line
@@ -793,12 +834,9 @@ fn extract_all_datetimes_from_line(line: &str) -> Vec<(i32, u32, u32, u32)> {
                 line[i + 8..i + 10].parse::<u32>(),
                 line[i + 11..i + 13].parse::<u32>(),
             ) {
-                if year >= 2000
-                    && year <= 2100
-                    && month >= 1
-                    && month <= 12
-                    && day >= 1
-                    && day <= 31
+                if (2000..=2100).contains(&year)
+                    && (1..=12).contains(&month)
+                    && (1..=31).contains(&day)
                     && hour <= 23
                 {
                     results.push((year, month, day, hour));
@@ -813,6 +851,7 @@ fn extract_all_datetimes_from_line(line: &str) -> Vec<(i32, u32, u32, u32)> {
 }
 
 /// Extract ALL (year, month, day) tuples from a CSV line.
+#[allow(dead_code)]
 fn extract_all_dates_from_line(line: &str) -> Vec<(i32, u32, u32)> {
     let mut dates = Vec::new();
     let bytes = line.as_bytes();
@@ -834,12 +873,9 @@ fn extract_all_dates_from_line(line: &str) -> Vec<(i32, u32, u32)> {
                 line[i + 5..i + 7].parse::<u32>(),
                 line[i + 8..i + 10].parse::<u32>(),
             ) {
-                if year >= 2000
-                    && year <= 2100
-                    && month >= 1
-                    && month <= 12
-                    && day >= 1
-                    && day <= 31
+                if (2000..=2100).contains(&year)
+                    && (1..=12).contains(&month)
+                    && (1..=31).contains(&day)
                 {
                     dates.push((year, month, day));
                 }
@@ -872,7 +908,10 @@ fn extract_date_from_line(line: &str) -> Option<(i32, u32, u32)> {
             let year: i32 = line[i..i + 4].parse().ok()?;
             let month: u32 = line[i + 5..i + 7].parse().ok()?;
             let day: u32 = line[i + 8..i + 10].parse().ok()?;
-            if year >= 2000 && year <= 2100 && month >= 1 && month <= 12 && day >= 1 && day <= 31 {
+            if (2000..=2100).contains(&year)
+                && (1..=12).contains(&month)
+                && (1..=31).contains(&day)
+            {
                 return Some((year, month, day));
             }
         }
@@ -883,7 +922,7 @@ fn extract_date_from_line(line: &str) -> Option<(i32, u32, u32)> {
 /// Determine Pacific timezone offset for a given date.
 /// Returns -7 for PDT (Daylight), -8 for PST (Standard).
 /// Pacific DST: 2nd Sunday of March 2:00 AM to 1st Sunday of November 2:00 AM
-fn pacific_tz_offset(year: i32, month: u32, day: u32) -> i32 {
+fn pacific_tz_offset(_year: i32, month: u32, day: u32) -> i32 {
     // Simple rule: March 15 - November 1 is approximately PDT
     // More precise would calculate exact Sunday transitions, but this is close
     // enough
@@ -918,7 +957,7 @@ fn regenerate_rust_output(
     tz_offset: i32,
     custom_bin: Option<&Path>,
 ) -> RegenerateResult {
-    let tz_str = format!("{}", tz_offset);
+    let tz_str = format!("{tz_offset}");
     let tz_label = match tz_offset {
         -7 => "PDT (Pacific Daylight)",
         -8 => "PST (Pacific Standard)",
@@ -926,26 +965,22 @@ fn regenerate_rust_output(
     };
 
     println!("Mode: --regenerate");
-    println!(
-        "Using --tz-offset {} ({}) to match the golden baseline timezone.",
-        tz_offset, tz_label
-    );
+    println!("Using --tz-offset {tz_offset} ({tz_label}) to match the golden baseline timezone.");
     println!();
 
     // Locate MFT file
-    let mft_file = data_dir.join(format!("{}_mft.bin", drive_letter));
+    let mft_file = data_dir.join(format!("{drive_letter}_mft.bin"));
     if !mft_file.exists() {
         eprintln!("ERROR: MFT file not found: {}", mft_file.display());
         std::process::exit(1);
     }
 
     // Get MFT file size
-    let mft_size_bytes = fs::metadata(&mft_file)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let mft_size_bytes = fs::metadata(&mft_file).map(|m| m.len()).unwrap_or(0);
+    #[allow(clippy::cast_precision_loss)] // File sizes don't need full u64 precision
     let mft_mb = mft_size_bytes as f64 / (1024.0 * 1024.0);
 
-    println!("MFT file:     {} ({:.1} MB)", mft_file.display(), mft_mb);
+    println!("MFT file:     {} ({mft_mb:.1} MB)", mft_file.display());
 
     // Determine which binary to use
     let binary_path = if let Some(custom) = custom_bin {
@@ -979,7 +1014,7 @@ fn regenerate_rust_output(
     println!();
 
     // Generate output
-    let rust_output = data_dir.join(format!("verify_rust_{}.txt", drive_lower));
+    let rust_output = data_dir.join(format!("verify_rust_{drive_lower}.txt"));
     println!("Running uffs scan (baseline-compatible algorithms)...");
 
     // Time the uffs execution
@@ -995,7 +1030,7 @@ fn regenerate_rust_output(
             "--tz-offset",
             &tz_str,
             "--format",
-            "custom",  // Match C++ baseline footer format
+            "custom", // Match C++ baseline format (includes footer)
             "--out",
             &rust_output.to_string_lossy(),
         ])
@@ -1007,18 +1042,17 @@ fn regenerate_rust_output(
         Ok(s) if s.success() => {
             let throughput = mft_mb / parse_duration.as_secs_f64();
             println!(
-                "  ✅ uffs scan completed in {} ({:.1} MB/s)",
+                "  ✅ uffs scan completed in {} ({throughput:.1} MB/s)",
                 format_duration(parse_duration),
-                throughput
             );
             println!();
         }
         Ok(s) => {
-            eprintln!("ERROR: uffs exited with status {}", s);
+            eprintln!("ERROR: uffs exited with status {s}");
             std::process::exit(1);
         }
         Err(e) => {
-            eprintln!("ERROR: Failed to run uffs: {}", e);
+            eprintln!("ERROR: Failed to run uffs: {e}");
             std::process::exit(1);
         }
     }
@@ -1138,7 +1172,7 @@ fn extract_json_string_field(json: &str, field_name: &str) -> Option<String> {
     None
 }
 
-fn uffs_binary_name() -> &'static str {
+const fn uffs_binary_name() -> &'static str {
     if cfg!(windows) {
         "uffs.exe"
     } else {
@@ -1174,11 +1208,11 @@ fn compute_file_hashes(path: &Path) -> FileHashes {
 
 fn read_lines(path: &Path) -> Vec<String> {
     let file =
-        fs::File::open(path).unwrap_or_else(|e| panic!("Failed to open {}: {}", path.display(), e));
+        fs::File::open(path).unwrap_or_else(|e| panic!("Failed to open {}: {e}", path.display()));
     let reader = BufReader::new(file);
     reader
         .lines()
-        .map(|line| line.expect("Failed to read line"))
+        .map(|line| line.unwrap_or_else(|e| panic!("Failed to read line: {e}")))
         .collect()
 }
 
@@ -1240,7 +1274,7 @@ fn show_first_ordered_diffs(file_a: &Path, file_b: &Path) {
 
     // First 5
     let first_n = 5.min(diffs.len());
-    println!("=== FIRST {} DIFFERENCES ===", first_n);
+    println!("=== FIRST {first_n} DIFFERENCES ===");
     for (line_num, baseline, rust) in diffs.iter().take(first_n) {
         print_diff_pair(*line_num, baseline.as_deref(), rust.as_deref());
     }
@@ -1268,7 +1302,8 @@ fn show_first_ordered_diffs(file_a: &Path, file_b: &Path) {
             let mut indices: Vec<usize> = (0..middle.len()).collect();
             // Simple shuffle with LCG
             for i in (1..indices.len()).rev() {
-                rng_seed = rng_seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                rng_seed = rng_seed.wrapping_mul(LCG_MULTIPLIER).wrapping_add(1);
+                #[allow(clippy::cast_possible_truncation)]
                 let j = (rng_seed as usize) % (i + 1);
                 indices.swap(i, j);
             }
@@ -1284,17 +1319,17 @@ fn show_first_ordered_diffs(file_a: &Path, file_b: &Path) {
 fn print_diff_pair(line_num: usize, baseline: Option<&str>, rust: Option<&str>) {
     match (baseline, rust) {
         (Some(b), Some(r)) => {
-            println!("  Line {}:", line_num);
-            println!("    BASELINE: {}", b);
-            println!("    RUST:     {}", r);
+            println!("  Line {line_num}:");
+            println!("    BASELINE: {b}");
+            println!("    RUST:     {r}");
         }
         (Some(b), None) => {
-            println!("  Line {} BASELINE ONLY:", line_num);
-            println!("    {}", b);
+            println!("  Line {line_num} BASELINE ONLY:");
+            println!("    {b}");
         }
         (None, Some(r)) => {
-            println!("  Line {} RUST ONLY:", line_num);
-            println!("    {}", r);
+            println!("  Line {line_num} RUST ONLY:");
+            println!("    {r}");
         }
         (None, None) => {}
     }
@@ -1313,15 +1348,19 @@ fn collect_sorted_diffs(file_a: &Path, file_b: &Path) -> (Vec<String>, Vec<Strin
     let mut ib = 0;
 
     while ia < lines_a.len() && ib < lines_b.len() {
-        if lines_a[ia] == lines_b[ib] {
-            ia += 1;
-            ib += 1;
-        } else if lines_a[ia] < lines_b[ib] {
-            only_a.push(lines_a[ia].clone());
-            ia += 1;
-        } else {
-            only_b.push(lines_b[ib].clone());
-            ib += 1;
+        match lines_a[ia].cmp(&lines_b[ib]) {
+            Ordering::Equal => {
+                ia += 1;
+                ib += 1;
+            }
+            Ordering::Less => {
+                only_a.push(lines_a[ia].clone());
+                ia += 1;
+            }
+            Ordering::Greater => {
+                only_b.push(lines_b[ib].clone());
+                ib += 1;
+            }
         }
     }
     while ia < lines_a.len() {
@@ -1368,9 +1407,10 @@ fn show_first_sorted_diffs(file_a: &Path, file_b: &Path) {
     let last_n = 5.min(total_diffs);
 
     // First 5 differences
-    println!("\n--- FIRST {} DIFFERENCES ---", first_n);
+    println!("\n--- FIRST {first_n} DIFFERENCES ---");
     for &idx in diff_indices.iter().take(first_n) {
-        println!("  Line {}:", idx + 1);
+        let line_num = idx + 1;
+        println!("  Line {line_num}:");
         println!("    BASELINE: {}", sorted_baseline[idx]);
         println!("    RUST:     {}", sorted_rust[idx]);
     }
@@ -1378,9 +1418,10 @@ fn show_first_sorted_diffs(file_a: &Path, file_b: &Path) {
     // Last 5 differences (if different from first 5)
     if total_diffs > 10 {
         let last_start = total_diffs.saturating_sub(last_n);
-        println!("\n--- LAST {} DIFFERENCES ---", last_n);
+        println!("\n--- LAST {last_n} DIFFERENCES ---");
         for &idx in diff_indices.iter().skip(last_start) {
-            println!("  Line {}:", idx + 1);
+            let line_num = idx + 1;
+            println!("  Line {line_num}:");
             println!("    BASELINE: {}", sorted_baseline[idx]);
             println!("    RUST:     {}", sorted_rust[idx]);
         }
@@ -1393,24 +1434,23 @@ fn show_first_sorted_diffs(file_a: &Path, file_b: &Path) {
         if middle_end > middle_start {
             let middle_diff_indices: Vec<usize> = diff_indices[middle_start..middle_end].to_vec();
             let sample_count = 10.min(middle_diff_indices.len());
+            let middle_count = middle_diff_indices.len();
 
-            println!(
-                "\n--- {} RANDOM DIFFERENCES FROM MIDDLE ({} middle diffs) ---",
-                sample_count,
-                middle_diff_indices.len()
-            );
+            println!("\n--- {sample_count} RANDOM DIFFERENCES FROM MIDDLE ({middle_count} middle diffs) ---");
 
             // Deterministic shuffle using LCG
             let mut rng_seed = total_diffs as u64;
             let mut shuffled: Vec<usize> = middle_diff_indices;
             for i in (1..shuffled.len()).rev() {
-                rng_seed = rng_seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                rng_seed = rng_seed.wrapping_mul(LCG_MULTIPLIER).wrapping_add(1);
+                #[allow(clippy::cast_possible_truncation)]
                 let j = (rng_seed as usize) % (i + 1);
                 shuffled.swap(i, j);
             }
 
             for &idx in shuffled.iter().take(sample_count) {
-                println!("  Line {}:", idx + 1);
+                let line_num = idx + 1;
+                println!("  Line {line_num}:");
                 println!("    BASELINE: {}", sorted_baseline[idx]);
                 println!("    RUST:     {}", sorted_rust[idx]);
             }
