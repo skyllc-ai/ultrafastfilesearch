@@ -7,7 +7,10 @@ mod fragment_extension;
 mod index;
 mod index_extension;
 
-#[expect(deprecated, reason = "re-exporting deprecated API for backward compatibility")]
+#[expect(
+    deprecated,
+    reason = "re-exporting deprecated API for backward compatibility"
+)]
 pub use fragment::parse_record_to_fragment;
 pub use index::parse_record_to_index;
 

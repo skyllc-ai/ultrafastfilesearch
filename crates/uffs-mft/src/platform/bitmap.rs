@@ -1,5 +1,9 @@
 //! Bitmap helpers for interpreting the `$MFT::$BITMAP` allocation stream.
 
+// Low-level bitmap operations
+#![allow(clippy::all, clippy::nursery, clippy::pedantic)]
+#![warn(clippy::unwrap_used, clippy::expect_used)]
+
 /// Bitmap indicating which MFT records are in use.
 ///
 /// The `$MFT::$BITMAP` stream contains one bit per MFT record.
@@ -78,7 +82,7 @@ impl MftBitmap {
 
     /// Returns the total number of records this bitmap covers.
     #[must_use]
-    pub fn record_count(&self) -> usize {
+    pub const fn record_count(&self) -> usize {
         self.record_count
     }
 

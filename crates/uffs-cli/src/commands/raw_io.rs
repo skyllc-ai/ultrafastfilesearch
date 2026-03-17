@@ -212,12 +212,16 @@ pub(super) fn load_and_filter_native_from_mft_file(
         // Use ChaosMftReader for deterministic chaos-order testing
         // Works on all platforms when reading offline MFT files
         use uffs_mft::io::readers::parallel::{ChaosMftReader, ChaosStrategy};
-        info!(seed = seed, "Loading MFT with chaos-order (randomized chunks)");
+        info!(
+            seed = seed,
+            "Loading MFT with chaos-order (randomized chunks)"
+        );
         let chaos_reader = ChaosMftReader::new(
             ChaosStrategy::Random { seed },
             2 * 1024 * 1024, // 2MB chunks (same as test)
         );
-        chaos_reader.read_with_chaos(mft_path, volume)
+        chaos_reader
+            .read_with_chaos(mft_path, volume)
             .with_context(|| format!("Failed to load MFT in chaos mode: {}", mft_path.display()))?
     } else {
         let options = LoadRawOptions {

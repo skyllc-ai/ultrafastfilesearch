@@ -10,7 +10,13 @@
 //! seeded randomization, and processes them through the same parsing pipeline
 //! as LIVE.
 
+// Test harness code has different lint needs than production code
+#![allow(clippy::all, clippy::nursery, clippy::pedantic)]
+// Test code is allowed to use expect/unwrap
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::Path;
+
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 
@@ -103,8 +109,7 @@ impl ChaosMftReader {
             MftExtentMap::contiguous(0, mft_bytes.len() as u64, record_size as u32, 1024);
 
         // Generate chunks (no bitmap - read everything)
-        let mut chunks: Vec<ReadChunk> =
-            generate_read_chunks(&extent_map, None, self.chunk_size);
+        let mut chunks: Vec<ReadChunk> = generate_read_chunks(&extent_map, None, self.chunk_size);
         chunks.sort_by_key(|c| c.start_frs);
 
         // Apply chaos strategy
@@ -143,7 +148,7 @@ impl ChaosMftReader {
 
             let handle = std::thread::spawn(move || {
                 let mut results: Vec<ParseResult> = Vec::with_capacity(records_per_worker);
-                let mut local_parsed = 0usize;
+                let mut local_parsed = 0_usize;
 
                 // Process buffers until channel closes
                 while let Ok(Some((mut buffer, start_frs, record_count))) = rx.recv() {
@@ -183,7 +188,7 @@ impl ChaosMftReader {
 
         // Send chunks to workers in chaos order
         let start_time = std::time::Instant::now();
-        let mut bytes_sent = 0u64;
+        let mut bytes_sent = 0_u64;
 
         for chunk in chunks {
             let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
@@ -226,7 +231,11 @@ impl ChaosMftReader {
         }
 
         let send_ms = start_time.elapsed().as_millis();
-        tracing::info!(send_ms, bytes_mb = bytes_sent / (1024 * 1024), "✅ Chunk dispatch complete");
+        tracing::info!(
+            send_ms,
+            bytes_mb = bytes_sent / (1024 * 1024),
+            "✅ Chunk dispatch complete"
+        );
 
         // Signal workers to stop
         for _ in 0..num_workers {
@@ -312,12 +321,12 @@ impl ChaosMftReader {
 fn sorted_sha256(lines: &[String]) -> String {
     let mut indexed: Vec<(usize, &str)> = lines.iter().map(String::as_str).enumerate().collect();
     // Stable sort with byte-level comparison for cross-platform consistency
-    indexed.sort_by(|(idx_a, a), (idx_b, b)| {
-        match a.as_bytes().cmp(b.as_bytes()) {
+    indexed.sort_by(
+        |(idx_a, a), (idx_b, b)| match a.as_bytes().cmp(b.as_bytes()) {
             std::cmp::Ordering::Equal => idx_a.cmp(idx_b),
             other => other,
-        }
-    });
+        },
+    );
     sha256_for_lines(indexed.into_iter().map(|(_, s)| s))
 }
 
@@ -335,7 +344,8 @@ fn sha256_for_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// Run with: `cargo test -p uffs-mft --lib -- chaos_order --nocapture --ignored`
+/// Run with: `cargo test -p uffs-mft --lib -- chaos_order --nocapture
+/// --ignored`
 #[test]
 #[ignore = "requires offline MFT at /Users/rnio/uffs_data/drive_d/D_mft.bin"]
 fn test_chaos_order_d_drive() {
@@ -369,13 +379,21 @@ fn test_chaos_order_d_drive() {
         .args(["build", "--release", "-p", "uffs-cli", "--bin", "uffs"])
         .status()
         .expect("Failed to build uffs CLI");
-    assert!(build_status.success(), "uffs CLI build failed with status: {}", build_status);
+    assert!(
+        build_status.success(),
+        "uffs CLI build failed with status: {}",
+        build_status
+    );
 
     // Get path to built binary
     let uffs_bin = std::env::current_dir()
         .expect("current dir")
         .join("target/release/uffs");
-    assert!(uffs_bin.exists(), "uffs binary not found at: {}", uffs_bin.display());
+    assert!(
+        uffs_bin.exists(),
+        "uffs binary not found at: {}",
+        uffs_bin.display()
+    );
     println!("   ✓ Build complete: {}", uffs_bin.display());
     println!();
 
@@ -396,7 +414,11 @@ fn test_chaos_order_d_drive() {
         .status()
         .expect("Failed to run uffs CLI");
 
-    assert!(status.success(), "uffs CLI (chaos) failed with status: {}", status);
+    assert!(
+        status.success(),
+        "uffs CLI (chaos) failed with status: {}",
+        status
+    );
     println!("   ✓ Chaos export complete");
     println!();
 
@@ -416,7 +438,11 @@ fn test_chaos_order_d_drive() {
         .status()
         .expect("Failed to run uffs CLI");
 
-    assert!(status.success(), "uffs CLI (sequential) failed with status: {}", status);
+    assert!(
+        status.success(),
+        "uffs CLI (sequential) failed with status: {}",
+        status
+    );
     println!("   ✓ Sequential export complete");
     println!();
 
@@ -432,10 +458,11 @@ fn test_chaos_order_d_drive() {
     let chaos_sha = sorted_sha256(&chaos_lines);
     println!("   Chaos SHA256:      {}", chaos_sha);
 
-    let sequential_lines: Vec<String> = BufReader::new(File::open(&sequential_output).expect("sequential file"))
-        .lines()
-        .collect::<Result<_, _>>()
-        .expect("read sequential lines");
+    let sequential_lines: Vec<String> =
+        BufReader::new(File::open(&sequential_output).expect("sequential file"))
+            .lines()
+            .collect::<Result<_, _>>()
+            .expect("read sequential lines");
     let sequential_sha = sorted_sha256(&sequential_lines);
     println!("   Sequential SHA256: {}", sequential_sha);
     println!();
@@ -444,7 +471,8 @@ fn test_chaos_order_d_drive() {
     // Phase 5: Validate against C++ ground truth
     // ──────────────────────────────────────────────────────────────
     println!("✅ Phase 5: Validating against C++ ground truth");
-    const EXPECTED_SORTED_SHA: &str = "028356d4c9298ca8ef790229f4d4270ea29827ad155051e01181181fa34a531e";
+    const EXPECTED_SORTED_SHA: &str =
+        "028356d4c9298ca8ef790229f4d4270ea29827ad155051e01181181fa34a531e";
     println!("   Expected:   {}", EXPECTED_SORTED_SHA);
     println!("   Sequential: {}", sequential_sha);
     println!("   Chaos:      {}", chaos_sha);
@@ -455,7 +483,10 @@ fn test_chaos_order_d_drive() {
         println!("❌ SEQUENTIAL SHA256 MISMATCH!");
         println!("   Expected lines: 7,065,330");
         println!("   Actual lines:   {}", sequential_lines.len());
-        panic!("Sequential SHA256 mismatch! Expected: {}, Got: {}", EXPECTED_SORTED_SHA, sequential_sha);
+        panic!(
+            "Sequential SHA256 mismatch! Expected: {}, Got: {}",
+            EXPECTED_SORTED_SHA, sequential_sha
+        );
     }
 
     // Verify chaos matches sequential
@@ -474,8 +505,15 @@ fn test_chaos_order_d_drive() {
         let mut diff_count = 0;
         for i in 0..seq_sorted.len().min(chaos_sorted.len()) {
             if seq_sorted[i] != chaos_sorted[i] && diff_count < 10 {
-                println!("     Line {}: SEQ={}", i + 1, &seq_sorted[i][..seq_sorted[i].len().min(80)]);
-                println!("             CHS={}", &chaos_sorted[i][..chaos_sorted[i].len().min(80)]);
+                println!(
+                    "     Line {}: SEQ={}",
+                    i + 1,
+                    &seq_sorted[i][..seq_sorted[i].len().min(80)]
+                );
+                println!(
+                    "             CHS={}",
+                    &chaos_sorted[i][..chaos_sorted[i].len().min(80)]
+                );
                 diff_count += 1;
             }
         }
@@ -501,13 +539,13 @@ fn test_reverse_order_d_drive() {
 
     let mft_path = PathBuf::from("/Users/rnio/uffs_data/drive_d/D_mft.bin");
     if !mft_path.exists() {
-        panic!("Test skipped: offline MFT not found at {}", mft_path.display());
+        panic!(
+            "Test skipped: offline MFT not found at {}",
+            mft_path.display()
+        );
     }
 
-    let chaos_reader = ChaosMftReader::new(
-        ChaosStrategy::Reverse,
-        2 * 1024 * 1024,
-    );
+    let chaos_reader = ChaosMftReader::new(ChaosStrategy::Reverse, 2 * 1024 * 1024);
 
     let result = chaos_reader.read_with_chaos(&mft_path, 'D');
 
@@ -536,13 +574,13 @@ fn test_interleaved_order_d_drive() {
 
     let mft_path = PathBuf::from("/Users/rnio/uffs_data/drive_d/D_mft.bin");
     if !mft_path.exists() {
-        panic!("Test skipped: offline MFT not found at {}", mft_path.display());
+        panic!(
+            "Test skipped: offline MFT not found at {}",
+            mft_path.display()
+        );
     }
 
-    let chaos_reader = ChaosMftReader::new(
-        ChaosStrategy::Interleaved,
-        2 * 1024 * 1024,
-    );
+    let chaos_reader = ChaosMftReader::new(ChaosStrategy::Interleaved, 2 * 1024 * 1024);
 
     let result = chaos_reader.read_with_chaos(&mft_path, 'D');
 

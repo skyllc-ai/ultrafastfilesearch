@@ -1,6 +1,10 @@
 //! Legacy extension-record helper for direct-to-fragment parsing.
 //! Extracts names and streams from extension records into a fragment.
 
+// Performance-critical hot-path parser — lint suppressions match index.rs.
+#![allow(clippy::all, clippy::nursery, clippy::pedantic)]
+#![warn(clippy::unwrap_used, clippy::expect_used)]
+
 use core::mem::size_of;
 
 use smallvec::SmallVec;

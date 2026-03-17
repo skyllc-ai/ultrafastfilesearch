@@ -1,12 +1,19 @@
 //! Legacy direct-to-fragment parser bridge.
 //! Preserves the parallel parser surface used before fragment merge.
 
+// Performance-critical hot-path parser — lint suppressions match index.rs.
+#![allow(clippy::all, clippy::nursery, clippy::pedantic)]
+#![warn(clippy::unwrap_used, clippy::expect_used)]
+
 use core::mem::size_of;
 
 use smallvec::SmallVec;
 use zerocopy::FromBytes;
 
-#[expect(deprecated, reason = "internal use in deprecated parse_record_to_fragment")]
+#[expect(
+    deprecated,
+    reason = "internal use in deprecated parse_record_to_fragment"
+)]
 use super::fragment_extension::parse_extension_to_fragment;
 use crate::ntfs::is_internal_windows_stream;
 

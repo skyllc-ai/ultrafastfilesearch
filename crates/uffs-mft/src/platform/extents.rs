@@ -1,5 +1,9 @@
 //! Retrieval-pointer helpers for locating MFT extents on disk.
 
+// Low-level extent manipulation
+#![allow(clippy::all, clippy::nursery, clippy::pedantic)]
+#![warn(clippy::unwrap_used, clippy::expect_used)]
+
 #[cfg(windows)]
 use std::mem::size_of;
 

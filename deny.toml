@@ -89,8 +89,9 @@ skip-tree = [
     # signal-hook has version fragmentation (0.3 vs 0.4)
     { crate = "signal-hook@0.3", reason = "crossterm pins to 0.3.x, others use 0.4.x" },
 
-    # unicode-width has version fragmentation
-    { crate = "unicode-width@0.1", reason = "various deps use different versions" },
+    # rand/getrandom version fragmentation from polars transitive deps
+    { crate = "getrandom@0.3", reason = "polars deps use different versions" },
+    { crate = "rand_chacha@0.3", reason = "uffs-mft uses 0.3.x, polars uses 0.9.x" },
 ]
 
 [sources]

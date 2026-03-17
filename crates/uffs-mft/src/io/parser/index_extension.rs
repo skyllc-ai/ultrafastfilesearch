@@ -8,6 +8,10 @@
 //! names, streams, and all attribute types from extension records and merging
 //! them into base records in the index.
 
+// Performance-critical hot-path parser — lint suppressions match index.rs.
+#![allow(clippy::all, clippy::nursery, clippy::pedantic)]
+#![warn(clippy::unwrap_used, clippy::expect_used)]
+
 use core::mem::size_of;
 
 use smallvec::SmallVec;

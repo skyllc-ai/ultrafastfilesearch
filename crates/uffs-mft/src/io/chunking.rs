@@ -1,6 +1,12 @@
 //! Chunk planning helpers for extent-aware MFT reads.
 
-use super::*;
+// Chunk planning involves low-level byte/record arithmetic.
+#![allow(clippy::all, clippy::nursery, clippy::pedantic)]
+#![warn(clippy::unwrap_used, clippy::expect_used)]
+
+use tracing::{debug, info, trace, warn};
+
+use super::MftExtentMap;
 
 /// A read chunk representing a contiguous range of MFT records.
 #[derive(Debug, Clone)]
@@ -20,13 +26,13 @@ pub struct ReadChunk {
 impl ReadChunk {
     /// Returns the effective first FRS (after skipping unused records).
     #[must_use]
-    pub fn effective_start_frs(&self) -> u64 {
+    pub const fn effective_start_frs(&self) -> u64 {
         self.start_frs + self.skip_begin
     }
 
     /// Returns the effective record count (excluding skipped records).
     #[must_use]
-    pub fn effective_record_count(&self) -> u64 {
+    pub const fn effective_record_count(&self) -> u64 {
         self.record_count
             .saturating_sub(self.skip_begin + self.skip_end)
     }
@@ -65,9 +71,9 @@ pub fn generate_read_chunks(
     let records_per_cluster = cluster_size / record_size;
 
     let num_extents = extent_map.extent_count();
-    let mut sparse_extents = 0u64;
-    let mut total_records_to_read = 0u64;
-    let mut total_records_skipped = 0u64;
+    let mut sparse_extents = 0_u64;
+    let mut total_records_to_read = 0_u64;
+    let mut total_records_skipped = 0_u64;
 
     debug!(
         num_extents,
@@ -98,7 +104,7 @@ pub fn generate_read_chunks(
 
         // Split extent into chunks
         let records_per_chunk = (chunk_size / record_size as usize) as u64;
-        let mut chunk_start = 0u64;
+        let mut chunk_start = 0_u64;
 
         while chunk_start < extent_records {
             let chunk_records = (extent_records - chunk_start).min(records_per_chunk);
@@ -256,8 +262,8 @@ pub fn generate_precise_read_chunks(
     }
 
     let mut chunks = Vec::new();
-    let mut total_records_to_read = 0u64;
-    let mut total_records_skipped = 0u64;
+    let mut total_records_to_read = 0_u64;
+    let mut total_records_skipped = 0_u64;
 
     // Process each extent and match with in-use cluster ranges
     for extent in extent_map.extents() {
@@ -294,7 +300,7 @@ pub fn generate_precise_read_chunks(
 
             // Split into max_io_size chunks
             let records_per_io = max_io_size / record_size;
-            let mut chunk_start = 0u64;
+            let mut chunk_start = 0_u64;
 
             while chunk_start < clipped_records {
                 let chunk_records = (clipped_records - chunk_start).min(records_per_io as u64);

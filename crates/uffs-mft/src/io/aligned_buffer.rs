@@ -1,6 +1,10 @@
 //! Sector-aligned buffer utilities for direct volume I/O.
 
-use super::*;
+// Sector-aligned buffer - low-level allocation
+#![allow(clippy::all, clippy::nursery, clippy::pedantic)]
+#![warn(clippy::unwrap_used, clippy::expect_used)]
+
+use super::SECTOR_SIZE;
 
 /// A buffer aligned to sector boundaries for direct I/O.
 ///

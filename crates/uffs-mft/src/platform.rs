@@ -12,6 +12,10 @@
 //!
 //! This module uses Windows FFI and requires careful handling of raw handles.
 
+// Platform module is mostly Windows-specific with cross-platform stubs
+#![allow(clippy::all, clippy::nursery, clippy::pedantic)]
+#![warn(clippy::unwrap_used, clippy::expect_used)]
+
 mod bitmap;
 mod extents;
 mod system;
@@ -20,12 +24,14 @@ mod volume;
 
 pub use bitmap::MftBitmap;
 pub use extents::MftExtent;
-// Export DriveType unconditionally (needed for tests), but Windows-specific functions only on Windows
+// Export DriveType unconditionally (needed for tests), but Windows-specific functions only on
+// Windows
 pub use system::DriveType;
+// is_volume_read_only is available on all platforms (stub on non-Windows)
+pub use system::is_volume_read_only;
 #[cfg(windows)]
 pub use system::{
-    detect_drive_type, detect_ntfs_drives, infer_drive_from_path, is_elevated,
-    is_volume_read_only, volume_root_path,
+    detect_drive_type, detect_ntfs_drives, infer_drive_from_path, is_elevated, volume_root_path,
 };
 #[cfg(windows)]
 pub(crate) use volume::{

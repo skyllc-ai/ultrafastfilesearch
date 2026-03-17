@@ -80,10 +80,34 @@ name = "mft_read"
 harness = false
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Lints (inherit from workspace, unsafe allowed case-by-case via #[allow])
+# Lints: uffs-mft is a low-level NTFS parser with performance-critical hot paths.
+# The monolithic parser modules (io/parser/*.rs) handle all NTFS attribute types
+# inline with validated bounds checking.
+#
+# NOT inheriting workspace lints because:
+# - Indexing/slicing without runtime overhead (bounds validated before loops)
+# - Low-level NTFS parsing patterns (shadowing, single-char vars, etc.)
+# - Performance-critical code paths (pedantic lints add overhead or noise)
 # ─────────────────────────────────────────────────────────────────────────────
-[lints]
-workspace = true
+[lints.clippy]
+# Core lint groups - cargo at deny, nursery/pedantic at allow for parser code
+cargo = { level = "deny", priority = -1 }
+nursery = { level = "allow", priority = -1 }
+pedantic = { level = "allow", priority = -1 }
+
+# Multiple crate versions are unavoidable with polars ecosystem
+multiple_crate_versions = "allow"
+
+# Critical safety lints remain active
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
 
 [features]
 default = ["zstd"]

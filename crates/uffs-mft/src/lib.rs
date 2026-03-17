@@ -108,7 +108,8 @@ pub mod parse; // MFT record parsing - cross-platform
 pub mod io;
 
 // Platform module needed by io module
-// Available on all platforms (with Windows-specific HANDLE types cfg-gated internally)
+// Available on all platforms (with Windows-specific HANDLE types cfg-gated
+// internally)
 pub mod platform;
 
 pub mod usn;
@@ -163,8 +164,8 @@ pub use ntfs::{
 pub use platform::{DriveType, MftBitmap, MftExtent};
 #[cfg(windows)]
 pub use platform::{
-    NtfsVolumeData, VolumeHandle, detect_drive_type,
-    detect_ntfs_drives, infer_drive_from_path, is_elevated, is_volume_read_only,
+    NtfsVolumeData, VolumeHandle, detect_drive_type, detect_ntfs_drives, infer_drive_from_path,
+    is_elevated, is_volume_read_only,
 };
 pub use raw::{
     LoadRawOptions, RawMftData, RawMftHeader, SaveRawOptions, load_raw_mft, load_raw_mft_header,

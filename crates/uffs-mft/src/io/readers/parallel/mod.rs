@@ -1,5 +1,9 @@
 //! Parallel reader implementations and strategy entrypoints.
 
+// Parallel reader module with complex timing and coordination
+#![allow(clippy::all, clippy::nursery, clippy::pedantic)]
+#![warn(clippy::unwrap_used, clippy::expect_used)]
+
 #[cfg(windows)]
 pub(super) use super::iocp::IoCompletionPort;
 

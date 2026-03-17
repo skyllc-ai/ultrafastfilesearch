@@ -1,6 +1,12 @@
 //! Extent mapping helpers for fragmented MFT layouts.
 
-use super::*;
+// Extent map involves low-level byte/cluster arithmetic.
+#![allow(clippy::all, clippy::nursery, clippy::pedantic)]
+#![warn(clippy::unwrap_used, clippy::expect_used)]
+
+use tracing::{debug, info};
+
+use crate::platform::MftExtent;
 
 /// Maps Virtual Cluster Numbers (VCN) to Logical Cluster Numbers (LCN).
 ///

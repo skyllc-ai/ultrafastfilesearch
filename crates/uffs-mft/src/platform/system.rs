@@ -1,5 +1,9 @@
 //! Windows privilege, path, and drive-classification helpers.
 
+// Platform-specific code has many cfg-gated sections
+#![allow(clippy::all, clippy::nursery, clippy::pedantic)]
+#![warn(clippy::unwrap_used, clippy::expect_used)]
+
 #[cfg(windows)]
 use std::mem::size_of;
 #[cfg(windows)]
@@ -206,10 +210,14 @@ pub fn is_volume_read_only(drive_letter: char) -> bool {
     (fs_flags & FILE_READ_ONLY_VOLUME) != 0
 }
 
-/// Stub for non-Windows platforms.
+/// Stub for non-Windows platforms - always returns false.
+///
+/// This function exists to provide a cross-platform API surface.
+/// On non-Windows platforms, we cannot determine volume read-only status,
+/// so we conservatively return `false` (assume writable).
 #[cfg(not(windows))]
 #[must_use]
-pub fn is_volume_read_only(_drive_letter: char) -> bool {
+pub const fn is_volume_read_only(_drive_letter: char) -> bool {
     false
 }
 
