@@ -737,10 +737,32 @@ pub(super) fn parse_extension_to_index(
         // Merge directory index sizes from extension records
         if dir_index_size > 0 || dir_index_allocated > 0 {
             let record = &mut index.records[record_idx as usize];
-            // Add to the first_stream size (which represents the default stream for
-            // directories)
-            record.first_stream.size.length += dir_index_size;
-            record.first_stream.size.allocated += dir_index_allocated;
+
+            // CRITICAL: Handle IOCP out-of-order scenarios.
+            // Apply the same snapshot/restore pattern as default $DATA (lines 718-733).
+            // If base record has no first_stream size (both 0), either:
+            // (a) base hasn't been parsed yet, OR
+            // (b) genuinely has no $DATA/$I30
+            //
+            // We use the same pattern: write if empty, accumulate otherwise.
+
+            if record.first_stream.size.length == 0 && record.first_stream.size.allocated == 0 {
+                // Base has no size set - use extension's dir_index values
+                record.first_stream.size.length = dir_index_size;
+                record.first_stream.size.allocated = dir_index_allocated;
+            } else {
+                // Base has size set - accumulate extension's dir_index
+                record.first_stream.size.length = record
+                    .first_stream
+                    .size
+                    .length
+                    .saturating_add(dir_index_size);
+                record.first_stream.size.allocated = record
+                    .first_stream
+                    .size
+                    .allocated
+                    .saturating_add(dir_index_allocated);
+            }
         }
 
         // Build parent-child relationship for names added from extension records

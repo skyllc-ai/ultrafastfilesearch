@@ -15,6 +15,9 @@ mod to_index_parallel;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod tests_chaos;
+
 pub struct ReadParseTiming {
     /// Time spent in I/O operations (reading chunks from disk).
     /// This is the cumulative time spent in `ReadFile` calls.
