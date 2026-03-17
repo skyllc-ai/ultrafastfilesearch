@@ -35,11 +35,6 @@ mod parser;
 // readers module available on all platforms (contains ChaosMftReader for offline MFT)
 pub mod readers;
 
-// Chaos test harness - works with offline MFT files on any platform
-#[cfg(test)]
-#[path = "io/readers/parallel/tests_chaos.rs"]
-mod tests_chaos;
-
 pub use aligned_buffer::AlignedBuffer;
 pub use chunking::{ReadChunk, generate_precise_read_chunks, generate_read_chunks};
 pub use extent_map::MftExtentMap;

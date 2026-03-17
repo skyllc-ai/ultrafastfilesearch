@@ -335,10 +335,12 @@ fn sha256_for_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// Run with: `cargo test -p uffs-mft -- chaos_order --nocapture --ignored`
+/// Run with: `cargo test -p uffs-mft --lib -- chaos_order --nocapture --ignored`
 #[test]
 #[ignore = "requires offline MFT at /Users/rnio/uffs_data/drive_d/D_mft.bin"]
 fn test_chaos_order_d_drive() {
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
     use std::path::PathBuf;
 
     // Initialize logging for diagnostics
@@ -359,129 +361,131 @@ fn test_chaos_order_d_drive() {
     println!("     (Full-field parity with C++ ground truth)");
     println!("═══════════════════════════════════════════════════════\n");
 
-    // Step 1: Export chaos-order results using CLI with --chaos-seed
-    println!("📤 Step 1: Exporting chaos-order results to CSV format via CLI");
-    println!("   (Uses --chaos-seed 42 to randomize chunk processing order)");
+    // ──────────────────────────────────────────────────────────────
+    // Phase 1: Build binary upfront (single compilation)
+    // ──────────────────────────────────────────────────────────────
+    println!("🔨 Phase 1: Building uffs CLI (release mode)");
+    let build_status = std::process::Command::new("cargo")
+        .args(["build", "--release", "-p", "uffs-cli", "--bin", "uffs"])
+        .status()
+        .expect("Failed to build uffs CLI");
+    assert!(build_status.success(), "uffs CLI build failed with status: {}", build_status);
+
+    // Get path to built binary
+    let uffs_bin = std::env::current_dir()
+        .expect("current dir")
+        .join("target/release/uffs");
+    assert!(uffs_bin.exists(), "uffs binary not found at: {}", uffs_bin.display());
+    println!("   ✓ Build complete: {}", uffs_bin.display());
+    println!();
+
+    // ──────────────────────────────────────────────────────────────
+    // Phase 2: Run chaos-order export
+    // ──────────────────────────────────────────────────────────────
+    println!("📤 Phase 2: Exporting chaos-order results (--chaos-seed 42)");
     let temp_output = std::env::temp_dir().join("chaos_d.txt");
 
-    let status = std::process::Command::new("cargo")
-        .args(&["run", "--release", "-p", "uffs-cli", "--bin", "uffs", "--"])
-        .args(&["*"])
-        .args(&["--mft-file", mft_path.to_str().expect("valid path")])
-        .args(&["--drive", "D"])
-        .args(&["--chaos-seed", "42"])
-        .args(&["--tz-offset", "-8"])
-        .args(&["--format", "custom"])
-        .args(&["--out", temp_output.to_str().expect("valid path")])
+    let status = std::process::Command::new(&uffs_bin)
+        .args(["*"])
+        .args(["--mft-file", mft_path.to_str().expect("valid path")])
+        .args(["--drive", "D"])
+        .args(["--chaos-seed", "42"])
+        .args(["--tz-offset", "-8"])
+        .args(["--format", "custom"])
+        .args(["--out", temp_output.to_str().expect("valid path")])
         .status()
         .expect("Failed to run uffs CLI");
 
-    assert!(status.success(), "uffs CLI failed with status: {}", status);
-    println!("   ✓ CSV export completed");
+    assert!(status.success(), "uffs CLI (chaos) failed with status: {}", status);
+    println!("   ✓ Chaos export complete");
     println!();
 
-    // Step 2: Compute sorted SHA256 of chaos output
-    println!("🔐 Step 2: Computing sorted SHA256 of chaos-order output");
-    use std::fs::File;
-    use std::io::{BufRead, BufReader};
-
-    let chaos_lines: Vec<String> = BufReader::new(File::open(&temp_output).expect("temp file exists"))
-        .lines()
-        .collect::<Result<_, _>>()
-        .expect("read lines");
-
-    let chaos_sha = sorted_sha256(&chaos_lines);
-    println!("   Chaos SHA256:    {}", chaos_sha);
-    println!();
-
-    // Step 3: Export sequential output for comparison
-    println!("📤 Step 3: Exporting sequential-order output for baseline comparison");
+    // ──────────────────────────────────────────────────────────────
+    // Phase 3: Run sequential-order export
+    // ──────────────────────────────────────────────────────────────
+    println!("📤 Phase 3: Exporting sequential-order results (baseline)");
     let sequential_output = std::env::temp_dir().join("sequential_d.txt");
 
-    let status = std::process::Command::new("cargo")
-        .args(&["run", "--release", "-p", "uffs-cli", "--bin", "uffs", "--"])
-        .args(&["*"])
-        .args(&["--mft-file", mft_path.to_str().expect("valid path")])
-        .args(&["--drive", "D"])
-        .args(&["--tz-offset", "-8"])
-        .args(&["--format", "custom"])
-        .args(&["--out", sequential_output.to_str().expect("valid path")])
+    let status = std::process::Command::new(&uffs_bin)
+        .args(["*"])
+        .args(["--mft-file", mft_path.to_str().expect("valid path")])
+        .args(["--drive", "D"])
+        .args(["--tz-offset", "-8"])
+        .args(["--format", "custom"])
+        .args(["--out", sequential_output.to_str().expect("valid path")])
         .status()
-        .expect("Failed to run uffs CLI for sequential export");
+        .expect("Failed to run uffs CLI");
 
-    assert!(status.success(), "Sequential uffs CLI failed with status: {}", status);
-    println!("   ✓ Sequential CSV export completed");
+    assert!(status.success(), "uffs CLI (sequential) failed with status: {}", status);
+    println!("   ✓ Sequential export complete");
     println!();
 
-    // Step 4: Compute SHA256 of sequential output
-    println!("🔐 Step 4: Computing sorted SHA256 of sequential-order output");
-    let sequential_lines: Vec<String> = BufReader::new(File::open(&sequential_output).expect("sequential file exists"))
+    // ──────────────────────────────────────────────────────────────
+    // Phase 4: Read and compute SHA256 hashes
+    // ──────────────────────────────────────────────────────────────
+    println!("🔐 Phase 4: Computing sorted SHA256 hashes");
+
+    let chaos_lines: Vec<String> = BufReader::new(File::open(&temp_output).expect("chaos file"))
+        .lines()
+        .collect::<Result<_, _>>()
+        .expect("read chaos lines");
+    let chaos_sha = sorted_sha256(&chaos_lines);
+    println!("   Chaos SHA256:      {}", chaos_sha);
+
+    let sequential_lines: Vec<String> = BufReader::new(File::open(&sequential_output).expect("sequential file"))
         .lines()
         .collect::<Result<_, _>>()
         .expect("read sequential lines");
-
     let sequential_sha = sorted_sha256(&sequential_lines);
     println!("   Sequential SHA256: {}", sequential_sha);
     println!();
 
-    // Step 5: Compare against C++ ground truth (sorted comparison, like verify_parity.rs)
-    println!("✅ Step 5: Validating against C++ ground truth (sorted SHA256)");
+    // ──────────────────────────────────────────────────────────────
+    // Phase 5: Validate against C++ ground truth
+    // ──────────────────────────────────────────────────────────────
+    println!("✅ Phase 5: Validating against C++ ground truth");
     const EXPECTED_SORTED_SHA: &str = "028356d4c9298ca8ef790229f4d4270ea29827ad155051e01181181fa34a531e";
-    println!("   Expected sorted SHA: {}", EXPECTED_SORTED_SHA);
-    println!("   Sequential sorted:   {}", sequential_sha);
-    println!("   Chaos sorted:        {}", chaos_sha);
+    println!("   Expected:   {}", EXPECTED_SORTED_SHA);
+    println!("   Sequential: {}", sequential_sha);
+    println!("   Chaos:      {}", chaos_sha);
     println!();
 
-    // Verify sequential matches ground truth (sorted comparison)
-    // Note: Row order may differ (C++ vs Rust MFT/tree walk), but content must match
+    // Verify sequential matches ground truth
     if sequential_sha != EXPECTED_SORTED_SHA {
         println!("❌ SEQUENTIAL SHA256 MISMATCH!");
-        println!();
-        println!("   This indicates a critical bug in the base parser or output format.");
-        println!("   Line counts:");
-        println!("     Expected:   7,065,330 lines");
-        println!("     Sequential: {} lines", sequential_lines.len());
-        panic!("Sequential sorted SHA256 mismatch! Expected: {}, Got: {}", EXPECTED_SORTED_SHA, sequential_sha);
+        println!("   Expected lines: 7,065,330");
+        println!("   Actual lines:   {}", sequential_lines.len());
+        panic!("Sequential SHA256 mismatch! Expected: {}, Got: {}", EXPECTED_SORTED_SHA, sequential_sha);
     }
 
-    // Verify chaos matches sequential (sorted comparison)
+    // Verify chaos matches sequential
     if chaos_sha != sequential_sha {
         println!("❌ CHAOS-ORDER SHA256 MISMATCH!");
-        println!();
-        println!("   This indicates the directory index merge fix is broken for out-of-order processing.");
-        println!("   Line counts:");
-        println!("     Sequential: {} lines", sequential_lines.len());
-        println!("     Chaos:      {} lines", chaos_lines.len());
-        println!();
+        println!("   Sequential: {} lines", sequential_lines.len());
+        println!("   Chaos:      {} lines", chaos_lines.len());
 
-        // Show first few differences using verify_parity.rs-style diagnostics
-        println!("   📊 Comparing sorted outputs (first 10 differences):");
-        let mut sequential_sorted = sequential_lines.clone();
+        // Show first differences
+        let mut seq_sorted = sequential_lines.clone();
         let mut chaos_sorted = chaos_lines.clone();
-        sequential_sorted.sort_unstable();
+        seq_sorted.sort_unstable();
         chaos_sorted.sort_unstable();
 
-        let n = sequential_sorted.len().min(chaos_sorted.len());
+        println!("\n   First 10 differences:");
         let mut diff_count = 0;
-        for i in 0..n {
-            if sequential_sorted[i] != chaos_sorted[i] && diff_count < 10 {
-                println!("      Line {} differs:", i + 1);
-                println!("        Sequential: {}", &sequential_sorted[i][..sequential_sorted[i].len().min(100)]);
-                println!("        Chaos:      {}", &chaos_sorted[i][..chaos_sorted[i].len().min(100)]);
+        for i in 0..seq_sorted.len().min(chaos_sorted.len()) {
+            if seq_sorted[i] != chaos_sorted[i] && diff_count < 10 {
+                println!("     Line {}: SEQ={}", i + 1, &seq_sorted[i][..seq_sorted[i].len().min(80)]);
+                println!("             CHS={}", &chaos_sorted[i][..chaos_sorted[i].len().min(80)]);
                 diff_count += 1;
             }
         }
-
-        panic!("Chaos-order SHA256 mismatch! Expected: {}, Got: {}", sequential_sha, chaos_sha);
+        panic!("Chaos SHA256 mismatch!");
     }
 
-    assert_eq!(chaos_sha, EXPECTED_SORTED_SHA,
-        "Chaos-order SHA256 mismatch! This indicates the directory index merge fix is broken.");
-
-    println!();
+    println!("═══════════════════════════════════════════════════════");
     println!("✅ VALIDATION PASSED!");
-    println!("   Chaos-order output matches C++ ground truth exactly (all fields, all records).");
-    println!("   This proves 100% parity - not just 4 fields!");
+    println!("   Chaos-order matches C++ ground truth exactly.");
+    println!("═══════════════════════════════════════════════════════");
 }
 
 /// Tests reverse-order parsing (simpler chaos strategy).
