@@ -376,17 +376,34 @@ fn run_scan_with_log(bin: &Path, args: &[&str], out_file: &Path, log_file: &Path
     }
 }
 
+/// Read file and sort lines using robust byte-level comparison.
+///
+/// Uses stable sort with explicit byte comparison for cross-platform consistency:
+/// - Primary: byte-level lexicographic comparison (UTF-8 bytes, not Unicode codepoints)
+/// - Secondary: original line index (stable tie-break for identical lines)
+///
+/// This ensures identical output regardless of locale settings, UTF-8/UTF-16
+/// collation differences, or unstable sort reorderings.
 fn read_and_sort(path: &Path) -> Vec<String> {
     let Ok(file) = fs::File::open(path) else {
         return Vec::new();
     };
-    let mut lines: Vec<String> = BufReader::new(file)
+    let mut lines: Vec<(usize, String)> = BufReader::new(file)
         .lines()
         .map_while(Result::ok)
         .filter(|l| !l.trim().is_empty())
+        .enumerate()
         .collect();
-    lines.sort_unstable();
-    lines
+
+    // Stable sort with byte-level comparison + index tie-break
+    lines.sort_by(|(idx_a, a), (idx_b, b)| {
+        match a.as_bytes().cmp(b.as_bytes()) {
+            std::cmp::Ordering::Equal => idx_a.cmp(idx_b),
+            other => other,
+        }
+    });
+
+    lines.into_iter().map(|(_, line)| line).collect()
 }
 
 fn save_sorted_lines(path: &Path, lines: &[String]) {
