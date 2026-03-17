@@ -380,7 +380,33 @@ impl ParallelMftReader {
                         // Check bitmap
                         if let Some(bm) = bitmap_ref {
                             if !bm.is_record_in_use(frs) {
-                                continue;
+                                // Bitmap says unused, but extension records have IN_USE
+                                // set in their header while NOT being marked in $Bitmap.
+                                // Peek at the FILE record header flags (offset 0x16, 2 bytes LE)
+                                // before skipping.
+                                let offset = i * record_size;
+                                let record_slice = &buffer_slice[offset..offset + record_size];
+
+                                /// Flags offset in FILE_RECORD_SEGMENT_HEADER.
+                                const FLAGS_OFFSET: usize = 0x16;
+                                /// IN_USE flag bit in
+                                /// FILE_RECORD_SEGMENT_HEADER.flags.
+                                const IN_USE_FLAG: u16 = 0x0001;
+
+                                if record_slice.len() > FLAGS_OFFSET + 1 {
+                                    let flags = u16::from_le_bytes([
+                                        record_slice[FLAGS_OFFSET],
+                                        record_slice[FLAGS_OFFSET + 1],
+                                    ]);
+                                    if flags & IN_USE_FLAG == 0 {
+                                        // Record header also says not in use — safe to skip
+                                        continue;
+                                    }
+                                    // Header says IN_USE — this is an extension
+                                    // record, process it
+                                } else {
+                                    continue;
+                                }
                             }
                         }
 
@@ -463,7 +489,7 @@ impl ParallelMftReader {
             }
         }
 
-        let total_ms = read_start.elapsed().as_millis();
+        let total_ms = read_start.elapsed().as_millis() as u64;
         let wait_ms = total_wait_time_ns / 1_000_000;
         let parse_ms = total_parse_time_ns / 1_000_000;
 
