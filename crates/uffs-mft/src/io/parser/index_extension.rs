@@ -458,12 +458,14 @@ pub(super) fn parse_extension_to_index(
         offset += attr_header.length as usize;
     }
 
-    // If no names, user-visible streams, internal streams, or default data found,
-    // nothing to do
+    // If no names, user-visible streams, internal streams, default data, or
+    // directory index sizes found, nothing to do
     if names.is_empty()
         && streams.is_empty()
         && ext_internal_streams.is_empty()
         && !found_default_data
+        && dir_index_size == 0
+        && dir_index_allocated == 0
     {
         return false;
     }
@@ -784,4 +786,6 @@ pub(super) fn parse_extension_to_index(
         || !streams.is_empty()
         || !ext_internal_streams.is_empty()
         || found_default_data
+        || dir_index_size > 0
+        || dir_index_allocated > 0
 }

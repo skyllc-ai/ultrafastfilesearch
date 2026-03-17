@@ -723,12 +723,20 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             let ext_internal_head = record.first_internal_stream;
             let ext_internal_size = record.internal_streams_size;
             let ext_internal_alloc = record.internal_streams_allocated;
+            // Snapshot first_stream.size from extension records (IOCP ordering).
+            let ext_first_stream_len = record.first_stream.size.length;
+            let ext_first_stream_alloc = record.first_stream.size.allocated;
 
             record.stdinfo = std_info;
             record.first_stream.size = SizeInfo {
                 length: default_size,
                 allocated: default_allocated,
             };
+            // Restore extension's default-stream size if base has no $DATA/$I30.
+            if default_size == 0 && default_allocated == 0 && (ext_first_stream_len > 0 || ext_first_stream_alloc > 0) {
+                record.first_stream.size.length = ext_first_stream_len;
+                record.first_stream.size.allocated = ext_first_stream_alloc;
+            }
             // Set type_name_id for first_stream: 0 for directories ($I30), 8 for files
             // ($DATA)
             record.first_stream.flags = if record.stdinfo.is_directory() {
@@ -919,12 +927,25 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let ext_internal_head = record.first_internal_stream;
     let ext_internal_size = record.internal_streams_size;
     let ext_internal_alloc = record.internal_streams_allocated;
+    // Snapshot first_stream.size — extension records processed before the base
+    // (due to IOCP out-of-order I/O) may have already set the default $DATA or
+    // $I30 size. We must preserve it if the base record has no $DATA.
+    let ext_first_stream_len = record.first_stream.size.length;
+    let ext_first_stream_alloc = record.first_stream.size.allocated;
 
     record.stdinfo = std_info;
     record.first_stream.size = SizeInfo {
         length: default_size,
         allocated: default_allocated,
     };
+    // If the base record has no $DATA (default_size == 0 and default_allocated
+    // == 0) but an extension record already populated first_stream.size, restore
+    // the extension's values. This handles files/dirs whose primary $DATA/$I30
+    // attribute resides entirely in an extension record.
+    if default_size == 0 && default_allocated == 0 && (ext_first_stream_len > 0 || ext_first_stream_alloc > 0) {
+        record.first_stream.size.length = ext_first_stream_len;
+        record.first_stream.size.allocated = ext_first_stream_alloc;
+    }
     // Set type_name_id for first_stream: 0 for directories ($I30), 8 for files
     // ($DATA)
     record.first_stream.flags = if record.stdinfo.is_directory() {
