@@ -2,7 +2,6 @@
 
 #[cfg(windows)]
 pub(super) use super::iocp::IoCompletionPort;
-use super::*;
 
 #[cfg(windows)]
 mod bulk;
@@ -28,6 +27,7 @@ mod tests;
 mod tests_chaos;
 pub use tests_chaos::{ChaosMftReader, ChaosStrategy};
 
+/// Timing breakdown for read and parse operations.
 pub struct ReadParseTiming {
     /// Time spent in I/O operations (reading chunks from disk).
     /// This is the cumulative time spent in `ReadFile` calls.

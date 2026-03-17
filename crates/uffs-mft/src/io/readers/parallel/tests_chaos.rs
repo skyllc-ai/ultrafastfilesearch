@@ -25,7 +25,10 @@ use crate::raw::{LoadRawOptions, load_raw_mft};
 #[derive(Debug, Clone, Copy)]
 pub enum ChaosStrategy {
     /// Random shuffle with fixed seed (most realistic).
-    Random { seed: u64 },
+    Random {
+        /// RNG seed for deterministic shuffling.
+        seed: u64,
+    },
     /// Reverse order (simple but unrealistic).
     Reverse,
     /// Every other chunk swapped (controlled chaos).
@@ -183,7 +186,6 @@ impl ChaosMftReader {
         let mut bytes_sent = 0u64;
 
         for chunk in chunks {
-            let skip_begin_bytes = chunk.skip_begin as usize * record_size;
             let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
             if effective_records == 0 {
                 continue;

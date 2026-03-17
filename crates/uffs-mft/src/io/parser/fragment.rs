@@ -6,6 +6,7 @@ use core::mem::size_of;
 use smallvec::SmallVec;
 use zerocopy::FromBytes;
 
+#[expect(deprecated, reason = "internal use in deprecated parse_record_to_fragment")]
 use super::fragment_extension::parse_extension_to_fragment;
 use crate::ntfs::is_internal_windows_stream;
 
@@ -26,6 +27,7 @@ use crate::ntfs::is_internal_windows_stream;
     clippy::cast_possible_truncation,
     reason = "NTFS field sizes are bounded by u16/u32 record layout"
 )]
+#[expect(deprecated, reason = "deprecated function calling deprecated helper")]
 pub fn parse_record_to_fragment(
     data: &[u8],
     frs: u64,

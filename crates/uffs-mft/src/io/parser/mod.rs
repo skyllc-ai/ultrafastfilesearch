@@ -7,6 +7,7 @@ mod fragment_extension;
 mod index;
 mod index_extension;
 
+#[expect(deprecated, reason = "re-exporting deprecated API for backward compatibility")]
 pub use fragment::parse_record_to_fragment;
 pub use index::parse_record_to_index;
 
@@ -18,7 +19,9 @@ pub use crate::parse::{
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_record_to_fragment, parse_record_to_index};
+    #[expect(deprecated, reason = "testing deprecated parse_record_to_index API")]
+    use super::parse_record_to_fragment;
+    use super::parse_record_to_index;
     use crate::index::{MftIndex, MftIndexFragment};
 
     #[test]
@@ -28,6 +31,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated, reason = "testing deprecated parse_record_to_fragment API")]
     fn parse_record_to_fragment_rejects_short_buffers() {
         let mut fragment = MftIndexFragment::with_capacity(1);
         assert!(!parse_record_to_fragment(&[0_u8; 3], 42, &mut fragment));

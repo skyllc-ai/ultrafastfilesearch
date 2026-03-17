@@ -1,12 +1,5 @@
 //! Reader implementations and async I/O orchestration for MFT ingestion.
 
-pub(super) use std::sync::Arc;
-pub(super) use std::sync::atomic::{AtomicU64, Ordering};
-
-pub(super) use rayon::prelude::*;
-
-use super::*;
-
 // Windows-specific readers (require HANDLE and Windows APIs)
 #[cfg(windows)]
 mod basic;

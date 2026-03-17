@@ -10,8 +10,6 @@
 //! Available on all platforms for offline MFT processing (chaos mode, testing).
 //! Live MFT access via HANDLE is Windows-only and gated per-function.
 
-use std::cell::RefCell;
-
 // Tracing is needed for all submodules (chunking, merger, parser, etc.)
 use tracing::{debug, info, trace, warn};
 
@@ -50,8 +48,10 @@ pub use merger::MftRecordMerger;
 pub use parser::{
     ExtensionAttributes, ParseResult, ParsedColumns, ParsedRecord,
     add_missing_parent_placeholders_to_vec, create_placeholder_record, parse_record,
-    parse_record_full, parse_record_to_fragment, parse_record_to_index, parse_record_zero_alloc,
+    parse_record_full, parse_record_to_index, parse_record_zero_alloc,
 };
+#[expect(deprecated, reason = "re-exporting deprecated API for backward compatibility")]
+pub use parser::parse_record_to_fragment;
 // Export Windows-specific readers (require HANDLE)
 #[cfg(windows)]
 pub use readers::{
