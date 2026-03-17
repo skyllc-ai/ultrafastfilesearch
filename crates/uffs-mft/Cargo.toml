@@ -68,6 +68,8 @@ crossbeam-channel = "0.5.15"
 criterion.workspace = true
 proptest.workspace = true
 tokio = { workspace = true, features = ["test-util", "macros"] }
+rand = "0.8.5"
+rand_chacha = "0.3.1"
 
 [[bench]]
 name = "mft_read"

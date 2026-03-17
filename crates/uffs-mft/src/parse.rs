@@ -46,6 +46,8 @@ mod attribute_helpers;
 mod columns;
 mod direct_index;
 mod direct_index_extension;
+#[cfg(test)]
+mod direct_index_extension_tests;
 mod fixup;
 mod forensic;
 mod full;
