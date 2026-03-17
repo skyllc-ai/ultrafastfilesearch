@@ -698,8 +698,26 @@ pub(super) fn parse_extension_to_index(
         // record (e.g., large files with extensive run lists).
         if found_default_data {
             let record = &mut index.records[record_idx as usize];
-            record.first_stream.size.length = default_data_size;
-            record.first_stream.size.allocated = default_data_allocated;
+
+            // If base record has no $DATA (both fields are 0), use extension's $DATA.
+            // Otherwise, accumulate extension $DATA to base $DATA.
+            if record.first_stream.size.length == 0 && record.first_stream.size.allocated == 0 {
+                // Base has no $DATA — use extension's values
+                record.first_stream.size.length = default_data_size;
+                record.first_stream.size.allocated = default_data_allocated;
+            } else {
+                // Base has partial $DATA — accumulate extension values
+                record.first_stream.size.length = record
+                    .first_stream
+                    .size
+                    .length
+                    .saturating_add(default_data_size);
+                record.first_stream.size.allocated = record
+                    .first_stream
+                    .size
+                    .allocated
+                    .saturating_add(default_data_allocated);
+            }
         }
 
         // Merge directory index sizes from extension records
