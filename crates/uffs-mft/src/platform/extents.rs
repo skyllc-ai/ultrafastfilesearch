@@ -1,10 +1,14 @@
 //! Retrieval-pointer helpers for locating MFT extents on disk.
 
+#[cfg(windows)]
 use std::mem::size_of;
 
+#[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;
+#[cfg(windows)]
 use windows::Win32::System::Ioctl::{FSCTL_GET_RETRIEVAL_POINTERS, STARTING_VCN_INPUT_BUFFER};
 
+#[cfg(windows)]
 use crate::error::{MftError, Result};
 
 /// Represents a contiguous extent of the MFT on disk.
@@ -38,6 +42,7 @@ impl MftExtent {
 }
 
 /// Retrieves the extent map for a file using `FSCTL_GET_RETRIEVAL_POINTERS`.
+#[cfg(windows)]
 #[expect(
     unsafe_code,
     reason = "FFI: windows API (DeviceIoControl) and mem::zeroed"

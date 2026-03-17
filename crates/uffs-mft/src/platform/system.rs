@@ -1,17 +1,23 @@
 //! Windows privilege, path, and drive-classification helpers.
 
+#[cfg(windows)]
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;
+#[cfg(windows)]
 use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
+#[cfg(windows)]
 use windows::core::PCWSTR;
 
+#[cfg(windows)]
 use super::volume::HandleGuard;
 
 /// Checks if the current process has Administrator privileges.
 ///
 /// MFT reading requires Administrator privileges or `SE_BACKUP_PRIVILEGE`.
+#[cfg(windows)]
 #[must_use]
 #[expect(
     unsafe_code,
@@ -51,12 +57,14 @@ pub fn is_elevated() -> bool {
 }
 
 /// Returns the path to the volume root (e.g., "C:\").
+#[cfg(windows)]
 #[must_use]
 pub fn volume_root_path(volume: char) -> PathBuf {
     PathBuf::from(format!("{}:\\", volume.to_ascii_uppercase()))
 }
 
 /// Infer drive letter from a file path.
+#[cfg(windows)]
 #[must_use]
 pub fn infer_drive_from_path(path: &Path) -> Option<char> {
     use std::path::{Component, Prefix};
@@ -85,6 +93,7 @@ pub fn infer_drive_from_path(path: &Path) -> Option<char> {
 }
 
 /// Detects all available NTFS drives on the system.
+#[cfg(windows)]
 #[must_use]
 #[expect(unsafe_code, reason = "FFI: windows API (GetLogicalDrives)")]
 pub fn detect_ntfs_drives() -> Vec<char> {
@@ -114,6 +123,7 @@ pub fn detect_ntfs_drives() -> Vec<char> {
 }
 
 /// Checks if a drive is an NTFS volume.
+#[cfg(windows)]
 #[expect(
     unsafe_code,
     reason = "FFI: windows API (GetDriveTypeW, GetVolumeInformationW)"
@@ -281,6 +291,7 @@ impl DriveType {
 }
 
 /// Detects whether a drive is NVMe, SSD, or HDD.
+#[cfg(windows)]
 #[must_use]
 #[expect(
     unsafe_code,
@@ -433,6 +444,7 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
 }
 
 /// Fallback detection using TRIM support (SSDs support TRIM).
+#[cfg(windows)]
 #[expect(
     unsafe_code,
     reason = "FFI: windows API (CreateFileW, DeviceIoControl) for trim detection"

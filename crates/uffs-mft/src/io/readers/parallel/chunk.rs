@@ -1,4 +1,8 @@
 //! Shared chunk reader helper for ParallelMftReader.
+//!
+//! Windows-only: requires HANDLE.
+
+#![cfg(windows)]
 
 use super::*;
 

@@ -1,4 +1,8 @@
 //! Sliding-window direct-to-index reader path.
+//!
+//! Windows-only: requires IOCP and HANDLE.
+
+#![cfg(windows)]
 
 use super::*;
 

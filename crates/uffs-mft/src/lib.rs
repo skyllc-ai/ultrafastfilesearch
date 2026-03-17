@@ -102,11 +102,13 @@ pub mod tree_metrics;
 pub mod ntfs; // NTFS structure definitions - cross-platform
 pub mod parse; // MFT record parsing - cross-platform
 
-// Windows-only modules (I/O operations)
-#[cfg(windows)]
+// I/O operations module
+// Available on all platforms for offline MFT processing (chaos mode, testing)
+// Live MFT access (via HANDLE) is still Windows-only and gated per-function
 pub mod io;
 
-#[cfg(windows)]
+// Platform module needed by io module
+// Available on all platforms (with Windows-specific HANDLE types cfg-gated internally)
 pub mod platform;
 
 pub mod usn;
@@ -155,9 +157,13 @@ pub use ntfs::{
     apply_usa_fixup, extract_data_runs_from_attribute, fixup_file_record, parse_data_runs,
 };
 // Re-export platform types
+// Export core types (DriveType, MftBitmap, MftExtent) for testing on all platforms
+// Export Windows-specific types and functions only on Windows
+#[cfg(any(windows, test))]
+pub use platform::{DriveType, MftBitmap, MftExtent};
 #[cfg(windows)]
 pub use platform::{
-    DriveType, MftBitmap, MftExtent, NtfsVolumeData, VolumeHandle, detect_drive_type,
+    NtfsVolumeData, VolumeHandle, detect_drive_type,
     detect_ntfs_drives, infer_drive_from_path, is_elevated, is_volume_read_only,
 };
 pub use raw::{

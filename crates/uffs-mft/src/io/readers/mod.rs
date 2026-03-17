@@ -7,20 +7,36 @@ pub(super) use rayon::prelude::*;
 
 use super::*;
 
+// Windows-specific readers (require HANDLE and Windows APIs)
+#[cfg(windows)]
 mod basic;
+#[cfg(windows)]
 mod iocp;
-mod parallel;
+#[cfg(windows)]
 mod pipelined;
+#[cfg(windows)]
 mod prefetch;
+#[cfg(windows)]
 mod streaming;
+#[cfg(windows)]
 mod zero_copy;
 
+// Parallel reader available on all platforms (contains ChaosMftReader)
+pub mod parallel;
+
+#[cfg(windows)]
 pub use basic::{BatchMftReader, MftRecordReader};
+#[cfg(windows)]
 pub use iocp::{
     IoCompletionPort, IocpMftReader, MultiVolumeIoOp, MultiVolumeIocpReader, OverlappedRead,
     VolumeState, prepare_volume_state,
 };
-pub use parallel::{ParallelMftReader, ReadParseTiming};
+#[cfg(windows)]
+pub use parallel::ParallelMftReader;
+pub use parallel::ReadParseTiming;
+#[cfg(windows)]
 pub use pipelined::PipelinedMftReader;
+#[cfg(windows)]
 pub use prefetch::PrefetchMftReader;
+#[cfg(windows)]
 pub use streaming::StreamingMftReader;

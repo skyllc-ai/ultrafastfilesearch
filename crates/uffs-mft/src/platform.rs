@@ -5,30 +5,37 @@
 //! - NTFS volume data retrieval
 //! - Privilege checking
 //!
+//! Some types (MftExtent, MftBitmap, DriveType) are available on all platforms
+//! for testing and offline MFT processing.
+//!
 //! # Safety
 //!
 //! This module uses Windows FFI and requires careful handling of raw handles.
 
-#![cfg(windows)]
-
 mod bitmap;
 mod extents;
 mod system;
+#[cfg(windows)]
 mod volume;
 
 pub use bitmap::MftBitmap;
 pub use extents::MftExtent;
+// Export DriveType unconditionally (needed for tests), but Windows-specific functions only on Windows
+pub use system::DriveType;
+#[cfg(windows)]
 pub use system::{
-    DriveType, detect_drive_type, detect_ntfs_drives, infer_drive_from_path, is_elevated,
+    detect_drive_type, detect_ntfs_drives, infer_drive_from_path, is_elevated,
     is_volume_read_only, volume_root_path,
 };
+#[cfg(windows)]
 pub(crate) use volume::{
     IOCP_WAIT_COMPLETION_DEADLINE, IOCP_WAIT_POLL_INTERVAL_MS, WAIT_TIMEOUT_ERROR_CODE,
     classify_wait_error_code, wait_deadline_exceeded,
 };
+#[cfg(windows)]
 pub use volume::{NtfsVolumeData, VolumeHandle};
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use std::path::PathBuf;
 

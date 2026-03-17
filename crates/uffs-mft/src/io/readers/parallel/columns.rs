@@ -1,4 +1,8 @@
 //! Column-oriented parallel reader path.
+//!
+//! Windows-only: requires HANDLE.
+
+#![cfg(windows)]
 
 use super::*;
 
