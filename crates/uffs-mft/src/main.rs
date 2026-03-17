@@ -56,6 +56,10 @@ use crossbeam_channel as _;
 use indicatif as _;
 #[cfg(test)]
 use proptest as _;
+#[cfg(test)]
+use rand as _;
+#[cfg(test)]
+use rand_chacha as _;
 use rayon as _;
 use rustc_hash as _;
 // SmallVec for path chain building (used in index.rs PathResolver)

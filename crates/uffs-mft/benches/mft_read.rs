@@ -21,6 +21,8 @@ use dirs_next as _;
 use hostname as _;
 use indicatif as _;
 use proptest as _;
+use rand as _;
+use rand_chacha as _;
 use rayon as _;
 use rustc_hash as _;
 use smallvec as _;

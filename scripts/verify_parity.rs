@@ -1221,9 +1221,15 @@ fn ordered_sha256(lines: &[String]) -> String {
 }
 
 fn sorted_sha256(lines: &[String]) -> String {
-    let mut sorted_lines: Vec<&str> = lines.iter().map(String::as_str).collect();
-    sorted_lines.sort_unstable();
-    sha256_for_lines(sorted_lines)
+    let mut indexed: Vec<(usize, &str)> = lines.iter().map(String::as_str).enumerate().collect();
+    // Stable sort with byte-level comparison for cross-platform consistency
+    indexed.sort_by(|(idx_a, a), (idx_b, b)| {
+        match a.as_bytes().cmp(b.as_bytes()) {
+            std::cmp::Ordering::Equal => idx_a.cmp(idx_b),
+            other => other,
+        }
+    });
+    sha256_for_lines(indexed.into_iter().map(|(_, s)| s))
 }
 
 fn sha256_for_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
@@ -1458,10 +1464,27 @@ fn show_first_sorted_diffs(file_a: &Path, file_b: &Path) {
     }
 }
 
+/// Read file and sort lines using robust byte-level comparison.
+///
+/// Uses stable sort with explicit byte comparison for cross-platform consistency:
+/// - Primary: byte-level lexicographic comparison (UTF-8 bytes, not Unicode codepoints)
+/// - Secondary: original line index (stable tie-break for identical lines)
+///
+/// This ensures identical output regardless of locale settings, UTF-8/UTF-16
+/// collation differences, or unstable sort reorderings.
 fn read_sorted_lines(path: &Path) -> Vec<String> {
-    let mut all_lines = read_lines(path);
-    all_lines.sort_unstable();
-    all_lines
+    let all_lines = read_lines(path);
+    let mut indexed: Vec<(usize, String)> = all_lines.into_iter().enumerate().collect();
+
+    // Stable sort with byte-level comparison + index tie-break
+    indexed.sort_by(|(idx_a, a), (idx_b, b)| {
+        match a.as_bytes().cmp(b.as_bytes()) {
+            std::cmp::Ordering::Equal => idx_a.cmp(idx_b),
+            other => other,
+        }
+    });
+
+    indexed.into_iter().map(|(_, line)| line).collect()
 }
 
 #[cfg(test)]

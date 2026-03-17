@@ -6,3 +6,4 @@ crates/uffs-cli/src/commands/output.rs|Output formatting module with comprehensi
 crates/uffs-cli/src/commands/raw_io.rs|I/O coordination module consolidating MFT reading, query filtering, and multi-drive orchestration logic.
 crates/uffs-mft/src/io/parser/index.rs|Single-pass direct-to-index parser (C++-style inline approach). Monolithic by design for IOCP hot path - handles all NTFS attribute types inline.
 crates/uffs-mft/src/parse/direct_index.rs|Cross-platform single-pass direct-to-index parser. Monolithic by design for hot path - handles all NTFS attribute types inline.
+crates/uffs-mft/src/parse/direct_index_extension.rs|Extension record parser matching direct_index.rs completeness - handles all NTFS attribute types that can appear in extension records.
