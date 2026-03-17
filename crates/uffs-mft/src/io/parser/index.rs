@@ -733,7 +733,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 allocated: default_allocated,
             };
             // Restore extension's default-stream size if base has no $DATA/$I30.
-            if default_size == 0 && default_allocated == 0 && (ext_first_stream_len > 0 || ext_first_stream_alloc > 0) {
+            if default_size == 0
+                && default_allocated == 0
+                && (ext_first_stream_len > 0 || ext_first_stream_alloc > 0)
+            {
                 record.first_stream.size.length = ext_first_stream_len;
                 record.first_stream.size.allocated = ext_first_stream_alloc;
             }
@@ -942,7 +945,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     // == 0) but an extension record already populated first_stream.size, restore
     // the extension's values. This handles files/dirs whose primary $DATA/$I30
     // attribute resides entirely in an extension record.
-    if default_size == 0 && default_allocated == 0 && (ext_first_stream_len > 0 || ext_first_stream_alloc > 0) {
+    if default_size == 0
+        && default_allocated == 0
+        && (ext_first_stream_len > 0 || ext_first_stream_alloc > 0)
+    {
         record.first_stream.size.length = ext_first_stream_len;
         record.first_stream.size.allocated = ext_first_stream_alloc;
     }
