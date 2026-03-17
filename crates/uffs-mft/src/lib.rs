@@ -66,6 +66,10 @@ use bitflags as _;
 use criterion as _;
 #[cfg(test)]
 use proptest as _;
+#[cfg(test)]
+use rand as _;
+#[cfg(test)]
+use rand_chacha as _;
 // Pipelining dependencies (used in io.rs PipelinedMftReader on Windows)
 #[cfg(not(windows))]
 use rayon as _;

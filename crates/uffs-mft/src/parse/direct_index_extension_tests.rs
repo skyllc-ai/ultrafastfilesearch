@@ -1,14 +1,14 @@
-//! Regression tests for direct_index_extension.rs
+//! Regression tests for `direct_index_extension.rs`
 //!
 //! These tests verify the snapshot/restore pattern for handling out-of-order
 //! IOCP delivery of extension records before base records.
 //!
 //! Rather than creating complex mock MFT records, these tests directly verify
-//! the core logic by simulating the index state after dir_index accumulation.
+//! the core logic by simulating the index state after `dir_index` accumulation.
 
 use crate::index::{IndexNameRef, IndexStreamInfo, MftIndex, NO_ENTRY, SizeInfo};
 
-/// Test helper to create a FileRecord with specified first_stream size
+/// Test helper to create a `FileRecord` with specified `first_stream` size
 fn create_test_record(frs: u64, length: u64, allocated: u64) -> crate::index::FileRecord {
     crate::index::FileRecord {
         frs,
@@ -22,8 +22,8 @@ fn create_test_record(frs: u64, length: u64, allocated: u64) -> crate::index::Fi
     }
 }
 
-/// Simulate the snapshot/restore pattern for dir_index merging
-/// This is the core logic from direct_index_extension.rs lines 749-765
+/// Simulate the snapshot/restore pattern for `dir_index` merging.
+/// This is the core logic from `direct_index_extension.rs` lines 749-765.
 fn merge_dir_index(
     record: &mut crate::index::FileRecord,
     dir_index_size: u64,
