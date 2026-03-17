@@ -149,6 +149,7 @@ pub async fn search(
     neg: &str,
     query_mode: &str,
     tz_offset: Option<i32>,
+    chaos_seed: Option<u64>,
 ) -> Result<()> {
     let start_time = std::time::Instant::now();
 
@@ -219,6 +220,7 @@ pub async fn search(
             &filters,
             needs_paths,
             debug_tree,
+            chaos_seed,
         )?;
 
         let t_output = std::time::Instant::now();
@@ -278,6 +280,7 @@ pub async fn search(
             needs_paths,
             profile,
             debug_tree,
+            chaos_seed,
         )?
     } else if use_index_path {
         info!("🚀 Using fast cached MftIndex query path");

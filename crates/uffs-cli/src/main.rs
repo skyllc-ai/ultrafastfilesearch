@@ -294,6 +294,14 @@ struct Cli {
     /// Examples: -8 (PST), -7 (PDT), 0 (UTC), 1 (CET), 9 (JST)
     #[arg(long, allow_hyphen_values = true)]
     tz_offset: Option<i32>,
+
+    /// Chaos mode seed for testing (randomizes chunk order).
+    ///
+    /// Only works with `--mft-file`. Reads MFT chunks in pseudo-random order
+    /// to verify that directory index merging works correctly regardless of
+    /// read order. Used for regression testing.
+    #[arg(long, hide = true)]
+    chaos_seed: Option<u64>,
 }
 
 /// Available CLI subcommands.
@@ -503,6 +511,7 @@ async fn run() -> Result<()> {
                     &cli.neg,
                     &cli.query_mode,
                     cli.tz_offset,
+                    cli.chaos_seed,
                 )
                 .await?;
             } else {

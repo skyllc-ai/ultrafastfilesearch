@@ -10,9 +10,7 @@
 //! seeded randomization, and processes them through the same parsing pipeline
 //! as LIVE.
 
-use std::collections::VecDeque;
 use std::path::Path;
-
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 
@@ -25,13 +23,15 @@ use crate::raw::{LoadRawOptions, load_raw_mft};
 
 /// Strategy for chunk reordering in chaos mode.
 #[derive(Debug, Clone, Copy)]
-enum ChaosStrategy {
+pub enum ChaosStrategy {
     /// Random shuffle with fixed seed (most realistic).
     Random { seed: u64 },
     /// Reverse order (simple but unrealistic).
     Reverse,
     /// Every other chunk swapped (controlled chaos).
     Interleaved,
+    /// Sequential order (baseline for validation).
+    Sequential,
 }
 
 /// Deterministic chaos-order MFT reader for testing.
@@ -41,14 +41,14 @@ enum ChaosStrategy {
 /// 2. Splitting into chunks (like IOCP does)
 /// 3. Reordering chunks with controlled strategy
 /// 4. Processing through parallel parsing pipeline
-struct ChaosMftReader {
+pub struct ChaosMftReader {
     strategy: ChaosStrategy,
     chunk_size: usize,
 }
 
 impl ChaosMftReader {
     /// Creates a new chaos reader with the given strategy.
-    const fn new(strategy: ChaosStrategy, chunk_size: usize) -> Self {
+    pub const fn new(strategy: ChaosStrategy, chunk_size: usize) -> Self {
         Self {
             strategy,
             chunk_size,
@@ -74,7 +74,7 @@ impl ChaosMftReader {
         clippy::too_many_lines,
         reason = "test harness orchestration requires sequential setup"
     )]
-    fn read_with_chaos(&self, mft_path: &Path, volume: char) -> anyhow::Result<MftIndex> {
+    pub fn read_with_chaos(&self, mft_path: &Path, volume: char) -> anyhow::Result<MftIndex> {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -100,7 +100,8 @@ impl ChaosMftReader {
             MftExtentMap::contiguous(0, mft_bytes.len() as u64, record_size as u32, 1024);
 
         // Generate chunks (no bitmap - read everything)
-        let mut chunks: Vec<ReadChunk> = generate_read_chunks(&extent_map, None, self.chunk_size);
+        let mut chunks: Vec<ReadChunk> =
+            generate_read_chunks(&extent_map, None, self.chunk_size);
         chunks.sort_by_key(|c| c.start_frs);
 
         // Apply chaos strategy
@@ -223,11 +224,7 @@ impl ChaosMftReader {
         }
 
         let send_ms = start_time.elapsed().as_millis();
-        tracing::info!(
-            send_ms,
-            bytes_mb = bytes_sent / (1024 * 1024),
-            "✅ Chunk dispatch complete"
-        );
+        tracing::info!(send_ms, bytes_mb = bytes_sent / (1024 * 1024), "✅ Chunk dispatch complete");
 
         // Signal workers to stop
         for _ in 0..num_workers {
@@ -289,6 +286,9 @@ impl ChaosMftReader {
                     chunks.swap(i, i + 1);
                 }
             }
+            ChaosStrategy::Sequential => {
+                // No reordering - chunks remain in sequential order
+            }
         }
     }
 }
@@ -300,6 +300,39 @@ impl ChaosMftReader {
 /// - Is slow (processes 7M+ records)
 /// - Is diagnostic/investigative rather than regression-preventive
 ///
+/// Computes sorted SHA256 hash of CSV lines (for full-field validation).
+///
+/// This matches the verification strategy used in `scripts/verify_parity.rs`:
+/// - Sort lines using byte-level comparison for cross-platform consistency
+/// - Hash each line with trailing newline (NOT join with \n)
+/// - This ensures ALL fields match, not just a subset
+#[cfg(test)]
+fn sorted_sha256(lines: &[String]) -> String {
+    let mut indexed: Vec<(usize, &str)> = lines.iter().map(String::as_str).enumerate().collect();
+    // Stable sort with byte-level comparison for cross-platform consistency
+    indexed.sort_by(|(idx_a, a), (idx_b, b)| {
+        match a.as_bytes().cmp(b.as_bytes()) {
+            std::cmp::Ordering::Equal => idx_a.cmp(idx_b),
+            other => other,
+        }
+    });
+    sha256_for_lines(indexed.into_iter().map(|(_, s)| s))
+}
+
+/// Computes SHA256 hash of lines (helper for sorted and unsorted hashing).
+///
+/// This matches `scripts/verify_parity.rs:1229-1236` exactly.
+#[cfg(test)]
+fn sha256_for_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for line in lines {
+        hasher.update(line.as_bytes());
+        hasher.update(b"\n");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 /// Run with: `cargo test -p uffs-mft -- chaos_order --nocapture --ignored`
 #[test]
 #[ignore = "requires offline MFT at /Users/rnio/uffs_data/drive_d/D_mft.bin"]
@@ -319,35 +352,134 @@ fn test_chaos_order_d_drive() {
         panic!("Test skipped: offline MFT not found");
     }
 
-    // Test with random chaos (most realistic)
-    let chaos_reader = ChaosMftReader::new(
-        ChaosStrategy::Random { seed: 42 },
-        2 * 1024 * 1024, // 2MB chunks (typical for SSD)
-    );
+    println!("\n═══════════════════════════════════════════════════════");
+    println!("     CHAOS-ORDER SHA256 VALIDATION TEST");
+    println!("     (Full-field parity with C++ ground truth)");
+    println!("═══════════════════════════════════════════════════════\n");
 
-    let result = chaos_reader.read_with_chaos(&mft_path, 'D');
+    // Step 1: Export chaos-order results using CLI with --chaos-seed
+    println!("📤 Step 1: Exporting chaos-order results to CSV format via CLI");
+    println!("   (Uses --chaos-seed 42 to randomize chunk processing order)");
+    let temp_output = std::env::temp_dir().join("chaos_d.txt");
 
-    match result {
-        Ok(index) => {
-            println!("\n═══════════════════════════════════════════════════════");
-            println!("           CHAOS-ORDER PARSING RESULTS");
-            println!("═══════════════════════════════════════════════════════\n");
-            println!("📊 Index statistics:");
-            println!("  Total records:     {}", index.records.len());
-            println!("  Total names:       {}", index.names.len());
-            println!("  Total children:    {}", index.children.len());
-            println!("  Total streams:     {}", index.streams.len());
-            println!("\n✅ Chaos-order parsing completed successfully");
-            println!("\nNext steps:");
-            println!("  1. Compare this output to C++ reference");
-            println!("  2. Look for directory size mismatches");
-            println!("  3. Check for ordering differences");
-        }
-        Err(e) => {
-            eprintln!("\n❌ Chaos-order parsing FAILED: {e:?}");
-            panic!("Chaos-order test failed");
-        }
+    let status = std::process::Command::new("cargo")
+        .args(&["run", "--release", "-p", "uffs-cli", "--bin", "uffs", "--"])
+        .args(&["*"])
+        .args(&["--mft-file", mft_path.to_str().expect("valid path")])
+        .args(&["--drive", "D"])
+        .args(&["--chaos-seed", "42"])
+        .args(&["--tz-offset", "-8"])
+        .args(&["--format", "custom"])
+        .args(&["--out", temp_output.to_str().expect("valid path")])
+        .status()
+        .expect("Failed to run uffs CLI");
+
+    assert!(status.success(), "uffs CLI failed with status: {}", status);
+    println!("   ✓ CSV export completed");
+    println!();
+
+    // Step 2: Compute sorted SHA256 of chaos output
+    println!("🔐 Step 2: Computing sorted SHA256 of chaos-order output");
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+
+    let chaos_lines: Vec<String> = BufReader::new(File::open(&temp_output).expect("temp file exists"))
+        .lines()
+        .collect::<Result<_, _>>()
+        .expect("read lines");
+
+    let chaos_sha = sorted_sha256(&chaos_lines);
+    println!("   Chaos SHA256:    {}", chaos_sha);
+    println!();
+
+    // Step 3: Export sequential output for comparison
+    println!("📤 Step 3: Exporting sequential-order output for baseline comparison");
+    let sequential_output = std::env::temp_dir().join("sequential_d.txt");
+
+    let status = std::process::Command::new("cargo")
+        .args(&["run", "--release", "-p", "uffs-cli", "--bin", "uffs", "--"])
+        .args(&["*"])
+        .args(&["--mft-file", mft_path.to_str().expect("valid path")])
+        .args(&["--drive", "D"])
+        .args(&["--tz-offset", "-8"])
+        .args(&["--format", "custom"])
+        .args(&["--out", sequential_output.to_str().expect("valid path")])
+        .status()
+        .expect("Failed to run uffs CLI for sequential export");
+
+    assert!(status.success(), "Sequential uffs CLI failed with status: {}", status);
+    println!("   ✓ Sequential CSV export completed");
+    println!();
+
+    // Step 4: Compute SHA256 of sequential output
+    println!("🔐 Step 4: Computing sorted SHA256 of sequential-order output");
+    let sequential_lines: Vec<String> = BufReader::new(File::open(&sequential_output).expect("sequential file exists"))
+        .lines()
+        .collect::<Result<_, _>>()
+        .expect("read sequential lines");
+
+    let sequential_sha = sorted_sha256(&sequential_lines);
+    println!("   Sequential SHA256: {}", sequential_sha);
+    println!();
+
+    // Step 5: Compare against C++ ground truth (sorted comparison, like verify_parity.rs)
+    println!("✅ Step 5: Validating against C++ ground truth (sorted SHA256)");
+    const EXPECTED_SORTED_SHA: &str = "028356d4c9298ca8ef790229f4d4270ea29827ad155051e01181181fa34a531e";
+    println!("   Expected sorted SHA: {}", EXPECTED_SORTED_SHA);
+    println!("   Sequential sorted:   {}", sequential_sha);
+    println!("   Chaos sorted:        {}", chaos_sha);
+    println!();
+
+    // Verify sequential matches ground truth (sorted comparison)
+    // Note: Row order may differ (C++ vs Rust MFT/tree walk), but content must match
+    if sequential_sha != EXPECTED_SORTED_SHA {
+        println!("❌ SEQUENTIAL SHA256 MISMATCH!");
+        println!();
+        println!("   This indicates a critical bug in the base parser or output format.");
+        println!("   Line counts:");
+        println!("     Expected:   7,065,330 lines");
+        println!("     Sequential: {} lines", sequential_lines.len());
+        panic!("Sequential sorted SHA256 mismatch! Expected: {}, Got: {}", EXPECTED_SORTED_SHA, sequential_sha);
     }
+
+    // Verify chaos matches sequential (sorted comparison)
+    if chaos_sha != sequential_sha {
+        println!("❌ CHAOS-ORDER SHA256 MISMATCH!");
+        println!();
+        println!("   This indicates the directory index merge fix is broken for out-of-order processing.");
+        println!("   Line counts:");
+        println!("     Sequential: {} lines", sequential_lines.len());
+        println!("     Chaos:      {} lines", chaos_lines.len());
+        println!();
+
+        // Show first few differences using verify_parity.rs-style diagnostics
+        println!("   📊 Comparing sorted outputs (first 10 differences):");
+        let mut sequential_sorted = sequential_lines.clone();
+        let mut chaos_sorted = chaos_lines.clone();
+        sequential_sorted.sort_unstable();
+        chaos_sorted.sort_unstable();
+
+        let n = sequential_sorted.len().min(chaos_sorted.len());
+        let mut diff_count = 0;
+        for i in 0..n {
+            if sequential_sorted[i] != chaos_sorted[i] && diff_count < 10 {
+                println!("      Line {} differs:", i + 1);
+                println!("        Sequential: {}", &sequential_sorted[i][..sequential_sorted[i].len().min(100)]);
+                println!("        Chaos:      {}", &chaos_sorted[i][..chaos_sorted[i].len().min(100)]);
+                diff_count += 1;
+            }
+        }
+
+        panic!("Chaos-order SHA256 mismatch! Expected: {}, Got: {}", sequential_sha, chaos_sha);
+    }
+
+    assert_eq!(chaos_sha, EXPECTED_SORTED_SHA,
+        "Chaos-order SHA256 mismatch! This indicates the directory index merge fix is broken.");
+
+    println!();
+    println!("✅ VALIDATION PASSED!");
+    println!("   Chaos-order output matches C++ ground truth exactly (all fields, all records).");
+    println!("   This proves 100% parity - not just 4 fields!");
 }
 
 /// Tests reverse-order parsing (simpler chaos strategy).
@@ -363,13 +495,13 @@ fn test_reverse_order_d_drive() {
 
     let mft_path = PathBuf::from("/Users/rnio/uffs_data/drive_d/D_mft.bin");
     if !mft_path.exists() {
-        panic!(
-            "Test skipped: offline MFT not found at {}",
-            mft_path.display()
-        );
+        panic!("Test skipped: offline MFT not found at {}", mft_path.display());
     }
 
-    let chaos_reader = ChaosMftReader::new(ChaosStrategy::Reverse, 2 * 1024 * 1024);
+    let chaos_reader = ChaosMftReader::new(
+        ChaosStrategy::Reverse,
+        2 * 1024 * 1024,
+    );
 
     let result = chaos_reader.read_with_chaos(&mft_path, 'D');
 
@@ -398,13 +530,13 @@ fn test_interleaved_order_d_drive() {
 
     let mft_path = PathBuf::from("/Users/rnio/uffs_data/drive_d/D_mft.bin");
     if !mft_path.exists() {
-        panic!(
-            "Test skipped: offline MFT not found at {}",
-            mft_path.display()
-        );
+        panic!("Test skipped: offline MFT not found at {}", mft_path.display());
     }
 
-    let chaos_reader = ChaosMftReader::new(ChaosStrategy::Interleaved, 2 * 1024 * 1024);
+    let chaos_reader = ChaosMftReader::new(
+        ChaosStrategy::Interleaved,
+        2 * 1024 * 1024,
+    );
 
     let result = chaos_reader.read_with_chaos(&mft_path, 'D');
 
@@ -418,10 +550,4 @@ fn test_interleaved_order_d_drive() {
             panic!("Interleaved-order test failed");
         }
     }
-}
-
-/// Dummy test to verify the module is being compiled.
-#[test]
-fn test_module_loads() {
-    assert!(true, "chaos test module loaded successfully");
 }

@@ -1,22 +1,32 @@
 //! Parallel reader implementations and strategy entrypoints.
 
+#[cfg(windows)]
 pub(super) use super::iocp::IoCompletionPort;
 use super::*;
 
+#[cfg(windows)]
 mod bulk;
+#[cfg(windows)]
 mod bulk_iocp;
+#[cfg(windows)]
 mod chunk;
+#[cfg(windows)]
 mod columns;
+#[cfg(windows)]
 mod sliding_window;
+#[cfg(windows)]
 mod timing;
+#[cfg(windows)]
 mod to_index;
+#[cfg(windows)]
 mod to_index_parallel;
 
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
+// Chaos reader is available outside of tests for CLI integration
 mod tests_chaos;
+pub use tests_chaos::{ChaosMftReader, ChaosStrategy};
 
 pub struct ReadParseTiming {
     /// Time spent in I/O operations (reading chunks from disk).
@@ -76,6 +86,9 @@ impl ReadParseTiming {
 /// - Large batch I/O (4-8 MB chunks) for reduced syscall overhead
 /// - Drive-type aware tuning (SSD vs HDD vs NVMe)
 /// - Buffer reuse to minimize allocations
+///
+/// Windows-only: requires HANDLE for live MFT reading.
+#[cfg(windows)]
 #[derive(Debug)]
 pub struct ParallelMftReader {
     /// Extent map for VCN-to-LCN translation.
@@ -97,6 +110,7 @@ pub struct ParallelMftReader {
     buffer: RefCell<AlignedBuffer>,
 }
 
+#[cfg(windows)]
 impl ParallelMftReader {
     /// Default chunk size for SSD (64 KB) - let OS read-ahead handle
     /// prefetching. C++ team insight: With FILE_FLAG_SEQUENTIAL_SCAN,

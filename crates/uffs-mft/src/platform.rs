@@ -5,12 +5,12 @@
 //! - NTFS volume data retrieval
 //! - Privilege checking
 //!
+//! Some types (MftExtent, MftBitmap, DriveType) are available on all platforms
+//! for testing and offline MFT processing.
+//!
 //! # Safety
 //!
 //! This module uses Windows FFI and requires careful handling of raw handles.
-
-// Allow compilation on non-Windows for testing (types like MftExtent, MftBitmap, DriveType)
-#![cfg(any(windows, test))]
 
 mod bitmap;
 mod extents;

@@ -102,13 +102,13 @@ pub mod tree_metrics;
 pub mod ntfs; // NTFS structure definitions - cross-platform
 pub mod parse; // MFT record parsing - cross-platform
 
-// Windows-only modules (I/O operations)
-// Also compiled in test mode for chaos test harness with offline MFT files
-#[cfg(any(windows, test))]
+// I/O operations module
+// Available on all platforms for offline MFT processing (chaos mode, testing)
+// Live MFT access (via HANDLE) is still Windows-only and gated per-function
 pub mod io;
 
-// Platform module also needed in test mode for types used by io module
-#[cfg(any(windows, test))]
+// Platform module needed by io module
+// Available on all platforms (with Windows-specific HANDLE types cfg-gated internally)
 pub mod platform;
 
 pub mod usn;

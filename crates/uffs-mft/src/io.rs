@@ -6,11 +6,10 @@
 //! - Multi-sector fixup (Update Sequence Array)
 //! - Fragmented MFT support via extent mapping
 //! - Chunk planning and reader implementations tuned by drive type
+//!
+//! Available on all platforms for offline MFT processing (chaos mode, testing).
+//! Live MFT access via HANDLE is Windows-only and gated per-function.
 
-// Allow compilation on non-Windows platforms for testing with offline MFT files
-#![cfg(any(windows, test))]
-
-#[cfg(windows)]
 use std::cell::RefCell;
 
 // Tracing is needed for all submodules (chunking, merger, parser, etc.)
@@ -35,8 +34,8 @@ mod extent_map;
 mod fixup;
 mod merger;
 mod parser;
-#[cfg(windows)]
-mod readers;
+// readers module available on all platforms (contains ChaosMftReader for offline MFT)
+pub mod readers;
 
 // Chaos test harness - works with offline MFT files on any platform
 #[cfg(test)]
@@ -53,6 +52,7 @@ pub use parser::{
     add_missing_parent_placeholders_to_vec, create_placeholder_record, parse_record,
     parse_record_full, parse_record_to_fragment, parse_record_to_index, parse_record_zero_alloc,
 };
+// Export Windows-specific readers (require HANDLE)
 #[cfg(windows)]
 pub use readers::{
     BatchMftReader, IoCompletionPort, IocpMftReader, MftRecordReader, MultiVolumeIoOp,

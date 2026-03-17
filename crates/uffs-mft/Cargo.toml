@@ -59,10 +59,14 @@ hostname = "0.4.2"
 rustc-hash = "2.1.1"
 zerocopy.workspace = true
 
+# Chaos mode dependencies (used by ChaosMftReader for offline MFT testing)
+rand = "0.8.5"
+rand_chacha = "0.3.1"
+crossbeam-channel = "0.5.15"
+
 # Windows APIs (Windows only)
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
-crossbeam-channel = "0.5.15"
 
 [dev-dependencies]
 criterion.workspace = true
@@ -70,6 +74,7 @@ proptest.workspace = true
 tokio = { workspace = true, features = ["test-util", "macros"] }
 rand = "0.8.5"
 rand_chacha = "0.3.1"
+sha2 = "0.10"  # For SHA256 validation in chaos tests
 # Needed for chaos test harness (non-Windows platforms)
 crossbeam-channel = "0.5.15"
 tracing-subscriber = { workspace = true }
