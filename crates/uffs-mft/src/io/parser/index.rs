@@ -714,6 +714,16 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 
             // Now create the record and set up streams
             let record = index.get_or_create(frs);
+
+            // Snapshot existing extension data before overwriting (extension may
+            // have been processed first on a fragmented MFT).
+            let ext_stream_head = record.first_stream.next_entry;
+            let ext_stream_count = record.stream_count.saturating_sub(1);
+            let ext_total_extra = record.total_stream_count.saturating_sub(1);
+            let ext_internal_head = record.first_internal_stream;
+            let ext_internal_size = record.internal_streams_size;
+            let ext_internal_alloc = record.internal_streams_allocated;
+
             record.stdinfo = std_info;
             record.first_stream.size = SizeInfo {
                 length: default_size,
@@ -750,8 +760,46 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             record.total_stream_count =
                 1 + additional_stream_count as u16 + internal_stream_count as u16;
 
-            // Leave first_name empty - extension record will fill it
-            return false;
+            // Merge extension streams that were processed before this base record.
+            if ext_stream_count > 0 {
+                let base_stream_tail = if !stream_indices.is_empty() {
+                    *stream_indices.last().expect("stream_indices is non-empty")
+                } else {
+                    NO_ENTRY
+                };
+                if base_stream_tail != NO_ENTRY {
+                    index.streams[base_stream_tail as usize].next_entry = ext_stream_head;
+                } else {
+                    let record = index.get_or_create(frs);
+                    record.first_stream.next_entry = ext_stream_head;
+                }
+                let record = index.get_or_create(frs);
+                record.stream_count += ext_stream_count;
+                record.total_stream_count += ext_stream_count;
+            }
+
+            if ext_internal_head != NO_ENTRY {
+                if first_internal != NO_ENTRY {
+                    let mut tail = first_internal;
+                    while index.internal_streams[tail as usize].next_entry != NO_ENTRY {
+                        tail = index.internal_streams[tail as usize].next_entry;
+                    }
+                    index.internal_streams[tail as usize].next_entry = ext_internal_head;
+                } else {
+                    let record = index.get_or_create(frs);
+                    record.first_internal_stream = ext_internal_head;
+                }
+                let record = index.get_or_create(frs);
+                record.internal_streams_size += ext_internal_size;
+                record.internal_streams_allocated += ext_internal_alloc;
+                record.total_stream_count += ext_total_extra.saturating_sub(ext_stream_count);
+            }
+
+            // Emit the record even though first_name is empty - extension record will fill
+            // it. The ADS streams have been correctly stored in the index and
+            // must be counted to match C++ behavior (which emits all streams
+            // during traversal regardless of when $FILE_NAME was added).
+            return true;
         }
     };
 
@@ -854,6 +902,24 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     // Now get or create the record in the index - no more index mutations after
     // this
     let record = index.get_or_create(frs);
+
+    // Snapshot existing extension data BEFORE overwriting.
+    // On a fragmented MFT, extension records may be processed before their base
+    // record. The extension parser adds names/ADS/streams to a placeholder
+    // record. We must preserve that data when the base record arrives.
+    let ext_stream_head = record.first_stream.next_entry;
+    let ext_stream_count = record.stream_count.saturating_sub(1); // exclude default
+    let ext_total_extra = record.total_stream_count.saturating_sub(1);
+    let ext_name_next = record.first_name.next_entry;
+    let ext_name_count = if record.first_name.name.is_valid() {
+        record.name_count
+    } else {
+        0
+    };
+    let ext_internal_head = record.first_internal_stream;
+    let ext_internal_size = record.internal_streams_size;
+    let ext_internal_alloc = record.internal_streams_allocated;
+
     record.stdinfo = std_info;
     record.first_stream.size = SizeInfo {
         length: default_size,
@@ -909,6 +975,61 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         let current_idx = stream_indices[i] as usize;
         let next_idx = stream_indices[i + 1];
         index.streams[current_idx].next_entry = next_idx;
+    }
+
+    // Merge extension data that was processed before this base record.
+    // Reconnect extension stream/name/internal chains at the end of base chains.
+    if ext_stream_count > 0 {
+        // Find the tail of the base user-visible stream chain
+        let base_stream_tail = if !stream_indices.is_empty() {
+            *stream_indices.last().expect("stream_indices is non-empty")
+        } else {
+            NO_ENTRY // first_stream itself is the tail
+        };
+        if base_stream_tail != NO_ENTRY {
+            index.streams[base_stream_tail as usize].next_entry = ext_stream_head;
+        } else {
+            let record = index.get_or_create(frs);
+            record.first_stream.next_entry = ext_stream_head;
+        }
+        let record = index.get_or_create(frs);
+        record.stream_count += ext_stream_count;
+        record.total_stream_count += ext_stream_count;
+    }
+
+    if ext_name_count > 0 {
+        // Find the tail of the base name chain
+        let base_name_tail = if !link_indices.is_empty() {
+            *link_indices.last().expect("link_indices is non-empty")
+        } else {
+            NO_ENTRY // first_name itself is the tail
+        };
+        if base_name_tail != NO_ENTRY {
+            index.links[base_name_tail as usize].next_entry = ext_name_next;
+        } else {
+            let record = index.get_or_create(frs);
+            record.first_name.next_entry = ext_name_next;
+        }
+        let record = index.get_or_create(frs);
+        record.name_count += ext_name_count;
+    }
+
+    if ext_internal_head != NO_ENTRY {
+        // Find the tail of the base internal stream chain
+        if first_internal != NO_ENTRY {
+            let mut tail = first_internal;
+            while index.internal_streams[tail as usize].next_entry != NO_ENTRY {
+                tail = index.internal_streams[tail as usize].next_entry;
+            }
+            index.internal_streams[tail as usize].next_entry = ext_internal_head;
+        } else {
+            let record = index.get_or_create(frs);
+            record.first_internal_stream = ext_internal_head;
+        }
+        let record = index.get_or_create(frs);
+        record.internal_streams_size += ext_internal_size;
+        record.internal_streams_allocated += ext_internal_alloc;
+        record.total_stream_count += ext_total_extra.saturating_sub(ext_stream_count);
     }
 
     // Build parent-child relationship for tree metrics computation
