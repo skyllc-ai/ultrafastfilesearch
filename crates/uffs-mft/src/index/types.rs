@@ -76,7 +76,102 @@ impl StandardInfo {
     /// Virtual file attribute flag.
     pub const IS_VIRTUAL: u32 = 1 << 16;
 
+    /// Create from [`ExtendedStandardInfo`] - the canonical conversion point.
+    ///
+    /// This is the **single source of truth** for converting parsed NTFS
+    /// attributes to compact index storage. All code paths should use:
+    /// 1. [`ExtendedStandardInfo::from_attributes()`] to parse raw flags
+    /// 2. This method to convert to compact [`StandardInfo`]
+    ///
+    /// [`ExtendedStandardInfo`]: crate::ntfs::ExtendedStandardInfo
+    /// [`ExtendedStandardInfo::from_attributes()`]: crate::ntfs::ExtendedStandardInfo::from_attributes
+    #[must_use]
+    pub const fn from_extended(ext: &crate::ntfs::ExtendedStandardInfo) -> Self {
+        let mut flags = 0_u32;
+
+        // Core file attributes
+        if ext.is_readonly {
+            flags |= Self::IS_READONLY;
+        }
+        if ext.is_archive {
+            flags |= Self::IS_ARCHIVE;
+        }
+        if ext.is_system {
+            flags |= Self::IS_SYSTEM;
+        }
+        if ext.is_hidden {
+            flags |= Self::IS_HIDDEN;
+        }
+        if ext.is_offline {
+            flags |= Self::IS_OFFLINE;
+        }
+        if ext.is_not_content_indexed {
+            flags |= Self::IS_NOT_INDEXED;
+        }
+        if ext.is_compressed {
+            flags |= Self::IS_COMPRESSED;
+        }
+        if ext.is_encrypted {
+            flags |= Self::IS_ENCRYPTED;
+        }
+        if ext.is_sparse {
+            flags |= Self::IS_SPARSE;
+        }
+        if ext.is_reparse {
+            flags |= Self::IS_REPARSE;
+        }
+        if ext.is_temporary {
+            flags |= Self::IS_TEMPORARY;
+        }
+
+        // Extended attributes (NTFS 3.1+ / Windows 8+)
+        if ext.is_integrity_stream {
+            flags |= Self::IS_INTEGRITY_STREAM;
+        }
+        if ext.is_no_scrub_data {
+            flags |= Self::IS_NO_SCRUB_DATA;
+        }
+        if ext.is_pinned {
+            flags |= Self::IS_PINNED;
+        }
+        if ext.is_unpinned {
+            flags |= Self::IS_UNPINNED;
+        }
+        if ext.is_virtual {
+            flags |= Self::IS_VIRTUAL;
+        }
+
+        // Note: is_directory is set separately via set_directory() based on
+        // MFT record flags, not $STANDARD_INFORMATION attributes.
+
+        Self {
+            created: ext.created,
+            modified: ext.modified,
+            accessed: ext.accessed,
+            mft_changed: ext.mft_changed,
+            flags,
+            usn: ext.usn,
+            security_id: ext.security_id,
+            owner_id: ext.owner_id,
+        }
+    }
+
     /// Create from Windows `FILE_ATTRIBUTE_*` flags.
+    ///
+    /// # Deprecated
+    ///
+    /// This method is **incomplete** - it does not parse all NTFS 3.1+ flags
+    /// (integrity, `no_scrub`, pinned, unpinned, virtual). Use the canonical
+    /// two-step approach instead:
+    ///
+    /// ```ignore
+    /// let ext = ExtendedStandardInfo::from_attributes(raw_attrs);
+    /// let info = StandardInfo::from_extended(&ext);
+    /// ```
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use StandardInfo::from_extended(&ExtendedStandardInfo::from_attributes(attrs)) instead"
+    )]
     #[must_use]
     pub fn from_attributes(attrs: u32) -> Self {
         let mut flags = 0_u32;

@@ -499,73 +499,107 @@ pub fn is_iocp_capture<P: AsRef<Path>>(path: P) -> Result<bool> {
     clippy::cast_possible_truncation,
     reason = "MFT record counts fit in usize on 64-bit"
 )]
+/// Load IOCP capture and build `MftIndex` using the **exact same inline
+/// parsing** as Windows LIVE (`parse_record_to_index` directly into
+/// `MftIndex`).
+///
+/// This mirrors the Windows LIVE `SlidingIocpInline` path exactly:
+/// 1. Process chunks in IOCP completion order (sequential, not parallel)
+/// 2. Apply fixup to each record
+/// 3. Call `parse_record_to_index` to build index directly (no merger)
+/// 4. Call `compute_tree_metrics()` at the end
+///
+/// By using the same `parse_record_to_index` function, we ensure byte-for-byte
+/// identical results with Windows LIVE, including any bugs or edge cases.
 pub fn load_iocp_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIndex> {
-    use rayon::prelude::*;
-    use tracing::info;
+    use tracing::{debug, info};
 
     use crate::index::MftIndex;
-    use crate::parse::{MftRecordMerger, ParseResult, apply_fixup, parse_record_full};
+    use crate::io::parse_record_to_index;
+    use crate::parse::apply_fixup;
 
+    debug!("[PARITY_TRACE] load_iocp_to_index: ENTER (INLINE parse_record_to_index)");
     let capture = load_iocp_capture(path)?;
     let volume = capture.volume_letter();
     let record_size = capture.record_size() as usize;
     let total_records = capture.header.total_records as usize;
 
+    debug!(
+        %volume,
+        chunks = capture.chunks.len(),
+        total_records,
+        "[PARITY_TRACE] load_iocp_to_index config"
+    );
     info!(
         volume = %volume,
         chunks = capture.chunks.len(),
         total_records,
-        "Loading IOCP capture with LIVE pipeline replay"
+        "Loading IOCP capture with INLINE parsing (matching Windows LIVE SlidingIocpInline)"
     );
 
-    // Phase 1: Parallel parse all chunks IN IOCP COMPLETION ORDER
-    // This matches how Windows LIVE processes IOCP completions in parallel
-    let parse_results: Vec<ParseResult> = capture
-        .iter_chunks()
-        .par_bridge() // Parallel iterator over chunks
-        .flat_map(|(chunk, chunk_data)| {
-            // Parse all records in this chunk
-            let records_in_chunk = chunk.record_count as usize;
-            let mut results = Vec::with_capacity(records_in_chunk);
+    // Create empty MftIndex with capacity
+    let mut index = MftIndex::with_capacity(volume, total_records);
+    let mut records_parsed: usize = 0;
+    let mut fixup_failed: usize = 0;
 
-            for i in 0..records_in_chunk {
-                let offset = i * record_size;
-                let end = offset + record_size;
-                if end > chunk_data.len() {
-                    break;
-                }
+    // Process chunks in IOCP completion order (sequential, matching Windows LIVE)
+    // Windows LIVE processes one IOCP completion at a time on the completion thread
+    for (chunk, chunk_data) in capture.iter_chunks() {
+        let records_in_chunk = chunk.record_count as usize;
 
-                // Clone to allow fixup (matches Windows LIVE behavior)
-                let mut record_buf = chunk_data[offset..end].to_vec();
-                if !apply_fixup(&mut record_buf) {
-                    continue;
-                }
-
-                let frs = chunk.start_frs + i as u64;
-                results.push(parse_record_full(&record_buf, frs));
+        for i in 0..records_in_chunk {
+            let offset = i * record_size;
+            let end = offset + record_size;
+            if end > chunk_data.len() {
+                break;
             }
-            results
-        })
-        .collect();
 
-    info!(
-        parse_results = parse_results.len(),
-        "Parallel parse complete, feeding to MftRecordMerger"
-    );
+            // Clone to allow fixup (matches Windows LIVE behavior)
+            let mut record_buf = chunk_data[offset..end].to_vec();
+            if !apply_fixup(&mut record_buf) {
+                fixup_failed += 1;
+                continue;
+            }
 
-    // Phase 2: Feed through MftRecordMerger (exactly like Windows LIVE)
-    // Results arrive in non-deterministic order due to parallel processing
-    let mut merger = MftRecordMerger::with_capacity(total_records);
-    for result in parse_results {
-        merger.add_result(result);
+            let frs = chunk.start_frs + i as u64;
+
+            // Use parse_record_to_index - THE SAME FUNCTION as Windows LIVE
+            // This directly modifies the MftIndex, handling base records and
+            // extension records the same way Windows LIVE does
+            if parse_record_to_index(&record_buf, frs, &mut index) {
+                records_parsed += 1;
+            }
+        }
     }
 
-    // Phase 3: Merge and build index (exactly like Windows LIVE)
-    let parsed_records = merger.merge();
+    debug!(
+        records_parsed,
+        fixup_failed,
+        index_entries = index.records.len(),
+        "[PARITY_TRACE] inline parsing complete"
+    );
     info!(
-        merged_records = parsed_records.len(),
-        "Merger complete, building MftIndex"
+        records_parsed,
+        fixup_failed,
+        index_entries = index.records.len(),
+        "Inline parsing complete"
     );
 
-    Ok(MftIndex::from_parsed_records(volume, parsed_records))
+    // Compute tree metrics - same as Windows LIVE SlidingIocpInline path
+    debug!(
+        records = index.records.len(),
+        "[PARITY_TRACE] CALLING compute_tree_metrics()"
+    );
+    let tree_start = std::time::Instant::now();
+    index.compute_tree_metrics();
+    debug!(
+        tree_metrics_ms = tree_start.elapsed().as_millis(),
+        "[PARITY_TRACE] compute_tree_metrics() done"
+    );
+
+    debug!(
+        records = index.records.len(),
+        "[PARITY_TRACE] load_iocp_to_index: EXIT"
+    );
+    Ok(index)
 }

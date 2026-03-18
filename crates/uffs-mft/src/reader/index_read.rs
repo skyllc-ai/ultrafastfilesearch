@@ -338,6 +338,11 @@ impl MftReader {
         // IOCP with multiple reads in flight and inline parsing, matching C++
         // performance.
         let mut effective_mode = index_effective_mode(self.mode, drive_type);
+        debug!(
+            requested_mode = ?self.mode,
+            ?drive_type,
+            "[PARITY_TRACE] read_mft_index_internal ENTER"
+        );
 
         // Apply legacy parse mode override if escape hatch is set
         if use_legacy_parse && effective_mode == MftReadMode::SlidingIocpInline {
@@ -345,6 +350,10 @@ impl MftReader {
             effective_mode = MftReadMode::SlidingIocp;
         }
 
+        debug!(
+            ?effective_mode,
+            total_records, "[PARITY_TRACE] selected mode"
+        );
         info!(mode = %effective_mode, "🚀 Using read mode (lean index)");
 
         let handle = self.handle.raw_handle();
@@ -598,6 +607,7 @@ impl MftReader {
                 // Sliding window IOCP with inline parsing and direct index building
                 // This mode returns MftIndex directly, skipping the intermediate
                 // Vec<ParsedRecord>
+                debug!("[PARITY_TRACE] ENTERING SlidingIocpInline branch (Windows LIVE path)");
                 let overlapped_handle = self.handle.open_overlapped_handle()?;
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
@@ -623,8 +633,16 @@ impl MftReader {
                 // Compute tree metrics (directory sizes, descendant counts).
                 // The legacy path gets this from `from_parsed_records()`, but the
                 // inline path bypasses that, so we must call it explicitly.
+                debug!(
+                    records = index.records.len(),
+                    "[PARITY_TRACE] SlidingIocpInline: CALLING compute_tree_metrics()"
+                );
                 let tree_start = Instant::now();
                 index.compute_tree_metrics();
+                debug!(
+                    tree_metrics_ms = tree_start.elapsed().as_millis(),
+                    "[PARITY_TRACE] SlidingIocpInline: compute_tree_metrics() done"
+                );
                 info!(
                     tree_metrics_ms = tree_start.elapsed().as_millis(),
                     "✅ Tree metrics computed for inline index"

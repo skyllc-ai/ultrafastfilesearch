@@ -80,8 +80,13 @@ impl ParallelMftReader {
             classify_wait_error_code, wait_deadline_exceeded,
         };
 
+        debug!("[PARITY_TRACE] to_index.rs: read_all_sliding_window_iocp_to_index ENTER");
         let record_size = self.extent_map.bytes_per_record as usize;
         let total_records = self.extent_map.total_records() as usize;
+        debug!(
+            record_size,
+            total_records, "[PARITY_TRACE] to_index.rs: config"
+        );
 
         // Use provided values or adaptive defaults based on drive type
         // M1: Adaptive concurrency and I/O size based on drive type
@@ -505,6 +510,11 @@ impl ParallelMftReader {
             0.0
         };
 
+        debug!(
+            records_parsed,
+            index_entries = index.records.len(),
+            "[PARITY_TRACE] to_index.rs: I/O complete"
+        );
         info!(
             total_ms,
             wait_ms,
@@ -530,15 +540,19 @@ impl ParallelMftReader {
                     files_with_zero_size += 1;
                 }
             }
-            eprintln!(
-                "[PARITY_DEBUG] Summary: total_records={}, directories={}, files_with_size={}, files_with_zero_size={}",
-                index.records.len(),
-                dirs,
+            debug!(
+                total_records = index.records.len(),
+                directories = dirs,
                 files_with_size,
-                files_with_zero_size
+                files_with_zero_size,
+                "[PARITY_DEBUG] Summary"
             );
         }
 
+        debug!(
+            records = index.records.len(),
+            "[PARITY_TRACE] to_index.rs: EXIT (NO compute_tree_metrics yet)"
+        );
         Ok(index)
     }
 }

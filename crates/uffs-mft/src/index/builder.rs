@@ -124,65 +124,10 @@ impl MftIndex {
                 record.fn_accessed = parsed.fn_accessed;
                 record.fn_mft_changed = parsed.fn_mft_changed;
 
-                // Set $STANDARD_INFORMATION timestamps and flags
-                record.stdinfo.created = parsed.std_info.created;
-                record.stdinfo.modified = parsed.std_info.modified;
-                record.stdinfo.accessed = parsed.std_info.accessed;
-                record.stdinfo.mft_changed = parsed.std_info.mft_changed;
-                record.stdinfo.usn = parsed.std_info.usn;
-                record.stdinfo.security_id = parsed.std_info.security_id;
-                record.stdinfo.owner_id = parsed.std_info.owner_id;
+                // Set $STANDARD_INFORMATION using the canonical conversion method.
+                // This is the single source of truth for ExtendedStandardInfo → StandardInfo.
+                record.stdinfo = StandardInfo::from_extended(&parsed.std_info);
                 record.stdinfo.set_directory(parsed.is_directory);
-
-                // Set attribute flags from ExtendedStandardInfo
-                if parsed.std_info.is_readonly {
-                    record.stdinfo.flags |= StandardInfo::IS_READONLY;
-                }
-                if parsed.std_info.is_archive {
-                    record.stdinfo.flags |= StandardInfo::IS_ARCHIVE;
-                }
-                if parsed.std_info.is_system {
-                    record.stdinfo.flags |= StandardInfo::IS_SYSTEM;
-                }
-                if parsed.std_info.is_hidden {
-                    record.stdinfo.flags |= StandardInfo::IS_HIDDEN;
-                }
-                if parsed.std_info.is_offline {
-                    record.stdinfo.flags |= StandardInfo::IS_OFFLINE;
-                }
-                if parsed.std_info.is_not_content_indexed {
-                    record.stdinfo.flags |= StandardInfo::IS_NOT_INDEXED;
-                }
-                if parsed.std_info.is_compressed {
-                    record.stdinfo.flags |= StandardInfo::IS_COMPRESSED;
-                }
-                if parsed.std_info.is_encrypted {
-                    record.stdinfo.flags |= StandardInfo::IS_ENCRYPTED;
-                }
-                if parsed.std_info.is_sparse {
-                    record.stdinfo.flags |= StandardInfo::IS_SPARSE;
-                }
-                if parsed.std_info.is_reparse {
-                    record.stdinfo.flags |= StandardInfo::IS_REPARSE;
-                }
-                if parsed.std_info.is_temporary {
-                    record.stdinfo.flags |= StandardInfo::IS_TEMPORARY;
-                }
-                if parsed.std_info.is_integrity_stream {
-                    record.stdinfo.flags |= StandardInfo::IS_INTEGRITY_STREAM;
-                }
-                if parsed.std_info.is_no_scrub_data {
-                    record.stdinfo.flags |= StandardInfo::IS_NO_SCRUB_DATA;
-                }
-                if parsed.std_info.is_pinned {
-                    record.stdinfo.flags |= StandardInfo::IS_PINNED;
-                }
-                if parsed.std_info.is_unpinned {
-                    record.stdinfo.flags |= StandardInfo::IS_UNPINNED;
-                }
-                if parsed.std_info.is_virtual {
-                    record.stdinfo.flags |= StandardInfo::IS_VIRTUAL;
-                }
 
                 // Set name info (offset and extension_id were computed before borrowing record)
                 record.first_name.name =

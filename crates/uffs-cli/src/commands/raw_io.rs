@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use tracing::info;
+use tracing::{debug, info};
 use uffs_core::MftQuery;
 use uffs_core::extensions::ExtensionFilter;
 use uffs_core::pattern::ParsedPattern;
@@ -144,6 +144,7 @@ pub(super) fn load_and_filter_native_from_mft_file(
         // Use ChaosMftReader for deterministic chaos-order testing
         // Works on all platforms when reading offline MFT files
         use uffs_mft::io::readers::parallel::{ChaosMftReader, ChaosStrategy};
+        debug!(seed, "[PARITY_TRACE] CHAOS path");
         info!(
             seed = seed,
             "Loading MFT with chaos-order (randomized chunks)"
@@ -159,6 +160,7 @@ pub(super) fn load_and_filter_native_from_mft_file(
         // IOCP capture: use load_iocp_to_index which replays the exact Windows LIVE
         // pipeline (parallel parse → MftRecordMerger → merge → from_parsed_records)
         // Skip this path if debug_tree is set (use sequential debug path instead)
+        debug!("[PARITY_TRACE] IOCP path -> load_iocp_to_index()");
         info!("IOCP capture detected - using LIVE pipeline replay for exact parity");
         uffs_mft::load_iocp_to_index(mft_path)
             .with_context(|| format!("Failed to load IOCP capture: {}", mft_path.display()))?
@@ -169,17 +171,27 @@ pub(super) fn load_and_filter_native_from_mft_file(
         };
 
         if debug_tree {
+            debug!("[PARITY_TRACE] DEBUG_TREE path");
             load_raw_mft_with_debug(mft_path, &options)?
         } else {
+            debug!("[PARITY_TRACE] RAW MFT path -> load_raw_to_index_with_options()");
             MftReader::load_raw_to_index_with_options(mft_path, &options)
                 .with_context(|| format!("Failed to load raw MFT: {}", mft_path.display()))?
         }
     };
     let load_ms = t_load.elapsed().as_millis();
+    debug!(
+        records = index.records.len(),
+        load_ms, "[PARITY_TRACE] loaded"
+    );
 
     let t_query = std::time::Instant::now();
     let results = execute_index_query_native(&index, filters, needs_paths)?;
     let query_ms = t_query.elapsed().as_millis();
+    debug!(
+        results = results.len(),
+        query_ms, "[PARITY_TRACE] query returned"
+    );
 
     Ok(NativeOfflineQueryResults {
         index,

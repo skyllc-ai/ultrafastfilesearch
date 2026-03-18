@@ -117,7 +117,12 @@ pub fn parse_record_to_fragment(
                             Ok((si, _)) => si,
                             Err(_) => break,
                         };
-                        let mut info = StandardInfo::from_attributes(si.file_attributes);
+                        // Two-step canonical approach:
+                        // 1. Parse raw attrs to ExtendedStandardInfo (complete parsing)
+                        // 2. Convert to compact StandardInfo (single source of truth)
+                        let ext =
+                            crate::ntfs::ExtendedStandardInfo::from_attributes(si.file_attributes);
+                        let mut info = StandardInfo::from_extended(&ext);
                         info.created = filetime_to_unix_micros(si.creation_time);
                         info.modified = filetime_to_unix_micros(si.modification_time);
                         info.accessed = filetime_to_unix_micros(si.access_time);
