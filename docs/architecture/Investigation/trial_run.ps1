@@ -9,12 +9,14 @@
 #   - Capture stdout/stderr to .log files (text) with diagnostic logging.
 #   - Sequential per physical disk; parallel across physical disks (PS7+).
 #   - Enable diagnostic logging for live path analysis.
-#   - ALWAYS save uncompressed MFT snapshot for each drive (required for offline analysis).
+#   - ALWAYS save IOCP capture (.iocp) for each drive - captures real Windows IOCP order
+#   - ALWAYS save uncompressed MFT snapshot (.bin) as fallback for offline analysis
 #
 # What gets collected:
-#   1. MFT snapshots (uncompressed .bin files) - ALWAYS collected for offline analysis on Mac
-#   2. C++ baseline scan output - reference for parity comparison
-#   3. Rust LIVE scan output + diagnostic logs - with chunk/record processing stats
+#   1. IOCP captures (.iocp files) - captures IOCP completion order for 100% accurate replay
+#   2. MFT snapshots (uncompressed .bin files) - fallback for sequential offline analysis
+#   3. C++ baseline scan output - reference for parity comparison
+#   4. Rust LIVE scan output + diagnostic logs - with chunk/record processing stats
 #
 # Diagnostic logging captures (in .log files):
 #   - Chunk handoff, record boundaries, preload_concurrent timing
@@ -22,8 +24,9 @@
 #   - Parallel sync (lock acquisition), chunk processing order
 #
 # After running this script, transfer all files to Mac for offline analysis using:
-#   - uffs "*" --mft-file <mft_file> --drive <letter> for offline search
-#   - uffs-diag tools for detailed comparison
+#   - uffs "*" --mft-file <mft_file.iocp> --drive <letter>  (IOCP replay - preferred)
+#   - uffs "*" --mft-file <mft_file.bin> --drive <letter>   (sequential fallback)
+#   - rust-script scripts/verify_parity.rs <data_dir> <drive> --regenerate
 #   - See: TESTING_TOOLS_GUIDE.md for full workflow
 [CmdletBinding()]
 param(
@@ -245,7 +248,8 @@ try {
         LogLine ""
     }
 
-    # MFT saves - ALWAYS save uncompressed MFT for each drive (required for offline analysis)
+    # MFT saves - ALWAYS save IOCP capture (primary) and uncompressed MFT (fallback)
+    # IOCP capture is preferred as it captures real Windows IOCP completion order
     # Extra formats (compressed, raw) can be skipped with -SkipMftExtras
     if ($hasMft -and $Drives.Count -gt 0) {
         LogLine "---"
@@ -256,9 +260,16 @@ try {
         foreach ($mftDrive in $Drives) {
             Write-Host "MFT Save (Drive $mftDrive)..." -ForegroundColor Cyan
 
-            $mftNoCompress = "${mftDrive}_mft.bin"  # Uncompressed is the primary format
+            $mftIocp = "${mftDrive}_mft.iocp"       # IOCP capture - captures real IOCP order (PRIMARY)
+            $mftNoCompress = "${mftDrive}_mft.bin"  # Uncompressed sequential (fallback)
 
-            # Always save uncompressed MFT (required for offline analysis on Mac)
+            # Always save IOCP capture (captures real Windows IOCP completion order)
+            # This is the PRIMARY format for 100% accurate LIVE replay on Mac
+            $timings += Invoke-CmdToLog -Title "uffs_mft save (IOCP capture): drive $mftDrive" `
+                -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive --output `"$mftIocp`" --iocp") `
+                -LogFileName "${mftDrive}_mft_save_iocp.log"
+
+            # Always save uncompressed MFT (fallback for sequential offline analysis)
             $timings += Invoke-CmdToLog -Title "uffs_mft save (uncompressed): drive $mftDrive" `
                 -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive --output `"$mftNoCompress`" --no-compress") `
                 -LogFileName "${mftDrive}_mft_save.log"
@@ -280,16 +291,27 @@ try {
 
         LogLine "### Generated MFT Files"
         LogLine ""
-        LogLine "| Drive | File | Size |"
-        LogLine "|-------|------|------|"
+        LogLine "| Drive | File | Format | Size |"
+        LogLine "|-------|------|--------|------|"
         foreach ($mftDrive in $Drives) {
+            # IOCP capture (primary)
+            $mftIocp = "${mftDrive}_mft.iocp"
+            $p = Join-Path $WorkDir $mftIocp
+            if (Test-Path -LiteralPath $p) {
+                $size = (Get-Item -LiteralPath $p).Length
+                LogLine "| $mftDrive | $mftIocp | **IOCP capture** (primary) | $(Format-FileSize $size) |"
+            } else {
+                LogLine "| $mftDrive | $mftIocp | IOCP capture | (missing) |"
+            }
+
+            # Uncompressed MFT (fallback)
             $mftNoCompress = "${mftDrive}_mft.bin"
             $p = Join-Path $WorkDir $mftNoCompress
             if (Test-Path -LiteralPath $p) {
                 $size = (Get-Item -LiteralPath $p).Length
-                LogLine "| $mftDrive | $mftNoCompress | $(Format-FileSize $size) |"
+                LogLine "| $mftDrive | $mftNoCompress | Sequential (fallback) | $(Format-FileSize $size) |"
             } else {
-                LogLine "| $mftDrive | $mftNoCompress | (missing) |"
+                LogLine "| $mftDrive | $mftNoCompress | Sequential | (missing) |"
             }
 
             if (-not $SkipMftExtras) {
@@ -299,9 +321,9 @@ try {
                     $p = Join-Path $WorkDir $f
                     if (Test-Path -LiteralPath $p) {
                         $size = (Get-Item -LiteralPath $p).Length
-                        LogLine "| $mftDrive | $f | $(Format-FileSize $size) |"
+                        LogLine "| $mftDrive | $f | Extra | $(Format-FileSize $size) |"
                     } else {
-                        LogLine "| $mftDrive | $f | (missing) |"
+                        LogLine "| $mftDrive | $f | Extra | (missing) |"
                     }
                 }
             }

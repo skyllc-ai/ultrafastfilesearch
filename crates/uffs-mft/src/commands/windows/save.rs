@@ -14,16 +14,25 @@ use crate::display::{clean_path_for_display, format_bytes, format_duration, form
 
 /// Save MFT bytes to a file for offline analysis.
 #[cfg(windows)]
+#[expect(clippy::too_many_arguments, reason = "CLI command with many options")]
 pub async fn cmd_save(
     drive: char,
     output: &Path,
     compress: bool,
     compression_level: i32,
     raw_compat: bool,
+    iocp_mode: bool,
+    iocp_concurrency: usize,
 ) -> Result<()> {
     use std::time::Instant;
 
     use uffs_mft::platform::{VolumeHandle, detect_drive_type};
+
+    // IOCP mode uses a different code path
+    if iocp_mode {
+        return cmd_save_iocp(drive, output, compress, compression_level, iocp_concurrency).await;
+    }
+
     use uffs_mft::{MftReader, SaveRawOptions};
 
     let start_time = Instant::now();
@@ -148,6 +157,105 @@ pub async fn cmd_save(
     } else {
         println!("  Compression:          none");
         println!("  Volume letter:        {}:", header.volume_letter);
+    }
+    println!();
+    println!("⏱️  Completed in {}", format_duration(elapsed));
+
+    Ok(())
+}
+
+/// Save MFT in IOCP capture mode.
+///
+/// This mode reads MFT using IOCP and saves chunks in the order they complete,
+/// capturing the non-deterministic I/O ordering for realistic testing.
+#[cfg(windows)]
+async fn cmd_save_iocp(
+    drive: char,
+    output: &Path,
+    compress: bool,
+    compression_level: i32,
+    concurrency: usize,
+) -> Result<()> {
+    use std::time::Instant;
+
+    use uffs_mft::platform::{VolumeHandle, detect_drive_type};
+    use uffs_mft::{IocpCaptureOptions, MftReader};
+
+    let start_time = Instant::now();
+    let drive_upper = drive.to_ascii_uppercase();
+
+    info!(drive = %drive_upper, concurrency, "Reading MFT with IOCP capture mode");
+
+    // Get volume info for display
+    let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {}:", drive))?;
+    let vol_data = handle.volume_data();
+
+    let drive_type = detect_drive_type(drive_upper);
+    let drive_type_str = drive_type_label(drive_type, "Unknown");
+
+    // Calculate metrics
+    let record_count =
+        vol_data.mft_valid_data_length / vol_data.bytes_per_file_record_segment as u64;
+
+    println!("═══════════════════════════════════════════════════════════════");
+    println!("                    MFT IOCP CAPTURE");
+    println!(
+        "                    Drive: {}: ({})",
+        drive_upper, drive_type_str
+    );
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+    println!("📊 MFT INFO");
+    println!(
+        "  Total records:        {}",
+        format_number_commas(record_count)
+    );
+    println!("  IOCP concurrency:     {}", concurrency);
+    println!();
+    println!("⏳ Reading with IOCP and capturing chunk order...");
+
+    // Create capture options
+    let options = IocpCaptureOptions {
+        compress,
+        compression_level,
+        volume_letter: drive_upper,
+        concurrency: concurrency as u8,
+    };
+
+    // Open reader and save with IOCP capture
+    let reader =
+        MftReader::open(drive).with_context(|| format!("Failed to open drive {drive}:"))?;
+
+    let header = reader
+        .save_iocp_capture(output, &options)
+        .with_context(|| format!("Failed to save IOCP capture to {}", output.display()))?;
+
+    let elapsed = start_time.elapsed();
+
+    // Get absolute path for display
+    let abs_path = std::fs::canonicalize(output).unwrap_or_else(|_| output.to_path_buf());
+    let abs_path = clean_path_for_display(&abs_path);
+
+    println!();
+    println!("💾 OUTPUT FILE");
+    println!("  Path:                 {}", abs_path.display());
+    println!("  Format:               UFFS-IOCP (chunk order preserved)");
+    println!(
+        "  Chunks captured:      {}",
+        format_number_commas(u64::from(header.chunk_count))
+    );
+    println!(
+        "  Total records:        {}",
+        format_number_commas(header.total_records)
+    );
+    println!(
+        "  Data size:            {}",
+        format_bytes(header.total_data_size)
+    );
+    if header.is_compressed() {
+        println!("  Compression:          zstd (level {})", compression_level);
+    } else {
+        println!("  Compression:          none");
     }
     println!();
     println!("⏱️  Completed in {}", format_duration(elapsed));

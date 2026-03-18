@@ -11,11 +11,6 @@
 //! Live MFT access via HANDLE is Windows-only and gated per-function.
 
 #[cfg(windows)]
-use windows::Win32::Foundation::HANDLE;
-#[cfg(windows)]
-use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
-
-#[cfg(windows)]
 use crate::error::{MftError, Result};
 pub use crate::ntfs::SECTOR_SIZE;
 #[cfg(windows)]

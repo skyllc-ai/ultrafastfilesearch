@@ -14,8 +14,8 @@
 )]
 
 use crate::index::{
-    ChildInfo, IndexNameRef, IndexStreamInfo, InternalStreamInfo, LinkInfo, MftIndex, SizeInfo,
-    NO_ENTRY,
+    ChildInfo, IndexNameRef, IndexStreamInfo, InternalStreamInfo, LinkInfo, MftIndex, NO_ENTRY,
+    SizeInfo,
 };
 
 /// Adds a stream to the index and returns its index.
@@ -126,7 +126,8 @@ pub fn add_link_to_index(index: &mut MftIndex, link_name: &str, link_parent: u64
     let link_len = link_name.len();
     let link_is_ascii = link_name.is_ascii();
     let extension_id = index.intern_extension(link_name);
-    let link_name_ref = IndexNameRef::new(link_offset, link_len as u16, link_is_ascii, extension_id);
+    let link_name_ref =
+        IndexNameRef::new(link_offset, link_len as u16, link_is_ascii, extension_id);
 
     let link_idx = index.links.len() as u32;
     index.links.push(LinkInfo {
@@ -153,7 +154,9 @@ pub fn add_child_entry(index: &mut MftIndex, parent_frs: u64, child_frs: u64, na
         if index.frs_to_idx[p_frs_usize] == NO_ENTRY {
             let new_idx = index.records.len() as u32;
             index.frs_to_idx[p_frs_usize] = new_idx;
-            index.records.push(crate::index::FileRecord::new(parent_frs));
+            index
+                .records
+                .push(crate::index::FileRecord::new(parent_frs));
         }
         index.frs_to_idx[p_frs_usize]
     };
@@ -171,7 +174,8 @@ pub fn add_child_entry(index: &mut MftIndex, parent_frs: u64, child_frs: u64, na
     });
 }
 
-/// Data snapshot from an extension record that needs to be merged into the base.
+/// Data snapshot from an extension record that needs to be merged into the
+/// base.
 pub struct ExtensionSnapshot {
     /// Head of the extension's stream chain.
     pub stream_head: u32,
@@ -257,4 +261,3 @@ pub fn merge_extension_names(
         record.name_count += ext.name_count;
     }
 }
-

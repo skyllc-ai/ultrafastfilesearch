@@ -6,4 +6,3 @@
 mod stats;
 
 pub use stats::{ComparisonResults, FieldStats};
-

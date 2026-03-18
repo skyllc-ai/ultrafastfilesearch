@@ -50,13 +50,21 @@ pub fn cmd_load(
     use std::time::Instant;
 
     use uffs_mft::raw::LoadRawOptions;
-    use uffs_mft::{MftReader, load_raw_mft};
+    use uffs_mft::{MftReader, is_iocp_capture, load_raw_mft};
 
     // Validate arguments upfront - don't print anything if we're going to fail
     if !info_only && !build_index && !debug_tree && output_path.is_none() {
         anyhow::bail!(
             "--output is required when not using --info-only, --build-index, or --debug-tree"
         );
+    }
+
+    // Check for IOCP capture format first
+    let is_iocp = is_iocp_capture(input)
+        .with_context(|| format!("Failed to check format of {}", input.display()))?;
+
+    if is_iocp {
+        return cmd_load_iocp(input, output_path, info_only, build_index, debug_tree);
     }
 
     let start_time = Instant::now();
@@ -524,6 +532,222 @@ pub fn cmd_load(
     let elapsed = start_time.elapsed();
     println!();
     println!("⏱️  Completed in {}", format_duration(elapsed));
+
+    Ok(())
+}
+
+/// Load and process an IOCP capture file.
+///
+/// This handles the UFFS-IOCP format which stores MFT chunks in IOCP
+/// completion order for realistic out-of-order parsing testing.
+#[expect(clippy::print_stdout, reason = "intentional user-facing cli output")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "cli output function with complex display logic"
+)]
+fn cmd_load_iocp(
+    input: &Path,
+    output_path: Option<&Path>,
+    info_only: bool,
+    build_index: bool,
+    _debug_tree: bool,
+) -> Result<()> {
+    use std::time::Instant;
+
+    use uffs_mft::index::MftIndex;
+    use uffs_mft::load_iocp_capture;
+    use uffs_mft::parse::{MftRecordMerger, apply_fixup, parse_record_full};
+
+    let start_time = Instant::now();
+
+    // Load IOCP capture data
+    let capture = load_iocp_capture(input)
+        .with_context(|| format!("Failed to load IOCP capture from {}", input.display()))?;
+
+    let header = &capture.header;
+
+    // Get file info for display
+    let abs_path = std::fs::canonicalize(input).unwrap_or_else(|_| input.to_path_buf());
+    let abs_path = clean_path_for_display(&abs_path);
+    let file_size = std::fs::metadata(input).map_or(0, |meta| meta.len());
+
+    println!("═══════════════════════════════════════════════════════════════");
+    println!("                      IOCP CAPTURE FILE INFO");
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+    println!("📁 FILE DETAILS");
+    println!("  Path:                 {}", abs_path.display());
+    println!("  File size:            {}", format_bytes(file_size));
+    println!("  Format:               UFFS-IOCP v{}", header.version);
+    println!("  Volume letter:        {}:", header.volume_letter);
+    println!();
+    println!("📊 CAPTURE INFO");
+    println!(
+        "  Total chunks:         {}",
+        format_number_commas(u64::from(header.chunk_count))
+    );
+    println!(
+        "  Total records:        {}",
+        format_number_commas(header.total_records)
+    );
+    println!(
+        "  Bytes per record:     {}",
+        format_number_commas(u64::from(header.record_size))
+    );
+    println!(
+        "  Data size:            {}",
+        format_bytes(header.total_data_size)
+    );
+    println!("  IOCP concurrency:     {}", header.concurrency);
+    println!();
+    if header.is_compressed() {
+        println!("💾 COMPRESSION");
+        println!("  Compressed:           yes");
+        println!(
+            "  Compressed size:      {}",
+            format_bytes(file_size.saturating_sub(96 + u64::from(header.chunk_count) * 32))
+        );
+        println!();
+    }
+
+    // Show chunk order preview
+    println!(
+        "🔀 CHUNK ORDER (first 10 of {} captured in IOCP order):",
+        header.chunk_count
+    );
+    for (idx, (chunk, _)) in capture.iter_chunks().take(10).enumerate() {
+        println!(
+            "    [{:2}] seq={:4} FRS {:8}..{:8}",
+            idx,
+            chunk.completion_seq,
+            chunk.start_frs,
+            chunk.start_frs + u64::from(chunk.record_count)
+        );
+    }
+    if header.chunk_count > 10 {
+        println!("    ... and {} more chunks", header.chunk_count - 10);
+    }
+    println!();
+
+    if info_only {
+        let elapsed = start_time.elapsed();
+        println!("⏱️  Info retrieved in {}", format_duration(elapsed));
+        return Ok(());
+    }
+
+    // Parse records in IOCP completion order
+    println!("⏳ Parsing MFT records in IOCP capture order...");
+    let parse_start = Instant::now();
+
+    let record_size = header.record_size as usize;
+    let volume_letter = header.volume_letter;
+    // MFT record count always fits in memory on 64-bit systems
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "MFT record count fits in usize on 64-bit (target platform)"
+    )]
+    let capacity = header.total_records as usize;
+    let mut merger = MftRecordMerger::with_capacity(capacity);
+    let mut records_parsed: u64 = 0;
+    let mut chunks_processed: u32 = 0;
+
+    // Process chunks in captured order (not sorted!)
+    for (chunk, data) in capture.iter_chunks() {
+        let num_records = data.len() / record_size;
+        for i in 0..num_records {
+            let offset = i * record_size;
+            if let Some(record_slice) = data.get(offset..offset + record_size) {
+                let mut record_buf = record_slice.to_vec();
+                if apply_fixup(&mut record_buf) {
+                    let frs = chunk.start_frs + i as u64;
+                    merger.add_result(parse_record_full(&record_buf, frs));
+                    records_parsed += 1;
+                }
+            }
+        }
+        chunks_processed += 1;
+    }
+
+    let parse_time = parse_start.elapsed();
+    println!(
+        "  Parsed {} records from {} chunks in {}",
+        format_number_commas(records_parsed),
+        format_number_commas(u64::from(chunks_processed)),
+        format_duration(parse_time)
+    );
+
+    // Build index and optionally export
+    if build_index || output_path.is_some() {
+        println!();
+        println!("🌲 Building MftIndex with tree metrics...");
+        let build_start = Instant::now();
+
+        let parsed_records = merger.merge();
+        let mut index = MftIndex::from_parsed_records(volume_letter, parsed_records);
+        index.compute_tree_metrics();
+
+        let build_time = build_start.elapsed();
+        println!(
+            "  ✅ Index built in {} ({} records)",
+            format_duration(build_time),
+            format_number_commas(index.len() as u64)
+        );
+
+        if let Some(output) = output_path {
+            // Convert to DataFrame and export
+            println!("  Converting to DataFrame with paths...");
+            let df_start = Instant::now();
+            let mut df = index
+                .to_dataframe()
+                .with_context(|| "Failed to convert index to DataFrame")?;
+            let df_time = df_start.elapsed();
+            println!(
+                "  ✅ DataFrame created in {} ({} columns)",
+                format_duration(df_time),
+                df.width()
+            );
+
+            let ext = output
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            println!("  Writing {} file...", ext.to_uppercase());
+            let export_start = Instant::now();
+            match ext.as_str() {
+                "parquet" => {
+                    use uffs_mft::MftReader;
+                    MftReader::save_parquet(&mut df, output).context("Failed to save Parquet")?;
+                }
+                "csv" => {
+                    use uffs_polars::{CsvWriter, SerWriter};
+                    let file = std::fs::File::create(output)?;
+                    CsvWriter::new(file)
+                        .finish(&mut df)
+                        .map_err(|e| anyhow::anyhow!("Failed to write CSV: {e}"))?;
+                }
+                _ => {
+                    anyhow::bail!("Unsupported output format: .{ext} (use .parquet or .csv)");
+                }
+            }
+            let export_time = export_start.elapsed();
+            println!("  ✅ Export completed in {}", format_duration(export_time));
+
+            let output_abs = std::fs::canonicalize(output).unwrap_or_else(|_| output.to_path_buf());
+            let output_abs = clean_path_for_display(&output_abs);
+            let output_size = std::fs::metadata(output).map_or(0, |m| m.len());
+
+            println!();
+            println!("📤 EXPORT COMPLETE");
+            println!("  Output path:          {}", output_abs.display());
+            println!("  Output size:          {}", format_bytes(output_size));
+        }
+    }
+
+    let total_elapsed = start_time.elapsed();
+    println!();
+    println!("⏱️  Total time: {}", format_duration(total_elapsed));
 
     Ok(())
 }

@@ -1,4 +1,8 @@
 //! Persistence helpers for parquet and raw MFT save/load paths.
+//!
+//! Exception: IOCP capture mode adds ~270 LOC of Windows-specific overlapped
+//! I/O code for capturing chunks in IOCP completion order. Splitting this would
+//! fragment the `MftReader` persistence API.
 
 use std::path::Path;
 
@@ -349,6 +353,12 @@ impl MftReader {
 
     /// Load raw MFT from file and build `MftIndex` with custom options.
     ///
+    /// Auto-detects file format:
+    /// - **UFFS-IOCP**: IOCP capture format (replays Windows IOCP completion
+    ///   order)
+    /// - **UFFS-MFT**: Standard compressed format
+    /// - **Raw NTFS**: Uncompressed MFT bytes (FILE magic)
+    ///
     /// # Errors
     ///
     /// Returns an error if the raw file cannot be loaded or if record parsing
@@ -371,7 +381,18 @@ impl MftReader {
             parse_record_full,
         };
 
-        let mut raw = crate::raw::load_raw_mft(path, options)?;
+        let path_ref = path.as_ref();
+
+        // Check for IOCP capture format first
+        if crate::raw_iocp::is_iocp_capture(path_ref)? {
+            info!(
+                path = %path_ref.display(),
+                "📼 Detected IOCP capture format - replaying Windows IOCP order"
+            );
+            return Self::load_iocp_capture_to_index(path_ref, options);
+        }
+
+        let mut raw = crate::raw::load_raw_mft(path_ref, options)?;
         let capacity = usize::try_from(raw.header.record_count).unwrap_or(0);
         let total_records_in_file = capacity;
         let parse_options = if options.forensic {
@@ -552,6 +573,363 @@ impl MftReader {
                 ))
             }
         }
+    }
+
+    /// Load IOCP capture and build `MftIndex` by replaying chunks in captured
+    /// order.
+    ///
+    /// This processes MFT chunks in the exact order Windows IOCP delivered
+    /// them, enabling 100% accurate reproduction of LIVE parsing behavior
+    /// on any platform.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the capture file cannot be loaded or parsing fails.
+    fn load_iocp_capture_to_index(
+        path: &Path,
+        options: &crate::raw::LoadRawOptions,
+    ) -> Result<crate::index::MftIndex> {
+        use std::time::Instant;
+
+        use tracing::info;
+
+        use crate::index::MftIndex;
+        use crate::parse::{MftRecordMerger, apply_fixup, parse_record_full};
+        use crate::raw_iocp::load_iocp_capture;
+
+        let load_start = Instant::now();
+        let capture = load_iocp_capture(path)?;
+        let header = &capture.header;
+        let record_size = header.record_size as usize;
+        let volume = options.volume_letter.unwrap_or(header.volume_letter);
+
+        info!(
+            path = %path.display(),
+            chunks = header.chunk_count,
+            total_records = header.total_records,
+            volume = %volume,
+            concurrency = header.concurrency,
+            compressed = header.is_compressed(),
+            "📼 Loading IOCP capture"
+        );
+
+        let parse_start = Instant::now();
+        // MFT record count always fits in memory on 64-bit systems (typical max ~5M
+        // records)
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "MFT record count fits in usize on 64-bit (target platform)"
+        )]
+        let capacity = header.total_records as usize;
+        let mut merger = MftRecordMerger::with_capacity(capacity);
+        let mut records_parsed: u64 = 0;
+        let mut fixup_success: u64 = 0;
+        let mut fixup_failed: u64 = 0;
+
+        // Process chunks in IOCP capture order (NOT sorted!)
+        for (chunk, data) in capture.iter_chunks() {
+            let num_records = data.len() / record_size;
+            for i in 0..num_records {
+                let offset = i * record_size;
+                if let Some(record_slice) = data.get(offset..offset + record_size) {
+                    let mut record_buf = record_slice.to_vec();
+                    if apply_fixup(&mut record_buf) {
+                        fixup_success += 1;
+                        let frs = chunk.start_frs + i as u64;
+                        merger.add_result(parse_record_full(&record_buf, frs));
+                        records_parsed += 1;
+                    } else {
+                        fixup_failed += 1;
+                    }
+                }
+            }
+        }
+
+        let parse_ms = parse_start.elapsed().as_millis();
+        let parsed_records = merger.merge();
+
+        info!(
+            load_ms = load_start.elapsed().as_millis(),
+            parse_ms,
+            chunks_processed = header.chunk_count,
+            records_parsed,
+            fixup_success,
+            fixup_failed,
+            final_merged_count = parsed_records.len(),
+            "✅ IOCP capture replay complete"
+        );
+
+        let mut index = MftIndex::from_parsed_records(volume, parsed_records);
+        index.compute_tree_metrics();
+
+        Ok(index)
+    }
+
+    /// Save MFT using IOCP capture mode.
+    ///
+    /// This reads MFT using IOCP and saves chunks in the order they complete,
+    /// capturing the non-deterministic I/O ordering for realistic testing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if raw MFT reading or writing the output file fails.
+    #[cfg(windows)]
+    pub fn save_iocp_capture<P: AsRef<Path>>(
+        &self,
+        path: P,
+        options: &crate::raw_iocp::IocpCaptureOptions,
+    ) -> Result<crate::raw_iocp::IocpCaptureHeader> {
+        self.save_iocp_internal(path, options)
+    }
+
+    /// Internal IOCP capture implementation.
+    #[cfg(windows)]
+    #[expect(
+        unsafe_code,
+        reason = "FFI: ReadFile, GetQueuedCompletionStatus for overlapped IOCP capture"
+    )]
+    fn save_iocp_internal<P: AsRef<Path>>(
+        &self,
+        path: P,
+        options: &crate::raw_iocp::IocpCaptureOptions,
+    ) -> Result<crate::raw_iocp::IocpCaptureHeader> {
+        use std::collections::VecDeque;
+        use std::pin::Pin;
+
+        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError, HANDLE};
+        use windows::Win32::Storage::FileSystem::ReadFile;
+        use windows::Win32::System::IO::GetQueuedCompletionStatus;
+
+        use crate::io::{
+            AlignedBuffer, IoCompletionPort, MftExtentMap, OverlappedRead, SECTOR_SIZE,
+            generate_read_chunks,
+        };
+        use crate::platform::detect_drive_type;
+        use crate::raw_iocp::IocpCaptureWriter;
+
+        let record_size = self.handle.file_record_size();
+        let volume_data = self.handle.volume_data();
+        let concurrency = options.concurrency as usize;
+
+        let extents = self.handle.get_mft_extents().unwrap_or_else(|_| {
+            vec![crate::platform::MftExtent {
+                vcn: 0,
+                cluster_count: volume_data.mft_valid_data_length
+                    / u64::from(volume_data.bytes_per_cluster),
+                lcn: volume_data.mft_start_lcn as i64,
+            }]
+        });
+
+        let extent_map = MftExtentMap::new(extents, volume_data.bytes_per_cluster, record_size);
+        let drive_type = detect_drive_type(self.volume);
+        let chunk_size = drive_type.optimal_chunk_size();
+        let chunks = generate_read_chunks(&extent_map, None, chunk_size);
+        let num_chunks = chunks.len();
+
+        if num_chunks == 0 {
+            let writer = IocpCaptureWriter::new(record_size, options);
+            return writer.write_to_file(path);
+        }
+
+        info!(
+            chunks = num_chunks,
+            chunk_size_mb = chunk_size / (1024 * 1024),
+            concurrency,
+            "🎯 Starting IOCP capture with {} concurrent reads",
+            concurrency
+        );
+
+        // Create capture writer
+        let mut writer = IocpCaptureWriter::new(record_size, options);
+
+        // Create IOCP
+        let handle: HANDLE = self.handle.raw_handle();
+        let iocp = IoCompletionPort::new(0)?;
+        iocp.associate(handle, 0)?;
+
+        // Pre-allocate buffer pool and in-flight operations
+        let max_chunk_size = chunks
+            .iter()
+            .map(|c| c.record_count * u64::from(record_size))
+            .max()
+            .unwrap_or(chunk_size as u64) as usize;
+
+        // Don't sort chunks - we want to capture IOCP completion order
+        let mut pending_chunks: VecDeque<crate::io::ReadChunk> = chunks.into_iter().collect();
+        let mut in_flight: Vec<Option<Pin<Box<OverlappedRead>>>> =
+            (0..concurrency).map(|_| None).collect();
+
+        // Issue initial reads
+        for (slot_idx, slot) in in_flight.iter_mut().enumerate() {
+            if let Some(chunk) = pending_chunks.pop_front() {
+                let buffer = AlignedBuffer::new(max_chunk_size + SECTOR_SIZE);
+                let mut op = Box::pin(OverlappedRead::new(buffer, chunk, record_size, slot_idx));
+
+                let aligned_offset =
+                    (op.chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
+                op.set_offset(aligned_offset);
+
+                let read_size = op.chunk.record_count * u64::from(record_size);
+                let offset_adjustment = (op.chunk.disk_offset - aligned_offset) as usize;
+                let aligned_size = ((read_size as usize + offset_adjustment + SECTOR_SIZE - 1)
+                    / SECTOR_SIZE)
+                    * SECTOR_SIZE;
+
+                let overlapped_ptr = unsafe { op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
+                let read_result = unsafe {
+                    ReadFile(
+                        handle,
+                        Some(
+                            &mut op.as_mut().get_unchecked_mut().buffer.as_mut_slice()
+                                [..aligned_size],
+                        ),
+                        None,
+                        Some(overlapped_ptr),
+                    )
+                };
+
+                if read_result.is_err() {
+                    let err = unsafe { GetLastError() };
+                    if err != ERROR_IO_PENDING {
+                        return Err(MftError::Io(std::io::Error::from_raw_os_error(
+                            err.0 as i32,
+                        )));
+                    }
+                }
+                *slot = Some(op);
+            }
+        }
+
+        // Process completions in the order they arrive
+        let mut completed_chunks = 0;
+        while completed_chunks < num_chunks {
+            let mut bytes_transferred: u32 = 0;
+            let mut completion_key: usize = 0;
+            let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
+                std::ptr::null_mut();
+
+            let status = unsafe {
+                GetQueuedCompletionStatus(
+                    iocp.raw_handle(),
+                    &mut bytes_transferred,
+                    &mut completion_key,
+                    &mut overlapped_ptr,
+                    u32::MAX,
+                )
+            };
+
+            if status.is_err() && overlapped_ptr.is_null() {
+                return Err(MftError::Io(std::io::Error::last_os_error()));
+            }
+
+            // Find which slot completed by matching the overlapped pointer
+            let mut completed_slot_idx: Option<usize> = None;
+            for (idx, slot) in in_flight.iter_mut().enumerate() {
+                if let Some(op) = slot {
+                    let op_ptr = op.as_overlapped_ptr();
+                    if op_ptr == overlapped_ptr {
+                        completed_slot_idx = Some(idx);
+                        break;
+                    }
+                }
+            }
+
+            if let Some(slot_idx) = completed_slot_idx {
+                if let Some(op) = in_flight[slot_idx].take() {
+                    // Extract chunk data in completion order
+                    let chunk = &op.chunk;
+                    let read_size = chunk.record_count * u64::from(record_size);
+                    let aligned_offset =
+                        (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
+                    let offset_adjustment = (chunk.disk_offset - aligned_offset) as usize;
+
+                    let data = op.buffer.as_slice()
+                        [offset_adjustment..offset_adjustment + read_size as usize]
+                        .to_vec();
+
+                    // Record in completion order
+                    writer.record_chunk(chunk.start_frs, data);
+                    completed_chunks += 1;
+
+                    debug!(
+                        "Captured chunk {} of {} (FRS {}..{})",
+                        completed_chunks,
+                        num_chunks,
+                        chunk.start_frs,
+                        chunk.start_frs + chunk.record_count
+                    );
+
+                    // Issue next read if available
+                    if let Some(next_chunk) = pending_chunks.pop_front() {
+                        let buffer = AlignedBuffer::new(max_chunk_size + SECTOR_SIZE);
+                        let mut new_op = Box::pin(OverlappedRead::new(
+                            buffer,
+                            next_chunk,
+                            record_size,
+                            slot_idx,
+                        ));
+
+                        let aligned_offset =
+                            (new_op.chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
+                        new_op.set_offset(aligned_offset);
+
+                        let read_size = new_op.chunk.record_count * u64::from(record_size);
+                        let offset_adjustment =
+                            (new_op.chunk.disk_offset - aligned_offset) as usize;
+                        let aligned_size = ((read_size as usize + offset_adjustment + SECTOR_SIZE
+                            - 1)
+                            / SECTOR_SIZE)
+                            * SECTOR_SIZE;
+
+                        let overlapped_ptr =
+                            unsafe { new_op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
+                        let read_result = unsafe {
+                            ReadFile(
+                                handle,
+                                Some(
+                                    &mut new_op.as_mut().get_unchecked_mut().buffer.as_mut_slice()
+                                        [..aligned_size],
+                                ),
+                                None,
+                                Some(overlapped_ptr),
+                            )
+                        };
+
+                        if read_result.is_err() {
+                            let err = unsafe { GetLastError() };
+                            if err != ERROR_IO_PENDING {
+                                return Err(MftError::Io(std::io::Error::from_raw_os_error(
+                                    err.0 as i32,
+                                )));
+                            }
+                        }
+                        in_flight[slot_idx] = Some(new_op);
+                    }
+                }
+            }
+        }
+
+        info!(
+            "IOCP capture complete: {} chunks in completion order",
+            writer.chunk_count()
+        );
+
+        writer.write_to_file(path)
+    }
+
+    /// Save IOCP capture (non-Windows stub).
+    ///
+    /// # Errors
+    ///
+    /// Always returns `MftError::PlatformNotSupported` on non-Windows
+    /// platforms.
+    #[cfg(not(windows))]
+    pub fn save_iocp_capture<P: AsRef<Path>>(
+        &self,
+        _path: P,
+        _options: &crate::raw_iocp::IocpCaptureOptions,
+    ) -> Result<crate::raw_iocp::IocpCaptureHeader> {
+        Err(MftError::PlatformNotSupported)
     }
 
     /// Load raw MFT from file and build `MftIndex` using direct-to-index

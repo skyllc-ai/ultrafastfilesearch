@@ -968,12 +968,20 @@ fn regenerate_rust_output(
     println!("Using --tz-offset {tz_offset} ({tz_label}) to match the golden baseline timezone.");
     println!();
 
-    // Locate MFT file
-    let mft_file = data_dir.join(format!("{drive_letter}_mft.bin"));
-    if !mft_file.exists() {
-        eprintln!("ERROR: MFT file not found: {}", mft_file.display());
+    // Locate MFT file - prefer IOCP capture (.iocp) over raw MFT (.bin)
+    let iocp_file = data_dir.join(format!("{drive_letter}_mft.iocp"));
+    let bin_file = data_dir.join(format!("{drive_letter}_mft.bin"));
+
+    let (mft_file, mft_format) = if iocp_file.exists() {
+        (iocp_file, "IOCP capture (Windows IOCP order replay)")
+    } else if bin_file.exists() {
+        (bin_file, "Raw MFT (sequential)")
+    } else {
+        eprintln!("ERROR: No MFT file found. Looked for:");
+        eprintln!("  - {} (IOCP capture, preferred)", iocp_file.display());
+        eprintln!("  - {} (raw MFT, fallback)", bin_file.display());
         std::process::exit(1);
-    }
+    };
 
     // Get MFT file size
     let mft_size_bytes = fs::metadata(&mft_file).map(|m| m.len()).unwrap_or(0);
@@ -981,6 +989,7 @@ fn regenerate_rust_output(
     let mft_mb = mft_size_bytes as f64 / (1024.0 * 1024.0);
 
     println!("MFT file:     {} ({mft_mb:.1} MB)", mft_file.display());
+    println!("MFT format:   {mft_format}");
 
     // Determine which binary to use
     let binary_path = if let Some(custom) = custom_bin {

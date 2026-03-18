@@ -65,4 +65,3 @@ pub fn format_json_value(col: &uffs_polars::Column, row_idx: usize) -> String {
         Ok(value) => format_json_string(&value.to_string()),
     }
 }
-

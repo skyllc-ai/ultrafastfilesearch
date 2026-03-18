@@ -96,6 +96,7 @@ pub mod error;
 pub mod flags;
 pub mod index;
 pub mod raw;
+pub mod raw_iocp;
 pub mod tree_metrics;
 
 // Cross-platform modules (NTFS structures and parsing)
@@ -170,6 +171,10 @@ pub use platform::{
 pub use raw::{
     LoadRawOptions, RawMftData, RawMftHeader, SaveRawOptions, load_raw_mft, load_raw_mft_header,
     save_raw_mft,
+};
+pub use raw_iocp::{
+    CapturedChunk, IocpCaptureData, IocpCaptureHeader, IocpCaptureOptions, IocpCaptureWriter,
+    is_iocp_capture, load_iocp_capture,
 };
 pub use reader::{
     BenchmarkResult, DriveCharacteristics, DriveReadResult, MftProgress, MftReadMode, MftReader,

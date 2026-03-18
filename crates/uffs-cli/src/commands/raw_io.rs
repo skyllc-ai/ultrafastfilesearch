@@ -37,26 +37,24 @@ pub(super) struct NativeOfflineQueryResults {
 }
 
 /// Query filter options for the search command.
-pub(crate) struct QueryFilters<'a> {
+pub struct QueryFilters<'a> {
     /// Parsed search pattern (glob, regex, or literal).
-    pub(crate) parsed: &'a ParsedPattern,
+    pub parsed: &'a ParsedPattern,
     /// Extension filter string (e.g., "pictures,mp4,pdf").
-    pub(crate) ext_filter: Option<&'a str>,
+    pub ext_filter: Option<&'a str>,
     /// Only return files (not directories).
-    pub(crate) files_only: bool,
+    pub files_only: bool,
     /// Only return directories (not files).
-    pub(crate) dirs_only: bool,
+    pub dirs_only: bool,
     /// Hide system files (files starting with $).
-    pub(crate) hide_system: bool,
+    pub hide_system: bool,
     /// Minimum file size filter.
-    pub(crate) min_size: Option<u64>,
+    pub min_size: Option<u64>,
     /// Maximum file size filter.
-    pub(crate) max_size: Option<u64>,
+    pub max_size: Option<u64>,
     /// Maximum number of results to return.
-    pub(crate) limit: u32,
+    pub limit: u32,
 }
-
-
 
 /// Load and filter search data from a raw MFT file (cross-platform debugging).
 ///

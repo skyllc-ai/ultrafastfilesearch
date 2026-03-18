@@ -49,7 +49,10 @@ impl FieldStats {
     }
 
     /// Merge another `FieldStats` into this one.
-    #[expect(clippy::float_arithmetic, reason = "statistics require accumulating f64 sums")]
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "statistics require accumulating f64 sums"
+    )]
     pub fn merge(&mut self, other: Self) {
         self.total_compared += other.total_compared;
         self.exact_matches += other.exact_matches;
@@ -97,4 +100,3 @@ pub struct ComparisonResults {
     /// Sample paths only in Rust.
     pub sample_rust_only: Vec<String>,
 }
-

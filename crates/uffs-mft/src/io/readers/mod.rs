@@ -3,8 +3,6 @@
 #[cfg(windows)]
 pub(super) use std::cell::RefCell;
 #[cfg(windows)]
-pub(super) use std::path::Path;
-#[cfg(windows)]
 pub(super) use std::sync::Arc;
 #[cfg(windows)]
 pub(super) use std::sync::atomic::{AtomicU64, Ordering};

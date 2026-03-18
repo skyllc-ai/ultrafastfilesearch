@@ -1,5 +1,8 @@
 //! Comprehensive reference-output vs Rust scan parity comparison tool.
 //!
+//! Exception: Standalone diagnostic CLI binary with complex parity output
+//! formatting. Not library code - splitting would reduce tool readability.
+//!
 //! This tool performs deep comparison of UFFS scan outputs to verify that
 //! the Rust implementation produces identical results to the reference output.
 //!
@@ -69,17 +72,16 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::path::Path;
-
 use std::fs::File;
 use std::io::Write;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use uffs_diag::parity::{ComparisonResults, FieldStats};
-use uffs_polars::{CsvReadOptions, DataFrame, SerReader, StringChunked};
 // Wire in crate dependencies for version-locking
 use uffs_mft as _;
+use uffs_polars::{CsvReadOptions, DataFrame, SerReader, StringChunked};
 
 // ============================================================================
 // Column Name Mappings (reference output <-> Rust)
@@ -635,23 +637,44 @@ fn print_results(results: &ComparisonResults) {
     println!("  Rust: {}", results.rust_file);
 
     println!("\n📊 ROW COUNTS");
-    println!("  Reference rows: {:>8}", format_num(results.reference_total_rows));
+    println!(
+        "  Reference rows: {:>8}",
+        format_num(results.reference_total_rows)
+    );
     println!("  Rust rows:  {:>12}", format_num(results.rust_total_rows));
     let diff = results.rust_total_rows as i64 - results.reference_total_rows as i64;
     println!("  Difference: {:>+12}", diff);
 
     println!("\n🔗 PATH MATCHING");
-    println!("  Common paths:    {:>12}", format_num(results.common_paths));
-    println!("  Reference only:  {:>12}", format_num(results.reference_only_paths));
-    println!("  Rust only:       {:>12}", format_num(results.rust_only_paths));
+    println!(
+        "  Common paths:    {:>12}",
+        format_num(results.common_paths)
+    );
+    println!(
+        "  Reference only:  {:>12}",
+        format_num(results.reference_only_paths)
+    );
+    println!(
+        "  Rust only:       {:>12}",
+        format_num(results.rust_only_paths)
+    );
     println!("  Match rate:      {:>11.4}%", results.path_match_rate);
 
     println!("\n📎 ALTERNATE DATA STREAMS (ADS)");
-    println!("  Reference ADS:    {:>10}", format_num(results.reference_ads_count));
-    println!("  Rust ADS entries: {:>10}", format_num(results.rust_ads_count));
+    println!(
+        "  Reference ADS:    {:>10}",
+        format_num(results.reference_ads_count)
+    );
+    println!(
+        "  Rust ADS entries: {:>10}",
+        format_num(results.rust_ads_count)
+    );
 
     println!("\n📈 FIELD-BY-FIELD COMPARISON");
-    println!("{:>20} {:>12} {:>12} {:>10} {:>12}", "Field", "Compared", "Matches", "Rate", "Max Diff");
+    println!(
+        "{:>20} {:>12} {:>12} {:>10} {:>12}",
+        "Field", "Compared", "Matches", "Rate", "Max Diff"
+    );
     println!("{}", "-".repeat(70));
 
     let mut fields: Vec<_> = results.field_stats.keys().collect();
@@ -666,7 +689,11 @@ fn print_results(results: &ComparisonResults) {
                 format_num(stats.total_compared as usize),
                 format_num(stats.exact_matches as usize),
                 stats.match_rate(),
-                if stats.max_abs_diff > 0.0 { format!("{:.0}", stats.max_abs_diff) } else { "-".to_string() }
+                if stats.max_abs_diff > 0.0 {
+                    format!("{:.0}", stats.max_abs_diff)
+                } else {
+                    "-".to_string()
+                }
             );
         }
     }
@@ -714,7 +741,10 @@ fn print_results(results: &ComparisonResults) {
     } else {
         println!("\n⚠️  DIFFERENCES DETECTED:");
         if results.reference_only_paths > 0 {
-            println!("  - {} paths missing from Rust", results.reference_only_paths);
+            println!(
+                "  - {} paths missing from Rust",
+                results.reference_only_paths
+            );
         }
         if results.rust_only_paths > 0 {
             println!("  - {} extra paths in Rust", results.rust_only_paths);
@@ -733,7 +763,11 @@ fn write_markdown_report(results: &ComparisonResults, path: &Path) -> Result<()>
 
     writeln!(f, "# UFFS Scan Parity Report")?;
     writeln!(f)?;
-    writeln!(f, "Generated: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"))?;
+    writeln!(
+        f,
+        "Generated: {}",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    )?;
     writeln!(f)?;
 
     writeln!(f, "## Files Compared")?;
@@ -748,7 +782,11 @@ fn write_markdown_report(results: &ComparisonResults, path: &Path) -> Result<()>
     writeln!(f)?;
     writeln!(f, "| Metric | Count |")?;
     writeln!(f, "|--------|------:|")?;
-    writeln!(f, "| Reference rows | {} |", format_num(results.reference_total_rows))?;
+    writeln!(
+        f,
+        "| Reference rows | {} |",
+        format_num(results.reference_total_rows)
+    )?;
     writeln!(f, "| Rust rows | {} |", format_num(results.rust_total_rows))?;
     let diff = results.rust_total_rows as i64 - results.reference_total_rows as i64;
     writeln!(f, "| Difference | {:+} |", diff)?;
@@ -759,16 +797,28 @@ fn write_markdown_report(results: &ComparisonResults, path: &Path) -> Result<()>
     writeln!(f, "| Metric | Count |")?;
     writeln!(f, "|--------|------:|")?;
     writeln!(f, "| Common paths | {} |", format_num(results.common_paths))?;
-    writeln!(f, "| Reference only | {} |", format_num(results.reference_only_paths))?;
+    writeln!(
+        f,
+        "| Reference only | {} |",
+        format_num(results.reference_only_paths)
+    )?;
     writeln!(f, "| Rust only | {} |", format_num(results.rust_only_paths))?;
-    writeln!(f, "| **Match rate** | **{:.4}%** |", results.path_match_rate)?;
+    writeln!(
+        f,
+        "| **Match rate** | **{:.4}%** |",
+        results.path_match_rate
+    )?;
     writeln!(f)?;
 
     writeln!(f, "## Alternate Data Streams (ADS)")?;
     writeln!(f)?;
     writeln!(f, "| Source | ADS Count |")?;
     writeln!(f, "|--------|----------:|")?;
-    writeln!(f, "| Reference | {} |", format_num(results.reference_ads_count))?;
+    writeln!(
+        f,
+        "| Reference | {} |",
+        format_num(results.reference_ads_count)
+    )?;
     writeln!(f, "| Rust | {} |", format_num(results.rust_ads_count))?;
     writeln!(f)?;
 
@@ -790,7 +840,11 @@ fn write_markdown_report(results: &ComparisonResults, path: &Path) -> Result<()>
                 format_num(stats.total_compared as usize),
                 format_num(stats.exact_matches as usize),
                 stats.match_rate(),
-                if stats.max_abs_diff > 0.0 { format!("{:.0}", stats.max_abs_diff) } else { "-".to_string() }
+                if stats.max_abs_diff > 0.0 {
+                    format!("{:.0}", stats.max_abs_diff)
+                } else {
+                    "-".to_string()
+                }
             )?;
         }
     }
@@ -803,12 +857,19 @@ fn write_markdown_report(results: &ComparisonResults, path: &Path) -> Result<()>
     writeln!(f, "## Summary")?;
     writeln!(f)?;
     if all_match {
-        writeln!(f, "✅ **PERFECT PARITY** - All paths and fields match exactly!")?;
+        writeln!(
+            f,
+            "✅ **PERFECT PARITY** - All paths and fields match exactly!"
+        )?;
     } else {
         writeln!(f, "⚠️ **DIFFERENCES DETECTED**")?;
         writeln!(f)?;
         if results.reference_only_paths > 0 {
-            writeln!(f, "- {} paths missing from Rust", results.reference_only_paths)?;
+            writeln!(
+                f,
+                "- {} paths missing from Rust",
+                results.reference_only_paths
+            )?;
         }
         if results.rust_only_paths > 0 {
             writeln!(f, "- {} extra paths in Rust", results.rust_only_paths)?;

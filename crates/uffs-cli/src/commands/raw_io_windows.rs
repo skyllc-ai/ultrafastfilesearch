@@ -327,4 +327,3 @@ pub(crate) async fn load_and_filter_data_index_multi(
 
     Ok(final_result)
 }
-

@@ -48,7 +48,20 @@ pub async fn dispatch_command(command: Commands) -> Result<()> {
             no_compress,
             compression_level,
             raw,
-        } => windows::cmd_save(drive, &output, !no_compress, compression_level, raw).await,
+            iocp,
+            iocp_concurrency,
+        } => {
+            windows::cmd_save(
+                drive,
+                &output,
+                !no_compress,
+                compression_level,
+                raw,
+                iocp,
+                iocp_concurrency,
+            )
+            .await
+        }
         Commands::Load {
             input,
             output,

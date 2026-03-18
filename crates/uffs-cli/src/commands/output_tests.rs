@@ -1,8 +1,8 @@
 //! Tests for output helpers.
 
+use core::time::Duration;
 use std::fs;
 use std::path::PathBuf;
-use core::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -463,4 +463,3 @@ fn test_cpp_footer_omits_fast_scan_message_when_elapsed_gt_1s() -> TestResult {
     assert_eq!(lines.get(footer_start + 3), Some(&""));
     Ok(())
 }
-

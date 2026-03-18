@@ -44,7 +44,9 @@ use smallvec::SmallVec;
 use zerocopy::FromBytes;
 
 use super::direct_index_extension::parse_extension_to_index;
-use super::index_helpers::{add_child_entry, add_link_to_index, add_stream_to_index, chain_links, chain_streams};
+use super::index_helpers::{
+    add_child_entry, add_link_to_index, add_stream_to_index, chain_links, chain_streams,
+};
 use crate::ntfs::is_internal_windows_stream;
 
 /// Parses a record directly into `MftIndex` (single-pass inline parsing).

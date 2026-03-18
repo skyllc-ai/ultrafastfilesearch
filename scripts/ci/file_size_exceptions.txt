@@ -1,0 +1,6 @@
+# File size exceptions - files over 800 LOC with justification
+# Format: path|reason
+crates/uffs-mft/src/reader/persistence.rs|IOCP capture adds 270 LOC for Windows overlapped I/O capture mode
+crates/uffs-diag/src/bin/compare_scan_parity.rs|Standalone diagnostic CLI with complex parity output formatting
+crates/uffs-mft/src/io/parser/index.rs|Core MFT record parser with unified parse_record_to_index and forensic mode
+

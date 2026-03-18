@@ -108,8 +108,6 @@ impl<W: Write> StreamingWriter<W> {
     }
 
     fn write_json_batch(&self, writer: &mut W, df: &uffs_mft::DataFrame) -> Result<usize> {
-        use std::io::Write as _;
-
         let col_names: Vec<_> = df.get_column_names();
         let columns: Vec<_> = col_names
             .iter()
@@ -229,4 +227,3 @@ pub(crate) fn format_json_value(col: &uffs_polars::Column, row_idx: usize) -> St
         Ok(value) => format_json_string(&value.to_string()),
     }
 }
-

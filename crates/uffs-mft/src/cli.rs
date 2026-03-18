@@ -179,13 +179,26 @@ pub enum Commands {
         /// MFT2CSV. Note: --raw implies --no-compress.
         #[arg(long)]
         raw: bool,
+
+        /// IOCP capture mode: save chunks in IOCP completion order.
+        /// This captures the non-deterministic order in which Windows IOCP
+        /// delivers completed reads, enabling realistic testing of parsers
+        /// on non-Windows systems. Uses UFFS-IOCP format.
+        #[arg(long)]
+        iocp: bool,
+
+        /// IOCP concurrency level (number of reads in flight).
+        /// Only used with --iocp. Default: 8.
+        #[arg(long, default_value = "8")]
+        iocp_concurrency: usize,
     },
 
     /// Load MFT from a saved file and export to parquet/csv
     ///
-    /// Supports both UFFS-MFT format (with header) and raw NTFS format
-    /// (compatible with other MFT tools). For raw NTFS files, use --drive
-    /// to specify the volume letter for path resolution.
+    /// Supports three formats:
+    /// - UFFS-MFT: Standard compressed format with header
+    /// - UFFS-IOCP: IOCP capture format (chunks in completion order)
+    /// - Raw NTFS: Compatible with other MFT tools (requires --drive)
     ///
     /// # Examples
     ///
@@ -195,6 +208,7 @@ pub enum Commands {
     /// uffs_mft load mft_c.mft -o index.csv
     /// uffs_mft load mft_c.mft --build-index  # Debug tree metrics
     /// uffs_mft load mft_c.raw --drive C -o output.csv  # Raw NTFS format
+    /// uffs_mft load mft_c.iocp -o output.csv  # IOCP capture format
     /// ```
     Load {
         /// Input raw MFT file path (created with 'save' command or other tools)

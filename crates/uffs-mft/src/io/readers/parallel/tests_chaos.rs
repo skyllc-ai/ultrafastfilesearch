@@ -6,9 +6,24 @@
 //! - Parallel rayon parsing (extension records can be processed before base
 //!   records)
 //!
-//! The harness reads an offline MFT, splits it into chunks, reorders them with
-//! seeded randomization, and processes them through the same parsing pipeline
-//! as LIVE.
+//! ## IOCP Replay Mode (Recommended)
+//!
+//! The most accurate way to test is using an IOCP capture file created on
+//! Windows with `uffs_mft save --iocp`. This captures the exact order in which
+//! Windows IOCP delivered chunks during a real MFT read.
+//!
+//! ```bash
+//! # On Windows: capture IOCP order
+//! uffs_mft save --drive C --output mft_c.iocp --iocp
+//!
+//! # On macOS: replay exact IOCP order
+//! cargo test -p uffs-mft --lib -- test_iocp_replay --ignored --nocapture
+//! ```
+//!
+//! ## Legacy Random Shuffle Mode
+//!
+//! For synthetic chaos testing without a real capture file, the harness can
+//! split an offline MFT into chunks and reorder them with seeded randomization.
 
 // Test harness code has different lint needs than production code
 #![allow(clippy::all, clippy::nursery, clippy::pedantic)]
@@ -26,6 +41,9 @@ use crate::io::fixup::apply_fixup;
 use crate::io::merger::MftRecordMerger;
 use crate::io::parser::{ParseResult, parse_record_full};
 use crate::raw::{LoadRawOptions, load_raw_mft};
+// Note: IOCP replay is now handled by the production pipeline via
+// MftReader::load_raw_to_index_with_options(), which auto-detects IOCP format.
+// Use verify_parity.rs with an .iocp file for full parity testing.
 
 /// Strategy for chunk reordering in chaos mode.
 #[derive(Debug, Clone, Copy)]
@@ -592,3 +610,24 @@ fn test_interleaved_order_d_drive() {
         }
     }
 }
+
+// ============================================================================
+// IOCP REPLAY
+// ============================================================================
+//
+// IOCP replay is now handled by the production pipeline:
+//
+//   MftReader::load_raw_to_index_with_options()
+//
+// This auto-detects IOCP capture format (.iocp) and processes chunks in the
+// exact order Windows IOCP delivered them.
+//
+// For parity testing, use verify_parity.rs:
+//
+//   rust-script scripts/verify_parity.rs /Users/rnio/uffs_data D --regenerate
+//
+// The script will:
+// 1. Look for D_mft.iocp first (IOCP capture, preferred)
+// 2. Fall back to D_mft.bin (raw MFT, sequential)
+// 3. Display which format is being used
+// 4. Compare output with C++ golden baseline

@@ -1,5 +1,8 @@
 //! Single-pass direct-to-index parser (C++-style inline approach).
 //!
+//! Exception: Core MFT record parser with unified parse_record_to_index and
+//! forensic mode. This is the performance-critical hot path.
+//!
 //! This module implements the high-performance single-pass parser that matches
 //! the C++ architecture. It parses MFT records directly into `MftIndex` without
 //! creating intermediate `ParsedRecord` allocations, which is critical for IOCP
@@ -27,7 +30,6 @@
     clippy::single_match_else,
     reason = "explicit match arms are clearer for attribute type dispatch"
 )]
-
 
 use core::mem::size_of;
 
@@ -660,7 +662,11 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     default_allocated
                 },
             };
-            record.first_stream.flags = if record.stdinfo.is_directory() { 0 } else { 8 << 2 };
+            record.first_stream.flags = if record.stdinfo.is_directory() {
+                0
+            } else {
+                8 << 2
+            };
             record.internal_streams_size = internal_size_total;
             record.internal_streams_allocated = internal_alloc_total;
             record.first_internal_stream = first_internal;
@@ -677,7 +683,13 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 1 + additional_stream_count as u16 + internal_stream_count as u16;
 
             // Merge extension data
-            merge_extension_streams(index, frs, stream_indices.last().copied(), first_internal, &ext);
+            merge_extension_streams(
+                index,
+                frs,
+                stream_indices.last().copied(),
+                first_internal,
+                &ext,
+            );
             return true;
         }
     };
@@ -733,7 +745,11 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         stream_count: record.stream_count.saturating_sub(1),
         total_extra: record.total_stream_count.saturating_sub(1),
         name_next: record.first_name.next_entry,
-        name_count: if record.first_name.name.is_valid() { record.name_count } else { 0 },
+        name_count: if record.first_name.name.is_valid() {
+            record.name_count
+        } else {
+            0
+        },
         internal_head: record.first_internal_stream,
         internal_size: record.internal_streams_size,
         internal_alloc: record.internal_streams_allocated,
@@ -754,8 +770,16 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             default_allocated
         },
     };
-    record.first_stream.flags = if record.stdinfo.is_directory() { 0 } else { 8 << 2 };
-    record.first_name = LinkInfo { next_entry: NO_ENTRY, name: name_ref, parent_frs };
+    record.first_stream.flags = if record.stdinfo.is_directory() {
+        0
+    } else {
+        8 << 2
+    };
+    record.first_name = LinkInfo {
+        next_entry: NO_ENTRY,
+        name: name_ref,
+        parent_frs,
+    };
     record.name_count = 1 + additional_count as u16;
     record.stream_count = 1 + additional_stream_count as u16;
     record.total_stream_count = 1 + additional_stream_count as u16 + internal_stream_count as u16;
@@ -765,13 +789,23 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     record.reparse_tag = reparse_tag;
 
     // Chain links and streams, attach to record
-    if !link_indices.is_empty() { record.first_name.next_entry = link_indices[0]; }
-    if !stream_indices.is_empty() { record.first_stream.next_entry = stream_indices[0]; }
+    if !link_indices.is_empty() {
+        record.first_name.next_entry = link_indices[0];
+    }
+    if !stream_indices.is_empty() {
+        record.first_stream.next_entry = stream_indices[0];
+    }
     chain_links(index, &link_indices);
     chain_streams(index, &stream_indices);
 
     // Merge extension data
-    merge_extension_streams(index, frs, stream_indices.last().copied(), first_internal, &ext);
+    merge_extension_streams(
+        index,
+        frs,
+        stream_indices.last().copied(),
+        first_internal,
+        &ext,
+    );
     merge_extension_names(index, frs, link_indices.last().copied(), &ext);
 
     // Build parent-child relationship for tree metrics computation

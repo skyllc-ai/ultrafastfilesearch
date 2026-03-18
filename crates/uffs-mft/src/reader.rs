@@ -3,7 +3,9 @@
 //! The heavy read pipelines and multi-drive orchestration live in dedicated
 //! submodules under `reader/`.
 
-use crate::error::{MftError, Result};
+use crate::error::Result;
+#[cfg(not(windows))]
+use crate::error::MftError;
 #[cfg(windows)]
 use crate::platform::VolumeHandle;
 
@@ -435,6 +437,7 @@ mod tests {
     use core::time::Duration;
 
     use super::*;
+    use crate::error::MftError;
 
     #[test]
     #[cfg(windows)]
