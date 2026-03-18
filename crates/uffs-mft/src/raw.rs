@@ -1,5 +1,8 @@
 //! RAW MFT Persistence.
 //!
+//! Exception: Unified MFT persistence handling UFFS-MFT, UFFS-IOCP, and raw
+//! NTFS formats
+//!
 //! This module provides functionality to save and load complete raw MFT bytes
 //! for offline analysis. This allows:
 //! - Saving MFT data without requiring admin privileges later
@@ -38,6 +41,9 @@ use crate::error::{MftError, Result};
 
 /// Magic bytes for raw MFT file format.
 const MAGIC: &[u8; 8] = b"UFFS-MFT";
+
+/// Magic bytes for IOCP capture format (first 8 bytes of "UFFS-IOCP").
+const IOCP_MAGIC_PREFIX: &[u8; 8] = b"UFFS-IOC";
 
 /// NTFS FILE record magic bytes ("FILE" in ASCII).
 const NTFS_FILE_MAGIC: &[u8; 4] = b"FILE";
@@ -418,6 +424,11 @@ pub fn load_raw_mft<P: AsRef<Path>>(path: P, options: &LoadRawOptions) -> Result
         return Ok(RawMftData { header, data });
     }
 
+    // Check if it's IOCP capture format (starts with "UFFS-IOC")
+    if &magic_buf == IOCP_MAGIC_PREFIX {
+        return load_iocp_as_raw_mft(path, options);
+    }
+
     // Check if it's raw NTFS format (starts with "FILE")
     if &magic_buf[0..4] == NTFS_FILE_MAGIC {
         // Seek back to start
@@ -465,8 +476,87 @@ pub fn load_raw_mft<P: AsRef<Path>>(path: P, options: &LoadRawOptions) -> Result
 
     // Unknown format
     Err(MftError::InvalidData(
-        "Invalid MFT file: expected UFFS-MFT header or raw NTFS FILE records".into(),
+        "Invalid MFT file: expected UFFS-MFT, UFFS-IOCP, or raw NTFS FILE records".into(),
     ))
+}
+
+/// Loads an IOCP capture file and reassembles it as sequential raw MFT data.
+///
+/// IOCP captures store chunks in completion order (non-deterministic).
+/// This function reassembles them in FRS order for compatibility with
+/// standard MFT processing pipelines.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "MFT data fits in memory on 64-bit systems"
+)]
+fn load_iocp_as_raw_mft<P: AsRef<Path>>(path: P, options: &LoadRawOptions) -> Result<RawMftData> {
+    use crate::raw_iocp::load_iocp_capture;
+
+    let capture = load_iocp_capture(path)?;
+    let record_size = capture.record_size();
+    let total_records = capture.header.total_records;
+    let volume_letter = options
+        .volume_letter
+        .unwrap_or(capture.header.volume_letter);
+
+    // Build header for the reassembled data
+    let header = RawMftHeader {
+        version: VERSION, // Use current version since we're creating new data
+        flags: 0,         // Not compressed (we decompress during load)
+        record_size,
+        record_count: total_records,
+        original_size: total_records * u64::from(record_size),
+        compressed_size: 0,
+        volume_letter,
+    };
+
+    // If header-only mode, return early
+    if options.header_only {
+        return Ok(RawMftData {
+            header,
+            data: Vec::new(),
+        });
+    }
+
+    // Allocate buffer for reassembled MFT data
+    let total_size = (total_records * u64::from(record_size)) as usize;
+    let mut data = vec![0_u8; total_size];
+
+    // Collect chunks and sort by start_frs for sequential reassembly
+    let mut chunks: Vec<_> = capture.iter_chunks().collect();
+    chunks.sort_by_key(|(chunk, _)| chunk.start_frs);
+
+    // Copy each chunk's data to its correct position
+    for (chunk, chunk_data) in chunks {
+        let start_offset = (chunk.start_frs * u64::from(record_size)) as usize;
+        let expected_size = (chunk.record_count as usize) * (record_size as usize);
+
+        // Validate chunk data size
+        if chunk_data.len() != expected_size {
+            return Err(MftError::InvalidData(format!(
+                "IOCP chunk at FRS {} has wrong size: expected {}, got {}",
+                chunk.start_frs,
+                expected_size,
+                chunk_data.len()
+            )));
+        }
+
+        // Validate destination bounds
+        let end_offset = start_offset + expected_size;
+        if end_offset > data.len() {
+            return Err(MftError::InvalidData(format!(
+                "IOCP chunk at FRS {} extends beyond MFT bounds: {} > {}",
+                chunk.start_frs,
+                end_offset,
+                data.len()
+            )));
+        }
+
+        // Copy chunk data to correct position
+        data[start_offset..end_offset].copy_from_slice(chunk_data);
+    }
+
+    Ok(RawMftData { header, data })
 }
 
 /// Loads only the header from a raw MFT file.

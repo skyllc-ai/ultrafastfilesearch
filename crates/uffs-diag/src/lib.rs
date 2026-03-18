@@ -7,7 +7,9 @@
 // portion does not use them directly (the binaries do).
 use anyhow as _;
 use chrono as _;
+use hex as _;
 use rayon as _;
+use sha2 as _;
 use uffs_mft as _;
 use uffs_polars as _;
 

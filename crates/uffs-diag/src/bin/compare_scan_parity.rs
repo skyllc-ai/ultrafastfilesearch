@@ -17,6 +17,10 @@
 //! ```
 
 #![expect(
+    unused_crate_dependencies,
+    reason = "shared Cargo.toml dependencies not used by all binaries"
+)]
+#![expect(
     clippy::print_stdout,
     clippy::print_stderr,
     clippy::use_debug,

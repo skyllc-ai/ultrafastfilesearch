@@ -69,6 +69,10 @@ path = "src/bin/analyze_diff.rs"
 name = "compare_scan_parity"
 path = "src/bin/compare_scan_parity.rs"
 
+[[bin]]
+name = "verify_iocp_capture"
+path = "src/bin/verify_iocp_capture.rs"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Dependencies (minimal set for diagnostic tools)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -79,6 +83,10 @@ anyhow.workspace = true
 # Date/time formatting for reports
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 rayon.workspace = true
+
+# Cryptographic hashing for verification
+sha2 = "0.10"
+hex = "0.4"
 
 # MFT reading (for raw file parsing and Windows extent diagnostics)
 uffs-mft.workspace = true
