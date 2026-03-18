@@ -1,5 +1,26 @@
 //! Reader implementations and async I/O orchestration for MFT ingestion.
 
+#[cfg(windows)]
+pub(super) use std::cell::RefCell;
+#[cfg(windows)]
+pub(super) use std::path::Path;
+#[cfg(windows)]
+pub(super) use std::sync::Arc;
+#[cfg(windows)]
+pub(super) use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(windows)]
+pub(super) use rayon::prelude::*;
+#[cfg(windows)]
+pub(super) use tracing::{debug, info, trace, warn};
+#[cfg(windows)]
+pub(super) use windows::Win32::Foundation::HANDLE;
+#[cfg(windows)]
+pub(super) use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
+
+#[cfg(windows)]
+use super::*;
+
 // Windows-specific readers (require HANDLE and Windows APIs)
 #[cfg(windows)]
 mod basic;

@@ -362,8 +362,8 @@ fn test_chaos_order_d_drive() {
     let mft_path = PathBuf::from("/Users/rnio/uffs_data/drive_d/D_mft.bin");
     if !mft_path.exists() {
         eprintln!("⚠️  Offline MFT not found at: {}", mft_path.display());
-        eprintln!("   This test requires the offline D: drive MFT.");
-        panic!("Test skipped: offline MFT not found");
+        eprintln!("   This test requires the offline D: drive MFT. Skipping.");
+        return;
     }
 
     println!("\n═══════════════════════════════════════════════════════");
@@ -479,15 +479,12 @@ fn test_chaos_order_d_drive() {
     println!();
 
     // Verify sequential matches ground truth
-    if sequential_sha != EXPECTED_SORTED_SHA {
-        println!("❌ SEQUENTIAL SHA256 MISMATCH!");
-        println!("   Expected lines: 7,065,330");
-        println!("   Actual lines:   {}", sequential_lines.len());
-        panic!(
-            "Sequential SHA256 mismatch! Expected: {}, Got: {}",
-            EXPECTED_SORTED_SHA, sequential_sha
-        );
-    }
+    assert_eq!(
+        sequential_sha,
+        EXPECTED_SORTED_SHA,
+        "Sequential SHA256 mismatch! Expected lines: 7,065,330, Actual: {}",
+        sequential_lines.len()
+    );
 
     // Verify chaos matches sequential
     if chaos_sha != sequential_sha {
@@ -517,7 +514,7 @@ fn test_chaos_order_d_drive() {
                 diff_count += 1;
             }
         }
-        panic!("Chaos SHA256 mismatch!");
+        assert_eq!(chaos_sha, sequential_sha, "Chaos SHA256 mismatch!");
     }
 
     println!("═══════════════════════════════════════════════════════");
@@ -539,10 +536,11 @@ fn test_reverse_order_d_drive() {
 
     let mft_path = PathBuf::from("/Users/rnio/uffs_data/drive_d/D_mft.bin");
     if !mft_path.exists() {
-        panic!(
-            "Test skipped: offline MFT not found at {}",
+        eprintln!(
+            "⚠️  Test skipped: offline MFT not found at {}",
             mft_path.display()
         );
+        return;
     }
 
     let chaos_reader = ChaosMftReader::new(ChaosStrategy::Reverse, 2 * 1024 * 1024);
@@ -555,8 +553,7 @@ fn test_reverse_order_d_drive() {
             println!("   Total records: {}", index.records.len());
         }
         Err(e) => {
-            eprintln!("\n❌ REVERSE-ORDER parsing FAILED: {e:?}");
-            panic!("Reverse-order test failed");
+            assert!(false, "REVERSE-ORDER parsing FAILED: {e:?}");
         }
     }
 }
@@ -574,10 +571,11 @@ fn test_interleaved_order_d_drive() {
 
     let mft_path = PathBuf::from("/Users/rnio/uffs_data/drive_d/D_mft.bin");
     if !mft_path.exists() {
-        panic!(
-            "Test skipped: offline MFT not found at {}",
+        eprintln!(
+            "⚠️  Test skipped: offline MFT not found at {}",
             mft_path.display()
         );
+        return;
     }
 
     let chaos_reader = ChaosMftReader::new(ChaosStrategy::Interleaved, 2 * 1024 * 1024);
@@ -590,8 +588,7 @@ fn test_interleaved_order_d_drive() {
             println!("   Total records: {}", index.records.len());
         }
         Err(e) => {
-            eprintln!("\n❌ INTERLEAVED-ORDER parsing FAILED: {e:?}");
-            panic!("Interleaved-order test failed");
+            assert!(false, "INTERLEAVED-ORDER parsing FAILED: {e:?}");
         }
     }
 }

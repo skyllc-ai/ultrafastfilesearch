@@ -11,6 +11,10 @@ use rayon as _;
 use uffs_mft as _;
 use uffs_polars as _;
 
+/// Parity comparison helpers for validating scan output between reference and
+/// Rust implementations.
+pub mod parity;
+
 /// Windows-only helpers for inspecting the full uffs-mft raw->fixup->parse
 /// pipeline for a single FRS.
 #[cfg(windows)]

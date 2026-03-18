@@ -6,6 +6,8 @@
 
 #[cfg(windows)]
 pub(super) use super::iocp::IoCompletionPort;
+#[cfg(windows)]
+use super::*;
 
 #[cfg(windows)]
 mod bulk;

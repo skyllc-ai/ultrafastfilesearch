@@ -1,10 +1,5 @@
 //! Single-pass direct-to-index parser (C++-style inline approach).
 //!
-//! Exception: This file is intentionally monolithic (840+ LOC) because it
-//! implements a performance-critical hot path that handles all NTFS attribute
-//! types inline. Splitting would introduce indirection overhead and hurt
-//! performance. See `scripts/ci/file_size_exceptions.txt`.
-//!
 //! This module implements the high-performance single-pass parser that matches
 //! the C++ architecture. It parses MFT records directly into `MftIndex` without
 //! creating intermediate `ParsedRecord` allocations.
@@ -42,10 +37,6 @@
     clippy::let_underscore_untyped,
     reason = "let _ = expr is used for intentionally ignoring results"
 )]
-#![expect(
-    clippy::explicit_iter_loop,
-    reason = ".iter() is explicit and intentional"
-)]
 
 use core::mem::size_of;
 
@@ -53,6 +44,7 @@ use smallvec::SmallVec;
 use zerocopy::FromBytes;
 
 use super::direct_index_extension::parse_extension_to_index;
+use super::index_helpers::{add_child_entry, add_link_to_index, add_stream_to_index, chain_links, chain_streams};
 use crate::ntfs::is_internal_windows_stream;
 
 /// Parses a record directly into `MftIndex` (single-pass inline parsing).
@@ -86,9 +78,7 @@ use crate::ntfs::is_internal_windows_stream;
     reason = "NTFS field sizes are bounded by u16/u32 record layout"
 )]
 pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::MftIndex) -> bool {
-    use crate::index::{
-        ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo,
-    };
+    use crate::index::{IndexNameRef, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo};
     use crate::ntfs::{
         AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
         StandardInformation, file_reference_to_frs, filetime_to_unix_micros,
@@ -658,35 +648,14 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             // The $FILE_NAME may be in an extension record, but the ADS are here.
             // Without this, ADS on files/directories with extension records are lost.
 
-            // Pre-process ADS streams BEFORE creating the record
+            // Pre-process ADS streams using helper
             let additional_stream_count = additional_streams.len();
-            let mut stream_indices: Vec<u32> = Vec::with_capacity(additional_stream_count);
-            for (stream_name, stream_size, stream_allocated) in additional_streams {
-                let stream_name_offset = index.add_name(&stream_name);
-                let stream_name_len = stream_name.len();
-                let stream_is_ascii = stream_name.is_ascii();
-                let extension_id = index.intern_extension(&stream_name);
-                let stream_name_ref = IndexNameRef::new(
-                    stream_name_offset,
-                    stream_name_len as u16,
-                    stream_is_ascii,
-                    extension_id,
-                );
+            let stream_indices: Vec<u32> = additional_streams
+                .into_iter()
+                .map(|(name, size, alloc)| add_stream_to_index(index, &name, size, alloc))
+                .collect();
 
-                let stream_idx = index.streams.len() as u32;
-                index.streams.push(IndexStreamInfo {
-                    size: SizeInfo {
-                        length: stream_size,
-                        allocated: stream_allocated,
-                    },
-                    next_entry: NO_ENTRY,
-                    name: stream_name_ref,
-                    flags: 0,
-                });
-                stream_indices.push(stream_idx);
-            }
-
-            // Now create the record and set up streams
+            // Setup record and chain streams
             let record = index.get_or_create(frs);
             record.stdinfo = std_info;
             record.first_stream.size = SizeInfo {
@@ -694,21 +663,13 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 allocated: default_allocated,
             };
 
-            // Chain ADS streams to first_stream
             if !stream_indices.is_empty() {
-                // Chain the streams together
-                for i in 0..stream_indices.len().saturating_sub(1) {
-                    let current_idx = stream_indices[i] as usize;
-                    let next_idx = stream_indices[i + 1];
-                    index.streams[current_idx].next_entry = next_idx;
-                }
-                // Attach to first_stream
+                chain_streams(index, &stream_indices);
                 let record = index.get_or_create(frs);
                 record.first_stream.next_entry = stream_indices[0];
                 record.stream_count = 1 + additional_stream_count as u16;
             }
 
-            // Leave first_name empty - extension record will fill it
             return false;
         }
     };
@@ -720,59 +681,24 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let extension_id = index.intern_extension(&name);
     let name_ref = IndexNameRef::new(name_offset, name_len as u16, is_ascii, extension_id);
 
-    // Pre-process additional names: add to names buffer and links list BEFORE
-    // getting record reference This avoids borrow checker issues with holding
-    // &mut record while modifying index
+    // Pre-process additional names using helpers
     let additional_count = additional_names.len();
-    let mut link_indices: Vec<u32> = Vec::with_capacity(additional_count);
-    // Collect parent FRS values for building children array later
     let mut additional_parent_frs: SmallVec<[(u64, u16); 4]> =
         SmallVec::with_capacity(additional_count);
-    for (link_name, link_parent, link_parse_idx) in additional_names {
-        additional_parent_frs.push((link_parent, link_parse_idx));
-        let link_offset = index.add_name(&link_name);
-        let link_len = link_name.len();
-        let link_is_ascii = link_name.is_ascii();
-        let extension_id = index.intern_extension(&link_name);
-        let link_name_ref =
-            IndexNameRef::new(link_offset, link_len as u16, link_is_ascii, extension_id);
+    let link_indices: Vec<u32> = additional_names
+        .into_iter()
+        .map(|(link_name, link_parent, link_parse_idx)| {
+            additional_parent_frs.push((link_parent, link_parse_idx));
+            add_link_to_index(index, &link_name, link_parent)
+        })
+        .collect();
 
-        let link_idx = index.links.len() as u32;
-        index.links.push(LinkInfo {
-            next_entry: NO_ENTRY, // Will be patched below
-            name: link_name_ref,
-            parent_frs: link_parent,
-        });
-        link_indices.push(link_idx);
-    }
-
-    // Pre-process additional streams (ADS): add to names buffer and streams list
+    // Pre-process additional streams (ADS) using helpers
     let additional_stream_count = additional_streams.len();
-    let mut stream_indices: Vec<u32> = Vec::with_capacity(additional_stream_count);
-    for (stream_name, stream_size, stream_allocated) in additional_streams {
-        let stream_name_offset = index.add_name(&stream_name);
-        let stream_name_len = stream_name.len();
-        let stream_is_ascii = stream_name.is_ascii();
-        let extension_id = index.intern_extension(&stream_name);
-        let stream_name_ref = IndexNameRef::new(
-            stream_name_offset,
-            stream_name_len as u16,
-            stream_is_ascii,
-            extension_id,
-        );
-
-        let stream_idx = index.streams.len() as u32;
-        index.streams.push(IndexStreamInfo {
-            size: SizeInfo {
-                length: stream_size,
-                allocated: stream_allocated,
-            },
-            next_entry: NO_ENTRY, // Will be patched below
-            name: stream_name_ref,
-            flags: 0,
-        });
-        stream_indices.push(stream_idx);
-    }
+    let stream_indices: Vec<u32> = additional_streams
+        .into_iter()
+        .map(|(name, size, alloc)| add_stream_to_index(index, &name, size, alloc))
+        .collect();
 
     // Ensure parent exists (create placeholder if needed) - do this before getting
     // our record
@@ -816,64 +742,14 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         record.first_stream.next_entry = stream_indices[0];
     }
 
-    // Chain the links together
-    for i in 0..link_indices.len().saturating_sub(1) {
-        let current_idx = link_indices[i] as usize;
-        let next_idx = link_indices[i + 1];
-        index.links[current_idx].next_entry = next_idx;
-    }
+    // Chain links and streams together using helpers
+    chain_links(index, &link_indices);
+    chain_streams(index, &stream_indices);
 
-    // Chain the streams together
-    for i in 0..stream_indices.len().saturating_sub(1) {
-        let current_idx = stream_indices[i] as usize;
-        let next_idx = stream_indices[i + 1];
-        index.streams[current_idx].next_entry = next_idx;
-    }
-
-    // Build parent-child relationship for tree metrics computation
-    // This is critical for compute_tree_metrics() to work correctly.
-    // Each name (primary + additional) creates a child entry in its parent.
-    // name_index 0 = primary name, 1+ = additional names (hardlinks)
-
-    // Helper to add a child entry to a parent
-    let add_child_entry = |index: &mut crate::index::MftIndex, p_frs: u64, name_idx: u16| {
-        if p_frs == frs || p_frs == 0 || p_frs == u64::from(NO_ENTRY) {
-            return;
-        }
-        // Ensure parent exists
-        let parent_idx = {
-            let p_frs_usize = p_frs as usize;
-            if p_frs_usize >= index.frs_to_idx.len() {
-                index.frs_to_idx.resize(p_frs_usize + 1, NO_ENTRY);
-            }
-            if index.frs_to_idx[p_frs_usize] == NO_ENTRY {
-                // Create placeholder parent
-                let new_idx = index.records.len() as u32;
-                index.frs_to_idx[p_frs_usize] = new_idx;
-                index.records.push(crate::index::FileRecord::new(p_frs));
-            }
-            index.frs_to_idx[p_frs_usize]
-        };
-
-        // Add child entry
-        let child_idx = index.children.len() as u32;
-        let parent = &mut index.records[parent_idx as usize];
-        let old_first_child = parent.first_child;
-        parent.first_child = child_idx;
-
-        index.children.push(ChildInfo {
-            next_entry: old_first_child,
-            child_frs: frs,
-            name_index: name_idx,
-        });
-    };
-
-    // Add child entry for primary name (using C++ parse-order index)
-    add_child_entry(index, parent_frs, primary_parse_index);
-
-    // Add child entries for additional names (hardlinks)
-    for &(link_parent_frs, link_parse_idx) in additional_parent_frs.iter() {
-        add_child_entry(index, link_parent_frs, link_parse_idx);
+    // Build parent-child relationships for tree metrics computation
+    add_child_entry(index, parent_frs, frs, primary_parse_index);
+    for &(link_parent_frs, link_parse_idx) in &additional_parent_frs {
+        add_child_entry(index, link_parent_frs, frs, link_parse_idx);
     }
 
     true

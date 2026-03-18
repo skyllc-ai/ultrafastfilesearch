@@ -1,9 +1,5 @@
 //! Extension record parser for direct-to-index path.
 //!
-//! Exception: This file is intentionally large (720+ LOC) to match the
-//! completeness of `index.rs` - it handles all the same attribute types that
-//! can appear in extension records. See `scripts/ci/file_size_exceptions.txt`.
-//!
 //! This module handles extension records for the single-pass parser, extracting
 //! names, streams, and all attribute types from extension records and merging
 //! them into base records in the index.
@@ -44,6 +40,7 @@ use core::mem::size_of;
 use smallvec::SmallVec;
 use zerocopy::FromBytes;
 
+use super::index_helpers::{add_link_to_index, add_stream_to_index};
 use crate::ntfs::is_internal_windows_stream;
 
 /// Parses an extension record and adds its names/streams to the base record.
@@ -86,7 +83,7 @@ pub(super) fn parse_extension_to_index(
     base_frs: u64,
     index: &mut crate::index::MftIndex,
 ) -> bool {
-    use crate::index::{ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo};
+    use crate::index::{ChildInfo, NO_ENTRY};
     use crate::ntfs::{
         AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
     };
@@ -543,44 +540,15 @@ pub(super) fn parse_extension_to_index(
 
     // Add names to the base record
     // First, add all names to the names buffer and create LinkInfo entries
-    let mut link_indices: Vec<u32> = Vec::with_capacity(names.len());
-    for (name, parent_frs) in &names {
-        let name_offset = index.add_name(name);
-        let name_len = name.len();
-        let is_ascii = name.is_ascii();
-        let extension_id = index.intern_extension(name);
-        let name_ref = IndexNameRef::new(name_offset, name_len as u16, is_ascii, extension_id);
-
-        let link_idx = index.links.len() as u32;
-        index.links.push(LinkInfo {
-            next_entry: NO_ENTRY,
-            name: name_ref,
-            parent_frs: *parent_frs,
-        });
-        link_indices.push(link_idx);
-    }
-
-    // Add streams to the streams buffer
-    let mut stream_indices: Vec<u32> = Vec::with_capacity(streams.len());
-    for (stream_name, size, allocated) in &streams {
-        let name_offset = index.add_name(stream_name);
-        let name_len = stream_name.len();
-        let is_ascii = stream_name.is_ascii();
-        let extension_id = index.intern_extension(stream_name);
-        let name_ref = IndexNameRef::new(name_offset, name_len as u16, is_ascii, extension_id);
-
-        let stream_idx = index.streams.len() as u32;
-        index.streams.push(IndexStreamInfo {
-            size: SizeInfo {
-                length: *size,
-                allocated: *allocated,
-            },
-            next_entry: NO_ENTRY,
-            name: name_ref,
-            flags: 0,
-        });
-        stream_indices.push(stream_idx);
-    }
+    // Add names/streams using helpers
+    let link_indices: Vec<u32> = names
+        .iter()
+        .map(|(name, parent)| add_link_to_index(index, name, *parent))
+        .collect();
+    let stream_indices: Vec<u32> = streams
+        .iter()
+        .map(|(name, size, alloc)| add_stream_to_index(index, name, *size, *alloc))
+        .collect();
 
     // Ensure parent directories exist for the new names
     for (_, parent_frs) in &names {

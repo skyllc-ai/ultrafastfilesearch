@@ -7,7 +7,7 @@
 #[cfg(windows)]
 use std::mem::size_of;
 #[cfg(windows)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;

@@ -1,21 +1,33 @@
 //! Single-pass direct-to-index parser (C++-style inline approach).
 //!
-//! Exception: This file is intentionally monolithic (840+ LOC) because it
-//! implements a performance-critical hot path that handles all NTFS attribute
-//! types inline. Splitting would introduce indirection overhead and hurt
-//! performance. See `scripts/ci/file_size_exceptions.txt`.
-//!
 //! This module implements the high-performance single-pass parser that matches
 //! the C++ architecture. It parses MFT records directly into `MftIndex` without
 //! creating intermediate `ParsedRecord` allocations, which is critical for IOCP
 //! performance.
 
-// Performance-critical hot-path parser — lint suppressions for NTFS parsing code.
-// This is a 1000+ LOC monolithic parser handling all NTFS attribute types inline.
-// The complexity is intentional for performance, and bounds are validated before indexing.
-#![allow(clippy::all, clippy::nursery, clippy::pedantic)]
-// Re-enable critical safety lints
-#![warn(clippy::unwrap_used, clippy::expect_used)]
+// Performance-critical hot-path parser — minimal, scoped lint suppressions.
+// Each suppression is justified with a reason.
+#![expect(
+    clippy::doc_markdown,
+    reason = "NTFS terminology like WoF, MftIndex does not need backticks"
+)]
+#![expect(
+    clippy::manual_let_else,
+    reason = "explicit match is clearer in NTFS attribute dispatch"
+)]
+#![expect(
+    clippy::cast_lossless,
+    reason = "u32 as u64 casts are intentional for NTFS struct field sizes"
+)]
+#![expect(
+    clippy::cast_sign_loss,
+    reason = "i64.max(0) as u64 is safe because negative values become 0"
+)]
+#![expect(
+    clippy::single_match_else,
+    reason = "explicit match arms are clearer for attribute type dispatch"
+)]
+
 
 use core::mem::size_of;
 
@@ -24,6 +36,11 @@ use zerocopy::FromBytes;
 
 use super::index_extension::parse_extension_to_index;
 use crate::ntfs::is_internal_windows_stream;
+use crate::parse::index_helpers::{
+    ExtensionSnapshot, InternalStreamChain, add_child_entry, add_link_to_index,
+    add_stream_to_index, build_internal_stream_chain, chain_links, chain_streams,
+    merge_extension_names, merge_extension_streams,
+};
 
 /// Parses a record directly into `MftIndex` (single-pass inline parsing).
 ///
@@ -56,16 +73,11 @@ use crate::ntfs::is_internal_windows_stream;
     reason = "NTFS field sizes are bounded by u16/u32 record layout"
 )]
 pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::MftIndex) -> bool {
-    use crate::index::{
-        ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo,
-    };
+    use crate::index::{IndexNameRef, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo};
     use crate::ntfs::{
         AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
         StandardInformation, file_reference_to_frs, filetime_to_unix_micros,
     };
-
-    // Check for parity debug logging
-    let debug_parity = std::env::var("UFFS_PARITY_DEBUG").is_ok();
 
     if data.len() < size_of::<FileRecordSegmentHeader>() {
         return false;
@@ -107,7 +119,6 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let mut name_parse_counter: u16 = 0;
     let mut default_size = 0u64;
     let mut default_allocated = 0u64;
-    let mut found_data_attr = false;
     // User-visible ADS: (stream_name, size, allocated)
     let mut additional_streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
     // Internal NTFS streams (e.g. $REPARSE, $EA, $OBJECT_ID) — not emitted as
@@ -232,24 +243,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                         let lowest_vcn = i64::from_le_bytes(
                             data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
                         );
-                        let is_primary = lowest_vcn == 0;
-                        if debug_parity && !is_primary {
-                            eprintln!(
-                                "[PARITY_DEBUG] FRS={}: $DATA LowestVCN={}, SKIPPED (continuation extent)",
-                                frs, lowest_vcn
-                            );
-                        }
-                        is_primary
+                        lowest_vcn == 0
                     } else {
-                        // Can't read LowestVCN — assume primary (LowestVCN == 0 is common case)
-                        // This prevents skipping valid $DATA attributes near record boundaries
-                        if debug_parity {
-                            eprintln!(
-                                "[PARITY_DEBUG] FRS={}: $DATA can't read LowestVCN (nr_offset + 8 > data.len()), assuming primary",
-                                frs
-                            );
-                        }
-                        true
+                        true // Assume primary if can't read LowestVCN
                     }
                 };
 
@@ -307,41 +303,20 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                                 .try_into()
                                 .unwrap_or([0; 8]),
                         );
-                        if debug_parity && name_len == 0 {
-                            eprintln!(
-                                "[PARITY_DEBUG] FRS={}: $DATA non-resident, size={}, allocated={} (compressed/sparse={})",
-                                frs, size, allocated, use_compressed_size
-                            );
-                        }
                         (size, allocated)
                     } else if alloc_offset + 8 <= data.len() {
                         // Can read AllocatedSize but not DataSize — use AllocatedSize for both
-                        // This handles attributes truncated near record boundary
                         let allocated = u64::from_le_bytes(
                             data[alloc_offset..alloc_offset + 8]
                                 .try_into()
                                 .unwrap_or([0; 8]),
                         );
-                        if debug_parity && name_len == 0 {
-                            eprintln!(
-                                "[PARITY_DEBUG] FRS={}: $DATA non-resident (truncated), allocated={}",
-                                frs, allocated
-                            );
-                        }
                         (allocated, allocated)
                     } else {
-                        if debug_parity && name_len == 0 {
-                            eprintln!(
-                                "[PARITY_DEBUG] FRS={}: $DATA non-resident, but can't read size/allocated (offset beyond data.len()), size=0",
-                                frs
-                            );
-                        }
                         (0, 0)
                     }
                 } else {
                     // Resident: value_length at offset 16
-                    // Resident files have no clusters allocated - data is stored in MFT record
-                    // C++ correctly shows allocated_size=0 for resident files
                     let len_offset = offset + 16;
                     if len_offset + 4 <= data.len() {
                         let len = u32::from_le_bytes(
@@ -349,17 +324,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                                 .try_into()
                                 .unwrap_or([0; 4]),
                         ) as u64;
-                        if debug_parity && name_len == 0 {
-                            eprintln!("[PARITY_DEBUG] FRS={}: $DATA resident, size={}", frs, len);
-                        }
                         (len, 0) // allocated_size = 0 for resident files
                     } else {
-                        if debug_parity && name_len == 0 {
-                            eprintln!(
-                                "[PARITY_DEBUG] FRS={}: $DATA resident, but can't read value_length, size=0",
-                                frs
-                            );
-                        }
                         (0, 0)
                     }
                 };
@@ -368,13 +334,6 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     // Default stream
                     default_size = size;
                     default_allocated = allocated;
-                    found_data_attr = true;
-                    if debug_parity && size == 0 {
-                        eprintln!(
-                            "[PARITY_DEBUG] FRS={}: Default $DATA stream has ZERO size",
-                            frs
-                        );
-                    }
                 } else {
                     // Alternate Data Stream (ADS)
                     let name_offset = offset + attr_header.name_offset as usize;
@@ -643,11 +602,6 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             default_size = dir_index_size;
             default_allocated = dir_index_allocated;
         }
-    } else if debug_parity && !found_data_attr && default_size == 0 {
-        eprintln!(
-            "[PARITY_DEBUG] FRS={}: Non-directory file has NO $DATA attribute, size will be 0",
-            frs
-        );
     }
 
     // Handle records without a filename in the base record
@@ -664,155 +618,66 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 
             // Pre-process user-visible ADS streams BEFORE creating the record
             let additional_stream_count = additional_streams.len();
-            let mut stream_indices: Vec<u32> = Vec::with_capacity(additional_stream_count);
-            for (stream_name, stream_size, stream_allocated) in additional_streams {
-                let stream_name_offset = index.add_name(&stream_name);
-                let stream_name_len = stream_name.len();
-                let stream_is_ascii = stream_name.is_ascii();
-                let extension_id = index.intern_extension(&stream_name);
-                let stream_name_ref = IndexNameRef::new(
-                    stream_name_offset,
-                    stream_name_len as u16,
-                    stream_is_ascii,
-                    extension_id,
-                );
-
-                let stream_idx = index.streams.len() as u32;
-                index.streams.push(IndexStreamInfo {
-                    size: SizeInfo {
-                        length: stream_size,
-                        allocated: stream_allocated,
-                    },
-                    next_entry: NO_ENTRY,
-                    name: stream_name_ref,
-                    // type_name_id=8 for $DATA (0x80 >> 4), stored in bits 2-7
-                    flags: 8 << 2,
-                });
-                stream_indices.push(stream_idx);
-            }
+            let stream_indices: Vec<u32> = additional_streams
+                .into_iter()
+                .map(|(name, size, alloc)| add_stream_to_index(index, &name, size, alloc))
+                .collect();
 
             // Build internal stream chain for tree-metrics accounting
             let internal_stream_count = internal_streams.len();
-            let mut internal_size_total = 0_u64;
-            let mut internal_alloc_total = 0_u64;
-            let mut first_internal = NO_ENTRY;
-            let mut last_internal = NO_ENTRY;
-            for (ist_size, ist_allocated) in internal_streams {
-                internal_size_total = internal_size_total.saturating_add(ist_size);
-                internal_alloc_total = internal_alloc_total.saturating_add(ist_allocated);
-                let new_idx = index.internal_streams.len() as u32;
-                index
-                    .internal_streams
-                    .push(crate::index::InternalStreamInfo {
-                        size: SizeInfo {
-                            length: ist_size,
-                            allocated: ist_allocated,
-                        },
-                        next_entry: NO_ENTRY,
-                        flags: 0,
-                    });
-                if last_internal == NO_ENTRY {
-                    first_internal = new_idx;
-                } else {
-                    index.internal_streams[last_internal as usize].next_entry = new_idx;
-                }
-                last_internal = new_idx;
-            }
+            let InternalStreamChain {
+                first: first_internal,
+                size_total: internal_size_total,
+                alloc_total: internal_alloc_total,
+                ..
+            } = build_internal_stream_chain(index, internal_streams);
 
-            // Now create the record and set up streams
+            // Snapshot and setup record using helper
             let record = index.get_or_create(frs);
-
-            // Snapshot existing extension data before overwriting (extension may
-            // have been processed first on a fragmented MFT).
-            let ext_stream_head = record.first_stream.next_entry;
-            let ext_stream_count = record.stream_count.saturating_sub(1);
-            let ext_total_extra = record.total_stream_count.saturating_sub(1);
-            let ext_internal_head = record.first_internal_stream;
-            let ext_internal_size = record.internal_streams_size;
-            let ext_internal_alloc = record.internal_streams_allocated;
-            // Snapshot first_stream.size from extension records (IOCP ordering).
-            let ext_first_stream_len = record.first_stream.size.length;
-            let ext_first_stream_alloc = record.first_stream.size.allocated;
+            let ext = ExtensionSnapshot {
+                stream_head: record.first_stream.next_entry,
+                stream_count: record.stream_count.saturating_sub(1),
+                total_extra: record.total_stream_count.saturating_sub(1),
+                name_next: NO_ENTRY,
+                name_count: 0,
+                internal_head: record.first_internal_stream,
+                internal_size: record.internal_streams_size,
+                internal_alloc: record.internal_streams_allocated,
+                first_stream_len: record.first_stream.size.length,
+                first_stream_alloc: record.first_stream.size.allocated,
+            };
 
             record.stdinfo = std_info;
             record.first_stream.size = SizeInfo {
-                length: default_size,
-                allocated: default_allocated,
+                length: if default_size == 0 && ext.first_stream_len > 0 {
+                    ext.first_stream_len
+                } else {
+                    default_size
+                },
+                allocated: if default_allocated == 0 && ext.first_stream_alloc > 0 {
+                    ext.first_stream_alloc
+                } else {
+                    default_allocated
+                },
             };
-            // Restore extension's default-stream size if base has no $DATA/$I30.
-            if default_size == 0
-                && default_allocated == 0
-                && (ext_first_stream_len > 0 || ext_first_stream_alloc > 0)
-            {
-                record.first_stream.size.length = ext_first_stream_len;
-                record.first_stream.size.allocated = ext_first_stream_alloc;
-            }
-            // Set type_name_id for first_stream: 0 for directories ($I30), 8 for files
-            // ($DATA)
-            record.first_stream.flags = if record.stdinfo.is_directory() {
-                0 // type_name_id=0 for directory index ($I30)
-            } else {
-                8 << 2 // type_name_id=8 for $DATA (0x80 >> 4), stored in bits 2-7
-            };
+            record.first_stream.flags = if record.stdinfo.is_directory() { 0 } else { 8 << 2 };
             record.internal_streams_size = internal_size_total;
             record.internal_streams_allocated = internal_alloc_total;
             record.first_internal_stream = first_internal;
 
-            // Chain user-visible ADS streams to first_stream
+            // Chain ADS streams and set counts
             if !stream_indices.is_empty() {
-                // Chain the streams together
-                for i in 0..stream_indices.len().saturating_sub(1) {
-                    let current_idx = stream_indices[i] as usize;
-                    let next_idx = stream_indices[i + 1];
-                    index.streams[current_idx].next_entry = next_idx;
-                }
-                // Attach to first_stream
+                chain_streams(index, &stream_indices);
                 let record = index.get_or_create(frs);
                 record.first_stream.next_entry = stream_indices[0];
             }
-
-            // stream_count = user-visible streams only (1 default + ADS)
             let record = index.get_or_create(frs);
             record.stream_count = 1 + additional_stream_count as u16;
-            // total_stream_count = ALL streams including internal
             record.total_stream_count =
                 1 + additional_stream_count as u16 + internal_stream_count as u16;
 
-            // Merge extension streams that were processed before this base record.
-            if ext_stream_count > 0 {
-                let base_stream_tail = stream_indices.last().copied().unwrap_or(NO_ENTRY);
-                if base_stream_tail != NO_ENTRY {
-                    index.streams[base_stream_tail as usize].next_entry = ext_stream_head;
-                } else {
-                    let record = index.get_or_create(frs);
-                    record.first_stream.next_entry = ext_stream_head;
-                }
-                let record = index.get_or_create(frs);
-                record.stream_count += ext_stream_count;
-                record.total_stream_count += ext_stream_count;
-            }
-
-            if ext_internal_head != NO_ENTRY {
-                if first_internal != NO_ENTRY {
-                    let mut tail = first_internal;
-                    while index.internal_streams[tail as usize].next_entry != NO_ENTRY {
-                        tail = index.internal_streams[tail as usize].next_entry;
-                    }
-                    index.internal_streams[tail as usize].next_entry = ext_internal_head;
-                } else {
-                    let record = index.get_or_create(frs);
-                    record.first_internal_stream = ext_internal_head;
-                }
-                let record = index.get_or_create(frs);
-                record.internal_streams_size += ext_internal_size;
-                record.internal_streams_allocated += ext_internal_alloc;
-                record.total_stream_count += ext_total_extra.saturating_sub(ext_stream_count);
-            }
-
-            // Emit the record even though first_name is empty - extension record will fill
-            // it. The ADS streams have been correctly stored in the index and
-            // must be counted to match C++ behavior (which emits all streams
-            // during traversal regardless of when $FILE_NAME was added).
+            // Merge extension data
+            merge_extension_streams(index, frs, stream_indices.last().copied(), first_internal, &ext);
             return true;
         }
     };
@@ -828,84 +693,32 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     // getting record reference This avoids borrow checker issues with holding
     // &mut record while modifying index
     let additional_count = additional_names.len();
-    let mut link_indices: Vec<u32> = Vec::with_capacity(additional_count);
     // Collect parent FRS values for building children array later
     let mut additional_parent_frs: SmallVec<[(u64, u16); 4]> =
         SmallVec::with_capacity(additional_count);
-    for (link_name, link_parent, link_parse_idx) in additional_names {
-        additional_parent_frs.push((link_parent, link_parse_idx));
-        let link_offset = index.add_name(&link_name);
-        let link_len = link_name.len();
-        let link_is_ascii = link_name.is_ascii();
-        let extension_id = index.intern_extension(&link_name);
-        let link_name_ref =
-            IndexNameRef::new(link_offset, link_len as u16, link_is_ascii, extension_id);
-
-        let link_idx = index.links.len() as u32;
-        index.links.push(LinkInfo {
-            next_entry: NO_ENTRY, // Will be patched below
-            name: link_name_ref,
-            parent_frs: link_parent,
-        });
-        link_indices.push(link_idx);
-    }
+    let link_indices: Vec<u32> = additional_names
+        .into_iter()
+        .map(|(link_name, link_parent, link_parse_idx)| {
+            additional_parent_frs.push((link_parent, link_parse_idx));
+            add_link_to_index(index, &link_name, link_parent)
+        })
+        .collect();
 
     // Pre-process user-visible ADS streams: add to names buffer and streams list
     let additional_stream_count = additional_streams.len();
-    let mut stream_indices: Vec<u32> = Vec::with_capacity(additional_stream_count);
-    for (stream_name, stream_size, stream_allocated) in additional_streams {
-        let stream_name_offset = index.add_name(&stream_name);
-        let stream_name_len = stream_name.len();
-        let stream_is_ascii = stream_name.is_ascii();
-        let extension_id = index.intern_extension(&stream_name);
-        let stream_name_ref = IndexNameRef::new(
-            stream_name_offset,
-            stream_name_len as u16,
-            stream_is_ascii,
-            extension_id,
-        );
-
-        let stream_idx = index.streams.len() as u32;
-        index.streams.push(IndexStreamInfo {
-            size: SizeInfo {
-                length: stream_size,
-                allocated: stream_allocated,
-            },
-            next_entry: NO_ENTRY, // Will be patched below
-            name: stream_name_ref,
-            // type_name_id=8 for $DATA (0x80 >> 4), stored in bits 2-7
-            flags: 8 << 2,
-        });
-        stream_indices.push(stream_idx);
-    }
+    let stream_indices: Vec<u32> = additional_streams
+        .into_iter()
+        .map(|(name, size, alloc)| add_stream_to_index(index, &name, size, alloc))
+        .collect();
 
     // Build internal stream chain for tree-metrics accounting
     let internal_stream_count = internal_streams.len();
-    let mut internal_size_total = 0_u64;
-    let mut internal_alloc_total = 0_u64;
-    let mut first_internal = NO_ENTRY;
-    let mut last_internal = NO_ENTRY;
-    for (ist_size, ist_allocated) in internal_streams {
-        internal_size_total = internal_size_total.saturating_add(ist_size);
-        internal_alloc_total = internal_alloc_total.saturating_add(ist_allocated);
-        let new_idx = index.internal_streams.len() as u32;
-        index
-            .internal_streams
-            .push(crate::index::InternalStreamInfo {
-                size: SizeInfo {
-                    length: ist_size,
-                    allocated: ist_allocated,
-                },
-                next_entry: NO_ENTRY,
-                flags: 0,
-            });
-        if last_internal == NO_ENTRY {
-            first_internal = new_idx;
-        } else {
-            index.internal_streams[last_internal as usize].next_entry = new_idx;
-        }
-        last_internal = new_idx;
-    }
+    let InternalStreamChain {
+        first: first_internal,
+        size_total: internal_size_total,
+        alloc_total: internal_alloc_total,
+        ..
+    } = build_internal_stream_chain(index, internal_streams);
 
     // Ensure parent exists (create placeholder if needed) - do this before getting
     // our record
@@ -913,191 +726,62 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         let _ = index.get_or_create(parent_frs);
     }
 
-    // Now get or create the record in the index - no more index mutations after
-    // this
+    // Snapshot and setup record
     let record = index.get_or_create(frs);
-
-    // Snapshot existing extension data BEFORE overwriting.
-    // On a fragmented MFT, extension records may be processed before their base
-    // record. The extension parser adds names/ADS/streams to a placeholder
-    // record. We must preserve that data when the base record arrives.
-    let ext_stream_head = record.first_stream.next_entry;
-    let ext_stream_count = record.stream_count.saturating_sub(1); // exclude default
-    let ext_total_extra = record.total_stream_count.saturating_sub(1);
-    let ext_name_next = record.first_name.next_entry;
-    let ext_name_count = if record.first_name.name.is_valid() {
-        record.name_count
-    } else {
-        0
+    let ext = ExtensionSnapshot {
+        stream_head: record.first_stream.next_entry,
+        stream_count: record.stream_count.saturating_sub(1),
+        total_extra: record.total_stream_count.saturating_sub(1),
+        name_next: record.first_name.next_entry,
+        name_count: if record.first_name.name.is_valid() { record.name_count } else { 0 },
+        internal_head: record.first_internal_stream,
+        internal_size: record.internal_streams_size,
+        internal_alloc: record.internal_streams_allocated,
+        first_stream_len: record.first_stream.size.length,
+        first_stream_alloc: record.first_stream.size.allocated,
     };
-    let ext_internal_head = record.first_internal_stream;
-    let ext_internal_size = record.internal_streams_size;
-    let ext_internal_alloc = record.internal_streams_allocated;
-    // Snapshot first_stream.size — extension records processed before the base
-    // (due to IOCP out-of-order I/O) may have already set the default $DATA or
-    // $I30 size. We must preserve it if the base record has no $DATA.
-    let ext_first_stream_len = record.first_stream.size.length;
-    let ext_first_stream_alloc = record.first_stream.size.allocated;
 
     record.stdinfo = std_info;
     record.first_stream.size = SizeInfo {
-        length: default_size,
-        allocated: default_allocated,
+        length: if default_size == 0 && ext.first_stream_len > 0 {
+            ext.first_stream_len
+        } else {
+            default_size
+        },
+        allocated: if default_allocated == 0 && ext.first_stream_alloc > 0 {
+            ext.first_stream_alloc
+        } else {
+            default_allocated
+        },
     };
-    // If the base record has no $DATA (default_size == 0 and default_allocated
-    // == 0) but an extension record already populated first_stream.size, restore
-    // the extension's values. This handles files/dirs whose primary $DATA/$I30
-    // attribute resides entirely in an extension record.
-    if default_size == 0
-        && default_allocated == 0
-        && (ext_first_stream_len > 0 || ext_first_stream_alloc > 0)
-    {
-        record.first_stream.size.length = ext_first_stream_len;
-        record.first_stream.size.allocated = ext_first_stream_alloc;
-    }
-    // Set type_name_id for first_stream: 0 for directories ($I30), 8 for files
-    // ($DATA)
-    record.first_stream.flags = if record.stdinfo.is_directory() {
-        0 // type_name_id=0 for directory index ($I30)
-    } else {
-        8 << 2 // type_name_id=8 for $DATA (0x80 >> 4), stored in bits 2-7
-    };
-    record.first_name = LinkInfo {
-        next_entry: NO_ENTRY,
-        name: name_ref,
-        parent_frs,
-    };
+    record.first_stream.flags = if record.stdinfo.is_directory() { 0 } else { 8 << 2 };
+    record.first_name = LinkInfo { next_entry: NO_ENTRY, name: name_ref, parent_frs };
     record.name_count = 1 + additional_count as u16;
-    // stream_count = user-visible streams only (1 default + ADS)
     record.stream_count = 1 + additional_stream_count as u16;
-    // total_stream_count = ALL streams including internal (for tree metrics)
     record.total_stream_count = 1 + additional_stream_count as u16 + internal_stream_count as u16;
-    // Internal stream metadata for tree metrics
     record.internal_streams_size = internal_size_total;
     record.internal_streams_allocated = internal_alloc_total;
     record.first_internal_stream = first_internal;
-    // Set reparse tag if this is a reparse point
     record.reparse_tag = reparse_tag;
 
-    // Chain the additional links: first_name -> link[0] -> link[1] -> ... ->
-    // NO_ENTRY The links were pushed with next_entry = NO_ENTRY, now we chain
-    // them
-    if !link_indices.is_empty() {
-        // Point first_name to the first additional link
-        record.first_name.next_entry = link_indices[0];
-    }
+    // Chain links and streams, attach to record
+    if !link_indices.is_empty() { record.first_name.next_entry = link_indices[0]; }
+    if !stream_indices.is_empty() { record.first_stream.next_entry = stream_indices[0]; }
+    chain_links(index, &link_indices);
+    chain_streams(index, &stream_indices);
 
-    // Chain the additional streams: first_stream -> stream[0] -> stream[1] -> ...
-    if !stream_indices.is_empty() {
-        // Point first_stream to the first additional stream
-        record.first_stream.next_entry = stream_indices[0];
-    }
-
-    // Chain the links together
-    for i in 0..link_indices.len().saturating_sub(1) {
-        let current_idx = link_indices[i] as usize;
-        let next_idx = link_indices[i + 1];
-        index.links[current_idx].next_entry = next_idx;
-    }
-
-    // Chain the streams together
-    for i in 0..stream_indices.len().saturating_sub(1) {
-        let current_idx = stream_indices[i] as usize;
-        let next_idx = stream_indices[i + 1];
-        index.streams[current_idx].next_entry = next_idx;
-    }
-
-    // Merge extension data that was processed before this base record.
-    // Reconnect extension stream/name/internal chains at the end of base chains.
-    if ext_stream_count > 0 {
-        // Find the tail of the base user-visible stream chain
-        let base_stream_tail = stream_indices.last().copied().unwrap_or(NO_ENTRY);
-        if base_stream_tail != NO_ENTRY {
-            index.streams[base_stream_tail as usize].next_entry = ext_stream_head;
-        } else {
-            let record = index.get_or_create(frs);
-            record.first_stream.next_entry = ext_stream_head;
-        }
-        let record = index.get_or_create(frs);
-        record.stream_count += ext_stream_count;
-        record.total_stream_count += ext_stream_count;
-    }
-
-    if ext_name_count > 0 {
-        // Find the tail of the base name chain
-        let base_name_tail = link_indices.last().copied().unwrap_or(NO_ENTRY);
-        if base_name_tail != NO_ENTRY {
-            index.links[base_name_tail as usize].next_entry = ext_name_next;
-        } else {
-            let record = index.get_or_create(frs);
-            record.first_name.next_entry = ext_name_next;
-        }
-        let record = index.get_or_create(frs);
-        record.name_count += ext_name_count;
-    }
-
-    if ext_internal_head != NO_ENTRY {
-        // Find the tail of the base internal stream chain
-        if first_internal != NO_ENTRY {
-            let mut tail = first_internal;
-            while index.internal_streams[tail as usize].next_entry != NO_ENTRY {
-                tail = index.internal_streams[tail as usize].next_entry;
-            }
-            index.internal_streams[tail as usize].next_entry = ext_internal_head;
-        } else {
-            let record = index.get_or_create(frs);
-            record.first_internal_stream = ext_internal_head;
-        }
-        let record = index.get_or_create(frs);
-        record.internal_streams_size += ext_internal_size;
-        record.internal_streams_allocated += ext_internal_alloc;
-        record.total_stream_count += ext_total_extra.saturating_sub(ext_stream_count);
-    }
+    // Merge extension data
+    merge_extension_streams(index, frs, stream_indices.last().copied(), first_internal, &ext);
+    merge_extension_names(index, frs, link_indices.last().copied(), &ext);
 
     // Build parent-child relationship for tree metrics computation
     // This is critical for compute_tree_metrics() to work correctly.
     // Each name (primary + additional) creates a child entry in its parent.
-    // name_index 0 = primary name, 1+ = additional names (hardlinks)
-
-    // Helper to add a child entry to a parent
-    let add_child_entry = |index: &mut crate::index::MftIndex, p_frs: u64, name_idx: u16| {
-        if p_frs == frs || p_frs == 0 || p_frs == u64::from(NO_ENTRY) {
-            return;
-        }
-        // Ensure parent exists
-        let parent_idx = {
-            let p_frs_usize = p_frs as usize;
-            if p_frs_usize >= index.frs_to_idx.len() {
-                index.frs_to_idx.resize(p_frs_usize + 1, NO_ENTRY);
-            }
-            if index.frs_to_idx[p_frs_usize] == NO_ENTRY {
-                // Create placeholder parent
-                let new_idx = index.records.len() as u32;
-                index.frs_to_idx[p_frs_usize] = new_idx;
-                index.records.push(crate::index::FileRecord::new(p_frs));
-            }
-            index.frs_to_idx[p_frs_usize]
-        };
-
-        // Add child entry
-        let child_idx = index.children.len() as u32;
-        let parent = &mut index.records[parent_idx as usize];
-        let old_first_child = parent.first_child;
-        parent.first_child = child_idx;
-
-        index.children.push(ChildInfo {
-            next_entry: old_first_child,
-            child_frs: frs,
-            name_index: name_idx,
-        });
-    };
-
-    // Add child entry for primary name (using C++ parse-order index)
-    add_child_entry(index, parent_frs, primary_parse_index);
+    add_child_entry(index, parent_frs, frs, primary_parse_index);
 
     // Add child entries for additional names (hardlinks)
-    for &(link_parent_frs, link_parse_idx) in additional_parent_frs.iter() {
-        add_child_entry(index, link_parent_frs, link_parse_idx);
+    for &(link_parent_frs, link_parse_idx) in &additional_parent_frs {
+        add_child_entry(index, link_parent_frs, frs, link_parse_idx);
     }
 
     true
