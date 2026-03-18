@@ -1,11 +1,12 @@
 //! Multi-drive reader orchestration and cache/update helpers.
 
+use uffs_polars::DataFrame;
+
 use crate::error::MftError;
 #[cfg(not(windows))]
 use crate::error::Result;
 #[cfg(not(windows))]
 use crate::reader::MftProgress;
-use uffs_polars::DataFrame;
 
 /// DataFrame-backed multi-drive read helpers.
 #[cfg(windows)]

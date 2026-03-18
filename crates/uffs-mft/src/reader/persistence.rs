@@ -696,7 +696,7 @@ impl MftReader {
         use std::collections::VecDeque;
         use std::pin::Pin;
 
-        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError, HANDLE};
+        use windows::Win32::Foundation::{CloseHandle, ERROR_IO_PENDING, GetLastError, HANDLE};
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
@@ -742,10 +742,16 @@ impl MftReader {
         // Create capture writer
         let mut writer = IocpCaptureWriter::new(record_size, options);
 
-        // Create IOCP
-        let handle: HANDLE = self.handle.raw_handle();
+        // IOCP requires FILE_FLAG_OVERLAPPED, so we need a separate handle
+        let handle: HANDLE = self.handle.open_overlapped_handle()?;
+
+        // Create IOCP and associate overlapped handle
         let iocp = IoCompletionPort::new(0)?;
-        iocp.associate(handle, 0)?;
+        if let Err(e) = iocp.associate(handle, 0) {
+            // SAFETY: handle was successfully opened by open_overlapped_handle
+            unsafe { CloseHandle(handle) }.ok();
+            return Err(e);
+        }
 
         // Pre-allocate buffer pool and in-flight operations
         let max_chunk_size = chunks
@@ -791,6 +797,8 @@ impl MftReader {
                 if read_result.is_err() {
                     let err = unsafe { GetLastError() };
                     if err != ERROR_IO_PENDING {
+                        // SAFETY: handle was opened by open_overlapped_handle
+                        unsafe { CloseHandle(handle) }.ok();
                         return Err(MftError::Io(std::io::Error::from_raw_os_error(
                             err.0 as i32,
                         )));
@@ -819,6 +827,8 @@ impl MftReader {
             };
 
             if status.is_err() && overlapped_ptr.is_null() {
+                // SAFETY: handle was opened by open_overlapped_handle
+                unsafe { CloseHandle(handle) }.ok();
                 return Err(MftError::Io(std::io::Error::last_os_error()));
             }
 
@@ -898,6 +908,8 @@ impl MftReader {
                         if read_result.is_err() {
                             let err = unsafe { GetLastError() };
                             if err != ERROR_IO_PENDING {
+                                // SAFETY: handle was opened by open_overlapped_handle
+                                unsafe { CloseHandle(handle) }.ok();
                                 return Err(MftError::Io(std::io::Error::from_raw_os_error(
                                     err.0 as i32,
                                 )));
@@ -913,6 +925,10 @@ impl MftReader {
             "IOCP capture complete: {} chunks in completion order",
             writer.chunk_count()
         );
+
+        // Close the overlapped handle before writing the file
+        // SAFETY: handle was opened by open_overlapped_handle and is no longer needed
+        unsafe { CloseHandle(handle) }.ok();
 
         writer.write_to_file(path)
     }

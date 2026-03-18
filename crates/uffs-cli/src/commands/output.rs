@@ -18,8 +18,8 @@ use uffs_core::{export_json, export_table};
 mod streaming;
 #[cfg(windows)]
 pub(crate) use streaming::StreamingWriter;
-
-// For tests, we need the JSON helpers - on Windows from streaming.rs, elsewhere from json_helpers.rs
+// For tests, we need the JSON helpers - on Windows from streaming.rs, elsewhere from
+// json_helpers.rs
 #[cfg(all(test, windows))]
 pub(super) use streaming::format_json_value;
 #[cfg(all(test, not(windows)))]

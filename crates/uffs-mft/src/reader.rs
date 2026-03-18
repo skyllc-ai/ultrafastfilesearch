@@ -3,9 +3,9 @@
 //! The heavy read pipelines and multi-drive orchestration live in dedicated
 //! submodules under `reader/`.
 
-use crate::error::Result;
 #[cfg(not(windows))]
 use crate::error::MftError;
+use crate::error::Result;
 #[cfg(windows)]
 use crate::platform::VolumeHandle;
 
