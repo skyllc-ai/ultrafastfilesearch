@@ -11,6 +11,7 @@
 //! verify_iocp_capture <iocp_file.iocp> <reference.raw|.bin>
 //! ```
 
+// Diagnostic binary: relaxed lints for user-facing output and one-time verification
 #![expect(
     unused_crate_dependencies,
     reason = "shared Cargo.toml dependencies not used by all binaries"
@@ -19,6 +20,29 @@
     clippy::print_stdout,
     clippy::print_stderr,
     reason = "diagnostic tool — stdout/stderr output is intentional"
+)]
+#![expect(
+    clippy::single_call_fn,
+    reason = "diagnostic tool — separate functions for clarity and error handling"
+)]
+#![expect(
+    clippy::float_arithmetic,
+    clippy::cast_precision_loss,
+    clippy::default_numeric_fallback,
+    reason = "diagnostic tool — progress percentages and GB size displays are approximate"
+)]
+#![expect(
+    clippy::let_underscore_must_use,
+    clippy::let_underscore_untyped,
+    reason = "diagnostic tool — flush() errors are safely ignored"
+)]
+#![expect(
+    clippy::indexing_slicing,
+    reason = "diagnostic tool — args indexing is guarded by length check"
+)]
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "diagnostic tool — MFT sizes fit in usize on 64-bit platforms"
 )]
 
 use std::env;
@@ -31,8 +55,11 @@ use sha2::{Digest, Sha256};
 use uffs_mft::raw::{LoadRawOptions, load_raw_mft};
 use uffs_mft::raw_iocp::load_iocp_capture;
 
-/// Chunk size for progress updates during hashing (256 MB)
+/// Chunk size for progress updates during hashing (256 MB).
 const HASH_CHUNK_SIZE: usize = 256 * 1024 * 1024;
+
+/// Conversion factor from bytes to GiB.
+const BYTES_TO_GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -55,26 +82,26 @@ fn main() -> Result<()> {
 
     // Load and process IOCP capture
     println!("📂 Loading IOCP capture: {}", iocp_path.display());
-    let start = Instant::now();
+    let iocp_start = Instant::now();
     let iocp_data = load_and_hash_iocp(iocp_path)?;
     println!(
         "\n   ✓ Loaded in {:.2}s: {} records, {:.2} GB",
-        start.elapsed().as_secs_f64(),
+        iocp_start.elapsed().as_secs_f64(),
         iocp_data.record_count,
-        iocp_data.data_size as f64 / (1024.0 * 1024.0 * 1024.0)
+        iocp_data.data_size as f64 / BYTES_TO_GIB
     );
     println!("   SHA256: {}", iocp_data.hash);
     println!();
 
     // Load and process reference MFT
     println!("📂 Loading reference MFT: {}", ref_path.display());
-    let start = Instant::now();
+    let ref_start = Instant::now();
     let ref_data = load_and_hash_raw(ref_path)?;
     println!(
         "\n   ✓ Loaded in {:.2}s: {} records, {:.2} GB",
-        start.elapsed().as_secs_f64(),
+        ref_start.elapsed().as_secs_f64(),
         ref_data.record_count,
-        ref_data.data_size as f64 / (1024.0 * 1024.0 * 1024.0)
+        ref_data.data_size as f64 / BYTES_TO_GIB
     );
     println!("   SHA256: {}", ref_data.hash);
     println!();
@@ -85,12 +112,11 @@ fn main() -> Result<()> {
     let size_match = iocp_data.data_size == ref_data.data_size;
     let hash_match = iocp_data.hash == ref_data.hash;
 
+    println!("╔══════════════════════════════════════════════════════════════╗");
     if records_match && size_match && hash_match {
-        println!("╔══════════════════════════════════════════════════════════════╗");
         println!("║  ✅ VERIFICATION PASSED - Data is identical                  ║");
         println!("╚══════════════════════════════════════════════════════════════╝");
     } else {
-        println!("╔══════════════════════════════════════════════════════════════╗");
         println!("║  ❌ VERIFICATION FAILED - Data differs                       ║");
         println!("╚══════════════════════════════════════════════════════════════╝");
         if !records_match {
@@ -114,12 +140,17 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Result of loading and hashing a data source.
 struct HashResult {
+    /// Number of MFT records.
     record_count: u64,
+    /// Total data size in bytes.
     data_size: usize,
+    /// Hex-encoded SHA256 hash.
     hash: String,
 }
 
+/// Loads an IOCP capture file, reassembles in FRS order, and computes SHA256.
 fn load_and_hash_iocp(path: &Path) -> Result<HashResult> {
     print!("   Reading & decompressing...");
     let _ = std::io::stdout().flush();
@@ -130,15 +161,17 @@ fn load_and_hash_iocp(path: &Path) -> Result<HashResult> {
     let total_records = capture.header.total_records;
     let total_size = (total_records * u64::from(record_size)) as usize;
 
-    println!(" {} chunks, {:.2} GB uncompressed",
+    println!(
+        " {} chunks, {:.2} GB uncompressed",
         capture.chunks.len(),
-        total_size as f64 / (1024.0 * 1024.0 * 1024.0));
+        total_size as f64 / BYTES_TO_GIB
+    );
 
     // Allocate buffer and reassemble in FRS order
     print!("   Reassembling chunks in FRS order...");
     let _ = std::io::stdout().flush();
 
-    let mut data = vec![0u8; total_size];
+    let mut data = vec![0_u8; total_size];
 
     // Sort chunks by start_frs
     let mut chunks: Vec<_> = capture.iter_chunks().collect();
@@ -162,6 +195,7 @@ fn load_and_hash_iocp(path: &Path) -> Result<HashResult> {
     })
 }
 
+/// Loads a raw MFT file and computes SHA256.
 fn load_and_hash_raw(path: &Path) -> Result<HashResult> {
     print!("   Reading file...");
     let _ = std::io::stdout().flush();
@@ -176,7 +210,7 @@ fn load_and_hash_raw(path: &Path) -> Result<HashResult> {
     )
     .context("Failed to load raw MFT")?;
 
-    println!(" done ({:.2} GB)", raw.data.len() as f64 / (1024.0 * 1024.0 * 1024.0));
+    println!(" done ({:.2} GB)", raw.data.len() as f64 / BYTES_TO_GIB);
 
     let hash = compute_sha256_with_progress(&raw.data, "RAW ");
 
@@ -187,23 +221,23 @@ fn load_and_hash_raw(path: &Path) -> Result<HashResult> {
     })
 }
 
+/// Computes SHA256 of data with progress indicator.
 fn compute_sha256_with_progress(data: &[u8], label: &str) -> String {
     let mut hasher = Sha256::new();
     let total = data.len();
     let mut processed = 0_usize;
 
-    print!("   Hashing {}: ", label);
+    print!("   Hashing {label}: ");
     let _ = std::io::stdout().flush();
 
     for chunk in data.chunks(HASH_CHUNK_SIZE) {
         hasher.update(chunk);
         processed = processed.saturating_add(chunk.len());
         let pct = (processed as f64 / total as f64) * 100.0;
-        print!("\r   Hashing {}: {:.0}%", label, pct);
+        print!("\r   Hashing {label}: {pct:.0}%");
         let _ = std::io::stdout().flush();
     }
 
     let result = hasher.finalize();
     hex::encode(result)
 }
-

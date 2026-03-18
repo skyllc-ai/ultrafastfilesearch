@@ -137,6 +137,9 @@ pub(super) fn load_and_filter_native_from_mft_file(
 
     let t_load = std::time::Instant::now();
 
+    // Check if this is an IOCP capture file (has UFFS-IOCP magic header)
+    let is_iocp = uffs_mft::is_iocp_capture(mft_path).unwrap_or(false);
+
     let index = if let Some(seed) = chaos_seed {
         // Use ChaosMftReader for deterministic chaos-order testing
         // Works on all platforms when reading offline MFT files
@@ -152,6 +155,13 @@ pub(super) fn load_and_filter_native_from_mft_file(
         chaos_reader
             .read_with_chaos(mft_path, volume)
             .with_context(|| format!("Failed to load MFT in chaos mode: {}", mft_path.display()))?
+    } else if is_iocp && !debug_tree {
+        // IOCP capture: use load_iocp_to_index which replays the exact Windows LIVE
+        // pipeline (parallel parse → MftRecordMerger → merge → from_parsed_records)
+        // Skip this path if debug_tree is set (use sequential debug path instead)
+        info!("IOCP capture detected - using LIVE pipeline replay for exact parity");
+        uffs_mft::load_iocp_to_index(mft_path)
+            .with_context(|| format!("Failed to load IOCP capture: {}", mft_path.display()))?
     } else {
         let options = LoadRawOptions {
             volume_letter: Some(volume),

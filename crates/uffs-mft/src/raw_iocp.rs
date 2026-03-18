@@ -478,3 +478,94 @@ pub fn is_iocp_capture<P: AsRef<Path>>(path: P) -> Result<bool> {
     }
     Ok(&magic_buf == MAGIC)
 }
+
+/// Load IOCP capture and build `MftIndex` using the **exact same pipeline** as
+/// Windows LIVE.
+///
+/// This function replays IOCP capture in the original completion order, using
+/// parallel parsing and `MftRecordMerger` exactly as Windows LIVE does. This
+/// ensures byte-for-byte parity with live Windows reads.
+///
+/// # Pipeline (identical to Windows LIVE)
+///
+/// ```text
+/// IOCP chunks (completion order) → parallel parse → MftRecordMerger → merge() → MftIndex
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if reading, parsing, or index building fails.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "MFT record counts fit in usize on 64-bit"
+)]
+pub fn load_iocp_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIndex> {
+    use rayon::prelude::*;
+    use tracing::info;
+
+    use crate::index::MftIndex;
+    use crate::parse::{MftRecordMerger, ParseResult, apply_fixup, parse_record_full};
+
+    let capture = load_iocp_capture(path)?;
+    let volume = capture.volume_letter();
+    let record_size = capture.record_size() as usize;
+    let total_records = capture.header.total_records as usize;
+
+    info!(
+        volume = %volume,
+        chunks = capture.chunks.len(),
+        total_records,
+        "Loading IOCP capture with LIVE pipeline replay"
+    );
+
+    // Phase 1: Parallel parse all chunks IN IOCP COMPLETION ORDER
+    // This matches how Windows LIVE processes IOCP completions in parallel
+    let parse_results: Vec<ParseResult> = capture
+        .iter_chunks()
+        .par_bridge() // Parallel iterator over chunks
+        .flat_map(|(chunk, chunk_data)| {
+            // Parse all records in this chunk
+            let records_in_chunk = chunk.record_count as usize;
+            let mut results = Vec::with_capacity(records_in_chunk);
+
+            for i in 0..records_in_chunk {
+                let offset = i * record_size;
+                let end = offset + record_size;
+                if end > chunk_data.len() {
+                    break;
+                }
+
+                // Clone to allow fixup (matches Windows LIVE behavior)
+                let mut record_buf = chunk_data[offset..end].to_vec();
+                if !apply_fixup(&mut record_buf) {
+                    continue;
+                }
+
+                let frs = chunk.start_frs + i as u64;
+                results.push(parse_record_full(&record_buf, frs));
+            }
+            results
+        })
+        .collect();
+
+    info!(
+        parse_results = parse_results.len(),
+        "Parallel parse complete, feeding to MftRecordMerger"
+    );
+
+    // Phase 2: Feed through MftRecordMerger (exactly like Windows LIVE)
+    // Results arrive in non-deterministic order due to parallel processing
+    let mut merger = MftRecordMerger::with_capacity(total_records);
+    for result in parse_results {
+        merger.add_result(result);
+    }
+
+    // Phase 3: Merge and build index (exactly like Windows LIVE)
+    let parsed_records = merger.merge();
+    info!(
+        merged_records = parsed_records.len(),
+        "Merger complete, building MftIndex"
+    );
+
+    Ok(MftIndex::from_parsed_records(volume, parsed_records))
+}

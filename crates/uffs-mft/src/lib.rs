@@ -174,7 +174,7 @@ pub use raw::{
 };
 pub use raw_iocp::{
     CapturedChunk, IocpCaptureData, IocpCaptureHeader, IocpCaptureOptions, IocpCaptureWriter,
-    is_iocp_capture, load_iocp_capture,
+    is_iocp_capture, load_iocp_capture, load_iocp_to_index,
 };
 pub use reader::{
     BenchmarkResult, DriveCharacteristics, DriveReadResult, MftProgress, MftReadMode, MftReader,
