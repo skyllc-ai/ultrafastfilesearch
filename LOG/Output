@@ -1,0 +1,217 @@
+   Compiling polars-time v0.53.0 (https://github.com/pola-rs/polars?branch=main#b6ae1153)
+   Compiling polars-io v0.53.0 (https://github.com/pola-rs/polars?branch=main#b6ae1153)
+   Compiling polars-mem-engine v0.53.0 (https://github.com/pola-rs/polars?branch=main#b6ae1153)
+   Compiling polars-sql v0.53.0 (https://github.com/pola-rs/polars?branch=main#b6ae1153)
+   Compiling uffs-polars v0.3.40 (/Users/rnio/Private/Github/UltraFastFileSearch/crates/uffs-polars)
+   Compiling uffs-mft v0.3.40 (/Users/rnio/Private/Github/UltraFastFileSearch/crates/uffs-mft)
+   Compiling uffs-diag v0.3.40 (/Users/rnio/Private/Github/UltraFastFileSearch/crates/uffs-diag)
+   Compiling uffs-core v0.3.40 (/Users/rnio/Private/Github/UltraFastFileSearch/crates/uffs-core)
+   Compiling uffs-gui v0.3.40 (/Users/rnio/Private/Github/UltraFastFileSearch/crates/uffs-gui)
+   Compiling uffs-cli v0.3.40 (/Users/rnio/Private/Github/UltraFastFileSearch/crates/uffs-cli)
+   Compiling uffs-tui v0.3.40 (/Users/rnio/Private/Github/UltraFastFileSearch/crates/uffs-tui)
+    Finished `release` profile [optimized] target(s) in 13m 28s
+
+✅ Release build completed in 13m 28.9s
+
+Auto-detected from trial_run.md: -7 (PDT)
+  - **Started:** 2026-03-18T06:05:23.4666126-07:00
+Mode: --regenerate
+Using --tz-offset -7 (PDT (Pacific Daylight)) to match the golden baseline timezone.
+
+MFT file:     /Users/rnio/uffs_data/drive_d/D_mft.iocp (407.9 MB)
+MFT format:   IOCP capture (Windows IOCP order replay)
+Workspace root:        /Users/rnio/Private/Github/UltraFastFileSearch
+Cargo target dir:      /Users/rnio/Private/Github/UltraFastFileSearch/target
+UFFS release artifact: /Users/rnio/Private/Github/UltraFastFileSearch/target/release/uffs
+Artifact provenance:   cargo metadata target_directory → release/uffs
+
+Running uffs scan (baseline-compatible algorithms)...
+  ✅ uffs scan completed in 16.02s (25.5 MB/s)
+
+  Base dir:      /Users/rnio/uffs_data
+  Drive dir:     /Users/rnio/uffs_data/drive_d
+  Drive letter:  D
+  Baseline file: /Users/rnio/uffs_data/drive_d/cpp_d.txt
+  Rust output:   /Users/rnio/uffs_data/drive_d/verify_rust_d.txt
+
+  Computing SHA256 hashes and persisting sorted files...
+  Sorted baseline: /Users/rnio/uffs_data/drive_d/cpp_d_sorted.txt
+  Sorted Rust:     /Users/rnio/uffs_data/drive_d/verify_rust_d_sorted.txt
+
+  Golden baseline: 9b066add6da8c74fe3c19835c3486b3738ba1ebc2be43ab6498c65ce7e719f95 (7065517 lines)
+  Rust output:     b2e6696abc68544d44678dec3ad6d09c7b552fe2ef44b9ce72baf2f329778bff (7065517 lines)
+
+  Ordered hashes differ; checking full-file line-sort normalization...
+  Golden baseline (sorted): 0e9d1ad5c845f8400798eb83c68808afaa049c10af06c9cf850626539ab01105
+  Rust output (sorted):     e9c3cbc85199deb70ebe14110528164a6eb2600b9141a352ff5c42a4bdabc111
+
+  ❌ RESULT: STRICT FULL OUTPUT MISMATCH
+     Sorted baseline:  0e9d1ad5c845f8400798eb83c68808afaa049c10af06c9cf850626539ab01105
+     Sorted Rust:      e9c3cbc85199deb70ebe14110528164a6eb2600b9141a352ff5c42a4bdabc111
+     Line count:       7065517 (baseline) vs 7065517 (Rust)
+
+     TIP: If timestamps are off by exactly 1 hour, try the other TZ offset:
+          --tz -7 (PDT) or --tz -8 (PST)
+
+
+=== SORTED SIDE-BY-SIDE COMPARISON (differences only) ===
+  Baseline lines: 7065517
+  Rust lines:     7065517
+  Lines that differ: 51
+
+--- FIRST 50 DIFFERENCES ---
+  Line 5:
+    BASELINE: "D:\","","D:\",5252335107531,5120051462144,2014-08-06 18:45:00,2026-03-14 01:36:59,2026-03-14 06:38:43,14762408,0,0,1,1,0,0,0,0,0,0,1,0,0,0,0,22
+    RUST:     "D:\","","D:\",5252335107536,5120051462144,2014-08-06 18:45:00,2026-03-14 01:36:59,2026-03-14 06:38:43,14762408,0,0,1,1,0,0,0,0,0,0,1,0,0,0,0,22
+  Line 76461:
+    BASELINE: "D:\Dropbox\","","D:\Dropbox\",2808178863552,2728612118528,2022-09-16 18:47:24,2026-03-12 07:15:09,2026-03-14 06:11:25,8305040,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,17
+    RUST:     "D:\Dropbox\","","D:\Dropbox\",2808178863557,2728612118528,2022-09-16 18:47:24,2026-03-12 07:15:09,2026-03-14 06:11:25,8305040,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,17
+  Line 77895:
+    BASELINE: "D:\Dropbox\DATA\","","D:\Dropbox\DATA\",2325212676367,2244760346624,2022-09-16 18:47:25,2025-05-07 17:59:27,2026-03-11 07:00:40,6678204,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,48
+    RUST:     "D:\Dropbox\DATA\","","D:\Dropbox\DATA\",2325212676372,2244760346624,2022-09-16 18:47:25,2025-05-07 17:59:27,2026-03-11 07:00:40,6678204,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,48
+  Line 977269:
+    BASELINE: "D:\Dropbox\DATA\Protect\","","D:\Dropbox\DATA\Protect\",473543706633,395128455168,2022-09-16 18:49:15,2023-08-09 22:10:50,2026-03-09 23:16:38,4875940,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,48
+    RUST:     "D:\Dropbox\DATA\Protect\","","D:\Dropbox\DATA\Protect\",473543706638,395128455168,2022-09-16 18:49:15,2023-08-09 22:10:50,2026-03-09 23:16:38,4875940,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,48
+  Line 2633045:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\","","D:\Dropbox\DATA\Protect\IMPORTANT\",69451866570,55894904832,2022-09-16 18:49:45,2026-01-22 22:22:01,2026-03-06 07:21:18,1111751,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,48
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\","","D:\Dropbox\DATA\Protect\IMPORTANT\",69451866575,55894904832,2022-09-16 18:49:45,2026-01-22 22:22:01,2026-03-06 07:21:18,1111751,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,48
+  Line 3134748:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\",2837408578,1441497088,2020-05-03 16:20:59,2021-06-18 12:15:33,2026-03-06 07:21:03,44221,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\",2837408583,1441497088,2020-05-03 16:20:59,2021-06-18 12:15:33,2026-03-06 07:21:03,44221,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137260:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\",7643467,5898240,2020-06-10 17:29:15,2020-08-24 14:14:19,2026-03-06 07:20:52,1599,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\",7643472,5898240,2020-06-10 17:29:15,2020-08-24 14:14:19,2026-03-06 07:20:52,1599,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137350:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\",7619838,5873664,2020-06-10 17:29:29,2020-08-24 14:37:09,2026-03-06 07:20:52,1463,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\",7619843,5873664,2020-06-10 17:29:29,2020-08-24 14:37:09,2026-03-06 07:20:52,1463,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137354:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\",5216710,3809280,2020-06-10 17:29:29,2020-06-11 10:15:40,2026-03-06 07:20:52,766,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\",5216715,3809280,2020-06-10 17:29:29,2020-06-11 10:15:40,2026-03-06 07:20:52,766,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137512:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\",3493586,2932736,2020-06-10 17:29:29,2020-08-24 14:43:43,2026-03-06 07:20:52,476,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\",3493591,2932736,2020-06-10 17:29:29,2020-08-24 14:43:43,2026-03-06 07:20:52,476,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137637:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\",207674,192512,2020-06-10 17:29:29,2020-06-11 12:05:34,2026-03-06 07:20:52,55,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\",207679,192512,2020-06-10 17:29:29,2020-06-11 12:05:34,2026-03-06 07:20:52,55,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137639:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf-1unkcerazvq4f\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf-1unkcerazvq4f\",70247,65536,2020-06-11 12:03:35,2020-06-11 12:03:35,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf-1unkcerazvq4f\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf-1unkcerazvq4f\",70245,65536,2020-06-11 12:03:35,2020-06-11 12:03:35,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137640:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf-1unkcerazvq4f\dep-graph.bin","dep-graph.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf-1unkcerazvq4f\",151331,135168,2020-06-10 17:29:29,2020-06-11 12:03:35,2022-09-18 05:23:45,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf-1unkcerazvq4f\work-products.bin","work-products.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf-1unkcerazvq4f\",37,0,2020-06-10 17:29:29,2020-06-11 12:03:35,2022-09-17 17:01:28,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137641:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf-1unkcerazvq4f\query-cache.bin","query-cache.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf-1unkcerazvq4f\",45966,49152,2020-06-10 17:29:29,2020-06-11 12:03:35,2022-09-18 03:41:01,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf.lock","s-foa5s5ksp7-12fl3nf.lock","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\",0,0,2020-06-11 12:03:35,2020-06-11 12:03:35,2025-12-24 22:21:45,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137642:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf-1unkcerazvq4f\work-products.bin","work-products.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf-1unkcerazvq4f\",37,0,2020-06-10 17:29:29,2020-06-11 12:03:35,2022-09-17 17:01:28,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf.lock:com.dropbox.attrs","s-foa5s5ksp7-12fl3nf.lock:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\",26,0,2020-06-11 12:03:35,2020-06-11 12:03:35,2025-12-24 22:21:45,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137643:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf.lock","s-foa5s5ksp7-12fl3nf.lock","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\",0,0,2020-06-11 12:03:35,2020-06-11 12:03:35,2025-12-24 22:21:45,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working:com.dropbox.attrs","s-foa5u0k7zm-1yasipc-working:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\",26,0,2020-06-11 12:05:28,2020-06-11 12:05:28,2026-03-06 07:20:52,0,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137644:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5s5ksp7-12fl3nf.lock:com.dropbox.attrs","s-foa5s5ksp7-12fl3nf.lock:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\",26,0,2020-06-11 12:03:35,2020-06-11 12:03:35,2025-12-24 22:21:45,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\",66479,61440,2020-06-11 12:05:28,2020-06-11 12:05:28,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137645:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working:com.dropbox.attrs","s-foa5u0k7zm-1yasipc-working:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\",26,0,2020-06-11 12:05:28,2020-06-11 12:05:28,2026-03-06 07:20:52,0,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\dep-graph.bin","dep-graph.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\",151331,135168,2020-06-10 17:29:29,2020-06-11 12:03:35,2022-09-18 05:23:45,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137646:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\",66474,61440,2020-06-11 12:05:28,2020-06-11 12:05:28,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\query-cache.bin","query-cache.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\",45966,49152,2020-06-10 17:29:29,2020-06-11 12:03:35,2022-09-18 03:41:01,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137647:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\dep-graph.bin","dep-graph.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\",151331,135168,2020-06-10 17:29:29,2020-06-11 12:03:35,2022-09-18 05:23:45,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\work-products.bin","work-products.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\",37,0,2020-06-10 17:29:29,2020-06-11 12:03:35,2022-09-17 17:01:28,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137648:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\query-cache.bin","query-cache.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\",45966,49152,2020-06-10 17:29:29,2020-06-11 12:03:35,2022-09-18 03:41:01,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc.lock","s-foa5u0k7zm-1yasipc.lock","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\",0,0,2020-06-11 12:05:28,2020-06-11 12:05:28,2025-12-24 22:21:43,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137649:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\work-products.bin","work-products.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc-working\",37,0,2020-06-10 17:29:29,2020-06-11 12:03:35,2022-09-17 17:01:28,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc.lock:com.dropbox.attrs","s-foa5u0k7zm-1yasipc.lock:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\",26,0,2020-06-11 12:05:28,2020-06-11 12:05:28,2025-12-24 22:21:43,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137650:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc.lock","s-foa5u0k7zm-1yasipc.lock","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\",0,0,2020-06-11 12:05:28,2020-06-11 12:05:28,2025-12-24 22:21:43,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u4a4pv-qe7mdg-working:com.dropbox.attrs","s-foa5u4a4pv-qe7mdg-working:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\",26,0,2020-06-11 12:05:34,2020-06-11 12:05:34,2026-03-06 07:20:52,0,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137651:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u0k7zm-1yasipc.lock:com.dropbox.attrs","s-foa5u0k7zm-1yasipc.lock:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\",26,0,2020-06-11 12:05:28,2020-06-11 12:05:28,2025-12-24 22:21:43,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u4a4pv-qe7mdg-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u4a4pv-qe7mdg-working\",66483,61440,2020-06-11 12:05:34,2020-06-11 12:05:34,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137652:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u4a4pv-qe7mdg-working:com.dropbox.attrs","s-foa5u4a4pv-qe7mdg-working:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\",26,0,2020-06-11 12:05:34,2020-06-11 12:05:34,2026-03-06 07:20:52,0,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u4a4pv-qe7mdg-working\dep-graph.bin","dep-graph.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u4a4pv-qe7mdg-working\",151331,135168,2020-06-10 17:29:29,2020-06-11 12:03:35,2022-09-18 05:23:45,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137653:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u4a4pv-qe7mdg-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u4a4pv-qe7mdg-working\",66481,61440,2020-06-11 12:05:34,2020-06-11 12:05:34,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u4a4pv-qe7mdg-working\dep-graph.bin","dep-graph.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u4a4pv-qe7mdg-working\",151331,135168,2020-06-10 17:29:29,2020-06-11 12:03:35,2022-09-18 05:23:45,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137654:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u4a4pv-qe7mdg-working\dep-graph.bin","dep-graph.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u4a4pv-qe7mdg-working\",151331,135168,2020-06-10 17:29:29,2020-06-11 12:03:35,2022-09-18 05:23:45,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u4a4pv-qe7mdg-working\query-cache.bin","query-cache.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\debug\incremental\chapter3-2pi6kooksiodv\s-foa5u4a4pv-qe7mdg-working\",45966,49152,2020-06-10 17:29:29,2020-06-11 12:03:35,2022-09-18 03:41:01,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137944:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\",28666,25941,2020-06-11 12:05:26,2020-06-11 12:05:26,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\",28671,25945,2020-06-11 12:05:26,2020-06-11 12:05:26,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137946:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\query-cache.bin","query-cache.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\",60541,57344,2020-06-10 17:29:34,2020-06-11 12:04:00,2022-09-18 04:14:14,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\dep-graph.bin","dep-graph.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\",192404,163840,2020-06-10 17:29:34,2020-06-11 12:04:00,2022-09-18 07:05:26,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137947:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\work-products.bin","work-products.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\",37,0,2020-06-10 17:29:34,2020-06-11 12:04:00,2022-09-17 13:35:28,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\query-cache.bin","query-cache.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\",60541,57344,2020-06-10 17:29:34,2020-06-11 12:04:00,2022-09-18 04:14:14,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137948:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1.lock","s-foa5tzmjen-1ue8ik1.lock","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\",0,0,2020-06-11 12:05:26,2020-06-11 12:05:26,2025-12-24 22:21:43,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\query-cache.bin","query-cache.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\",60541,57344,2020-06-10 17:29:34,2020-06-11 12:04:00,2022-09-18 04:14:14,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137949:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1.lock:com.dropbox.attrs","s-foa5tzmjen-1ue8ik1.lock:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\",26,0,2020-06-11 12:05:26,2020-06-11 12:05:26,2025-12-24 22:21:43,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\work-products.bin","work-products.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\",37,0,2020-06-10 17:29:34,2020-06-11 12:04:00,2022-09-17 13:35:28,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137950:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working:com.dropbox.attrs","s-foa5tzu69f-1engjcc-working:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\",26,0,2020-06-11 12:05:27,2020-06-11 12:05:27,2026-03-06 07:20:52,0,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\work-products.bin","work-products.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1-working\",37,0,2020-06-10 17:29:34,2020-06-11 12:04:00,2022-09-17 13:35:28,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137951:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working\",28671,25945,2020-06-11 12:05:27,2020-06-11 12:05:27,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1.lock","s-foa5tzmjen-1ue8ik1.lock","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\",0,0,2020-06-11 12:05:26,2020-06-11 12:05:26,2025-12-24 22:21:43,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137952:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working\dep-graph.bin","dep-graph.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working\",192404,163840,2020-06-10 17:29:34,2020-06-11 12:04:00,2022-09-18 07:05:26,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzmjen-1ue8ik1.lock:com.dropbox.attrs","s-foa5tzmjen-1ue8ik1.lock:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\",26,0,2020-06-11 12:05:26,2020-06-11 12:05:26,2025-12-24 22:21:43,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137953:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working\query-cache.bin","query-cache.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working\",60541,57344,2020-06-10 17:29:34,2020-06-11 12:04:00,2022-09-18 04:14:14,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working:com.dropbox.attrs","s-foa5tzu69f-1engjcc-working:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\",26,0,2020-06-11 12:05:27,2020-06-11 12:05:27,2026-03-06 07:20:52,0,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137954:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working\work-products.bin","work-products.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working\",37,0,2020-06-10 17:29:34,2020-06-11 12:04:00,2022-09-17 13:35:28,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5tzu69f-1engjcc-working\",28669,25941,2020-06-11 12:05:27,2020-06-11 12:05:27,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137972:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5u3hbg8-18y3xwi-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5u3hbg8-18y3xwi-working\",28669,25941,2020-06-11 12:05:33,2020-06-11 12:05:33,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5u3hbg8-18y3xwi-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2f7ittun7i37q\s-foa5u3hbg8-18y3xwi-working\",28666,25941,2020-06-11 12:05:33,2020-06-11 12:05:33,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137995:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\",29304,27761,2020-06-11 12:04:06,2020-06-11 12:04:06,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\",29310,27765,2020-06-11 12:04:06,2020-06-11 12:04:06,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3137997:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\query-cache.bin","query-cache.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\",58012,57344,2020-06-10 17:29:34,2020-06-11 12:04:06,2022-09-18 04:08:55,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\dep-graph.bin","dep-graph.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\",166775,143360,2020-06-10 17:29:34,2020-06-11 12:04:06,2022-09-18 05:40:04,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137998:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\work-products.bin","work-products.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\",37,0,2020-06-10 17:29:34,2020-06-11 12:04:06,2022-09-17 13:35:28,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\query-cache.bin","query-cache.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\",58012,57344,2020-06-10 17:29:34,2020-06-11 12:04:06,2022-09-18 04:08:55,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3137999:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y.lock","s-foa5snvegn-12xs22y.lock","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\",0,0,2020-06-11 12:04:06,2020-06-11 12:04:06,2025-12-24 22:21:45,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\query-cache.bin","query-cache.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\",58012,57344,2020-06-10 17:29:34,2020-06-11 12:04:06,2022-09-18 04:08:55,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3138000:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y.lock:com.dropbox.attrs","s-foa5snvegn-12xs22y.lock:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\",26,0,2020-06-11 12:04:06,2020-06-11 12:04:06,2025-12-24 22:21:45,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\work-products.bin","work-products.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\",37,0,2020-06-10 17:29:34,2020-06-11 12:04:06,2022-09-17 13:35:28,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3138001:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working:com.dropbox.attrs","s-foa5tzhat2-yvgsdl-working:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\",26,0,2020-06-11 12:05:26,2020-06-11 12:05:26,2026-03-06 07:20:52,0,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\work-products.bin","work-products.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y-29houyaiuva94\",37,0,2020-06-10 17:29:34,2020-06-11 12:04:06,2022-09-17 13:35:28,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3138002:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working\",25542,23669,2020-06-11 12:05:26,2020-06-11 12:05:26,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y.lock","s-foa5snvegn-12xs22y.lock","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\",0,0,2020-06-11 12:04:06,2020-06-11 12:04:06,2025-12-24 22:21:45,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3138003:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working\dep-graph.bin","dep-graph.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working\",166775,143360,2020-06-10 17:29:34,2020-06-11 12:04:06,2022-09-18 05:40:04,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5snvegn-12xs22y.lock:com.dropbox.attrs","s-foa5snvegn-12xs22y.lock:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\",26,0,2020-06-11 12:04:06,2020-06-11 12:04:06,2025-12-24 22:21:45,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+  Line 3138004:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working\query-cache.bin","query-cache.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working\",58012,57344,2020-06-10 17:29:34,2020-06-11 12:04:06,2022-09-18 04:08:55,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working:com.dropbox.attrs","s-foa5tzhat2-yvgsdl-working:com.dropbox.attrs","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\",26,0,2020-06-11 12:05:26,2020-06-11 12:05:26,2026-03-06 07:20:52,0,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3138005:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working\work-products.bin","work-products.bin","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working\",37,0,2020-06-10 17:29:34,2020-06-11 12:04:06,2022-09-17 13:35:28,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzhat2-yvgsdl-working\",25541,23666,2020-06-11 12:05:26,2020-06-11 12:05:26,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3138009:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzov8x-qpautm-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzov8x-qpautm-working\",25541,23666,2020-06-11 12:05:26,2020-06-11 12:05:26,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzov8x-qpautm-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzov8x-qpautm-working\",25540,23665,2020-06-11 12:05:26,2020-06-11 12:05:26,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+  Line 3138016:
+    BASELINE: "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzryuc-1n569vv-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzryuc-1n569vv-working\",25540,23665,2020-06-11 12:05:26,2020-06-11 12:05:26,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+    RUST:     "D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzryuc-1n569vv-working\","","D:\Dropbox\DATA\Protect\IMPORTANT\RUST\chapter3\target\rls\debug\incremental\chapter3-2pi6kooksiodv\s-foa5tzryuc-1n569vv-working\",25541,23666,2020-06-11 12:05:26,2020-06-11 12:05:26,2026-03-06 07:20:52,13,0,1,0,0,0,0,0,0,0,0,1,1,0,0,0,2096
+
+⏱️  MFT Parse Time: 16.02s
+   MFT Size: 407.9 MB, Throughput: 25.5 MB/s
+
+    ~/Pr/GitHub/UltraFastFileSearch  on   main *1 !14 ?3                                                                                                              1 ✘  took 16m 5s   at 10:07:14 

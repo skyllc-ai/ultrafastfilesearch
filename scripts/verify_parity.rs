@@ -394,9 +394,13 @@ fn verify_single_drive(
     println!("  Rust output:   {}", rust_output.display());
     println!();
 
-    println!("  Computing ordered full-file SHA256...");
-    let golden_hashes = compute_file_hashes(&golden_baseline_file);
-    let rust_hashes = compute_file_hashes(rust_output);
+    println!("  Computing SHA256 hashes and persisting sorted files...");
+    let (golden_hashes, golden_sorted_path) =
+        compute_file_hashes_and_persist_sorted(&golden_baseline_file);
+    let (rust_hashes, rust_sorted_path) = compute_file_hashes_and_persist_sorted(rust_output);
+
+    println!("  Sorted baseline: {}", golden_sorted_path.display());
+    println!("  Sorted Rust:     {}", rust_sorted_path.display());
 
     println!();
     println!(
@@ -1215,6 +1219,47 @@ fn compute_file_hashes(path: &Path) -> FileHashes {
     }
 }
 
+/// Compute hashes and persist the sorted version to disk.
+/// Returns the hashes and the path to the sorted file.
+fn compute_file_hashes_and_persist_sorted(path: &Path) -> (FileHashes, PathBuf) {
+    let lines = read_lines(path);
+    let hashes = FileHashes {
+        ordered_hash: ordered_sha256(&lines),
+        sorted_hash: sorted_sha256(&lines),
+        line_count: lines.len(),
+    };
+
+    // Generate sorted file path: foo.txt -> foo_sorted.txt
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let ext = path.extension().map(|e| e.to_string_lossy()).unwrap_or_default();
+    let sorted_name = if ext.is_empty() {
+        format!("{stem}_sorted")
+    } else {
+        format!("{stem}_sorted.{ext}")
+    };
+    let sorted_path = path.parent().unwrap_or(Path::new(".")).join(&sorted_name);
+
+    // Sort lines using the same robust byte-level comparison
+    let mut indexed: Vec<(usize, &str)> = lines.iter().map(String::as_str).enumerate().collect();
+    indexed.sort_by(|(idx_a, a), (idx_b, b)| {
+        match a.as_bytes().cmp(b.as_bytes()) {
+            std::cmp::Ordering::Equal => idx_a.cmp(idx_b),
+            other => other,
+        }
+    });
+
+    // Write sorted lines to file
+    use std::io::Write;
+    let mut file = fs::File::create(&sorted_path)
+        .unwrap_or_else(|e| panic!("Failed to create {}: {e}", sorted_path.display()));
+    for (_, line) in &indexed {
+        writeln!(file, "{}", line)
+            .unwrap_or_else(|e| panic!("Failed to write to {}: {e}", sorted_path.display()));
+    }
+
+    (hashes, sorted_path)
+}
+
 fn read_lines(path: &Path) -> Vec<String> {
     let file =
         fs::File::open(path).unwrap_or_else(|e| panic!("Failed to open {}: {e}", path.display()));
@@ -1418,10 +1463,11 @@ fn show_first_sorted_diffs(file_a: &Path, file_b: &Path) {
     }
 
     let total_diffs = diff_indices.len();
-    let first_n = 5.min(total_diffs);
-    let last_n = 5.min(total_diffs);
+    let first_n = 50.min(total_diffs);
+    let last_n = 50.min(total_diffs);
+    let middle_sample = 100;
 
-    // First 5 differences
+    // First 50 differences
     println!("\n--- FIRST {first_n} DIFFERENCES ---");
     for &idx in diff_indices.iter().take(first_n) {
         let line_num = idx + 1;
@@ -1430,8 +1476,8 @@ fn show_first_sorted_diffs(file_a: &Path, file_b: &Path) {
         println!("    RUST:     {}", sorted_rust[idx]);
     }
 
-    // Last 5 differences (if different from first 5)
-    if total_diffs > 10 {
+    // Last 50 differences (if different from first 50)
+    if total_diffs > first_n + last_n {
         let last_start = total_diffs.saturating_sub(last_n);
         println!("\n--- LAST {last_n} DIFFERENCES ---");
         for &idx in diff_indices.iter().skip(last_start) {
@@ -1442,13 +1488,13 @@ fn show_first_sorted_diffs(file_a: &Path, file_b: &Path) {
         }
     }
 
-    // 10 random from middle differences
-    if total_diffs > 10 {
+    // 100 random from middle differences
+    if total_diffs > first_n + last_n {
         let middle_start = first_n;
         let middle_end = total_diffs.saturating_sub(last_n);
         if middle_end > middle_start {
             let middle_diff_indices: Vec<usize> = diff_indices[middle_start..middle_end].to_vec();
-            let sample_count = 10.min(middle_diff_indices.len());
+            let sample_count = middle_sample.min(middle_diff_indices.len());
             let middle_count = middle_diff_indices.len();
 
             println!("\n--- {sample_count} RANDOM DIFFERENCES FROM MIDDLE ({middle_count} middle diffs) ---");

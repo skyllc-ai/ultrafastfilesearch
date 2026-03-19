@@ -41,7 +41,6 @@ use smallvec::SmallVec;
 use zerocopy::FromBytes;
 
 use super::index_helpers::{add_link_to_index, add_stream_to_index};
-use crate::ntfs::is_internal_windows_stream;
 
 /// Parses an extension record and adds its names/streams to the base record.
 ///
@@ -104,6 +103,7 @@ pub(super) fn parse_extension_to_index(
     // Collect names and streams from extension record
     let mut names: SmallVec<[(String, u64); 4]> = SmallVec::new();
     let mut streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
+    let ext_internal_streams: SmallVec<[(u64, u64); 4]> = SmallVec::new();
     let mut dir_index_size: u64 = 0;
     let mut dir_index_allocated: u64 = 0;
     // Default $DATA stream (unnamed, name_len == 0) found in extension record
@@ -232,10 +232,10 @@ pub(super) fn parse_extension_to_index(
                             .map(|c| u16::from_le_bytes([c[0], c[1]]))
                             .collect();
                         let stream_name = String::from_utf16_lossy(&name_u16);
-                        // Filter out internal Windows streams (names starting with $)
-                        if !is_internal_windows_stream(&stream_name) {
-                            streams.push((stream_name, size, allocated));
-                        }
+                        // C++ parity: ALL named $DATA streams create regular
+                        // stream entries.  Internal ones are filtered from
+                        // output by is_internal_windows_stream in the output layer.
+                        streams.push((stream_name, size, allocated));
                     }
                 }
             }
@@ -531,6 +531,7 @@ pub(super) fn parse_extension_to_index(
     // nothing to do
     if names.is_empty()
         && streams.is_empty()
+        && ext_internal_streams.is_empty()
         && !found_default_data
         && dir_index_size == 0
         && dir_index_allocated == 0
@@ -702,6 +703,19 @@ pub(super) fn parse_extension_to_index(
             }
         }
 
+        // Accumulate internal stream sizes from extension records
+        if !ext_internal_streams.is_empty() {
+            let record = &mut index.records[record_idx as usize];
+            for (ist_size, ist_allocated) in &ext_internal_streams {
+                record.internal_streams_size =
+                    record.internal_streams_size.saturating_add(*ist_size);
+                record.internal_streams_allocated = record
+                    .internal_streams_allocated
+                    .saturating_add(*ist_allocated);
+            }
+            record.total_stream_count += ext_internal_streams.len() as u16;
+        }
+
         // Merge directory index sizes from extension records
         if dir_index_size > 0 || dir_index_allocated > 0 {
             let record = &mut index.records[record_idx as usize];
@@ -740,7 +754,7 @@ pub(super) fn parse_extension_to_index(
 
         for (name_idx, (_, parent_frs)) in names.iter().enumerate() {
             let p_frs = *parent_frs;
-            if p_frs == base_frs || p_frs == 0 || p_frs == u64::from(NO_ENTRY) {
+            if p_frs == base_frs || p_frs == u64::from(NO_ENTRY) {
                 continue;
             }
 
@@ -786,6 +800,7 @@ pub(super) fn parse_extension_to_index(
 
     !names.is_empty()
         || !streams.is_empty()
+        || !ext_internal_streams.is_empty()
         || found_default_data
         || dir_index_size > 0
         || dir_index_allocated > 0

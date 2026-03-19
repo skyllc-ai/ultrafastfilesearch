@@ -563,9 +563,6 @@ pub fn load_iocp_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIn
 
             let frs = chunk.start_frs + i as u64;
 
-            // Use parse_record_to_index - THE SAME FUNCTION as Windows LIVE
-            // This directly modifies the MftIndex, handling base records and
-            // extension records the same way Windows LIVE does
             if parse_record_to_index(&record_buf, frs, &mut index) {
                 records_parsed += 1;
             }

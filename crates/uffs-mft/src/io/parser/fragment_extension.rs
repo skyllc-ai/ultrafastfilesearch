@@ -10,8 +10,6 @@ use core::mem::size_of;
 use smallvec::SmallVec;
 use zerocopy::FromBytes;
 
-use crate::ntfs::is_internal_windows_stream;
-
 /// Parses an extension record and adds its names/streams to the base record in
 /// a fragment.
 ///
@@ -169,10 +167,10 @@ pub(super) fn parse_extension_to_fragment(
                             .map(|c| u16::from_le_bytes([c[0], c[1]]))
                             .collect();
                         let stream_name = String::from_utf16_lossy(&name_u16);
-                        // Filter out internal Windows streams (names starting with $)
-                        if !is_internal_windows_stream(&stream_name) {
-                            streams.push((stream_name, size, allocated));
-                        }
+                        // C++ parity: ALL named $DATA streams create regular
+                        // stream entries.  Internal ones are filtered from
+                        // output by is_internal_windows_stream in the output layer.
+                        streams.push((stream_name, size, allocated));
                     }
                 }
             }
@@ -340,7 +338,7 @@ pub(super) fn parse_extension_to_fragment(
 
     for (name_idx, (_, parent_frs)) in names.iter().enumerate() {
         let p_frs = *parent_frs;
-        if p_frs == base_frs || p_frs == 0 || p_frs == u64::from(NO_ENTRY) {
+        if p_frs == base_frs || p_frs == u64::from(NO_ENTRY) {
             continue;
         }
 

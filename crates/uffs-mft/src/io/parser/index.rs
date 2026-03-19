@@ -37,7 +37,6 @@ use smallvec::SmallVec;
 use zerocopy::FromBytes;
 
 use super::index_extension::parse_extension_to_index;
-use crate::ntfs::is_internal_windows_stream;
 use crate::parse::index_helpers::{
     ExtensionSnapshot, InternalStreamChain, add_child_entry, add_link_to_index,
     add_stream_to_index, build_internal_stream_chain, chain_links, chain_streams,
@@ -338,7 +337,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 };
 
                 if name_len == 0 {
-                    // Default stream
+                    // Default stream — mark that unnamed $DATA exists
+                    // (C++ parity: distinguishes "empty $DATA" from "no $DATA")
+                    let rec = index.get_or_create(frs);
+                    rec.set_has_default_data();
                     default_size = size;
                     default_allocated = allocated;
                 } else {
@@ -351,11 +353,37 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                             .map(|c| u16::from_le_bytes([c[0], c[1]]))
                             .collect();
                         let stream_name = String::from_utf16_lossy(&name_u16);
-                        // Filter out internal Windows streams (names starting with $)
-                        // These include $DSC, $REPARSE, $EA, $EA_INFORMATION, $TXF_DATA, $OBJECT_ID
-                        if !is_internal_windows_stream(&stream_name) {
-                            additional_streams.push((stream_name, size, allocated));
-                        }
+
+                        // C++ parity: $BadClus:$Bad (FRS 8) uses InitializedSize
+                        // instead of DataSize/AllocatedSize to avoid counting the
+                        // entire volume size (ntfs_index_load.hpp lines 431-452).
+                        let (size, allocated) = if frs == 8
+                            && attr_header.name_length == 4
+                            && stream_name == "$Bad"
+                            && attr_header.is_non_resident != 0
+                        {
+                            let init_size_offset = offset + 56;
+                            if init_size_offset + 8 <= data.len() {
+                                let init_size = u64::from_le_bytes(
+                                    data[init_size_offset..init_size_offset + 8]
+                                        .try_into()
+                                        .unwrap_or([0; 8]),
+                                );
+                                (init_size, init_size)
+                            } else {
+                                (0, 0)
+                            }
+                        } else {
+                            (size, allocated)
+                        };
+
+                        // C++ parity: ALL named $DATA streams create regular
+                        // stream entries (counted in stream_count).  Internal
+                        // ones (names starting with $) are filtered from
+                        // *output* by is_internal_windows_stream checks in the
+                        // output layer, but must be counted here to match C++
+                        // stream_count semantics for descendants.
+                        additional_streams.push((stream_name, size, allocated));
                     }
                 }
             }
@@ -656,16 +684,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 
             record.stdinfo = std_info;
             record.first_stream.size = SizeInfo {
-                length: if default_size == 0 && ext.first_stream_len > 0 {
-                    ext.first_stream_len
-                } else {
-                    default_size
-                },
-                allocated: if default_allocated == 0 && ext.first_stream_alloc > 0 {
-                    ext.first_stream_alloc
-                } else {
-                    default_allocated
-                },
+                length: default_size.saturating_add(ext.first_stream_len),
+                allocated: default_allocated.saturating_add(ext.first_stream_alloc),
             };
             record.first_stream.flags = if record.stdinfo.is_directory() {
                 0
@@ -764,16 +784,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 
     record.stdinfo = std_info;
     record.first_stream.size = SizeInfo {
-        length: if default_size == 0 && ext.first_stream_len > 0 {
-            ext.first_stream_len
-        } else {
-            default_size
-        },
-        allocated: if default_allocated == 0 && ext.first_stream_alloc > 0 {
-            ext.first_stream_alloc
-        } else {
-            default_allocated
-        },
+        length: default_size.saturating_add(ext.first_stream_len),
+        allocated: default_allocated.saturating_add(ext.first_stream_alloc),
     };
     record.first_stream.flags = if record.stdinfo.is_directory() {
         0

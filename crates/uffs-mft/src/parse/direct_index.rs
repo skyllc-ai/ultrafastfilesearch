@@ -47,7 +47,6 @@ use super::direct_index_extension::parse_extension_to_index;
 use super::index_helpers::{
     add_child_entry, add_link_to_index, add_stream_to_index, chain_links, chain_streams,
 };
-use crate::ntfs::is_internal_windows_stream;
 
 /// Parses a record directly into `MftIndex` (single-pass inline parsing).
 ///
@@ -128,6 +127,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let mut default_allocated = 0u64;
     // ADS: (stream_name, size, allocated)
     let mut additional_streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
+    // Internal streams for tree-metrics (size, allocated)
+    let internal_streams: SmallVec<[(u64, u64); 4]> = SmallVec::new();
     let mut reparse_tag: u32 = 0;
     let mut dir_index_size: u64 = 0;
     let mut dir_index_allocated: u64 = 0;
@@ -308,11 +309,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                             .map(|c| u16::from_le_bytes([c[0], c[1]]))
                             .collect();
                         let stream_name = String::from_utf16_lossy(&name_u16);
-                        // Filter out internal Windows streams (names starting with $)
-                        // These include $DSC, $REPARSE, $EA, $EA_INFORMATION, $TXF_DATA, $OBJECT_ID
-                        if !is_internal_windows_stream(&stream_name) {
-                            additional_streams.push((stream_name, size, allocated));
-                        }
+                        // C++ parity: ALL named $DATA streams create regular
+                        // stream entries.  Internal ones are filtered from
+                        // output by is_internal_windows_stream in the output layer.
+                        additional_streams.push((stream_name, size, allocated));
                     }
                 }
             }
@@ -730,9 +730,17 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     record.stream_count = 1 + additional_stream_count as u16;
     // total_stream_count includes all streams (including internal ones like
     // $REPARSE)
-    record.total_stream_count = 1 + additional_stream_count as u16;
+    record.total_stream_count = 1 + additional_stream_count as u16 + internal_streams.len() as u16;
     // Set reparse tag if this is a reparse point
     record.reparse_tag = reparse_tag;
+
+    // Accumulate internal stream sizes for tree-metrics
+    for (ist_size, ist_allocated) in &internal_streams {
+        record.internal_streams_size = record.internal_streams_size.saturating_add(*ist_size);
+        record.internal_streams_allocated = record
+            .internal_streams_allocated
+            .saturating_add(*ist_allocated);
+    }
 
     // Chain the additional links: first_name -> link[0] -> link[1] -> ... ->
     // NO_ENTRY The links were pushed with next_entry = NO_ENTRY, now we chain

@@ -632,7 +632,7 @@ pub struct FileRecord {
     /// Primary filename namespace (0=POSIX, 1=Win32, 2=DOS, 3=Win32+DOS)
     pub namespace: u8,
     /// Forensic flags (bit-packed): bit 0 = `is_deleted`, bit 1 = `is_corrupt`,
-    /// bit 2 = `is_extension`
+    /// bit 2 = `is_extension`, bit 3 = `has_default_data` (unnamed $DATA found)
     pub forensic_flags: u8,
     /// Log File Sequence Number - correlates with `$LogFile` journal (forensic)
     pub lsn: u64,
@@ -780,9 +780,26 @@ impl FileRecord {
     /// Sets the forensic flags from parsed record fields.
     #[inline]
     pub fn set_forensic_flags(&mut self, is_deleted: bool, is_corrupt: bool, is_extension: bool) {
-        self.forensic_flags = u8::from(is_deleted)
+        // Preserve bit 3 (has_default_data) when setting forensic bits
+        self.forensic_flags = (self.forensic_flags & 0b1000)
+            | u8::from(is_deleted)
             | (u8::from(is_corrupt) << 1_u8)
             | (u8::from(is_extension) << 2_u8);
+    }
+
+    /// Returns true if an unnamed `$DATA` attribute was found during parsing.
+    /// Used by tree metrics to distinguish "has empty $DATA" from "has no
+    /// $DATA".
+    #[inline]
+    #[must_use]
+    pub const fn has_default_data(&self) -> bool {
+        self.forensic_flags & 0b1000 != 0
+    }
+
+    /// Marks that an unnamed `$DATA` attribute was found during parsing.
+    #[inline]
+    pub const fn set_has_default_data(&mut self) {
+        self.forensic_flags |= 0b1000;
     }
 
     /// Returns the tree metrics tuple (descendants, treesize,

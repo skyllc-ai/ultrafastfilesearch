@@ -141,7 +141,7 @@ pub fn add_link_to_index(index: &mut MftIndex, link_name: &str, link_parent: u64
 /// Adds a child entry to a parent record for tree metrics computation.
 #[inline]
 pub fn add_child_entry(index: &mut MftIndex, parent_frs: u64, child_frs: u64, name_idx: u16) {
-    if parent_frs == child_frs || parent_frs == 0 || parent_frs == u64::from(NO_ENTRY) {
+    if parent_frs == child_frs || parent_frs == u64::from(NO_ENTRY) {
         return;
     }
 

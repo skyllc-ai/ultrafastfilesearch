@@ -17,8 +17,6 @@ use core::mem::size_of;
 use smallvec::SmallVec;
 use zerocopy::FromBytes;
 
-use crate::ntfs::is_internal_windows_stream;
-
 /// Parses an extension record and adds its names/streams to the base record.
 ///
 /// Extension records contain additional `$FILE_NAME` attributes (hard links)
@@ -227,6 +225,17 @@ pub(super) fn parse_extension_to_index(
 
                 if name_len == 0 {
                     // Default $DATA stream — update base record size
+                    // Mark that unnamed $DATA exists on the base record
+                    // (C++ parity: distinguishes "empty $DATA" from "no $DATA")
+                    {
+                        let bf = base_frs as usize;
+                        if bf < index.frs_to_idx.len() {
+                            let base_idx = index.frs_to_idx[bf];
+                            if base_idx != NO_ENTRY {
+                                index.records[base_idx as usize].set_has_default_data();
+                            }
+                        }
+                    }
                     default_data_size = size;
                     default_data_allocated = allocated;
                     found_default_data = true;
@@ -240,10 +249,10 @@ pub(super) fn parse_extension_to_index(
                             .map(|c| u16::from_le_bytes([c[0], c[1]]))
                             .collect();
                         let stream_name = String::from_utf16_lossy(&name_u16);
-                        // Filter out internal Windows streams (names starting with $)
-                        if !is_internal_windows_stream(&stream_name) {
-                            streams.push((stream_name, size, allocated));
-                        }
+                        // C++ parity: ALL named $DATA streams create regular
+                        // stream entries.  Internal ones are filtered from
+                        // output by is_internal_windows_stream in the output layer.
+                        streams.push((stream_name, size, allocated));
                     }
                 }
             }
@@ -704,6 +713,9 @@ pub(super) fn parse_extension_to_index(
         // record (e.g., large files with extensive run lists).
         if found_default_data {
             let record = &mut index.records[record_idx as usize];
+            // Ensure has_default_data bit is set (may not have been set
+            // earlier if the base record didn't exist at attribute-parse time)
+            record.set_has_default_data();
 
             // If base record has no $DATA (both fields are 0), use extension's $DATA.
             // Otherwise, accumulate extension $DATA to base $DATA.
@@ -742,7 +754,7 @@ pub(super) fn parse_extension_to_index(
 
         for (name_idx, (_, parent_frs)) in names.iter().enumerate() {
             let p_frs = *parent_frs;
-            if p_frs == base_frs || p_frs == 0 || p_frs == u64::from(NO_ENTRY) {
+            if p_frs == base_frs || p_frs == u64::from(NO_ENTRY) {
                 continue;
             }
 
@@ -765,12 +777,21 @@ pub(super) fn parse_extension_to_index(
             // name_index is the position in the combined name list (existing + new)
             // For extension records, the first name might replace first_name (if empty),
             // so we need to account for that
+            //
+            // FIX: The off-by-one bug was here. Extension names are appended AFTER
+            // existing names, so the index should be existing_name_count + name_idx,
+            // not existing_name_count - 1 + name_idx.
+            //
+            // Example: base has 1 name (index 0), extension adds 1 name
+            //   - existing_name_count = 1
+            //   - name_idx = 0 (first extension name)
+            //   - effective_name_idx should be 1 (the second name overall)
             let effective_name_idx = if existing_name_count == 0 {
                 // First extension name became first_name, so name_index starts at 0
                 name_idx as u16
             } else {
                 // Extension names are appended after existing names
-                existing_name_count - 1 + name_idx as u16
+                existing_name_count + name_idx as u16
             };
 
             let child_idx = index.children.len() as u32;

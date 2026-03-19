@@ -15,7 +15,6 @@ use zerocopy::FromBytes;
     reason = "internal use in deprecated parse_record_to_fragment"
 )]
 use super::fragment_extension::parse_extension_to_fragment;
-use crate::ntfs::is_internal_windows_stream;
 
 /// Parses a record directly into an `MftIndexFragment` (for parallel parsing).
 ///
@@ -259,10 +258,10 @@ pub fn parse_record_to_fragment(
                             .map(|c| u16::from_le_bytes([c[0], c[1]]))
                             .collect();
                         let stream_name = String::from_utf16_lossy(&name_u16);
-                        // Filter out internal Windows streams (names starting with $)
-                        if !is_internal_windows_stream(&stream_name) {
-                            additional_streams.push((stream_name, size, allocated));
-                        }
+                        // C++ parity: ALL named $DATA streams create regular
+                        // stream entries.  Internal ones are filtered from
+                        // output by is_internal_windows_stream in the output layer.
+                        additional_streams.push((stream_name, size, allocated));
                     }
                 }
             }
@@ -546,7 +545,7 @@ pub fn parse_record_to_fragment(
     // Helper to add a child entry to a parent in the fragment
     let add_child_entry =
         |fragment: &mut crate::index::MftIndexFragment, p_frs: u64, name_idx: u16| {
-            if p_frs == frs || p_frs == 0 || p_frs == u64::from(NO_ENTRY) {
+            if p_frs == frs || p_frs == u64::from(NO_ENTRY) {
                 return;
             }
             // Ensure parent exists in fragment

@@ -6,6 +6,7 @@ mod fragment;
 mod fragment_extension;
 mod index;
 mod index_extension;
+pub mod unified;
 
 #[expect(
     deprecated,
@@ -13,6 +14,7 @@ mod index_extension;
 )]
 pub use fragment::parse_record_to_fragment;
 pub use index::parse_record_to_index;
+pub use unified::process_record;
 
 pub use crate::parse::{
     ExtensionAttributes, ParseResult, ParsedColumns, ParsedRecord,

@@ -88,6 +88,27 @@ impl MftIndex {
             );
         }
 
+        // C++ parity: fix total_stream_count for non-directory records that
+        // have NO unnamed $DATA attribute but DO have other streams.  In C++,
+        // the first non-$STD_INFO/non-$FILE_NAME attribute becomes first_stream
+        // directly — there is no phantom empty default.  Rust always counts 1
+        // for the default slot.  The `has_default_data()` bit (set during
+        // parsing in both base and extension handlers) lets us distinguish
+        // "has empty $DATA" (keep the 1) from "has no $DATA" (subtract 1).
+        {
+            let no_entry = super::NO_ENTRY;
+            for rec in &mut self.records {
+                if !rec.stdinfo.is_directory()
+                    && !rec.has_default_data()
+                    && rec.total_stream_count > 1
+                    && (rec.first_stream.next_entry != no_entry
+                        || rec.first_internal_stream != no_entry)
+                {
+                    rec.total_stream_count -= 1;
+                }
+            }
+        }
+
         // First pass: compute tree metrics
         crate::tree_metrics::compute_tree_metrics(self, debug, skip_orphans);
         tracing::debug!("[TRIP] MftIndex::compute_tree_metrics_impl -> first pass done");
