@@ -4,4 +4,7 @@ crates/uffs-mft/src/reader/persistence.rs|IOCP capture adds 270 LOC for Windows 
 crates/uffs-diag/src/bin/compare_scan_parity.rs|Standalone diagnostic CLI with complex parity output formatting
 crates/uffs-mft/src/io/parser/index.rs|Core MFT record parser with unified parse_record_to_index and forensic mode
 crates/uffs-mft/src/raw.rs|Unified MFT persistence handling UFFS-MFT, UFFS-IOCP, and raw NTFS formats
+crates/uffs-mft/src/index/types.rs|Core index types (FileRecord, StandardInfo, LinkInfo) with bit-packed accessors and dual constructors
+crates/uffs-mft/src/io/parser/index_extension.rs|MFT extension record parser handling multi-record files
+crates/uffs-mft/src/parse/direct_index_extension.rs|Direct index extension record parser for offline mode
 

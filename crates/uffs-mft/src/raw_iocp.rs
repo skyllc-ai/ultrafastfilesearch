@@ -499,26 +499,25 @@ pub fn is_iocp_capture<P: AsRef<Path>>(path: P) -> Result<bool> {
     clippy::cast_possible_truncation,
     reason = "MFT record counts fit in usize on 64-bit"
 )]
-/// Load IOCP capture and build `MftIndex` using the **exact same inline
-/// parsing** as Windows LIVE (`parse_record_to_index` directly into
-/// `MftIndex`).
+/// Load IOCP capture and build `MftIndex` using the unified
+/// `process_record` parser directly into `MftIndex`.
 ///
 /// This mirrors the Windows LIVE `SlidingIocpInline` path exactly:
 /// 1. Process chunks in IOCP completion order (sequential, not parallel)
 /// 2. Apply fixup to each record
-/// 3. Call `parse_record_to_index` to build index directly (no merger)
+/// 3. Call `process_record` to build index directly (no merger)
 /// 4. Call `compute_tree_metrics()` at the end
 ///
-/// By using the same `parse_record_to_index` function, we ensure byte-for-byte
-/// identical results with Windows LIVE, including any bugs or edge cases.
+/// The unified parser processes base and extension records through
+/// the same attribute loop, matching C++ `load()` behavior.
 pub fn load_iocp_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIndex> {
     use tracing::{debug, info};
 
     use crate::index::MftIndex;
-    use crate::io::parse_record_to_index;
+    use crate::io::process_record;
     use crate::parse::apply_fixup;
 
-    debug!("[PARITY_TRACE] load_iocp_to_index: ENTER (INLINE parse_record_to_index)");
+    debug!("[PARITY_TRACE] load_iocp_to_index: ENTER (INLINE process_record)");
     let capture = load_iocp_capture(path)?;
     let volume = capture.volume_letter();
     let record_size = capture.record_size() as usize;
@@ -534,7 +533,7 @@ pub fn load_iocp_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIn
         volume = %volume,
         chunks = capture.chunks.len(),
         total_records,
-        "Loading IOCP capture with INLINE parsing (matching Windows LIVE SlidingIocpInline)"
+        "Loading IOCP capture with unified process_record (matching Windows LIVE SlidingIocpInline)"
     );
 
     // Create empty MftIndex with capacity
@@ -563,7 +562,7 @@ pub fn load_iocp_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIn
 
             let frs = chunk.start_frs + i as u64;
 
-            if parse_record_to_index(&record_buf, frs, &mut index) {
+            if process_record(&record_buf, frs, &mut index) {
                 records_parsed += 1;
             }
         }

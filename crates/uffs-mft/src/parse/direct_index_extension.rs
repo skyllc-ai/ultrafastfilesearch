@@ -1,5 +1,7 @@
 //! Extension record parser for direct-to-index path.
 //!
+//! Exception: Direct index extension record parser for offline mode.
+//!
 //! This module handles extension records for the single-pass parser, extracting
 //! names, streams, and all attribute types from extension records and merging
 //! them into base records in the index.

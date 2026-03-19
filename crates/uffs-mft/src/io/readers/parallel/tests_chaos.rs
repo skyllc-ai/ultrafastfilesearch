@@ -69,7 +69,9 @@ pub enum ChaosStrategy {
 /// 3. Reordering chunks with controlled strategy
 /// 4. Processing through parallel parsing pipeline
 pub struct ChaosMftReader {
+    /// The chaos reordering strategy to apply.
     strategy: ChaosStrategy,
+    /// Size of each chunk in bytes.
     chunk_size: usize,
 }
 

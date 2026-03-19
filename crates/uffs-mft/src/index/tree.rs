@@ -91,14 +91,17 @@ impl MftIndex {
         // C++ parity: fix total_stream_count for non-directory records that
         // have NO unnamed $DATA attribute but DO have other streams.  In C++,
         // the first non-$STD_INFO/non-$FILE_NAME attribute becomes first_stream
-        // directly — there is no phantom empty default.  Rust always counts 1
-        // for the default slot.  The `has_default_data()` bit (set during
-        // parsing in both base and extension handlers) lets us distinguish
-        // "has empty $DATA" (keep the 1) from "has no $DATA" (subtract 1).
+        // directly — there is no phantom empty default.  The legacy Rust parser
+        // (`FileRecord::new()`) always counts 1 for the default slot.  The
+        // `has_default_data()` bit lets us subtract that phantom 1.
+        //
+        // Records created by the unified parser (`new_unified()`) start counts
+        // at 0, so the phantom-default correction is not needed for them.
         {
             let no_entry = super::NO_ENTRY;
             for rec in &mut self.records {
-                if !rec.stdinfo.is_directory()
+                if !rec.is_unified()
+                    && !rec.stdinfo.is_directory()
                     && !rec.has_default_data()
                     && rec.total_stream_count > 1
                     && (rec.first_stream.next_entry != no_entry

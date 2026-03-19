@@ -205,9 +205,13 @@ impl MftBitmap {
 
 /// Iterator over ranges of clusters containing in-use records.
 struct InUseClusterRangeIterator<'a> {
+    /// Reference to the bitmap being iterated.
     bitmap: &'a MftBitmap,
+    /// Number of MFT records per cluster.
     records_per_cluster: u32,
+    /// Current cluster index being examined.
     current_cluster: u64,
+    /// Total number of clusters in the MFT.
     total_clusters: u64,
 }
 

@@ -978,7 +978,7 @@ impl MftReader {
     ///
     /// This is a single-pass implementation that parses records directly into
     /// the index without creating intermediate `ParsedRecord` allocations. It
-    /// uses the modernized `parse_record_to_index()` from Wave 1.
+    /// uses the unified `process_record()` parser that mirrors C++ `load()`.
     ///
     /// # Errors
     ///
@@ -993,7 +993,8 @@ impl MftReader {
         use tracing::info;
 
         use crate::index::MftIndex;
-        use crate::parse::{apply_fixup, parse_record_to_index};
+        use crate::io::process_record;
+        use crate::parse::apply_fixup;
 
         let parse_start = Instant::now();
 
@@ -1020,9 +1021,9 @@ impl MftReader {
             }
             fixup_success += 1;
 
-            // Parse record directly into index
-            // parse_record_to_index handles both base and extension records internally
-            let added = parse_record_to_index(chunk, frs as u64, &mut index);
+            // Parse record directly into index using unified parser
+            // process_record handles both base and extension records
+            let added = process_record(chunk, frs as u64, &mut index);
             if added {
                 records_added += 1;
             }

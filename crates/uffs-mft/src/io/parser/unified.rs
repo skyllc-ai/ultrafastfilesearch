@@ -25,6 +25,10 @@ use crate::ntfs::{
 /// For extensions, `frs_base` points to the base record; for base records,
 /// `frs_base == frs`.  This is identical to C++ lines 231-234.
 ///
+/// Records are created with [`FileRecord::new_unified()`] which starts all
+/// counts at 0.  Every accepted `$FILE_NAME` and every first-occurrence
+/// stream increments the respective count, matching C++ semantics exactly.
+///
 /// Returns `true` if the record was successfully processed.
 #[expect(
     clippy::too_many_lines,
@@ -62,8 +66,8 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex) -> bool {
 
     let is_directory = header.is_directory();
 
-    // C++ line 234: get or create the base record
-    let _ = index.get_or_create(frs_base);
+    // C++ line 234: get or create the base record (zero-based counts)
+    let _ = index.get_or_create_unified(frs_base);
 
     // ── Attribute loop (C++ lines 240-461) ──────────────────────────────
     let mut offset = header.first_attribute_offset as usize;
@@ -101,7 +105,7 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex) -> bool {
                             if is_directory {
                                 info.set_directory(true);
                             }
-                            let rec = index.get_or_create(frs_base);
+                            let rec = index.get_or_create_unified(frs_base);
                             rec.stdinfo = info;
                         }
                     }
@@ -134,13 +138,13 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex) -> bool {
 
                                     // C++ lines 273-278: push old first_name to chain
                                     // Copy first_name before mutating (borrow checker)
-                                    let rec = index.get_or_create(frs_base);
+                                    let rec = index.get_or_create_unified(frs_base);
                                     let old_valid = rec.first_name.name.is_valid();
                                     let old_first = rec.first_name; // Copy
                                     if old_valid {
                                         let link_idx = index.links.len() as u32;
                                         index.links.push(old_first);
-                                        let rec = index.get_or_create(frs_base);
+                                        let rec = index.get_or_create_unified(frs_base);
                                         rec.first_name.next_entry = link_idx;
                                     }
 
@@ -155,18 +159,19 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex) -> bool {
                                         ext_id,
                                     );
 
-                                    let rec = index.get_or_create(frs_base);
+                                    let rec = index.get_or_create_unified(frs_base);
                                     rec.first_name.name = name_ref;
                                     rec.first_name.parent_frs = parent_frs;
 
                                     // C++ lines 293-304: build parent-child
-                                    // name_index = name_count (C++ line 302)
+                                    // name_index = name_count BEFORE increment
+                                    // (C++ line 302)
                                     let name_index = rec.name_count;
 
                                     if parent_frs != frs_base && parent_frs != u64::from(NO_ENTRY) {
-                                        let _ = index.get_or_create(parent_frs);
+                                        let _ = index.get_or_create_unified(parent_frs);
                                         let child_idx = index.children.len() as u32;
-                                        let parent_rec = index.get_or_create(parent_frs);
+                                        let parent_rec = index.get_or_create_unified(parent_frs);
                                         let old_fc = parent_rec.first_child;
                                         parent_rec.first_child = child_idx;
 
@@ -178,13 +183,10 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex) -> bool {
                                     }
 
                                     // C++ line 307: ++name_count
-                                    // C++ starts at 0 and always increments.
-                                    // Rust starts at 1 (FileRecord::new), so
-                                    // only increment for the 2nd+ name.
-                                    let rec = index.get_or_create(frs_base);
-                                    if old_valid {
-                                        rec.name_count += 1;
-                                    }
+                                    // With zero-based counts, ALWAYS increment
+                                    // (including the first name).
+                                    let rec = index.get_or_create_unified(frs_base);
+                                    rec.name_count += 1;
                                 }
                             }
                         }
@@ -269,14 +271,29 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex) -> bool {
                     // ── Classify and store ───────────────────────────
                     if is_i30 {
                         // $I30: accumulate into first_stream (directory index)
-                        let rec = index.get_or_create(frs_base);
+                        let rec = index.get_or_create_unified(frs_base);
                         rec.stdinfo.set_directory(true);
                         rec.first_stream.flags = 0; // type_name_id=0 for $I30
                         rec.first_stream.size.length += size;
                         rec.first_stream.size.allocated += alloc;
+                        // Increment counts once for the first $I30 attribute;
+                        // subsequent $I30 attrs ($INDEX_ALLOCATION, $BITMAP)
+                        // accumulate size without creating new stream entries.
+                        if !rec.has_i30_stream() {
+                            rec.set_has_i30_stream();
+                            rec.stream_count += 1;
+                            rec.total_stream_count += 1;
+                        }
                     } else if attr_type == AttributeType::Data as u32 && aname_len == 0 {
                         // Unnamed $DATA: default stream
-                        let rec = index.get_or_create(frs_base);
+                        let rec = index.get_or_create_unified(frs_base);
+                        // Increment counts once for the first unnamed $DATA;
+                        // subsequent unnamed $DATA (from extension records)
+                        // accumulate size only.
+                        if !rec.has_default_data() {
+                            rec.stream_count += 1;
+                            rec.total_stream_count += 1;
+                        }
                         rec.set_has_default_data();
                         rec.first_stream.size.length += size;
                         rec.first_stream.size.allocated += alloc;
@@ -301,7 +318,7 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex) -> bool {
                             });
 
                             // Chain to record's stream list
-                            let rec = index.get_or_create(frs_base);
+                            let rec = index.get_or_create_unified(frs_base);
                             let old_next = rec.first_stream.next_entry;
                             // Find end of chain
                             if old_next == NO_ENTRY {
@@ -313,7 +330,7 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex) -> bool {
                                 }
                                 index.streams[tail as usize].next_entry = si;
                             }
-                            let rec = index.get_or_create(frs_base);
+                            let rec = index.get_or_create_unified(frs_base);
                             rec.stream_count += 1;
                             rec.total_stream_count += 1;
                         }
@@ -332,7 +349,7 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex) -> bool {
                         // Chain to record's internal stream list
                         // (split borrows: read first_internal_stream, walk chain,
                         // then mutate record)
-                        let rec = index.get_or_create(frs_base);
+                        let rec = index.get_or_create_unified(frs_base);
                         let head = rec.first_internal_stream;
                         if head == NO_ENTRY {
                             rec.first_internal_stream = ist_idx;
@@ -344,7 +361,7 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex) -> bool {
                             }
                             index.internal_streams[tail as usize].next_entry = ist_idx;
                         }
-                        let rec = index.get_or_create(frs_base);
+                        let rec = index.get_or_create_unified(frs_base);
                         rec.internal_streams_size += size;
                         rec.internal_streams_allocated += alloc;
                         rec.total_stream_count += 1;
@@ -359,7 +376,7 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex) -> bool {
                         if rp + 4 <= data.len() {
                             let tag =
                                 u32::from_le_bytes(data[rp..rp + 4].try_into().unwrap_or([0; 4]));
-                            let rec = index.get_or_create(frs_base);
+                            let rec = index.get_or_create_unified(frs_base);
                             rec.reparse_tag = tag;
                         }
                     }
@@ -372,7 +389,7 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex) -> bool {
 
     // Set directory flag from header if not already set
     if is_directory {
-        let rec = index.get_or_create(frs_base);
+        let rec = index.get_or_create_unified(frs_base);
         rec.stdinfo.set_directory(true);
     }
 
@@ -381,6 +398,8 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex) -> bool {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
+/// Read a little-endian u16 from the given offset, returning 0 if out of
+/// bounds.
 #[inline]
 fn rd_u16(d: &[u8], o: usize) -> u16 {
     if o + 2 <= d.len() {
@@ -390,6 +409,8 @@ fn rd_u16(d: &[u8], o: usize) -> u16 {
     }
 }
 
+/// Read a little-endian u32 from the given offset, returning 0 if out of
+/// bounds.
 #[inline]
 fn rd_u32(d: &[u8], o: usize) -> u32 {
     if o + 4 <= d.len() {
@@ -399,6 +420,8 @@ fn rd_u32(d: &[u8], o: usize) -> u32 {
     }
 }
 
+/// Read a little-endian u64 from the given offset, returning 0 if out of
+/// bounds.
 #[inline]
 fn rd_u64(d: &[u8], o: usize) -> u64 {
     if o + 8 <= d.len() {

@@ -375,7 +375,7 @@ impl ParallelMftReader {
                     // only project a mutable reference without moving the allocation.
                     let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
 
-                    // Time parse phase (fixup + parse_record_to_index)
+                    // Time parse phase (fixup + process_record)
                     let parse_start = Instant::now();
 
                     // DIRECT-TO-INDEX: parse records directly into MftIndex
@@ -427,8 +427,8 @@ impl ParallelMftReader {
                             continue;
                         }
 
-                        // Parse directly into index (single-pass, no intermediates)
-                        if parse_record_to_index(record_slice, frs, &mut index) {
+                        // Parse directly into index using unified parser
+                        if process_record(record_slice, frs, &mut index) {
                             records_parsed += 1;
                         }
                     }

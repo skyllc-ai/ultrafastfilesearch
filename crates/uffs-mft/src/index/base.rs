@@ -210,6 +210,41 @@ impl MftIndex {
         }
     }
 
+    /// Get or create a record using zero-based counts for the unified parser.
+    ///
+    /// Same lookup/create logic as [`get_or_create()`](Self::get_or_create),
+    /// but newly created records use
+    /// [`FileRecord::new_unified(frs)`](FileRecord::new_unified) which starts
+    /// all counts at 0.  Existing records are returned as-is.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "bounds checked: resize ensures frs_usize < len"
+    )]
+    pub fn get_or_create_unified(&mut self, frs: u64) -> &mut FileRecord {
+        let frs_usize = frs as usize;
+
+        // Expand lookup table if needed
+        if frs_usize >= self.frs_to_idx.len() {
+            self.frs_to_idx.resize(frs_usize + 1, NO_ENTRY);
+        }
+
+        let idx = self.frs_to_idx[frs_usize];
+        if idx == NO_ENTRY {
+            // Create new record with zero-based counts
+            let new_idx = self.records.len() as u32;
+            self.frs_to_idx[frs_usize] = new_idx;
+            self.records.push(FileRecord::new_unified(frs));
+            let len = self.records.len();
+            &mut self.records[len - 1]
+        } else {
+            &mut self.records[idx as usize]
+        }
+    }
+
     /// Find a record by FRS (returns None if not present)
     #[must_use]
     pub fn find(&self, frs: u64) -> Option<&FileRecord> {

@@ -1,4 +1,7 @@
 //! Core per-record index types and packed name or stream metadata.
+//!
+//! Exception: Core index types (`FileRecord`, `StandardInfo`, `LinkInfo`) with
+//! bit-packed accessors and dual constructors (new / `new_unified`).
 
 // ============================================================================
 // Constants
@@ -632,7 +635,9 @@ pub struct FileRecord {
     /// Primary filename namespace (0=POSIX, 1=Win32, 2=DOS, 3=Win32+DOS)
     pub namespace: u8,
     /// Forensic flags (bit-packed): bit 0 = `is_deleted`, bit 1 = `is_corrupt`,
-    /// bit 2 = `is_extension`, bit 3 = `has_default_data` (unnamed $DATA found)
+    /// bit 2 = `is_extension`, bit 3 = `has_default_data` (unnamed $DATA
+    /// found), bit 4 = `has_i30_stream`, bit 5 = `is_unified` (created by
+    /// unified parser)
     pub forensic_flags: u8,
     /// Log File Sequence Number - correlates with `$LogFile` journal (forensic)
     pub lsn: u64,
@@ -718,6 +723,44 @@ impl FileRecord {
         }
     }
 
+    /// Create a new record with zero-based counts, matching C++ constructor.
+    ///
+    /// Unlike [`new()`](Self::new) which initialises counts at 1 (assuming
+    /// every record will have at least one name and one stream), this
+    /// constructor starts all counts at 0.  The unified parser
+    /// (`process_record`) then increments them for **every** accepted
+    /// attribute, including the first, producing correct-by-construction
+    /// values that match the C++ `load()` behaviour.
+    #[must_use]
+    pub fn new_unified(frs: u64) -> Self {
+        Self {
+            frs,
+            name_count: 0,
+            stream_count: 0,
+            total_stream_count: 0,
+            forensic_flags: 0b10_0000, // bit 5: is_unified
+            first_internal_stream: NO_ENTRY,
+            first_child: NO_ENTRY,
+            first_name: LinkInfo {
+                next_entry: NO_ENTRY,
+                name: IndexNameRef {
+                    offset: NO_ENTRY,
+                    meta: 0,
+                },
+                parent_frs: u64::from(NO_ENTRY),
+            },
+            first_stream: IndexStreamInfo {
+                next_entry: NO_ENTRY,
+                name: IndexNameRef {
+                    offset: NO_ENTRY,
+                    meta: 0,
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     /// Returns true if this record is a directory.
     #[inline]
     #[must_use]
@@ -780,8 +823,9 @@ impl FileRecord {
     /// Sets the forensic flags from parsed record fields.
     #[inline]
     pub fn set_forensic_flags(&mut self, is_deleted: bool, is_corrupt: bool, is_extension: bool) {
-        // Preserve bit 3 (has_default_data) when setting forensic bits
-        self.forensic_flags = (self.forensic_flags & 0b1000)
+        // Preserve bits 3-5 (has_default_data, has_i30_stream, is_unified)
+        // when setting forensic bits
+        self.forensic_flags = (self.forensic_flags & 0b11_1000)
             | u8::from(is_deleted)
             | (u8::from(is_corrupt) << 1_u8)
             | (u8::from(is_extension) << 2_u8);
@@ -800,6 +844,39 @@ impl FileRecord {
     #[inline]
     pub const fn set_has_default_data(&mut self) {
         self.forensic_flags |= 0b1000;
+    }
+
+    /// Returns true if an `$I30` directory-index stream was counted for this
+    /// record.  Used by the unified parser to avoid double-counting when
+    /// multiple `$I30`-contributing attributes (`$INDEX_ROOT`,
+    /// `$INDEX_ALLOCATION`, `$BITMAP`) appear in the same or extension
+    /// records.
+    #[inline]
+    #[must_use]
+    pub const fn has_i30_stream(&self) -> bool {
+        self.forensic_flags & 0b1_0000 != 0
+    }
+
+    /// Marks that an `$I30` stream was counted for this record.
+    #[inline]
+    pub const fn set_has_i30_stream(&mut self) {
+        self.forensic_flags |= 0b1_0000;
+    }
+
+    /// Returns true if this record was created by the unified parser
+    /// (`new_unified`).  Records from the legacy `new()` constructor do not
+    /// have this flag.  Used by `compute_tree_metrics` to decide whether the
+    /// `has_default_data` correction hack is needed.
+    #[inline]
+    #[must_use]
+    pub const fn is_unified(&self) -> bool {
+        self.forensic_flags & 0b10_0000 != 0
+    }
+
+    /// Marks this record as created by the unified parser.
+    #[inline]
+    pub const fn set_unified(&mut self) {
+        self.forensic_flags |= 0b10_0000;
     }
 
     /// Returns the tree metrics tuple (descendants, treesize,
