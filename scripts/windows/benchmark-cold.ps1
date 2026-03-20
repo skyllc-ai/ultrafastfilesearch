@@ -60,7 +60,8 @@ function RunDriveBench($driveLetter) {
     Write-Host "📁 DRIVE ${driveLetter}:" -ForegroundColor Yellow
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
     if (-not $CppOnly) {
-        BenchCold "Rust (cold)" { & $UFFS search "$Pattern" --drive $driveLetter }
+        # Note: no "search" subcommand - pattern is the default action
+        BenchCold "Rust (cold)" { & $UFFS "$Pattern" --drive $driveLetter }
     }
     if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
         BenchCold "C++ (cold)" { & $UFFS_CPP "$Pattern" --drives=$driveLetter }
@@ -72,7 +73,8 @@ function RunAllDrivesBench() {
     Write-Host "🌐 ALL DRIVES:" -ForegroundColor Yellow
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
     if (-not $CppOnly) {
-        BenchCold "Rust (cold)" { & $UFFS search "$Pattern" }
+        # Note: no "search" subcommand - pattern is the default action
+        BenchCold "Rust (cold)" { & $UFFS "$Pattern" }
     }
     if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
         BenchCold "C++ (cold)" { & $UFFS_CPP "$Pattern" }
