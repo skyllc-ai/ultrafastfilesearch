@@ -459,12 +459,20 @@ pub fn load_iocp_capture<P: AsRef<Path>>(path: P) -> Result<IocpCaptureData> {
         chunks.push(CapturedChunk::from_bytes(&entry_buf));
     }
 
-    // Read chunk data
+    // Read remaining file data into memory first, then decompress.
+    // This is faster than streaming decompression from a BufReader because:
+    // 1) A single read_to_end avoids many small syscalls
+    // 2) zstd can decompress from a contiguous memory buffer more efficiently
+    let mut compressed = Vec::new();
+    reader.read_to_end(&mut compressed)?;
+    drop(reader); // release file handle early
+
     let data = if header.is_compressed() {
         #[cfg(feature = "zstd")]
         {
-            let mut decoder = zstd::stream::Decoder::new(reader)?;
             let mut data = Vec::with_capacity(header.total_data_size as usize);
+            let cursor = std::io::Cursor::new(&compressed);
+            let mut decoder = zstd::stream::Decoder::new(cursor)?;
             decoder.read_to_end(&mut data)?;
             data
         }
@@ -475,9 +483,7 @@ pub fn load_iocp_capture<P: AsRef<Path>>(path: P) -> Result<IocpCaptureData> {
             ));
         }
     } else {
-        let mut data = Vec::with_capacity(header.total_data_size as usize);
-        reader.read_to_end(&mut data)?;
-        data
+        compressed
     };
 
     Ok(IocpCaptureData {
@@ -541,7 +547,9 @@ pub fn load_iocp_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIn
     use crate::parse::apply_fixup;
 
     debug!("[PARITY_TRACE] load_iocp_to_index: ENTER (INLINE process_record)");
-    let capture = load_iocp_capture(path)?;
+    let t_load = std::time::Instant::now();
+    let mut capture = load_iocp_capture(path)?;
+    let load_ms = t_load.elapsed().as_millis();
     let volume = capture.volume_letter();
     let record_size = capture.record_size() as usize;
     let total_records = capture.header.total_records as usize;
@@ -550,60 +558,83 @@ pub fn load_iocp_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIn
         %volume,
         chunks = capture.chunks.len(),
         total_records,
+        load_ms,
         "[PARITY_TRACE] load_iocp_to_index config"
     );
     info!(
         volume = %volume,
         chunks = capture.chunks.len(),
         total_records,
+        load_ms,
         "Loading IOCP capture with unified process_record (matching Windows LIVE SlidingIocpInline)"
     );
 
-    // Create empty MftIndex with capacity
+    // Create MftIndex with capacity and pre-size frs_to_idx to avoid
+    // repeated resize checks during parsing.
+    let t_parse = std::time::Instant::now();
     let mut index = MftIndex::with_capacity(volume, total_records);
+    // Pre-size frs_to_idx to cover all possible FRS values.  This eliminates
+    // the bounds-check + resize inside every get_or_create_unified() call.
+    index.pre_size_frs_lookup(total_records);
     // Propagate reserved_allocated_bytes from IOCP header (0 for legacy v1
     // captures).
     index.reserved_allocated_bytes = capture.header.reserved_allocated_bytes;
     let mut records_parsed: usize = 0;
     let mut fixup_failed: usize = 0;
 
-    // Process chunks in IOCP completion order (sequential, matching Windows LIVE)
-    // Windows LIVE processes one IOCP completion at a time on the completion thread
-    for (chunk, chunk_data) in capture.iter_chunks() {
-        let records_in_chunk = chunk.record_count as usize;
+    // Reusable scratch buffer for UTF-16 → UTF-8 name decoding, shared
+    // across all records to avoid per-record String allocation.
+    let mut name_buf = String::with_capacity(256);
+
+    // Zero-copy path: iterate by chunk index, slicing directly into the
+    // owned capture data for in-place fixup (no per-record copy).
+    let num_chunks = capture.chunks.len();
+    for ci in 0..num_chunks {
+        let start_frs = capture.chunks[ci].start_frs;
+        let records_in_chunk = capture.chunks[ci].record_count as usize;
+        let data_off = capture.chunks[ci].data_offset as usize;
+        let data_sz = capture.chunks[ci].data_size as usize;
 
         for i in 0..records_in_chunk {
-            let offset = i * record_size;
-            let end = offset + record_size;
-            if end > chunk_data.len() {
+            let rec_off = data_off + i * record_size;
+            let rec_end = rec_off + record_size;
+            if rec_end > data_off + data_sz {
                 break;
             }
 
-            // Clone to allow fixup (matches Windows LIVE behavior)
-            let mut record_buf = chunk_data[offset..end].to_vec();
-            if !apply_fixup(&mut record_buf) {
+            // In-place fixup directly on owned capture data (zero copy)
+            if !apply_fixup(&mut capture.data[rec_off..rec_end]) {
                 fixup_failed += 1;
                 continue;
             }
 
-            let frs = chunk.start_frs + i as u64;
+            let frs = start_frs + i as u64;
 
-            if process_record(&record_buf, frs, &mut index) {
+            if process_record(
+                &capture.data[rec_off..rec_end],
+                frs,
+                &mut index,
+                &mut name_buf,
+            ) {
                 records_parsed += 1;
             }
         }
     }
 
+    let parse_ms = t_parse.elapsed().as_millis();
+
     debug!(
         records_parsed,
         fixup_failed,
         index_entries = index.records.len(),
+        parse_ms,
         "[PARITY_TRACE] inline parsing complete"
     );
     info!(
         records_parsed,
         fixup_failed,
         index_entries = index.records.len(),
+        parse_ms,
         "Inline parsing complete"
     );
 
@@ -614,11 +645,19 @@ pub fn load_iocp_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIn
     );
     let tree_start = std::time::Instant::now();
     index.compute_tree_metrics();
+    let tree_ms = tree_start.elapsed().as_millis();
     debug!(
-        tree_metrics_ms = tree_start.elapsed().as_millis(),
+        tree_metrics_ms = tree_ms,
         "[PARITY_TRACE] compute_tree_metrics() done"
     );
 
+    info!(
+        load_ms,
+        parse_ms,
+        tree_ms,
+        records = index.records.len(),
+        "load_iocp_to_index timing breakdown"
+    );
     debug!(
         records = index.records.len(),
         "[PARITY_TRACE] load_iocp_to_index: EXIT"

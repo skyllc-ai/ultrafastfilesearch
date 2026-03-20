@@ -113,10 +113,6 @@ fn should_use_index_path(
     reason = "intentional user-facing output to stderr"
 )]
 #[expect(
-    clippy::too_many_lines,
-    reason = "top-level search orchestrator remains the command surface entry point"
-)]
-#[expect(
     clippy::single_call_fn,
     reason = "public CLI entry point called from main dispatch"
 )]
@@ -209,6 +205,106 @@ pub async fn search(
         && !benchmark
         && can_write_native_results(format, &output_config)
     {
+        // Detect full-scan (no filtering): use streaming direct-write-from-index
+        // to skip SearchResult allocation entirely.
+        let is_full_scan = !filters.files_only
+            && !filters.dirs_only
+            && !filters.hide_system
+            && filters.ext_filter.is_none()
+            && filters.min_size.is_none()
+            && filters.max_size.is_none()
+            && filters.limit == 0
+            && (filters.parsed.pattern() == "*"
+                || filters.parsed.pattern() == "**"
+                || filters.parsed.pattern() == "**/*"
+                || filters.parsed.pattern().is_empty());
+
+        if is_full_scan {
+            info!(
+                path = %mft_path.display(),
+                format,
+                "📂 Loading raw MFT file via STREAMING direct-from-index path (full scan)"
+            );
+
+            // Load index only (skip IndexQuery::collect entirely)
+            let native_index = super::raw_io::load_index_from_mft_file(
+                mft_path,
+                single_drive,
+                debug_tree,
+                chaos_seed,
+                reserved_allocated,
+            )?;
+
+            let t_output = std::time::Instant::now();
+
+            let is_console = matches!(
+                out.to_lowercase().as_str(),
+                "console" | "con" | "term" | "terminal"
+            );
+            // We need the row count for the footer, but we don't know it
+            // until after streaming. Use a placeholder and write footer after.
+            let cpp_pattern = format!(
+                ">{}:{}",
+                native_index.index.volume,
+                pattern.replace('*', ".*")
+            );
+
+            let row_count = if is_console {
+                let stdout_handle = std::io::stdout();
+                let mut stdout = stdout_handle.lock();
+                let footer_ctx = crate::commands::output::CppFooterContext {
+                    output_targets: &output_targets,
+                    pattern: &cpp_pattern,
+                    row_count: 0, // Updated by streaming writer
+                };
+                crate::commands::output::write_index_streaming(
+                    &native_index.index,
+                    &mut stdout,
+                    format,
+                    &output_config,
+                    &footer_ctx,
+                )?
+            } else {
+                use std::io::Write as _;
+                let file = std::fs::File::create(out)
+                    .with_context(|| format!("Failed to create output file: {out}"))?;
+                let mut writer = std::io::BufWriter::with_capacity(256 * 1024, file);
+                let footer_ctx = crate::commands::output::CppFooterContext {
+                    output_targets: &output_targets,
+                    pattern: &cpp_pattern,
+                    row_count: 0,
+                };
+                let count = crate::commands::output::write_index_streaming(
+                    &native_index.index,
+                    &mut writer,
+                    format,
+                    &output_config,
+                    &footer_ctx,
+                )?;
+                writer.flush()?;
+                info!(file = out, "Results written to file");
+                count
+            };
+
+            let output_ms = t_output.elapsed().as_millis();
+
+            if profile {
+                eprintln!("=== RAW MFT FILE TIMING (streaming) ===");
+                eprintln!(
+                    "  Load from file:  {:>6} ms  ({} records)",
+                    native_index.load_ms,
+                    native_index.index.len()
+                );
+                eprintln!("  Query/filter:    skipped (streaming)");
+                eprintln!("  Output/write:    {output_ms:>6} ms  ({row_count} rows)");
+                eprintln!("=== TOTAL: {} ms ===", start_time.elapsed().as_millis());
+            }
+
+            info!(count = row_count, "Search complete (streaming)");
+            return Ok(());
+        }
+
+        // Filtered query: use IndexQuery → SearchResult path
         info!(
             path = %mft_path.display(),
             format,

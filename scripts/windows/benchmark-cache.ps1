@@ -4,6 +4,7 @@
 
 param(
     [int]$N = 5,                    # Rounds per test
+    [string]$Pattern = "*",         # Search pattern (default: "*" for everything)
     [switch]$ClearCache,            # Clear cache before running
     [switch]$SkipCpp                # Skip C++ baseline tests
 )
@@ -16,6 +17,7 @@ $CACHE_DIR = "$env:TEMP\uffs_index_cache"
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "  UFFS Cache Benchmark" -ForegroundColor Cyan
 Write-Host "  Rounds per test: $N" -ForegroundColor Cyan
+Write-Host "  Pattern: $Pattern" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
 
 # Clear cache if requested
@@ -65,9 +67,9 @@ function Bench($label, $cmd) {
 # WARM-UP (populates cache)
 # ============================================
 Write-Host "🔥 Warm-up (populating cache)..." -ForegroundColor Yellow
-& $UFFS search "*.rs" --drive F 2>$null | Out-Null
-& $UFFS search "*.rs" --drive S 2>$null | Out-Null
-& $UFFS search "*.rs" 2>$null | Out-Null  # All drives
+& $UFFS search $Pattern --drive F 2>$null | Out-Null
+& $UFFS search $Pattern --drive S 2>$null | Out-Null
+& $UFFS search $Pattern 2>$null | Out-Null  # All drives
 Write-Host "   Done.`n" -ForegroundColor Green
 
 # ============================================
@@ -76,11 +78,11 @@ Write-Host "   Done.`n" -ForegroundColor Green
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
 Write-Host "📁 DRIVE F: (single drive)" -ForegroundColor White
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
-Bench "F: index"     { & $UFFS search "*.rs" --drive F --query-mode=index }
-Bench "F: dataframe" { & $UFFS search "*.rs" --drive F --query-mode=dataframe }
-Bench "F: default"   { & $UFFS search "*.rs" --drive F }
+Bench "F: index"     { & $UFFS search $Pattern --drive F --query-mode=index }
+Bench "F: dataframe" { & $UFFS search $Pattern --drive F --query-mode=dataframe }
+Bench "F: default"   { & $UFFS search $Pattern --drive F }
 if (-not $SkipCpp -and (Test-Path $UFFS_CPP)) {
-    Bench "F: C++ baseline" { & $UFFS_CPP "*.rs" --drives=F }
+    Bench "F: C++ baseline" { & $UFFS_CPP $Pattern --drives=F }
 }
 Write-Host ""
 
@@ -90,11 +92,11 @@ Write-Host ""
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
 Write-Host "📁 DRIVE S: (single drive)" -ForegroundColor White
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
-Bench "S: index"     { & $UFFS search "*.rs" --drive S --query-mode=index }
-Bench "S: dataframe" { & $UFFS search "*.rs" --drive S --query-mode=dataframe }
-Bench "S: default"   { & $UFFS search "*.rs" --drive S }
+Bench "S: index"     { & $UFFS search $Pattern --drive S --query-mode=index }
+Bench "S: dataframe" { & $UFFS search $Pattern --drive S --query-mode=dataframe }
+Bench "S: default"   { & $UFFS search $Pattern --drive S }
 if (-not $SkipCpp -and (Test-Path $UFFS_CPP)) {
-    Bench "S: C++ baseline" { & $UFFS_CPP "*.rs" --drives=S }
+    Bench "S: C++ baseline" { & $UFFS_CPP $Pattern --drives=S }
 }
 Write-Host ""
 
@@ -104,11 +106,11 @@ Write-Host ""
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
 Write-Host "🌐 ALL DRIVES: (no --drive specified)" -ForegroundColor White
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
-Bench "ALL: index"     { & $UFFS search "*.rs" --query-mode=index }
-Bench "ALL: dataframe" { & $UFFS search "*.rs" --query-mode=dataframe }
-Bench "ALL: default"   { & $UFFS search "*.rs" }
+Bench "ALL: index"     { & $UFFS search $Pattern --query-mode=index }
+Bench "ALL: dataframe" { & $UFFS search $Pattern --query-mode=dataframe }
+Bench "ALL: default"   { & $UFFS search $Pattern }
 if (-not $SkipCpp -and (Test-Path $UFFS_CPP)) {
-    Bench "ALL: C++ baseline" { & $UFFS_CPP "*.rs" }
+    Bench "ALL: C++ baseline" { & $UFFS_CPP $Pattern }
 }
 Write-Host ""
 

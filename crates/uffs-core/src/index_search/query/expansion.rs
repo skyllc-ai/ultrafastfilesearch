@@ -60,12 +60,13 @@ impl<'a> RecordExpander<'a> {
         };
         let path_index = self.path_cache.index();
         let path_resolver = self.path_cache.resolver();
+        let dir_cache = self.path_cache.dir_cache();
         let cached_path = self.resolve_paths.then(|| {
             debug_assert!(
                 path_resolver.is_valid_idx(record_idx),
                 "collect_results only resolves paths for valid record indices"
             );
-            path_resolver.materialize_path(path_index, record_idx)
+            path_resolver.materialize_path_cached(path_index, record_idx, dir_cache)
         });
 
         let mut results = Vec::with_capacity(usize::from(name_count) * usize::from(stream_count));

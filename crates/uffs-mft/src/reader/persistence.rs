@@ -1012,6 +1012,7 @@ impl MftReader {
         let mut fixup_success: u64 = 0;
         let mut fixup_failed: u64 = 0;
         let mut records_added: u64 = 0;
+        let mut name_buf = String::with_capacity(256);
 
         let buffer_slice = raw.data.as_mut_slice();
         for (frs, chunk) in buffer_slice.chunks_exact_mut(record_size).enumerate() {
@@ -1024,7 +1025,7 @@ impl MftReader {
 
             // Parse record directly into index using unified parser
             // process_record handles both base and extension records
-            let added = process_record(chunk, frs as u64, &mut index);
+            let added = process_record(chunk, frs as u64, &mut index, &mut name_buf);
             if added {
                 records_added += 1;
             }

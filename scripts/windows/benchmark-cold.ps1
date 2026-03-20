@@ -3,6 +3,7 @@
 
 param(
     [int]$N = 3,                    # Rounds per test
+    [string]$Pattern = "*",         # Search pattern (default: "*" for everything)
     [switch]$RustOnly,              # Skip C++ tests
     [switch]$CppOnly                # Skip Rust tests
 )
@@ -15,6 +16,7 @@ $CACHE_DIR = "$env:TEMP\uffs_index_cache"
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "  UFFS Cold Start Benchmark" -ForegroundColor Cyan
 Write-Host "  Rounds per test: $N" -ForegroundColor Cyan
+Write-Host "  Pattern: $Pattern" -ForegroundColor Cyan
 Write-Host "  (Cache cleared before EACH run)" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
 
@@ -52,10 +54,10 @@ Write-Host "━━━━━━━━━━━━━━━━━━━━━━�
 Write-Host "📁 DRIVE F:" -ForegroundColor Yellow
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
 if (-not $CppOnly) {
-    BenchCold "Rust (cold)" { & $UFFS search "*.rs" --drive F }
+    BenchCold "Rust (cold)" { & $UFFS search $Pattern --drive F }
 }
 if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
-    BenchCold "C++ (cold)" { & $UFFS_CPP "*.rs" --drives=F }
+    BenchCold "C++ (cold)" { & $UFFS_CPP $Pattern --drives=F }
 }
 
 # ============================================
@@ -65,10 +67,10 @@ Write-Host "━━━━━━━━━━━━━━━━━━━━━━�
 Write-Host "📁 DRIVE S:" -ForegroundColor Yellow
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
 if (-not $CppOnly) {
-    BenchCold "Rust (cold)" { & $UFFS search "*.rs" --drive S }
+    BenchCold "Rust (cold)" { & $UFFS search $Pattern --drive S }
 }
 if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
-    BenchCold "C++ (cold)" { & $UFFS_CPP "*.rs" --drives=S }
+    BenchCold "C++ (cold)" { & $UFFS_CPP $Pattern --drives=S }
 }
 
 # ============================================
@@ -78,10 +80,10 @@ Write-Host "━━━━━━━━━━━━━━━━━━━━━━�
 Write-Host "🌐 ALL DRIVES:" -ForegroundColor Yellow
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
 if (-not $CppOnly) {
-    BenchCold "Rust (cold)" { & $UFFS search "*.rs" }
+    BenchCold "Rust (cold)" { & $UFFS search $Pattern }
 }
 if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
-    BenchCold "C++ (cold)" { & $UFFS_CPP "*.rs" }
+    BenchCold "C++ (cold)" { & $UFFS_CPP $Pattern }
 }
 
 # ============================================

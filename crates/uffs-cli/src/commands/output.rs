@@ -94,6 +94,339 @@ pub(super) fn write_native_results(
     Ok(())
 }
 
+/// Stream output directly from `MftIndex` — zero `SearchResult` allocation.
+///
+/// This replaces the chain: `IndexQuery::collect()` → `Vec<SearchResult>` →
+/// `write_native_results_to()` with a single pass that reads record fields
+/// directly from the index and writes rows inline.
+///
+/// Eliminates:
+/// - 8M+ `SearchResult` allocations (3 Strings each)
+/// - The Rayon parallel collect overhead
+/// - Redundant `index.find(result.frs)` lookups in the output loop
+#[expect(
+    clippy::too_many_lines,
+    reason = "single-pass streaming writer needs inline path + row logic"
+)]
+pub(super) fn write_index_streaming<W: Write>(
+    index: &uffs_mft::MftIndex,
+    writer: &mut W,
+    format: &str,
+    output_config: &OutputConfig,
+    footer_ctx: &CppFooterContext<'_>,
+) -> Result<usize> {
+    use uffs_mft::index::PathCache;
+
+    let output_cols = selected_output_columns(output_config);
+    let tz_offset_secs = output_config.timezone_offset_secs;
+
+    // Build path cache (includes dir_cache for fast parent lookups).
+    let path_cache = PathCache::build(index, false);
+    let resolver = path_cache.resolver();
+    let dir_cache = path_cache.dir_cache();
+
+    write_native_header(writer, output_config, output_cols)?;
+
+    let mut row_buffer = String::with_capacity(512);
+    let mut path_buffer = String::with_capacity(256);
+    let mut hardlink_buf = String::new(); // Only allocated when hardlinks encountered
+    let mut row_count: usize = 0;
+
+    for (record_idx, record) in index.records.iter().enumerate() {
+        if !resolver.is_valid_idx(record_idx) {
+            continue;
+        }
+
+        let is_directory = record.is_directory();
+
+        // Resolve primary path into reusable buffer (zero per-record allocation).
+        path_buffer.clear();
+        resolver.materialize_path_into(index, record_idx, dir_cache, &mut path_buffer);
+
+        // Expand names × streams (same logic as RecordExpander).
+        let name_count = record.name_count.max(1);
+        let stream_count = record.stream_count.max(1);
+
+        for name_idx in 0..name_count {
+            for stream_idx in 0..stream_count {
+                let Some(stream_info) = index.get_stream_at(record, stream_idx) else {
+                    continue;
+                };
+                if !stream_info.is_output_stream() {
+                    continue;
+                }
+
+                // Build the display name.
+                let name_info = index
+                    .get_name_at(record, name_idx)
+                    .unwrap_or(&record.first_name);
+                let stream_name = index.stream_name(stream_info);
+                let has_ads = !stream_name.is_empty();
+                let base_name = index.get_name(&name_info.name);
+
+                // Path base: use path_buffer for primary name, resolve
+                // alternate for hardlinks. NEVER mutate path_buffer in this
+                // inner loop — it's shared across stream iterations.
+                let base_path: &str = if name_idx == 0 {
+                    &path_buffer
+                } else {
+                    // Hard link — resolve via alternate parent (rare, <1%).
+                    hardlink_buf.clear();
+                    let alt = resolver.materialize_path_for_name(index, record_idx, name_idx);
+                    hardlink_buf.push_str(&alt);
+                    &hardlink_buf
+                };
+                // Whether this directory path needs a trailing backslash.
+                let dir_needs_sep = is_directory && !has_ads && !base_path.ends_with('\\');
+
+                // Determine tree metrics and displayed sizes.
+                let (descendants, treesize, tree_allocated) = if stream_idx == 0 {
+                    record.tree_metrics()
+                } else {
+                    (0, 0, 0)
+                };
+                let displayed_size = if is_directory && !has_ads {
+                    treesize
+                } else {
+                    stream_info.size.length
+                };
+                let displayed_alloc = if is_directory && !has_ads {
+                    tree_allocated
+                } else {
+                    stream_info.size.allocated
+                };
+
+                // Display name: dirs get empty name for default stream.
+                let display_name: &str = if is_directory && !has_ads {
+                    ""
+                } else if has_ads {
+                    // Inline "base:stream" — avoid allocation by writing
+                    // directly during column output below.
+                    ""
+                } else {
+                    base_name
+                };
+
+                // Path-only (parent directory portion including trailing \).
+                // For directories: PathOnly = full path with trailing \
+                //   (e.g., "D:\...\images\" → "D:\...\images\")
+                // For files: PathOnly = parent directory with trailing \
+                //   (e.g., "D:\...\images\foo.jpg" → "D:\...\images\")
+                // For ADS: PathOnly = parent directory of the base path
+                let path_only: &str = if is_directory && !has_ads {
+                    // Directory default stream: PathOnly = full dir path
+                    // (base_path may or may not have trailing \, we add it
+                    // in the column writer so just use base_path + \ here)
+                    base_path
+                } else {
+                    base_path
+                        .rfind('\\')
+                        .and_then(|pos| base_path.get(..=pos))
+                        .unwrap_or_default()
+                };
+
+                // Build row (clear any hardlink stash from above).
+                row_buffer.clear();
+                for (col_idx, col) in output_cols.iter().enumerate() {
+                    if col_idx > 0 {
+                        row_buffer.push_str(&output_config.separator);
+                    }
+                    match col {
+                        OutputColumn::Path => {
+                            row_buffer.push_str(&output_config.quote);
+                            row_buffer.push_str(base_path);
+                            if has_ads {
+                                row_buffer.push(':');
+                                row_buffer.push_str(stream_name);
+                            } else if dir_needs_sep {
+                                row_buffer.push('\\');
+                            }
+                            row_buffer.push_str(&output_config.quote);
+                        }
+                        OutputColumn::Name => {
+                            if has_ads {
+                                row_buffer.push_str(&output_config.quote);
+                                row_buffer.push_str(base_name);
+                                row_buffer.push(':');
+                                row_buffer.push_str(stream_name);
+                                row_buffer.push_str(&output_config.quote);
+                            } else {
+                                append_quoted(&mut row_buffer, &output_config.quote, display_name);
+                            }
+                        }
+                        OutputColumn::PathOnly => {
+                            row_buffer.push_str(&output_config.quote);
+                            row_buffer.push_str(path_only);
+                            if dir_needs_sep && is_directory && !has_ads {
+                                row_buffer.push('\\');
+                            }
+                            row_buffer.push_str(&output_config.quote);
+                        }
+                        OutputColumn::Size => append_display(&mut row_buffer, displayed_size),
+                        OutputColumn::SizeOnDisk => {
+                            append_display(&mut row_buffer, displayed_alloc);
+                        }
+                        OutputColumn::Created => {
+                            append_datetime(
+                                &mut row_buffer,
+                                record.stdinfo.created,
+                                tz_offset_secs,
+                            );
+                        }
+                        OutputColumn::Modified => {
+                            append_datetime(
+                                &mut row_buffer,
+                                record.stdinfo.modified,
+                                tz_offset_secs,
+                            );
+                        }
+                        OutputColumn::Accessed => {
+                            append_datetime(
+                                &mut row_buffer,
+                                record.stdinfo.accessed,
+                                tz_offset_secs,
+                            );
+                        }
+                        OutputColumn::Descendants => append_display(&mut row_buffer, descendants),
+                        OutputColumn::TreeSize => append_display(&mut row_buffer, treesize),
+                        OutputColumn::TreeAllocated => {
+                            append_display(&mut row_buffer, tree_allocated);
+                        }
+                        OutputColumn::Type => {
+                            let ext_id = record.first_name.name.extension_id();
+                            let ext = index.extensions.get_extension(ext_id).unwrap_or("");
+                            append_quoted(&mut row_buffer, &output_config.quote, ext);
+                        }
+                        OutputColumn::Attributes | OutputColumn::AttributeValue => {
+                            append_display(&mut row_buffer, record.stdinfo.to_attributes());
+                        }
+                        OutputColumn::Hidden => {
+                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_hidden());
+                        }
+                        OutputColumn::System => {
+                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_system());
+                        }
+                        OutputColumn::Archive => {
+                            append_bool(
+                                &mut row_buffer,
+                                output_config,
+                                record.stdinfo.is_archive(),
+                            );
+                        }
+                        OutputColumn::ReadOnly => {
+                            append_bool(
+                                &mut row_buffer,
+                                output_config,
+                                record.stdinfo.is_readonly(),
+                            );
+                        }
+                        OutputColumn::Compressed => {
+                            append_bool(
+                                &mut row_buffer,
+                                output_config,
+                                record.stdinfo.is_compressed(),
+                            );
+                        }
+                        OutputColumn::Encrypted => {
+                            append_bool(
+                                &mut row_buffer,
+                                output_config,
+                                record.stdinfo.is_encrypted(),
+                            );
+                        }
+                        OutputColumn::Sparse => {
+                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_sparse());
+                        }
+                        OutputColumn::Reparse => {
+                            append_bool(
+                                &mut row_buffer,
+                                output_config,
+                                record.stdinfo.is_reparse(),
+                            );
+                        }
+                        OutputColumn::Offline => {
+                            append_bool(
+                                &mut row_buffer,
+                                output_config,
+                                record.stdinfo.is_offline(),
+                            );
+                        }
+                        OutputColumn::NotIndexed => {
+                            append_bool(
+                                &mut row_buffer,
+                                output_config,
+                                record.stdinfo.is_not_indexed(),
+                            );
+                        }
+                        OutputColumn::Temporary => {
+                            append_bool(
+                                &mut row_buffer,
+                                output_config,
+                                record.stdinfo.is_temporary(),
+                            );
+                        }
+                        OutputColumn::Virtual => {
+                            append_bool(
+                                &mut row_buffer,
+                                output_config,
+                                record.stdinfo.is_virtual(),
+                            );
+                        }
+                        OutputColumn::Pinned => {
+                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_pinned());
+                        }
+                        OutputColumn::Unpinned => {
+                            append_bool(
+                                &mut row_buffer,
+                                output_config,
+                                record.stdinfo.is_unpinned(),
+                            );
+                        }
+                        OutputColumn::DirectoryFlag => {
+                            append_bool(&mut row_buffer, output_config, is_directory);
+                        }
+                        OutputColumn::Integrity => {
+                            append_bool(
+                                &mut row_buffer,
+                                output_config,
+                                record.stdinfo.is_integrity_stream(),
+                            );
+                        }
+                        OutputColumn::NoScrub => {
+                            append_bool(
+                                &mut row_buffer,
+                                output_config,
+                                record.stdinfo.is_no_scrub_data(),
+                            );
+                        }
+                        OutputColumn::Bulkiness => {
+                            row_buffer.push_str(OutputColumn::Bulkiness.default_value());
+                        }
+                    }
+                }
+
+                row_buffer.push('\n');
+                writer.write_all(row_buffer.as_bytes())?;
+                row_count += 1;
+            }
+        }
+    }
+
+    if format == "custom" {
+        // Use actual row_count for the footer (not the placeholder from the
+        // caller) so that the "fast scan" message only appears for genuinely
+        // small result sets.
+        let final_footer = CppFooterContext {
+            output_targets: footer_ctx.output_targets,
+            pattern: footer_ctx.pattern,
+            row_count,
+        };
+        write_cpp_drive_footer(writer, &final_footer)?;
+    }
+
+    Ok(row_count)
+}
+
 /// Write native offline results to the provided writer.
 fn write_native_results_to<W: Write>(
     index: &uffs_mft::MftIndex,
@@ -104,7 +437,7 @@ fn write_native_results_to<W: Write>(
     footer_ctx: &CppFooterContext<'_>,
 ) -> Result<()> {
     let output_cols = selected_output_columns(output_config);
-    let fixed_tz = chrono::FixedOffset::east_opt(output_config.timezone_offset_secs);
+    let tz_offset_secs = output_config.timezone_offset_secs;
 
     write_native_header(writer, output_config, output_cols)?;
 
@@ -121,7 +454,7 @@ fn write_native_results_to<W: Write>(
             write_native_value(
                 &mut row_buffer,
                 output_config,
-                fixed_tz.as_ref(),
+                tz_offset_secs,
                 index,
                 result,
                 record,
@@ -185,7 +518,7 @@ fn selected_output_columns(output_config: &OutputConfig) -> &[OutputColumn] {
 fn write_native_value(
     row_buffer: &mut String,
     output_config: &OutputConfig,
-    fixed_tz: Option<&chrono::FixedOffset>,
+    tz_offset_secs: i32,
     index: &uffs_mft::MftIndex,
     result: &uffs_core::SearchResult,
     record: Option<&uffs_mft::index::FileRecord>,
@@ -207,17 +540,17 @@ fn write_native_value(
         OutputColumn::Created => append_datetime(
             row_buffer,
             record.map_or(0, |rec| rec.stdinfo.created),
-            fixed_tz,
+            tz_offset_secs,
         ),
         OutputColumn::Modified => append_datetime(
             row_buffer,
             record.map_or(0, |rec| rec.stdinfo.modified),
-            fixed_tz,
+            tz_offset_secs,
         ),
         OutputColumn::Accessed => append_datetime(
             row_buffer,
             record.map_or(0, |rec| rec.stdinfo.accessed),
-            fixed_tz,
+            tz_offset_secs,
         ),
         OutputColumn::Type => append_quoted(
             row_buffer,
@@ -423,27 +756,63 @@ fn append_bool(row_buffer: &mut String, output_config: &OutputConfig, value: boo
     }
 }
 
-/// Append a datetime field using the same fixed-offset formatting as the
-/// `DataFrame` writer.
-fn append_datetime(
-    row_buffer: &mut String,
-    timestamp_micros: i64,
-    fixed_tz: Option<&chrono::FixedOffset>,
-) {
-    let secs = timestamp_micros.div_euclid(1_000_000);
-    let micros = u32::try_from(timestamp_micros.rem_euclid(1_000_000)).unwrap_or(0);
-    if let Some(utc_dt) = chrono::DateTime::from_timestamp(secs, micros * 1000) {
-        if let Some(timezone_offset) = fixed_tz {
-            append_display(
-                row_buffer,
-                utc_dt
-                    .with_timezone(timezone_offset)
-                    .format("%Y-%m-%d %H:%M:%S"),
-            );
-        } else {
-            append_display(row_buffer, utc_dt.format("%Y-%m-%d %H:%M:%S"));
-        }
-    }
+/// Append a datetime field using fast manual formatting.
+///
+/// Replaces `chrono::format("%Y-%m-%d %H:%M:%S")` which re-parses the format
+/// string on every call (24.9M times for 8.3M records × 3 timestamp columns).
+/// Manual formatting is ~10-20× faster for this fixed format.
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "rem_euclid always returns non-negative value"
+)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "day_secs and doe are mathematically bounded within u32 range"
+)]
+fn append_datetime(row_buffer: &mut String, timestamp_micros: i64, tz_offset_secs: i32) {
+    use core::fmt::Write;
+
+    // Apply timezone offset directly to the Unix timestamp (avoids chrono
+    // DateTime construction + with_timezone + format overhead entirely).
+    let adjusted_secs = timestamp_micros.div_euclid(1_000_000) + i64::from(tz_offset_secs);
+
+    // Civil time decomposition (no leap seconds — matches chrono behavior).
+    // Algorithm: days since Unix epoch → year/month/day; remainder → H:M:S.
+    let day_secs = adjusted_secs.rem_euclid(86_400) as u32;
+    let days = adjusted_secs.div_euclid(86_400) + 719_468; // shift to 0000-03-01 epoch
+
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let doe = (days - era * 146_097) as u32; // day of era [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let year_offset = i64::from(yoe) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let month_proxy = (5 * doy + 2) / 153;
+    let day = doy - (153 * month_proxy + 2) / 5 + 1;
+    let month = if month_proxy < 10 {
+        month_proxy + 3
+    } else {
+        month_proxy - 9
+    };
+    let year = if month <= 2 {
+        year_offset + 1
+    } else {
+        year_offset
+    };
+
+    let hour = day_secs / 3600;
+    let minute = (day_secs % 3600) / 60;
+    let second = day_secs % 60;
+
+    // Write "YYYY-MM-DD HH:MM:SS" directly — no format string parsing.
+    // String::write_fmt is infallible, so ignoring the result is safe.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "String::write_fmt never fails"
+    )]
+    let _ = write!(
+        row_buffer,
+        "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}"
+    );
 }
 
 /// Append a displayable value without introducing extra string allocations in

@@ -247,15 +247,68 @@ impl MftIndex {
         }
     }
 
+    /// Pre-size the `frs_to_idx` lookup table so that all FRS values up to
+    /// `total_records` can be inserted without any resize checks.
+    ///
+    /// Call this once before the parse loop to eliminate the per-call
+    /// `if frs_usize >= self.frs_to_idx.len()` branch in
+    /// `get_or_create_unified`.
+    pub fn pre_size_frs_lookup(&mut self, total_records: usize) {
+        // FRS numbers can be up to total_records (and sometimes slightly
+        // beyond due to extension records referencing higher FRS values).
+        // Over-allocate by 10% to cover most cases without any resize.
+        let capacity = total_records + total_records / 10;
+        if capacity > self.frs_to_idx.len() {
+            self.frs_to_idx.resize(capacity, NO_ENTRY);
+        }
+    }
+
+    /// Ensure a record exists for `frs` and return its index in `records`.
+    ///
+    /// This is the fast-path equivalent of `get_or_create_unified` that
+    /// returns a `u32` index instead of a mutable reference.  Callers can
+    /// then use `self.records[idx]` directly, avoiding redundant lookups.
+    #[inline]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS fits in usize on 64-bit"
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "bounds checked: resize ensures frs_usize < len"
+    )]
+    pub fn ensure_record(&mut self, frs: u64) -> u32 {
+        let frs_usize = frs as usize;
+
+        if frs_usize >= self.frs_to_idx.len() {
+            self.frs_to_idx.resize(frs_usize + 1, NO_ENTRY);
+        }
+
+        let idx = self.frs_to_idx[frs_usize];
+        if idx == NO_ENTRY {
+            let new_idx = self.records.len() as u32;
+            self.frs_to_idx[frs_usize] = new_idx;
+            self.records.push(FileRecord::new_unified(frs));
+            new_idx
+        } else {
+            idx
+        }
+    }
+
     /// Find a record by FRS (returns None if not present)
+    #[inline]
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS and record index fit in usize on 64-bit"
+    )]
     pub fn find(&self, frs: u64) -> Option<&FileRecord> {
-        let frs_usize = usize::try_from(frs).ok()?;
+        let frs_usize = frs as usize;
         let idx = *self.frs_to_idx.get(frs_usize)?;
         if idx == NO_ENTRY {
             None
         } else {
-            self.records.get(usize::try_from(idx).ok()?)
+            self.records.get(idx as usize)
         }
     }
 
@@ -376,14 +429,19 @@ impl MftIndex {
     }
 
     /// Convert FRS to record index (returns None if not present).
+    #[inline]
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "FRS and record index fit in usize on 64-bit"
+    )]
     pub fn frs_to_idx_opt(&self, frs: u64) -> Option<usize> {
-        let frs_usize = usize::try_from(frs).ok()?;
+        let frs_usize = frs as usize;
         let idx = *self.frs_to_idx.get(frs_usize)?;
         if idx == NO_ENTRY {
             None
         } else {
-            Some(usize::try_from(idx).ok()?)
+            Some(idx as usize)
         }
     }
 

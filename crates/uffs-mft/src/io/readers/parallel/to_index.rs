@@ -290,6 +290,7 @@ impl ParallelMftReader {
         // Process completions with inline parsing
         let bitmap_ref = self.bitmap.as_ref();
         let mut last_completion_at = Instant::now();
+        let mut name_buf = String::with_capacity(256);
 
         // Timing instrumentation for I/O overlap analysis
         let mut total_wait_time_ns = 0u64;
@@ -428,7 +429,7 @@ impl ParallelMftReader {
                         }
 
                         // Parse directly into index using unified parser
-                        if process_record(record_slice, frs, &mut index) {
+                        if process_record(record_slice, frs, &mut index, &mut name_buf) {
                             records_parsed += 1;
                         }
                     }

@@ -387,6 +387,192 @@ impl PathResolver {
         self.invalid_count
     }
 
+    /// Pre-compute directory paths using the correct `materialize_path`
+    /// algorithm (follows `first_name.parent_frs`).
+    ///
+    /// Returns a dense `Vec<String>` indexed by record index.  Only valid
+    /// directory records get a non-empty path; everything else is empty.
+    ///
+    /// These cached paths are used by `materialize_path_cached` to short-
+    /// circuit the parent-chain walk when a directory ancestor is already
+    /// resolved.
+    #[must_use]
+    pub fn pre_cache_directory_paths(&self, index: &MftIndex) -> Vec<String> {
+        let n = index.records.len();
+        let mut cache: Vec<String> = vec![String::new(); n];
+        for (idx, slot) in cache.iter_mut().enumerate().take(n) {
+            if self.is_valid_idx(idx) && index.records[idx].is_directory() {
+                *slot = self.materialize_path(index, idx);
+            }
+        }
+        cache
+    }
+
+    /// Materialize a path directly into a caller-owned buffer.
+    ///
+    /// Same logic as `materialize_path_cached` but appends to `out` instead
+    /// of returning a new `String`.  Eliminates one heap allocation per
+    /// record in the streaming output hot path.
+    pub fn materialize_path_into(
+        &self,
+        index: &MftIndex,
+        idx: usize,
+        dir_cache: &[String],
+        out: &mut String,
+    ) {
+        let mut chain: smallvec::SmallVec<[usize; 16]> = smallvec::SmallVec::new();
+        let mut current_idx = idx;
+
+        loop {
+            if let Some(cached) = dir_cache.get(current_idx) {
+                if !cached.is_empty() {
+                    out.push_str(cached);
+                    for &ci in chain.iter().rev() {
+                        if let Some(rec) = index.records.get(ci) {
+                            let name = index.record_name(rec);
+                            if !name.is_empty() && name != "." {
+                                if !out.ends_with('\\') {
+                                    out.push('\\');
+                                }
+                                out.push_str(name);
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
+
+            let Some(record) = index.records.get(current_idx) else {
+                break;
+            };
+            chain.push(current_idx);
+
+            let parent_frs = record.first_name.parent_frs;
+            if parent_frs == ROOT_FRS
+                || parent_frs == record.frs
+                || parent_frs == u64::from(NO_ENTRY)
+            {
+                break;
+            }
+            let Some(parent_idx) = index.frs_to_idx_opt(parent_frs) else {
+                break;
+            };
+            current_idx = parent_idx;
+        }
+
+        // No cache hit — build from scratch.
+        out.push(self.volume.to_ascii_uppercase());
+        out.push(':');
+        for &chain_idx in chain.iter().rev() {
+            if let Some(record) = index.records.get(chain_idx) {
+                let name = index.record_name(record);
+                if !name.is_empty() && name != "." {
+                    out.push('\\');
+                    out.push_str(name);
+                }
+            }
+        }
+        if out.len() == 2 && out.as_bytes().last() == Some(&b':') {
+            out.push('\\');
+        }
+    }
+
+    /// Materialize a path using a directory cache for fast parent lookups.
+    ///
+    /// Identical to `materialize_path` but checks `dir_cache` when walking
+    /// the parent chain.  If a cached directory path is found, the walk
+    /// stops early and appends remaining components to the cached prefix.
+    #[must_use]
+    pub fn materialize_path_cached(
+        &self,
+        index: &MftIndex,
+        idx: usize,
+        dir_cache: &[String],
+    ) -> String {
+        let mut chain: smallvec::SmallVec<[usize; 16]> = smallvec::SmallVec::new();
+        let mut current_idx = idx;
+
+        // Walk up parent chain, checking cache at each step.
+        loop {
+            // Check if this ancestor is already cached.
+            if let Some(cached) = dir_cache.get(current_idx) {
+                if !cached.is_empty() {
+                    // Build path: cached prefix + remaining components
+                    if chain.is_empty() {
+                        return cached.clone();
+                    }
+                    let mut total_len = cached.len();
+                    for &ci in &chain {
+                        if let Some(rec) = index.records.get(ci) {
+                            let name = index.record_name(rec);
+                            if !name.is_empty() && name != "." {
+                                total_len += 1 + name.len();
+                            }
+                        }
+                    }
+                    let mut path = String::with_capacity(total_len);
+                    path.push_str(cached);
+                    for &ci in chain.iter().rev() {
+                        if let Some(rec) = index.records.get(ci) {
+                            let name = index.record_name(rec);
+                            if !name.is_empty() && name != "." {
+                                if !path.ends_with('\\') {
+                                    path.push('\\');
+                                }
+                                path.push_str(name);
+                            }
+                        }
+                    }
+                    return path;
+                }
+            }
+
+            let Some(record) = index.records.get(current_idx) else {
+                break;
+            };
+            chain.push(current_idx);
+
+            let parent_frs = record.first_name.parent_frs;
+            if parent_frs == ROOT_FRS
+                || parent_frs == record.frs
+                || parent_frs == u64::from(NO_ENTRY)
+            {
+                break;
+            }
+            let Some(parent_idx) = index.frs_to_idx_opt(parent_frs) else {
+                break;
+            };
+            current_idx = parent_idx;
+        }
+
+        // No cache hit — build from scratch (same as materialize_path).
+        let mut total_len = 2;
+        for &chain_idx in &chain {
+            if let Some(record) = index.records.get(chain_idx) {
+                let name = index.record_name(record);
+                if !name.is_empty() && name != "." {
+                    total_len += 1 + name.len();
+                }
+            }
+        }
+        let mut path = String::with_capacity(total_len);
+        path.push(self.volume.to_ascii_uppercase());
+        path.push(':');
+        for &chain_idx in chain.iter().rev() {
+            if let Some(record) = index.records.get(chain_idx) {
+                let name = index.record_name(record);
+                if !name.is_empty() && name != "." {
+                    path.push('\\');
+                    path.push_str(name);
+                }
+            }
+        }
+        if path.len() == 2 && path.as_bytes().last() == Some(&b':') {
+            path.push('\\');
+        }
+        path
+    }
+
     /// Materialize the full path for a record (on-demand).
     #[must_use]
     // Loop has 4 distinct break conditions: record not found, reached root,
@@ -631,16 +817,32 @@ pub struct PathCache<'a> {
     resolver: PathResolver,
     /// Reference to the MFT index.
     index: &'a MftIndex,
+    /// Pre-computed directory paths (indexed by `record_idx`, empty = not a
+    /// valid directory).  Used by `materialize_path_cached` to short-circuit
+    /// parent-chain walks.
+    dir_cache: Vec<String>,
 }
 
 impl<'a> PathCache<'a> {
     /// Build the path cache for all records in the index.
     #[must_use]
     pub fn build(index: &'a MftIndex, include_system_metafiles: bool) -> Self {
+        let resolver = PathResolver::build(index, include_system_metafiles);
+        // Pre-compute directory paths using the correct materialize_path
+        // algorithm.  ~500K directories × ~40 bytes avg = ~20 MB.
+        let dir_cache = resolver.pre_cache_directory_paths(index);
         Self {
-            resolver: PathResolver::build(index, include_system_metafiles),
+            resolver,
             index,
+            dir_cache,
         }
+    }
+
+    /// Get the directory path cache for use with `materialize_path_cached`.
+    #[inline]
+    #[must_use]
+    pub fn dir_cache(&self) -> &[String] {
+        &self.dir_cache
     }
 
     /// Get the path for a record (materializes on demand).

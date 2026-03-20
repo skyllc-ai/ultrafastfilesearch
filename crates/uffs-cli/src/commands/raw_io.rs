@@ -36,6 +36,59 @@ pub(super) struct NativeOfflineQueryResults {
     pub(super) query_ms: u128,
 }
 
+/// Index-only load result for the streaming output path.
+pub(super) struct NativeIndexOnly {
+    /// Loaded offline index.
+    pub(super) index: uffs_mft::MftIndex,
+    /// Raw MFT load duration in milliseconds.
+    pub(super) load_ms: u128,
+}
+
+/// Load MFT index without running any query (for streaming output).
+pub(super) fn load_index_from_mft_file(
+    mft_path: &Path,
+    drive_letter: Option<char>,
+    debug_tree: bool,
+    chaos_seed: Option<u64>,
+    reserved_allocated: Option<u64>,
+) -> Result<NativeIndexOnly> {
+    use uffs_mft::LoadRawOptions;
+
+    let volume = drive_letter.unwrap_or('X');
+    info!(volume = %volume, path = %mft_path.display(), "Loading raw MFT file (index only)");
+
+    let t_load = std::time::Instant::now();
+    let is_iocp = uffs_mft::is_iocp_capture(mft_path).unwrap_or(false);
+
+    let index = if let Some(seed) = chaos_seed {
+        use uffs_mft::io::readers::parallel::{ChaosMftReader, ChaosStrategy};
+        let chaos_reader = ChaosMftReader::new(ChaosStrategy::Random { seed }, 2 * 1024 * 1024);
+        chaos_reader
+            .read_with_chaos(mft_path, volume)
+            .with_context(|| format!("Failed to load MFT in chaos mode: {}", mft_path.display()))?
+    } else if is_iocp && !debug_tree {
+        let mut idx = uffs_mft::load_iocp_to_index(mft_path)
+            .with_context(|| format!("Failed to load IOCP capture: {}", mft_path.display()))?;
+        if let Some(ra) = reserved_allocated {
+            if idx.reserved_allocated_bytes == 0 && ra > 0 {
+                idx.reserved_allocated_bytes = ra;
+                idx.compute_tree_metrics();
+            }
+        }
+        idx
+    } else {
+        let options = LoadRawOptions {
+            volume_letter: Some(volume),
+            ..Default::default()
+        };
+        MftReader::load_raw_to_index_with_options(mft_path, &options)
+            .with_context(|| format!("Failed to load raw MFT: {}", mft_path.display()))?
+    };
+    let load_ms = t_load.elapsed().as_millis();
+
+    Ok(NativeIndexOnly { index, load_ms })
+}
+
 /// Query filter options for the search command.
 pub struct QueryFilters<'a> {
     /// Parsed search pattern (glob, regex, or literal).

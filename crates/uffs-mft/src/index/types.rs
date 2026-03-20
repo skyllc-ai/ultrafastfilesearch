@@ -159,6 +159,84 @@ impl StandardInfo {
         }
     }
 
+    /// Create directly from raw NTFS `FILE_ATTRIBUTE_*` flags.
+    ///
+    /// This is the **fast path** for the unified parser hot loop.  It maps
+    /// the raw NTFS attribute bitmask directly to our compact `flags` field
+    /// in a single pass — no intermediate `ExtendedStandardInfo` struct.
+    ///
+    /// Timestamps, USN, security/owner IDs must be set separately by the
+    /// caller.
+    #[inline]
+    #[must_use]
+    pub const fn from_raw_ntfs_flags(attrs: u32) -> Self {
+        let mut flags = 0_u32;
+        if attrs & 0x0001 != 0 {
+            flags |= Self::IS_READONLY;
+        }
+        if attrs & 0x0002 != 0 {
+            flags |= Self::IS_HIDDEN;
+        }
+        if attrs & 0x0004 != 0 {
+            flags |= Self::IS_SYSTEM;
+        }
+        if attrs & 0x0020 != 0 {
+            flags |= Self::IS_ARCHIVE;
+        }
+        if attrs & 0x0100 != 0 {
+            flags |= Self::IS_TEMPORARY;
+        }
+        if attrs & 0x0200 != 0 {
+            flags |= Self::IS_SPARSE;
+        }
+        if attrs & 0x0400 != 0 {
+            flags |= Self::IS_REPARSE;
+        }
+        if attrs & 0x0800 != 0 {
+            flags |= Self::IS_COMPRESSED;
+        }
+        if attrs & 0x1000 != 0 {
+            flags |= Self::IS_OFFLINE;
+        }
+        if attrs & 0x2000 != 0 {
+            flags |= Self::IS_NOT_INDEXED;
+        }
+        if attrs & 0x4000 != 0 {
+            flags |= Self::IS_ENCRYPTED;
+        }
+        if attrs & 0x8000 != 0 {
+            flags |= Self::IS_INTEGRITY_STREAM;
+        }
+        if attrs & 0x0001_0000 != 0 {
+            flags |= Self::IS_VIRTUAL;
+        }
+        if attrs & 0x0002_0000 != 0 {
+            flags |= Self::IS_NO_SCRUB_DATA;
+        }
+        if attrs & 0x0008_0000 != 0 {
+            flags |= Self::IS_PINNED;
+        }
+        if attrs & 0x0010_0000 != 0 {
+            flags |= Self::IS_UNPINNED;
+        }
+        Self {
+            flags,
+            ..Self::DEFAULT
+        }
+    }
+
+    /// Zero-valued constant for use in `from_raw_ntfs_flags`.
+    const DEFAULT: Self = Self {
+        created: 0,
+        modified: 0,
+        accessed: 0,
+        mft_changed: 0,
+        flags: 0,
+        usn: 0,
+        security_id: 0,
+        owner_id: 0,
+    };
+
     /// Create from Windows `FILE_ATTRIBUTE_*` flags.
     ///
     /// # Deprecated
