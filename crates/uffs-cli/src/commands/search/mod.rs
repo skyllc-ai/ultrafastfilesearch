@@ -149,6 +149,7 @@ pub async fn search(
     reserved_allocated: Option<u64>,
 ) -> Result<()> {
     let start_time = std::time::Instant::now();
+    println!("[TIMING] search() entered at 0ms");
 
     let parsed = ParsedPattern::parse(pattern)
         .with_context(|| format!("Invalid pattern: {pattern}"))?
@@ -360,8 +361,10 @@ pub async fn search(
                 && can_write_native_results(format, &output_config)
             {
                 let drive_letter = drives_to_search[0];
+                println!("[TIMING] LIVE: loading index at {}ms", start_time.elapsed().as_millis());
                 let (index, load_ms) =
                     super::raw_io::load_live_index(drive_letter, no_cache).await?;
+                println!("[TIMING] LIVE: index loaded at {}ms (load={}ms)", start_time.elapsed().as_millis(), load_ms);
 
                 // From here, IDENTICAL to the --mft-file native output path.
                 // Full scan → streaming; filtered → IndexQuery + native write.
@@ -381,6 +384,10 @@ pub async fn search(
                         &cpp_pattern,
                     )?;
                     let output_ms = t_output.elapsed().as_millis();
+                    println!(
+                        "[TIMING] LIVE: done at {}ms (load={}ms output={}ms rows={})",
+                        start_time.elapsed().as_millis(), load_ms, output_ms, row_count
+                    );
                     info!(load_ms, output_ms, row_count, "📊 LIVE streaming complete");
                     return Ok(());
                 }
