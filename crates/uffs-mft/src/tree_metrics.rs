@@ -158,6 +158,14 @@ struct TreeTraversal<'a> {
     /// `FILE_NAME` edges are included in tree aggregation. Orphans without
     /// Win32 paths are excluded to match Win32 enumeration behavior.
     skip_orphans: bool,
+    /// Current recursion depth (0 = root directory).
+    /// C++ adds `reserved_clusters * cluster_size` to the root's children
+    /// allocated at depth 0.
+    depth: u32,
+    /// Bytes to add to the root's children allocated at depth 0.
+    /// Mirrors C++: `(TotalReserved + MftZoneEnd - MftZoneStart) *
+    /// BytesPerCluster`.
+    reserved_allocated_bytes: u64,
 }
 
 impl TreeTraversal<'_> {
@@ -306,6 +314,8 @@ impl TreeTraversal<'_> {
         // 1) Aggregate children (Channel A outputs from children).
         let mut children = Agg::default();
         if is_directory {
+            self.depth = self.depth.saturating_add(1);
+
             let mut child_entry_idx = first_child;
             while child_entry_idx != NO_ENTRY {
                 // Extract fields from child_entry before calling preprocess (borrow checker).
@@ -336,6 +346,18 @@ impl TreeTraversal<'_> {
                 }
 
                 child_entry_idx = next_child_entry;
+            }
+
+            self.depth = self.depth.saturating_sub(1);
+
+            // C++ parity (ntfs_index_load.hpp L592-596): at depth 0 (root
+            // directory) add reserved NTFS clusters to the children's allocated
+            // total.  This accounts for MFT-zone and TotalReserved space that is
+            // allocated but not attributed to any individual file.
+            if self.depth == 0 && self.reserved_allocated_bytes > 0 {
+                children.allocated = children
+                    .allocated
+                    .saturating_add(self.reserved_allocated_bytes);
             }
         }
 
@@ -424,12 +446,15 @@ pub fn compute_tree_metrics(index: &mut MftIndex, debug: bool, skip_orphans: boo
         skip_orphans,
         "[TRIP] tree_metrics::compute_tree_metrics ENTER"
     );
+    let reserved_bytes = index.reserved_allocated_bytes;
     let seen = vec![false; index.records.len()];
     let mut traversal = TreeTraversal {
         index,
         seen,
         debug,
         skip_orphans,
+        depth: 0,
+        reserved_allocated_bytes: reserved_bytes,
     };
     traversal.run();
     tracing::debug!("[TRIP] tree_metrics::compute_tree_metrics -> traversal.run() done");

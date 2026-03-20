@@ -45,6 +45,14 @@ pub struct MftIndex {
     pub extension_index: Option<ExtensionIndex>,
     /// Whether this index was built with forensic mode enabled.
     pub forensic_mode: bool,
+    /// Bytes of NTFS reserved clusters to add to the root directory's
+    /// `tree_allocated`.
+    ///
+    /// C++ computes this as `(TotalReserved + MftZoneEnd - MftZoneStart) *
+    /// BytesPerCluster` and adds it to the root's children allocated at
+    /// depth 0. Without this adjustment the root `Size on Disk` will be
+    /// off by this amount.
+    pub reserved_allocated_bytes: u64,
 }
 
 /// Proportional hard-link size division formula used by tree metrics.

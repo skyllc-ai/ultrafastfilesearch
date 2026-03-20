@@ -302,6 +302,15 @@ struct Cli {
     /// read order. Used for regression testing.
     #[arg(long, hide = true)]
     chaos_seed: Option<u64>,
+
+    /// NTFS reserved cluster bytes to add to root directory's `Size on Disk`.
+    ///
+    /// C++ adds `(TotalReserved + MftZoneEnd - MftZoneStart) *
+    /// BytesPerCluster` to the root. This flag lets parity verification pass
+    /// the same value when reading from offline `.iocp` captures that don't
+    /// embed volume metadata.
+    #[arg(long, hide = true)]
+    reserved_allocated: Option<u64>,
 }
 
 /// Available CLI subcommands.
@@ -512,6 +521,7 @@ async fn run() -> Result<()> {
                     &cli.query_mode,
                     cli.tz_offset,
                     cli.chaos_seed,
+                    cli.reserved_allocated,
                 )
                 .await?;
             } else {
