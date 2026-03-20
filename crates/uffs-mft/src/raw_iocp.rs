@@ -228,6 +228,12 @@ pub struct IocpCaptureOptions {
     pub volume_letter: char,
     /// IOCP concurrency level.
     pub concurrency: u8,
+    /// Bytes of NTFS reserved clusters for root `tree_allocated`.
+    ///
+    /// Computed from `NtfsVolumeData::reserved_allocated_bytes()`.
+    /// Stored in the IOCP header so offline replays produce identical
+    /// tree metrics without needing live volume access.
+    pub reserved_allocated_bytes: u64,
 }
 
 impl Default for IocpCaptureOptions {
@@ -237,6 +243,7 @@ impl Default for IocpCaptureOptions {
             compression_level: 3,
             volume_letter: 'X',
             concurrency: 8,
+            reserved_allocated_bytes: 0,
         }
     }
 }
@@ -260,6 +267,8 @@ pub struct IocpCaptureWriter {
     compression_level: i32,
     /// Next completion sequence number.
     next_seq: u32,
+    /// Reserved allocated bytes for root tree metrics.
+    reserved_allocated_bytes: u64,
 }
 
 impl IocpCaptureWriter {
@@ -278,6 +287,7 @@ impl IocpCaptureWriter {
             compress: options.compress,
             compression_level: options.compression_level,
             next_seq: 0,
+            reserved_allocated_bytes: options.reserved_allocated_bytes,
         }
     }
 
@@ -341,7 +351,7 @@ impl IocpCaptureWriter {
             total_data_size: data_offset,
             volume_letter: self.volume_letter,
             concurrency: self.concurrency,
-            reserved_allocated_bytes: 0,
+            reserved_allocated_bytes: self.reserved_allocated_bytes,
         };
 
         // Write to file

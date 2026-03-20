@@ -215,11 +215,13 @@ async fn cmd_save_iocp(
     println!("⏳ Reading with IOCP and capturing chunk order...");
 
     // Create capture options
+    let reserved_alloc = vol_data.reserved_allocated_bytes();
     let options = IocpCaptureOptions {
         compress,
         compression_level,
         volume_letter: drive_upper,
         concurrency: concurrency as u8,
+        reserved_allocated_bytes: reserved_alloc,
     };
 
     // Open reader and save with IOCP capture

@@ -630,6 +630,10 @@ impl MftReader {
 
                 let mut index = result?;
 
+                // Set reserved allocated bytes from volume data so tree metrics
+                // adds it to the root's tree_allocated (C++ parity).
+                index.reserved_allocated_bytes = volume_data.reserved_allocated_bytes();
+
                 // Compute tree metrics (directory sizes, descendant counts).
                 // The legacy path gets this from `from_parsed_records()`, but the
                 // inline path bypasses that, so we must call it explicitly.

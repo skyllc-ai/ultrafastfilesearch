@@ -143,6 +143,20 @@ pub struct NtfsVolumeData {
     pub mft_zone_end: u64,
 }
 
+impl NtfsVolumeData {
+    /// Computes the reserved allocated bytes for the root directory.
+    ///
+    /// C++ formula: `(TotalReserved + MftZoneEnd - MftZoneStart) *
+    /// BytesPerCluster`. This is added to the root's `tree_allocated` at
+    /// depth 0 during tree metrics computation.
+    #[must_use]
+    pub const fn reserved_allocated_bytes(&self) -> u64 {
+        let reserved_clusters =
+            self.total_reserved + self.mft_zone_end.saturating_sub(self.mft_zone_start);
+        reserved_clusters * self.bytes_per_cluster as u64
+    }
+}
+
 impl VolumeHandle {
     /// Opens a volume for direct MFT reading.
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]

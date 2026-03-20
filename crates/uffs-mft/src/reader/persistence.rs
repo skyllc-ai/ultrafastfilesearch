@@ -685,6 +685,7 @@ impl MftReader {
         );
 
         let mut index = MftIndex::from_parsed_records(volume, parsed_records);
+        index.reserved_allocated_bytes = header.reserved_allocated_bytes;
         index.compute_tree_metrics();
 
         Ok(index)

@@ -1033,20 +1033,40 @@ fn regenerate_rust_output(
     // Time the uffs execution
     let start_time = Instant::now();
 
+    // Check for reserved_allocated.txt sidecar (C++ parity: root tree_allocated adjustment)
+    let reserved_alloc_file = data_dir.join("reserved_allocated.txt");
+    let reserved_alloc_value = if reserved_alloc_file.exists() {
+        let content = fs::read_to_string(&reserved_alloc_file)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if content.is_empty() { None } else { Some(content) }
+    } else {
+        None
+    };
+    if let Some(ref val) = reserved_alloc_value {
+        println!("Reserved allocated: {val} bytes (from {})", reserved_alloc_file.display());
+    }
+
+    let mut args = vec![
+        "*".to_string(),
+        "--mft-file".to_string(),
+        mft_file.to_string_lossy().to_string(),
+        "--drive".to_string(),
+        drive_letter.to_string(),
+        "--tz-offset".to_string(),
+        tz_str.clone(),
+        "--format".to_string(),
+        "custom".to_string(), // Match C++ baseline format (includes footer)
+        "--out".to_string(),
+        rust_output.to_string_lossy().to_string(),
+    ];
+    if let Some(ref val) = reserved_alloc_value {
+        args.push("--reserved-allocated".to_string());
+        args.push(val.clone());
+    }
     let status = Command::new(&binary_path)
-        .args([
-            "*",
-            "--mft-file",
-            &mft_file.to_string_lossy(),
-            "--drive",
-            drive_letter,
-            "--tz-offset",
-            &tz_str,
-            "--format",
-            "custom", // Match C++ baseline format (includes footer)
-            "--out",
-            &rust_output.to_string_lossy(),
-        ])
+        .args(&args)
         .status();
 
     let parse_duration = start_time.elapsed();
