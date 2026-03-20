@@ -25,6 +25,7 @@ Write-Host "  (Cache cleared before EACH run)" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
 
 function BenchCold($label, $cmd) {
+    Write-Host "▶ $label" -ForegroundColor Yellow
     $times = @()
     1..$N | ForEach-Object {
         # Clear cache before each run
@@ -56,7 +57,7 @@ function BenchCold($label, $cmd) {
         $avg = ($times | Measure-Object -Average).Average
         $min = ($times | Measure-Object -Minimum).Minimum
         $max = ($times | Measure-Object -Maximum).Maximum
-        Write-Host ("{0,-20} avg={1,8:N0} ms   min={2,8:N0}   max={3,8:N0}" -f $label, $avg, $min, $max) -ForegroundColor White
+        Write-Host ("{0,-20} avg={1,8:N0} ms   min={2,8:N0}   max={3,8:N0}" -f $label, $avg, $min, $max) -ForegroundColor Green
     }
     Write-Host ""
 }
