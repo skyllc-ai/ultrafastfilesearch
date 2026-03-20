@@ -26,13 +26,20 @@ Write-Host "========================================`n" -ForegroundColor Cyan
 
 function BenchCold($label, $cmd) {
     $times = @()
+    $lastTimings = @()
     1..$N | ForEach-Object {
         # Clear cache before each run
         Remove-Item $CACHE_DIR -Recurse -Force -ErrorAction SilentlyContinue
-        
+
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         try {
-            & $cmd | Out-Null
+            # Capture stderr (where [TIMING] goes) and stdout
+            $output = & $cmd 2>&1
+            # Extract [TIMING] lines
+            $timingLines = $output | Where-Object { $_ -match '\[TIMING\]' }
+            if ($timingLines) {
+                $lastTimings = $timingLines
+            }
         } catch {
             Write-Host "   ⚠️  Error: $_" -ForegroundColor Red
         }
@@ -41,12 +48,20 @@ function BenchCold($label, $cmd) {
         $times += $ms
         Write-Host "   Run $_`: $([math]::Round($ms/1000, 2))s" -ForegroundColor Gray
     }
-    
+
     if ($times.Count -gt 0) {
         $avg = ($times | Measure-Object -Average).Average
         $min = ($times | Measure-Object -Minimum).Minimum
         $max = ($times | Measure-Object -Maximum).Maximum
         Write-Host ("{0,-20} avg={1,8:N0} ms   min={2,8:N0}   max={3,8:N0}" -f $label, $avg, $min, $max) -ForegroundColor White
+
+        # Show timing breakdown from last run
+        if ($lastTimings) {
+            Write-Host "   Timing breakdown (last run):" -ForegroundColor DarkCyan
+            foreach ($line in $lastTimings) {
+                Write-Host "     $line" -ForegroundColor DarkCyan
+            }
+        }
     }
     Write-Host ""
 }
