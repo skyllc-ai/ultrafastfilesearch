@@ -121,9 +121,12 @@ pub(super) fn write_index_streaming<W: Write>(
     let tz_offset_secs = output_config.timezone_offset_secs;
 
     // Build path cache (includes dir_cache for fast parent lookups).
+    let t_cache = std::time::Instant::now();
     let path_cache = PathCache::build(index, false);
     let resolver = path_cache.resolver();
     let dir_cache = path_cache.dir_cache();
+    let cache_ms = t_cache.elapsed().as_millis();
+    tracing::info!(cache_ms, "📊 streaming: PathCache + dir_cache built");
 
     write_native_header(writer, output_config, output_cols)?;
 
@@ -131,6 +134,7 @@ pub(super) fn write_index_streaming<W: Write>(
     let mut path_buffer = String::with_capacity(256);
     let mut hardlink_buf = String::new(); // Only allocated when hardlinks encountered
     let mut row_count: usize = 0;
+    let t_rows = std::time::Instant::now();
 
     for (record_idx, record) in index.records.iter().enumerate() {
         if !resolver.is_valid_idx(record_idx) {
@@ -412,10 +416,15 @@ pub(super) fn write_index_streaming<W: Write>(
         }
     }
 
+    let rows_ms = t_rows.elapsed().as_millis();
+    tracing::info!(
+        cache_ms,
+        rows_ms,
+        row_count,
+        "📊 streaming: output phase breakdown"
+    );
+
     if format == "custom" {
-        // Use actual row_count for the footer (not the placeholder from the
-        // caller) so that the "fast scan" message only appears for genuinely
-        // small result sets.
         let final_footer = CppFooterContext {
             output_targets: footer_ctx.output_targets,
             pattern: footer_ctx.pattern,
