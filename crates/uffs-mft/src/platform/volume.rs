@@ -146,14 +146,15 @@ pub struct NtfsVolumeData {
 impl NtfsVolumeData {
     /// Computes the reserved allocated bytes for the root directory.
     ///
-    /// C++ formula: `(TotalReserved + MftZoneEnd - MftZoneStart) *
-    /// BytesPerCluster`. This is added to the root's `tree_allocated` at
-    /// depth 0 during tree metrics computation.
+    /// C++ formula: `TotalReserved * BytesPerCluster`.
+    ///
+    /// C++ suppresses the MFT zone contribution by setting
+    /// `mft_zone_end = mft_zone_start` before computing reserved_clusters
+    /// (see `mft_reader_init.hpp` lines 166-171).  So the effective formula
+    /// is just `TotalReserved * BytesPerCluster`.
     #[must_use]
     pub const fn reserved_allocated_bytes(&self) -> u64 {
-        let reserved_clusters =
-            self.total_reserved + self.mft_zone_end.saturating_sub(self.mft_zone_start);
-        reserved_clusters * self.bytes_per_cluster as u64
+        self.total_reserved * self.bytes_per_cluster as u64
     }
 }
 

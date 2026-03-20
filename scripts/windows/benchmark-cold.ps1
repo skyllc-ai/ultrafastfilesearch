@@ -4,6 +4,7 @@
 param(
     [int]$N = 3,                    # Rounds per test
     [string]$Pattern = "*",         # Search pattern (default: "*" for everything)
+    [string]$Drive = "",            # Single drive to benchmark (e.g., "C", "F", "S")
     [switch]$RustOnly,              # Skip C++ tests
     [switch]$CppOnly                # Skip Rust tests
 )
@@ -17,6 +18,9 @@ Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "  UFFS Cold Start Benchmark" -ForegroundColor Cyan
 Write-Host "  Rounds per test: $N" -ForegroundColor Cyan
 Write-Host "  Pattern: $Pattern" -ForegroundColor Cyan
+if ($Drive) {
+    Write-Host "  Drive: $Drive" -ForegroundColor Cyan
+}
 Write-Host "  (Cache cleared before EACH run)" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
 
@@ -48,42 +52,41 @@ function BenchCold($label, $cmd) {
 }
 
 # ============================================
-# DRIVE F
+# Run benchmarks based on -Drive parameter
 # ============================================
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
-Write-Host "📁 DRIVE F:" -ForegroundColor Yellow
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
-if (-not $CppOnly) {
-    BenchCold "Rust (cold)" { & $UFFS search $Pattern --drive F }
-}
-if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
-    BenchCold "C++ (cold)" { & $UFFS_CPP $Pattern --drives=F }
+
+function RunDriveBench($driveLetter) {
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+    Write-Host "📁 DRIVE ${driveLetter}:" -ForegroundColor Yellow
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+    if (-not $CppOnly) {
+        BenchCold "Rust (cold)" { & $UFFS search "$Pattern" --drive $driveLetter }
+    }
+    if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
+        BenchCold "C++ (cold)" { & $UFFS_CPP "$Pattern" --drives=$driveLetter }
+    }
 }
 
-# ============================================
-# DRIVE S
-# ============================================
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
-Write-Host "📁 DRIVE S:" -ForegroundColor Yellow
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
-if (-not $CppOnly) {
-    BenchCold "Rust (cold)" { & $UFFS search $Pattern --drive S }
-}
-if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
-    BenchCold "C++ (cold)" { & $UFFS_CPP $Pattern --drives=S }
+function RunAllDrivesBench() {
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+    Write-Host "🌐 ALL DRIVES:" -ForegroundColor Yellow
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+    if (-not $CppOnly) {
+        BenchCold "Rust (cold)" { & $UFFS search "$Pattern" }
+    }
+    if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
+        BenchCold "C++ (cold)" { & $UFFS_CPP "$Pattern" }
+    }
 }
 
-# ============================================
-# ALL DRIVES
-# ============================================
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
-Write-Host "🌐 ALL DRIVES:" -ForegroundColor Yellow
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
-if (-not $CppOnly) {
-    BenchCold "Rust (cold)" { & $UFFS search $Pattern }
-}
-if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
-    BenchCold "C++ (cold)" { & $UFFS_CPP $Pattern }
+if ($Drive) {
+    # Single drive specified
+    RunDriveBench $Drive.ToUpper()
+} else {
+    # Default: benchmark F, S, then all
+    RunDriveBench "F"
+    RunDriveBench "S"
+    RunAllDrivesBench
 }
 
 # ============================================
