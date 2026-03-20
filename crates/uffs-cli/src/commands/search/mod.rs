@@ -150,6 +150,7 @@ pub async fn search(
     query_mode: &str,
     tz_offset: Option<i32>,
     chaos_seed: Option<u64>,
+    reserved_allocated: Option<u64>,
 ) -> Result<()> {
     let start_time = std::time::Instant::now();
 
@@ -221,6 +222,7 @@ pub async fn search(
             needs_paths,
             debug_tree,
             chaos_seed,
+            reserved_allocated,
         )?;
 
         let t_output = std::time::Instant::now();

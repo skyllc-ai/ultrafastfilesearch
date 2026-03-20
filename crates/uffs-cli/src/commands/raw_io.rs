@@ -99,6 +99,7 @@ pub(super) fn load_and_filter_from_mft_file(
         needs_paths,
         debug_tree,
         chaos_seed,
+        None,
     )?;
     let matches = native.results.len();
     let records = native.index.len();
@@ -129,6 +130,7 @@ pub(super) fn load_and_filter_native_from_mft_file(
     needs_paths: bool,
     debug_tree: bool,
     chaos_seed: Option<u64>,
+    reserved_allocated: Option<u64>,
 ) -> Result<NativeOfflineQueryResults> {
     use uffs_mft::LoadRawOptions;
 
@@ -162,8 +164,18 @@ pub(super) fn load_and_filter_native_from_mft_file(
         // Skip this path if debug_tree is set (use sequential debug path instead)
         debug!("[PARITY_TRACE] IOCP path -> load_iocp_to_index()");
         info!("IOCP capture detected - using LIVE pipeline replay for exact parity");
-        uffs_mft::load_iocp_to_index(mft_path)
-            .with_context(|| format!("Failed to load IOCP capture: {}", mft_path.display()))?
+        let mut idx = uffs_mft::load_iocp_to_index(mft_path)
+            .with_context(|| format!("Failed to load IOCP capture: {}", mft_path.display()))?;
+        // CLI override for reserved_allocated_bytes: if the IOCP header stores 0
+        // (legacy v1 capture) but the user provided a value, re-run tree metrics
+        // with the override so that root Size on Disk matches C++.
+        if let Some(ra) = reserved_allocated {
+            if idx.reserved_allocated_bytes == 0 && ra > 0 {
+                idx.reserved_allocated_bytes = ra;
+                idx.compute_tree_metrics();
+            }
+        }
+        idx
     } else {
         let options = LoadRawOptions {
             volume_letter: Some(volume),

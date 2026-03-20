@@ -84,6 +84,11 @@ pub struct IocpCaptureHeader {
     pub volume_letter: char,
     /// IOCP concurrency level used during capture.
     pub concurrency: u8,
+    /// Bytes of NTFS reserved clusters added to root's `tree_allocated`.
+    ///
+    /// C++ formula: `(TotalReserved + MftZoneEnd - MftZoneStart) *
+    /// BytesPerCluster`. Stored at header bytes 46-53. Zero in v1 captures.
+    pub reserved_allocated_bytes: u64,
 }
 
 impl IocpCaptureHeader {
@@ -107,7 +112,9 @@ impl IocpCaptureHeader {
         buf[36..44].copy_from_slice(&self.total_data_size.to_le_bytes());
         buf[44] = self.volume_letter as u8;
         buf[45] = self.concurrency;
-        // Reserved bytes 46-95 are already zero
+        // Reserved_allocated_bytes at bytes 46-53 (zero for legacy captures).
+        buf[46..54].copy_from_slice(&self.reserved_allocated_bytes.to_le_bytes());
+        // Remaining reserved bytes 54-95 are already zero.
         buf
     }
 
@@ -145,6 +152,10 @@ impl IocpCaptureHeader {
             'X'
         };
         let concurrency = buf[45];
+        // Bytes 46-53: reserved_allocated_bytes (zero for v1 captures).
+        let reserved_allocated_bytes = u64::from_le_bytes([
+            buf[46], buf[47], buf[48], buf[49], buf[50], buf[51], buf[52], buf[53],
+        ]);
 
         Ok(Self {
             version,
@@ -155,6 +166,7 @@ impl IocpCaptureHeader {
             total_data_size,
             volume_letter,
             concurrency,
+            reserved_allocated_bytes,
         })
     }
 }
@@ -329,6 +341,7 @@ impl IocpCaptureWriter {
             total_data_size: data_offset,
             volume_letter: self.volume_letter,
             concurrency: self.concurrency,
+            reserved_allocated_bytes: 0,
         };
 
         // Write to file
@@ -538,6 +551,8 @@ pub fn load_iocp_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIn
 
     // Create empty MftIndex with capacity
     let mut index = MftIndex::with_capacity(volume, total_records);
+    // Propagate reserved_allocated_bytes from IOCP header (0 for legacy v1 captures).
+    index.reserved_allocated_bytes = capture.header.reserved_allocated_bytes;
     let mut records_parsed: usize = 0;
     let mut fixup_failed: usize = 0;
 

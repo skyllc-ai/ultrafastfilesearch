@@ -478,6 +478,7 @@ impl MftIndex {
             extensions,
             extension_index: None,
             forensic_mode: false, // Loaded indexes don't have forensic records
+            reserved_allocated_bytes: 0,
         };
 
         // Compute stats from loaded data

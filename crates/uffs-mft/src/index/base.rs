@@ -32,6 +32,7 @@ impl MftIndex {
             extensions: ExtensionTable::new(),
             extension_index: None,
             forensic_mode: false,
+            reserved_allocated_bytes: 0,
         }
     }
 
@@ -84,6 +85,7 @@ impl MftIndex {
             extensions: ExtensionTable::new(),
             extension_index: None,
             forensic_mode: false,
+            reserved_allocated_bytes: 0,
         }
     }
 
