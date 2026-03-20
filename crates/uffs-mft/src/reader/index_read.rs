@@ -633,12 +633,12 @@ impl MftReader {
                 // Set reserved allocated bytes from volume data so tree metrics
                 // adds it to the root's tree_allocated (C++ parity).
                 let ra = volume_data.reserved_allocated_bytes();
-                eprintln!(
+                println!(
                     "[TIMING] IOCP+parse: {}ms  records: {}",
                     start_time.elapsed().as_millis(),
                     index.records.len()
                 );
-                eprintln!(
+                println!(
                     "[DIAG] reserved_allocated_bytes={} (total_reserved={} mft_zone={}..{} bpc={})",
                     ra,
                     volume_data.total_reserved,
@@ -670,7 +670,7 @@ impl MftReader {
                     "[PARITY_TRACE] SlidingIocpInline: compute_tree_metrics() done"
                 );
                 let tree_ms = tree_start.elapsed().as_millis();
-                eprintln!("[TIMING] tree_metrics: {}ms", tree_ms);
+                println!("[TIMING] tree_metrics: {}ms", tree_ms);
                 info!(
                     tree_metrics_ms = tree_ms,
                     "✅ Tree metrics computed for inline index"
@@ -683,7 +683,7 @@ impl MftReader {
                 let ext_ms = ext_start.elapsed().as_millis();
 
                 let total_index_ms = start_time.elapsed().as_millis();
-                eprintln!(
+                println!(
                     "[TIMING] ext_index: {}ms  total_index: {}ms",
                     ext_ms, total_index_ms
                 );
