@@ -1230,15 +1230,6 @@ fn find_workspace_root() -> PathBuf {
     cwd
 }
 
-fn compute_file_hashes(path: &Path) -> FileHashes {
-    let lines = read_lines(path);
-    FileHashes {
-        ordered_hash: ordered_sha256(&lines),
-        sorted_hash: sorted_sha256(&lines),
-        line_count: lines.len(),
-    }
-}
-
 /// Compute hashes and persist the sorted version to disk.
 /// Returns the hashes and the path to the sorted file.
 fn compute_file_hashes_and_persist_sorted(path: &Path) -> (FileHashes, PathBuf) {

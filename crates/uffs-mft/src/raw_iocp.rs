@@ -561,7 +561,8 @@ pub fn load_iocp_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIn
 
     // Create empty MftIndex with capacity
     let mut index = MftIndex::with_capacity(volume, total_records);
-    // Propagate reserved_allocated_bytes from IOCP header (0 for legacy v1 captures).
+    // Propagate reserved_allocated_bytes from IOCP header (0 for legacy v1
+    // captures).
     index.reserved_allocated_bytes = capture.header.reserved_allocated_bytes;
     let mut records_parsed: usize = 0;
     let mut fixup_failed: usize = 0;
