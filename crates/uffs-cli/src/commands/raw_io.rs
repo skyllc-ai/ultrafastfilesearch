@@ -22,6 +22,7 @@ mod windows;
 #[cfg(windows)]
 pub(crate) use windows::{
     OwnedQueryFilters, load_and_filter_data_index, load_and_filter_data_index_multi,
+    load_live_index,
 };
 
 /// Native offline query results for direct `--mft-file` output.
@@ -579,6 +580,19 @@ fn execute_query(
         query = query.limit(filters.limit);
     }
     Ok(query.collect()?)
+}
+
+/// Execute query using fast `IndexQuery` path (no `DataFrame` conversion).
+///
+/// This is the fast path for simple queries.  Public wrapper so both
+/// `--mft-file` and Windows LIVE paths can share the same query logic.
+#[cfg(windows)]
+pub(super) fn execute_index_query_native_pub(
+    index: &uffs_mft::MftIndex,
+    filters: &QueryFilters<'_>,
+    resolve_paths: bool,
+) -> Result<Vec<uffs_core::SearchResult>> {
+    execute_index_query_native(index, filters, resolve_paths)
 }
 
 /// Execute query using fast `IndexQuery` path (no `DataFrame` conversion).

@@ -86,6 +86,36 @@ impl OwnedQueryFilters {
     }
 }
 
+/// Load index only (no query) for Windows LIVE streaming output.
+///
+/// Returns the `MftIndex` directly for use with `write_index_streaming`.
+#[expect(clippy::single_call_fn, reason = "extracted for streaming output path")]
+pub(crate) async fn load_live_index(
+    drive_letter: char,
+    no_cache: bool,
+) -> Result<(uffs_mft::MftIndex, u128)> {
+    let t_load = std::time::Instant::now();
+
+    let reader = MftReader::open(drive_letter)
+        .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
+
+    let index = if no_cache {
+        info!(drive = %drive_letter, "🔄 --no-cache: reading MFT fresh (streaming)");
+        reader.read_all_index().await?
+    } else {
+        reader.read_index_cached(INDEX_TTL_SECONDS).await?
+    };
+    let load_ms = t_load.elapsed().as_millis();
+    info!(
+        drive = %drive_letter,
+        load_ms,
+        records = index.len(),
+        "📊 Windows LIVE: index loaded for streaming output"
+    );
+
+    Ok((index, load_ms))
+}
+
 /// Execute query against an `MftIndex` and return results as a `DataFrame`.
 fn execute_index_query(
     index: &uffs_mft::MftIndex,
@@ -167,10 +197,22 @@ pub(crate) async fn load_and_filter_data_index(
         reader.read_index_cached(INDEX_TTL_SECONDS).await?
     };
     let load_ms = t_load.elapsed().as_millis();
+    info!(
+        drive = %drive_letter,
+        load_ms,
+        records = index.len(),
+        "📊 Windows LIVE: index loaded (IOCP+parse+tree+ext)"
+    );
 
     let t_query = std::time::Instant::now();
     let results = execute_index_query(&index, filters, needs_paths)?;
     let query_ms = t_query.elapsed().as_millis();
+    info!(
+        drive = %drive_letter,
+        query_ms,
+        matches = results.height(),
+        "📊 Windows LIVE: query+results_to_dataframe complete"
+    );
 
     if profile {
         let total_ms = load_ms + query_ms;

@@ -647,9 +647,25 @@ impl MftReader {
                     tree_metrics_ms = tree_start.elapsed().as_millis(),
                     "[PARITY_TRACE] SlidingIocpInline: compute_tree_metrics() done"
                 );
+                let tree_ms = tree_start.elapsed().as_millis();
                 info!(
-                    tree_metrics_ms = tree_start.elapsed().as_millis(),
+                    tree_metrics_ms = tree_ms,
                     "✅ Tree metrics computed for inline index"
+                );
+
+                // Build extension index eagerly so filtered queries (*.txt
+                // etc.) get O(matches) lookup immediately.
+                let ext_start = Instant::now();
+                index.build_extension_index();
+                let ext_ms = ext_start.elapsed().as_millis();
+
+                let total_index_ms = start_time.elapsed().as_millis();
+                info!(
+                    total_index_ms,
+                    tree_ms,
+                    ext_ms,
+                    records = index.records.len(),
+                    "📊 Windows LIVE index build timing breakdown"
                 );
 
                 // Report final progress

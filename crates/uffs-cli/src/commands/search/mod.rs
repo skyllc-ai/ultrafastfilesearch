@@ -201,24 +201,24 @@ pub async fn search(
         .or_else(|| filters.parsed.drive().map(|drive| vec![drive]))
         .unwrap_or_default();
 
+    // Detect full-scan (no filtering) — used by both --mft-file and
+    // Windows LIVE streaming paths to bypass SearchResult allocation.
+    let is_full_scan = !filters.files_only
+        && !filters.dirs_only
+        && !filters.hide_system
+        && filters.ext_filter.is_none()
+        && filters.min_size.is_none()
+        && filters.max_size.is_none()
+        && filters.limit == 0
+        && (filters.parsed.pattern() == "*"
+            || filters.parsed.pattern() == "**"
+            || filters.parsed.pattern() == "**/*"
+            || filters.parsed.pattern().is_empty());
+
     if let Some(mft_path) = mft_file.as_ref()
         && !benchmark
         && can_write_native_results(format, &output_config)
     {
-        // Detect full-scan (no filtering): use streaming direct-write-from-index
-        // to skip SearchResult allocation entirely.
-        let is_full_scan = !filters.files_only
-            && !filters.dirs_only
-            && !filters.hide_system
-            && filters.ext_filter.is_none()
-            && filters.min_size.is_none()
-            && filters.max_size.is_none()
-            && filters.limit == 0
-            && (filters.parsed.pattern() == "*"
-                || filters.parsed.pattern() == "**"
-                || filters.parsed.pattern() == "**/*"
-                || filters.parsed.pattern().is_empty());
-
         if is_full_scan {
             info!(
                 path = %mft_path.display(),
@@ -236,56 +236,19 @@ pub async fn search(
             )?;
 
             let t_output = std::time::Instant::now();
-
-            let is_console = matches!(
-                out.to_lowercase().as_str(),
-                "console" | "con" | "term" | "terminal"
-            );
-            // We need the row count for the footer, but we don't know it
-            // until after streaming. Use a placeholder and write footer after.
             let cpp_pattern = format!(
                 ">{}:{}",
                 native_index.index.volume,
                 pattern.replace('*', ".*")
             );
-
-            let row_count = if is_console {
-                let stdout_handle = std::io::stdout();
-                let mut stdout = stdout_handle.lock();
-                let footer_ctx = crate::commands::output::CppFooterContext {
-                    output_targets: &output_targets,
-                    pattern: &cpp_pattern,
-                    row_count: 0, // Updated by streaming writer
-                };
-                crate::commands::output::write_index_streaming(
-                    &native_index.index,
-                    &mut stdout,
-                    format,
-                    &output_config,
-                    &footer_ctx,
-                )?
-            } else {
-                use std::io::Write as _;
-                let file = std::fs::File::create(out)
-                    .with_context(|| format!("Failed to create output file: {out}"))?;
-                let mut writer = std::io::BufWriter::with_capacity(256 * 1024, file);
-                let footer_ctx = crate::commands::output::CppFooterContext {
-                    output_targets: &output_targets,
-                    pattern: &cpp_pattern,
-                    row_count: 0,
-                };
-                let count = crate::commands::output::write_index_streaming(
-                    &native_index.index,
-                    &mut writer,
-                    format,
-                    &output_config,
-                    &footer_ctx,
-                )?;
-                writer.flush()?;
-                info!(file = out, "Results written to file");
-                count
-            };
-
+            let row_count = write_streaming_output(
+                &native_index.index,
+                format,
+                out,
+                &output_config,
+                &output_targets,
+                &cpp_pattern,
+            )?;
             let output_ms = t_output.elapsed().as_millis();
 
             if profile {
@@ -388,6 +351,68 @@ pub async fn search(
                 bail!("No NTFS drives found on this system");
             }
 
+            // DRY: Single-drive with native output uses the SAME path as
+            // --mft-file.  The only difference is how the MftIndex is built
+            // (IOCP live vs file replay).  After that, query+output is
+            // identical.
+            if drives_to_search.len() == 1
+                && !benchmark
+                && can_write_native_results(format, &output_config)
+            {
+                let drive_letter = drives_to_search[0];
+                let (index, load_ms) =
+                    super::raw_io::load_live_index(drive_letter, no_cache).await?;
+
+                // From here, IDENTICAL to the --mft-file native output path.
+                // Full scan → streaming; filtered → IndexQuery + native write.
+                if is_full_scan {
+                    info!(
+                        drive = %drive_letter,
+                        "📂 LIVE STREAMING direct-from-index (full scan, same as --mft-file)"
+                    );
+                    let t_output = std::time::Instant::now();
+                    let cpp_pattern = format!(">{}:{}", index.volume, pattern.replace('*', ".*"));
+                    let row_count = write_streaming_output(
+                        &index,
+                        format,
+                        out,
+                        &output_config,
+                        &output_targets,
+                        &cpp_pattern,
+                    )?;
+                    let output_ms = t_output.elapsed().as_millis();
+                    info!(load_ms, output_ms, row_count, "📊 LIVE streaming complete");
+                    return Ok(());
+                }
+
+                // Filtered query: IndexQuery → native write (same as --mft-file filtered)
+                info!(
+                    drive = %drive_letter,
+                    "📂 LIVE native query+output (filtered, same as --mft-file)"
+                );
+                let t_query = std::time::Instant::now();
+                let results =
+                    super::raw_io::execute_index_query_native_pub(&index, &filters, needs_paths)?;
+                let query_ms = t_query.elapsed().as_millis();
+
+                let t_output = std::time::Instant::now();
+                let row_count = results.len();
+                let cpp_pattern = format!(">{}:{}", index.volume, pattern.replace('*', ".*"));
+                let footer_ctx = crate::commands::output::CppFooterContext {
+                    output_targets: &output_targets,
+                    pattern: &cpp_pattern,
+                    row_count,
+                };
+                write_native_results(&index, &results, format, out, &output_config, &footer_ctx)?;
+                let output_ms = t_output.elapsed().as_millis();
+                info!(
+                    load_ms,
+                    query_ms, output_ms, row_count, "📊 LIVE native complete"
+                );
+                return Ok(());
+            }
+
+            // Multi-drive or non-native format: fall back to DataFrame path
             if drives_to_search.len() == 1 {
                 load_and_filter_data_index(
                     Some(drives_to_search[0]),
@@ -507,6 +532,60 @@ pub async fn search(
 
     info!(count = results.height(), "Search complete");
     Ok(())
+}
+
+/// Shared helper: write streaming output from an `MftIndex` to file or console.
+///
+/// Used by both `--mft-file` and Windows LIVE full-scan paths (DRY).
+fn write_streaming_output(
+    index: &uffs_mft::MftIndex,
+    format: &str,
+    out: &str,
+    output_config: &OutputConfig,
+    output_targets: &[char],
+    cpp_pattern: &str,
+) -> Result<usize> {
+    let is_console = matches!(
+        out.to_lowercase().as_str(),
+        "console" | "con" | "term" | "terminal"
+    );
+
+    if is_console {
+        let stdout_handle = std::io::stdout();
+        let mut stdout = stdout_handle.lock();
+        let footer_ctx = crate::commands::output::CppFooterContext {
+            output_targets,
+            pattern: cpp_pattern,
+            row_count: 0,
+        };
+        crate::commands::output::write_index_streaming(
+            index,
+            &mut stdout,
+            format,
+            output_config,
+            &footer_ctx,
+        )
+    } else {
+        use std::io::Write as _;
+        let file = std::fs::File::create(out)
+            .with_context(|| format!("Failed to create output file: {out}"))?;
+        let mut writer = std::io::BufWriter::with_capacity(256 * 1024, file);
+        let footer_ctx = crate::commands::output::CppFooterContext {
+            output_targets,
+            pattern: cpp_pattern,
+            row_count: 0,
+        };
+        let count = crate::commands::output::write_index_streaming(
+            index,
+            &mut writer,
+            format,
+            output_config,
+            &footer_ctx,
+        )?;
+        writer.flush()?;
+        info!(file = out, "Results written to file");
+        Ok(count)
+    }
 }
 
 /// Stub for non-Windows platforms.

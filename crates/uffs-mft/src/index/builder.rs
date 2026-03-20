@@ -422,7 +422,10 @@ impl MftIndex {
         tracing::debug!("[TRIP] MftIndex::from_parsed_records -> Phase 5: compute_tree_metrics");
         index.compute_tree_metrics();
 
-        // 4. Set forensic mode flag if any forensic records were included
+        // 4. Build extension index eagerly for O(matches) filtered queries.
+        index.build_extension_index();
+
+        // 5. Set forensic mode flag if any forensic records were included
         index.forensic_mode = has_forensic_records;
 
         tracing::debug!(

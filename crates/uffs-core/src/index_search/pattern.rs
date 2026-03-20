@@ -100,6 +100,10 @@ pub enum IndexPattern {
 
 impl IndexPattern {
     /// Check if a string matches this pattern.
+    ///
+    /// Case-insensitive variants use zero-allocation byte-level comparison
+    /// instead of `.to_ascii_lowercase()` which allocates a new `String` per
+    /// call.  For 8M records this eliminates 8M heap allocations.
     #[inline]
     #[must_use]
     pub fn matches(&self, input: &str, case_sensitive: bool) -> bool {
@@ -119,9 +123,7 @@ impl IndexPattern {
                 if case_sensitive {
                     input.starts_with(prefix.as_str())
                 } else {
-                    input
-                        .to_ascii_lowercase()
-                        .starts_with(prefix_lower.as_str())
+                    starts_with_ignore_ascii_case(input, prefix_lower)
                 }
             }
             Self::Suffix {
@@ -131,7 +133,7 @@ impl IndexPattern {
                 if case_sensitive {
                     input.ends_with(suffix.as_str())
                 } else {
-                    input.to_ascii_lowercase().ends_with(suffix_lower.as_str())
+                    ends_with_ignore_ascii_case(input, suffix_lower)
                 }
             }
             Self::Contains {
@@ -141,7 +143,7 @@ impl IndexPattern {
                 if case_sensitive {
                     input.contains(needle.as_str())
                 } else {
-                    input.to_ascii_lowercase().contains(needle_lower.as_str())
+                    contains_ignore_ascii_case(input, needle_lower)
                 }
             }
             Self::PrefixSuffix {
@@ -153,9 +155,8 @@ impl IndexPattern {
                 if case_sensitive {
                     input.starts_with(prefix.as_str()) && input.ends_with(suffix.as_str())
                 } else {
-                    let lower = input.to_ascii_lowercase();
-                    lower.starts_with(prefix_lower.as_str())
-                        && lower.ends_with(suffix_lower.as_str())
+                    starts_with_ignore_ascii_case(input, prefix_lower)
+                        && ends_with_ignore_ascii_case(input, suffix_lower)
                 }
             }
             Self::ExactSet {
@@ -165,6 +166,8 @@ impl IndexPattern {
                 if case_sensitive {
                     values.contains(input)
                 } else {
+                    // HashSet lookup requires an owned key — unavoidable alloc.
+                    // But ExactSet is rare (multi-value exact match).
                     values_lower.contains(&input.to_ascii_lowercase())
                 }
             }
@@ -175,10 +178,9 @@ impl IndexPattern {
                 if case_sensitive {
                     suffixes.iter().any(|suf| input.ends_with(suf.as_str()))
                 } else {
-                    let lower = input.to_ascii_lowercase();
                     suffixes_lower
                         .iter()
-                        .any(|suf| lower.ends_with(suf.as_str()))
+                        .any(|suf| ends_with_ignore_ascii_case(input, suf))
                 }
             }
             Self::ContainsAny {
@@ -189,6 +191,8 @@ impl IndexPattern {
                 if case_sensitive {
                     automaton.is_match(input)
                 } else {
+                    // Aho-Corasick requires the input pre-lowercased — unavoidable.
+                    // But ContainsAny is only used for multi-substring patterns.
                     automaton_lower.is_match(&input.to_ascii_lowercase())
                 }
             }
@@ -196,11 +200,92 @@ impl IndexPattern {
                 if case_sensitive {
                     regex.is_match(input)
                 } else {
-                    regex_lower.is_match(&input.to_ascii_lowercase())
+                    // regex_lower is already compiled with (?i) flag, so it
+                    // handles case-insensitivity internally — no allocation needed.
+                    regex_lower.is_match(input)
                 }
             }
         }
     }
+}
+
+// ── Zero-allocation ASCII case-insensitive helpers ──────────────────────
+//
+// These replace `.to_ascii_lowercase().starts_with(...)` etc. which allocate
+// a new String on every call.  For 8M records per query, this eliminates
+// 8M heap allocations.
+
+/// Check if `haystack` starts with `needle` (ASCII case-insensitive).
+///
+/// `needle` must already be lowercase.
+#[inline]
+fn starts_with_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    let hb = haystack.as_bytes();
+    let nb = needle.as_bytes();
+    if hb.len() < nb.len() {
+        return false;
+    }
+    hb.iter()
+        .zip(nb)
+        .all(|(hay, ndl)| hay.to_ascii_lowercase() == *ndl)
+}
+
+/// Check if `haystack` ends with `needle` (ASCII case-insensitive).
+///
+/// `needle` must already be lowercase.
+#[inline]
+fn ends_with_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    let hb = haystack.as_bytes();
+    let nb = needle.as_bytes();
+    if hb.len() < nb.len() {
+        return false;
+    }
+    let start = hb.len() - nb.len();
+    hb.iter()
+        .skip(start)
+        .zip(nb)
+        .all(|(hay, ndl)| hay.to_ascii_lowercase() == *ndl)
+}
+
+/// Check if `haystack` contains `needle` (ASCII case-insensitive).
+///
+/// `needle` must already be lowercase.  Uses a simple sliding-window
+/// approach.  For short needles (typical filenames), this is faster than
+/// allocating a lowercased copy of the entire haystack.
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted for readability — contains is semantically distinct from starts_with/ends_with"
+)]
+#[inline]
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let hb = haystack.as_bytes();
+    let nb = needle.as_bytes();
+    if hb.len() < nb.len() {
+        return false;
+    }
+    let Some(&first) = nb.first() else {
+        return true;
+    };
+
+    // Sliding window: find candidate positions where first byte matches.
+    for start in 0..=hb.len() - nb.len() {
+        if let Some(hay_byte) = hb.get(start) {
+            if hay_byte.to_ascii_lowercase() == first
+                && hb.get(start..start + nb.len()).is_some_and(|window| {
+                    window
+                        .iter()
+                        .zip(nb)
+                        .all(|(hay, ndl)| hay.to_ascii_lowercase() == *ndl)
+                })
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Compile a glob pattern into an `IndexPattern`.

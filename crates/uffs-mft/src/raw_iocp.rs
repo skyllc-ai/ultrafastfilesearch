@@ -651,6 +651,10 @@ pub fn load_iocp_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIn
         "[PARITY_TRACE] compute_tree_metrics() done"
     );
 
+    // Build extension index eagerly so filtered queries (*.txt etc.) get
+    // O(matches) lookup immediately without a separate pass at query time.
+    index.build_extension_index();
+
     info!(
         load_ms,
         parse_ms,
