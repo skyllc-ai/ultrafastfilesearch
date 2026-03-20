@@ -417,6 +417,12 @@ pub(super) fn write_index_streaming<W: Write>(
     }
 
     let rows_ms = t_rows.elapsed().as_millis();
+    #[allow(clippy::print_stderr, clippy::semicolon_outside_block)]
+    {
+        eprintln!(
+            "[TIMING] streaming output: cache={cache_ms}ms  rows={rows_ms}ms  count={row_count}"
+        );
+    }
     tracing::info!(
         cache_ms,
         rows_ms,

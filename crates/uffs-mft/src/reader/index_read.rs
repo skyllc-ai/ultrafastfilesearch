@@ -632,7 +632,29 @@ impl MftReader {
 
                 // Set reserved allocated bytes from volume data so tree metrics
                 // adds it to the root's tree_allocated (C++ parity).
-                index.reserved_allocated_bytes = volume_data.reserved_allocated_bytes();
+                let ra = volume_data.reserved_allocated_bytes();
+                eprintln!(
+                    "[TIMING] IOCP+parse: {}ms  records: {}",
+                    start_time.elapsed().as_millis(),
+                    index.records.len()
+                );
+                eprintln!(
+                    "[DIAG] reserved_allocated_bytes={} (total_reserved={} mft_zone={}..{} bpc={})",
+                    ra,
+                    volume_data.total_reserved,
+                    volume_data.mft_zone_start,
+                    volume_data.mft_zone_end,
+                    volume_data.bytes_per_cluster
+                );
+                info!(
+                    reserved_allocated_bytes = ra,
+                    total_reserved = volume_data.total_reserved,
+                    mft_zone_start = volume_data.mft_zone_start,
+                    mft_zone_end = volume_data.mft_zone_end,
+                    bytes_per_cluster = volume_data.bytes_per_cluster,
+                    "📊 reserved_allocated_bytes for tree_allocated root adjustment"
+                );
+                index.reserved_allocated_bytes = ra;
 
                 // Compute tree metrics (directory sizes, descendant counts).
                 // The legacy path gets this from `from_parsed_records()`, but the
@@ -648,6 +670,7 @@ impl MftReader {
                     "[PARITY_TRACE] SlidingIocpInline: compute_tree_metrics() done"
                 );
                 let tree_ms = tree_start.elapsed().as_millis();
+                eprintln!("[TIMING] tree_metrics: {}ms", tree_ms);
                 info!(
                     tree_metrics_ms = tree_ms,
                     "✅ Tree metrics computed for inline index"
@@ -660,6 +683,10 @@ impl MftReader {
                 let ext_ms = ext_start.elapsed().as_millis();
 
                 let total_index_ms = start_time.elapsed().as_millis();
+                eprintln!(
+                    "[TIMING] ext_index: {}ms  total_index: {}ms",
+                    ext_ms, total_index_ms
+                );
                 info!(
                     total_index_ms,
                     tree_ms,
