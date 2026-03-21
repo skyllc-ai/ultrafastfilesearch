@@ -108,7 +108,7 @@ pub(super) fn write_native_results(
     clippy::too_many_lines,
     reason = "single-pass streaming writer needs inline path + row logic"
 )]
-pub(super) fn write_index_streaming<W: Write>(
+pub(super) fn write_index_streaming<W: Write + ?Sized>(
     index: &uffs_mft::MftIndex,
     writer: &mut W,
     format: &str,
@@ -120,7 +120,6 @@ pub(super) fn write_index_streaming<W: Write>(
     let output_cols = selected_output_columns(output_config);
     let tz_offset_secs = output_config.timezone_offset_secs;
 
-    // Build path cache (includes dir_cache for fast parent lookups).
     let t_cache = std::time::Instant::now();
     let path_cache = PathCache::build(index, false);
     let resolver = path_cache.resolver();
@@ -492,7 +491,7 @@ fn write_native_results_to<W: Write>(
 }
 
 /// Write the configured header for direct native output.
-fn write_native_header<W: Write>(
+fn write_native_header<W: Write + ?Sized>(
     writer: &mut W,
     output_config: &OutputConfig,
     output_cols: &[OutputColumn],
@@ -518,8 +517,48 @@ fn write_native_header<W: Write>(
 
 /// Return the effective output columns for the current configuration.
 #[must_use]
-fn selected_output_columns(output_config: &OutputConfig) -> &[OutputColumn] {
+pub(super) fn selected_output_columns(output_config: &OutputConfig) -> &[OutputColumn] {
     output_config.columns.as_deref().unwrap_or(CPP_COLUMN_ORDER)
+}
+
+/// Public wrapper for `write_native_header` (used by multi-drive streaming).
+#[cfg(windows)]
+pub(super) fn write_native_header_pub<W: Write + ?Sized>(
+    writer: &mut W,
+    output_config: &OutputConfig,
+    output_cols: &[OutputColumn],
+) -> Result<()> {
+    write_native_header(writer, output_config, output_cols)
+}
+
+/// Stream rows from an `MftIndex` WITHOUT writing header/footer.
+///
+/// Used by multi-drive streaming where the caller writes one header before
+/// all drives and one footer after all drives.
+#[cfg(windows)]
+pub(super) fn write_index_streaming_no_header<W: Write + ?Sized>(
+    index: &uffs_mft::MftIndex,
+    writer: &mut W,
+    output_config: &OutputConfig,
+) -> Result<usize> {
+    // Use a no-header OutputConfig clone and pass format="" to skip footer.
+    let mut no_header_config = output_config.clone();
+    no_header_config.header = false;
+    let footer_ctx = CppFooterContext {
+        output_targets: &[],
+        pattern: "",
+        row_count: 0,
+    };
+    write_index_streaming(index, writer, "", &no_header_config, &footer_ctx)
+}
+
+/// Public wrapper for `write_cpp_drive_footer` (used by multi-drive streaming).
+#[cfg(windows)]
+pub(super) fn write_cpp_footer_pub<W: Write + ?Sized>(
+    writer: &mut W,
+    ctx: &CppFooterContext<'_>,
+) -> Result<()> {
+    write_cpp_drive_footer(writer, ctx)
 }
 
 /// Write a single native value using the same formatting semantics as the
@@ -1119,7 +1158,7 @@ pub(super) fn write_results(
 ///
 /// Uses CRLF line endings (`\r\n`) to match C++ baseline behavior.
 /// When `row_count` is < 20,000, appends the fast-scan message.
-fn write_cpp_drive_footer<W: Write>(writer: &mut W, ctx: &CppFooterContext<'_>) -> Result<()> {
+fn write_cpp_drive_footer<W: Write + ?Sized>(writer: &mut W, ctx: &CppFooterContext<'_>) -> Result<()> {
     if ctx.output_targets.is_empty() {
         return Ok(());
     }

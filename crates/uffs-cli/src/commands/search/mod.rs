@@ -425,7 +425,102 @@ pub async fn search(
                 return Ok(());
             }
 
-            // Multi-drive or non-native format: fall back to DataFrame path
+            // Multi-drive full-scan with native output: load indexes in
+            // parallel, stream each drive's output through our fast path.
+            // No DataFrame, no SearchResult, no Polars merge.
+            if drives_to_search.len() > 1
+                && is_full_scan
+                && !benchmark
+                && can_write_native_results(format, &output_config)
+            {
+                info!(
+                    drives = ?drives_to_search,
+                    "📂 LIVE MULTI-DRIVE STREAMING (parallel load, shared output)"
+                );
+
+                // Load all indexes in parallel (IOCP reads overlap).
+                // Collect completed indexes, then stream output synchronously.
+                // StdoutLock is !Send so we can't hold it across .await.
+                let mut join_set = tokio::task::JoinSet::new();
+                for &drive_letter in &drives_to_search {
+                    let nc = no_cache;
+                    join_set.spawn(async move {
+                        super::raw_io::load_live_index(drive_letter, nc)
+                            .await
+                            .map(|(idx, ms)| (drive_letter, idx, ms))
+                    });
+                }
+
+                let mut indexes: Vec<(char, uffs_mft::MftIndex, u128)> = Vec::new();
+                while let Some(result) = join_set.join_next().await {
+                    match result {
+                        Ok(Ok(tuple)) => {
+                            info!(drive = %tuple.0, load_ms = tuple.2, records = tuple.1.len(), "📊 drive ready");
+                            indexes.push(tuple);
+                        }
+                        Ok(Err(e)) => info!(error = %e, "Drive load failed (continuing)"),
+                        Err(e) => info!(error = %e, "Task join error (continuing)"),
+                    }
+                }
+
+                // Stream all drives through the fast native path.
+                let cpp_pattern = format!(
+                    ">{}",
+                    drives_to_search
+                        .iter()
+                        .map(|d| format!("{}:{}", d, pattern.replace('*', ".*")))
+                        .collect::<Vec<_>>()
+                        .join("|")
+                );
+                let t_output = std::time::Instant::now();
+                let mut total_rows: usize = 0;
+
+                let stream_drives = |writer: &mut dyn std::io::Write| -> Result<usize> {
+                    let cols = crate::commands::output::selected_output_columns(&output_config);
+                    crate::commands::output::write_native_header_pub(writer, &output_config, cols)?;
+                    let mut rows = 0usize;
+                    for (_drive, idx, _ms) in &indexes {
+                        rows += crate::commands::output::write_index_streaming_no_header(
+                            idx, writer, &output_config,
+                        )?;
+                    }
+                    if format == "custom" {
+                        let footer = crate::commands::output::CppFooterContext {
+                            output_targets: &output_targets,
+                            pattern: &cpp_pattern,
+                            row_count: rows,
+                        };
+                        crate::commands::output::write_cpp_footer_pub(writer, &footer)?;
+                    }
+                    Ok(rows)
+                };
+
+                use std::io::Write as _;
+                let is_console = matches!(
+                    out.to_lowercase().as_str(),
+                    "console" | "con" | "term" | "terminal"
+                );
+                if is_console {
+                    let stdout_handle = std::io::stdout();
+                    let stdout_lock = stdout_handle.lock();
+                    let mut w = std::io::BufWriter::with_capacity(1024 * 1024, stdout_lock);
+                    total_rows = stream_drives(&mut w)?;
+                    w.flush()?;
+                } else {
+                    let file = std::fs::File::create(out)
+                        .with_context(|| format!("Failed to create output file: {out}"))?;
+                    let mut w = std::io::BufWriter::with_capacity(1024 * 1024, file);
+                    total_rows = stream_drives(&mut w)?;
+                    w.flush()?;
+                    info!(file = out, "Results written to file");
+                }
+
+                let output_ms = t_output.elapsed().as_millis();
+                info!(output_ms, total_rows, "📊 LIVE multi-drive streaming complete");
+                return Ok(());
+            }
+
+            // Multi-drive non-native or filtered: fall back to DataFrame path
             if drives_to_search.len() == 1 {
                 load_and_filter_data_index(
                     Some(drives_to_search[0]),
