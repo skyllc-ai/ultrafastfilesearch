@@ -24,19 +24,24 @@ if ($Drive) {
 Write-Host "  (Cache cleared before EACH run)" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
 
-function BenchCold($label, $cmd) {
+function BenchCold($label, $exePath, $argStr) {
     Write-Host "▶ $label" -ForegroundColor Yellow
     $times = @()
     1..$N | ForEach-Object {
         # Clear cache before each run
         Remove-Item $CACHE_DIR -Recurse -Force -ErrorAction SilentlyContinue
 
-        # Use a temp file for stdout to avoid PowerShell pipeline overhead.
-        # Capturing 7M+ lines as .NET objects adds 100-150s of overhead.
+        # Use Start-Process with raw file redirect to bypass PowerShell's
+        # encoding layer.  PowerShell's > operator re-encodes every line
+        # through its UTF-16 pipeline, adding 20-30s for large outputs.
         $tempOut = [System.IO.Path]::GetTempFileName()
+        $tempErr = [System.IO.Path]::GetTempFileName()
+
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         try {
-            & $cmd > $tempOut 2>&1
+            $proc = Start-Process -FilePath $exePath -ArgumentList $argStr `
+                -RedirectStandardOutput $tempOut -RedirectStandardError $tempErr `
+                -NoNewWindow -Wait -PassThru
         } catch {
             Write-Host "   ⚠️  Error: $_" -ForegroundColor Red
         }
@@ -45,8 +50,7 @@ function BenchCold($label, $cmd) {
         $times += $ms
         Write-Host "   Run $_`: $([math]::Round($ms/1000, 2))s" -ForegroundColor Gray
 
-        # Extract [TIMING] and [DIAG] lines from the temp file.
-        # Use regex (not -SimpleMatch) since brackets need escaping in SimpleMatch.
+        # Extract [TIMING] and [DIAG] lines from the temp file
         try {
             $timingLines = Select-String -Path $tempOut -Pattern '\[TIMING\]|\[DIAG\]' | ForEach-Object { $_.Line }
             if ($timingLines) {
@@ -58,8 +62,9 @@ function BenchCold($label, $cmd) {
             # Ignore errors reading temp file
         }
 
-        # Clean up temp file
+        # Clean up temp files
         Remove-Item $tempOut -Force -ErrorAction SilentlyContinue
+        Remove-Item $tempErr -Force -ErrorAction SilentlyContinue
     }
 
     if ($times.Count -gt 0) {
@@ -80,11 +85,10 @@ function RunDriveBench($driveLetter) {
     Write-Host "📁 DRIVE ${driveLetter}:" -ForegroundColor Yellow
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
     if (-not $CppOnly) {
-        # Note: no "search" subcommand - pattern is the default action
-        BenchCold "Rust (cold)" { & $UFFS "$Pattern" --drive $driveLetter }
+        BenchCold "Rust (cold)" $UFFS "`"$Pattern`" --drive $driveLetter"
     }
     if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
-        BenchCold "C++ (cold)" { & $UFFS_CPP "$Pattern" --drives=$driveLetter }
+        BenchCold "C++ (cold)" $UFFS_CPP "`"$Pattern`" --drives=$driveLetter"
     }
 }
 
@@ -93,11 +97,10 @@ function RunAllDrivesBench() {
     Write-Host "🌐 ALL DRIVES:" -ForegroundColor Yellow
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
     if (-not $CppOnly) {
-        # Note: no "search" subcommand - pattern is the default action
-        BenchCold "Rust (cold)" { & $UFFS "$Pattern" }
+        BenchCold "Rust (cold)" $UFFS "`"$Pattern`""
     }
     if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
-        BenchCold "C++ (cold)" { & $UFFS_CPP "$Pattern" }
+        BenchCold "C++ (cold)" $UFFS_CPP "`"$Pattern`""
     }
 }
 
