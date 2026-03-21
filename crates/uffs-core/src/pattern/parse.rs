@@ -36,13 +36,26 @@ impl ParsedPattern {
         }
 
         let (drive, remaining) = Self::extract_drive_prefix(input);
-        let pattern_type = Self::detect_pattern_type(remaining);
+        let has_separator = Self::contains_path_separator(remaining);
+        let pattern_type_preview = Self::detect_pattern_type(remaining);
+        // Literal (bare text like "nice") is always path-aware so it matches
+        // against full paths (like Everything, WizFile, C++ UFFS).
+        // Glob patterns are path-aware only if they contain separators.
+        let is_path = has_separator || matches!(pattern_type_preview, PatternType::Literal);
+        // Normalize forward slashes to backslashes for Windows path matching.
+        let normalized = if has_separator {
+            remaining.replace('/', "\\")
+        } else {
+            remaining.to_owned()
+        };
+        let pattern_type = Self::detect_pattern_type(&normalized);
 
         Ok(Self {
             drive,
-            pattern: remaining.to_owned(),
+            pattern: normalized,
             pattern_type,
             case_sensitive: false,
+            is_path_pattern: is_path,
         })
     }
 
@@ -63,11 +76,13 @@ impl ParsedPattern {
 
         let (drive, remaining) = Self::extract_drive_from_regex(pattern);
 
+        let is_path = Self::contains_path_separator(remaining);
         Ok(Self {
             drive,
             pattern: remaining.to_owned(),
             pattern_type: PatternType::Regex,
             case_sensitive: false,
+            is_path_pattern: is_path,
         })
     }
 
@@ -109,6 +124,21 @@ impl ParsedPattern {
         }
 
         (None, pattern)
+    }
+
+    /// Detect whether a pattern contains path separators (`\` or `/`).
+    ///
+    /// When true, the pattern should be matched against the full file path
+    /// (e.g., `D:\Users\foo\file.txt`) instead of just the filename.
+    fn contains_path_separator(pattern: &str) -> bool {
+        // A pattern is path-aware if it contains directory separators BETWEEN
+        // path components (not just a leading slash like "/pro*").
+        // Strip leading separator — it's a glob prefix, not a path indicator.
+        let inner = pattern
+            .strip_prefix('/')
+            .or_else(|| pattern.strip_prefix('\\'))
+            .unwrap_or(pattern);
+        inner.contains('\\') || inner.contains('/')
     }
 
     /// Detect whether a pattern is glob, regex, or literal.

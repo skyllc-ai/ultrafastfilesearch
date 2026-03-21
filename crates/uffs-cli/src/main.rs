@@ -244,6 +244,76 @@ struct Cli {
     #[arg(long, default_value = "false")]
     case: bool,
 
+    /// Smart case: auto case-sensitive if pattern contains uppercase (default:
+    /// off)
+    ///
+    /// When enabled, patterns with ANY uppercase letter become case-sensitive
+    /// automatically. Lowercase-only patterns stay case-insensitive.
+    /// Like `fd --smart-case` / `ripgrep --smart-case`.
+    #[arg(long, default_value = "false")]
+    smart_case: bool,
+
+    /// Filter by NTFS attributes (comma-separated, prefix ! to exclude)
+    ///
+    /// Examples: hidden, !hidden, compressed,encrypted, !system,!hidden
+    /// Available: hidden, system, archive, readonly, compressed, encrypted,
+    ///   sparse, reparse, offline, notindexed, temporary, virtual,
+    ///   pinned, unpinned, integrity, noscrub, directory
+    #[arg(long)]
+    attr: Option<String>,
+
+    /// Only files modified within this duration/after this date
+    ///
+    /// Examples: 7d (7 days), 24h (24 hours), 30m (30 minutes),
+    ///   2026-01-15, 2026-01-15T10:30:00
+    #[arg(long)]
+    newer: Option<String>,
+
+    /// Only files modified before this duration/date
+    #[arg(long)]
+    older: Option<String>,
+
+    /// Only files created within this duration/after this date
+    #[arg(long)]
+    newer_created: Option<String>,
+
+    /// Only files created before this duration/date
+    #[arg(long)]
+    older_created: Option<String>,
+
+    /// Only files accessed within this duration/after this date
+    #[arg(long)]
+    newer_accessed: Option<String>,
+
+    /// Only files accessed before this duration/date
+    #[arg(long)]
+    older_accessed: Option<String>,
+
+    /// Exclude files matching this pattern (applied after main pattern)
+    ///
+    /// Example: uffs *.txt --exclude backup*
+    #[arg(long)]
+    exclude: Option<String>,
+
+    /// Whole word matching (wraps pattern in \b...\b regex)
+    ///
+    /// Example: uffs --word nice  (finds "nice" but not "nicehouse")
+    #[arg(long, default_value = "false")]
+    word: bool,
+
+    /// Sort results by column(s), comma-separated for multi-tier
+    ///
+    /// Examples: size, modified, name, size,name, modified,size,name
+    /// Available: size, sizeondisk, modified, created, accessed, name,
+    ///   ext, descendants, hidden, system, archive, readonly,
+    ///   compressed, encrypted, directory
+    #[arg(long)]
+    sort: Option<String>,
+
+    /// Reverse sort order (descending)
+    #[arg(long, default_value = "false")]
+    sort_desc: bool,
+
     /// Filter by file extension(s)
     #[arg(long)]
     ext: Option<String>,
@@ -510,6 +580,18 @@ async fn run() -> Result<()> {
                     cli.limit,
                     &cli.format,
                     cli.case,
+                    cli.smart_case,
+                    cli.attr.as_deref(),
+                    cli.newer.as_deref(),
+                    cli.older.as_deref(),
+                    cli.newer_created.as_deref(),
+                    cli.older_created.as_deref(),
+                    cli.newer_accessed.as_deref(),
+                    cli.older_accessed.as_deref(),
+                    cli.exclude.as_deref(),
+                    cli.word,
+                    cli.sort.as_deref(),
+                    cli.sort_desc,
                     cli.ext.as_deref(),
                     &cli.out,
                     &cli.columns,

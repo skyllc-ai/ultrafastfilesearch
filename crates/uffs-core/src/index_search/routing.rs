@@ -73,7 +73,8 @@ pub const fn analyze_pattern_complexity(pattern: &IndexPattern) -> QueryComplexi
         | IndexPattern::ExactSet { .. }
         | IndexPattern::SuffixSet { .. }
         | IndexPattern::ContainsAny { .. }
-        | IndexPattern::Regex { .. } => QueryComplexity::Simple,
+        | IndexPattern::Regex { .. }
+        | IndexPattern::Or { .. } => QueryComplexity::Simple,
     }
 }
 

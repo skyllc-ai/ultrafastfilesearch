@@ -57,6 +57,9 @@ pub struct ParsedPattern {
     pattern_type: PatternType,
     /// Whether the pattern is case-sensitive.
     case_sensitive: bool,
+    /// Whether this is a path pattern (contains `\` or `/`).
+    /// When true, matching should be against the full path, not filename.
+    is_path_pattern: bool,
 }
 
 impl ParsedPattern {
@@ -86,6 +89,17 @@ impl ParsedPattern {
     #[must_use]
     pub const fn is_case_sensitive(&self) -> bool {
         self.case_sensitive
+    }
+
+    /// Check if this is a path pattern (matches against full path, not
+    /// filename).
+    ///
+    /// A pattern is path-aware when it contains directory separators (`\` or
+    /// `/`), indicating the user wants to match against the file's location
+    /// in the tree.
+    #[must_use]
+    pub const fn is_path_pattern(&self) -> bool {
+        self.is_path_pattern
     }
 
     /// Set case sensitivity.

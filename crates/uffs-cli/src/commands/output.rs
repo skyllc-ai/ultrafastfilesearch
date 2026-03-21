@@ -94,6 +94,520 @@ pub(super) fn write_native_results(
     Ok(())
 }
 
+/// A single attribute requirement: attribute must be set (Include) or not set
+/// (Exclude).
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy)]
+pub(super) enum AttrRequirement {
+    /// Attribute must be set (e.g., `hidden`).
+    Include(AttrKind),
+    /// Attribute must NOT be set (e.g., `!hidden`).
+    Exclude(AttrKind),
+}
+
+/// Known NTFS file attributes for filtering.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy)]
+pub(super) enum AttrKind {
+    /// Hidden file attribute.
+    Hidden,
+    /// System file attribute.
+    System,
+    /// Archive attribute.
+    Archive,
+    /// Read-only attribute.
+    ReadOnly,
+    /// Compressed attribute.
+    Compressed,
+    /// Encrypted attribute.
+    Encrypted,
+    /// Sparse file attribute.
+    Sparse,
+    /// Reparse point attribute.
+    Reparse,
+    /// Offline attribute.
+    Offline,
+    /// Not content indexed attribute.
+    NotIndexed,
+    /// Temporary file attribute.
+    Temporary,
+    /// Virtual file attribute.
+    Virtual,
+    /// Pinned attribute.
+    Pinned,
+    /// Unpinned attribute.
+    Unpinned,
+    /// Integrity stream attribute.
+    Integrity,
+    /// No scrub data attribute.
+    NoScrub,
+    /// Directory flag.
+    Directory,
+}
+
+#[cfg(windows)]
+impl AttrKind {
+    /// Parse an attribute name (case-insensitive).
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "hidden" | "h" => Some(Self::Hidden),
+            "system" | "s" => Some(Self::System),
+            "archive" | "a" => Some(Self::Archive),
+            "readonly" | "r" | "read-only" => Some(Self::ReadOnly),
+            "compressed" => Some(Self::Compressed),
+            "encrypted" => Some(Self::Encrypted),
+            "sparse" => Some(Self::Sparse),
+            "reparse" => Some(Self::Reparse),
+            "offline" | "o" => Some(Self::Offline),
+            "notindexed" | "notcontent" => Some(Self::NotIndexed),
+            "temporary" | "temp" => Some(Self::Temporary),
+            "virtual" => Some(Self::Virtual),
+            "pinned" => Some(Self::Pinned),
+            "unpinned" => Some(Self::Unpinned),
+            "integrity" => Some(Self::Integrity),
+            "noscrub" => Some(Self::NoScrub),
+            "directory" | "dir" => Some(Self::Directory),
+            _ => None,
+        }
+    }
+
+    /// Check if this attribute is set on the given record.
+    #[inline]
+    #[must_use]
+    pub fn is_set(self, record: &uffs_mft::index::FileRecord) -> bool {
+        match self {
+            Self::Hidden => record.stdinfo.is_hidden(),
+            Self::System => record.stdinfo.is_system(),
+            Self::Archive => record.stdinfo.is_archive(),
+            Self::ReadOnly => record.stdinfo.is_readonly(),
+            Self::Compressed => record.stdinfo.is_compressed(),
+            Self::Encrypted => record.stdinfo.is_encrypted(),
+            Self::Sparse => record.stdinfo.is_sparse(),
+            Self::Reparse => record.stdinfo.is_reparse(),
+            Self::Offline => record.stdinfo.is_offline(),
+            Self::NotIndexed => record.stdinfo.is_not_indexed(),
+            Self::Temporary => record.stdinfo.is_temporary(),
+            Self::Virtual => record.stdinfo.is_virtual(),
+            Self::Pinned => record.stdinfo.is_pinned(),
+            Self::Unpinned => record.stdinfo.is_unpinned(),
+            Self::Integrity => record.stdinfo.is_integrity_stream(),
+            Self::NoScrub => record.stdinfo.is_no_scrub_data(),
+            Self::Directory => record.is_directory(),
+        }
+    }
+}
+
+/// Record-level filters for the streaming writer.
+///
+/// ALL filters are combined with AND logic and applied inline during the
+/// streaming scan — no separate filter pass, zero memory overhead.
+///
+/// # Example CLI usage
+/// ```text
+/// uffs *.txt --files-only --min-size 1024 --attr hidden --newer 7d --case
+/// ```
+#[derive(Debug, Clone, Default)]
+pub(super) struct StreamingRecordFilter {
+    /// Only output files (skip directories).
+    pub files_only: bool,
+    /// Only output directories (skip files).
+    pub dirs_only: bool,
+    /// Hide system/hidden files.
+    pub hide_system: bool,
+    /// Minimum file size filter.
+    pub min_size: Option<u64>,
+    /// Maximum file size filter.
+    pub max_size: Option<u64>,
+    /// Attribute requirements (all must be satisfied — AND logic).
+    #[cfg(windows)]
+    pub attr_filters: Vec<AttrRequirement>,
+    /// Only records modified after this timestamp (microseconds since epoch).
+    pub newer_modified: Option<i64>,
+    /// Only records modified before this timestamp (microseconds since epoch).
+    pub older_modified: Option<i64>,
+    /// Only records created after this timestamp.
+    pub newer_created: Option<i64>,
+    /// Only records created before this timestamp.
+    pub older_created: Option<i64>,
+    /// Only records accessed after this timestamp.
+    pub newer_accessed: Option<i64>,
+    /// Only records accessed before this timestamp.
+    pub older_accessed: Option<i64>,
+    /// Exclude pattern — records matching this are rejected.
+    pub exclude_pattern: Option<uffs_core::IndexPattern>,
+    /// Maximum number of output rows (0 = unlimited).
+    pub limit: usize,
+    /// Sort specification (empty = no sort, output in FRS order).
+    #[cfg(windows)]
+    pub sort_spec: Vec<SortColumn>,
+    /// Reverse sort order (descending).
+    #[cfg(windows)]
+    pub sort_desc: bool,
+}
+
+/// A single sort tier: column + direction.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SortColumn {
+    /// The column to sort by.
+    pub kind: SortKind,
+    /// Whether this tier sorts descending.
+    pub descending: bool,
+}
+
+/// Sort column kind.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy)]
+pub(super) enum SortKind {
+    /// File size.
+    Size,
+    /// Allocated size on disk.
+    SizeOnDisk,
+    /// Last modification timestamp.
+    Modified,
+    /// Creation timestamp.
+    Created,
+    /// Last access timestamp.
+    Accessed,
+    /// Filename.
+    Name,
+    /// Full path.
+    Path,
+    /// File extension.
+    Extension,
+    /// Descendant count.
+    Descendants,
+    /// Hidden attribute.
+    Hidden,
+    /// System attribute.
+    System,
+    /// Archive attribute.
+    Archive,
+    /// Read-only attribute.
+    ReadOnly,
+    /// Compressed attribute.
+    Compressed,
+    /// Encrypted attribute.
+    Encrypted,
+    /// Directory flag.
+    Directory,
+}
+
+#[cfg(windows)]
+impl SortKind {
+    /// Smart default sort direction for this column.
+    ///
+    /// Dates and sizes default to descending (newest/largest first).
+    /// Names and extensions default to ascending (A→Z).
+    /// Booleans default to descending (true first).
+    #[must_use]
+    pub const fn default_descending(self) -> bool {
+        matches!(
+            self,
+            Self::Size
+                | Self::SizeOnDisk
+                | Self::Modified
+                | Self::Created
+                | Self::Accessed
+                | Self::Descendants
+                | Self::Hidden
+                | Self::System
+                | Self::Archive
+                | Self::ReadOnly
+                | Self::Compressed
+                | Self::Encrypted
+                | Self::Directory
+        )
+    }
+
+    /// Parse a sort column name (case-insensitive).
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "size" => Some(Self::Size),
+            "sizeondisk" | "allocated" => Some(Self::SizeOnDisk),
+            "modified" | "written" | "date" => Some(Self::Modified),
+            "created" => Some(Self::Created),
+            "accessed" => Some(Self::Accessed),
+            "name" => Some(Self::Name),
+            "path" => Some(Self::Path),
+            "ext" | "extension" | "type" => Some(Self::Extension),
+            "descendants" => Some(Self::Descendants),
+            "hidden" | "h" => Some(Self::Hidden),
+            "system" | "s" => Some(Self::System),
+            "archive" | "a" => Some(Self::Archive),
+            "readonly" | "r" => Some(Self::ReadOnly),
+            "compressed" => Some(Self::Compressed),
+            "encrypted" => Some(Self::Encrypted),
+            "directory" | "dir" => Some(Self::Directory),
+            _ => None,
+        }
+    }
+}
+
+/// Parse a comma-separated `--sort` string into sort tiers.
+///
+/// Each tier is `column` or `column:asc` or `column:desc`.
+/// Default direction: ascending.  `--sort-desc` reverses ALL tiers.
+///
+/// # Examples
+/// - `"size"` → `[Size(asc)]`
+/// - `"size:desc,name"` → `[Size(desc), Name(asc)]`
+/// - `"modified:desc,size:asc,name"` → `[Modified(desc), Size(asc), Name(asc)]`
+#[cfg(windows)]
+pub(super) fn parse_sort_spec(input: &str) -> Vec<SortColumn> {
+    input
+        .split(',')
+        .filter_map(|s| {
+            let s = s.trim();
+            let (name, dir) = if let Some((n, d)) = s.split_once(':') {
+                (n.trim(), Some(d.trim()))
+            } else {
+                (s, None) // no explicit direction → use smart default
+            };
+            let kind = SortKind::parse(name)?;
+            let descending = match dir {
+                Some(d) => match d.to_ascii_lowercase().as_str() {
+                    "desc" | "d" | "descending" => true,
+                    "asc" | "a" | "ascending" => false,
+                    _ => kind.default_descending(),
+                },
+                None => kind.default_descending(), // smart default
+            };
+            Some(SortColumn { kind, descending })
+        })
+        .collect()
+}
+
+/// Lightweight sort entry: just the record index.
+/// Sort keys are extracted on-demand during comparison from the MftIndex.
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+pub(super) struct SortEntry {
+    /// Index into the MftIndex records array.
+    pub record_idx: u32,
+}
+
+/// Compare two records by multi-tier sort specification.
+///
+/// Extracts sort keys on-demand from the index — no pre-materialized keys.
+/// For name/path sorts, uses the names buffer directly (zero allocation).
+#[cfg(windows)]
+pub(super) fn compare_records(
+    a_idx: usize,
+    b_idx: usize,
+    index: &uffs_mft::MftIndex,
+    sort_spec: &[SortColumn],
+    global_desc: bool,
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    let a = &index.records[a_idx];
+    let b = &index.records[b_idx];
+
+    for col in sort_spec {
+        let ord = match col.kind {
+            SortKind::Size => a.first_stream.size.length.cmp(&b.first_stream.size.length),
+            SortKind::SizeOnDisk => a
+                .first_stream
+                .size
+                .allocated
+                .cmp(&b.first_stream.size.allocated),
+            SortKind::Modified => a.stdinfo.modified.cmp(&b.stdinfo.modified),
+            SortKind::Created => a.stdinfo.created.cmp(&b.stdinfo.created),
+            SortKind::Accessed => a.stdinfo.accessed.cmp(&b.stdinfo.accessed),
+            SortKind::Name => {
+                let na = index.record_name(a);
+                let nb = index.record_name(b);
+                na.to_ascii_lowercase().cmp(&nb.to_ascii_lowercase())
+            }
+            SortKind::Path => Ordering::Equal,
+            SortKind::Extension => a
+                .first_name
+                .name
+                .extension_id()
+                .cmp(&b.first_name.name.extension_id()),
+            SortKind::Descendants => a.descendants.cmp(&b.descendants),
+            SortKind::Hidden => a.stdinfo.is_hidden().cmp(&b.stdinfo.is_hidden()),
+            SortKind::System => a.stdinfo.is_system().cmp(&b.stdinfo.is_system()),
+            SortKind::Archive => a.stdinfo.is_archive().cmp(&b.stdinfo.is_archive()),
+            SortKind::ReadOnly => a.stdinfo.is_readonly().cmp(&b.stdinfo.is_readonly()),
+            SortKind::Compressed => a.stdinfo.is_compressed().cmp(&b.stdinfo.is_compressed()),
+            SortKind::Encrypted => a.stdinfo.is_encrypted().cmp(&b.stdinfo.is_encrypted()),
+            SortKind::Directory => a.is_directory().cmp(&b.is_directory()),
+        };
+
+        if ord != Ordering::Equal {
+            // Per-tier direction: col.descending XOR global_desc.
+            let effective_desc = col.descending ^ global_desc;
+            return if effective_desc { ord.reverse() } else { ord };
+        }
+    }
+
+    Ordering::Equal
+}
+
+impl StreamingRecordFilter {
+    /// Check if a record passes ALL filters (AND logic).
+    #[inline]
+    #[must_use]
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "on Windows, the #[cfg(windows)] attr_filters for-loop prevents const"
+    )]
+    pub fn matches(&self, record: &uffs_mft::index::FileRecord) -> bool {
+        // Type filter.
+        let is_dir = record.is_directory();
+        if self.files_only && is_dir {
+            return false;
+        }
+        if self.dirs_only && !is_dir {
+            return false;
+        }
+
+        // Legacy hide-system (combines hidden + system).
+        if self.hide_system && (record.stdinfo.is_system() || record.stdinfo.is_hidden()) {
+            return false;
+        }
+
+        // Size filter.
+        let size = record.first_stream.size.length;
+        if let Some(min) = self.min_size {
+            if size < min {
+                return false;
+            }
+        }
+        if let Some(max) = self.max_size {
+            if size > max {
+                return false;
+            }
+        }
+
+        // Attribute requirements (AND — all must pass).
+        #[cfg(windows)]
+        for req in &self.attr_filters {
+            match req {
+                AttrRequirement::Include(kind) => {
+                    if !kind.is_set(record) {
+                        return false;
+                    }
+                }
+                AttrRequirement::Exclude(kind) => {
+                    if kind.is_set(record) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Date range filters (all three NTFS timestamps).
+        if let Some(ts) = self.newer_modified {
+            if record.stdinfo.modified < ts {
+                return false;
+            }
+        }
+        if let Some(ts) = self.older_modified {
+            if record.stdinfo.modified > ts {
+                return false;
+            }
+        }
+        if let Some(ts) = self.newer_created {
+            if record.stdinfo.created < ts {
+                return false;
+            }
+        }
+        if let Some(ts) = self.older_created {
+            if record.stdinfo.created > ts {
+                return false;
+            }
+        }
+        if let Some(ts) = self.newer_accessed {
+            if record.stdinfo.accessed < ts {
+                return false;
+            }
+        }
+        if let Some(ts) = self.older_accessed {
+            if record.stdinfo.accessed > ts {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+/// Parse a comma-separated `--attr` string into attribute requirements.
+///
+/// # Examples
+/// - `"hidden"` → `[Include(Hidden)]`
+/// - `"!hidden"` → `[Exclude(Hidden)]`
+/// - `"hidden,compressed"` → `[Include(Hidden), Include(Compressed)]`
+/// - `"!system,!hidden"` → `[Exclude(System), Exclude(Hidden)]`
+#[cfg(windows)]
+pub(super) fn parse_attr_filter(input: &str) -> Vec<AttrRequirement> {
+    input
+        .split(',')
+        .filter_map(|token| {
+            let token = token.trim();
+            if token.is_empty() {
+                return None;
+            }
+            if let Some(name) = token.strip_prefix('!') {
+                AttrKind::parse(name).map(AttrRequirement::Exclude)
+            } else {
+                AttrKind::parse(token).map(AttrRequirement::Include)
+            }
+        })
+        .collect()
+}
+
+/// Parse a `--newer` / `--older` duration or date string into a timestamp.
+///
+/// Supports:
+/// - `7d` → 7 days ago
+/// - `24h` → 24 hours ago
+/// - `30m` → 30 minutes ago
+/// - `2026-01-15` → specific date (midnight UTC)
+/// - `2026-01-15T10:30:00` → specific datetime
+#[cfg(windows)]
+pub(super) fn parse_age_filter(input: &str) -> Option<i64> {
+    let input = input.trim();
+
+    // Duration format: Nd, Nh, Nm
+    if let Some(days) = input.strip_suffix('d').and_then(|s| s.parse::<i64>().ok()) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?;
+        let now_micros = now.as_micros() as i64;
+        return Some(now_micros - days * 86_400 * 1_000_000);
+    }
+    if let Some(hours) = input.strip_suffix('h').and_then(|s| s.parse::<i64>().ok()) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?;
+        let now_micros = now.as_micros() as i64;
+        return Some(now_micros - hours * 3_600 * 1_000_000);
+    }
+    if let Some(mins) = input.strip_suffix('m').and_then(|s| s.parse::<i64>().ok()) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?;
+        let now_micros = now.as_micros() as i64;
+        return Some(now_micros - mins * 60 * 1_000_000);
+    }
+
+    // ISO date/datetime format via chrono
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(input, "%Y-%m-%dT%H:%M:%S") {
+        return Some(dt.and_utc().timestamp_micros());
+    }
+    if let Ok(dt) = chrono::NaiveDate::parse_from_str(input, "%Y-%m-%d") {
+        return Some(dt.and_hms_opt(0, 0, 0)?.and_utc().timestamp_micros());
+    }
+
+    None
+}
+
 /// Stream output directly from `MftIndex` — zero `SearchResult` allocation.
 ///
 /// This replaces the chain: `IndexQuery::collect()` → `Vec<SearchResult>` →
@@ -104,12 +618,54 @@ pub(super) fn write_native_results(
 /// - 8M+ `SearchResult` allocations (3 Strings each)
 /// - The Rayon parallel collect overhead
 /// - Redundant `index.find(result.frs)` lookups in the output loop
+pub(super) fn write_index_streaming<W: Write + ?Sized>(
+    index: &uffs_mft::MftIndex,
+    writer: &mut W,
+    format: &str,
+    output_config: &OutputConfig,
+    footer_ctx: &CppFooterContext<'_>,
+) -> Result<usize> {
+    write_index_streaming_with_filter(
+        index,
+        None,
+        None,
+        false,
+        false,
+        &StreamingRecordFilter::default(),
+        writer,
+        format,
+        output_config,
+        footer_ctx,
+    )
+}
+
+/// Core streaming writer with optional pattern filter and optional record
+/// indices.
+///
+/// - `pattern = None`: write ALL records (full scan `*`)
+/// - `pattern = Some(pat)`: write only records whose name matches `pat`
+/// - `record_indices = Some(indices)`: only visit these records (extension
+///   index)
+/// - `record_indices = None`: scan all records sequentially
 #[expect(
     clippy::too_many_lines,
     reason = "single-pass streaming writer needs inline path + row logic"
 )]
-pub(super) fn write_index_streaming<W: Write + ?Sized>(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "unified streaming writer accepting all filter options"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "flat column-match dispatch + filter checks — structurally simple, just many branches"
+)]
+pub(super) fn write_index_streaming_with_filter<W: Write + ?Sized>(
     index: &uffs_mft::MftIndex,
+    pattern: Option<&uffs_core::IndexPattern>,
+    record_indices: Option<&[u32]>,
+    case_sensitive: bool,
+    is_path_pattern: bool,
+    record_filter: &StreamingRecordFilter,
     writer: &mut W,
     format: &str,
     output_config: &OutputConfig,
@@ -131,13 +687,117 @@ pub(super) fn write_index_streaming<W: Write + ?Sized>(
 
     let mut row_buffer = String::with_capacity(512);
     let mut path_buffer = String::with_capacity(256);
-    let mut hardlink_buf = String::new(); // Only allocated when hardlinks encountered
+    let mut hardlink_buf = String::new();
     let mut itoa_buf = itoa::Buffer::new();
     let mut row_count: usize = 0;
     let t_rows = std::time::Instant::now();
 
-    for (record_idx, record) in index.records.iter().enumerate() {
+    // If sorting is requested, collect matching record indices using Top-K
+    // heap (when limit is set) or full collect+sort (when unlimited).
+    // Default sort limit: 200 rows to avoid collecting millions of records.
+    // Sort is only available on Windows (sort_spec/sort_desc are cfg(windows)
+    // fields).
+    #[cfg(not(windows))]
+    let sorted_indices: Option<Vec<u32>> = None;
+
+    #[cfg(windows)]
+    let sorted_indices: Option<Vec<u32>> = if !record_filter.sort_spec.is_empty() {
+        let effective_limit = if record_filter.limit > 0 {
+            record_filter.limit
+        } else {
+            200 // default sort limit to avoid collecting millions of records
+        };
+
+        let sort_spec = &record_filter.sort_spec;
+        let desc = record_filter.sort_desc;
+
+        let base_iter: Box<dyn Iterator<Item = (usize, &uffs_mft::index::FileRecord)>> =
+            if let Some(indices) = record_indices {
+                Box::new(indices.iter().filter_map(|&idx_u32| {
+                    let idx = idx_u32 as usize;
+                    index.records.get(idx).map(|rec| (idx, rec))
+                }))
+            } else {
+                Box::new(index.records.iter().enumerate())
+            };
+
+        // Collect matching record indices, then use select_nth_unstable_by
+        // (introselect) for O(n) average Top-K selection instead of O(n log n) full
+        // sort.
+        let mut matching: Vec<u32> = Vec::new();
+        for (record_idx, record) in base_iter {
+            if !resolver.is_valid_idx(record_idx) {
+                continue;
+            }
+            if !record_filter.matches(record) {
+                continue;
+            }
+            if let Some(pat) = pattern {
+                let matches = if is_path_pattern {
+                    path_buffer.clear();
+                    resolver.materialize_path_into(index, record_idx, dir_cache, &mut path_buffer);
+                    pat.matches(&path_buffer, case_sensitive)
+                } else {
+                    pat.matches(index.record_name(record), case_sensitive)
+                };
+                if !matches {
+                    continue;
+                }
+            }
+            if let Some(excl) = &record_filter.exclude_pattern {
+                if excl.matches(index.record_name(record), case_sensitive) {
+                    continue;
+                }
+            }
+            matching.push(record_idx as u32);
+        }
+
+        // Partial sort: if we have more matches than the limit, use
+        // select_nth_unstable_by to find the top-K in O(n) average,
+        // then sort only those K entries in O(k log k).
+        if matching.len() > effective_limit {
+            matching.select_nth_unstable_by(effective_limit, |&a, &b| {
+                crate::commands::output::compare_records(
+                    a as usize, b as usize, index, sort_spec, desc,
+                )
+            });
+            matching.truncate(effective_limit);
+        }
+
+        // Final sort of the top-K entries.
+        matching.sort_unstable_by(|&a, &b| {
+            crate::commands::output::compare_records(a as usize, b as usize, index, sort_spec, desc)
+        });
+
+        Some(matching)
+    } else {
+        None
+    };
+
+    // Build the final iterator: sorted indices or original scan order.
+    let record_iter: Box<dyn Iterator<Item = (usize, &uffs_mft::index::FileRecord)>> =
+        if let Some(sorted) = &sorted_indices {
+            // Sorted path: iterate pre-filtered, pre-sorted indices.
+            Box::new(sorted.iter().filter_map(|&idx_u32| {
+                let idx = idx_u32 as usize;
+                index.records.get(idx).map(|rec| (idx, rec))
+            }))
+        } else if let Some(indices) = record_indices {
+            Box::new(indices.iter().filter_map(|&idx_u32| {
+                let idx = idx_u32 as usize;
+                index.records.get(idx).map(|rec| (idx, rec))
+            }))
+        } else {
+            Box::new(index.records.iter().enumerate())
+        };
+
+    for (record_idx, record) in record_iter {
         if !resolver.is_valid_idx(record_idx) {
+            continue;
+        }
+
+        // Apply attribute filters (files_only, dirs_only, hide_system, size).
+        if !record_filter.matches(record) {
             continue;
         }
 
@@ -146,6 +806,33 @@ pub(super) fn write_index_streaming<W: Write + ?Sized>(
         // Resolve primary path into reusable buffer (zero per-record allocation).
         path_buffer.clear();
         resolver.materialize_path_into(index, record_idx, dir_cache, &mut path_buffer);
+
+        // Apply pattern filter: match against full path or filename.
+        if let Some(pat) = pattern {
+            if is_path_pattern {
+                if !pat.matches(&path_buffer, case_sensitive) {
+                    continue;
+                }
+            } else {
+                let name = index.record_name(record);
+                if !pat.matches(name, case_sensitive) {
+                    continue;
+                }
+            }
+        }
+
+        // Apply exclude pattern (reject matches).
+        if let Some(excl) = &record_filter.exclude_pattern {
+            let name = index.record_name(record);
+            if excl.matches(name, case_sensitive) {
+                continue;
+            }
+        }
+
+        // Check limit — stop early if we've reached the max.
+        if record_filter.limit > 0 && row_count >= record_filter.limit {
+            break;
+        }
 
         // Expand names × streams (same logic as RecordExpander).
         let name_count = record.name_count.max(1);
@@ -536,11 +1223,11 @@ pub(super) fn write_native_header_pub<W: Write + ?Sized>(
 /// Same as `write_index_streaming` but only visits the supplied record
 /// indices (e.g. from the extension index for `*.rs`).  Includes header
 /// and footer.  No `SearchResult` allocation.
-#[cfg(windows)]
 #[expect(
     clippy::too_many_lines,
     reason = "mirrors write_index_streaming with an index filter"
 )]
+#[cfg(windows)]
 pub(super) fn write_index_streaming_filtered<W: Write + ?Sized>(
     index: &uffs_mft::MftIndex,
     record_indices: &[u32],

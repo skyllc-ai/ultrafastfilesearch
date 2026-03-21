@@ -1,5 +1,7 @@
 //! Search command implementation.
 
+extern crate alloc;
+
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
@@ -135,6 +137,18 @@ pub async fn search(
     limit: u32,
     format: &str,
     case_sensitive: bool,
+    smart_case: bool,
+    attr_filter: Option<&str>,
+    newer: Option<&str>,
+    older: Option<&str>,
+    newer_created: Option<&str>,
+    older_created: Option<&str>,
+    newer_accessed: Option<&str>,
+    older_accessed: Option<&str>,
+    exclude: Option<&str>,
+    word: bool,
+    sort: Option<&str>,
+    sort_desc: bool,
     ext_filter: Option<&str>,
     out: &str,
     columns: &str,
@@ -151,9 +165,38 @@ pub async fn search(
     let start_time = std::time::Instant::now();
     debug!("[TIMING] search() entered at 0ms");
 
-    let parsed = ParsedPattern::parse(pattern)
+    // These params are only consumed inside #[cfg(windows)] blocks (LIVE streaming
+    // path). Suppress unused-variable warnings on non-Windows platforms.
+    #[cfg(not(windows))]
+    {
+        let _: Option<&str> = attr_filter;
+        let _: Option<&str> = newer;
+        let _: Option<&str> = older;
+        let _: Option<&str> = newer_created;
+        let _: Option<&str> = older_created;
+        let _: Option<&str> = newer_accessed;
+        let _: Option<&str> = older_accessed;
+        let _: Option<&str> = exclude;
+        let _: Option<&str> = sort;
+        let _: bool = sort_desc;
+    }
+
+    // Smart case: if enabled and pattern has any uppercase letter,
+    // automatically enable case-sensitive matching (like fd/ripgrep).
+    // Explicit --case always wins over smart case.
+    let effective_case_sensitive =
+        case_sensitive || (smart_case && pattern.chars().any(|ch| ch.is_ascii_uppercase()));
+
+    // Whole word: wrap pattern in \b...\b regex for word boundary matching.
+    let effective_pattern: alloc::borrow::Cow<'_, str> = if word {
+        alloc::borrow::Cow::Owned(format!(">\\b{pattern}\\b"))
+    } else {
+        alloc::borrow::Cow::Borrowed(pattern)
+    };
+
+    let parsed = ParsedPattern::parse(&effective_pattern)
         .with_context(|| format!("Invalid pattern: {pattern}"))?
-        .with_case_sensitive(case_sensitive);
+        .with_case_sensitive(effective_case_sensitive);
 
     let filters = QueryFilters {
         parsed: &parsed,
@@ -288,7 +331,6 @@ pub async fn search(
         let t_output = std::time::Instant::now();
         let elapsed = start_time.elapsed();
         let row_count = native.results.len();
-        // Convert glob pattern to regex format for C++ footer (e.g., * -> .*)
         let cpp_pattern = format!(">{}:{}", native.index.volume, pattern.replace('*', ".*"));
         let footer_ctx = crate::commands::output::CppFooterContext {
             output_targets: &output_targets,
@@ -398,67 +440,57 @@ pub async fn search(
                     return Ok(());
                 }
 
-                // Try filtered streaming: if the pattern is a simple extension
-                // query (*.rs, *.txt) and we have an extension index, use the
-                // fast streaming path with only matching record indices.
-                // Falls back to IndexQuery → SearchResult for complex patterns.
-                if let Some(record_indices) = try_get_extension_indices(&index, &filters) {
-                    info!(
-                        drive = %drive_letter,
-                        matches = record_indices.len(),
-                        "📂 LIVE FILTERED STREAMING (extension index, zero SearchResult)"
-                    );
-                    let t_output = std::time::Instant::now();
-                    let cpp_pattern = format!(">{}:{}", index.volume, pattern.replace('*', ".*"));
-                    let row_count = write_filtered_streaming_output(
-                        &index,
-                        &record_indices,
-                        format,
-                        out,
-                        &output_config,
-                        &output_targets,
-                        &cpp_pattern,
-                    )?;
-                    let output_ms = t_output.elapsed().as_millis();
-                    info!(
-                        load_ms,
-                        output_ms, row_count, "📊 LIVE filtered streaming complete"
-                    );
-                    return Ok(());
-                }
-
-                // Complex pattern: fall back to IndexQuery → SearchResult → native write.
+                // ALL filtered patterns use unified streaming: compile the
+                // pattern, optionally use extension index for O(matches)
+                // scan, and write matches directly.  Zero SearchResult.
+                let compiled = uffs_core::compile_parsed_pattern(filters.parsed)?;
+                let ext_indices = try_get_extension_indices(&index, &filters);
                 info!(
                     drive = %drive_letter,
-                    "📂 LIVE native query+output (complex pattern)"
+                    has_ext_index = ext_indices.is_some(),
+                    "📂 LIVE STREAMING with pattern filter (zero SearchResult)"
                 );
-                let t_query = std::time::Instant::now();
-                let results =
-                    super::raw_io::execute_index_query_native_pub(&index, &filters, needs_paths)?;
-                let query_ms = t_query.elapsed().as_millis();
-
                 let t_output = std::time::Instant::now();
-                let row_count = results.len();
                 let cpp_pattern = format!(">{}:{}", index.volume, pattern.replace('*', ".*"));
-                let footer_ctx = crate::commands::output::CppFooterContext {
-                    output_targets: &output_targets,
-                    pattern: &cpp_pattern,
-                    row_count,
-                };
-                write_native_results(&index, &results, format, out, &output_config, &footer_ctx)?;
+                let rec_filter = build_record_filter(
+                    &filters,
+                    attr_filter,
+                    newer,
+                    older,
+                    newer_created,
+                    older_created,
+                    newer_accessed,
+                    older_accessed,
+                    exclude,
+                    sort,
+                    sort_desc,
+                );
+                let row_count = write_streaming_output_with_filter(
+                    &index,
+                    &compiled,
+                    ext_indices.as_deref(),
+                    effective_case_sensitive,
+                    filters.parsed.is_path_pattern(),
+                    &rec_filter,
+                    format,
+                    out,
+                    &output_config,
+                    &output_targets,
+                    &cpp_pattern,
+                )?;
                 let output_ms = t_output.elapsed().as_millis();
                 info!(
                     load_ms,
-                    query_ms, output_ms, row_count, "📊 LIVE native complete"
+                    output_ms, row_count, "📊 LIVE streaming+filter complete"
                 );
                 return Ok(());
             }
 
-            // Multi-drive full-scan with native output: load indexes in
-            // parallel, stream each drive's output through our fast path.
+            // Multi-drive with native output: load indexes in parallel,
+            // stream each drive's output through our fast path.
+            // Works for ALL patterns (full scan + filtered).
             // No DataFrame, no SearchResult, no Polars merge.
             if drives_to_search.len() > 1
-                && is_full_scan
                 && !benchmark
                 && can_write_native_results(format, &output_config)
             {
@@ -496,20 +528,76 @@ pub async fn search(
                 // Use a channel: load tasks send indexes, main thread writes.
                 let (tx, rx) = std::sync::mpsc::sync_channel::<(char, uffs_mft::MftIndex, u128)>(2);
 
+                // Compile pattern once for the writer thread.
+                let compiled_pattern = if is_full_scan {
+                    None
+                } else {
+                    Some(uffs_core::compile_parsed_pattern(filters.parsed)?)
+                };
+
                 // Spawn a writer thread that streams output as indexes arrive.
                 let output_config_clone = output_config.clone();
                 let format_owned = format.to_owned();
                 let output_targets_clone = output_targets.clone();
                 let cpp_pattern_clone = cpp_pattern.clone();
                 let out_owned = out.to_owned();
+                let pattern_owned = pattern.to_owned();
+                let cs = effective_case_sensitive;
+                let is_pp = filters.parsed.is_path_pattern();
+                let rf = build_record_filter(
+                    &filters,
+                    attr_filter,
+                    newer,
+                    older,
+                    newer_created,
+                    older_created,
+                    newer_accessed,
+                    older_accessed,
+                    exclude,
+                    sort,
+                    sort_desc,
+                );
                 let writer_handle = std::thread::spawn(move || -> Result<usize> {
                     use std::io::Write as _;
                     let is_console = matches!(
                         out_owned.to_lowercase().as_str(),
                         "console" | "con" | "term" | "terminal"
                     );
-                    let mut total_rows = 0usize;
 
+                    // Per-drive streaming: for each index, optionally extract
+                    // extension indices for O(matches) pre-filtering, then
+                    // write with the unified streaming writer.
+                    let stream_drive = |index: &uffs_mft::MftIndex,
+                                        w: &mut dyn std::io::Write|
+                     -> Result<usize> {
+                        // Extract extension indices per-drive (each drive has its own ext index).
+                        let ext_indices: Option<Vec<u32>> =
+                            compiled_pattern.as_ref().and_then(|_pat| {
+                                let ext_index = index.extension_index.as_ref()?;
+                                let ext = extract_trailing_extension(&pattern_owned)?;
+                                let ext_lower = ext.to_ascii_lowercase();
+                                let ext_id = index.extensions.map.get(ext_lower.as_str())?;
+                                Some(ext_index.get_records(*ext_id).to_vec())
+                            });
+                        crate::commands::output::write_index_streaming_with_filter(
+                            index,
+                            compiled_pattern.as_ref(),
+                            ext_indices.as_deref(),
+                            cs,
+                            is_pp,
+                            &rf,
+                            w,
+                            "",
+                            &output_config_clone,
+                            &crate::commands::output::CppFooterContext {
+                                output_targets: &[],
+                                pattern: "",
+                                row_count: 0,
+                            },
+                        )
+                    };
+
+                    let mut total_rows = 0usize;
                     if is_console {
                         let stdout_handle = std::io::stdout();
                         let stdout_lock = stdout_handle.lock();
@@ -523,11 +611,7 @@ pub async fn search(
                         )?;
                         for (drive, index, load_ms) in rx {
                             info!(drive = %drive, load_ms, records = index.len(), "📊 streaming drive");
-                            total_rows += crate::commands::output::write_index_streaming_no_header(
-                                &index,
-                                &mut w,
-                                &output_config_clone,
-                            )?;
+                            total_rows += stream_drive(&index, &mut w)?;
                         }
                         if format_owned == "custom" {
                             let footer = crate::commands::output::CppFooterContext {
@@ -552,11 +636,7 @@ pub async fn search(
                         )?;
                         for (drive, index, load_ms) in rx {
                             info!(drive = %drive, load_ms, records = index.len(), "📊 streaming drive");
-                            total_rows += crate::commands::output::write_index_streaming_no_header(
-                                &index,
-                                &mut w,
-                                &output_config_clone,
-                            )?;
+                            total_rows += stream_drive(&index, &mut w)?;
                         }
                         if format_owned == "custom" {
                             let footer = crate::commands::output::CppFooterContext {
@@ -807,11 +887,16 @@ fn try_get_extension_indices(
     }
 
     let pattern = filters.parsed.pattern();
-    // Must be *.ext format
-    let ext = pattern.strip_prefix("*.")?;
-    if ext.contains('*') || ext.contains('?') || ext.contains('.') {
-        return None;
-    }
+
+    // Extract a trailing literal extension from ANY pattern.
+    // Examples:
+    //   "*.txt"         → ext = "txt"
+    //   "*hallo*.txt"   → ext = "txt"
+    //   "foo*.rs"       → ext = "rs"
+    //   "*.tar.gz"      → None (multi-dot)
+    //   "*hallo*"       → None (no extension)
+    //   "nice"          → None (no dot)
+    let ext = extract_trailing_extension(pattern)?;
 
     let ext_index = index.extension_index.as_ref()?;
     let ext_lower = ext.to_ascii_lowercase();
@@ -819,9 +904,158 @@ fn try_get_extension_indices(
     Some(ext_index.get_records(*ext_id).to_vec())
 }
 
-/// Shared helper: write filtered streaming output to file or console.
+/// Build a `StreamingRecordFilter` from `QueryFilters` + extra CLI params.
+#[cfg(windows)]
+#[expect(clippy::too_many_arguments, reason = "collects all filter CLI params")]
+fn build_record_filter(
+    filters: &super::raw_io::QueryFilters<'_>,
+    attr_filter: Option<&str>,
+    newer: Option<&str>,
+    older: Option<&str>,
+    newer_created: Option<&str>,
+    older_created: Option<&str>,
+    newer_accessed: Option<&str>,
+    older_accessed: Option<&str>,
+    exclude: Option<&str>,
+    sort: Option<&str>,
+    sort_desc: bool,
+) -> crate::commands::output::StreamingRecordFilter {
+    let exclude_pattern = exclude.and_then(|excl| uffs_core::compile_index_pattern(excl).ok());
+
+    crate::commands::output::StreamingRecordFilter {
+        files_only: filters.files_only,
+        dirs_only: filters.dirs_only,
+        hide_system: filters.hide_system,
+        min_size: filters.min_size,
+        max_size: filters.max_size,
+        attr_filters: attr_filter
+            .map(crate::commands::output::parse_attr_filter)
+            .unwrap_or_default(),
+        newer_modified: newer.and_then(crate::commands::output::parse_age_filter),
+        older_modified: older.and_then(crate::commands::output::parse_age_filter),
+        newer_created: newer_created.and_then(crate::commands::output::parse_age_filter),
+        older_created: older_created.and_then(crate::commands::output::parse_age_filter),
+        newer_accessed: newer_accessed.and_then(crate::commands::output::parse_age_filter),
+        older_accessed: older_accessed.and_then(crate::commands::output::parse_age_filter),
+        exclude_pattern,
+        limit: filters.limit as usize,
+        sort_spec: sort
+            .map(crate::commands::output::parse_sort_spec)
+            .unwrap_or_default(),
+        sort_desc,
+    }
+}
+
+/// Extract a trailing literal file extension from a glob/regex pattern.
 ///
-/// Like `write_streaming_output` but only writes records at given indices.
+/// Returns the extension (without dot) if the pattern ends with a literal
+/// `.ext` where `ext` contains no wildcards, dots, or special chars.
+///
+/// # Examples
+/// - `"*.txt"` → `Some("txt")`
+/// - `"*hallo*.txt"` → `Some("txt")`
+/// - `"foo*.rs"` → `Some("rs")`
+/// - `"*.tar.gz"` → `None` (ext contains dot)
+/// - `"*hallo*"` → `None` (no extension)
+/// - `"nice"` → `None` (no dot)
+/// - `"*.tx?"` → `None` (wildcard in ext)
+#[cfg(windows)]
+fn extract_trailing_extension(pattern: &str) -> Option<&str> {
+    // Find the last dot in the pattern.
+    let dot_pos = pattern.rfind('.')?;
+    let ext = pattern.get(dot_pos + 1..)?;
+
+    // Extension must be non-empty and contain no wildcards or dots.
+    if ext.is_empty()
+        || ext.contains('*')
+        || ext.contains('?')
+        || ext.contains('.')
+        || ext.contains('[')
+    {
+        return None;
+    }
+
+    Some(ext)
+}
+
+/// Shared helper: write streaming output with pattern filter to file or
+/// console.
+///
+/// Unified path for ALL filtered patterns — compiles the pattern and
+/// optionally uses the extension index for O(matches) scan.
+#[cfg(windows)]
+fn write_streaming_output_with_filter(
+    index: &uffs_mft::MftIndex,
+    pattern: &uffs_core::IndexPattern,
+    record_indices: Option<&[u32]>,
+    case_sensitive: bool,
+    is_path_pattern: bool,
+    record_filter: &crate::commands::output::StreamingRecordFilter,
+    format: &str,
+    out: &str,
+    output_config: &OutputConfig,
+    output_targets: &[char],
+    cpp_pattern: &str,
+) -> Result<usize> {
+    use std::io::Write as _;
+
+    let is_console = matches!(
+        out.to_lowercase().as_str(),
+        "console" | "con" | "term" | "terminal"
+    );
+
+    if is_console {
+        let stdout_handle = std::io::stdout();
+        let stdout_lock = stdout_handle.lock();
+        let mut writer = std::io::BufWriter::with_capacity(1024 * 1024, stdout_lock);
+        let footer_ctx = crate::commands::output::CppFooterContext {
+            output_targets,
+            pattern: cpp_pattern,
+            row_count: 0,
+        };
+        let result = crate::commands::output::write_index_streaming_with_filter(
+            index,
+            Some(pattern),
+            record_indices,
+            case_sensitive,
+            is_path_pattern,
+            record_filter,
+            &mut writer,
+            format,
+            output_config,
+            &footer_ctx,
+        );
+        writer.flush()?;
+        result
+    } else {
+        let file = std::fs::File::create(out)
+            .with_context(|| format!("Failed to create output file: {out}"))?;
+        let mut writer = std::io::BufWriter::with_capacity(1024 * 1024, file);
+        let footer_ctx = crate::commands::output::CppFooterContext {
+            output_targets,
+            pattern: cpp_pattern,
+            row_count: 0,
+        };
+        let count = crate::commands::output::write_index_streaming_with_filter(
+            index,
+            Some(pattern),
+            record_indices,
+            case_sensitive,
+            is_path_pattern,
+            record_filter,
+            &mut writer,
+            format,
+            output_config,
+            &footer_ctx,
+        )?;
+        writer.flush()?;
+        info!(file = out, "Results written to file");
+        Ok(count)
+    }
+}
+
+/// Legacy helper: write filtered streaming output to file or console.
+/// Kept for backward compatibility with write_index_streaming_filtered.
 #[cfg(windows)]
 fn write_filtered_streaming_output(
     index: &uffs_mft::MftIndex,

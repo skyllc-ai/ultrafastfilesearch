@@ -96,6 +96,12 @@ pub enum IndexPattern {
         /// Compiled regex for case-insensitive matching.
         regex_lower: Regex,
     },
+
+    /// OR: match if ANY sub-pattern matches (e.g., `*.txt|*.log`).
+    Or {
+        /// Sub-patterns — record matches if any one matches.
+        patterns: Vec<Self>,
+    },
 }
 
 impl IndexPattern {
@@ -200,11 +206,12 @@ impl IndexPattern {
                 if case_sensitive {
                     regex.is_match(input)
                 } else {
-                    // regex_lower is already compiled with (?i) flag, so it
-                    // handles case-insensitivity internally — no allocation needed.
                     regex_lower.is_match(input)
                 }
             }
+            Self::Or { patterns } => patterns
+                .iter()
+                .any(|pat| pat.matches(input, case_sensitive)),
         }
     }
 }
@@ -366,6 +373,22 @@ pub fn compile_index_pattern(pattern: &str) -> Result<IndexPattern> {
 ///
 /// Returns an error if the pattern is invalid (e.g., malformed glob or regex).
 pub fn compile_parsed_pattern(parsed: &ParsedPattern) -> Result<IndexPattern> {
+    // OR operator: split on | and compile each part.
+    // "*.txt|*.log" → Or([Suffix(".txt"), Suffix(".log")])
+    let pat = parsed.pattern();
+    if parsed.pattern_type() != PatternType::Regex && pat.contains('|') {
+        let parts: Vec<&str> = pat.split('|').collect();
+        if parts.len() > 1 {
+            let sub_patterns: Result<Vec<IndexPattern>> = parts
+                .iter()
+                .map(|part| compile_index_pattern(part.trim()))
+                .collect();
+            return Ok(IndexPattern::Or {
+                patterns: sub_patterns?,
+            });
+        }
+    }
+
     match parsed.pattern_type() {
         PatternType::Glob => compile_index_pattern(parsed.pattern()),
         PatternType::Regex => {
@@ -383,9 +406,16 @@ pub fn compile_parsed_pattern(parsed: &ParsedPattern) -> Result<IndexPattern> {
             Ok(IndexPattern::Regex { regex, regex_lower })
         }
         PatternType::Literal => {
-            let value = parsed.pattern().to_owned();
-            let value_lower = value.to_ascii_lowercase();
-            Ok(IndexPattern::Exact { value, value_lower })
+            // Bare text = substring match (like Everything, WizFile, C++ UFFS).
+            // "nice" finds "nicehouse", "my_nice_file.txt", "venice.jpg".
+            // Combined with is_path_pattern, this also matches against full
+            // paths — so "AppData" finds "C:\Users\john\AppData\Local\".
+            let needle = parsed.pattern().to_owned();
+            let needle_lower = needle.to_ascii_lowercase();
+            Ok(IndexPattern::Contains {
+                needle,
+                needle_lower,
+            })
         }
     }
 }
