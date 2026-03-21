@@ -4,9 +4,10 @@
 param(
     [int]$N = 3,                    # Rounds per test
     [string]$Pattern = "*",         # Search pattern (default: "*" for everything)
-    [string]$Drive = "",            # Single drive to benchmark (e.g., "C", "F", "S")
+    [string[]]$Drive = @(),         # One or more drives to benchmark (e.g., -Drive C D E F)
     [switch]$RustOnly,              # Skip C++ tests
-    [switch]$CppOnly                # Skip Rust tests
+    [switch]$CppOnly,               # Skip Rust tests
+    [switch]$NoAll                  # Skip the final "all drives" parallel run
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,12 +15,15 @@ $UFFS = "$env:USERPROFILE\bin\uffs.exe"
 $UFFS_CPP = "$env:USERPROFILE\bin\uffs.com"
 $CACHE_DIR = "$env:TEMP\uffs_index_cache"
 
+# Normalize drives to uppercase
+$Drive = $Drive | ForEach-Object { $_.ToUpper() }
+
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "  UFFS Cold Start Benchmark" -ForegroundColor Cyan
 Write-Host "  Rounds per test: $N" -ForegroundColor Cyan
 Write-Host "  Pattern: $Pattern" -ForegroundColor Cyan
-if ($Drive) {
-    Write-Host "  Drive: $Drive" -ForegroundColor Cyan
+if ($Drive.Count -gt 0) {
+    Write-Host "  Drives: $($Drive -join ', ')" -ForegroundColor Cyan
 }
 Write-Host "  (Cache cleared before EACH run)" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
@@ -108,15 +112,32 @@ function RunAllDrivesBench() {
     }
 }
 
-if ($Drive -eq "ALL") {
-    # Explicit all-drives parallel benchmark
+# ============================================
+# Main execution: run each drive, then "all" at the end
+# ============================================
+
+if ($Drive.Count -eq 0) {
+    # No drives specified: just run all-drives parallel
     RunAllDrivesBench
-} elseif ($Drive) {
-    # Single drive specified
-    RunDriveBench $Drive.ToUpper()
 } else {
-    # Default: all drives parallel
-    RunAllDrivesBench
+    # Run each drive individually
+    foreach ($d in $Drive) {
+        if ($d -eq "ALL") {
+            # "ALL" as a drive means run the parallel benchmark
+            RunAllDrivesBench
+        } else {
+            RunDriveBench $d
+        }
+    }
+
+    # After all individual drives, run the parallel "all drives" benchmark
+    if (-not $NoAll) {
+        Write-Host "`n" -NoNewline
+        Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Magenta
+        Write-Host "║  FINAL: All Drives Parallel Run      ║" -ForegroundColor Magenta
+        Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Magenta
+        RunAllDrivesBench
+    }
 }
 
 # ============================================
