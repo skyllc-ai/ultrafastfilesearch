@@ -108,13 +108,14 @@ function RunAllDrivesBench() {
     }
 }
 
-if ($Drive) {
+if ($Drive -eq "ALL") {
+    # Explicit all-drives parallel benchmark
+    RunAllDrivesBench
+} elseif ($Drive) {
     # Single drive specified
     RunDriveBench $Drive.ToUpper()
 } else {
-    # Default: benchmark F, S, then all
-    RunDriveBench "F"
-    RunDriveBench "S"
+    # Default: all drives parallel
     RunAllDrivesBench
 }
 
