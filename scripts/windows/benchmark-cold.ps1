@@ -1,10 +1,13 @@
 # UFFS Cold Start Benchmark
 # Compares Rust vs C++ without cache (fresh MFT read each time)
+#
+# Usage:
+#   .\benchmark-cold.ps1 -N 5 -Drive C,D,E,F,G,M,S
 
 param(
     [int]$N = 3,                    # Rounds per test
     [string]$Pattern = "*",         # Search pattern (default: "*" for everything)
-    [string[]]$Drive = @(),         # One or more drives to benchmark (e.g., -Drive C D E F)
+    [string[]]$Drive = @(),         # Drives (comma-separated): -Drive C,D,E,F
     [switch]$RustOnly,              # Skip C++ tests
     [switch]$CppOnly,               # Skip Rust tests
     [switch]$NoAll                  # Skip the final "all drives" parallel run
@@ -16,14 +19,14 @@ $UFFS_CPP = "$env:USERPROFILE\bin\uffs.com"
 $CACHE_DIR = "$env:TEMP\uffs_index_cache"
 
 # Normalize drives to uppercase
-$Drive = $Drive | ForEach-Object { $_.ToUpper() }
+$AllDrives = $Drive | ForEach-Object { $_.ToUpper().Trim() } | Where-Object { $_ }
 
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "  UFFS Cold Start Benchmark" -ForegroundColor Cyan
 Write-Host "  Rounds per test: $N" -ForegroundColor Cyan
 Write-Host "  Pattern: $Pattern" -ForegroundColor Cyan
-if ($Drive.Count -gt 0) {
-    Write-Host "  Drives: $($Drive -join ', ')" -ForegroundColor Cyan
+if ($AllDrives.Count -gt 0) {
+    Write-Host "  Drives: $($AllDrives -join ', ')" -ForegroundColor Cyan
 }
 Write-Host "  (Cache cleared before EACH run)" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
@@ -116,12 +119,12 @@ function RunAllDrivesBench() {
 # Main execution: run each drive, then "all" at the end
 # ============================================
 
-if ($Drive.Count -eq 0) {
+if ($AllDrives.Count -eq 0) {
     # No drives specified: just run all-drives parallel
     RunAllDrivesBench
 } else {
     # Run each drive individually
-    foreach ($d in $Drive) {
+    foreach ($d in $AllDrives) {
         if ($d -eq "ALL") {
             # "ALL" as a drive means run the parallel benchmark
             RunAllDrivesBench
