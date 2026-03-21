@@ -133,6 +133,7 @@ pub(super) fn write_index_streaming<W: Write>(
     let mut row_buffer = String::with_capacity(512);
     let mut path_buffer = String::with_capacity(256);
     let mut hardlink_buf = String::new(); // Only allocated when hardlinks encountered
+    let mut itoa_buf = itoa::Buffer::new();
     let mut row_count: usize = 0;
     let t_rows = std::time::Instant::now();
 
@@ -266,9 +267,11 @@ pub(super) fn write_index_streaming<W: Write>(
                             }
                             row_buffer.push_str(&output_config.quote);
                         }
-                        OutputColumn::Size => append_display(&mut row_buffer, displayed_size),
+                        OutputColumn::Size => {
+                            row_buffer.push_str(itoa_buf.format(displayed_size));
+                        }
                         OutputColumn::SizeOnDisk => {
-                            append_display(&mut row_buffer, displayed_alloc);
+                            row_buffer.push_str(itoa_buf.format(displayed_alloc));
                         }
                         OutputColumn::Created => {
                             append_datetime(
@@ -291,10 +294,14 @@ pub(super) fn write_index_streaming<W: Write>(
                                 tz_offset_secs,
                             );
                         }
-                        OutputColumn::Descendants => append_display(&mut row_buffer, descendants),
-                        OutputColumn::TreeSize => append_display(&mut row_buffer, treesize),
+                        OutputColumn::Descendants => {
+                            row_buffer.push_str(itoa_buf.format(descendants));
+                        }
+                        OutputColumn::TreeSize => {
+                            row_buffer.push_str(itoa_buf.format(treesize));
+                        }
                         OutputColumn::TreeAllocated => {
-                            append_display(&mut row_buffer, tree_allocated);
+                            row_buffer.push_str(itoa_buf.format(tree_allocated));
                         }
                         OutputColumn::Type => {
                             let ext_id = record.first_name.name.extension_id();
@@ -302,7 +309,7 @@ pub(super) fn write_index_streaming<W: Write>(
                             append_quoted(&mut row_buffer, &output_config.quote, ext);
                         }
                         OutputColumn::Attributes | OutputColumn::AttributeValue => {
-                            append_display(&mut row_buffer, record.stdinfo.to_attributes());
+                            row_buffer.push_str(itoa_buf.format(record.stdinfo.to_attributes()));
                         }
                         OutputColumn::Hidden => {
                             append_bool(&mut row_buffer, output_config, record.stdinfo.is_hidden());
@@ -417,12 +424,7 @@ pub(super) fn write_index_streaming<W: Write>(
     }
 
     let rows_ms = t_rows.elapsed().as_millis();
-    #[allow(clippy::print_stdout, clippy::semicolon_outside_block)]
-    {
-        println!(
-            "[TIMING] streaming output: cache={cache_ms}ms  rows={rows_ms}ms  count={row_count}"
-        );
-    }
+    tracing::debug!(cache_ms, rows_ms, row_count, "[TIMING] streaming output");
     tracing::info!(
         cache_ms,
         rows_ms,

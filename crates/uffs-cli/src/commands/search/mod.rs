@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use tracing::info;
+use tracing::{debug, info};
 use uffs_core::QueryMode;
 use uffs_core::output::OutputConfig;
 use uffs_core::pattern::ParsedPattern;
@@ -149,10 +149,7 @@ pub async fn search(
     reserved_allocated: Option<u64>,
 ) -> Result<()> {
     let start_time = std::time::Instant::now();
-    #[allow(clippy::print_stdout, clippy::semicolon_outside_block)]
-    {
-        println!("[TIMING] search() entered at 0ms");
-    }
+    debug!("[TIMING] search() entered at 0ms");
 
     let parsed = ParsedPattern::parse(pattern)
         .with_context(|| format!("Invalid pattern: {pattern}"))?
@@ -364,16 +361,15 @@ pub async fn search(
                 && can_write_native_results(format, &output_config)
             {
                 let drive_letter = drives_to_search[0];
-                println!(
-                    "[TIMING] LIVE: loading index at {}ms",
-                    start_time.elapsed().as_millis()
+                debug!(
+                    ms = start_time.elapsed().as_millis(),
+                    "[TIMING] LIVE: loading index"
                 );
                 let (index, load_ms) =
                     super::raw_io::load_live_index(drive_letter, no_cache).await?;
-                println!(
-                    "[TIMING] LIVE: index loaded at {}ms (load={}ms)",
-                    start_time.elapsed().as_millis(),
-                    load_ms
+                debug!(
+                    ms = start_time.elapsed().as_millis(),
+                    load_ms, "[TIMING] LIVE: index loaded"
                 );
 
                 // From here, IDENTICAL to the --mft-file native output path.
@@ -394,12 +390,9 @@ pub async fn search(
                         &cpp_pattern,
                     )?;
                     let output_ms = t_output.elapsed().as_millis();
-                    println!(
-                        "[TIMING] LIVE: done at {}ms (load={}ms output={}ms rows={})",
-                        start_time.elapsed().as_millis(),
-                        load_ms,
-                        output_ms,
-                        row_count
+                    debug!(
+                        ms = start_time.elapsed().as_millis(),
+                        load_ms, output_ms, row_count, "[TIMING] LIVE: done"
                     );
                     info!(load_ms, output_ms, row_count, "📊 LIVE streaming complete");
                     return Ok(());
@@ -579,7 +572,7 @@ fn write_streaming_output(
         // Without this, 2.2M write_all calls each trigger a syscall
         // through the OS pipe, making redirected stdout 15× slower than
         // C's printf (which buffers in the C runtime).
-        let mut writer = std::io::BufWriter::with_capacity(256 * 1024, stdout_lock);
+        let mut writer = std::io::BufWriter::with_capacity(1024 * 1024, stdout_lock);
         let footer_ctx = crate::commands::output::CppFooterContext {
             output_targets,
             pattern: cpp_pattern,
@@ -597,7 +590,7 @@ fn write_streaming_output(
     } else {
         let file = std::fs::File::create(out)
             .with_context(|| format!("Failed to create output file: {out}"))?;
-        let mut writer = std::io::BufWriter::with_capacity(256 * 1024, file);
+        let mut writer = std::io::BufWriter::with_capacity(1024 * 1024, file);
         let footer_ctx = crate::commands::output::CppFooterContext {
             output_targets,
             pattern: cpp_pattern,

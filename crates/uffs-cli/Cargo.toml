@@ -53,6 +53,9 @@ uffs-polars.workspace = true
 # Time handling
 chrono.workspace = true
 
+# Fast integer formatting (already a transitive dep via serde/polars)
+itoa = "1"
+
 # Memory allocator - mimalloc is faster than system allocator on all platforms
 mimalloc.workspace = true
 

@@ -449,7 +449,14 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
         }
     };
 
-    drive_classification.unwrap_or_else(|| detect_drive_type_via_trim(drive_letter))
+    let result = drive_classification.unwrap_or_else(|| detect_drive_type_via_trim(drive_letter));
+    tracing::info!(
+        drive = %drive_letter,
+        detected = ?result,
+        seek_penalty_query = ?drive_classification,
+        "🔍 Drive type detection result"
+    );
+    result
 }
 
 /// Fallback detection using TRIM support (SSDs support TRIM).
