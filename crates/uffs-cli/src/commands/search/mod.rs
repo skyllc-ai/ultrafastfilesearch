@@ -451,19 +451,9 @@ pub async fn search(
                     });
                 }
 
-                let mut indexes: Vec<(char, uffs_mft::MftIndex, u128)> = Vec::new();
-                while let Some(result) = join_set.join_next().await {
-                    match result {
-                        Ok(Ok(tuple)) => {
-                            info!(drive = %tuple.0, load_ms = tuple.2, records = tuple.1.len(), "📊 drive ready");
-                            indexes.push(tuple);
-                        }
-                        Ok(Err(e)) => info!(error = %e, "Drive load failed (continuing)"),
-                        Err(e) => info!(error = %e, "Task join error (continuing)"),
-                    }
-                }
-
-                // Stream all drives through the fast native path.
+                // C++ architecture: output each drive AS SOON AS it finishes
+                // loading, while other drives continue reading in the
+                // background.  This overlaps output I/O with disk reads.
                 let cpp_pattern = format!(
                     ">{}",
                     drives_to_search
@@ -473,50 +463,110 @@ pub async fn search(
                         .join("|")
                 );
                 let t_output = std::time::Instant::now();
-                let mut total_rows: usize = 0;
 
-                let stream_drives = |writer: &mut dyn std::io::Write| -> Result<usize> {
-                    let cols = crate::commands::output::selected_output_columns(&output_config);
-                    crate::commands::output::write_native_header_pub(writer, &output_config, cols)?;
-                    let mut rows = 0usize;
-                    for (_drive, idx, _ms) in &indexes {
-                        rows += crate::commands::output::write_index_streaming_no_header(
-                            idx, writer, &output_config,
+                // Use a channel: load tasks send indexes, main thread writes.
+                let (tx, rx) = std::sync::mpsc::sync_channel::<(char, uffs_mft::MftIndex, u128)>(2);
+
+                // Spawn a writer thread that streams output as indexes arrive.
+                let output_config_clone = output_config.clone();
+                let format_owned = format.to_owned();
+                let output_targets_clone = output_targets.clone();
+                let cpp_pattern_clone = cpp_pattern.clone();
+                let out_owned = out.to_owned();
+                let writer_handle = std::thread::spawn(move || -> Result<usize> {
+                    use std::io::Write as _;
+                    let is_console = matches!(
+                        out_owned.to_lowercase().as_str(),
+                        "console" | "con" | "term" | "terminal"
+                    );
+                    let mut total_rows = 0usize;
+
+                    if is_console {
+                        let stdout_handle = std::io::stdout();
+                        let stdout_lock = stdout_handle.lock();
+                        let mut w = std::io::BufWriter::with_capacity(1024 * 1024, stdout_lock);
+                        let cols =
+                            crate::commands::output::selected_output_columns(&output_config_clone);
+                        crate::commands::output::write_native_header_pub(
+                            &mut w,
+                            &output_config_clone,
+                            cols,
                         )?;
+                        for (drive, index, load_ms) in rx {
+                            info!(drive = %drive, load_ms, records = index.len(), "📊 streaming drive");
+                            total_rows += crate::commands::output::write_index_streaming_no_header(
+                                &index,
+                                &mut w,
+                                &output_config_clone,
+                            )?;
+                        }
+                        if format_owned == "custom" {
+                            let footer = crate::commands::output::CppFooterContext {
+                                output_targets: &output_targets_clone,
+                                pattern: &cpp_pattern_clone,
+                                row_count: total_rows,
+                            };
+                            crate::commands::output::write_cpp_footer_pub(&mut w, &footer)?;
+                        }
+                        w.flush()?;
+                    } else {
+                        let file = std::fs::File::create(&out_owned).with_context(|| {
+                            format!("Failed to create output file: {out_owned}")
+                        })?;
+                        let mut w = std::io::BufWriter::with_capacity(1024 * 1024, file);
+                        let cols =
+                            crate::commands::output::selected_output_columns(&output_config_clone);
+                        crate::commands::output::write_native_header_pub(
+                            &mut w,
+                            &output_config_clone,
+                            cols,
+                        )?;
+                        for (drive, index, load_ms) in rx {
+                            info!(drive = %drive, load_ms, records = index.len(), "📊 streaming drive");
+                            total_rows += crate::commands::output::write_index_streaming_no_header(
+                                &index,
+                                &mut w,
+                                &output_config_clone,
+                            )?;
+                        }
+                        if format_owned == "custom" {
+                            let footer = crate::commands::output::CppFooterContext {
+                                output_targets: &output_targets_clone,
+                                pattern: &cpp_pattern_clone,
+                                row_count: total_rows,
+                            };
+                            crate::commands::output::write_cpp_footer_pub(&mut w, &footer)?;
+                        }
+                        w.flush()?;
+                        info!(file = out_owned, "Results written to file");
                     }
-                    if format == "custom" {
-                        let footer = crate::commands::output::CppFooterContext {
-                            output_targets: &output_targets,
-                            pattern: &cpp_pattern,
-                            row_count: rows,
-                        };
-                        crate::commands::output::write_cpp_footer_pub(writer, &footer)?;
-                    }
-                    Ok(rows)
-                };
+                    Ok(total_rows)
+                });
 
-                use std::io::Write as _;
-                let is_console = matches!(
-                    out.to_lowercase().as_str(),
-                    "console" | "con" | "term" | "terminal"
-                );
-                if is_console {
-                    let stdout_handle = std::io::stdout();
-                    let stdout_lock = stdout_handle.lock();
-                    let mut w = std::io::BufWriter::with_capacity(1024 * 1024, stdout_lock);
-                    total_rows = stream_drives(&mut w)?;
-                    w.flush()?;
-                } else {
-                    let file = std::fs::File::create(out)
-                        .with_context(|| format!("Failed to create output file: {out}"))?;
-                    let mut w = std::io::BufWriter::with_capacity(1024 * 1024, file);
-                    total_rows = stream_drives(&mut w)?;
-                    w.flush()?;
-                    info!(file = out, "Results written to file");
+                // As each drive finishes loading, send its index to the
+                // writer thread immediately.  Other drives continue loading
+                // in parallel while the writer outputs the completed drive.
+                while let Some(result) = join_set.join_next().await {
+                    match result {
+                        Ok(Ok(tuple)) => {
+                            info!(drive = %tuple.0, load_ms = tuple.2, records = tuple.1.len(), "📊 drive ready, sending to writer");
+                            let _ = tx.send(tuple);
+                        }
+                        Ok(Err(e)) => info!(error = %e, "Drive load failed (continuing)"),
+                        Err(e) => info!(error = %e, "Task join error (continuing)"),
+                    }
                 }
+                drop(tx); // Signal writer thread that all drives are done.
+
+                let total_rows = writer_handle
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("Writer thread panicked"))??;
 
                 let output_ms = t_output.elapsed().as_millis();
-                info!(output_ms, total_rows, "📊 LIVE multi-drive streaming complete");
+                info!(
+                    output_ms,
+                    total_rows, "📊 LIVE multi-drive streaming complete"
+                );
                 return Ok(());
             }
 

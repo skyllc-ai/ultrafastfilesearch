@@ -1158,7 +1158,10 @@ pub(super) fn write_results(
 ///
 /// Uses CRLF line endings (`\r\n`) to match C++ baseline behavior.
 /// When `row_count` is < 20,000, appends the fast-scan message.
-fn write_cpp_drive_footer<W: Write + ?Sized>(writer: &mut W, ctx: &CppFooterContext<'_>) -> Result<()> {
+fn write_cpp_drive_footer<W: Write + ?Sized>(
+    writer: &mut W,
+    ctx: &CppFooterContext<'_>,
+) -> Result<()> {
     if ctx.output_targets.is_empty() {
         return Ok(());
     }
