@@ -45,9 +45,10 @@ function BenchCold($label, $cmd) {
         $times += $ms
         Write-Host "   Run $_`: $([math]::Round($ms/1000, 2))s" -ForegroundColor Gray
 
-        # Extract [TIMING] lines from the temp file (fast grep, not full load)
+        # Extract [TIMING] and [DIAG] lines from the temp file.
+        # Use regex (not -SimpleMatch) since brackets need escaping in SimpleMatch.
         try {
-            $timingLines = Select-String -Path $tempOut -Pattern '\[TIMING\]' -SimpleMatch | ForEach-Object { $_.Line }
+            $timingLines = Select-String -Path $tempOut -Pattern '\[TIMING\]|\[DIAG\]' | ForEach-Object { $_.Line }
             if ($timingLines) {
                 foreach ($line in $timingLines) {
                     Write-Host "     $line" -ForegroundColor DarkCyan
