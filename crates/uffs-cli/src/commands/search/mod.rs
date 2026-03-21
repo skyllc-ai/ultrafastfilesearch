@@ -398,10 +398,39 @@ pub async fn search(
                     return Ok(());
                 }
 
-                // Filtered query: IndexQuery → native write (same as --mft-file filtered)
+                // Try filtered streaming: if the pattern is a simple extension
+                // query (*.rs, *.txt) and we have an extension index, use the
+                // fast streaming path with only matching record indices.
+                // Falls back to IndexQuery → SearchResult for complex patterns.
+                if let Some(record_indices) = try_get_extension_indices(&index, &filters) {
+                    info!(
+                        drive = %drive_letter,
+                        matches = record_indices.len(),
+                        "📂 LIVE FILTERED STREAMING (extension index, zero SearchResult)"
+                    );
+                    let t_output = std::time::Instant::now();
+                    let cpp_pattern = format!(">{}:{}", index.volume, pattern.replace('*', ".*"));
+                    let row_count = write_filtered_streaming_output(
+                        &index,
+                        &record_indices,
+                        format,
+                        out,
+                        &output_config,
+                        &output_targets,
+                        &cpp_pattern,
+                    )?;
+                    let output_ms = t_output.elapsed().as_millis();
+                    info!(
+                        load_ms,
+                        output_ms, row_count, "📊 LIVE filtered streaming complete"
+                    );
+                    return Ok(());
+                }
+
+                // Complex pattern: fall back to IndexQuery → SearchResult → native write.
                 info!(
                     drive = %drive_letter,
-                    "📂 LIVE native query+output (filtered, same as --mft-file)"
+                    "📂 LIVE native query+output (complex pattern)"
                 );
                 let t_query = std::time::Instant::now();
                 let results =
@@ -743,6 +772,104 @@ fn write_streaming_output(
         };
         let count = crate::commands::output::write_index_streaming(
             index,
+            &mut writer,
+            format,
+            output_config,
+            &footer_ctx,
+        )?;
+        writer.flush()?;
+        info!(file = out, "Results written to file");
+        Ok(count)
+    }
+}
+
+/// Try to get record indices from the extension index for simple suffix
+/// patterns.
+///
+/// Returns `Some(Vec<u32>)` for patterns like `*.rs`, `*.txt` where the
+/// extension index provides O(matches) lookup.  Returns `None` for complex
+/// patterns that need full-scan matching.
+#[cfg(windows)]
+fn try_get_extension_indices(
+    index: &uffs_mft::MftIndex,
+    filters: &super::raw_io::QueryFilters<'_>,
+) -> Option<Vec<u32>> {
+    // Only works for simple glob suffix patterns with no other filters.
+    if filters.files_only
+        || filters.dirs_only
+        || filters.hide_system
+        || filters.ext_filter.is_some()
+        || filters.min_size.is_some()
+        || filters.max_size.is_some()
+        || filters.limit > 0
+    {
+        return None;
+    }
+
+    let pattern = filters.parsed.pattern();
+    // Must be *.ext format
+    let ext = pattern.strip_prefix("*.")?;
+    if ext.contains('*') || ext.contains('?') || ext.contains('.') {
+        return None;
+    }
+
+    let ext_index = index.extension_index.as_ref()?;
+    let ext_lower = ext.to_ascii_lowercase();
+    let ext_id = index.extensions.map.get(ext_lower.as_str())?;
+    Some(ext_index.get_records(*ext_id).to_vec())
+}
+
+/// Shared helper: write filtered streaming output to file or console.
+///
+/// Like `write_streaming_output` but only writes records at given indices.
+#[cfg(windows)]
+fn write_filtered_streaming_output(
+    index: &uffs_mft::MftIndex,
+    record_indices: &[u32],
+    format: &str,
+    out: &str,
+    output_config: &OutputConfig,
+    output_targets: &[char],
+    cpp_pattern: &str,
+) -> Result<usize> {
+    use std::io::Write as _;
+
+    let is_console = matches!(
+        out.to_lowercase().as_str(),
+        "console" | "con" | "term" | "terminal"
+    );
+
+    if is_console {
+        let stdout_handle = std::io::stdout();
+        let stdout_lock = stdout_handle.lock();
+        let mut writer = std::io::BufWriter::with_capacity(1024 * 1024, stdout_lock);
+        let footer_ctx = crate::commands::output::CppFooterContext {
+            output_targets,
+            pattern: cpp_pattern,
+            row_count: 0,
+        };
+        let result = crate::commands::output::write_index_streaming_filtered(
+            index,
+            record_indices,
+            &mut writer,
+            format,
+            output_config,
+            &footer_ctx,
+        );
+        writer.flush()?;
+        result
+    } else {
+        let file = std::fs::File::create(out)
+            .with_context(|| format!("Failed to create output file: {out}"))?;
+        let mut writer = std::io::BufWriter::with_capacity(1024 * 1024, file);
+        let footer_ctx = crate::commands::output::CppFooterContext {
+            output_targets,
+            pattern: cpp_pattern,
+            row_count: 0,
+        };
+        let count = crate::commands::output::write_index_streaming_filtered(
+            index,
+            record_indices,
             &mut writer,
             format,
             output_config,

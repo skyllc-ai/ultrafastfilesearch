@@ -531,6 +531,287 @@ pub(super) fn write_native_header_pub<W: Write + ?Sized>(
     write_native_header(writer, output_config, output_cols)
 }
 
+/// Stream ONLY the records at the given indices through the fast output path.
+///
+/// Same as `write_index_streaming` but only visits the supplied record
+/// indices (e.g. from the extension index for `*.rs`).  Includes header
+/// and footer.  No `SearchResult` allocation.
+#[cfg(windows)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "mirrors write_index_streaming with an index filter"
+)]
+pub(super) fn write_index_streaming_filtered<W: Write + ?Sized>(
+    index: &uffs_mft::MftIndex,
+    record_indices: &[u32],
+    writer: &mut W,
+    format: &str,
+    output_config: &OutputConfig,
+    footer_ctx: &CppFooterContext<'_>,
+) -> Result<usize> {
+    use uffs_mft::index::PathCache;
+
+    let output_cols = selected_output_columns(output_config);
+    let tz_offset_secs = output_config.timezone_offset_secs;
+
+    let path_cache = PathCache::build(index, false);
+    let resolver = path_cache.resolver();
+    let dir_cache = path_cache.dir_cache();
+
+    write_native_header(writer, output_config, output_cols)?;
+
+    let mut row_buffer = String::with_capacity(512);
+    let mut path_buffer = String::with_capacity(256);
+    let mut hardlink_buf = String::new();
+    let mut itoa_buf = itoa::Buffer::new();
+    let mut row_count: usize = 0;
+
+    for &record_idx_u32 in record_indices {
+        let record_idx = record_idx_u32 as usize;
+        let Some(record) = index.records.get(record_idx) else {
+            continue;
+        };
+        if !resolver.is_valid_idx(record_idx) {
+            continue;
+        }
+
+        let is_directory = record.is_directory();
+
+        path_buffer.clear();
+        resolver.materialize_path_into(index, record_idx, dir_cache, &mut path_buffer);
+
+        let name_count = record.name_count.max(1);
+        let stream_count = record.stream_count.max(1);
+
+        for name_idx in 0..name_count {
+            for stream_idx in 0..stream_count {
+                let Some(stream_info) = index.get_stream_at(record, stream_idx) else {
+                    continue;
+                };
+                if !stream_info.is_output_stream() {
+                    continue;
+                }
+
+                let name_info = index
+                    .get_name_at(record, name_idx)
+                    .unwrap_or(&record.first_name);
+                let stream_name = index.stream_name(stream_info);
+                let has_ads = !stream_name.is_empty();
+                let base_name = index.get_name(&name_info.name);
+
+                let base_path: &str = if name_idx == 0 {
+                    &path_buffer
+                } else {
+                    hardlink_buf.clear();
+                    let alt = resolver.materialize_path_for_name(index, record_idx, name_idx);
+                    hardlink_buf.push_str(&alt);
+                    &hardlink_buf
+                };
+                let dir_needs_sep = is_directory && !has_ads && !base_path.ends_with('\\');
+
+                let (descendants, treesize, tree_allocated) = if stream_idx == 0 {
+                    record.tree_metrics()
+                } else {
+                    (0, 0, 0)
+                };
+                let displayed_size = if is_directory && !has_ads {
+                    treesize
+                } else {
+                    stream_info.size.length
+                };
+                let displayed_alloc = if is_directory && !has_ads {
+                    tree_allocated
+                } else {
+                    stream_info.size.allocated
+                };
+
+                let display_name: &str = if is_directory && !has_ads {
+                    ""
+                } else if has_ads {
+                    ""
+                } else {
+                    base_name
+                };
+
+                let path_only: &str = if is_directory && !has_ads {
+                    base_path
+                } else {
+                    base_path
+                        .rfind('\\')
+                        .and_then(|pos| base_path.get(..=pos))
+                        .unwrap_or_default()
+                };
+
+                row_buffer.clear();
+                for (col_idx, col) in output_cols.iter().enumerate() {
+                    if col_idx > 0 {
+                        row_buffer.push_str(&output_config.separator);
+                    }
+                    match col {
+                        OutputColumn::Path => {
+                            row_buffer.push_str(&output_config.quote);
+                            row_buffer.push_str(base_path);
+                            if dir_needs_sep {
+                                row_buffer.push('\\');
+                            }
+                            if has_ads {
+                                row_buffer.push(':');
+                                row_buffer.push_str(stream_name);
+                            }
+                            row_buffer.push_str(&output_config.quote);
+                        }
+                        OutputColumn::Name => {
+                            row_buffer.push_str(&output_config.quote);
+                            row_buffer.push_str(display_name);
+                            if has_ads {
+                                row_buffer.push_str(base_name);
+                                row_buffer.push(':');
+                                row_buffer.push_str(stream_name);
+                            }
+                            row_buffer.push_str(&output_config.quote);
+                        }
+                        OutputColumn::PathOnly => {
+                            row_buffer.push_str(&output_config.quote);
+                            row_buffer.push_str(path_only);
+                            if dir_needs_sep && is_directory && !has_ads {
+                                row_buffer.push('\\');
+                            }
+                            row_buffer.push_str(&output_config.quote);
+                        }
+                        OutputColumn::Size => {
+                            row_buffer.push_str(itoa_buf.format(displayed_size));
+                        }
+                        OutputColumn::SizeOnDisk => {
+                            row_buffer.push_str(itoa_buf.format(displayed_alloc));
+                        }
+                        OutputColumn::Created => {
+                            append_datetime(
+                                &mut row_buffer,
+                                record.stdinfo.created,
+                                tz_offset_secs,
+                            );
+                        }
+                        OutputColumn::Modified => {
+                            append_datetime(
+                                &mut row_buffer,
+                                record.stdinfo.modified,
+                                tz_offset_secs,
+                            );
+                        }
+                        OutputColumn::Accessed => {
+                            append_datetime(
+                                &mut row_buffer,
+                                record.stdinfo.accessed,
+                                tz_offset_secs,
+                            );
+                        }
+                        OutputColumn::Descendants => {
+                            row_buffer.push_str(itoa_buf.format(descendants));
+                        }
+                        OutputColumn::TreeSize => {
+                            row_buffer.push_str(itoa_buf.format(treesize));
+                        }
+                        OutputColumn::TreeAllocated => {
+                            row_buffer.push_str(itoa_buf.format(tree_allocated));
+                        }
+                        OutputColumn::Type => {
+                            let ext_id = record.first_name.name.extension_id();
+                            let ext = index.extensions.get_extension(ext_id).unwrap_or("");
+                            append_quoted(&mut row_buffer, &output_config.quote, ext);
+                        }
+                        OutputColumn::Attributes | OutputColumn::AttributeValue => {
+                            row_buffer.push_str(itoa_buf.format(record.stdinfo.to_attributes()));
+                        }
+                        OutputColumn::Hidden => {
+                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_hidden())
+                        }
+                        OutputColumn::System => {
+                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_system())
+                        }
+                        OutputColumn::Archive => {
+                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_archive())
+                        }
+                        OutputColumn::DirectoryFlag => {
+                            append_bool(&mut row_buffer, output_config, is_directory)
+                        }
+                        OutputColumn::Offline => {
+                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_offline())
+                        }
+                        OutputColumn::NotIndexed => append_bool(
+                            &mut row_buffer,
+                            output_config,
+                            record.stdinfo.is_not_indexed(),
+                        ),
+                        OutputColumn::NoScrub => append_bool(
+                            &mut row_buffer,
+                            output_config,
+                            record.stdinfo.is_no_scrub_data(),
+                        ),
+                        OutputColumn::Integrity => append_bool(
+                            &mut row_buffer,
+                            output_config,
+                            record.stdinfo.is_integrity_stream(),
+                        ),
+                        OutputColumn::Pinned => {
+                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_pinned())
+                        }
+                        OutputColumn::Unpinned => append_bool(
+                            &mut row_buffer,
+                            output_config,
+                            record.stdinfo.is_unpinned(),
+                        ),
+                        OutputColumn::ReadOnly => append_bool(
+                            &mut row_buffer,
+                            output_config,
+                            record.stdinfo.is_readonly(),
+                        ),
+                        OutputColumn::Compressed => append_bool(
+                            &mut row_buffer,
+                            output_config,
+                            record.stdinfo.is_compressed(),
+                        ),
+                        OutputColumn::Encrypted => append_bool(
+                            &mut row_buffer,
+                            output_config,
+                            record.stdinfo.is_encrypted(),
+                        ),
+                        OutputColumn::Sparse => {
+                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_sparse())
+                        }
+                        OutputColumn::Reparse => {
+                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_reparse())
+                        }
+                        OutputColumn::Temporary => append_bool(
+                            &mut row_buffer,
+                            output_config,
+                            record.stdinfo.is_temporary(),
+                        ),
+                        OutputColumn::Virtual => {
+                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_virtual())
+                        }
+                        OutputColumn::Bulkiness => { /* not computed for filtered streaming */ }
+                    }
+                }
+
+                row_buffer.push('\n');
+                writer.write_all(row_buffer.as_bytes())?;
+                row_count += 1;
+            }
+        }
+    }
+
+    if format == "custom" {
+        let final_footer = CppFooterContext {
+            output_targets: footer_ctx.output_targets,
+            pattern: footer_ctx.pattern,
+            row_count,
+        };
+        write_cpp_drive_footer(writer, &final_footer)?;
+    }
+
+    Ok(row_count)
+}
+
 /// Stream rows from an `MftIndex` WITHOUT writing header/footer.
 ///
 /// Used by multi-drive streaming where the caller writes one header before
