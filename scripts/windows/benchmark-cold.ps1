@@ -24,7 +24,7 @@ if ($Drive) {
 Write-Host "  (Cache cleared before EACH run)" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
 
-function BenchCold($label, $exePath, $argStr) {
+function BenchCold($label, $exePath, [string[]]$argList) {
     Write-Host "▶ $label" -ForegroundColor Yellow
     $times = @()
     1..$N | ForEach-Object {
@@ -37,9 +37,13 @@ function BenchCold($label, $exePath, $argStr) {
         $tempOut = [System.IO.Path]::GetTempFileName()
         $tempErr = [System.IO.Path]::GetTempFileName()
 
+        # Show exact command on first run only
+        if ($_ -eq 1) {
+            Write-Host "     CMD: $exePath $($argList -join ' ')" -ForegroundColor DarkGray
+        }
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         try {
-            $proc = Start-Process -FilePath $exePath -ArgumentList $argStr `
+            $proc = Start-Process -FilePath $exePath -ArgumentList $argList `
                 -RedirectStandardOutput $tempOut -RedirectStandardError $tempErr `
                 -NoNewWindow -Wait -PassThru
         } catch {
@@ -85,10 +89,10 @@ function RunDriveBench($driveLetter) {
     Write-Host "📁 DRIVE ${driveLetter}:" -ForegroundColor Yellow
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
     if (-not $CppOnly) {
-        BenchCold "Rust (cold)" $UFFS "`"$Pattern`" --drive $driveLetter"
+        BenchCold "Rust (cold)" $UFFS @($Pattern, '--drive', $driveLetter)
     }
     if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
-        BenchCold "C++ (cold)" $UFFS_CPP "`"$Pattern`" --drives=$driveLetter"
+        BenchCold "C++ (cold)" $UFFS_CPP @($Pattern, "--drives=$driveLetter")
     }
 }
 
@@ -97,10 +101,10 @@ function RunAllDrivesBench() {
     Write-Host "🌐 ALL DRIVES:" -ForegroundColor Yellow
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
     if (-not $CppOnly) {
-        BenchCold "Rust (cold)" $UFFS "`"$Pattern`""
+        BenchCold "Rust (cold)" $UFFS @($Pattern)
     }
     if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
-        BenchCold "C++ (cold)" $UFFS_CPP "`"$Pattern`""
+        BenchCold "C++ (cold)" $UFFS_CPP @($Pattern)
     }
 }
 
