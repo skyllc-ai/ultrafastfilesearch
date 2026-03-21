@@ -565,6 +565,8 @@ fn write_streaming_output(
     output_targets: &[char],
     cpp_pattern: &str,
 ) -> Result<usize> {
+    use std::io::Write as _;
+
     let is_console = matches!(
         out.to_lowercase().as_str(),
         "console" | "con" | "term" | "terminal"
@@ -572,21 +574,27 @@ fn write_streaming_output(
 
     if is_console {
         let stdout_handle = std::io::stdout();
-        let mut stdout = stdout_handle.lock();
+        let stdout_lock = stdout_handle.lock();
+        // Wrap stdout in BufWriter to avoid per-line WriteFile syscalls.
+        // Without this, 2.2M write_all calls each trigger a syscall
+        // through the OS pipe, making redirected stdout 15× slower than
+        // C's printf (which buffers in the C runtime).
+        let mut writer = std::io::BufWriter::with_capacity(256 * 1024, stdout_lock);
         let footer_ctx = crate::commands::output::CppFooterContext {
             output_targets,
             pattern: cpp_pattern,
             row_count: 0,
         };
-        crate::commands::output::write_index_streaming(
+        let result = crate::commands::output::write_index_streaming(
             index,
-            &mut stdout,
+            &mut writer,
             format,
             output_config,
             &footer_ctx,
-        )
+        );
+        writer.flush()?;
+        result
     } else {
-        use std::io::Write as _;
         let file = std::fs::File::create(out)
             .with_context(|| format!("Failed to create output file: {out}"))?;
         let mut writer = std::io::BufWriter::with_capacity(256 * 1024, file);
