@@ -31,12 +31,12 @@ function BenchCold($label, $cmd) {
         # Clear cache before each run
         Remove-Item $CACHE_DIR -Recurse -Force -ErrorAction SilentlyContinue
 
+        # Use a temp file for stdout to avoid PowerShell pipeline overhead.
+        # Capturing 7M+ lines as .NET objects adds 100-150s of overhead.
+        $tempOut = [System.IO.Path]::GetTempFileName()
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         try {
-            # Capture stderr (where [TIMING] goes) and stdout
-            $output = & $cmd 2>&1
-            # Extract [TIMING] lines
-            $timingLines = $output | Where-Object { $_ -match '\[TIMING\]' }
+            & $cmd > $tempOut 2>&1
         } catch {
             Write-Host "   ⚠️  Error: $_" -ForegroundColor Red
         }
@@ -45,12 +45,20 @@ function BenchCold($label, $cmd) {
         $times += $ms
         Write-Host "   Run $_`: $([math]::Round($ms/1000, 2))s" -ForegroundColor Gray
 
-        # Show timing breakdown for this run
-        if ($timingLines) {
-            foreach ($line in $timingLines) {
-                Write-Host "     $line" -ForegroundColor DarkCyan
+        # Extract [TIMING] lines from the temp file (fast grep, not full load)
+        try {
+            $timingLines = Select-String -Path $tempOut -Pattern '\[TIMING\]' -SimpleMatch | ForEach-Object { $_.Line }
+            if ($timingLines) {
+                foreach ($line in $timingLines) {
+                    Write-Host "     $line" -ForegroundColor DarkCyan
+                }
             }
+        } catch {
+            # Ignore errors reading temp file
         }
+
+        # Clean up temp file
+        Remove-Item $tempOut -Force -ErrorAction SilentlyContinue
     }
 
     if ($times.Count -gt 0) {
