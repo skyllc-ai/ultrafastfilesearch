@@ -135,12 +135,12 @@ fn run_drive_parity(
         }
     }
 
-    // 2. Run Rust
+    // 2. Run Rust (with --format custom to match C++ output format)
     print!("  [2/4] Running Rust scan...");
     io::stdout().flush().ok();
     let rust_start = Instant::now();
     let rust_status = Command::new(rust_bin)
-        .args(["*", "--drive", &drive.to_uppercase(), "--no-cache"])
+        .args(["*", "--drive", &drive.to_uppercase(), "--no-cache", "--format", "custom"])
         .stdout(File::create(&rust_raw).expect("create rust_raw"))
         .stderr(std::process::Stdio::null())
         .status();

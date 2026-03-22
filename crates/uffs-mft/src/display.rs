@@ -116,8 +116,7 @@ pub fn truncate_string(text: &str, max_len: usize) -> String {
             .char_indices()
             .take_while(|(idx, _)| *idx < truncate_at)
             .last()
-            .map(|(idx, ch)| idx + ch.len_utf8())
-            .unwrap_or(0);
+            .map_or(0, |(idx, ch)| idx + ch.len_utf8());
         format!("{}...", &text[..safe_end])
     }
 }
@@ -131,7 +130,7 @@ pub fn truncate_string(text: &str, max_len: usize) -> String {
     dead_code,
     reason = "cross-platform utility, currently called from Windows commands only"
 )]
-pub fn char_or_dot(byte: u8) -> char {
+pub const fn char_or_dot(byte: u8) -> char {
     if byte.is_ascii_graphic() || byte == b' ' {
         byte as char
     } else {
@@ -173,7 +172,7 @@ pub fn format_usn_reason(reason: u32) -> String {
     }
 
     if parts.is_empty() {
-        format!("0x{:08X}", reason)
+        format!("0x{reason:08X}")
     } else {
         parts.join("+")
     }

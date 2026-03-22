@@ -15,33 +15,41 @@
     reason = "DataFrame streaming path — cross-platform MftIndex streaming is wired, DataFrame path pending"
 )]
 
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::io::Write;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use anyhow::Result;
 use uffs_core::output::OutputConfig;
 
 /// Streaming output writer for multi-drive search.
-pub(crate) struct StreamingWriter<W: Write> {
+pub struct StreamingWriter<W: Write> {
+    /// The underlying writer (locked for thread-safe access).
     writer: Mutex<W>,
+    /// Output format (CSV or JSON).
     format: StreamingFormat,
+    /// Column and formatting configuration.
     output_config: OutputConfig,
+    /// Whether the header has been written (CSV only).
     header_written: AtomicBool,
+    /// Number of rows written so far.
     rows_written: AtomicUsize,
+    /// Maximum number of rows to write (0 = unlimited).
     limit: u32,
 }
 
 /// Output format for streaming writer.
 #[derive(Clone, Copy)]
 enum StreamingFormat {
+    /// CSV with header row.
     Csv,
+    /// Newline-delimited JSON (one JSON object per line).
     Json,
 }
 
 impl<W: Write> StreamingWriter<W> {
     /// Create a new streaming writer.
-    pub(crate) fn new(writer: W, format: &str, limit: u32, output_config: OutputConfig) -> Self {
+    pub fn new(writer: W, format: &str, limit: u32, output_config: OutputConfig) -> Self {
         let fmt = match format.to_lowercase().as_str() {
             "json" => StreamingFormat::Json,
             _ => StreamingFormat::Csv,
@@ -56,8 +64,8 @@ impl<W: Write> StreamingWriter<W> {
         }
     }
 
-    /// Write a DataFrame batch. Returns number of rows written.
-    pub(crate) fn write_batch(&self, df: &uffs_mft::DataFrame) -> Result<usize> {
+    /// Write a `DataFrame` batch. Returns number of rows written.
+    pub fn write_batch(&self, df: &uffs_mft::DataFrame) -> Result<usize> {
         if df.height() == 0 {
             return Ok(0);
         }
@@ -72,7 +80,7 @@ impl<W: Write> StreamingWriter<W> {
         let mut writer = self
             .writer
             .lock()
-            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+            .map_err(|err| anyhow::anyhow!("Lock error: {err}"))?;
 
         match self.format {
             StreamingFormat::Csv => self.write_csv_batch(&mut *writer, df),
@@ -80,6 +88,7 @@ impl<W: Write> StreamingWriter<W> {
         }
     }
 
+    /// Write a CSV batch (internal).
     fn write_csv_batch(&self, writer: &mut W, df: &uffs_mft::DataFrame) -> Result<usize> {
         let height = df.height();
         if height == 0 {
@@ -110,7 +119,7 @@ impl<W: Write> StreamingWriter<W> {
 
         config
             .write(&df_slice, &mut *writer)
-            .map_err(|e| anyhow::anyhow!("Write error: {e}"))?;
+            .map_err(|err| anyhow::anyhow!("Write error: {err}"))?;
 
         self.rows_written
             .fetch_add(rows_to_write, Ordering::Relaxed);
@@ -119,6 +128,7 @@ impl<W: Write> StreamingWriter<W> {
         Ok(rows_to_write)
     }
 
+    /// Write a JSON batch (internal).
     fn write_json_batch(&self, writer: &mut W, df: &uffs_mft::DataFrame) -> Result<usize> {
         let col_names: Vec<_> = df.get_column_names();
         let columns: Vec<_> = col_names
@@ -164,7 +174,7 @@ impl<W: Write> StreamingWriter<W> {
     }
 
     /// Check if we've hit the output limit.
-    pub(crate) fn limit_reached(&self) -> bool {
+    pub fn limit_reached(&self) -> bool {
         if self.limit == 0 {
             return false;
         }
@@ -172,13 +182,13 @@ impl<W: Write> StreamingWriter<W> {
     }
 
     /// Get total rows written.
-    pub(crate) fn total_rows(&self) -> usize {
+    pub fn total_rows(&self) -> usize {
         self.rows_written.load(Ordering::Relaxed)
     }
 }
 
 /// Escape a string for JSON output.
-pub(crate) fn format_json_string(value: &str) -> String {
+pub fn format_json_string(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len() + 2);
     escaped.push('"');
     for ch in value.chars() {
@@ -198,6 +208,7 @@ pub(crate) fn format_json_string(value: &str) -> String {
     escaped
 }
 
+/// Push a JSON unicode escape sequence for a control character.
 fn push_json_unicode_escape(buf: &mut String, ch: char) {
     const HEX: &[char; 16] = &[
         '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
@@ -211,7 +222,7 @@ fn push_json_unicode_escape(buf: &mut String, ch: char) {
 }
 
 /// Format a cell value for JSON output.
-pub(crate) fn format_json_value(col: &uffs_polars::Column, row_idx: usize) -> String {
+pub fn format_json_value(col: &uffs_polars::Column, row_idx: usize) -> String {
     use uffs_polars::{AnyValue, TimeUnit};
 
     match col.get(row_idx) {

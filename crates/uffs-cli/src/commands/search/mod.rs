@@ -115,6 +115,14 @@ fn should_use_index_path(
     clippy::single_call_fn,
     reason = "public CLI entry point called from main dispatch"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "multi-drive dispatch logic with many code paths — refactoring would obscure flow"
+)]
+#[expect(
+    clippy::shadow_unrelated,
+    reason = "inner 'mft_index' variable in closure is intentionally unrelated to outer scope"
+)]
 pub async fn search(
     pattern: &str,
     single_drive: Option<char>,
@@ -248,7 +256,7 @@ pub async fn search(
     // live multi-drive but fully cross-platform.
     if mft_file.len() > 1 && !benchmark && can_write_native_results(format, &output_config) {
         // Drive letters: use --drives if provided, otherwise infer from filenames.
-        let drive_letters: Vec<char> = if let Some(ref drives) = multi_drives {
+        let drive_letters: Vec<char> = if let Some(drives) = &multi_drives {
             if drives.len() != mft_file.len() {
                 bail!(
                     "Number of --drives ({}) must match number of --mft-file ({}).\n\
@@ -262,7 +270,7 @@ pub async fn search(
         } else {
             mft_file
                 .iter()
-                .map(|p| infer_drive_from_filename(p))
+                .map(|path| infer_drive_from_filename(path))
                 .collect()
         };
 
@@ -299,7 +307,7 @@ pub async fn search(
         let file_drive_pairs: Vec<_> = mft_file
             .iter()
             .zip(drive_letters.iter())
-            .map(|(p, &d)| (p.clone(), d))
+            .map(|(path, &drv)| (path.clone(), drv))
             .collect();
         let debug_tree_copy = debug_tree;
         let chaos_seed_copy = chaos_seed;
@@ -310,7 +318,7 @@ pub async fn search(
             // Each completed index is sent to the writer immediately.
             std::thread::scope(|scope| {
                 for (path, drive) in &file_drive_pairs {
-                    let tx = tx.clone();
+                    let sender = tx.clone();
                     scope.spawn(move || {
                         let result = super::raw_io::load_index_from_mft_file(
                             path,
@@ -321,13 +329,14 @@ pub async fn search(
                         );
                         match result {
                             Ok(loaded) => {
-                                let _ = tx.send((*drive, loaded.index, loaded.load_ms));
+                                // Ignore send errors — receiver may have stopped early (limit reached).
+                                drop(sender.send((*drive, loaded.index, loaded.load_ms)));
                             }
-                            Err(e) => {
+                            Err(load_err) => {
                                 tracing::warn!(
                                     drive = %drive,
                                     path = %path.display(),
-                                    error = %e,
+                                    error = %load_err,
                                     "Failed to load MFT file"
                                 );
                             }
@@ -344,29 +353,29 @@ pub async fn search(
             ">{}",
             drive_letters
                 .iter()
-                .map(|d| format!("{}:{}", d, pattern.replace('*', ".*")))
+                .map(|drv| format!("{drv}:{}", pattern.replace('*', ".*")))
                 .collect::<Vec<_>>()
                 .join("|")
         );
         let t_output = std::time::Instant::now();
 
         let stream_drive =
-            |index: &uffs_mft::MftIndex, w: &mut dyn std::io::Write| -> Result<usize> {
+            |mft_index: &uffs_mft::MftIndex, writer: &mut dyn std::io::Write| -> Result<usize> {
                 let ext_indices: Option<Vec<u32>> = compiled_pattern.as_ref().and_then(|_pat| {
-                    let ext_index = index.extension_index.as_ref()?;
+                    let ext_index = mft_index.extension_index.as_ref()?;
                     let ext = extract_trailing_extension(pattern)?;
                     let ext_lower = ext.to_ascii_lowercase();
-                    let ext_id = index.extensions.map.get(ext_lower.as_str())?;
+                    let ext_id = mft_index.extensions.map.get(ext_lower.as_str())?;
                     Some(ext_index.get_records(*ext_id).to_vec())
                 });
                 crate::commands::output::write_index_streaming_with_filter(
-                    index,
+                    mft_index,
                     compiled_pattern.as_ref(),
                     ext_indices.as_deref(),
                     cs,
                     is_pp,
                     &rec_filter,
-                    w,
+                    writer,
                     "",
                     &output_config,
                     &crate::commands::output::CppFooterContext {
@@ -386,10 +395,10 @@ pub async fn search(
 
             let write_to = |w: &mut dyn std::io::Write| -> Result<usize> {
                 crate::commands::output::write_native_header_pub(w, &output_config, cols)?;
-                let mut total = 0usize;
-                for (drive, index, load_ms) in rx {
-                    info!(drive = %drive, load_ms, records = index.len(), "📊 streaming drive");
-                    total += stream_drive(&index, w)?;
+                let mut total = 0_usize;
+                for (drive, mft_index, load_ms) in rx {
+                    info!(drive = %drive, load_ms, records = mft_index.len(), "📊 streaming drive");
+                    total += stream_drive(&mft_index, writer)?;
                 }
                 if format == "custom" {
                     let footer = crate::commands::output::CppFooterContext {
@@ -1262,7 +1271,7 @@ fn infer_drive_from_filename(path: &std::path::Path) -> char {
         if first.is_ascii_alphabetic() {
             // Second char must be non-alphabetic (or end of string)
             match chars.next() {
-                None | Some('.') | Some('_') | Some('-') | Some(' ') => {
+                None | Some('.' | '_' | '-' | ' ') => {
                     return first.to_ascii_uppercase();
                 }
                 _ => {}

@@ -15,7 +15,7 @@ mod streaming;
     unused_imports,
     reason = "cross-platform type, currently used from Windows multi-drive paths only"
 )]
-pub(crate) use streaming::StreamingWriter;
+pub use streaming::StreamingWriter;
 #[cfg(test)]
 pub(super) use streaming::format_json_value;
 

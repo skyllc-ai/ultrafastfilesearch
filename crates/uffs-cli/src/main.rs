@@ -661,7 +661,7 @@ mod tests {
         clippy::panic
     )]
 
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use clap::{CommandFactory, Parser};
 
