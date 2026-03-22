@@ -212,7 +212,6 @@ impl MftReader {
     async fn read_and_cache_index(&self) -> Result<crate::index::MftIndex> {
         use tracing::info;
 
-        use crate::cache::save_to_cache;
         use crate::platform::VolumeHandle;
         use crate::usn::query_usn_journal;
 
@@ -221,24 +220,37 @@ impl MftReader {
         let index = self.read_all_index().await?;
         tracing::debug!(drive = %drive, records = index.len(), "[TRIP] reader::read_and_cache_index -> read_all_index done");
 
-        // Get volume info for caching
-        let handle = VolumeHandle::open(drive)?;
-        let volume_data = handle.volume_data();
-        let volume_serial = volume_data.volume_serial_number;
+        // Get volume info for caching (quick syscalls, fine on async thread).
+        let volume_serial = VolumeHandle::open(drive)
+            .map(|h| h.volume_data().volume_serial_number)
+            .unwrap_or(0);
 
         let (usn_journal_id, next_usn) = match query_usn_journal(drive) {
             Ok(info) => (info.journal_id, info.next_usn),
             Err(_) => (0, 0),
         };
 
-        // Save to cache
-        if let Err(e) = save_to_cache(&index, drive, volume_serial, usn_journal_id, next_usn) {
-            info!(drive = %drive, error = %e, "⚠️ Failed to save to cache (non-fatal)");
-        } else {
-            info!(drive = %drive, records = index.len(), "💾 Saved to cache");
-        }
+        // Fire-and-forget: serialize + write the cache file on the blocking
+        // pool so we don't stall the tokio workers.  The index is shared via
+        // Arc so there's no expensive clone.
+        let index = std::sync::Arc::new(index);
+        let index_for_cache = std::sync::Arc::clone(&index);
+        tokio::task::spawn_blocking(move || {
+            use crate::cache::save_to_cache;
+            if let Err(e) =
+                save_to_cache(&index_for_cache, drive, volume_serial, usn_journal_id, next_usn)
+            {
+                info!(drive = %drive, error = %e, "⚠️ Failed to save to cache (non-fatal)");
+            } else {
+                info!(drive = %drive, records = index_for_cache.len(), "💾 Saved to cache");
+            }
+        });
 
         tracing::debug!(drive = %drive, "[TRIP] reader::read_and_cache_index EXIT");
-        Ok(index)
+        // Unwrap the Arc — the only other reference is the fire-and-forget
+        // cache task which may still be running.  If it hasn't finished yet
+        // we fall back to a clone (very rare in practice since the caller
+        // proceeds to output, giving the cache task time to complete).
+        Ok(std::sync::Arc::try_unwrap(index).unwrap_or_else(|arc| (*arc).clone()))
     }
 }

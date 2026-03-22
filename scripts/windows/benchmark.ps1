@@ -64,10 +64,11 @@ function BenchRun($label, $exePath, [string[]]$argList) {
             Remove-Item $CACHE_DIR -Recurse -Force -ErrorAction SilentlyContinue
         }
 
-        # Use Start-Process with raw file redirect to bypass PowerShell's
-        # encoding layer.  PowerShell's > operator re-encodes every line
-        # through its UTF-16 pipeline, adding 20-30s for large outputs.
-        $tempOut = [System.IO.Path]::GetTempFileName()
+        # Redirect stdout to NUL — we only need wall-clock time and any
+        # [TIMING]/[DIAG] lines that go to stderr.  Writing millions of
+        # result lines to a temp file added 10-20s of pure I/O overhead per
+        # run, and the subsequent Select-String scan of that multi-GB file
+        # added another 5-10s.
         $tempErr = [System.IO.Path]::GetTempFileName()
 
         # Show exact command on first run only
@@ -77,7 +78,7 @@ function BenchRun($label, $exePath, [string[]]$argList) {
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         try {
             $proc = Start-Process -FilePath $exePath -ArgumentList $argList `
-                -RedirectStandardOutput $tempOut -RedirectStandardError $tempErr `
+                -RedirectStandardOutput "NUL" -RedirectStandardError $tempErr `
                 -NoNewWindow -Wait -PassThru
         } catch {
             Write-Host "   ⚠️  Error: $_" -ForegroundColor Red
@@ -87,9 +88,9 @@ function BenchRun($label, $exePath, [string[]]$argList) {
         $times += $ms
         Write-Host "   Run $_`: $([math]::Round($ms/1000, 2))s" -ForegroundColor Gray
 
-        # Extract [TIMING] and [DIAG] lines from the temp file
+        # Extract [TIMING] and [DIAG] lines from stderr (small file)
         try {
-            $timingLines = Select-String -Path $tempOut -Pattern '\[TIMING\]|\[DIAG\]' | ForEach-Object { $_.Line }
+            $timingLines = Select-String -Path $tempErr -Pattern '\[TIMING\]|\[DIAG\]' | ForEach-Object { $_.Line }
             if ($timingLines) {
                 foreach ($line in $timingLines) {
                     Write-Host "     $line" -ForegroundColor DarkCyan
@@ -99,8 +100,7 @@ function BenchRun($label, $exePath, [string[]]$argList) {
             # Ignore errors reading temp file
         }
 
-        # Clean up temp files
-        Remove-Item $tempOut -Force -ErrorAction SilentlyContinue
+        # Clean up temp file
         Remove-Item $tempErr -Force -ErrorAction SilentlyContinue
     }
 
@@ -181,4 +181,6 @@ if ($Cache) {
 } else {
     Write-Host "`nThis measures fresh MFT reads (no cache)." -ForegroundColor Gray
     Write-Host "Rust saves to cache after each run, but cache is cleared before next run." -ForegroundColor Gray
+    Write-Host "Note: OS filesystem cache (RAM) is NOT cleared. Later runs benefit from" -ForegroundColor DarkGray
+    Write-Host "MFT data kept in RAM by Windows. C++ has no disk cache (only OS cache)." -ForegroundColor DarkGray
 }

@@ -526,8 +526,11 @@ async fn run_live_multi_drive_streaming(
     );
     let t_output = std::time::Instant::now();
 
-    // Use a channel: load tasks send indexes, main thread writes.
-    let (tx, rx) = std::sync::mpsc::sync_channel::<(char, uffs_mft::MftIndex, u128)>(2);
+    // Use a tokio channel so the send is async and never blocks a tokio
+    // worker thread (the old sync_channel could stall the runtime when the
+    // writer was busy).
+    let (tx, rx) =
+        tokio::sync::mpsc::channel::<(char, uffs_mft::MftIndex, u128)>(drives.len().max(2));
 
     // Compile pattern once for the writer thread.
     let compiled_pattern = if is_full_scan {
@@ -579,7 +582,7 @@ async fn run_live_multi_drive_streaming(
         match result {
             Ok(Ok(tuple)) => {
                 info!(drive = %tuple.0, load_ms = tuple.2, records = tuple.1.len(), "📊 drive ready");
-                drop(tx.send(tuple));
+                drop(tx.send(tuple).await);
             }
             Ok(Err(err)) => info!(error = %err, "Drive load failed (continuing)"),
             Err(err) => info!(error = %err, "Task join error (continuing)"),
@@ -606,7 +609,7 @@ async fn run_live_multi_drive_streaming(
     reason = "called from async context with owned values"
 )]
 fn run_multi_drive_writer(
-    rx: std::sync::mpsc::Receiver<(char, uffs_mft::MftIndex, u128)>,
+    mut rx: tokio::sync::mpsc::Receiver<(char, uffs_mft::MftIndex, u128)>,
     compiled_pattern: &Option<uffs_core::index_search::IndexPattern>,
     pattern: &str,
     case_sensitive: bool,
@@ -655,7 +658,7 @@ fn run_multi_drive_writer(
         let stdout_lock = stdout_handle.lock();
         let mut buf_writer = std::io::BufWriter::with_capacity(1024 * 1024, stdout_lock);
         crate::commands::output::write_native_header_pub(&mut buf_writer, output_config, cols)?;
-        for (drive, index, load_ms) in rx {
+        while let Some((drive, index, load_ms)) = rx.blocking_recv() {
             info!(drive = %drive, load_ms, records = index.len(), "📊 streaming drive");
             total_rows += stream_drive(&index, &mut buf_writer)?;
         }
@@ -673,7 +676,7 @@ fn run_multi_drive_writer(
             .with_context(|| format!("Failed to create output file: {out}"))?;
         let mut buf_writer = std::io::BufWriter::with_capacity(1024 * 1024, file);
         crate::commands::output::write_native_header_pub(&mut buf_writer, output_config, cols)?;
-        for (drive, index, load_ms) in rx {
+        while let Some((drive, index, load_ms)) = rx.blocking_recv() {
             info!(drive = %drive, load_ms, records = index.len(), "📊 streaming drive");
             total_rows += stream_drive(&index, &mut buf_writer)?;
         }

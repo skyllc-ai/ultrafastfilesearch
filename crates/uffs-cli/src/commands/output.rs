@@ -625,17 +625,37 @@ pub(super) fn write_index_streaming_with_filter<W: Write + ?Sized>(
     output_config: &OutputConfig,
     footer_ctx: &CppFooterContext<'_>,
 ) -> Result<usize> {
-    use uffs_mft::index::PathCache;
+    use uffs_mft::index::{PathCache, PathResolver};
 
     let output_cols = selected_output_columns(output_config);
     let tz_offset_secs = output_config.timezone_offset_secs;
 
+    // For filtered queries with an extension-index shortlist, skip the
+    // expensive pre_cache_directory_paths() pass.  That pass materialises a
+    // String for every valid directory (O(n), ~500K dirs, ~20 MB) which is
+    // wasteful when only a handful of records will actually be output.
+    // The PathResolver alone (O(n) state vec, cheap) is always needed for
+    // validity checks; materialize_path_into gracefully falls back to a
+    // parent-chain walk when the dir_cache is empty.
+    const LAZY_THRESHOLD: usize = 100_000;
+
     let t_cache = std::time::Instant::now();
-    let path_cache = PathCache::build(index, false);
-    let resolver = path_cache.resolver();
-    let dir_cache = path_cache.dir_cache();
+    let use_lazy = record_indices.is_some_and(|ri| ri.len() < LAZY_THRESHOLD);
+
+    let path_cache_storage; // owns the full PathCache when needed
+    let resolver_storage; // owns the lightweight resolver when lazy
+    let empty_dir_cache = Vec::new();
+
+    let (resolver, dir_cache): (&PathResolver, &[String]) = if use_lazy {
+        resolver_storage = PathResolver::build(index, false);
+        (&resolver_storage, &empty_dir_cache)
+    } else {
+        path_cache_storage = PathCache::build(index, false);
+        (path_cache_storage.resolver(), path_cache_storage.dir_cache())
+    };
+
     let cache_ms = t_cache.elapsed().as_millis();
-    tracing::info!(cache_ms, "📊 streaming: PathCache + dir_cache built");
+    tracing::info!(cache_ms, use_lazy, "📊 streaming: path resolver built");
 
     write_native_header(writer, output_config, output_cols)?;
 
