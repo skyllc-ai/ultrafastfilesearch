@@ -12,6 +12,7 @@
 //! rust-script scripts/windows/parity_check_live.rs --drive C,D,E  # Multiple drives
 //! rust-script scripts/windows/parity_check_live.rs --sample 50  # 50 diff samples (default: 30)
 //! rust-script scripts/windows/parity_check_live.rs --out-dir D:\parity  # Custom output dir
+//! rust-script scripts/windows/parity_check_live.rs --keep       # Keep raw output files on success
 //! ```
 //!
 //! # Requirements
@@ -24,16 +25,38 @@
 //! sha2 = "0.10"
 //! ```
 
-use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::cmp::Ordering;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{env, io};
 
-const DEFAULT_SAMPLE_SIZE: usize = 30;
+use sha2::{Digest, Sha256};
+
+const DEFAULT_SAMPLE_SIZE: usize = 50;
+
+/// LCG (Linear Congruential Generator) multiplier - Knuth's MMIX constant.
+const LCG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifyResult {
+    StrictMatch,
+    SortedMatch,
+    Mismatch,
+}
+
+#[derive(Debug)]
+struct DriveResult {
+    drive_letter: String,
+    result: VerifyResult,
+    cpp_lines: usize,
+    rust_lines: usize,
+    cpp_time_ms: u128,
+    rust_time_ms: u128,
+    sort_time_ms: u128,
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -57,6 +80,7 @@ fn main() {
     let drives = parse_drives(&args);
     let sample_size = parse_sample_size(&args);
     let out_dir = parse_out_dir(&args);
+    let keep_files = args.iter().any(|a| a == "--keep");
 
     fs::create_dir_all(&out_dir).ok();
     let timestamp = chrono_timestamp();
@@ -71,33 +95,44 @@ fn main() {
     println!("  Drives     : {:?}", drives);
     println!("  Output dir : {}", out_dir.display());
     println!("  Sample size: {}", sample_size);
+    println!(
+        "  Keep files : {}",
+        if keep_files {
+            "yes"
+        } else {
+            "no (clean on success)"
+        }
+    );
     println!();
 
-    let mut all_passed = true;
+    let mut results: Vec<DriveResult> = Vec::new();
 
-    for drive in &drives {
-        let passed = run_drive_parity(
+    for (index, drive) in drives.iter().enumerate() {
+        let result = run_drive_parity(
             drive,
             &uffs_cpp,
             &uffs_rust,
             &out_dir,
             &timestamp,
             sample_size,
+            keep_files,
+            index + 1,
+            drives.len(),
         );
-        if !passed {
-            all_passed = false;
-        }
+        results.push(result);
     }
 
-    println!();
-    if all_passed {
-        println!("🎉 ALL DRIVES PASSED PARITY CHECK!");
-    } else {
-        println!("⚠️  SOME DRIVES HAD MISMATCHES — see diff files above");
+    // Print summary
+    print_summary(&results);
+
+    // Exit with failure if any drive mismatched
+    let any_mismatch = results.iter().any(|r| r.result == VerifyResult::Mismatch);
+    if any_mismatch {
         std::process::exit(1);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_drive_parity(
     drive: &str,
     cpp_bin: &Path,
@@ -105,11 +140,20 @@ fn run_drive_parity(
     out_dir: &Path,
     timestamp: &str,
     sample_size: usize,
-) -> bool {
+    keep_files: bool,
+    drive_index: usize,
+    total_drives: usize,
+) -> DriveResult {
+    let drive_upper = drive.to_uppercase();
     let drive_lower = drive.to_lowercase();
+
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("  Drive {}", drive.to_uppercase());
+    println!(
+        "  [{}/{}] DRIVE {} — Live MFT Scan",
+        drive_index, total_drives, drive_upper
+    );
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
 
     let cpp_raw = out_dir.join(format!("cpp_{drive_lower}_{timestamp}.txt"));
     let rust_raw = out_dir.join(format!("rust_{drive_lower}_{timestamp}.txt"));
@@ -122,16 +166,24 @@ fn run_drive_parity(
     io::stdout().flush().ok();
     let cpp_start = Instant::now();
     let cpp_status = Command::new(cpp_bin)
-        .args(["*", &format!("--drives={}", drive.to_uppercase())])
+        .args(["*", &format!("--drives={}", drive_upper)])
         .stdout(File::create(&cpp_raw).expect("create cpp_raw"))
         .stderr(std::process::Stdio::null())
         .status();
     let cpp_ms = cpp_start.elapsed().as_millis();
     match cpp_status {
-        Ok(s) if s.success() => println!(" ✅ ({}ms)", cpp_ms),
+        Ok(s) if s.success() => println!(" ✅ ({})", format_duration_ms(cpp_ms)),
         _ => {
             println!(" ❌ FAILED");
-            return false;
+            return DriveResult {
+                drive_letter: drive_upper,
+                result: VerifyResult::Mismatch,
+                cpp_lines: 0,
+                rust_lines: 0,
+                cpp_time_ms: cpp_ms,
+                rust_time_ms: 0,
+                sort_time_ms: 0,
+            };
         }
     }
 
@@ -140,101 +192,158 @@ fn run_drive_parity(
     io::stdout().flush().ok();
     let rust_start = Instant::now();
     let rust_status = Command::new(rust_bin)
-        .args(["*", "--drive", &drive.to_uppercase(), "--no-cache", "--format", "custom"])
+        .args([
+            "*",
+            "--drive",
+            &drive_upper,
+            "--no-cache",
+            "--format",
+            "custom",
+        ])
         .stdout(File::create(&rust_raw).expect("create rust_raw"))
         .stderr(std::process::Stdio::null())
         .status();
     let rust_ms = rust_start.elapsed().as_millis();
     match rust_status {
-        Ok(s) if s.success() => println!(" ✅ ({}ms)", rust_ms),
+        Ok(s) if s.success() => println!(" ✅ ({})", format_duration_ms(rust_ms)),
         _ => {
             println!(" ❌ FAILED");
-            return false;
+            return DriveResult {
+                drive_letter: drive_upper,
+                result: VerifyResult::Mismatch,
+                cpp_lines: 0,
+                rust_lines: 0,
+                cpp_time_ms: cpp_ms,
+                rust_time_ms: rust_ms,
+                sort_time_ms: 0,
+            };
         }
     }
 
-    // 3. Sort both outputs (streaming, memory-efficient)
+    // 3. Sort both outputs (byte-level stable sort for cross-platform consistency)
     print!("  [3/4] Sorting outputs...");
     io::stdout().flush().ok();
     let sort_start = Instant::now();
     let cpp_lines = sort_file_to(&cpp_raw, &cpp_sorted);
     let rust_lines = sort_file_to(&rust_raw, &rust_sorted);
     let sort_ms = sort_start.elapsed().as_millis();
-    println!(" ✅ ({}ms)", sort_ms);
+    println!(" ✅ ({})", format_duration_ms(sort_ms));
     println!("       C++ lines : {}", cpp_lines);
     println!("       Rust lines: {}", rust_lines);
+    println!();
 
-    // 4. SHA256 comparison
+    // 4. SHA256 comparison - ordered first, then sorted
     print!("  [4/4] Computing SHA256...");
     io::stdout().flush().ok();
-    let cpp_hash = sha256_file(&cpp_sorted);
-    let rust_hash = sha256_file(&rust_sorted);
+    let cpp_ordered_hash = sha256_file(&cpp_raw);
+    let rust_ordered_hash = sha256_file(&rust_raw);
+    let cpp_sorted_hash = sha256_file(&cpp_sorted);
+    let rust_sorted_hash = sha256_file(&rust_sorted);
+    println!(" ✅");
+    println!();
 
-    if cpp_hash == rust_hash {
-        println!(" ✅ MATCH");
-        println!();
+    // Check for strict (ordered) match first
+    if cpp_ordered_hash == rust_ordered_hash {
         println!("  ╔═══════════════════════════════════════════════════════════╗");
-        println!("  ║  PARITY: PASS — Sorted outputs are identical              ║");
+        println!("  ║  ✅ PARITY: STRICT MATCH — Ordered outputs identical      ║");
         println!("  ╚═══════════════════════════════════════════════════════════╝");
-        println!("       SHA256: {}", &cpp_hash[..16]);
+        println!("       SHA256: {}...", &cpp_ordered_hash[..16]);
         println!();
-        // Clean up raw files
-        fs::remove_file(&cpp_raw).ok();
-        fs::remove_file(&rust_raw).ok();
-        return true;
+
+        // Clean up files unless --keep
+        if !keep_files {
+            fs::remove_file(&cpp_raw).ok();
+            fs::remove_file(&rust_raw).ok();
+            fs::remove_file(&cpp_sorted).ok();
+            fs::remove_file(&rust_sorted).ok();
+        }
+
+        return DriveResult {
+            drive_letter: drive_upper,
+            result: VerifyResult::StrictMatch,
+            cpp_lines,
+            rust_lines,
+            cpp_time_ms: cpp_ms,
+            rust_time_ms: rust_ms,
+            sort_time_ms: sort_ms,
+        };
     }
 
-    println!(" ❌ MISMATCH");
-    println!();
+    // Check for sorted match (different traversal order but same content)
+    if cpp_sorted_hash == rust_sorted_hash {
+        println!("  ╔═══════════════════════════════════════════════════════════╗");
+        println!("  ║  ✅ PARITY: SORTED MATCH — Content identical              ║");
+        println!("  ║     (traversal order differs, but all lines match)        ║");
+        println!("  ╚═══════════════════════════════════════════════════════════╝");
+        println!("       Sorted SHA256: {}...", &cpp_sorted_hash[..16]);
+        println!();
+
+        // Clean up files unless --keep
+        if !keep_files {
+            fs::remove_file(&cpp_raw).ok();
+            fs::remove_file(&rust_raw).ok();
+            fs::remove_file(&cpp_sorted).ok();
+            fs::remove_file(&rust_sorted).ok();
+        }
+
+        return DriveResult {
+            drive_letter: drive_upper,
+            result: VerifyResult::SortedMatch,
+            cpp_lines,
+            rust_lines,
+            cpp_time_ms: cpp_ms,
+            rust_time_ms: rust_ms,
+            sort_time_ms: sort_ms,
+        };
+    }
+
+    // Mismatch - show details
     println!("  ╔═══════════════════════════════════════════════════════════╗");
-    println!("  ║  PARITY: FAIL — Outputs differ                            ║");
+    println!("  ║  ❌ PARITY: MISMATCH — Outputs differ                     ║");
     println!("  ╚═══════════════════════════════════════════════════════════╝");
-    println!("       C++ SHA256 : {}", &cpp_hash[..16]);
-    println!("       Rust SHA256: {}", &rust_hash[..16]);
+    println!();
+    println!("  Hashes:");
+    println!("       C++ ordered SHA256 : {}...", &cpp_ordered_hash[..16]);
+    println!(
+        "       Rust ordered SHA256: {}...",
+        &rust_ordered_hash[..16]
+    );
+    println!("       C++ sorted SHA256  : {}...", &cpp_sorted_hash[..16]);
+    println!("       Rust sorted SHA256 : {}...", &rust_sorted_hash[..16]);
+    println!();
+    println!("  Line count: {} (C++) vs {} (Rust)", cpp_lines, rust_lines);
     println!();
 
-    // Build diff report
-    print!("  Building diff report...");
-    io::stdout().flush().ok();
-    let (only_cpp, only_rust) = compute_set_diff(&cpp_sorted, &rust_sorted);
-    println!(" ✅");
-    println!("       Only in C++ : {} lines", only_cpp.len());
-    println!("       Only in Rust: {} lines", only_rust.len());
+    // Show sorted side-by-side comparison (most useful for debugging)
+    show_first_sorted_diffs(&cpp_sorted, &rust_sorted, sample_size);
 
-    // Sample and write diff file
+    // Write diff report to file
     write_diff_report(
         &diff_file,
-        drive,
+        &drive_upper,
         &cpp_sorted,
         &rust_sorted,
-        &cpp_hash,
-        &rust_hash,
+        &cpp_sorted_hash,
+        &rust_sorted_hash,
         cpp_lines,
         rust_lines,
-        &only_cpp,
-        &only_rust,
         sample_size,
     );
-    println!("       Diff report : {}", diff_file.display());
-
-    // Show preview
-    let preview_count = 5.min(only_cpp.len());
-    if preview_count > 0 {
-        println!();
-        println!("       Sample lines only in C++ (first {}):", preview_count);
-        for line in only_cpp.iter().take(preview_count) {
-            println!("         < {}", truncate_line(line, 70));
-        }
-    }
-    let preview_count = 5.min(only_rust.len());
-    if preview_count > 0 {
-        println!("       Sample lines only in Rust (first {}):", preview_count);
-        for line in only_rust.iter().take(preview_count) {
-            println!("         > {}", truncate_line(line, 70));
-        }
-    }
     println!();
-    false
+    println!("  Diff report: {}", diff_file.display());
+    println!("  Sorted C++:  {}", cpp_sorted.display());
+    println!("  Sorted Rust: {}", rust_sorted.display());
+    println!();
+
+    DriveResult {
+        drive_letter: drive_upper,
+        result: VerifyResult::Mismatch,
+        cpp_lines,
+        rust_lines,
+        cpp_time_ms: cpp_ms,
+        rust_time_ms: rust_ms,
+        sort_time_ms: sort_ms,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -247,7 +356,9 @@ fn parse_drives(args: &[String]) -> Vec<String> {
             return args[i + 1]
                 .split(',')
                 .map(|s| s.trim().to_uppercase())
-                .filter(|s| s.len() == 1 && s.chars().next().map_or(false, |c| c.is_ascii_alphabetic()))
+                .filter(|s| {
+                    s.len() == 1 && s.chars().next().map_or(false, |c| c.is_ascii_alphabetic())
+                })
                 .collect();
         }
     }
@@ -258,7 +369,13 @@ fn parse_drives(args: &[String]) -> Vec<String> {
 fn detect_ntfs_drives() -> Vec<String> {
     // Try wmic to detect NTFS drives
     let output = Command::new("wmic")
-        .args(["logicaldisk", "where", "DriveType=3", "get", "DeviceID,FileSystem"])
+        .args([
+            "logicaldisk",
+            "where",
+            "DriveType=3",
+            "get",
+            "DeviceID,FileSystem",
+        ])
         .output();
 
     match output {
@@ -297,24 +414,31 @@ fn parse_out_dir(args: &[String]) -> PathBuf {
 fn chrono_timestamp() -> String {
     // Simple timestamp without chrono dependency
     use std::time::{SystemTime, UNIX_EPOCH};
-    let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     format!("{}", duration.as_secs())
 }
 
+/// Sort file using byte-level stable sort for cross-platform consistency.
 fn sort_file_to(input: &Path, output: &Path) -> usize {
     let file = File::open(input).expect("open input for sorting");
     let reader = BufReader::new(file);
-    let mut lines: Vec<String> = reader
-        .lines()
-        .filter_map(Result::ok)
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    lines.sort_unstable();
-    let count = lines.len();
+    let lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
 
+    // Stable sort with byte-level comparison + index tie-break
+    let mut indexed: Vec<(usize, &str)> = lines.iter().map(String::as_str).enumerate().collect();
+    indexed.sort_by(
+        |(idx_a, a), (idx_b, b)| match a.as_bytes().cmp(b.as_bytes()) {
+            Ordering::Equal => idx_a.cmp(idx_b),
+            other => other,
+        },
+    );
+
+    let count = indexed.len();
     let out_file = File::create(output).expect("create sorted output");
     let mut writer = BufWriter::new(out_file);
-    for line in &lines {
+    for (_, line) in &indexed {
         writeln!(writer, "{}", line).ok();
     }
     count
@@ -331,36 +455,112 @@ fn sha256_file(path: &Path) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn compute_set_diff(cpp_path: &Path, rust_path: &Path) -> (Vec<String>, Vec<String>) {
-    // Read Rust into HashSet
-    let rust_file = File::open(rust_path).expect("open rust sorted");
-    let rust_reader = BufReader::new(rust_file);
-    let rust_set: HashSet<String> = rust_reader.lines().filter_map(Result::ok).collect();
+/// Read file and sort lines using robust byte-level comparison.
+fn read_sorted_lines(path: &Path) -> Vec<String> {
+    let file = File::open(path).expect("open file for reading");
+    let reader = BufReader::new(file);
+    let all_lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+    let mut indexed: Vec<(usize, String)> = all_lines.into_iter().enumerate().collect();
 
-    // Find lines only in C++
-    let cpp_file = File::open(cpp_path).expect("open cpp sorted");
-    let cpp_reader = BufReader::new(cpp_file);
-    let only_cpp: Vec<String> = cpp_reader
-        .lines()
-        .filter_map(Result::ok)
-        .filter(|line| !rust_set.contains(line))
+    // Stable sort with byte-level comparison + index tie-break
+    indexed.sort_by(
+        |(idx_a, a), (idx_b, b)| match a.as_bytes().cmp(b.as_bytes()) {
+            Ordering::Equal => idx_a.cmp(idx_b),
+            other => other,
+        },
+    );
+
+    indexed.into_iter().map(|(_, line)| line).collect()
+}
+
+/// Show side-by-side comparison of DIFFERENT lines from sorted files.
+fn show_first_sorted_diffs(cpp_sorted: &Path, rust_sorted: &Path, sample_size: usize) {
+    let sorted_cpp = read_sorted_lines(cpp_sorted);
+    let sorted_rust = read_sorted_lines(rust_sorted);
+
+    let n = sorted_cpp.len().min(sorted_rust.len());
+    if n == 0 {
+        println!("  No lines to compare.");
+        return;
+    }
+
+    // Collect indices of lines that differ
+    let diff_indices: Vec<usize> = (0..n)
+        .filter(|&i| sorted_cpp[i] != sorted_rust[i])
         .collect();
 
-    // Read C++ into HashSet
-    let cpp_file2 = File::open(cpp_path).expect("open cpp sorted again");
-    let cpp_reader2 = BufReader::new(cpp_file2);
-    let cpp_set: HashSet<String> = cpp_reader2.lines().filter_map(Result::ok).collect();
+    println!("=== SORTED SIDE-BY-SIDE COMPARISON (differences only) ===");
+    println!("  C++ lines:   {}", sorted_cpp.len());
+    println!("  Rust lines:  {}", sorted_rust.len());
+    println!("  Lines that differ: {}", diff_indices.len());
 
-    // Find lines only in Rust
-    let rust_file2 = File::open(rust_path).expect("open rust sorted again");
-    let rust_reader2 = BufReader::new(rust_file2);
-    let only_rust: Vec<String> = rust_reader2
-        .lines()
-        .filter_map(Result::ok)
-        .filter(|line| !cpp_set.contains(line))
-        .collect();
+    if diff_indices.is_empty() {
+        println!();
+        println!("  ✅ All lines match!");
+        return;
+    }
 
-    (only_cpp, only_rust)
+    let total_diffs = diff_indices.len();
+    let first_n = sample_size.min(total_diffs);
+    let last_n = sample_size.min(total_diffs);
+    let middle_sample = sample_size * 2;
+
+    // First N differences
+    println!();
+    println!("--- FIRST {} DIFFERENCES ---", first_n);
+    for &idx in diff_indices.iter().take(first_n) {
+        let line_num = idx + 1;
+        println!("  Line {}:", line_num);
+        println!("    C++:  {}", sorted_cpp[idx]);
+        println!("    RUST: {}", sorted_rust[idx]);
+    }
+
+    // Last N differences (if different from first N)
+    if total_diffs > first_n + last_n {
+        let last_start = total_diffs.saturating_sub(last_n);
+        println!();
+        println!("--- LAST {} DIFFERENCES ---", last_n);
+        for &idx in diff_indices.iter().skip(last_start) {
+            let line_num = idx + 1;
+            println!("  Line {}:", line_num);
+            println!("    C++:  {}", sorted_cpp[idx]);
+            println!("    RUST: {}", sorted_rust[idx]);
+        }
+    }
+
+    // Random sample from middle differences
+    if total_diffs > first_n + last_n {
+        let middle_start = first_n;
+        let middle_end = total_diffs.saturating_sub(last_n);
+        if middle_end > middle_start {
+            let middle_diff_indices: Vec<usize> = diff_indices[middle_start..middle_end].to_vec();
+            let sample_count = middle_sample.min(middle_diff_indices.len());
+            let middle_count = middle_diff_indices.len();
+
+            println!();
+            println!(
+                "--- {} RANDOM DIFFERENCES FROM MIDDLE ({} middle diffs) ---",
+                sample_count, middle_count
+            );
+
+            // Deterministic shuffle using LCG
+            let mut rng_seed = total_diffs as u64;
+            let mut shuffled: Vec<usize> = middle_diff_indices;
+            for i in (1..shuffled.len()).rev() {
+                rng_seed = rng_seed.wrapping_mul(LCG_MULTIPLIER).wrapping_add(1);
+                #[allow(clippy::cast_possible_truncation)]
+                let j = (rng_seed as usize) % (i + 1);
+                shuffled.swap(i, j);
+            }
+
+            for &idx in shuffled.iter().take(sample_count) {
+                let line_num = idx + 1;
+                println!("  Line {}:", line_num);
+                println!("    C++:  {}", sorted_cpp[idx]);
+                println!("    RUST: {}", sorted_rust[idx]);
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -373,42 +573,214 @@ fn write_diff_report(
     rust_hash: &str,
     cpp_lines: usize,
     rust_lines: usize,
-    only_cpp: &[String],
-    only_rust: &[String],
     sample_size: usize,
 ) {
+    let sorted_cpp = read_sorted_lines(cpp_sorted);
+    let sorted_rust = read_sorted_lines(rust_sorted);
+
     let file = File::create(path).expect("create diff report");
     let mut w = BufWriter::new(file);
 
     writeln!(w, "# UFFS Live Parity Diff Report").ok();
-    writeln!(w, "# Drive: {}", drive.to_uppercase()).ok();
+    writeln!(w, "# Drive: {}", drive).ok();
     writeln!(w, "# C++ sorted : {}", cpp_sorted.display()).ok();
     writeln!(w, "# Rust sorted: {}", rust_sorted.display()).ok();
     writeln!(w, "# C++ SHA256 : {}", cpp_hash).ok();
     writeln!(w, "# Rust SHA256: {}", rust_hash).ok();
     writeln!(w, "# C++ lines  : {}", cpp_lines).ok();
     writeln!(w, "# Rust lines : {}", rust_lines).ok();
-    writeln!(w, "# Only in C++: {}", only_cpp.len()).ok();
-    writeln!(w, "# Only in Rust: {}", only_rust.len()).ok();
     writeln!(w).ok();
 
-    writeln!(w, "=== LINES ONLY IN C++ ({} total, showing up to {}) ===", only_cpp.len(), sample_size).ok();
-    for line in only_cpp.iter().take(sample_size) {
-        writeln!(w, "< {}", line).ok();
-    }
+    // Compute side-by-side diff stats
+    let n = sorted_cpp.len().min(sorted_rust.len());
+    let diff_indices: Vec<usize> = (0..n)
+        .filter(|&i| sorted_cpp[i] != sorted_rust[i])
+        .collect();
+
+    writeln!(w, "# Lines that differ: {}", diff_indices.len()).ok();
     writeln!(w).ok();
 
-    writeln!(w, "=== LINES ONLY IN RUST ({} total, showing up to {}) ===", only_rust.len(), sample_size).ok();
-    for line in only_rust.iter().take(sample_size) {
-        writeln!(w, "> {}", line).ok();
+    writeln!(
+        w,
+        "=== SIDE-BY-SIDE DIFFERENCES ({} total, showing up to {}) ===",
+        diff_indices.len(),
+        sample_size
+    )
+    .ok();
+    for &idx in diff_indices.iter().take(sample_size) {
+        let line_num = idx + 1;
+        writeln!(w, "Line {}:", line_num).ok();
+        writeln!(w, "  C++:  {}", sorted_cpp[idx]).ok();
+        writeln!(w, "  RUST: {}", sorted_rust[idx]).ok();
+        writeln!(w).ok();
     }
 }
 
-fn truncate_line(line: &str, max_len: usize) -> String {
-    if line.len() <= max_len {
-        line.to_string()
+/// Print final summary of all drive results
+fn print_summary(results: &[DriveResult]) {
+    println!();
+    println!("╔══════════════════════════════════════════════════════════════════╗");
+    println!("║                         SUMMARY                                  ║");
+    println!("╚══════════════════════════════════════════════════════════════════╝");
+    println!();
+
+    let mut strict_match = 0;
+    let mut sorted_match = 0;
+    let mut mismatch = 0;
+
+    for result in results {
+        let (icon, status) = match result.result {
+            VerifyResult::StrictMatch => {
+                strict_match += 1;
+                ("✅", "STRICT MATCH")
+            }
+            VerifyResult::SortedMatch => {
+                sorted_match += 1;
+                ("✅", "SORTED MATCH")
+            }
+            VerifyResult::Mismatch => {
+                mismatch += 1;
+                ("❌", "MISMATCH")
+            }
+        };
+        println!(
+            "  {} Drive {}: {} ({} / {} lines)",
+            icon, result.drive_letter, status, result.cpp_lines, result.rust_lines
+        );
+    }
+
+    println!();
+    let total_drives = results.len();
+    println!("  Total drives:    {}", total_drives);
+    println!("  Strict matches:  {}", strict_match);
+    println!("  Sorted matches:  {}", sorted_match);
+    println!("  Mismatches:      {}", mismatch);
+    println!();
+
+    if mismatch == 0 {
+        println!("  🎉 ALL DRIVES VERIFIED SUCCESSFULLY!");
     } else {
-        format!("{}...", &line[..max_len])
+        println!("  ⚠️  {} drive(s) had mismatches", mismatch);
     }
+
+    // Print timing table
+    print_timing_table(results);
+    println!();
 }
 
+/// Print a timing table for scan performance comparison
+fn print_timing_table(results: &[DriveResult]) {
+    println!();
+    println!(
+        "╔══════════════════════════════════════════════════════════════════════════════════════╗"
+    );
+    println!(
+        "║                           SCAN PERFORMANCE COMPARISON                                ║"
+    );
+    println!(
+        "╠═══════════╦══════════════════╦══════════════════╦═════════════╦═════════════════════╣"
+    );
+    println!(
+        "║   Drive   ║   C++ Time       ║   Rust Time      ║  Speedup    ║   Files/sec (Rust)  ║"
+    );
+    println!(
+        "╠═══════════╬══════════════════╬══════════════════╬═════════════╬═════════════════════╣"
+    );
+
+    let mut total_cpp_ms: u128 = 0;
+    let mut total_rust_ms: u128 = 0;
+    let mut total_files: usize = 0;
+
+    for result in results {
+        let cpp_time = format_duration_ms(result.cpp_time_ms);
+        let rust_time = format_duration_ms(result.rust_time_ms);
+
+        #[allow(clippy::cast_precision_loss)]
+        let speedup = if result.rust_time_ms > 0 {
+            result.cpp_time_ms as f64 / result.rust_time_ms as f64
+        } else {
+            0.0
+        };
+
+        let speedup_str = if speedup >= 1.0 {
+            format!("{:.2}x faster", speedup)
+        } else if speedup > 0.0 {
+            format!("{:.2}x slower", 1.0 / speedup)
+        } else {
+            "N/A".to_string()
+        };
+
+        #[allow(clippy::cast_precision_loss)]
+        let files_per_sec = if result.rust_time_ms > 0 {
+            (result.rust_lines as f64) / (result.rust_time_ms as f64 / 1000.0)
+        } else {
+            0.0
+        };
+
+        total_cpp_ms += result.cpp_time_ms;
+        total_rust_ms += result.rust_time_ms;
+        total_files += result.rust_lines;
+
+        println!(
+            "║     {}     ║ {:>16} ║ {:>16} ║ {:>11} ║ {:>17.0}/s ║",
+            result.drive_letter, cpp_time, rust_time, speedup_str, files_per_sec
+        );
+    }
+
+    // Print totals
+    if results.len() > 1 {
+        println!("╠═══════════╬══════════════════╬══════════════════╬═════════════╬═════════════════════╣");
+
+        let total_cpp = format_duration_ms(total_cpp_ms);
+        let total_rust = format_duration_ms(total_rust_ms);
+
+        #[allow(clippy::cast_precision_loss)]
+        let total_speedup = if total_rust_ms > 0 {
+            total_cpp_ms as f64 / total_rust_ms as f64
+        } else {
+            0.0
+        };
+
+        let speedup_str = if total_speedup >= 1.0 {
+            format!("{:.2}x faster", total_speedup)
+        } else if total_speedup > 0.0 {
+            format!("{:.2}x slower", 1.0 / total_speedup)
+        } else {
+            "N/A".to_string()
+        };
+
+        #[allow(clippy::cast_precision_loss)]
+        let avg_files_per_sec = if total_rust_ms > 0 {
+            (total_files as f64) / (total_rust_ms as f64 / 1000.0)
+        } else {
+            0.0
+        };
+
+        println!(
+            "║   TOTAL   ║ {:>16} ║ {:>16} ║ {:>11} ║ {:>17.0}/s ║",
+            total_cpp, total_rust, speedup_str, avg_files_per_sec
+        );
+    }
+
+    println!(
+        "╚═══════════╩══════════════════╩══════════════════╩═════════════╩═════════════════════╝"
+    );
+}
+
+/// Format milliseconds as a human-readable string
+fn format_duration_ms(ms: u128) -> String {
+    if ms < 1000 {
+        format!("{}ms", ms)
+    } else {
+        let duration = Duration::from_millis(ms as u64);
+        let total_secs = duration.as_secs_f64();
+        if total_secs < 60.0 {
+            format!("{:.2}s", total_secs)
+        } else {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let mins = (total_secs / 60.0).floor() as u64;
+            let secs = total_secs % 60.0;
+            format!("{}m {:.1}s", mins, secs)
+        }
+    }
+}
