@@ -125,20 +125,24 @@ foreach ($Drive in $Drives) {
     Write-Host "  [3/4] Sorting outputs..." -NoNewline
     $sortStart = Get-Date
 
-    # Read, filter blank lines, sort, write
-    $cppLines = @(Get-Content -LiteralPath $cppRaw -Encoding UTF8 | Where-Object { $_.Trim() -ne "" })
-    $rustLines = @(Get-Content -LiteralPath $rustRaw -Encoding UTF8 | Where-Object { $_.Trim() -ne "" })
-
-    $cppLinesSorted = $cppLines | Sort-Object
-    $rustLinesSorted = $rustLines | Sort-Object
-
-    $cppLinesSorted | Set-Content -LiteralPath $cppSorted -Encoding UTF8
-    $rustLinesSorted | Set-Content -LiteralPath $rustSorted -Encoding UTF8
+    # Use native sort.exe for speed (10-100x faster than PowerShell Sort-Object on large files)
+    # /O = output file, no other flags needed for simple alphabetical sort
+    & cmd.exe /c "sort `"$cppRaw`" /O `"$cppSorted`"" 2>$null
+    & cmd.exe /c "sort `"$rustRaw`" /O `"$rustSorted`"" 2>$null
 
     $sortMs = [math]::Round((New-TimeSpan -Start $sortStart -End (Get-Date)).TotalMilliseconds)
     Write-Host " ✅ ($sortMs ms)" -ForegroundColor Green
-    Write-Host "    C++ lines : $($cppLines.Count)" -ForegroundColor DarkGray
-    Write-Host "    Rust lines: $($rustLines.Count)" -ForegroundColor DarkGray
+
+    # Get line counts efficiently (wc-style)
+    $cppLineCount = 0
+    $rustLineCount = 0
+    $reader = [System.IO.File]::OpenText($cppSorted)
+    try { while ($null -ne $reader.ReadLine()) { $cppLineCount++ } } finally { $reader.Close() }
+    $reader = [System.IO.File]::OpenText($rustSorted)
+    try { while ($null -ne $reader.ReadLine()) { $rustLineCount++ } } finally { $reader.Close() }
+
+    Write-Host "    C++ lines : $cppLineCount" -ForegroundColor DarkGray
+    Write-Host "    Rust lines: $rustLineCount" -ForegroundColor DarkGray
 
     # ── 4. SHA256 comparison ──────────────────────────────────────────────────
     Write-Host "  [4/4] Computing SHA256 hashes..." -NoNewline
@@ -171,25 +175,32 @@ foreach ($Drive in $Drives) {
         # ── Build diff report ─────────────────────────────────────────────────
         Write-Host "  Building diff report..." -NoNewline
 
-        # Convert to sets for comparison
-        $cppSet  = [System.Collections.Generic.HashSet[string]]::new([string[]]$cppLinesSorted)
-        $rustSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$rustLinesSorted)
+        # Stream-based set difference: read Rust into HashSet, then stream C++ to find diff
+        $rustSet = [System.Collections.Generic.HashSet[string]]::new()
+        $reader = [System.IO.File]::OpenText($rustSorted)
+        try { while ($null -ne ($line = $reader.ReadLine())) { [void]$rustSet.Add($line) } } finally { $reader.Close() }
 
-        # Lines only in C++
+        # Lines only in C++ (streaming)
         $onlyCpp = [System.Collections.Generic.List[string]]::new()
-        foreach ($line in $cppLinesSorted) {
-            if (-not $rustSet.Contains($line)) {
-                $onlyCpp.Add($line)
+        $reader = [System.IO.File]::OpenText($cppSorted)
+        try {
+            while ($null -ne ($line = $reader.ReadLine())) {
+                if (-not $rustSet.Contains($line)) { $onlyCpp.Add($line) }
             }
-        }
+        } finally { $reader.Close() }
 
-        # Lines only in Rust
+        # Lines only in Rust: read C++ into set, check Rust
+        $cppSet = [System.Collections.Generic.HashSet[string]]::new()
+        $reader = [System.IO.File]::OpenText($cppSorted)
+        try { while ($null -ne ($line = $reader.ReadLine())) { [void]$cppSet.Add($line) } } finally { $reader.Close() }
+
         $onlyRust = [System.Collections.Generic.List[string]]::new()
-        foreach ($line in $rustLinesSorted) {
-            if (-not $cppSet.Contains($line)) {
-                $onlyRust.Add($line)
+        $reader = [System.IO.File]::OpenText($rustSorted)
+        try {
+            while ($null -ne ($line = $reader.ReadLine())) {
+                if (-not $cppSet.Contains($line)) { $onlyRust.Add($line) }
             }
-        }
+        } finally { $reader.Close() }
 
         # Sample random lines from each side
         $rng = [System.Random]::new()

@@ -9,20 +9,15 @@ use tracing::info;
 use uffs_core::output::{CPP_COLUMN_ORDER, OutputColumn, OutputConfig};
 use uffs_core::{export_json, export_table};
 
-#[cfg(windows)]
 #[path = "streaming.rs"]
 mod streaming;
-#[cfg(windows)]
+#[expect(
+    unused_imports,
+    reason = "cross-platform type, currently used from Windows multi-drive paths only"
+)]
 pub(crate) use streaming::StreamingWriter;
-// For tests, we need the JSON helpers - on Windows from streaming.rs, elsewhere from
-// json_helpers.rs
-#[cfg(all(test, windows))]
+#[cfg(test)]
 pub(super) use streaming::format_json_value;
-#[cfg(all(test, not(windows)))]
-#[path = "json_helpers.rs"]
-mod json_helpers;
-#[cfg(all(test, not(windows)))]
-pub(super) use json_helpers::format_json_value;
 
 /// Context for C++ baseline-compatible footer formatting.
 pub(super) struct CppFooterContext<'a> {
@@ -1100,7 +1095,6 @@ pub(super) fn selected_output_columns(output_config: &OutputConfig) -> &[OutputC
 }
 
 /// Public wrapper for `write_native_header` (used by multi-drive streaming).
-#[cfg(windows)]
 pub(super) fn write_native_header_pub<W: Write + ?Sized>(
     writer: &mut W,
     output_config: &OutputConfig,
@@ -1113,7 +1107,10 @@ pub(super) fn write_native_header_pub<W: Write + ?Sized>(
 ///
 /// Used by multi-drive streaming where the caller writes one header before
 /// all drives and one footer after all drives.
-#[cfg(windows)]
+#[expect(
+    dead_code,
+    reason = "cross-platform helper, currently called from Windows multi-drive paths only"
+)]
 pub(super) fn write_index_streaming_no_header<W: Write + ?Sized>(
     index: &uffs_mft::MftIndex,
     writer: &mut W,
@@ -1131,7 +1128,6 @@ pub(super) fn write_index_streaming_no_header<W: Write + ?Sized>(
 }
 
 /// Public wrapper for `write_cpp_drive_footer` (used by multi-drive streaming).
-#[cfg(windows)]
 pub(super) fn write_cpp_footer_pub<W: Write + ?Sized>(
     writer: &mut W,
     ctx: &CppFooterContext<'_>,

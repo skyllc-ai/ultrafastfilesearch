@@ -120,7 +120,7 @@ pub async fn search(
     single_drive: Option<char>,
     multi_drives: Option<Vec<char>>,
     index: Option<PathBuf>,
-    mft_file: Option<PathBuf>,
+    mft_file: Vec<PathBuf>,
     files_only: bool,
     dirs_only: bool,
     hide_system: bool,
@@ -240,7 +240,196 @@ pub async fn search(
             || filters.parsed.pattern() == "**/*"
             || filters.parsed.pattern().is_empty());
 
-    if let Some(mft_path) = mft_file.as_ref()
+    // =========================================================================
+    // Multi-file MftIndex streaming (cross-platform multi-drive with --mft-file)
+    // =========================================================================
+    // When multiple --mft-file arguments are provided, load each file in
+    // parallel and stream output per-drive — same architecture as Windows
+    // live multi-drive but fully cross-platform.
+    if mft_file.len() > 1 && !benchmark && can_write_native_results(format, &output_config) {
+        // Drive letters: use --drives if provided, otherwise infer from filenames.
+        let drive_letters: Vec<char> = if let Some(ref drives) = multi_drives {
+            if drives.len() != mft_file.len() {
+                bail!(
+                    "Number of --drives ({}) must match number of --mft-file ({}).\n\
+                     Tip: drive letters are auto-inferred from filenames — you can omit --drives entirely.\n\
+                     Example: uffs \"*\" --mft-file C.bin,D.bin",
+                    drives.len(),
+                    mft_file.len()
+                );
+            }
+            drives.clone()
+        } else {
+            mft_file
+                .iter()
+                .map(|p| infer_drive_from_filename(p))
+                .collect()
+        };
+
+        info!(
+            files = mft_file.len(),
+            drives = ?drive_letters,
+            "📂 MULTI-FILE STREAMING (cross-platform multi-drive)"
+        );
+
+        let compiled_pattern = if is_full_scan {
+            None
+        } else {
+            Some(uffs_core::compile_parsed_pattern(filters.parsed)?)
+        };
+
+        let rec_filter = build_record_filter(
+            &filters,
+            attr_filter,
+            newer,
+            older,
+            newer_created,
+            older_created,
+            newer_accessed,
+            older_accessed,
+            exclude,
+            sort,
+            sort_desc,
+        );
+
+        // Load all indexes in parallel, stream output per-drive.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<(char, uffs_mft::MftIndex, u128)>(2);
+
+        // Spawn parallel loaders (one per file).
+        let file_drive_pairs: Vec<_> = mft_file
+            .iter()
+            .zip(drive_letters.iter())
+            .map(|(p, &d)| (p.clone(), d))
+            .collect();
+        let debug_tree_copy = debug_tree;
+        let chaos_seed_copy = chaos_seed;
+        let reserved_alloc_copy = reserved_allocated;
+
+        let loader_handle = std::thread::spawn(move || {
+            // Load files in parallel using rayon-style scoped threads.
+            // Each completed index is sent to the writer immediately.
+            std::thread::scope(|scope| {
+                for (path, drive) in &file_drive_pairs {
+                    let tx = tx.clone();
+                    scope.spawn(move || {
+                        let result = super::raw_io::load_index_from_mft_file(
+                            path,
+                            Some(*drive),
+                            debug_tree_copy,
+                            chaos_seed_copy,
+                            reserved_alloc_copy,
+                        );
+                        match result {
+                            Ok(loaded) => {
+                                let _ = tx.send((*drive, loaded.index, loaded.load_ms));
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    drive = %drive,
+                                    path = %path.display(),
+                                    error = %e,
+                                    "Failed to load MFT file"
+                                );
+                            }
+                        }
+                    });
+                }
+            });
+        });
+
+        // Writer: stream output as indexes arrive (same as Windows live path).
+        let cs = effective_case_sensitive;
+        let is_pp = filters.parsed.is_path_pattern();
+        let cpp_pattern = format!(
+            ">{}",
+            drive_letters
+                .iter()
+                .map(|d| format!("{}:{}", d, pattern.replace('*', ".*")))
+                .collect::<Vec<_>>()
+                .join("|")
+        );
+        let t_output = std::time::Instant::now();
+
+        let stream_drive =
+            |index: &uffs_mft::MftIndex, w: &mut dyn std::io::Write| -> Result<usize> {
+                let ext_indices: Option<Vec<u32>> = compiled_pattern.as_ref().and_then(|_pat| {
+                    let ext_index = index.extension_index.as_ref()?;
+                    let ext = extract_trailing_extension(pattern)?;
+                    let ext_lower = ext.to_ascii_lowercase();
+                    let ext_id = index.extensions.map.get(ext_lower.as_str())?;
+                    Some(ext_index.get_records(*ext_id).to_vec())
+                });
+                crate::commands::output::write_index_streaming_with_filter(
+                    index,
+                    compiled_pattern.as_ref(),
+                    ext_indices.as_deref(),
+                    cs,
+                    is_pp,
+                    &rec_filter,
+                    w,
+                    "",
+                    &output_config,
+                    &crate::commands::output::CppFooterContext {
+                        output_targets: &[],
+                        pattern: "",
+                        row_count: 0,
+                    },
+                )
+            };
+
+        let is_console = matches!(
+            out.to_lowercase().as_str(),
+            "console" | "con" | "term" | "terminal"
+        );
+        let total_rows = {
+            let cols = crate::commands::output::selected_output_columns(&output_config);
+
+            let write_to = |w: &mut dyn std::io::Write| -> Result<usize> {
+                crate::commands::output::write_native_header_pub(w, &output_config, cols)?;
+                let mut total = 0usize;
+                for (drive, index, load_ms) in rx {
+                    info!(drive = %drive, load_ms, records = index.len(), "📊 streaming drive");
+                    total += stream_drive(&index, w)?;
+                }
+                if format == "custom" {
+                    let footer = crate::commands::output::CppFooterContext {
+                        output_targets: &output_targets,
+                        pattern: &cpp_pattern,
+                        row_count: total,
+                    };
+                    crate::commands::output::write_cpp_footer_pub(w, &footer)?;
+                }
+                w.flush()?;
+                Ok(total)
+            };
+
+            if is_console {
+                let stdout = std::io::stdout();
+                let mut w = std::io::BufWriter::with_capacity(1024 * 1024, stdout.lock());
+                write_to(&mut w)?
+            } else {
+                let file = std::fs::File::create(out)
+                    .with_context(|| format!("Failed to create output file: {out}"))?;
+                let mut w = std::io::BufWriter::with_capacity(1024 * 1024, file);
+                let rows = write_to(&mut w)?;
+                info!(file = out, "Results written to file");
+                rows
+            }
+        };
+
+        loader_handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("Loader thread panicked"))?;
+
+        let output_ms = t_output.elapsed().as_millis();
+        info!(output_ms, total_rows, "📊 multi-file streaming complete");
+        return Ok(());
+    }
+
+    // =========================================================================
+    // Single-file MftIndex streaming (cross-platform, one --mft-file)
+    // =========================================================================
+    if let Some(mft_path) = mft_file.first()
         && !benchmark
         && can_write_native_results(format, &output_config)
     {
@@ -252,9 +441,11 @@ pub async fn search(
             );
 
             // Load index only (skip IndexQuery::collect entirely)
+            let effective_drive =
+                single_drive.or_else(|| Some(infer_drive_from_filename(mft_path)));
             let native_index = super::raw_io::load_index_from_mft_file(
                 mft_path,
-                single_drive,
+                effective_drive,
                 debug_tree,
                 chaos_seed,
                 reserved_allocated,
@@ -300,9 +491,10 @@ pub async fn search(
             "📂 Loading raw MFT file via STREAMING filtered path"
         );
 
+        let effective_drive = single_drive.or_else(|| Some(infer_drive_from_filename(mft_path)));
         let native_index = super::raw_io::load_index_from_mft_file(
             mft_path,
-            single_drive,
+            effective_drive,
             debug_tree,
             chaos_seed,
             reserved_allocated,
@@ -360,7 +552,7 @@ pub async fn search(
         return Ok(());
     }
 
-    let mut results = if let Some(mft_path) = mft_file.as_ref() {
+    let mut results = if let Some(mft_path) = mft_file.first() {
         info!(path = %mft_path.display(), "📂 Loading from raw MFT file");
         load_and_filter_from_mft_file(
             mft_path,
@@ -1058,9 +1250,35 @@ pub(super) async fn search_multi_drive_filtered(
     bail!("Multi-drive search is only supported on Windows")
 }
 
+/// Infer a drive letter from an MFT filename.
+///
+/// If the filename starts with a single ASCII letter followed by a
+/// non-letter (e.g., `C.bin`, `C_mft.bin`, `D-drive.mft`), returns
+/// that letter uppercased.  Otherwise returns `'X'` as fallback.
+fn infer_drive_from_filename(path: &std::path::Path) -> char {
+    let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let mut chars = stem.chars();
+    if let Some(first) = chars.next() {
+        if first.is_ascii_alphabetic() {
+            // Second char must be non-alphabetic (or end of string)
+            match chars.next() {
+                None | Some('.') | Some('_') | Some('-') | Some(' ') => {
+                    return first.to_ascii_uppercase();
+                }
+                _ => {}
+            }
+        }
+    }
+    'X'
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MAX_CONCURRENT_SEARCH_DRIVE_TASKS, search_drive_task_budget};
+    use std::path::Path;
+
+    use super::{
+        MAX_CONCURRENT_SEARCH_DRIVE_TASKS, infer_drive_from_filename, search_drive_task_budget,
+    };
 
     #[test]
     fn search_drive_task_budget_handles_empty_input() {
@@ -1079,5 +1297,27 @@ mod tests {
             search_drive_task_budget(MAX_CONCURRENT_SEARCH_DRIVE_TASKS + 8)
                 <= MAX_CONCURRENT_SEARCH_DRIVE_TASKS
         );
+    }
+
+    #[test]
+    fn infer_drive_from_common_mft_filenames() {
+        assert_eq!(infer_drive_from_filename(Path::new("C.bin")), 'C');
+        assert_eq!(infer_drive_from_filename(Path::new("c.bin")), 'C');
+        assert_eq!(infer_drive_from_filename(Path::new("D_mft.bin")), 'D');
+        assert_eq!(infer_drive_from_filename(Path::new("f-drive.mft")), 'F');
+        assert_eq!(infer_drive_from_filename(Path::new("G mft.raw")), 'G');
+    }
+
+    #[test]
+    fn infer_drive_falls_back_to_x_for_ambiguous_names() {
+        assert_eq!(infer_drive_from_filename(Path::new("raw.bin")), 'X');
+        assert_eq!(infer_drive_from_filename(Path::new("backup_mft.bin")), 'X');
+        assert_eq!(infer_drive_from_filename(Path::new("12345.bin")), 'X');
+    }
+
+    #[test]
+    fn infer_drive_handles_full_paths() {
+        assert_eq!(infer_drive_from_filename(Path::new("/tmp/C.bin")), 'C');
+        assert_eq!(infer_drive_from_filename(Path::new("/data/D_mft.raw")), 'D');
     }
 }

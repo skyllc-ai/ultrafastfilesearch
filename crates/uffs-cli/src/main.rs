@@ -181,14 +181,21 @@ struct Cli {
     #[arg(short, long, conflicts_with_all = ["drive", "drives", "mft_file"])]
     index: Option<PathBuf>,
 
-    /// Use raw MFT file instead of live MFT (cross-platform debugging)
+    /// Use raw MFT file(s) instead of live MFT (cross-platform)
     ///
-    /// Load a previously saved raw MFT file (from `uffs save-raw` or `uffs_mft
-    /// save`). Use `--drive` to specify the volume letter for path
-    /// resolution (default: X). Example: `uffs "*" --mft-file G_mft.bin
-    /// --drive G`
-    #[arg(long, conflicts_with_all = ["index", "drives"], verbatim_doc_comment)]
-    mft_file: Option<PathBuf>,
+    /// Load previously saved raw MFT files (from `uffs save-raw` or
+    /// `uffs_mft save`). Drive letters are auto-inferred from filenames
+    /// (e.g., C.bin → C:, D_mft.bin → D:). Use --drive/--drives to
+    /// override if needed.
+    ///   Single:  `uffs "*" --mft-file C.bin`
+    ///   Multi:   `uffs "*" --mft-file C.bin,D.bin`
+    #[arg(
+        long,
+        value_delimiter = ',',
+        conflicts_with = "index",
+        verbatim_doc_comment
+    )]
+    mft_file: Vec<PathBuf>,
 
     /// Show only files (exclude directories)
     #[arg(long)]
@@ -726,7 +733,7 @@ mod tests {
         assert_eq!(cli.pattern.as_deref(), Some("*.rs"));
         assert_eq!(cli.drive, Some('G'));
         assert_eq!(cli.drives, None);
-        assert_eq!(cli.mft_file.as_deref(), Some(Path::new("raw.bin")));
+        assert_eq!(cli.mft_file.as_slice(), &[PathBuf::from("raw.bin")]);
         assert_eq!(cli.format, "json");
         assert_eq!(cli.tz_offset, Some(-8));
     }

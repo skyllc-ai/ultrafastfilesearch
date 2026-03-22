@@ -248,19 +248,50 @@ Windows-only IOCP/volume/platform layer where they belong.
 | Phase 2: Search helpers cross-platform | ✅ **DONE** | 12 | ~15 |
 | Phase 4: Remove legacy output | ✅ **DONE** | 0 | ~500 |
 | Phase 3: MftSource dispatch reader | ✅ **DONE** | ~10 | ~50 refactored |
+| Phase 5: Cross-platform cleanup | ✅ **DONE** | ~22 | ~68 deleted |
+| Phase 6: Multi-file cross-platform streaming | ✅ **DONE** | 0 | ~200 added |
 
-### Remaining cfg gates in CLI crate: 38
+### Phase 5: Cross-platform cleanup (completed)
 
-- `search/mod.rs` (13) — Windows LIVE streaming (IOCP multi-drive, drive
-  detection). **Genuinely Windows-only** — calls `MftReader::open(drive)`.
-- `output.rs` (7) — 3 Windows multi-drive helpers (callers are Windows-only),
-  2 cfg-gated imports, 2 test gates. **Blocked by Phase 3.**
-- `raw_io.rs` (7), `index.rs` (6), `commands.rs` (5) — Windows LIVE MFT
-  reader calls. **Genuinely Windows-only.**
+Removed unnecessary `#[cfg(windows)]` from pure utility functions and types:
+- `display.rs`: ungated `truncate_string`, `char_or_dot`, `format_usn_reason`,
+  `format_number` (6 gates)
+- `output.rs`: ungated `streaming.rs` module, `StreamingWriter`, multi-drive
+  helpers (5 gates). Deleted redundant `json_helpers.rs`.
+- `lib.rs`: ungated NTFS type re-exports (`AttributeType`, `FileRecordSegmentHeader`,
+  etc.) and `DriveType`/`MftBitmap`/`MftExtent` (5 gates)
+- `reader.rs`: fixed missing `MftError` import for non-Windows stub
+- `reader/`: consolidated split `MftError`/`Result` imports in `dataframe_read.rs`,
+  `dataframe_timing.rs`, `index_cache.rs`, `multi_drive/mod.rs` (6 gates)
 
-### Remaining cfg gates in uffs-mft crate: ~130
+### Phase 6: Multi-file cross-platform streaming (completed)
 
-All in `reader/` submodules. Blocked by Phase 3 (trait-based reader).
+`--mft-file` now accepts multiple files for cross-platform multi-drive:
+```
+uffs "*" --mft-file C.bin --mft-file D.bin --drives C,D
+```
+- Files load in parallel using scoped threads
+- Output streams per-drive as each index completes (same architecture as
+  Windows LIVE multi-drive)
+- `write_native_header_pub`, `write_index_streaming_with_filter`,
+  `write_cpp_footer_pub` are now genuinely called cross-platform
+- **Remaining**: DataFrame streaming path (`StreamingWriter` in
+  `commands/streaming.rs`) still needs `search/drive_search.rs` refactored
+  to support file-based MFT sources
+
+### Current cfg gate counts (249 total)
+
+| Crate | `cfg(windows)` | `cfg(not(windows))` | Total | Notes |
+|---|---|---|---|---|
+| uffs-core | 1 | 0 | 1 | `MftError::Windows` match arm |
+| uffs-gui | 0 | 0 | 0 | Clean |
+| uffs-cli | 23 | 6 | 29 | All genuinely Windows-only |
+| uffs-diag | 8 | 2 | 10 | Diagnostic tools, live volume |
+| uffs-mft | 174 | 35 | 209 | Reader/IO/platform layer |
+
+All remaining gates are in genuinely Windows-only code (IOCP, VolumeHandle,
+live volume detection, Win32 APIs) or their corresponding platform parity
+stubs.
 
 ## Phase 3: Detailed Implementation Plan
 

@@ -211,11 +211,19 @@ mod tests {
     }
 
     #[test]
-    fn test_search_rejects_conflicting_mft_file_and_drives() {
-        assert_failure(
-            "search_mft_drives_conflict",
-            &["*.rs", "--mft-file", "raw.bin", "--drives", "C,D"],
-            &["cannot be used with", "--drives <DRIVES>"],
+    fn test_search_accepts_multi_mft_file_without_drives() {
+        // Multiple --mft-file values work without --drives.
+        // Drive letters are auto-inferred from filenames (C.bin → C:).
+        // The command will fail (files don't exist) but must NOT fail with
+        // an argument-conflict error.
+        let output = run_cli(
+            "search_mft_multi_file",
+            &["*.rs", "--mft-file", "C.bin,D.bin"],
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains("cannot be used with"),
+            "--mft-file C.bin,D.bin should be accepted without --drives, got: {stderr}"
         );
     }
 

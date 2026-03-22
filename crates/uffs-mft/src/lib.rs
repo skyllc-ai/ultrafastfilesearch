@@ -147,10 +147,8 @@ pub use io::{
     PipelinedMftReader, PrefetchMftReader, ReadChunk, ReadParseTiming, StreamingMftReader,
     apply_fixup, generate_read_chunks, parse_record_full, parse_record_zero_alloc,
 };
-// Re-export NTFS constants
-#[cfg(windows)]
+// Re-export NTFS constants and types (pure Rust data structures, cross-platform)
 pub use ntfs::SECTOR_SIZE;
-#[cfg(windows)]
 pub use ntfs::{
     AttributeIterator, AttributeListEntry, AttributeRecordHeader, AttributeRef, AttributeType,
     DataRun, ExtendedStandardInfo, FileNameAttribute, FileRecordSegmentHeader, IndexHeader,
@@ -159,9 +157,9 @@ pub use ntfs::{
     apply_usa_fixup, extract_data_runs_from_attribute, fixup_file_record, parse_data_runs,
 };
 // Re-export platform types
-// Export core types (DriveType, MftBitmap, MftExtent) for testing on all platforms
-// Export Windows-specific types and functions only on Windows
-#[cfg(any(windows, test))]
+// Core types (DriveType, MftBitmap, MftExtent) are pure data — available on all platforms
+// Windows-specific types and functions (VolumeHandle, detect_ntfs_drives, etc.) only on
+// Windows
 pub use platform::{DriveType, MftBitmap, MftExtent};
 #[cfg(windows)]
 pub use platform::{

@@ -100,7 +100,10 @@ pub fn clean_path_for_display(path: &Path) -> PathBuf {
 }
 
 /// Truncates a string to a maximum length, adding "..." if truncated.
-#[cfg(windows)]
+#[expect(
+    dead_code,
+    reason = "cross-platform utility, currently called from Windows commands only"
+)]
 pub fn truncate_string(text: &str, max_len: usize) -> String {
     if text.len() <= max_len {
         text.to_owned()
@@ -123,10 +126,11 @@ pub fn truncate_string(text: &str, max_len: usize) -> String {
 // Benchmark Command
 // ============================================================================
 
-#[cfg(windows)]
-
 /// Converts a byte to a printable ASCII character or '.' for non-printable.
-#[cfg(windows)]
+#[expect(
+    dead_code,
+    reason = "cross-platform utility, currently called from Windows commands only"
+)]
 pub fn char_or_dot(byte: u8) -> char {
     if byte.is_ascii_graphic() || byte == b' ' {
         byte as char
@@ -140,14 +144,11 @@ pub fn char_or_dot(byte: u8) -> char {
 // --benchmark-index exactly)
 // ============================================================================
 
-/// Full index build benchmark matching C++ `--benchmark-index` output exactly.
-///
-/// This measures the complete UFFS indexing pipeline: async I/O + parsing +
-/// `DataFrame` building. This is what users experience when indexing.
-#[cfg(windows)]
-
 /// Format USN reason flags as a short string.
-#[cfg(windows)]
+#[expect(
+    dead_code,
+    reason = "cross-platform utility, currently called from Windows commands only"
+)]
 pub fn format_usn_reason(reason: u32) -> String {
     use uffs_mft::usn::reason;
 
@@ -179,7 +180,10 @@ pub fn format_usn_reason(reason: u32) -> String {
 }
 
 /// Format a number with thousands separators.
-#[cfg(windows)]
+#[expect(
+    dead_code,
+    reason = "cross-platform utility, currently called from Windows commands only"
+)]
 pub fn format_number(n: u64) -> String {
     let s = n.to_string();
     let mut result = String::new();

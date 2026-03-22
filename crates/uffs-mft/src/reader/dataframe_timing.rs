@@ -14,9 +14,7 @@ use super::benchmark::{
     build_benchmark_result, build_drive_characteristics, estimate_combined_phase_timings,
 };
 use super::{BenchmarkResult, MftReader};
-#[cfg(not(windows))]
-use crate::error::MftError;
-use crate::error::Result;
+use crate::error::{MftError, Result};
 
 impl MftReader {
     /// Read MFT with detailed phase timing for benchmarking.

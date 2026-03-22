@@ -1,6 +1,9 @@
 //! Benchmarking helper types and small construction utilities.
 
-#[cfg(windows)]
+#[expect(
+    unused_imports,
+    reason = "cross-platform type, used by cfg(windows) benchmark functions"
+)]
 use crate::platform::DriveType;
 
 /// Phase timing breakdown for MFT reading operations.

@@ -1,7 +1,19 @@
-//! Streaming output writer for multi-drive search (Windows-only).
+//! Streaming output writer for multi-drive search.
 //!
 //! Supports CSV (header + rows) and NDJSON (one JSON object per line) formats.
 //! Writes results as each drive completes for immediate user feedback.
+//!
+//! This module is cross-platform — it operates on `DataFrame` via generic
+//! `Write` and has no platform dependencies.
+
+// TODO: Wire this for cross-platform multi-file DataFrame streaming.
+// The MftIndex streaming path is already cross-platform (search/mod.rs).
+// This DataFrame path needs search/drive_search.rs to support file-based
+// MFT sources instead of only load_or_build_dataframe_cached().
+#![allow(
+    dead_code,
+    reason = "DataFrame streaming path — cross-platform MftIndex streaming is wired, DataFrame path pending"
+)]
 
 use std::io::Write;
 use std::sync::Mutex;
