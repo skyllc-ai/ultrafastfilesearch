@@ -7,7 +7,7 @@
 #   .\benchmark.ps1 -N 5 -Drive C,D,E,F,G,M,S -Cache              # warm full scan
 #   .\benchmark.ps1 -N 5 -Drive C,F -Cache -Pattern "*.rs"         # warm filtered
 #   .\benchmark.ps1 -N 5 -Drive C -Cache -RustArgs "--files-only --min-size 1024"
-#   .\benchmark.ps1 -N 5 -Drive C -Cache -RustArgs "--sort size --sort-desc --limit 100"
+#   .\benchmark.ps1 -N 5 -Drive C -Cache -RustArgs "--sort size:desc --limit 100"
 #   .\benchmark.ps1 -N 5 -Drive C -Cache -RustArgs "--attr hidden,!system --newer 7d"
 
 param(
