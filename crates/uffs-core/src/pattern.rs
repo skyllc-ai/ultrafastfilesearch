@@ -316,4 +316,122 @@ mod tests {
         assert_eq!(parsed.pattern_type(), PatternType::Glob);
         Ok(())
     }
+
+    // =========================================================================
+    // Path-aware detection (P6-P8 from branch matrix)
+    // =========================================================================
+
+    #[test]
+    fn test_backslash_path_detection() -> TestResult {
+        let parsed = ParsedPattern::parse("\\Users\\*")?;
+        assert!(
+            parsed.is_path_pattern(),
+            "backslash should trigger path detection"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_forward_slash_path_detection() -> TestResult {
+        let parsed = ParsedPattern::parse("Users/foo/*")?;
+        assert!(
+            parsed.is_path_pattern(),
+            "forward slash should trigger path detection"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_literal_always_path_aware() -> TestResult {
+        let parsed = ParsedPattern::parse("nice")?;
+        assert_eq!(parsed.pattern_type(), PatternType::Literal);
+        assert!(
+            parsed.is_path_pattern(),
+            "literals should always be path-aware"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_simple_glob_not_path_aware() -> TestResult {
+        let parsed = ParsedPattern::parse("*.txt")?;
+        assert!(
+            !parsed.is_path_pattern(),
+            "simple glob without separator should not be path-aware"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_glob_with_backslash_is_path_aware() -> TestResult {
+        let parsed = ParsedPattern::parse("**\\Users\\**\\AppData\\**")?;
+        assert!(
+            parsed.is_path_pattern(),
+            "glob with backslash should be path-aware"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_leading_slash_not_path_aware() -> TestResult {
+        // Leading slash is a glob prefix, not a path separator between components
+        let parsed = ParsedPattern::parse("/pro*")?;
+        assert!(
+            !parsed.is_path_pattern(),
+            "leading slash alone should not be path-aware"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_drive_prefix_with_path() -> TestResult {
+        let parsed = ParsedPattern::parse("C:\\Windows\\*")?;
+        assert_eq!(parsed.drive(), Some('C'));
+        assert!(
+            parsed.is_path_pattern(),
+            "drive + backslash path should be path-aware"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_regex_with_path_separators() -> TestResult {
+        let parsed = ParsedPattern::parse(r">C:\\TemP.*\.txt")?;
+        assert_eq!(parsed.pattern_type(), PatternType::Regex);
+        assert!(
+            parsed.is_path_pattern(),
+            "regex with backslashes should be path-aware"
+        );
+        Ok(())
+    }
+
+    // =========================================================================
+    // Forward slash normalization
+    // =========================================================================
+
+    #[test]
+    fn test_forward_slash_normalized_in_path_pattern() -> TestResult {
+        let parsed = ParsedPattern::parse("Users/foo/bar/*")?;
+        assert!(
+            parsed.pattern().contains('\\'),
+            "forward slashes should be normalized to backslashes"
+        );
+        assert!(
+            !parsed.pattern().contains('/'),
+            "no forward slashes should remain after normalization"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_forward_slash_not_normalized_in_non_path_glob() -> TestResult {
+        // /pro* has leading slash only — not path-aware, no normalization
+        let parsed = ParsedPattern::parse("/pro*")?;
+        assert_eq!(
+            parsed.pattern(),
+            "/pro*",
+            "leading slash should not be normalized"
+        );
+        Ok(())
+    }
 }

@@ -1,9 +1,5 @@
 //! Output helpers for CLI search commands.
 
-extern crate alloc;
-
-use alloc::borrow::Cow;
-use core::fmt::Write as _;
 use core::time::Duration;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -46,57 +42,8 @@ pub(super) fn can_write_native_results(format: &str, output_config: &OutputConfi
         && !selected_output_columns(output_config).contains(&OutputColumn::Bulkiness)
 }
 
-/// Write native `IndexQuery` results directly for the offline `--mft-file`
-/// output path.
-pub(super) fn write_native_results(
-    index: &uffs_mft::MftIndex,
-    results: &[uffs_core::SearchResult],
-    format: &str,
-    out: &str,
-    output_config: &OutputConfig,
-    footer_ctx: &CppFooterContext<'_>,
-) -> Result<()> {
-    let normalized_format = format.to_ascii_lowercase();
-    let is_console = matches!(
-        out.to_lowercase().as_str(),
-        "console" | "con" | "term" | "terminal"
-    );
-
-    if is_console {
-        let stdout_handle = std::io::stdout();
-        let mut stdout = stdout_handle.lock();
-        write_native_results_to(
-            index,
-            results,
-            &normalized_format,
-            &mut stdout,
-            output_config,
-            footer_ctx,
-        )?;
-        stdout.flush()?;
-    } else {
-        let file =
-            File::create(out).with_context(|| format!("Failed to create output file: {out}"))?;
-        let mut writer = BufWriter::new(file);
-        write_native_results_to(
-            index,
-            results,
-            &normalized_format,
-            &mut writer,
-            output_config,
-            footer_ctx,
-        )?;
-        writer.flush()?;
-
-        info!(file = out, "Results written to file");
-    }
-
-    Ok(())
-}
-
 /// A single attribute requirement: attribute must be set (Include) or not set
 /// (Exclude).
-#[cfg(windows)]
 #[derive(Debug, Clone, Copy)]
 pub(super) enum AttrRequirement {
     /// Attribute must be set (e.g., `hidden`).
@@ -106,7 +53,6 @@ pub(super) enum AttrRequirement {
 }
 
 /// Known NTFS file attributes for filtering.
-#[cfg(windows)]
 #[derive(Debug, Clone, Copy)]
 pub(super) enum AttrKind {
     /// Hidden file attribute.
@@ -145,7 +91,6 @@ pub(super) enum AttrKind {
     Directory,
 }
 
-#[cfg(windows)]
 impl AttrKind {
     /// Parse an attribute name (case-insensitive).
     #[must_use]
@@ -175,7 +120,7 @@ impl AttrKind {
     /// Check if this attribute is set on the given record.
     #[inline]
     #[must_use]
-    pub fn is_set(self, record: &uffs_mft::index::FileRecord) -> bool {
+    pub const fn is_set(self, record: &uffs_mft::index::FileRecord) -> bool {
         match self {
             Self::Hidden => record.stdinfo.is_hidden(),
             Self::System => record.stdinfo.is_system(),
@@ -208,6 +153,10 @@ impl AttrKind {
 /// uffs *.txt --files-only --min-size 1024 --attr hidden --newer 7d --case
 /// ```
 #[derive(Debug, Clone, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each bool maps to an independent CLI flag — not a state machine"
+)]
 pub(super) struct StreamingRecordFilter {
     /// Only output files (skip directories).
     pub files_only: bool,
@@ -220,7 +169,6 @@ pub(super) struct StreamingRecordFilter {
     /// Maximum file size filter.
     pub max_size: Option<u64>,
     /// Attribute requirements (all must be satisfied — AND logic).
-    #[cfg(windows)]
     pub attr_filters: Vec<AttrRequirement>,
     /// Only records modified after this timestamp (microseconds since epoch).
     pub newer_modified: Option<i64>,
@@ -239,15 +187,12 @@ pub(super) struct StreamingRecordFilter {
     /// Maximum number of output rows (0 = unlimited).
     pub limit: usize,
     /// Sort specification (empty = no sort, output in FRS order).
-    #[cfg(windows)]
     pub sort_spec: Vec<SortColumn>,
     /// Reverse sort order (descending).
-    #[cfg(windows)]
     pub sort_desc: bool,
 }
 
 /// A single sort tier: column + direction.
-#[cfg(windows)]
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SortColumn {
     /// The column to sort by.
@@ -257,7 +202,6 @@ pub(super) struct SortColumn {
 }
 
 /// Sort column kind.
-#[cfg(windows)]
 #[derive(Debug, Clone, Copy)]
 pub(super) enum SortKind {
     /// File size.
@@ -294,7 +238,6 @@ pub(super) enum SortKind {
     Directory,
 }
 
-#[cfg(windows)]
 impl SortKind {
     /// Smart default sort direction for this column.
     ///
@@ -355,87 +298,94 @@ impl SortKind {
 /// - `"size"` → `[Size(asc)]`
 /// - `"size:desc,name"` → `[Size(desc), Name(asc)]`
 /// - `"modified:desc,size:asc,name"` → `[Modified(desc), Size(asc), Name(asc)]`
-#[cfg(windows)]
 pub(super) fn parse_sort_spec(input: &str) -> Vec<SortColumn> {
     input
         .split(',')
-        .filter_map(|s| {
-            let s = s.trim();
-            let (name, dir) = if let Some((n, d)) = s.split_once(':') {
-                (n.trim(), Some(d.trim()))
+        .filter_map(|raw_token| {
+            let trimmed = raw_token.trim();
+            let (name, dir) = if let Some((col_name, dir_str)) = trimmed.split_once(':') {
+                (col_name.trim(), Some(dir_str.trim()))
             } else {
-                (s, None) // no explicit direction → use smart default
+                (trimmed, None) // no explicit direction → use smart default
             };
             let kind = SortKind::parse(name)?;
-            let descending = match dir {
-                Some(d) => match d.to_ascii_lowercase().as_str() {
-                    "desc" | "d" | "descending" => true,
-                    "asc" | "a" | "ascending" => false,
-                    _ => kind.default_descending(),
+            let descending = dir.map_or_else(
+                || kind.default_descending(),
+                |dir_str| {
+                    matches!(
+                        dir_str.to_ascii_lowercase().as_str(),
+                        "desc" | "d" | "descending"
+                    )
                 },
-                None => kind.default_descending(), // smart default
-            };
+            );
             Some(SortColumn { kind, descending })
         })
         .collect()
-}
-
-/// Lightweight sort entry: just the record index.
-/// Sort keys are extracted on-demand during comparison from the MftIndex.
-#[cfg(windows)]
-#[derive(Clone, Copy)]
-pub(super) struct SortEntry {
-    /// Index into the MftIndex records array.
-    pub record_idx: u32,
 }
 
 /// Compare two records by multi-tier sort specification.
 ///
 /// Extracts sort keys on-demand from the index — no pre-materialized keys.
 /// For name/path sorts, uses the names buffer directly (zero allocation).
-#[cfg(windows)]
 pub(super) fn compare_records(
     a_idx: usize,
     b_idx: usize,
     index: &uffs_mft::MftIndex,
     sort_spec: &[SortColumn],
     global_desc: bool,
-) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
+) -> core::cmp::Ordering {
+    use core::cmp::Ordering;
 
-    let a = &index.records[a_idx];
-    let b = &index.records[b_idx];
+    let Some(rec_a) = index.records.get(a_idx) else {
+        return Ordering::Equal;
+    };
+    let Some(rec_b) = index.records.get(b_idx) else {
+        return Ordering::Equal;
+    };
 
     for col in sort_spec {
         let ord = match col.kind {
-            SortKind::Size => a.first_stream.size.length.cmp(&b.first_stream.size.length),
-            SortKind::SizeOnDisk => a
+            SortKind::Size => rec_a
+                .first_stream
+                .size
+                .length
+                .cmp(&rec_b.first_stream.size.length),
+            SortKind::SizeOnDisk => rec_a
                 .first_stream
                 .size
                 .allocated
-                .cmp(&b.first_stream.size.allocated),
-            SortKind::Modified => a.stdinfo.modified.cmp(&b.stdinfo.modified),
-            SortKind::Created => a.stdinfo.created.cmp(&b.stdinfo.created),
-            SortKind::Accessed => a.stdinfo.accessed.cmp(&b.stdinfo.accessed),
+                .cmp(&rec_b.first_stream.size.allocated),
+            SortKind::Modified => rec_a.stdinfo.modified.cmp(&rec_b.stdinfo.modified),
+            SortKind::Created => rec_a.stdinfo.created.cmp(&rec_b.stdinfo.created),
+            SortKind::Accessed => rec_a.stdinfo.accessed.cmp(&rec_b.stdinfo.accessed),
             SortKind::Name => {
-                let na = index.record_name(a);
-                let nb = index.record_name(b);
+                let na = index.record_name(rec_a);
+                let nb = index.record_name(rec_b);
                 na.to_ascii_lowercase().cmp(&nb.to_ascii_lowercase())
             }
             SortKind::Path => Ordering::Equal,
-            SortKind::Extension => a
+            SortKind::Extension => rec_a
                 .first_name
                 .name
                 .extension_id()
-                .cmp(&b.first_name.name.extension_id()),
-            SortKind::Descendants => a.descendants.cmp(&b.descendants),
-            SortKind::Hidden => a.stdinfo.is_hidden().cmp(&b.stdinfo.is_hidden()),
-            SortKind::System => a.stdinfo.is_system().cmp(&b.stdinfo.is_system()),
-            SortKind::Archive => a.stdinfo.is_archive().cmp(&b.stdinfo.is_archive()),
-            SortKind::ReadOnly => a.stdinfo.is_readonly().cmp(&b.stdinfo.is_readonly()),
-            SortKind::Compressed => a.stdinfo.is_compressed().cmp(&b.stdinfo.is_compressed()),
-            SortKind::Encrypted => a.stdinfo.is_encrypted().cmp(&b.stdinfo.is_encrypted()),
-            SortKind::Directory => a.is_directory().cmp(&b.is_directory()),
+                .cmp(&rec_b.first_name.name.extension_id()),
+            SortKind::Descendants => rec_a.descendants.cmp(&rec_b.descendants),
+            SortKind::Hidden => rec_a.stdinfo.is_hidden().cmp(&rec_b.stdinfo.is_hidden()),
+            SortKind::System => rec_a.stdinfo.is_system().cmp(&rec_b.stdinfo.is_system()),
+            SortKind::Archive => rec_a.stdinfo.is_archive().cmp(&rec_b.stdinfo.is_archive()),
+            SortKind::ReadOnly => rec_a
+                .stdinfo
+                .is_readonly()
+                .cmp(&rec_b.stdinfo.is_readonly()),
+            SortKind::Compressed => rec_a
+                .stdinfo
+                .is_compressed()
+                .cmp(&rec_b.stdinfo.is_compressed()),
+            SortKind::Encrypted => rec_a
+                .stdinfo
+                .is_encrypted()
+                .cmp(&rec_b.stdinfo.is_encrypted()),
+            SortKind::Directory => rec_a.is_directory().cmp(&rec_b.is_directory()),
         };
 
         if ord != Ordering::Equal {
@@ -452,10 +402,6 @@ impl StreamingRecordFilter {
     /// Check if a record passes ALL filters (AND logic).
     #[inline]
     #[must_use]
-    #[expect(
-        clippy::missing_const_for_fn,
-        reason = "on Windows, the #[cfg(windows)] attr_filters for-loop prevents const"
-    )]
     pub fn matches(&self, record: &uffs_mft::index::FileRecord) -> bool {
         // Type filter.
         let is_dir = record.is_directory();
@@ -485,7 +431,6 @@ impl StreamingRecordFilter {
         }
 
         // Attribute requirements (AND — all must pass).
-        #[cfg(windows)]
         for req in &self.attr_filters {
             match req {
                 AttrRequirement::Include(kind) => {
@@ -544,20 +489,18 @@ impl StreamingRecordFilter {
 /// - `"!hidden"` → `[Exclude(Hidden)]`
 /// - `"hidden,compressed"` → `[Include(Hidden), Include(Compressed)]`
 /// - `"!system,!hidden"` → `[Exclude(System), Exclude(Hidden)]`
-#[cfg(windows)]
 pub(super) fn parse_attr_filter(input: &str) -> Vec<AttrRequirement> {
     input
         .split(',')
-        .filter_map(|token| {
-            let token = token.trim();
-            if token.is_empty() {
+        .filter_map(|raw_token| {
+            let trimmed = raw_token.trim();
+            if trimmed.is_empty() {
                 return None;
             }
-            if let Some(name) = token.strip_prefix('!') {
-                AttrKind::parse(name).map(AttrRequirement::Exclude)
-            } else {
-                AttrKind::parse(token).map(AttrRequirement::Include)
-            }
+            trimmed.strip_prefix('!').map_or_else(
+                || AttrKind::parse(trimmed).map(AttrRequirement::Include),
+                |name| AttrKind::parse(name).map(AttrRequirement::Exclude),
+            )
         })
         .collect()
 }
@@ -570,31 +513,36 @@ pub(super) fn parse_attr_filter(input: &str) -> Vec<AttrRequirement> {
 /// - `30m` → 30 minutes ago
 /// - `2026-01-15` → specific date (midnight UTC)
 /// - `2026-01-15T10:30:00` → specific datetime
-#[cfg(windows)]
-pub(super) fn parse_age_filter(input: &str) -> Option<i64> {
-    let input = input.trim();
+pub(super) fn parse_age_filter(raw_input: &str) -> Option<i64> {
+    /// Helper: compute microseconds-since-epoch for "now minus N seconds".
+    fn now_minus_secs(secs: i64) -> Option<i64> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?;
+        let now_us = i64::try_from(now.as_micros()).ok()?;
+        Some(now_us - secs * 1_000_000)
+    }
+
+    let input = raw_input.trim();
 
     // Duration format: Nd, Nh, Nm
-    if let Some(days) = input.strip_suffix('d').and_then(|s| s.parse::<i64>().ok()) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?;
-        let now_micros = now.as_micros() as i64;
-        return Some(now_micros - days * 86_400 * 1_000_000);
+    if let Some(days) = input
+        .strip_suffix('d')
+        .and_then(|val| val.parse::<i64>().ok())
+    {
+        return now_minus_secs(days * 86_400);
     }
-    if let Some(hours) = input.strip_suffix('h').and_then(|s| s.parse::<i64>().ok()) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?;
-        let now_micros = now.as_micros() as i64;
-        return Some(now_micros - hours * 3_600 * 1_000_000);
+    if let Some(hours) = input
+        .strip_suffix('h')
+        .and_then(|val| val.parse::<i64>().ok())
+    {
+        return now_minus_secs(hours * 3_600);
     }
-    if let Some(mins) = input.strip_suffix('m').and_then(|s| s.parse::<i64>().ok()) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?;
-        let now_micros = now.as_micros() as i64;
-        return Some(now_micros - mins * 60 * 1_000_000);
+    if let Some(mins) = input
+        .strip_suffix('m')
+        .and_then(|val| val.parse::<i64>().ok())
+    {
+        return now_minus_secs(mins * 60);
     }
 
     // ISO date/datetime format via chrono
@@ -695,13 +643,7 @@ pub(super) fn write_index_streaming_with_filter<W: Write + ?Sized>(
     // If sorting is requested, collect matching record indices using Top-K
     // heap (when limit is set) or full collect+sort (when unlimited).
     // Default sort limit: 200 rows to avoid collecting millions of records.
-    // Sort is only available on Windows (sort_spec/sort_desc are cfg(windows)
-    // fields).
-    #[cfg(not(windows))]
-    let sorted_indices: Option<Vec<u32>> = None;
-
-    #[cfg(windows)]
-    let sorted_indices: Option<Vec<u32>> = if !record_filter.sort_spec.is_empty() {
+    let sorted_indices: Option<Vec<u32>> = (!record_filter.sort_spec.is_empty()).then(|| {
         let effective_limit = if record_filter.limit > 0 {
             record_filter.limit
         } else {
@@ -749,30 +691,26 @@ pub(super) fn write_index_streaming_with_filter<W: Write + ?Sized>(
                     continue;
                 }
             }
-            matching.push(record_idx as u32);
+            matching.push(u32::try_from(record_idx).unwrap_or(u32::MAX));
         }
 
         // Partial sort: if we have more matches than the limit, use
         // select_nth_unstable_by to find the top-K in O(n) average,
         // then sort only those K entries in O(k log k).
         if matching.len() > effective_limit {
-            matching.select_nth_unstable_by(effective_limit, |&a, &b| {
-                crate::commands::output::compare_records(
-                    a as usize, b as usize, index, sort_spec, desc,
-                )
+            matching.select_nth_unstable_by(effective_limit, |&idx_a, &idx_b| {
+                compare_records(idx_a as usize, idx_b as usize, index, sort_spec, desc)
             });
             matching.truncate(effective_limit);
         }
 
         // Final sort of the top-K entries.
-        matching.sort_unstable_by(|&a, &b| {
-            crate::commands::output::compare_records(a as usize, b as usize, index, sort_spec, desc)
+        matching.sort_unstable_by(|&idx_a, &idx_b| {
+            compare_records(idx_a as usize, idx_b as usize, index, sort_spec, desc)
         });
 
-        Some(matching)
-    } else {
-        None
-    };
+        matching
+    });
 
     // Build the final iterator: sorted indices or original scan order.
     let record_iter: Box<dyn Iterator<Item = (usize, &uffs_mft::index::FileRecord)>> =
@@ -1130,53 +1068,6 @@ pub(super) fn write_index_streaming_with_filter<W: Write + ?Sized>(
     Ok(row_count)
 }
 
-/// Write native offline results to the provided writer.
-fn write_native_results_to<W: Write>(
-    index: &uffs_mft::MftIndex,
-    results: &[uffs_core::SearchResult],
-    format: &str,
-    writer: &mut W,
-    output_config: &OutputConfig,
-    footer_ctx: &CppFooterContext<'_>,
-) -> Result<()> {
-    let output_cols = selected_output_columns(output_config);
-    let tz_offset_secs = output_config.timezone_offset_secs;
-
-    write_native_header(writer, output_config, output_cols)?;
-
-    let mut row_buffer = String::with_capacity(output_cols.len() * 32);
-    for result in results {
-        row_buffer.clear();
-        let record = index.find(result.frs);
-        let tree_metrics = native_tree_metrics(result, record);
-
-        for (idx, col) in output_cols.iter().enumerate() {
-            if idx > 0 {
-                row_buffer.push_str(&output_config.separator);
-            }
-            write_native_value(
-                &mut row_buffer,
-                output_config,
-                tz_offset_secs,
-                index,
-                result,
-                record,
-                tree_metrics,
-                *col,
-            );
-        }
-
-        row_buffer.push('\n');
-        writer.write_all(row_buffer.as_bytes())?;
-    }
-
-    if format == "custom" {
-        write_cpp_drive_footer(writer, footer_ctx)?;
-    }
-
-    Ok(())
-}
-
 /// Write the configured header for direct native output.
 fn write_native_header<W: Write + ?Sized>(
     writer: &mut W,
@@ -1218,287 +1109,6 @@ pub(super) fn write_native_header_pub<W: Write + ?Sized>(
     write_native_header(writer, output_config, output_cols)
 }
 
-/// Stream ONLY the records at the given indices through the fast output path.
-///
-/// Same as `write_index_streaming` but only visits the supplied record
-/// indices (e.g. from the extension index for `*.rs`).  Includes header
-/// and footer.  No `SearchResult` allocation.
-#[expect(
-    clippy::too_many_lines,
-    reason = "mirrors write_index_streaming with an index filter"
-)]
-#[cfg(windows)]
-pub(super) fn write_index_streaming_filtered<W: Write + ?Sized>(
-    index: &uffs_mft::MftIndex,
-    record_indices: &[u32],
-    writer: &mut W,
-    format: &str,
-    output_config: &OutputConfig,
-    footer_ctx: &CppFooterContext<'_>,
-) -> Result<usize> {
-    use uffs_mft::index::PathCache;
-
-    let output_cols = selected_output_columns(output_config);
-    let tz_offset_secs = output_config.timezone_offset_secs;
-
-    let path_cache = PathCache::build(index, false);
-    let resolver = path_cache.resolver();
-    let dir_cache = path_cache.dir_cache();
-
-    write_native_header(writer, output_config, output_cols)?;
-
-    let mut row_buffer = String::with_capacity(512);
-    let mut path_buffer = String::with_capacity(256);
-    let mut hardlink_buf = String::new();
-    let mut itoa_buf = itoa::Buffer::new();
-    let mut row_count: usize = 0;
-
-    for &record_idx_u32 in record_indices {
-        let record_idx = record_idx_u32 as usize;
-        let Some(record) = index.records.get(record_idx) else {
-            continue;
-        };
-        if !resolver.is_valid_idx(record_idx) {
-            continue;
-        }
-
-        let is_directory = record.is_directory();
-
-        path_buffer.clear();
-        resolver.materialize_path_into(index, record_idx, dir_cache, &mut path_buffer);
-
-        let name_count = record.name_count.max(1);
-        let stream_count = record.stream_count.max(1);
-
-        for name_idx in 0..name_count {
-            for stream_idx in 0..stream_count {
-                let Some(stream_info) = index.get_stream_at(record, stream_idx) else {
-                    continue;
-                };
-                if !stream_info.is_output_stream() {
-                    continue;
-                }
-
-                let name_info = index
-                    .get_name_at(record, name_idx)
-                    .unwrap_or(&record.first_name);
-                let stream_name = index.stream_name(stream_info);
-                let has_ads = !stream_name.is_empty();
-                let base_name = index.get_name(&name_info.name);
-
-                let base_path: &str = if name_idx == 0 {
-                    &path_buffer
-                } else {
-                    hardlink_buf.clear();
-                    let alt = resolver.materialize_path_for_name(index, record_idx, name_idx);
-                    hardlink_buf.push_str(&alt);
-                    &hardlink_buf
-                };
-                let dir_needs_sep = is_directory && !has_ads && !base_path.ends_with('\\');
-
-                let (descendants, treesize, tree_allocated) = if stream_idx == 0 {
-                    record.tree_metrics()
-                } else {
-                    (0, 0, 0)
-                };
-                let displayed_size = if is_directory && !has_ads {
-                    treesize
-                } else {
-                    stream_info.size.length
-                };
-                let displayed_alloc = if is_directory && !has_ads {
-                    tree_allocated
-                } else {
-                    stream_info.size.allocated
-                };
-
-                let display_name: &str = if is_directory && !has_ads {
-                    ""
-                } else if has_ads {
-                    ""
-                } else {
-                    base_name
-                };
-
-                let path_only: &str = if is_directory && !has_ads {
-                    base_path
-                } else {
-                    base_path
-                        .rfind('\\')
-                        .and_then(|pos| base_path.get(..=pos))
-                        .unwrap_or_default()
-                };
-
-                row_buffer.clear();
-                for (col_idx, col) in output_cols.iter().enumerate() {
-                    if col_idx > 0 {
-                        row_buffer.push_str(&output_config.separator);
-                    }
-                    match col {
-                        OutputColumn::Path => {
-                            row_buffer.push_str(&output_config.quote);
-                            row_buffer.push_str(base_path);
-                            if dir_needs_sep {
-                                row_buffer.push('\\');
-                            }
-                            if has_ads {
-                                row_buffer.push(':');
-                                row_buffer.push_str(stream_name);
-                            }
-                            row_buffer.push_str(&output_config.quote);
-                        }
-                        OutputColumn::Name => {
-                            row_buffer.push_str(&output_config.quote);
-                            row_buffer.push_str(display_name);
-                            if has_ads {
-                                row_buffer.push_str(base_name);
-                                row_buffer.push(':');
-                                row_buffer.push_str(stream_name);
-                            }
-                            row_buffer.push_str(&output_config.quote);
-                        }
-                        OutputColumn::PathOnly => {
-                            row_buffer.push_str(&output_config.quote);
-                            row_buffer.push_str(path_only);
-                            if dir_needs_sep && is_directory && !has_ads {
-                                row_buffer.push('\\');
-                            }
-                            row_buffer.push_str(&output_config.quote);
-                        }
-                        OutputColumn::Size => {
-                            row_buffer.push_str(itoa_buf.format(displayed_size));
-                        }
-                        OutputColumn::SizeOnDisk => {
-                            row_buffer.push_str(itoa_buf.format(displayed_alloc));
-                        }
-                        OutputColumn::Created => {
-                            append_datetime(
-                                &mut row_buffer,
-                                record.stdinfo.created,
-                                tz_offset_secs,
-                            );
-                        }
-                        OutputColumn::Modified => {
-                            append_datetime(
-                                &mut row_buffer,
-                                record.stdinfo.modified,
-                                tz_offset_secs,
-                            );
-                        }
-                        OutputColumn::Accessed => {
-                            append_datetime(
-                                &mut row_buffer,
-                                record.stdinfo.accessed,
-                                tz_offset_secs,
-                            );
-                        }
-                        OutputColumn::Descendants => {
-                            row_buffer.push_str(itoa_buf.format(descendants));
-                        }
-                        OutputColumn::TreeSize => {
-                            row_buffer.push_str(itoa_buf.format(treesize));
-                        }
-                        OutputColumn::TreeAllocated => {
-                            row_buffer.push_str(itoa_buf.format(tree_allocated));
-                        }
-                        OutputColumn::Type => {
-                            let ext_id = record.first_name.name.extension_id();
-                            let ext = index.extensions.get_extension(ext_id).unwrap_or("");
-                            append_quoted(&mut row_buffer, &output_config.quote, ext);
-                        }
-                        OutputColumn::Attributes | OutputColumn::AttributeValue => {
-                            row_buffer.push_str(itoa_buf.format(record.stdinfo.to_attributes()));
-                        }
-                        OutputColumn::Hidden => {
-                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_hidden())
-                        }
-                        OutputColumn::System => {
-                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_system())
-                        }
-                        OutputColumn::Archive => {
-                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_archive())
-                        }
-                        OutputColumn::DirectoryFlag => {
-                            append_bool(&mut row_buffer, output_config, is_directory)
-                        }
-                        OutputColumn::Offline => {
-                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_offline())
-                        }
-                        OutputColumn::NotIndexed => append_bool(
-                            &mut row_buffer,
-                            output_config,
-                            record.stdinfo.is_not_indexed(),
-                        ),
-                        OutputColumn::NoScrub => append_bool(
-                            &mut row_buffer,
-                            output_config,
-                            record.stdinfo.is_no_scrub_data(),
-                        ),
-                        OutputColumn::Integrity => append_bool(
-                            &mut row_buffer,
-                            output_config,
-                            record.stdinfo.is_integrity_stream(),
-                        ),
-                        OutputColumn::Pinned => {
-                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_pinned())
-                        }
-                        OutputColumn::Unpinned => append_bool(
-                            &mut row_buffer,
-                            output_config,
-                            record.stdinfo.is_unpinned(),
-                        ),
-                        OutputColumn::ReadOnly => append_bool(
-                            &mut row_buffer,
-                            output_config,
-                            record.stdinfo.is_readonly(),
-                        ),
-                        OutputColumn::Compressed => append_bool(
-                            &mut row_buffer,
-                            output_config,
-                            record.stdinfo.is_compressed(),
-                        ),
-                        OutputColumn::Encrypted => append_bool(
-                            &mut row_buffer,
-                            output_config,
-                            record.stdinfo.is_encrypted(),
-                        ),
-                        OutputColumn::Sparse => {
-                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_sparse())
-                        }
-                        OutputColumn::Reparse => {
-                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_reparse())
-                        }
-                        OutputColumn::Temporary => append_bool(
-                            &mut row_buffer,
-                            output_config,
-                            record.stdinfo.is_temporary(),
-                        ),
-                        OutputColumn::Virtual => {
-                            append_bool(&mut row_buffer, output_config, record.stdinfo.is_virtual())
-                        }
-                        OutputColumn::Bulkiness => { /* not computed for filtered streaming */ }
-                    }
-                }
-
-                row_buffer.push('\n');
-                writer.write_all(row_buffer.as_bytes())?;
-                row_count += 1;
-            }
-        }
-    }
-
-    if format == "custom" {
-        let final_footer = CppFooterContext {
-            output_targets: footer_ctx.output_targets,
-            pattern: footer_ctx.pattern,
-            row_count,
-        };
-        write_cpp_drive_footer(writer, &final_footer)?;
-    }
-
-    Ok(row_count)
-}
-
 /// Stream rows from an `MftIndex` WITHOUT writing header/footer.
 ///
 /// Used by multi-drive streaming where the caller writes one header before
@@ -1527,241 +1137,6 @@ pub(super) fn write_cpp_footer_pub<W: Write + ?Sized>(
     ctx: &CppFooterContext<'_>,
 ) -> Result<()> {
     write_cpp_drive_footer(writer, ctx)
-}
-
-/// Write a single native value using the same formatting semantics as the
-/// `DataFrame` output path.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "direct native writer carries the same row context as the legacy path"
-)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "matches the existing full output schema column-by-column"
-)]
-fn write_native_value(
-    row_buffer: &mut String,
-    output_config: &OutputConfig,
-    tz_offset_secs: i32,
-    index: &uffs_mft::MftIndex,
-    result: &uffs_core::SearchResult,
-    record: Option<&uffs_mft::index::FileRecord>,
-    tree_metrics: (u32, u64, u64),
-    column: OutputColumn,
-) {
-    match column {
-        OutputColumn::Path => append_quoted(row_buffer, &output_config.quote, result_path(result)),
-        OutputColumn::Name => append_quoted(row_buffer, &output_config.quote, &result.name),
-        OutputColumn::PathOnly => append_quoted(
-            row_buffer,
-            &output_config.quote,
-            path_only_from_path(result_path(result)),
-        ),
-        OutputColumn::Size => append_display(row_buffer, displayed_size(result, tree_metrics)),
-        OutputColumn::SizeOnDisk => {
-            append_display(row_buffer, displayed_allocated_size(result, tree_metrics));
-        }
-        OutputColumn::Created => append_datetime(
-            row_buffer,
-            record.map_or(0, |rec| rec.stdinfo.created),
-            tz_offset_secs,
-        ),
-        OutputColumn::Modified => append_datetime(
-            row_buffer,
-            record.map_or(0, |rec| rec.stdinfo.modified),
-            tz_offset_secs,
-        ),
-        OutputColumn::Accessed => append_datetime(
-            row_buffer,
-            record.map_or(0, |rec| rec.stdinfo.accessed),
-            tz_offset_secs,
-        ),
-        OutputColumn::Type => append_quoted(
-            row_buffer,
-            &output_config.quote,
-            native_file_type(index, result, record).as_ref(),
-        ),
-        OutputColumn::Attributes | OutputColumn::AttributeValue => append_display(
-            row_buffer,
-            record.map_or(0_u32, |rec| rec.stdinfo.to_attributes()),
-        ),
-        OutputColumn::Hidden => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_hidden()),
-        ),
-        OutputColumn::System => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_system()),
-        ),
-        OutputColumn::Archive => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_archive()),
-        ),
-        OutputColumn::ReadOnly => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_readonly()),
-        ),
-        OutputColumn::Compressed => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_compressed()),
-        ),
-        OutputColumn::Encrypted => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_encrypted()),
-        ),
-        OutputColumn::Sparse => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_sparse()),
-        ),
-        OutputColumn::Reparse => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_reparse()),
-        ),
-        OutputColumn::Offline => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_offline()),
-        ),
-        OutputColumn::NotIndexed => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_not_indexed()),
-        ),
-        OutputColumn::Temporary => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_temporary()),
-        ),
-        OutputColumn::Virtual => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_virtual()),
-        ),
-        OutputColumn::Pinned => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_pinned()),
-        ),
-        OutputColumn::Unpinned => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_unpinned()),
-        ),
-        OutputColumn::Descendants => append_display(row_buffer, tree_metrics.0),
-        OutputColumn::TreeSize => append_display(row_buffer, tree_metrics.1),
-        OutputColumn::TreeAllocated => append_display(row_buffer, tree_metrics.2),
-        OutputColumn::Bulkiness => row_buffer.push_str(OutputColumn::Bulkiness.default_value()),
-        OutputColumn::Integrity => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_integrity_stream()),
-        ),
-        OutputColumn::NoScrub => append_bool(
-            row_buffer,
-            output_config,
-            record.is_some_and(|rec| rec.stdinfo.is_no_scrub_data()),
-        ),
-        OutputColumn::DirectoryFlag => append_bool(
-            row_buffer,
-            output_config,
-            record.map_or(result.is_directory, uffs_mft::FileRecord::is_directory),
-        ),
-    }
-}
-
-/// Return the output path string for a native search result.
-#[must_use]
-fn result_path(result: &uffs_core::SearchResult) -> &str {
-    result.path.as_deref().unwrap_or_default()
-}
-
-/// Return the parent-directory portion of a path, including the trailing
-/// backslash when present.
-#[must_use]
-fn path_only_from_path(path: &str) -> &str {
-    path.rfind('\\')
-        .and_then(|last_sep| path.get(..=last_sep))
-        .unwrap_or_default()
-}
-
-/// Compute the file-type string using the same metadata source as the
-/// compatibility `DataFrame` path.
-#[must_use]
-fn native_file_type<'a>(
-    index: &'a uffs_mft::MftIndex,
-    result: &'a uffs_core::SearchResult,
-    record: Option<&'a uffs_mft::index::FileRecord>,
-) -> Cow<'a, str> {
-    if let Some(rec) = record {
-        let ext_id = rec.first_name.name.extension_id();
-        return Cow::Borrowed(index.extensions.get_extension(ext_id).unwrap_or(""));
-    }
-
-    Cow::Owned(
-        result
-            .name
-            .rfind('.')
-            .and_then(|pos| {
-                if pos > 0 && pos < result.name.len() - 1 {
-                    result.name.get(pos + 1..)
-                } else {
-                    None
-                }
-            })
-            .map(str::to_lowercase)
-            .unwrap_or_default(),
-    )
-}
-
-/// Compute descendants/tree metrics for the output row.
-#[must_use]
-#[expect(
-    clippy::missing_const_for_fn,
-    reason = "kept non-const for readability alongside the other row helpers"
-)]
-fn native_tree_metrics(
-    result: &uffs_core::SearchResult,
-    record: Option<&uffs_mft::index::FileRecord>,
-) -> (u32, u64, u64) {
-    if result.stream_index > 0 {
-        (0, 0, 0)
-    } else if let Some(rec) = record {
-        rec.tree_metrics()
-    } else {
-        (result.descendants, result.treesize, result.tree_allocated)
-    }
-}
-
-/// Return the displayed size after applying directory treesize semantics.
-#[must_use]
-fn displayed_size(result: &uffs_core::SearchResult, tree_metrics: (u32, u64, u64)) -> u64 {
-    if result.is_directory && result.stream_name.is_empty() {
-        tree_metrics.1
-    } else {
-        result.size
-    }
-}
-
-/// Return the displayed allocated size after applying directory treesize
-/// semantics.
-#[must_use]
-fn displayed_allocated_size(
-    result: &uffs_core::SearchResult,
-    tree_metrics: (u32, u64, u64),
-) -> u64 {
-    if result.is_directory && result.stream_name.is_empty() {
-        tree_metrics.2
-    } else {
-        result.allocated_size
-    }
 }
 
 /// Append a quoted string field.
@@ -1837,17 +1212,6 @@ fn append_datetime(row_buffer: &mut String, timestamp_micros: i64, tz_offset_sec
         row_buffer,
         "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}"
     );
-}
-
-/// Append a displayable value without introducing extra string allocations in
-/// the common case.
-fn append_display<T>(row_buffer: &mut String, value: T)
-where
-    T: core::fmt::Display,
-{
-    if row_buffer.write_fmt(format_args!("{value}")).is_err() {
-        row_buffer.push_str(&value.to_string());
-    }
 }
 
 /// Convert `IndexQuery` results to a `DataFrame` for output compatibility.

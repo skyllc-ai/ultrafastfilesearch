@@ -428,3 +428,238 @@ fn test_analyze_pattern_complexity() {
     };
     assert_eq!(analyze_pattern_complexity(&regex), QueryComplexity::Simple);
 }
+
+// =========================================================================
+// OR Pattern Tests (OR1-OR5 from branch matrix)
+// =========================================================================
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_or_first_match() {
+    let parsed = crate::pattern::ParsedPattern::parse("*.txt|*.log").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+    assert!(
+        pattern.matches("file.txt", false),
+        "OR: first alternative should match"
+    );
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_or_second_match() {
+    let parsed = crate::pattern::ParsedPattern::parse("*.txt|*.log").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+    assert!(
+        pattern.matches("file.log", false),
+        "OR: second alternative should match"
+    );
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_or_no_match() {
+    let parsed = crate::pattern::ParsedPattern::parse("*.txt|*.log").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+    assert!(
+        !pattern.matches("file.rs", false),
+        "OR: non-matching input should fail"
+    );
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_or_both_match() {
+    let parsed = crate::pattern::ParsedPattern::parse("foo*|*bar").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+    assert!(
+        pattern.matches("foobar", false),
+        "OR: input matching both alternatives should pass"
+    );
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_or_multi_alternatives() {
+    let parsed = crate::pattern::ParsedPattern::parse("nice|cool|awesome").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+    assert!(
+        pattern.matches("cool", false),
+        "OR: middle alternative should match"
+    );
+    assert!(
+        !pattern.matches("bad", false),
+        "OR: non-matching should fail"
+    );
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_or_pattern_is_simple_complexity() {
+    let parsed = crate::pattern::ParsedPattern::parse("*.txt|*.log").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+    assert_eq!(
+        analyze_pattern_complexity(&pattern),
+        QueryComplexity::Simple
+    );
+}
+
+// =========================================================================
+// Case Sensitivity Tests (C1-C7 from branch matrix)
+// =========================================================================
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_case_insensitive_default() {
+    let pattern = compile_index_pattern("nice").unwrap();
+    assert!(
+        pattern.matches("Nice", false),
+        "case-insensitive: Nice should match nice"
+    );
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_case_insensitive_upper() {
+    let pattern = compile_index_pattern("nice").unwrap();
+    assert!(
+        pattern.matches("NICE", false),
+        "case-insensitive: NICE should match nice"
+    );
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_case_sensitive_mismatch() {
+    let pattern = compile_index_pattern("nice").unwrap();
+    assert!(
+        !pattern.matches("Nice", true),
+        "case-sensitive: Nice should NOT match nice"
+    );
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_case_sensitive_exact() {
+    let pattern = compile_index_pattern("nice").unwrap();
+    assert!(
+        pattern.matches("nice", true),
+        "case-sensitive: nice should match nice"
+    );
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_case_insensitive_glob_suffix() {
+    let pattern = compile_index_pattern("*.TXT").unwrap();
+    assert!(
+        pattern.matches("file.txt", false),
+        "case-insensitive: .txt should match .TXT pattern"
+    );
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_case_sensitive_glob_suffix() {
+    let pattern = compile_index_pattern("*.TXT").unwrap();
+    assert!(
+        !pattern.matches("file.txt", true),
+        "case-sensitive: .txt should NOT match .TXT pattern"
+    );
+}
+
+// =========================================================================
+// Literal → Contains (substring) matching
+// =========================================================================
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_literal_substring_match() {
+    // Literal patterns go through compile_parsed_pattern which converts to Contains
+    let parsed = crate::pattern::ParsedPattern::parse("nice").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+    assert!(
+        pattern.matches("nicehouse", false),
+        "literal should be substring match"
+    );
+    assert!(
+        pattern.matches("venice.jpg", false),
+        "literal should match mid-string"
+    );
+    assert!(
+        pattern.matches("NICE_FILE", false),
+        "literal should match case-insensitive substring"
+    );
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_literal_no_substring_match() {
+    let parsed = crate::pattern::ParsedPattern::parse("nice").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+    assert!(
+        !pattern.matches("bad.txt", false),
+        "literal should not match unrelated string"
+    );
+}
+
+// =========================================================================
+// IndexPattern variant matching comprehensive tests
+// =========================================================================
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_any_matches_everything() {
+    let pattern = compile_index_pattern("*").unwrap();
+    assert!(pattern.matches("anything.txt", false));
+    assert!(pattern.matches("", false));
+    assert!(pattern.matches("C:\\Windows\\System32", false));
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_prefix_match() {
+    let pattern = compile_index_pattern("foo*").unwrap();
+    assert!(pattern.matches("foobar", false));
+    assert!(pattern.matches("FOO", false));
+    assert!(!pattern.matches("barfoo", false));
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_suffix_match() {
+    let pattern = compile_index_pattern("*.rs").unwrap();
+    assert!(pattern.matches("main.rs", false));
+    assert!(pattern.matches("MAIN.RS", false));
+    assert!(!pattern.matches("main.txt", false));
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_contains_match() {
+    let pattern = compile_index_pattern("*needle*").unwrap();
+    assert!(pattern.matches("hayneedlehay", false));
+    assert!(pattern.matches("NEEDLE", false));
+    assert!(!pattern.matches("haystack", false));
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_regex_match() {
+    let parsed = crate::pattern::ParsedPattern::parse(r">file\d+\.txt").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+    assert!(pattern.matches("file123.txt", false));
+    assert!(!pattern.matches("fileABC.txt", false));
+}
+
+#[test]
+fn test_invalid_regex_returns_error() {
+    let parsed = crate::pattern::ParsedPattern::parse(">[invalid(regex");
+    assert!(
+        parsed.is_ok(),
+        "parse should succeed — regex validation happens at compile"
+    );
+    if let Ok(pp) = parsed {
+        let result = compile_parsed_pattern(&pp);
+        assert!(result.is_err(), "invalid regex should fail at compile time");
+    }
+}

@@ -11,11 +11,8 @@ use uffs_core::output::OutputConfig;
 use uffs_core::pattern::ParsedPattern;
 use uffs_core::tree::add_tree_columns;
 
-use super::output::{can_write_native_results, write_native_results, write_results};
-use super::raw_io::{
-    QueryFilters, load_and_filter_data, load_and_filter_from_mft_file,
-    load_and_filter_native_from_mft_file,
-};
+use super::output::{can_write_native_results, write_results};
+use super::raw_io::{QueryFilters, load_and_filter_data, load_and_filter_from_mft_file};
 #[cfg(windows)]
 use super::raw_io::{load_and_filter_data_index, load_and_filter_data_index_multi};
 
@@ -165,22 +162,6 @@ pub async fn search(
     let start_time = std::time::Instant::now();
     debug!("[TIMING] search() entered at 0ms");
 
-    // These params are only consumed inside #[cfg(windows)] blocks (LIVE streaming
-    // path). Suppress unused-variable warnings on non-Windows platforms.
-    #[cfg(not(windows))]
-    {
-        let _: Option<&str> = attr_filter;
-        let _: Option<&str> = newer;
-        let _: Option<&str> = older;
-        let _: Option<&str> = newer_created;
-        let _: Option<&str> = older_created;
-        let _: Option<&str> = newer_accessed;
-        let _: Option<&str> = older_accessed;
-        let _: Option<&str> = exclude;
-        let _: Option<&str> = sort;
-        let _: bool = sort_desc;
-    }
-
     // Smart case: if enabled and pattern has any uppercase letter,
     // automatically enable case-sensitive matching (like fd/ripgrep).
     // Explicit --case always wins over smart case.
@@ -311,67 +292,71 @@ pub async fn search(
             return Ok(());
         }
 
-        // Filtered query: use IndexQuery → SearchResult path
+        // Filtered query: use unified streaming path (same as LIVE).
+        // All filters (attr, date, sort, exclude) work cross-platform via --mft-file.
         info!(
             path = %mft_path.display(),
             format,
-            "📂 Loading raw MFT file via native direct-output path"
+            "📂 Loading raw MFT file via STREAMING filtered path"
         );
 
-        let native = load_and_filter_native_from_mft_file(
+        let native_index = super::raw_io::load_index_from_mft_file(
             mft_path,
             single_drive,
-            &filters,
-            needs_paths,
             debug_tree,
             chaos_seed,
             reserved_allocated,
         )?;
 
+        let compiled = uffs_core::compile_parsed_pattern(filters.parsed)?;
+        let ext_indices = try_get_extension_indices(&native_index.index, &filters);
+        let rec_filter = build_record_filter(
+            &filters,
+            attr_filter,
+            newer,
+            older,
+            newer_created,
+            older_created,
+            newer_accessed,
+            older_accessed,
+            exclude,
+            sort,
+            sort_desc,
+        );
+
         let t_output = std::time::Instant::now();
-        let elapsed = start_time.elapsed();
-        let row_count = native.results.len();
-        let cpp_pattern = format!(">{}:{}", native.index.volume, pattern.replace('*', ".*"));
-        let footer_ctx = crate::commands::output::CppFooterContext {
-            output_targets: &output_targets,
-            pattern: &cpp_pattern,
-            row_count,
-        };
-        write_native_results(
-            &native.index,
-            &native.results,
+        let cpp_pattern = format!(
+            ">{}:{}",
+            native_index.index.volume,
+            pattern.replace('*', ".*")
+        );
+        let row_count = write_streaming_output_with_filter(
+            &native_index.index,
+            &compiled,
+            ext_indices.as_deref(),
+            effective_case_sensitive,
+            filters.parsed.is_path_pattern(),
+            &rec_filter,
             format,
             out,
             &output_config,
-            &footer_ctx,
+            &output_targets,
+            &cpp_pattern,
         )?;
         let output_ms = t_output.elapsed().as_millis();
 
         if profile {
-            let raw_total_ms = native.load_ms + native.query_ms;
-            eprintln!("=== RAW MFT FILE TIMING ===");
+            eprintln!("=== RAW MFT FILE TIMING (streaming) ===");
             eprintln!(
                 "  Load from file:  {:>6} ms  ({} records)",
-                native.load_ms,
-                native.index.len()
+                native_index.load_ms,
+                native_index.index.len()
             );
-            eprintln!(
-                "  Query/filter:    {:>6} ms  ({} matches)",
-                native.query_ms,
-                native.results.len()
-            );
-            eprintln!("  TOTAL:           {raw_total_ms:>6} ms");
-            eprintln!("=== PROFILE: Output ===");
-            eprintln!("  Tree columns:    {:>6} ms", 0_u128);
-            eprintln!(
-                "  Output/write:    {:>6} ms  ({} rows)",
-                output_ms,
-                native.results.len()
-            );
-            eprintln!("=== TOTAL: {} ms ===", elapsed.as_millis());
+            eprintln!("  Output/write:    {output_ms:>6} ms  ({row_count} rows)");
+            eprintln!("=== TOTAL: {} ms ===", start_time.elapsed().as_millis());
         }
 
-        info!(count = native.results.len(), "Search complete");
+        info!(count = row_count, "Search complete (streaming)");
         return Ok(());
     }
 
@@ -869,10 +854,9 @@ fn write_streaming_output(
 /// Returns `Some(Vec<u32>)` for patterns like `*.rs`, `*.txt` where the
 /// extension index provides O(matches) lookup.  Returns `None` for complex
 /// patterns that need full-scan matching.
-#[cfg(windows)]
 fn try_get_extension_indices(
     index: &uffs_mft::MftIndex,
-    filters: &super::raw_io::QueryFilters<'_>,
+    filters: &QueryFilters<'_>,
 ) -> Option<Vec<u32>> {
     // Only works for simple glob suffix patterns with no other filters.
     if filters.files_only
@@ -905,10 +889,9 @@ fn try_get_extension_indices(
 }
 
 /// Build a `StreamingRecordFilter` from `QueryFilters` + extra CLI params.
-#[cfg(windows)]
 #[expect(clippy::too_many_arguments, reason = "collects all filter CLI params")]
 fn build_record_filter(
-    filters: &super::raw_io::QueryFilters<'_>,
+    filters: &QueryFilters<'_>,
     attr_filter: Option<&str>,
     newer: Option<&str>,
     older: Option<&str>,
@@ -959,7 +942,6 @@ fn build_record_filter(
 /// - `"*hallo*"` → `None` (no extension)
 /// - `"nice"` → `None` (no dot)
 /// - `"*.tx?"` → `None` (wildcard in ext)
-#[cfg(windows)]
 fn extract_trailing_extension(pattern: &str) -> Option<&str> {
     // Find the last dot in the pattern.
     let dot_pos = pattern.rfind('.')?;
@@ -983,7 +965,10 @@ fn extract_trailing_extension(pattern: &str) -> Option<&str> {
 ///
 /// Unified path for ALL filtered patterns — compiles the pattern and
 /// optionally uses the extension index for O(matches) scan.
-#[cfg(windows)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "unified streaming writer needs pattern, indices, case, path-mode, filter, format, output config, targets, footer pattern"
+)]
 fn write_streaming_output_with_filter(
     index: &uffs_mft::MftIndex,
     pattern: &uffs_core::IndexPattern,
@@ -1043,67 +1028,6 @@ fn write_streaming_output_with_filter(
             case_sensitive,
             is_path_pattern,
             record_filter,
-            &mut writer,
-            format,
-            output_config,
-            &footer_ctx,
-        )?;
-        writer.flush()?;
-        info!(file = out, "Results written to file");
-        Ok(count)
-    }
-}
-
-/// Legacy helper: write filtered streaming output to file or console.
-/// Kept for backward compatibility with write_index_streaming_filtered.
-#[cfg(windows)]
-fn write_filtered_streaming_output(
-    index: &uffs_mft::MftIndex,
-    record_indices: &[u32],
-    format: &str,
-    out: &str,
-    output_config: &OutputConfig,
-    output_targets: &[char],
-    cpp_pattern: &str,
-) -> Result<usize> {
-    use std::io::Write as _;
-
-    let is_console = matches!(
-        out.to_lowercase().as_str(),
-        "console" | "con" | "term" | "terminal"
-    );
-
-    if is_console {
-        let stdout_handle = std::io::stdout();
-        let stdout_lock = stdout_handle.lock();
-        let mut writer = std::io::BufWriter::with_capacity(1024 * 1024, stdout_lock);
-        let footer_ctx = crate::commands::output::CppFooterContext {
-            output_targets,
-            pattern: cpp_pattern,
-            row_count: 0,
-        };
-        let result = crate::commands::output::write_index_streaming_filtered(
-            index,
-            record_indices,
-            &mut writer,
-            format,
-            output_config,
-            &footer_ctx,
-        );
-        writer.flush()?;
-        result
-    } else {
-        let file = std::fs::File::create(out)
-            .with_context(|| format!("Failed to create output file: {out}"))?;
-        let mut writer = std::io::BufWriter::with_capacity(1024 * 1024, file);
-        let footer_ctx = crate::commands::output::CppFooterContext {
-            output_targets,
-            pattern: cpp_pattern,
-            row_count: 0,
-        };
-        let count = crate::commands::output::write_index_streaming_filtered(
-            index,
-            record_indices,
             &mut writer,
             format,
             output_config,
