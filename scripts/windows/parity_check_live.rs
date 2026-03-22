@@ -55,7 +55,7 @@ struct DriveResult {
     rust_lines: usize,
     cpp_time_ms: u128,
     rust_time_ms: u128,
-    sort_time_ms: u128,
+    _sort_time_ms: u128,
 }
 
 fn main() {
@@ -165,16 +165,17 @@ fn run_drive_parity(
     print!("  [1/4] Running C++ scan...");
     io::stdout().flush().ok();
     let cpp_start = Instant::now();
-    let cpp_status = Command::new(cpp_bin)
+    let cpp_output = Command::new(cpp_bin)
         .args(["*", &format!("--drives={}", drive_upper)])
         .stdout(File::create(&cpp_raw).expect("create cpp_raw"))
-        .stderr(std::process::Stdio::null())
-        .status();
+        .stderr(std::process::Stdio::piped())
+        .output();
     let cpp_ms = cpp_start.elapsed().as_millis();
-    match cpp_status {
-        Ok(s) if s.success() => println!(" ✅ ({})", format_duration_ms(cpp_ms)),
-        _ => {
-            println!(" ❌ FAILED");
+    match cpp_output {
+        Ok(ref o) if o.status.success() => println!(" ✅ ({})", format_duration_ms(cpp_ms)),
+        Ok(ref o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            println!(" ❌ FAILED (exit={}) {}", o.status, stderr.trim());
             return DriveResult {
                 drive_letter: drive_upper,
                 result: VerifyResult::Mismatch,
@@ -182,7 +183,19 @@ fn run_drive_parity(
                 rust_lines: 0,
                 cpp_time_ms: cpp_ms,
                 rust_time_ms: 0,
-                sort_time_ms: 0,
+                _sort_time_ms: 0,
+            };
+        }
+        Err(e) => {
+            println!(" ❌ FAILED ({})", e);
+            return DriveResult {
+                drive_letter: drive_upper,
+                result: VerifyResult::Mismatch,
+                cpp_lines: 0,
+                rust_lines: 0,
+                cpp_time_ms: cpp_ms,
+                rust_time_ms: 0,
+                _sort_time_ms: 0,
             };
         }
     }
@@ -191,7 +204,7 @@ fn run_drive_parity(
     print!("  [2/4] Running Rust scan...");
     io::stdout().flush().ok();
     let rust_start = Instant::now();
-    let rust_status = Command::new(rust_bin)
+    let rust_output = Command::new(rust_bin)
         .args([
             "*",
             "--drive",
@@ -201,13 +214,14 @@ fn run_drive_parity(
             "custom",
         ])
         .stdout(File::create(&rust_raw).expect("create rust_raw"))
-        .stderr(std::process::Stdio::null())
-        .status();
+        .stderr(std::process::Stdio::piped())
+        .output();
     let rust_ms = rust_start.elapsed().as_millis();
-    match rust_status {
-        Ok(s) if s.success() => println!(" ✅ ({})", format_duration_ms(rust_ms)),
-        _ => {
-            println!(" ❌ FAILED");
+    match rust_output {
+        Ok(ref o) if o.status.success() => println!(" ✅ ({})", format_duration_ms(rust_ms)),
+        Ok(ref o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            println!(" ❌ FAILED (exit={}) {}", o.status, stderr.trim());
             return DriveResult {
                 drive_letter: drive_upper,
                 result: VerifyResult::Mismatch,
@@ -215,7 +229,19 @@ fn run_drive_parity(
                 rust_lines: 0,
                 cpp_time_ms: cpp_ms,
                 rust_time_ms: rust_ms,
-                sort_time_ms: 0,
+                _sort_time_ms: 0,
+            };
+        }
+        Err(e) => {
+            println!(" ❌ FAILED ({})", e);
+            return DriveResult {
+                drive_letter: drive_upper,
+                result: VerifyResult::Mismatch,
+                cpp_lines: 0,
+                rust_lines: 0,
+                cpp_time_ms: cpp_ms,
+                rust_time_ms: rust_ms,
+                _sort_time_ms: 0,
             };
         }
     }
@@ -265,7 +291,7 @@ fn run_drive_parity(
             rust_lines,
             cpp_time_ms: cpp_ms,
             rust_time_ms: rust_ms,
-            sort_time_ms: sort_ms,
+            _sort_time_ms: sort_ms,
         };
     }
 
@@ -293,7 +319,7 @@ fn run_drive_parity(
             rust_lines,
             cpp_time_ms: cpp_ms,
             rust_time_ms: rust_ms,
-            sort_time_ms: sort_ms,
+            _sort_time_ms: sort_ms,
         };
     }
 
@@ -342,7 +368,7 @@ fn run_drive_parity(
         rust_lines,
         cpp_time_ms: cpp_ms,
         rust_time_ms: rust_ms,
-        sort_time_ms: sort_ms,
+        _sort_time_ms: sort_ms,
     }
 }
 
