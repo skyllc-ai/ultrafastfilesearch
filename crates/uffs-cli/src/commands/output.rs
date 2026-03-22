@@ -29,6 +29,17 @@ pub(super) struct CppFooterContext<'a> {
     pub(super) row_count: usize,
 }
 
+impl CppFooterContext<'_> {
+    /// Create an empty footer context (no footer output).
+    pub(super) const fn empty() -> CppFooterContext<'static> {
+        CppFooterContext {
+            output_targets: &[],
+            pattern: "",
+            row_count: 0,
+        }
+    }
+}
+
 /// Return whether the offline native results can be written directly without a
 /// compatibility `DataFrame`.
 #[must_use]

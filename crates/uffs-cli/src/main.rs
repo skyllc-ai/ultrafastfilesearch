@@ -185,7 +185,7 @@ struct Cli {
     ///
     /// Load previously saved raw MFT files (from `uffs save-raw` or
     /// `uffs_mft save`). Drive letters are auto-inferred from filenames
-    /// (e.g., C.bin → C:, D_mft.bin → D:). Use --drive/--drives to
+    /// (e.g., `C.bin` → C:, `D_mft.bin` → D:). Use `--drive`/`--drives` to
     /// override if needed.
     ///   Single:  `uffs "*" --mft-file C.bin`
     ///   Multi:   `uffs "*" --mft-file C.bin,D.bin`
