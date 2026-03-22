@@ -3,8 +3,12 @@
 # With -Cache: warm start (cache persists across runs)
 #
 # Usage:
-#   .\benchmark.ps1 -N 5 -Drive C,D,E,F,G,M,S          # cold (default)
-#   .\benchmark.ps1 -N 5 -Drive C,D,E,F,G,M,S -Cache    # warm / cached
+#   .\benchmark.ps1 -N 5 -Drive C,D,E,F,G,M,S                    # cold full scan
+#   .\benchmark.ps1 -N 5 -Drive C,D,E,F,G,M,S -Cache              # warm full scan
+#   .\benchmark.ps1 -N 5 -Drive C,F -Cache -Pattern "*.rs"         # warm filtered
+#   .\benchmark.ps1 -N 5 -Drive C -Cache -RustArgs "--files-only --min-size 1024"
+#   .\benchmark.ps1 -N 5 -Drive C -Cache -RustArgs "--sort size --sort-desc --limit 100"
+#   .\benchmark.ps1 -N 5 -Drive C -Cache -RustArgs "--attr hidden,!system --newer 7d"
 
 param(
     [int]$N = 3,                    # Rounds per test
@@ -13,7 +17,9 @@ param(
     [switch]$Cache,                 # Keep cache between runs (warm benchmark)
     [switch]$RustOnly,              # Skip C++ tests
     [switch]$CppOnly,               # Skip Rust tests
-    [switch]$NoAll                  # Skip the final "all drives" parallel run
+    [switch]$NoAll,                 # Skip the final "all drives" parallel run
+    [string]$RustArgs = "",         # Extra args for Rust (e.g. "--files-only --min-size 1024")
+    [string]$CppArgs = ""           # Extra args for C++ (e.g. "--limit=100")
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,6 +38,12 @@ Write-Host "  Rounds per test: $N" -ForegroundColor Cyan
 Write-Host "  Pattern: $Pattern" -ForegroundColor Cyan
 if ($AllDrives.Count -gt 0) {
     Write-Host "  Drives: $($AllDrives -join ', ')" -ForegroundColor Cyan
+}
+if ($RustArgs) {
+    Write-Host "  Rust args: $RustArgs" -ForegroundColor Cyan
+}
+if ($CppArgs) {
+    Write-Host "  C++ args: $CppArgs" -ForegroundColor Cyan
 }
 if ($Cache) {
     Write-Host "  (Cache kept between runs)" -ForegroundColor Cyan
@@ -117,15 +129,19 @@ function BenchRun($label, $exePath, [string[]]$argList) {
 # Run benchmarks based on -Drive parameter
 # ============================================
 
+# Split extra args strings into arrays (handles "--files-only --min-size 1024")
+$RustExtraArgs = if ($RustArgs) { $RustArgs -split '\s+' | Where-Object { $_ } } else { @() }
+$CppExtraArgs  = if ($CppArgs)  { $CppArgs  -split '\s+' | Where-Object { $_ } } else { @() }
+
 function RunDriveBench($driveLetter) {
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
     Write-Host "📁 DRIVE ${driveLetter}:" -ForegroundColor Yellow
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
     if (-not $CppOnly) {
-        BenchRun "Rust $mode" $UFFS @($Pattern, '--drive', $driveLetter)
+        BenchRun "Rust $mode" $UFFS (@($Pattern, '--drive', $driveLetter) + $RustExtraArgs)
     }
     if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
-        BenchRun "C++ $mode" $UFFS_CPP @($Pattern, "--drives=$driveLetter")
+        BenchRun "C++ $mode" $UFFS_CPP (@($Pattern, "--drives=$driveLetter") + $CppExtraArgs)
     }
 }
 
@@ -134,10 +150,10 @@ function RunAllDrivesBench() {
     Write-Host "🌐 ALL DRIVES:" -ForegroundColor Yellow
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
     if (-not $CppOnly) {
-        BenchRun "Rust $mode" $UFFS @($Pattern)
+        BenchRun "Rust $mode" $UFFS (@($Pattern) + $RustExtraArgs)
     }
     if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
-        BenchRun "C++ $mode" $UFFS_CPP @($Pattern)
+        BenchRun "C++ $mode" $UFFS_CPP (@($Pattern) + $CppExtraArgs)
     }
 }
 
