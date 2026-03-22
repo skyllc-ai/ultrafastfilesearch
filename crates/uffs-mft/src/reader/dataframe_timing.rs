@@ -81,13 +81,13 @@ impl MftReader {
 
         // Phase 1: Open (already done, but measure metadata retrieval)
         let open_start = Instant::now();
-        let record_size = self.handle.file_record_size();
-        let volume_data = self.handle.volume_data();
+        let record_size = self.require_handle().file_record_size();
+        let volume_data = self.require_handle().volume_data();
         let drive_type = detect_drive_type(self.volume);
         let chunk_size = drive_type.optimal_chunk_size();
 
         // Get MFT extents
-        let extents = self.handle.get_mft_extents().unwrap_or_else(|e| {
+        let extents = self.require_handle().get_mft_extents().unwrap_or_else(|e| {
             warn!(error = ?e, "Failed to get MFT extents, using fallback");
             vec![crate::platform::MftExtent {
                 vcn: 0,
@@ -103,7 +103,7 @@ impl MftReader {
         let mft_size_bytes = total_records * u64::from(record_size);
 
         // Get bitmap
-        let bitmap = self.handle.get_mft_bitmap().ok();
+        let bitmap = self.require_handle().get_mft_bitmap().ok();
         let in_use_records = bitmap.as_ref().map(|bm| bm.count_in_use() as u64);
 
         // Generate chunks to get count
@@ -144,7 +144,7 @@ impl MftReader {
         // with many hard links/ADS). ~15-25% faster, ideal for file search.
         let read_parse_start = Instant::now();
         let parallel_reader = ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
-        let handle = self.handle.raw_handle();
+        let handle = self.require_handle().raw_handle();
 
         let mut parsed_columns = parallel_reader.read_all_parallel_to_columns::<fn(u64, u64)>(
             handle,

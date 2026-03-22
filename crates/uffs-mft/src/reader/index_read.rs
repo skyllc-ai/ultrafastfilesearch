@@ -19,11 +19,12 @@ impl MftReader {
     /// Read the entire MFT into a lean `MftIndex` (fast path).
     ///
     /// This method builds a compact `MftIndex` structure instead of a Polars
-    /// DataFrame. It's significantly faster because it avoids the DataFrame
+    /// `DataFrame`. It's significantly faster because it avoids the `DataFrame`
     /// building overhead (~15-20s on large drives).
     ///
-    /// Use this when you need fast indexing and searching. Convert to DataFrame
-    /// later with `MftIndex::to_dataframe()` if you need Polars analytics.
+    /// Use this when you need fast indexing and searching. Convert to
+    /// `DataFrame` later with `MftIndex::to_dataframe()` if you need Polars
+    /// analytics.
     ///
     /// # Note
     ///
@@ -35,6 +36,33 @@ impl MftReader {
     /// # Errors
     ///
     /// Returns an error if MFT reading fails.
+    /// Read the entire MFT into a lean `MftIndex` (fast path).
+    ///
+    /// Dispatches automatically based on the data source:
+    /// - **Live volume** (Windows): Uses IOCP pipeline for maximum performance.
+    /// - **File** (cross-platform): Loads from a pre-captured `.mft` file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MFT reading fails.
+    pub async fn read_all_index(&self) -> Result<crate::index::MftIndex> {
+        match &self.source {
+            #[cfg(windows)]
+            super::MftSource::LiveVolume(_) => self.read_all_index_live().await,
+            super::MftSource::File(path) => {
+                let path = path.clone();
+                let volume = self.volume;
+                tokio::task::spawn_blocking(move || Self::read_index_from_file(&path, volume))
+                    .await
+                    .map_err(|_| MftError::Cancelled {
+                        operation: "read_all_index(file)",
+                        reason: "spawn_blocking task failed".into(),
+                    })?
+            }
+        }
+    }
+
+    /// Live-volume implementation of `read_all_index` (Windows IOCP).
     #[cfg(windows)]
     #[tracing::instrument(
         level = "info",
@@ -48,16 +76,14 @@ impl MftReader {
             forensic = self.forensic
         )
     )]
-    pub async fn read_all_index(&self) -> Result<crate::index::MftIndex> {
+    async fn read_all_index_live(&self) -> Result<crate::index::MftIndex> {
         tracing::debug!(volume = %self.volume, "[TRIP] reader::read_all_index ENTER");
         trace!(volume = %self.volume, "read_all_index: ENTER");
-        // Capture configuration to recreate reader in blocking thread
         let volume = self.volume;
         let mode = self.mode;
         let merge_extensions = self.merge_extensions;
         let use_bitmap = self.use_bitmap;
         let expand_links = self.expand_links;
-
         let add_placeholders = self.add_placeholders;
         let concurrency = self.concurrency;
         let io_size = self.io_size;
@@ -67,11 +93,10 @@ impl MftReader {
 
         let result = tokio::task::spawn_blocking(move || {
             trace!(volume = %volume, "read_all_index: INSIDE spawn_blocking");
-            // Create a new reader in the blocking thread
             let handle = VolumeHandle::open(volume)?;
             let reader = MftReader {
                 volume,
-                handle,
+                source: super::MftSource::LiveVolume(handle),
                 mode,
                 merge_extensions,
                 use_bitmap,
@@ -89,33 +114,44 @@ impl MftReader {
         })
         .await
         .map_err(|error| MftError::from_join_error("read_all_index", &error))?;
-        trace!(volume = %volume, "read_all_index: EXIT");
-        tracing::debug!(volume = %volume, "[TRIP] reader::read_all_index EXIT");
+        trace!(volume = %self.volume, "read_all_index: EXIT");
+        tracing::debug!(volume = %self.volume, "[TRIP] reader::read_all_index EXIT");
         result
+    }
+
+    /// Load an `MftIndex` from a pre-captured `.mft` file (cross-platform).
+    fn read_index_from_file(
+        path: &std::path::Path,
+        volume: char,
+    ) -> Result<crate::index::MftIndex> {
+        // Detect IOCP capture vs raw MFT format
+        let is_iocp = crate::is_iocp_capture(path).unwrap_or(false);
+        if is_iocp {
+            crate::load_iocp_to_index(path)
+        } else {
+            let options = crate::LoadRawOptions {
+                volume_letter: Some(volume),
+                ..Default::default()
+            };
+            Self::load_raw_to_index_with_options(path, &options)
+        }
     }
 
     /// Synchronous version of `read_all_index` for use in blocking contexts.
     ///
-    /// This is the same as `read_all_index` but without the async wrapper,
-    /// for use with `spawn_blocking` or other blocking contexts.
+    /// Dispatches on `MftSource` — works cross-platform.
     ///
     /// # Errors
     ///
     /// Returns an error if MFT reading fails.
-    #[cfg(windows)]
     pub fn read_all_index_sync(&self) -> Result<crate::index::MftIndex> {
-        self.read_mft_index_internal(None::<fn(MftProgress)>)
-    }
-
-    /// Synchronous version of `read_all_index` (non-Windows stub).
-    ///
-    /// # Errors
-    ///
-    /// Always returns `MftError::PlatformNotSupported` on non-Windows
-    /// platforms.
-    #[cfg(not(windows))]
-    pub const fn read_all_index_sync(&self) -> Result<crate::index::MftIndex> {
-        Err(MftError::PlatformNotSupported)
+        match &self.source {
+            #[cfg(windows)]
+            super::MftSource::LiveVolume(_) => {
+                self.read_mft_index_internal(None::<fn(MftProgress)>)
+            }
+            super::MftSource::File(path) => Self::read_index_from_file(path, self.volume),
+        }
     }
 
     /// Synchronous version of `read_index_with_progress` for use in blocking
@@ -197,7 +233,7 @@ impl MftReader {
             let handle = VolumeHandle::open(volume)?;
             let reader = MftReader {
                 volume,
-                handle,
+                source: super::MftSource::LiveVolume(handle),
                 mode,
                 merge_extensions,
                 use_bitmap,
@@ -274,8 +310,9 @@ impl MftReader {
         info!(volume = %self.volume, "Starting MFT read (lean index)");
 
         let start_time = Instant::now();
-        let record_size = self.handle.file_record_size();
-        let volume_data = self.handle.volume_data();
+        let handle = self.require_handle();
+        let record_size = handle.file_record_size();
+        let volume_data = handle.volume_data();
 
         // Detect drive type for optimal I/O tuning
         let drive_type = detect_drive_type(self.volume);
@@ -286,7 +323,7 @@ impl MftReader {
         );
 
         // Get MFT extents for fragmented MFT support
-        let extents = self.handle.get_mft_extents().unwrap_or_else(|e| {
+        let extents = handle.get_mft_extents().unwrap_or_else(|e| {
             warn!(error = ?e, "Failed to get MFT extents, using fallback");
             vec![crate::platform::MftExtent {
                 vcn: 0,
@@ -305,7 +342,7 @@ impl MftReader {
 
         // Try to get the MFT bitmap for optimization
         let bitmap = if self.use_bitmap {
-            let bm = self.handle.get_mft_bitmap().ok();
+            let bm = handle.get_mft_bitmap().ok();
             if let Some(ref b) = bm {
                 let in_use = b.count_in_use();
                 info!(
@@ -356,7 +393,7 @@ impl MftReader {
         );
         info!(mode = %effective_mode, "🚀 Using read mode (lean index)");
 
-        let handle = self.handle.raw_handle();
+        let handle = handle.raw_handle();
         let total_bytes = total_records * u64::from(record_size);
 
         // Read using the selected mode (same as read_mft_internal)
@@ -450,7 +487,7 @@ impl MftReader {
             MftReadMode::IocpParallel => {
                 // IOCP parallel mode: Multiple overlapped reads in flight
                 // IOCP requires FILE_FLAG_OVERLAPPED, so we open a separate handle
-                let overlapped_handle = self.handle.open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
                 let iocp_reader = crate::io::IocpMftReader::new(extent_map, bitmap, drive_type);
 
                 let result = if let Some(ref cb) = callback {
@@ -517,7 +554,7 @@ impl MftReader {
             }
             MftReadMode::BulkIocp => {
                 // Bulk IOCP mode: True C++ style - queues ALL reads to IOCP at once
-                let overlapped_handle = self.handle.open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
@@ -561,7 +598,7 @@ impl MftReader {
             }
             MftReadMode::SlidingIocp => {
                 // Sliding window IOCP mode: C++ style with 2 reads in flight
-                let overlapped_handle = self.handle.open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
@@ -608,7 +645,7 @@ impl MftReader {
                 // This mode returns MftIndex directly, skipping the intermediate
                 // Vec<ParsedRecord>
                 debug!("[PARITY_TRACE] ENTERING SlidingIocpInline branch (Windows LIVE path)");
-                let overlapped_handle = self.handle.open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 

@@ -247,7 +247,7 @@ Windows-only IOCP/volume/platform layer where they belong.
 | Phase 1: Output cross-platform | ✅ **DONE** | 24 | ~200 |
 | Phase 2: Search helpers cross-platform | ✅ **DONE** | 12 | ~15 |
 | Phase 4: Remove legacy output | ✅ **DONE** | 0 | ~500 |
-| Phase 3: Trait-based reader | ❌ **NOT STARTED** | 0 of 56 | 0 |
+| Phase 3: MftSource dispatch reader | ✅ **DONE** | ~10 | ~50 refactored |
 
 ### Remaining cfg gates in CLI crate: 38
 

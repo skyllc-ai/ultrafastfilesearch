@@ -51,7 +51,7 @@ impl MftReader {
             let handle = VolumeHandle::open(volume)?;
             let reader = MftReader {
                 volume,
-                handle,
+                source: super::MftSource::LiveVolume(handle),
                 mode,
                 merge_extensions,
                 use_bitmap,
@@ -111,13 +111,13 @@ impl MftReader {
 
         // Phase 1: Open (already done, but measure metadata retrieval)
         let open_start = Instant::now();
-        let record_size = self.handle.file_record_size();
-        let volume_data = self.handle.volume_data();
+        let record_size = self.require_handle().file_record_size();
+        let volume_data = self.require_handle().volume_data();
         let drive_type = detect_drive_type(self.volume);
         let chunk_size = drive_type.optimal_chunk_size();
 
         // Get MFT extents
-        let extents = self.handle.get_mft_extents().unwrap_or_else(|e| {
+        let extents = self.require_handle().get_mft_extents().unwrap_or_else(|e| {
             warn!(error = ?e, "Failed to get MFT extents, using fallback");
             vec![crate::platform::MftExtent {
                 vcn: 0,
@@ -134,7 +134,7 @@ impl MftReader {
 
         // Get bitmap
         let bitmap = if self.use_bitmap {
-            self.handle.get_mft_bitmap().ok()
+            self.require_handle().get_mft_bitmap().ok()
         } else {
             None
         };
@@ -171,7 +171,7 @@ impl MftReader {
 
         // Phase 2+3: Read + Parse with accurate timing
         let parallel_reader = ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
-        let handle = self.handle.raw_handle();
+        let handle = self.require_handle().raw_handle();
 
         // Use the new timing method for accurate phase breakdown
         let (mut parsed_records, read_parse_timing) =

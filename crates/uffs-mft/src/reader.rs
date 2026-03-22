@@ -3,8 +3,8 @@
 //! The heavy read pipelines and multi-drive orchestration live in dedicated
 //! submodules under `reader/`.
 
-#[cfg(not(windows))]
-use crate::error::MftError;
+use std::path::PathBuf;
+
 use crate::error::Result;
 #[cfg(windows)]
 use crate::platform::VolumeHandle;
@@ -25,6 +25,21 @@ pub use self::benchmark::{BenchmarkResult, DriveCharacteristics, PhaseTimings};
 pub use self::multi_drive::{DriveReadResult, MultiDriveMftReader};
 pub use self::read_mode::MftReadMode;
 pub use self::stats::{MftProgress, MftStats};
+
+/// Abstraction over the MFT data source.
+///
+/// The MFT can be read from a live NTFS volume (Windows only, via IOCP) or
+/// from a previously captured `.mft` file (cross-platform). This enum lets
+/// `MftReader` dispatch to the correct pipeline without `#[cfg]` gates on
+/// every public method.
+#[derive(Debug)]
+pub enum MftSource {
+    /// Live NTFS volume accessed via Windows IOCP.
+    #[cfg(windows)]
+    LiveVolume(VolumeHandle),
+    /// Pre-captured `.mft` file (cross-platform).
+    File(PathBuf),
+}
 
 /// MFT Reader for direct NTFS Master File Table access.
 ///
@@ -61,9 +76,8 @@ pub use self::stats::{MftProgress, MftStats};
 pub struct MftReader {
     /// The volume letter (e.g., 'C').
     volume: char,
-    /// The volume handle (Windows only).
-    #[cfg(windows)]
-    handle: VolumeHandle,
+    /// Data source: live NTFS volume or pre-captured `.mft` file.
+    source: MftSource,
     /// Read mode selection.
     mode: MftReadMode,
     /// Whether to merge extension records.
@@ -158,23 +172,17 @@ impl MftReader {
 
         Ok(Self {
             volume: volume.to_ascii_uppercase(),
-            handle,
+            source: MftSource::LiveVolume(handle),
             mode: MftReadMode::Auto,
-            // Enable extension merging by default for baseline-compatible output.
-            // Extension records contain additional attributes for files with
-            // many hard links or alternate data streams. Without merging,
-            // ~1% of files may have incomplete attribute information.
-            // The performance impact is ~10-15% slower, but correctness is
-            // more important for file search accuracy.
             merge_extensions: true,
-            use_bitmap: true,       // Use bitmap optimization by default
-            expand_links: true,     // Expand hard links by default for baseline-compatible output
-            add_placeholders: true, // Add placeholders by default for path resolution
-            concurrency: None,      // Use default (2 for HDD)
-            io_size: None,          // Use default (1MB)
-            parallel_parse: None,   // Auto-detect based on drive type
-            parse_workers: None,    // Use available CPU count
-            forensic: false,        // Normal mode by default
+            use_bitmap: true,
+            expand_links: true,
+            add_placeholders: true,
+            concurrency: None,
+            io_size: None,
+            parallel_parse: None,
+            parse_workers: None,
+            forensic: false,
         })
     }
 
@@ -187,6 +195,74 @@ impl MftReader {
     #[cfg(not(windows))]
     pub const fn open(_volume: char) -> Result<Self> {
         Err(MftError::PlatformNotSupported)
+    }
+
+    /// Create a reader from a pre-captured `.mft` file (cross-platform).
+    ///
+    /// This enables the full search/filter/sort pipeline on any platform
+    /// using a previously saved MFT capture file.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the `.mft` capture file
+    /// * `volume` - The volume letter to associate (e.g., 'C')
+    #[must_use]
+    pub fn from_file<P: Into<PathBuf>>(path: P, volume: char) -> Self {
+        Self {
+            volume: volume.to_ascii_uppercase(),
+            source: MftSource::File(path.into()),
+            mode: MftReadMode::Auto,
+            merge_extensions: true,
+            use_bitmap: true,
+            expand_links: true,
+            add_placeholders: true,
+            concurrency: None,
+            io_size: None,
+            parallel_parse: None,
+            parse_workers: None,
+            forensic: false,
+        }
+    }
+
+    /// Returns a reference to the `VolumeHandle` if this is a live reader.
+    #[cfg(windows)]
+    #[must_use]
+    pub(crate) fn handle(&self) -> Option<&VolumeHandle> {
+        match &self.source {
+            MftSource::LiveVolume(handle) => Some(handle),
+            MftSource::File(_) => None,
+        }
+    }
+
+    /// Returns the `VolumeHandle`, panicking if this is a file-based reader.
+    ///
+    /// Only called from `#[cfg(windows)]` IOCP code paths where a live volume
+    /// is guaranteed.
+    #[cfg(windows)]
+    pub(crate) fn require_handle(&self) -> &VolumeHandle {
+        match &self.source {
+            MftSource::LiveVolume(handle) => handle,
+            MftSource::File(_) => unreachable!("require_handle called on file-based reader"),
+        }
+    }
+
+    /// Returns `true` if this reader is backed by a live NTFS volume.
+    #[must_use]
+    pub const fn is_live(&self) -> bool {
+        #[cfg(windows)]
+        {
+            matches!(self.source, MftSource::LiveVolume(..))
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+
+    /// Returns `true` if this reader is backed by a file.
+    #[must_use]
+    pub const fn is_file(&self) -> bool {
+        matches!(self.source, MftSource::File(..))
     }
 
     /// Sets the read mode for this reader.

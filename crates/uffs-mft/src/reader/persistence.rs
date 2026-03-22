@@ -89,10 +89,11 @@ impl MftReader {
         use crate::io::{MftExtentMap, ParallelMftReader, generate_read_chunks};
         use crate::platform::detect_drive_type;
 
-        let record_size = self.handle.file_record_size();
-        let volume_data = self.handle.volume_data();
+        let vol_handle = self.require_handle();
+        let record_size = vol_handle.file_record_size();
+        let volume_data = vol_handle.volume_data();
 
-        let extents = self.handle.get_mft_extents().unwrap_or_else(|_| {
+        let extents = vol_handle.get_mft_extents().unwrap_or_else(|_| {
             vec![crate::platform::MftExtent {
                 vcn: 0,
                 cluster_count: volume_data.mft_valid_data_length
@@ -110,7 +111,7 @@ impl MftReader {
         let parallel_reader =
             ParallelMftReader::new_optimized(extent_map.clone(), None, drive_type);
         let chunks = generate_read_chunks(&extent_map, None, parallel_reader.chunk_size);
-        let handle = self.handle.raw_handle();
+        let handle = vol_handle.raw_handle();
 
         for chunk in chunks {
             let data = parallel_reader.read_chunk(handle, &chunk, record_size)?;
@@ -161,9 +162,10 @@ impl MftReader {
         use crate::platform::detect_drive_type;
         use crate::raw::StreamingRawMftWriter;
 
-        let record_size = self.handle.file_record_size();
-        let volume_data = self.handle.volume_data();
-        let extents = self.handle.get_mft_extents().unwrap_or_else(|_| {
+        let vol_handle = self.require_handle();
+        let record_size = vol_handle.file_record_size();
+        let volume_data = vol_handle.volume_data();
+        let extents = vol_handle.get_mft_extents().unwrap_or_else(|_| {
             vec![crate::platform::MftExtent {
                 vcn: 0,
                 cluster_count: volume_data.mft_valid_data_length
@@ -193,7 +195,7 @@ impl MftReader {
 
         let mut writer = StreamingRawMftWriter::new(path, record_size, options)?;
         let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = bounded(2);
-        let handle_ptr = self.handle.raw_handle().0 as usize;
+        let handle_ptr = vol_handle.raw_handle().0 as usize;
         let record_size_copy = record_size;
 
         let reader_handle = thread::spawn(move || -> Result<()> {
@@ -733,11 +735,12 @@ impl MftReader {
         use crate::platform::detect_drive_type;
         use crate::raw_iocp::IocpCaptureWriter;
 
-        let record_size = self.handle.file_record_size();
-        let volume_data = self.handle.volume_data();
+        let vol_handle = self.require_handle();
+        let record_size = vol_handle.file_record_size();
+        let volume_data = vol_handle.volume_data();
         let concurrency = options.concurrency as usize;
 
-        let extents = self.handle.get_mft_extents().unwrap_or_else(|_| {
+        let extents = vol_handle.get_mft_extents().unwrap_or_else(|_| {
             vec![crate::platform::MftExtent {
                 vcn: 0,
                 cluster_count: volume_data.mft_valid_data_length
@@ -769,7 +772,7 @@ impl MftReader {
         let mut writer = IocpCaptureWriter::new(record_size, options);
 
         // IOCP requires FILE_FLAG_OVERLAPPED, so we need a separate handle
-        let handle: HANDLE = self.handle.open_overlapped_handle()?;
+        let handle: HANDLE = vol_handle.open_overlapped_handle()?;
 
         // Create IOCP and associate overlapped handle
         let iocp = IoCompletionPort::new(0)?;

@@ -129,8 +129,8 @@ impl MftReader {
         info!(volume = %self.volume, "Starting MFT read");
 
         let start_time = Instant::now();
-        let record_size = self.handle.file_record_size();
-        let volume_data = self.handle.volume_data();
+        let record_size = self.require_handle().file_record_size();
+        let volume_data = self.require_handle().volume_data();
 
         // Detect drive type for optimal I/O tuning
         let drive_type = detect_drive_type(self.volume);
@@ -149,7 +149,7 @@ impl MftReader {
         );
 
         // Get MFT extents for fragmented MFT support
-        let extents = self.handle.get_mft_extents().unwrap_or_else(|e| {
+        let extents = self.require_handle().get_mft_extents().unwrap_or_else(|e| {
             warn!(error = ?e, "Failed to get MFT extents, using fallback");
             // Fallback to single contiguous extent
             vec![crate::platform::MftExtent {
@@ -170,7 +170,7 @@ impl MftReader {
 
         // Try to get the MFT bitmap for optimization (if enabled)
         let bitmap = if self.use_bitmap {
-            let bm = self.handle.get_mft_bitmap().ok();
+            let bm = self.require_handle().get_mft_bitmap().ok();
             if let Some(ref b) = bm {
                 let in_use = b.count_in_use();
                 info!(
@@ -210,7 +210,7 @@ impl MftReader {
             "🚀 Using read mode"
         );
 
-        let handle = self.handle.raw_handle();
+        let handle = self.require_handle().raw_handle();
         let total_bytes = total_records * u64::from(record_size);
 
         // Read using the selected mode
@@ -365,7 +365,7 @@ impl MftReader {
             MftReadMode::IocpParallel => {
                 // IOCP parallel mode: Multiple overlapped reads in flight (best for HDD)
                 // IOCP requires FILE_FLAG_OVERLAPPED, so we open a separate handle
-                let overlapped_handle = self.handle.open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
                 let iocp_reader = crate::io::IocpMftReader::new(extent_map, bitmap, drive_type);
 
                 let result = if let Some(ref cb) = callback {
@@ -432,7 +432,7 @@ impl MftReader {
             }
             MftReadMode::BulkIocp => {
                 // Bulk IOCP mode: True C++ style - queues ALL reads to IOCP at once
-                let overlapped_handle = self.handle.open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
@@ -476,7 +476,7 @@ impl MftReader {
             }
             MftReadMode::SlidingIocp => {
                 // Sliding window IOCP mode: C++ style with 2 reads in flight
-                let overlapped_handle = self.handle.open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
@@ -522,7 +522,7 @@ impl MftReader {
                 // SlidingIocpInline is designed for direct index building.
                 // For read_mft_internal (which returns Vec<ParsedRecord>), fall back to
                 // SlidingIocp.
-                let overlapped_handle = self.handle.open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
