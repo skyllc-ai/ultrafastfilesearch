@@ -15,11 +15,15 @@ param(
 )
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$benchArgs = @('-N', $N, '-Pattern', $Pattern, '-Cache')
-if ($Drive.Count -gt 0)  { $benchArgs += @('-Drive') + $Drive }
-if ($RustOnly)           { $benchArgs += '-RustOnly' }
-if ($CppOnly)            { $benchArgs += '-CppOnly' }
-if ($NoAll)              { $benchArgs += '-NoAll' }
+$benchArgs = @{
+    N       = $N
+    Pattern = $Pattern
+    Cache   = $true
+}
+if ($Drive.Count -gt 0)  { $benchArgs['Drive']    = $Drive }
+if ($RustOnly)           { $benchArgs['RustOnly'] = $true }
+if ($CppOnly)            { $benchArgs['CppOnly']  = $true }
+if ($NoAll)              { $benchArgs['NoAll']    = $true }
 
 & "$scriptDir\benchmark.ps1" @benchArgs
 
