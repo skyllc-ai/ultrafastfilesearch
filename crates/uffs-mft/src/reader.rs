@@ -5,7 +5,9 @@
 
 use std::path::PathBuf;
 
-use crate::error::{MftError, Result};
+use crate::error::Result;
+#[cfg(not(windows))]
+use crate::error::MftError;
 #[cfg(windows)]
 use crate::platform::VolumeHandle;
 

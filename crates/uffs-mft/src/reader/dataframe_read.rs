@@ -12,7 +12,9 @@ use super::MftReadMode;
 #[cfg(windows)]
 use super::read_mode::dataframe_effective_mode;
 use super::{MftProgress, MftReader};
-use crate::error::{MftError, Result};
+use crate::error::Result;
+#[cfg(not(windows))]
+use crate::error::MftError;
 
 impl MftReader {
     /// Read the entire MFT and return as a `DataFrame`.

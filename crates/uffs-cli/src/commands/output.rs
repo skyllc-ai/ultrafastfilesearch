@@ -627,9 +627,6 @@ pub(super) fn write_index_streaming_with_filter<W: Write + ?Sized>(
 ) -> Result<usize> {
     use uffs_mft::index::{PathCache, PathResolver};
 
-    let output_cols = selected_output_columns(output_config);
-    let tz_offset_secs = output_config.timezone_offset_secs;
-
     // For filtered queries with an extension-index shortlist, skip the
     // expensive pre_cache_directory_paths() pass.  That pass materialises a
     // String for every valid directory (O(n), ~500K dirs, ~20 MB) which is
@@ -638,6 +635,9 @@ pub(super) fn write_index_streaming_with_filter<W: Write + ?Sized>(
     // validity checks; materialize_path_into gracefully falls back to a
     // parent-chain walk when the dir_cache is empty.
     const LAZY_THRESHOLD: usize = 100_000;
+
+    let output_cols = selected_output_columns(output_config);
+    let tz_offset_secs = output_config.timezone_offset_secs;
 
     let t_cache = std::time::Instant::now();
     let use_lazy = record_indices.is_some_and(|ri| ri.len() < LAZY_THRESHOLD);
@@ -651,7 +651,10 @@ pub(super) fn write_index_streaming_with_filter<W: Write + ?Sized>(
         (&resolver_storage, &empty_dir_cache)
     } else {
         path_cache_storage = PathCache::build(index, false);
-        (path_cache_storage.resolver(), path_cache_storage.dir_cache())
+        (
+            path_cache_storage.resolver(),
+            path_cache_storage.dir_cache(),
+        )
     };
 
     let cache_ms = t_cache.elapsed().as_millis();

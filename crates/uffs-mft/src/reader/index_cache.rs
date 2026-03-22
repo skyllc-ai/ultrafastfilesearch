@@ -1,7 +1,9 @@
 //! Cached lean-index read helpers.
 
 use super::MftReader;
-use crate::error::{MftError, Result};
+use crate::error::Result;
+#[cfg(not(windows))]
+use crate::error::MftError;
 
 impl MftReader {
     /// Read MFT into lean `MftIndex` with automatic caching.
@@ -43,6 +45,24 @@ impl MftReader {
 
         let drive = self.volume;
         tracing::debug!(drive = %drive, ttl_seconds, "[TRIP] reader::read_index_cached ENTER");
+
+        // Fast path for read-only volumes: cache can never go stale since
+        // nothing can change on the drive.  Skip TTL, skip USN, skip
+        // VolumeHandle — just load from disk and return.
+        let read_only = crate::platform::is_volume_read_only(drive);
+        if read_only {
+            if let Some((index, _header)) = crate::cache::load_cached_index(drive, u64::MAX) {
+                info!(
+                    drive = %drive,
+                    records = index.len(),
+                    "📦 Read-only volume — using cached index (no TTL)"
+                );
+                return Ok(index);
+            }
+            // No cache yet — fall through to build one.
+            info!(drive = %drive, "🆕 Read-only volume — no cache, building index");
+            return self.read_and_cache_index().await;
+        }
 
         // Check cache status
         match check_cache_status(drive, ttl_seconds) {
@@ -230,27 +250,27 @@ impl MftReader {
             Err(_) => (0, 0),
         };
 
-        // Fire-and-forget: serialize + write the cache file on the blocking
-        // pool so we don't stall the tokio workers.  The index is shared via
-        // Arc so there's no expensive clone.
-        let index = std::sync::Arc::new(index);
-        let index_for_cache = std::sync::Arc::clone(&index);
+        // Serialize the index on the current thread (CPU-bound, no I/O yet)
+        // so we can hand ownership of the index back to the caller immediately.
+        // Only the byte buffer is sent to the blocking pool for the disk write.
+        let cache_bytes = index.serialize(volume_serial, usn_journal_id, next_usn);
+
         tokio::task::spawn_blocking(move || {
-            use crate::cache::save_to_cache;
-            if let Err(e) =
-                save_to_cache(&index_for_cache, drive, volume_serial, usn_journal_id, next_usn)
-            {
-                info!(drive = %drive, error = %e, "⚠️ Failed to save to cache (non-fatal)");
+            use crate::cache::{cache_dir, cache_file_path};
+            let dir = cache_dir();
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                info!(drive = %drive, error = %e, "⚠️ Failed to create cache dir");
+                return;
+            }
+            let path = cache_file_path(drive);
+            if let Err(e) = std::fs::write(&path, &cache_bytes) {
+                info!(drive = %drive, error = %e, "⚠️ Failed to write cache (non-fatal)");
             } else {
-                info!(drive = %drive, records = index_for_cache.len(), "💾 Saved to cache");
+                info!(drive = %drive, bytes = cache_bytes.len(), "💾 Saved to cache");
             }
         });
 
         tracing::debug!(drive = %drive, "[TRIP] reader::read_and_cache_index EXIT");
-        // Unwrap the Arc — the only other reference is the fire-and-forget
-        // cache task which may still be running.  If it hasn't finished yet
-        // we fall back to a clone (very rare in practice since the caller
-        // proceeds to output, giving the cache task time to complete).
-        Ok(std::sync::Arc::try_unwrap(index).unwrap_or_else(|arc| (*arc).clone()))
+        Ok(index)
     }
 }
