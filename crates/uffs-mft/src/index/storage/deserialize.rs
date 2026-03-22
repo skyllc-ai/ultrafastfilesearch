@@ -490,6 +490,12 @@ impl MftIndex {
             index.compute_tree_metrics();
         }
 
+        // Rebuild the per-extension → record-indices lookup so that
+        // filtered queries (*.txt, *.pdf, …) get O(matches) performance.
+        // The ExtensionIndex is not serialized; it must be reconstructed
+        // from the ExtensionTable + record names on every load.
+        index.build_extension_index();
+
         Ok((index, header))
     }
 }

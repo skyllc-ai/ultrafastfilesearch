@@ -59,6 +59,15 @@ impl MftReader {
                     "📦 Cache HIT - checking for USN updates"
                 );
 
+                // Restore reserved_allocated_bytes from live volume data.
+                // This field is not serialized in the cache; it is needed for
+                // correct root tree_allocated when tree metrics are recomputed
+                // (e.g. after USN updates).
+                if let Ok(handle) = VolumeHandle::open(drive) {
+                    index.reserved_allocated_bytes =
+                        handle.volume_data().reserved_allocated_bytes();
+                }
+
                 // Apply USN Journal updates to bring index up to date
                 let current_info = match query_usn_journal(drive) {
                     Ok(info) => info,
