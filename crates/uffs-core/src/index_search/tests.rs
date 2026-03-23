@@ -651,6 +651,108 @@ fn test_regex_match() {
     assert!(!pattern.matches("fileABC.txt", false));
 }
 
+// =========================================================================
+// Regex End-Anchoring Tests
+//
+// Rust's regex::is_match() does substring matching by default.
+// compile_parsed_pattern auto-appends $ to regex patterns so that
+// >.*\.(jpg|png) matches "photo.jpg" but NOT "icon.png.vir".
+// =========================================================================
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_regex_rejects_extension_appearing_mid_filename() {
+    // "icon.png.vir" should NOT match — the file ends with .vir, not .png
+    let parsed = crate::pattern::ParsedPattern::parse(r">.*\.(jpg|png|heic)").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+
+    assert!(!pattern.matches("icon.png.vir", false));
+    assert!(!pattern.matches("backup.jpg.bak", false));
+    assert!(!pattern.matches("archive.heic.zip", false));
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_regex_rejects_ads_entries() {
+    // ADS entries like "photo.png:com.dropbox.attrs" should NOT match
+    let parsed = crate::pattern::ParsedPattern::parse(r">.*\.(jpg|png|heic)").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+
+    assert!(!pattern.matches("photo.png:com.dropbox.attrs", false));
+    assert!(!pattern.matches("image.jpg:Zone.Identifier", false));
+    assert!(!pattern.matches("file.heic:$DATA", false));
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_regex_matches_correct_extensions() {
+    let parsed = crate::pattern::ParsedPattern::parse(r">.*\.(jpg|png|heic)").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+
+    assert!(pattern.matches("photo.jpg", false));
+    assert!(pattern.matches("image.png", false));
+    assert!(pattern.matches("camera.heic", false));
+    assert!(pattern.matches("C:\\Users\\Pictures\\vacation.jpg", false));
+    assert!(
+        pattern.matches("D:\\Dropbox\\photo.PNG", false),
+        "case-insensitive"
+    );
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_regex_with_explicit_dollar_anchor_not_doubled() {
+    // If the user already wrote $, we should not double it
+    let parsed = crate::pattern::ParsedPattern::parse(r">.*\.txt$").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+
+    assert!(pattern.matches("readme.txt", false));
+    assert!(!pattern.matches("readme.txt.bak", false));
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_regex_single_extension() {
+    let parsed = crate::pattern::ParsedPattern::parse(r">.*\.txt").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+
+    assert!(pattern.matches("readme.txt", false));
+    assert!(pattern.matches("C:\\docs\\readme.txt", false));
+    assert!(!pattern.matches("readme.txt.bak", false));
+    assert!(!pattern.matches("readme.txtx", false));
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_regex_path_prefix_with_extension() {
+    // Regex with path prefix: only match .jpg files under C:\Users
+    let parsed = crate::pattern::ParsedPattern::parse(r">C:\\Users\\.*\.(jpg|png|heic)").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+
+    assert!(pattern.matches(r"C:\Users\Pictures\vacation.jpg", false));
+    assert!(pattern.matches(r"C:\Users\rnio\photo.png", false));
+    assert!(
+        !pattern.matches(r"D:\Photos\vacation.jpg", false),
+        "wrong drive"
+    );
+    assert!(
+        !pattern.matches(r"C:\Users\file.jpg.tmp", false),
+        "extension mid-name"
+    );
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test code")]
+fn test_regex_digit_pattern_still_anchored() {
+    // Non-extension regex should also be end-anchored
+    let parsed = crate::pattern::ParsedPattern::parse(r">file\d+\.txt").unwrap();
+    let pattern = compile_parsed_pattern(&parsed).unwrap();
+
+    assert!(pattern.matches("file123.txt", false));
+    assert!(!pattern.matches("file123.txt.bak", false));
+    assert!(!pattern.matches("fileABC.txt", false));
+}
+
 #[test]
 fn test_invalid_regex_returns_error() {
     let parsed = crate::pattern::ParsedPattern::parse(">[invalid(regex");

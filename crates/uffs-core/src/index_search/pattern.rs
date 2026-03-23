@@ -393,16 +393,26 @@ pub fn compile_parsed_pattern(parsed: &ParsedPattern) -> Result<IndexPattern> {
         PatternType::Glob => compile_index_pattern(parsed.pattern()),
         PatternType::Regex => {
             let pattern_str = parsed.pattern();
-            let regex = Regex::new(pattern_str).map_err(|err| CoreError::InvalidRegex {
+            // Auto-anchor with $ if the pattern isn't already end-anchored.
+            // Rust's regex::is_match() does substring matching by default,
+            // so >.*\.(jpg|png) would match "icon.png.vir" (finding .png
+            // mid-string). Users expect end-of-string matching: the file
+            // must END with the extension. Adding $ fixes this to match
+            // C++ behavior and user intent.
+            let anchored = if pattern_str.ends_with('$') {
+                pattern_str.to_owned()
+            } else {
+                format!("{pattern_str}$")
+            };
+            let regex = Regex::new(&anchored).map_err(|err| CoreError::InvalidRegex {
                 pattern: pattern_str.to_owned(),
                 reason: err.to_string(),
             })?;
-            let regex_lower = Regex::new(&format!("(?i){pattern_str}")).map_err(|err| {
-                CoreError::InvalidRegex {
+            let regex_lower =
+                Regex::new(&format!("(?i){anchored}")).map_err(|err| CoreError::InvalidRegex {
                     pattern: pattern_str.to_owned(),
                     reason: err.to_string(),
-                }
-            })?;
+                })?;
             Ok(IndexPattern::Regex { regex, regex_lower })
         }
         PatternType::Literal => {
