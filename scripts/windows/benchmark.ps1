@@ -138,10 +138,10 @@ function RunDriveBench($driveLetter) {
     Write-Host "📁 DRIVE ${driveLetter}:" -ForegroundColor Yellow
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
     if (-not $CppOnly) {
-        BenchRun "Rust $mode" $UFFS (@($Pattern, '--drive', $driveLetter) + $RustExtraArgs)
+        BenchRun "Rust $mode" $UFFS (@("`"$Pattern`"", '--drive', $driveLetter) + $RustExtraArgs)
     }
     if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
-        BenchRun "C++ $mode" $UFFS_CPP (@($Pattern, "--drives=$driveLetter") + $CppExtraArgs)
+        BenchRun "C++ $mode" $UFFS_CPP (@("`"$Pattern`"", "--drives=$driveLetter") + $CppExtraArgs)
     }
 }
 
@@ -150,10 +150,10 @@ function RunAllDrivesBench() {
     Write-Host "🌐 ALL DRIVES:" -ForegroundColor Yellow
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
     if (-not $CppOnly) {
-        BenchRun "Rust $mode" $UFFS (@($Pattern) + $RustExtraArgs)
+        BenchRun "Rust $mode" $UFFS (@("`"$Pattern`"") + $RustExtraArgs)
     }
     if (-not $RustOnly -and (Test-Path $UFFS_CPP)) {
-        BenchRun "C++ $mode" $UFFS_CPP (@($Pattern) + $CppExtraArgs)
+        BenchRun "C++ $mode" $UFFS_CPP (@("`"$Pattern`"") + $CppExtraArgs)
     }
 }
 

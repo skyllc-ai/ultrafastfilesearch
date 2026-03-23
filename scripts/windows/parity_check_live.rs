@@ -7,9 +7,11 @@
 //! # Usage (Windows, elevated)
 //!
 //! ```powershell
-//! rust-script scripts/windows/parity_check_live.rs              # All NTFS drives
+//! rust-script scripts/windows/parity_check_live.rs              # All NTFS drives, full scan
 //! rust-script scripts/windows/parity_check_live.rs --drive C    # Single drive
 //! rust-script scripts/windows/parity_check_live.rs --drive C,D,E  # Multiple drives
+//! rust-script scripts/windows/parity_check_live.rs --pattern "*.txt"  # Glob pattern
+//! rust-script scripts/windows/parity_check_live.rs --pattern ">C:\\Users\\.*\.(jpg|png)"  # Regex
 //! rust-script scripts/windows/parity_check_live.rs --sample 50  # 50 diff samples (default: 30)
 //! rust-script scripts/windows/parity_check_live.rs --out-dir D:\parity  # Custom output dir
 //! rust-script scripts/windows/parity_check_live.rs --keep       # Keep raw output files on success
@@ -102,6 +104,7 @@ fn main() {
     }
 
     let drives = parse_drives(&args);
+    let pattern = parse_pattern(&args);
     let sample_size = parse_sample_size(&args);
     let out_dir = parse_out_dir(&args);
     let keep_files = args.iter().any(|a| a == "--keep");
@@ -117,6 +120,7 @@ fn main() {
     println!("  C++ binary : {}", uffs_cpp.display());
     println!("  Rust binary: {}", uffs_rust.display());
     println!("  Drives     : {:?}", drives);
+    println!("  Pattern    : {}", pattern);
     println!("  Output dir : {}", out_dir.display());
     println!("  Sample size: {}", sample_size);
     println!(
@@ -134,6 +138,7 @@ fn main() {
     for (index, drive) in drives.iter().enumerate() {
         let result = run_drive_parity(
             drive,
+            &pattern,
             &uffs_cpp,
             &uffs_rust,
             &out_dir,
@@ -210,6 +215,7 @@ fn run_with_retry(bin: &Path, args: &[&str], stdout_path: &Path, label: &str) ->
 #[allow(clippy::too_many_arguments)]
 fn run_drive_parity(
     drive: &str,
+    pattern: &str,
     cpp_bin: &Path,
     rust_bin: &Path,
     out_dir: &Path,
@@ -240,9 +246,10 @@ fn run_drive_parity(
     print!("  [1/4] Running C++ scan...");
     io::stdout().flush().ok();
     let cpp_start = Instant::now();
+    let cpp_drives_arg = format!("--drives={}", drive_upper);
     let cpp_result = run_with_retry(
         cpp_bin,
-        &["*", &format!("--drives={}", drive_upper)],
+        &[pattern, &cpp_drives_arg],
         &cpp_raw,
         "C++",
     );
@@ -271,7 +278,7 @@ fn run_drive_parity(
     let rust_result = run_with_retry(
         rust_bin,
         &[
-            "*",
+            pattern,
             "--drive",
             &drive_upper,
             "--no-cache",
@@ -470,6 +477,15 @@ fn detect_ntfs_drives() -> Vec<String> {
         }
         _ => vec!["C".to_string()], // Fallback to C:
     }
+}
+
+fn parse_pattern(args: &[String]) -> String {
+    for i in 0..args.len() {
+        if args[i] == "--pattern" && i + 1 < args.len() {
+            return args[i + 1].clone();
+        }
+    }
+    "*".to_string()
 }
 
 fn parse_sample_size(args: &[String]) -> usize {

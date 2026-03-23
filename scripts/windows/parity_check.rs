@@ -1,6 +1,10 @@
 #!/usr/bin/env rust-script
 //! UFFS Live Parity Check — C++ vs Rust comparison.
-//! Usage: rust-script scripts/windows/parity_check.rs D [E F] [--bin-dir DIR] [--sample N]
+//!
+//! Usage:
+//!   rust-script scripts/windows/parity_check.rs D [E F] [--bin-dir DIR] [--sample N]
+//!   rust-script scripts/windows/parity_check.rs C --pattern "*.txt"
+//!   rust-script scripts/windows/parity_check.rs C --pattern ">C:\\Users\\.*\.(jpg|png)"
 //! ```cargo
 //! [dependencies]
 //! sha2 = "0.10"
@@ -15,7 +19,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
 
-struct Config { drives: Vec<String>, cpp: PathBuf, rust: PathBuf, sample: usize, out: PathBuf }
+struct Config { drives: Vec<String>, pattern: String, cpp: PathBuf, rust: PathBuf, sample: usize, out: PathBuf }
 struct Scan { ok: bool, ms: u128, err: Option<String> }
 
 fn main() {
@@ -23,7 +27,7 @@ fn main() {
     println!("\n╔════════════════════════════════════════════╗");
     println!("║   UFFS Live Parity Check — C++ vs Rust     ║");
     println!("╚════════════════════════════════════════════╝\n");
-    println!("  C++ : {}\n  Rust: {}\n  Drives: {}\n", cfg.cpp.display(), cfg.rust.display(), cfg.drives.join(", "));
+    println!("  C++ : {}\n  Rust: {}\n  Drives: {}\n  Pattern: {}\n", cfg.cpp.display(), cfg.rust.display(), cfg.drives.join(", "), cfg.pattern);
     let ok = cfg.drives.iter().all(|d| check(&cfg, d));
     std::process::exit(if ok { 0 } else { 1 });
 }
@@ -31,18 +35,20 @@ fn main() {
 fn parse_args() -> Config {
     let args: Vec<String> = env::args().collect();
     let mut drives = vec![]; let mut bin = home().join("bin"); let mut sample = 30usize;
+    let mut pattern = "*".to_string();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--bin-dir" => { i += 1; bin = PathBuf::from(&args[i]); }
             "--sample" => { i += 1; sample = args[i].parse().unwrap_or(30); }
+            "--pattern" => { i += 1; pattern = args[i].clone(); }
             a if !a.starts_with('-') => drives.push(a.to_uppercase()),
             _ => {}
         }
         i += 1;
     }
-    if drives.is_empty() { eprintln!("Usage: parity_check.rs <DRIVE> [--bin-dir DIR]"); std::process::exit(1); }
-    Config { drives, cpp: bin.join("uffs.com"), rust: bin.join("uffs.exe"), sample, out: env::current_dir().unwrap() }
+    if drives.is_empty() { eprintln!("Usage: parity_check.rs <DRIVE> [--pattern PAT] [--bin-dir DIR] [--sample N]"); std::process::exit(1); }
+    Config { drives, pattern, cpp: bin.join("uffs.com"), rust: bin.join("uffs.exe"), sample, out: env::current_dir().unwrap() }
 }
 
 fn home() -> PathBuf { env::var_os("USERPROFILE").or(env::var_os("HOME")).map(PathBuf::from).unwrap_or(".".into()) }
@@ -55,10 +61,11 @@ fn check(cfg: &Config, drv: &str) -> bool {
     let cpp_f = cfg.out.join(format!("parity_cpp_{dl}_{t}.txt"));
     let rust_f = cfg.out.join(format!("parity_rust_{dl}_{t}.txt"));
 
+    let cpp_drives_arg = format!("--drives={}", drv);
     print!("  [1/4] C++ scan..."); flush();
-    let c = scan(&cfg.cpp, &["*", &format!("--drives={}", drv)], &cpp_f); pres(&c);
+    let c = scan(&cfg.cpp, &[&cfg.pattern, &cpp_drives_arg], &cpp_f); pres(&c);
     print!("  [2/4] Rust scan..."); flush();
-    let r = scan(&cfg.rust, &["*", "--drive", drv, "--no-cache"], &rust_f); pres(&r);
+    let r = scan(&cfg.rust, &[&cfg.pattern, "--drive", drv, "--no-cache", "--format", "custom"], &rust_f); pres(&r);
 
     if !c.ok || !r.ok { println!("  ❌ Scan failed"); return false; }
 
