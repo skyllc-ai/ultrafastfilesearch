@@ -12,6 +12,7 @@
 //! rust-script scripts/windows/parity_check_live.rs --drive C,D,E  # Multiple drives
 //! rust-script scripts/windows/parity_check_live.rs --pattern "*.txt"  # Glob pattern
 //! rust-script scripts/windows/parity_check_live.rs --pattern ">C:\\Users\\.*\.(jpg|png)"  # Regex
+//! rust-script scripts/windows/parity_check_live.rs --pattern "hallo" --name-only  # Filename-only matching
 //! rust-script scripts/windows/parity_check_live.rs --sample 50  # 50 diff samples (default: 30)
 //! rust-script scripts/windows/parity_check_live.rs --out-dir D:\parity  # Custom output dir
 //! rust-script scripts/windows/parity_check_live.rs --keep       # Keep raw output files on success
@@ -105,6 +106,7 @@ fn main() {
 
     let drives = parse_drives(&args);
     let pattern = parse_pattern(&args);
+    let name_only = args.iter().any(|a| a == "--name-only");
     let sample_size = parse_sample_size(&args);
     let out_dir = parse_out_dir(&args);
     let keep_files = args.iter().any(|a| a == "--keep");
@@ -121,6 +123,9 @@ fn main() {
     println!("  Rust binary: {}", uffs_rust.display());
     println!("  Drives     : {:?}", drives);
     println!("  Pattern    : {}", pattern);
+    if name_only {
+        println!("  Name only  : yes (filename matching only)");
+    }
     println!("  Output dir : {}", out_dir.display());
     println!("  Sample size: {}", sample_size);
     println!(
@@ -139,6 +144,7 @@ fn main() {
         let result = run_drive_parity(
             drive,
             &pattern,
+            name_only,
             &uffs_cpp,
             &uffs_rust,
             &out_dir,
@@ -216,6 +222,7 @@ fn run_with_retry(bin: &Path, args: &[&str], stdout_path: &Path, label: &str) ->
 fn run_drive_parity(
     drive: &str,
     pattern: &str,
+    name_only: bool,
     cpp_bin: &Path,
     rust_bin: &Path,
     out_dir: &Path,
@@ -275,16 +282,20 @@ fn run_drive_parity(
     print!("  [2/4] Running Rust scan...");
     io::stdout().flush().ok();
     let rust_start = Instant::now();
+    let mut rust_args: Vec<&str> = vec![
+        pattern,
+        "--drive",
+        &drive_upper,
+        "--no-cache",
+        "--format",
+        "custom",
+    ];
+    if name_only {
+        rust_args.push("--name-only");
+    }
     let rust_result = run_with_retry(
         rust_bin,
-        &[
-            pattern,
-            "--drive",
-            &drive_upper,
-            "--no-cache",
-            "--format",
-            "custom",
-        ],
+        &rust_args,
         &rust_raw,
         "Rust",
     );
