@@ -235,6 +235,16 @@ async fn run() -> Result<()> {
         None => {
             // Default action: search
             if let Some(pattern) = cli.pattern {
+                // Validate --name-only: incompatible with patterns containing path separators
+                if cli.name_only
+                    && (pattern.contains('\\') || pattern.contains('/'))
+                    && !pattern.starts_with('>')
+                {
+                    anyhow::bail!(
+                        "--name-only cannot be used with path patterns (pattern contains '\\' or '/'). \
+                         Remove the path from the pattern or drop --name-only."
+                    );
+                }
                 commands::search(
                     &pattern,
                     cli.drive,
@@ -264,6 +274,7 @@ async fn run() -> Result<()> {
                     cli.older_accessed.as_deref(),
                     cli.exclude.as_deref(),
                     cli.word,
+                    cli.name_only,
                     cli.sort.as_deref(),
                     cli.sort_desc,
                     cli.ext.as_deref(),

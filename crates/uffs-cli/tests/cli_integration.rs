@@ -316,4 +316,77 @@ mod tests {
             &["unexpected argument 'extra'", "Usage:"],
         );
     }
+
+    // ── --name-only tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_name_only_rejects_backslash_pattern() {
+        assert_failure(
+            "name_only_backslash",
+            &[
+                r"C:\Users\hallo",
+                "--name-only",
+                "--mft-file",
+                "nonexistent.bin",
+            ],
+            &["--name-only cannot be used with path patterns"],
+        );
+    }
+
+    #[test]
+    fn test_name_only_rejects_forward_slash_pattern() {
+        assert_failure(
+            "name_only_fwdslash",
+            &["usr/hallo", "--name-only", "--mft-file", "nonexistent.bin"],
+            &["--name-only cannot be used with path patterns"],
+        );
+    }
+
+    #[test]
+    fn test_name_only_accepts_plain_literal() {
+        // Should not error on validation (will fail later because no MFT file,
+        // but the --name-only + pattern validation should pass)
+        let output = run_cli(
+            "name_only_plain",
+            &["hallo", "--name-only", "--mft-file", "nonexistent.bin"],
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains("--name-only cannot be used with path patterns"),
+            "plain literal should be accepted with --name-only"
+        );
+    }
+
+    #[test]
+    fn test_name_only_accepts_glob_pattern() {
+        let output = run_cli(
+            "name_only_glob",
+            &["*.txt", "--name-only", "--mft-file", "nonexistent.bin"],
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains("--name-only cannot be used with path patterns"),
+            "glob should be accepted with --name-only"
+        );
+    }
+
+    #[test]
+    fn test_name_only_accepts_regex_with_backslash_escapes() {
+        // Regex patterns start with > and may contain \. for escaped dots.
+        // These backslashes are regex syntax, not path separators.
+        let output = run_cli(
+            "name_only_regex",
+            &[
+                r">.*\.(jpg|png)",
+                "--name-only",
+                "--mft-file",
+                "nonexistent.bin",
+            ],
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains("--name-only cannot be used with path patterns"),
+            "regex patterns (starting with >) should be accepted with --name-only"
+        );
+    }
 }

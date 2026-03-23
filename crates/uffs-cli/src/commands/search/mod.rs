@@ -129,6 +129,8 @@ struct SearchConfig<'a> {
     output_targets: Vec<char>,
     /// Whether this is a full-scan.
     is_full_scan: bool,
+    /// Force filename-only matching (--name-only flag).
+    name_only: bool,
     /// Query mode.
     query_mode: &'a str,
     /// Chaos seed for testing.
@@ -188,6 +190,7 @@ pub async fn search(
     older_accessed: Option<&str>,
     exclude: Option<&str>,
     word: bool,
+    name_only: bool,
     sort: Option<&str>,
     sort_desc: bool,
     ext_filter: Option<&str>,
@@ -236,6 +239,7 @@ pub async fn search(
         older_accessed,
         exclude,
         word,
+        name_only,
         sort,
         sort_desc,
         ext_filter,

@@ -208,6 +208,16 @@ pub struct Cli {
     #[arg(long, default_value = "false")]
     pub word: bool,
 
+    /// Match against filename only, not the full path
+    ///
+    /// By default, literal patterns like "hallo" match anywhere in the full
+    /// path (including directory names). With --name-only, matching is
+    /// restricted to the filename component — like C++ UFFS behavior.
+    ///
+    /// Incompatible with patterns containing path separators (\ or /).
+    #[arg(long, default_value = "false")]
+    pub name_only: bool,
+
     /// Sort results by column(s), comma-separated for multi-tier
     ///
     /// Examples: size, modified, name, size,name, modified,size,name

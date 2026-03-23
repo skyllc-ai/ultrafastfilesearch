@@ -49,6 +49,8 @@ pub(super) struct SingleFileStreamConfig<'a> {
     pub(super) sort_desc: bool,
     /// Whether this is a full-scan (no filtering).
     pub(super) is_full_scan: bool,
+    /// Force filename-only matching (--name-only flag).
+    pub(super) name_only: bool,
     /// Output format.
     pub(super) format: &'a str,
     /// Output path.
@@ -139,7 +141,7 @@ pub(super) fn run_single_file_streaming(config: &SingleFileStreamConfig<'_>) -> 
             &compiled,
             ext_indices.as_deref(),
             config.effective_case_sensitive,
-            config.filters.parsed.is_path_pattern(),
+            config.filters.parsed.is_path_pattern() && !config.name_only,
             &rec_filter,
             config.format,
             config.out,

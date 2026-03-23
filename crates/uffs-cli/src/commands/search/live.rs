@@ -60,6 +60,8 @@ struct IndexStreamConfig<'a> {
     sort_desc: bool,
     /// Whether this is a full-scan.
     is_full_scan: bool,
+    /// Force filename-only matching (--name-only flag).
+    name_only: bool,
     /// Output format.
     format: &'a str,
     /// Output path.
@@ -122,7 +124,7 @@ fn run_index_streaming(config: &IndexStreamConfig<'_>) -> Result<usize> {
             &compiled,
             ext_indices.as_deref(),
             config.case_sensitive,
-            config.filters.parsed.is_path_pattern(),
+            config.filters.parsed.is_path_pattern() && !config.name_only,
             &rec_filter,
             config.format,
             config.out,
@@ -181,6 +183,7 @@ pub(super) async fn dispatch_windows_live(
             config.sort,
             config.sort_desc,
             config.is_full_scan,
+            config.name_only,
             config.format,
             config.out,
             &config.output_config,
@@ -226,6 +229,7 @@ async fn run_live_single_drive(config: &SearchConfig<'_>, drive_letter: char) ->
         sort: config.sort,
         sort_desc: config.sort_desc,
         is_full_scan: config.is_full_scan,
+        name_only: config.name_only,
         format: config.format,
         out: config.out,
         output_config: &config.output_config,
@@ -261,6 +265,7 @@ async fn run_live_multi_drive_streaming(
     sort: Option<&str>,
     sort_desc: bool,
     is_full_scan: bool,
+    name_only: bool,
     format: &str,
     out: &str,
     output_config: &OutputConfig,
@@ -314,7 +319,7 @@ async fn run_live_multi_drive_streaming(
     let cpp_pattern_clone = cpp_pattern.clone();
     let out_owned = out.to_owned();
     let pattern_owned = pattern.to_owned();
-    let is_pp = filters.parsed.is_path_pattern();
+    let is_pp = filters.parsed.is_path_pattern() && !name_only;
     let rec_filter = build_record_filter(
         filters,
         attr_filter,
