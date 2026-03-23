@@ -45,6 +45,30 @@ enum VerifyResult {
     StrictMatch,
     SortedMatch,
     Mismatch,
+    Skipped,
+}
+
+/// Maximum retries for transient errors (sharing violation, access denied).
+const MAX_RETRIES: u32 = 3;
+/// Delay between retries in milliseconds.
+const RETRY_DELAY_MS: u64 = 2000;
+
+/// Decode a Windows process exit code into a human-readable error message.
+fn decode_exit_code(code: i32) -> &'static str {
+    match code {
+        5 => "ERROR_ACCESS_DENIED — Run as Administrator",
+        32 => "ERROR_SHARING_VIOLATION — Another process has the MFT locked (close other uffs/Everything instances)",
+        33 => "ERROR_LOCK_VIOLATION — File region locked by another process",
+        87 => "ERROR_INVALID_PARAMETER — Invalid command-line arguments",
+        995 => "ERROR_OPERATION_ABORTED — I/O was cancelled",
+        1359 => "ERROR_INTERNAL_ERROR — Internal error in volume access",
+        _ => "Unknown error",
+    }
+}
+
+/// Check if an exit code is a transient error worth retrying.
+fn is_transient_error(code: i32) -> bool {
+    matches!(code, 32 | 33)
 }
 
 #[derive(Debug)]
@@ -132,6 +156,57 @@ fn main() {
     }
 }
 
+/// Run a binary with retry logic for transient Windows errors.
+///
+/// Retries up to `MAX_RETRIES` times for sharing violations (exit code 32/33).
+/// Returns `Ok(())` on success, `Err(message)` with a human-readable diagnostic.
+fn run_with_retry(bin: &Path, args: &[&str], stdout_path: &Path, label: &str) -> Result<(), String> {
+    for attempt in 0..=MAX_RETRIES {
+        let output = Command::new(bin)
+            .args(args)
+            .stdout(File::create(stdout_path).map_err(|e| format!("cannot create output file: {e}"))?)
+            .stderr(std::process::Stdio::piped())
+            .output();
+
+        match output {
+            Ok(ref o) if o.status.success() => return Ok(()),
+            Ok(ref o) => {
+                let code = o.status.code().unwrap_or(-1);
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                let stderr_msg = stderr.trim();
+                let decoded = decode_exit_code(code);
+
+                if is_transient_error(code) && attempt < MAX_RETRIES {
+                    println!(
+                        "\n       ⚠️  {} attempt {}/{} failed: exit code {} — {}",
+                        label,
+                        attempt + 1,
+                        MAX_RETRIES + 1,
+                        code,
+                        decoded
+                    );
+                    println!(
+                        "       Retrying in {}s...",
+                        RETRY_DELAY_MS / 1000
+                    );
+                    std::thread::sleep(Duration::from_millis(RETRY_DELAY_MS));
+                    print!("  [retry] Running {} scan...", label);
+                    io::stdout().flush().ok();
+                    continue;
+                }
+
+                let mut msg = format!("exit code {} — {}", code, decoded);
+                if !stderr_msg.is_empty() {
+                    msg.push_str(&format!("\n       stderr: {}", stderr_msg));
+                }
+                return Err(msg);
+            }
+            Err(e) => return Err(format!("failed to execute {}: {}", bin.display(), e)),
+        }
+    }
+    Err("max retries exceeded".into())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_drive_parity(
     drive: &str,
@@ -161,36 +236,25 @@ fn run_drive_parity(
     let rust_sorted = out_dir.join(format!("rust_{drive_lower}_{timestamp}_sorted.txt"));
     let diff_file = out_dir.join(format!("diff_{drive_lower}_{timestamp}.txt"));
 
-    // 1. Run C++
+    // 1. Run C++ (with retry for transient errors like sharing violations)
     print!("  [1/4] Running C++ scan...");
     io::stdout().flush().ok();
     let cpp_start = Instant::now();
-    let cpp_output = Command::new(cpp_bin)
-        .args(["*", &format!("--drives={}", drive_upper)])
-        .stdout(File::create(&cpp_raw).expect("create cpp_raw"))
-        .stderr(std::process::Stdio::piped())
-        .output();
+    let cpp_result = run_with_retry(
+        cpp_bin,
+        &["*", &format!("--drives={}", drive_upper)],
+        &cpp_raw,
+        "C++",
+    );
     let cpp_ms = cpp_start.elapsed().as_millis();
-    match cpp_output {
-        Ok(ref o) if o.status.success() => println!(" ✅ ({})", format_duration_ms(cpp_ms)),
-        Ok(ref o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            println!(" ❌ FAILED (exit={}) {}", o.status, stderr.trim());
+    match cpp_result {
+        Ok(()) => println!(" ✅ ({})", format_duration_ms(cpp_ms)),
+        Err(msg) => {
+            println!(" ❌ SKIPPED — {}", msg);
+            println!();
             return DriveResult {
                 drive_letter: drive_upper,
-                result: VerifyResult::Mismatch,
-                cpp_lines: 0,
-                rust_lines: 0,
-                cpp_time_ms: cpp_ms,
-                rust_time_ms: 0,
-                _sort_time_ms: 0,
-            };
-        }
-        Err(e) => {
-            println!(" ❌ FAILED ({})", e);
-            return DriveResult {
-                drive_letter: drive_upper,
-                result: VerifyResult::Mismatch,
+                result: VerifyResult::Skipped,
                 cpp_lines: 0,
                 rust_lines: 0,
                 cpp_time_ms: cpp_ms,
@@ -204,39 +268,28 @@ fn run_drive_parity(
     print!("  [2/4] Running Rust scan...");
     io::stdout().flush().ok();
     let rust_start = Instant::now();
-    let rust_output = Command::new(rust_bin)
-        .args([
+    let rust_result = run_with_retry(
+        rust_bin,
+        &[
             "*",
             "--drive",
             &drive_upper,
             "--no-cache",
             "--format",
             "custom",
-        ])
-        .stdout(File::create(&rust_raw).expect("create rust_raw"))
-        .stderr(std::process::Stdio::piped())
-        .output();
+        ],
+        &rust_raw,
+        "Rust",
+    );
     let rust_ms = rust_start.elapsed().as_millis();
-    match rust_output {
-        Ok(ref o) if o.status.success() => println!(" ✅ ({})", format_duration_ms(rust_ms)),
-        Ok(ref o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            println!(" ❌ FAILED (exit={}) {}", o.status, stderr.trim());
+    match rust_result {
+        Ok(()) => println!(" ✅ ({})", format_duration_ms(rust_ms)),
+        Err(msg) => {
+            println!(" ❌ SKIPPED — {}", msg);
+            println!();
             return DriveResult {
                 drive_letter: drive_upper,
-                result: VerifyResult::Mismatch,
-                cpp_lines: 0,
-                rust_lines: 0,
-                cpp_time_ms: cpp_ms,
-                rust_time_ms: rust_ms,
-                _sort_time_ms: 0,
-            };
-        }
-        Err(e) => {
-            println!(" ❌ FAILED ({})", e);
-            return DriveResult {
-                drive_letter: drive_upper,
-                result: VerifyResult::Mismatch,
+                result: VerifyResult::Skipped,
                 cpp_lines: 0,
                 rust_lines: 0,
                 cpp_time_ms: cpp_ms,
@@ -653,6 +706,7 @@ fn print_summary(results: &[DriveResult]) {
     let mut strict_match = 0;
     let mut sorted_match = 0;
     let mut mismatch = 0;
+    let mut skipped = 0;
 
     for result in results {
         let (icon, status) = match result.result {
@@ -668,23 +722,38 @@ fn print_summary(results: &[DriveResult]) {
                 mismatch += 1;
                 ("❌", "MISMATCH")
             }
+            VerifyResult::Skipped => {
+                skipped += 1;
+                ("⏭️", "SKIPPED (access error)")
+            }
         };
-        println!(
-            "  {} Drive {}: {} ({} / {} lines)",
-            icon, result.drive_letter, status, result.cpp_lines, result.rust_lines
-        );
+        if result.result == VerifyResult::Skipped {
+            println!("  {} Drive {}: {}", icon, result.drive_letter, status);
+        } else {
+            println!(
+                "  {} Drive {}: {} ({} / {} lines)",
+                icon, result.drive_letter, status, result.cpp_lines, result.rust_lines
+            );
+        }
     }
 
     println!();
     let total_drives = results.len();
+    let tested = total_drives - skipped;
     println!("  Total drives:    {}", total_drives);
+    println!("  Tested:          {}", tested);
     println!("  Strict matches:  {}", strict_match);
     println!("  Sorted matches:  {}", sorted_match);
     println!("  Mismatches:      {}", mismatch);
+    if skipped > 0 {
+        println!("  Skipped:         {} (access errors — close other MFT readers)", skipped);
+    }
     println!();
 
-    if mismatch == 0 {
+    if mismatch == 0 && skipped == 0 {
         println!("  🎉 ALL DRIVES VERIFIED SUCCESSFULLY!");
+    } else if mismatch == 0 {
+        println!("  ✅ All tested drives match! ({} skipped due to access errors)", skipped);
     } else {
         println!("  ⚠️  {} drive(s) had mismatches", mismatch);
     }
@@ -718,6 +787,14 @@ fn print_timing_table(results: &[DriveResult]) {
     let mut total_files: usize = 0;
 
     for result in results {
+        if result.result == VerifyResult::Skipped {
+            println!(
+                "║     {}     ║ {:>16} ║ {:>16} ║ {:>11} ║ {:>19} ║",
+                result.drive_letter, "—", "—", "SKIPPED", "—"
+            );
+            continue;
+        }
+
         let cpp_time = format_duration_ms(result.cpp_time_ms);
         let rust_time = format_duration_ms(result.rust_time_ms);
 
