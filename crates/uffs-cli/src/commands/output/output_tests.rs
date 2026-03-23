@@ -171,7 +171,8 @@ fn test_write_results_custom_file_appends_cpp_drive_footer() -> Result<()> {
     let written = fs::read_to_string(&path)?;
     drop(fs::remove_file(&path));
 
-    // With 1 row (< 20,000), should include fast-scan message
+    // With glob pattern "*.txt", few results is expected — no MMMmmm warning.
+    // The warning only triggers for full-scan patterns (*, **, **/*).
     assert_eq!(
         written,
         concat!(
@@ -180,8 +181,6 @@ fn test_write_results_custom_file_appends_cpp_drive_footer() -> Result<()> {
             "\r\n",
             "Drives? \t2\tC:|D:\r\n",
             "\r\n",
-            "MMMmmm that was FAST ... maybe your searchstring was wrong?\t*.txt\r\n",
-            "Search path. E.g. 'C:/' or 'C:\\Prog**' \r\n"
         )
     );
     Ok(())
@@ -308,13 +307,52 @@ fn test_streaming_output_custom_format_includes_footer() -> TestResult {
 }
 
 #[test]
-fn test_cpp_footer_includes_fast_scan_message_when_elapsed_le_1s() -> TestResult {
+fn test_cpp_footer_includes_fast_scan_message_for_full_scan_pattern() -> TestResult {
     let path = temp_output_path("txt");
     let results = sample_df()?;
     let output_config = OutputConfig::new()
         .with_columns("path,name")
         .with_header(false);
 
+    // Full-scan pattern "*" with few results → should trigger the warning
+    write_results(
+        &results,
+        "custom",
+        &path.to_string_lossy(),
+        &output_config,
+        &['G'],
+        Duration::from_millis(999),
+        "*",
+    )?;
+
+    let written = fs::read_to_string(&path)?;
+    drop(fs::remove_file(&path));
+
+    assert_eq!(
+        written,
+        concat!(
+            "\"C:\\Temp\\file.txt\",\"file.txt\"\n",
+            "\r\n",
+            "\r\n",
+            "Drives? \t1\tG:\r\n",
+            "\r\n",
+            "MMMmmm that was FAST ... maybe your searchstring was wrong?\t*\r\n",
+            "Search path. E.g. 'C:/' or 'C:\\Prog**' \r\n"
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn test_cpp_footer_omits_fast_scan_message_for_regex_pattern() -> TestResult {
+    let path = temp_output_path("txt");
+    let results = sample_df()?;
+    let output_config = OutputConfig::new()
+        .with_columns("path,name")
+        .with_header(false);
+
+    // Regex pattern with few results → should NOT trigger the warning
+    // (few results is expected for filtered queries)
     write_results(
         &results,
         "custom",
@@ -336,8 +374,6 @@ fn test_cpp_footer_includes_fast_scan_message_when_elapsed_le_1s() -> TestResult
             "\r\n",
             "Drives? \t1\tG:\r\n",
             "\r\n",
-            "MMMmmm that was FAST ... maybe your searchstring was wrong?\t>G:.*\r\n",
-            "Search path. E.g. 'C:/' or 'C:\\Prog**' \r\n"
         )
     );
     Ok(())

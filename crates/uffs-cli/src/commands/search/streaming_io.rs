@@ -6,7 +6,7 @@ use uffs_core::output::OutputConfig;
 
 use super::super::output;
 use super::super::raw_io::QueryFilters;
-use super::util::extract_trailing_extension;
+use super::util::{extract_extensions_from_regex, extract_trailing_extension};
 
 /// Shared helper: write streaming output from an `MftIndex` to file or console.
 ///
@@ -159,17 +159,21 @@ where
     }
 }
 
-/// Try to get record indices from the extension index for simple suffix
-/// patterns.
+/// Try to get record indices from the extension index for patterns with
+/// recognizable file extensions.
 ///
-/// Returns `Some(Vec<u32>)` for patterns like `*.rs`, `*.txt` where the
-/// extension index provides O(matches) lookup.  Returns `None` for complex
-/// patterns that need full-scan matching.
+/// Supports two modes:
+/// - **Glob**: `*.rs`, `*hallo*.txt` → single extension lookup
+/// - **Regex**: `>.*\.(jpg|png|heic)` → union of multiple extension lookups
+///
+/// Returns `Some(Vec<u32>)` with the pre-filtered record indices, or `None`
+/// if the pattern doesn't have extractable extensions.
 pub(super) fn try_get_extension_indices(
     index: &uffs_mft::MftIndex,
     filters: &QueryFilters<'_>,
 ) -> Option<Vec<u32>> {
-    // Only works for simple glob suffix patterns with no other filters.
+    // Skip extension optimization when other filters are active —
+    // the streaming writer applies these filters inline anyway.
     if filters.files_only
         || filters.dirs_only
         || filters.hide_system
@@ -181,22 +185,54 @@ pub(super) fn try_get_extension_indices(
         return None;
     }
 
+    let ext_index = index.extension_index.as_ref()?;
     let pattern = filters.parsed.pattern();
 
-    // Extract a trailing literal extension from ANY pattern.
-    // Examples:
-    //   "*.txt"         → ext = "txt"
-    //   "*hallo*.txt"   → ext = "txt"
-    //   "foo*.rs"       → ext = "rs"
-    //   "*.tar.gz"      → None (multi-dot)
-    //   "*hallo*"       → None (no extension)
-    //   "nice"          → None (no dot)
-    let ext = extract_trailing_extension(pattern)?;
+    // Strategy 1: Glob patterns — single extension from trailing `.ext`
+    if let Some(ext) = extract_trailing_extension(pattern) {
+        let ext_lower = ext.to_ascii_lowercase();
+        let ext_id = index.extensions.map.get(ext_lower.as_str())?;
+        info!(
+            ext = ext_lower,
+            records = ext_index.get_records(*ext_id).len(),
+            "📊 extension index hit (glob)"
+        );
+        return Some(ext_index.get_records(*ext_id).to_vec());
+    }
 
-    let ext_index = index.extension_index.as_ref()?;
-    let ext_lower = ext.to_ascii_lowercase();
-    let ext_id = index.extensions.map.get(ext_lower.as_str())?;
-    Some(ext_index.get_records(*ext_id).to_vec())
+    // Strategy 2: Regex patterns — extract extensions from alternation group
+    //   >.*\.(jpg|png|heic)  → ["jpg", "png", "heic"]
+    //   >.*\.txt             → ["txt"]
+    if let Some(extensions) = extract_extensions_from_regex(pattern) {
+        let mut combined: Vec<u32> = Vec::new();
+        let mut matched_exts: Vec<&str> = Vec::new();
+
+        for ext in &extensions {
+            if let Some(&ext_id) = index.extensions.map.get(ext.as_str()) {
+                let records = ext_index.get_records(ext_id);
+                combined.extend_from_slice(records);
+                matched_exts.push(ext);
+            }
+        }
+
+        if combined.is_empty() {
+            return None;
+        }
+
+        // Deduplicate — a record could match multiple extensions
+        // (unlikely but possible with hardlinks having different names).
+        combined.sort_unstable();
+        combined.dedup();
+
+        info!(
+            extensions = ?matched_exts,
+            records = combined.len(),
+            "📊 extension index hit (regex alternation)"
+        );
+        return Some(combined);
+    }
+
+    None
 }
 
 /// Build a `StreamingRecordFilter` from `QueryFilters` + extra CLI params.

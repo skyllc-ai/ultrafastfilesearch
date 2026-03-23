@@ -434,7 +434,11 @@ fn write_cpp_drive_footer<W: Write + ?Sized>(
     )?;
     write!(writer, "\r\n")?;
 
-    if ctx.row_count < 20_000 {
+    // Only show the "too few results" warning for full-scan patterns (* or empty).
+    // Filtered/regex/glob queries naturally return few results — that's not an
+    // error.
+    let is_full_scan = matches!(ctx.pattern, "" | "*" | "**" | "**/*");
+    if ctx.row_count < 20_000 && is_full_scan {
         write!(
             writer,
             "MMMmmm that was FAST ... maybe your searchstring was wrong?\t{pattern}\r\n",

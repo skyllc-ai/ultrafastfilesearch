@@ -14,6 +14,10 @@
 //! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data --drive D --regenerate
 //! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data --drive D --rust /tmp/rust_d.txt
 //!
+//! # With a custom search pattern (glob or regex)
+//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data --regenerate --pattern "*.txt"
+//! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data --drive C --regenerate --pattern ">.*\\.(jpg|png|heic)"
+//!
 //! # Legacy single-drive mode (still supported)
 //! rust-script scripts/verify_parity.rs /Users/rnio/uffs_data D --regenerate
 //! ```
@@ -175,6 +179,7 @@ fn run_legacy_mode(args: &[String], base_dir: &Path) {
     // Parse optional arguments
     let explicit_tz = parse_tz_offset(args);
     let custom_bin = parse_bin_path(args);
+    let pattern = parse_pattern(args);
 
     // Determine mode
     let mode = &args[3];
@@ -189,6 +194,7 @@ fn run_legacy_mode(args: &[String], base_dir: &Path) {
                 &drive_lower,
                 tz_offset,
                 custom_bin.as_deref(),
+                &pattern,
             );
             (regen.output_path, Some(regen.parse_duration), regen.mft_size_bytes)
         }
@@ -231,6 +237,7 @@ fn run_multi_drive_mode(args: &[String], base_dir: &Path) {
     let custom_bin = parse_bin_path(args);
     let specific_drive = parse_drive_filter(args);
     let rust_output_path = parse_rust_path(args);
+    let pattern = parse_pattern(args);
     let regenerate = args.iter().any(|a| a == "--regenerate");
 
     if !regenerate && rust_output_path.is_none() {
@@ -260,6 +267,9 @@ fn run_multi_drive_mode(args: &[String], base_dir: &Path) {
     println!();
     println!("Base directory: {}", base_dir.display());
     println!("Drives found:   {} ({:?})", drives.len(), drives);
+    if pattern != "*" {
+        println!("Pattern:        {}", pattern);
+    }
     println!();
 
     let mut results: Vec<DriveResult> = Vec::new();
@@ -307,6 +317,7 @@ fn run_multi_drive_mode(args: &[String], base_dir: &Path) {
                 drive_lower,
                 tz_offset,
                 custom_bin.as_deref(),
+                &pattern,
             );
             (regen.output_path, Some(regen.parse_duration), regen.mft_size_bytes)
         };
@@ -709,6 +720,16 @@ fn parse_rust_path(args: &[String]) -> Option<String> {
     None
 }
 
+/// Parse --pattern argument from command line. Defaults to "*" (full scan).
+fn parse_pattern(args: &[String]) -> String {
+    for i in 0..args.len() {
+        if args[i] == "--pattern" && i + 1 < args.len() {
+            return args[i + 1].clone();
+        }
+    }
+    "*".to_string()
+}
+
 /// Parse --tz argument from command line. Returns None if not specified
 /// (auto-detect).
 fn parse_tz_offset(args: &[String]) -> Option<i32> {
@@ -960,6 +981,7 @@ fn regenerate_rust_output(
     drive_lower: &str,
     tz_offset: i32,
     custom_bin: Option<&Path>,
+    pattern: &str,
 ) -> RegenerateResult {
     let tz_str = format!("{tz_offset}");
     let tz_label = match tz_offset {
@@ -1049,7 +1071,7 @@ fn regenerate_rust_output(
     }
 
     let mut args = vec![
-        "*".to_string(),
+        pattern.to_string(),
         "--mft-file".to_string(),
         mft_file.to_string_lossy().to_string(),
         "--drive".to_string(),

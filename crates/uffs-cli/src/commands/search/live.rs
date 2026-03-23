@@ -73,11 +73,15 @@ struct IndexStreamConfig<'a> {
 /// Stream results from a preloaded MFT index.
 #[cfg(windows)]
 fn run_index_streaming(config: &IndexStreamConfig<'_>) -> Result<usize> {
-    let cpp_pattern = format!(
-        ">{}:{}",
-        config.index.volume,
-        config.pattern.replace('*', ".*")
-    );
+    let cpp_pattern = if config.pattern.starts_with('>') {
+        config.pattern.to_owned()
+    } else {
+        format!(
+            ">{}:{}",
+            config.index.volume,
+            config.pattern.replace('*', ".*")
+        )
+    };
 
     if config.is_full_scan {
         info!(

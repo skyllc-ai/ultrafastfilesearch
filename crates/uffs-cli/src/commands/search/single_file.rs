@@ -88,11 +88,16 @@ pub(super) fn run_single_file_streaming(config: &SingleFileStreamConfig<'_>) -> 
     )?;
 
     let t_output = std::time::Instant::now();
-    let cpp_pattern = format!(
-        ">{}:{}",
-        native_index.index.volume,
-        config.pattern.replace('*', ".*")
-    );
+    let cpp_pattern = if config.pattern.starts_with('>') {
+        // Already a regex — pass through unchanged for footer display
+        config.pattern.to_owned()
+    } else {
+        format!(
+            ">{}:{}",
+            native_index.index.volume,
+            config.pattern.replace('*', ".*")
+        )
+    };
 
     let row_count = if config.is_full_scan {
         info!(
