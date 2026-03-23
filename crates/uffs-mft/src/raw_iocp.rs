@@ -294,18 +294,14 @@ impl IocpCaptureWriter {
     /// Records a chunk as it completes from IOCP.
     ///
     /// Call this for each chunk in the order IOCP delivers them.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "MFT chunk size < 4GB guaranteed by Windows IOCP limits"
-    )]
     pub fn record_chunk(&mut self, start_frs: u64, data: Vec<u8>) {
-        let record_count = (data.len() / self.record_size as usize) as u32;
+        let record_count = crate::index::len_to_u32(data.len() / self.record_size as usize);
         let chunk = CapturedChunk {
             completion_seq: self.next_seq,
             start_frs,
             record_count,
             data_offset: 0, // Will be computed in finalize
-            data_size: data.len() as u32,
+            data_size: crate::index::len_to_u32(data.len()),
         };
         self.chunks.push((chunk, data));
         self.next_seq += 1;
@@ -322,10 +318,6 @@ impl IocpCaptureWriter {
     /// # Errors
     ///
     /// Returns an error if writing fails.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "MFT capture chunk count < 4 billion in practice"
-    )]
     pub fn write_to_file<P: AsRef<Path>>(mut self, path: P) -> Result<IocpCaptureHeader> {
         let path = path.as_ref();
 
@@ -346,7 +338,7 @@ impl IocpCaptureWriter {
             version: VERSION,
             flags: if self.compress { FLAG_COMPRESSED } else { 0 },
             record_size: self.record_size,
-            chunk_count: self.chunks.len() as u32,
+            chunk_count: crate::index::len_to_u32(self.chunks.len()),
             total_records,
             total_data_size: data_offset,
             volume_letter: self.volume_letter,
@@ -406,13 +398,9 @@ impl IocpCaptureData {
     /// Returns an iterator over chunks with their data slices.
     ///
     /// Chunks are yielded in IOCP completion order (as captured).
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "MFT capture data < 4GB fits in usize on 64-bit"
-    )]
     pub fn iter_chunks(&self) -> impl Iterator<Item = (&CapturedChunk, &[u8])> {
         self.chunks.iter().map(move |chunk| {
-            let start = chunk.data_offset as usize;
+            let start = crate::index::frs_to_usize(chunk.data_offset);
             let end = start + chunk.data_size as usize;
             let data = self.data.get(start..end).unwrap_or(&[]);
             (chunk, data)
@@ -437,10 +425,6 @@ impl IocpCaptureData {
 /// # Errors
 ///
 /// Returns an error if reading or parsing fails.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "MFT capture data fits in memory on 64-bit systems"
-)]
 pub fn load_iocp_capture<P: AsRef<Path>>(path: P) -> Result<IocpCaptureData> {
     let path = path.as_ref();
     let file = File::open(path)?;
@@ -470,7 +454,7 @@ pub fn load_iocp_capture<P: AsRef<Path>>(path: P) -> Result<IocpCaptureData> {
     let data = if header.is_compressed() {
         #[cfg(feature = "zstd")]
         {
-            let mut data = Vec::with_capacity(header.total_data_size as usize);
+            let mut data = Vec::with_capacity(crate::index::frs_to_usize(header.total_data_size));
             let cursor = std::io::Cursor::new(&compressed);
             let mut decoder = zstd::stream::Decoder::new(cursor)?;
             decoder.read_to_end(&mut data)?;
@@ -524,10 +508,6 @@ pub fn is_iocp_capture<P: AsRef<Path>>(path: P) -> Result<bool> {
 /// # Errors
 ///
 /// Returns an error if reading, parsing, or index building fails.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "MFT record counts fit in usize on 64-bit"
-)]
 /// Load IOCP capture and build `MftIndex` using the unified
 /// `process_record` parser directly into `MftIndex`.
 ///
@@ -552,7 +532,7 @@ pub fn load_iocp_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIn
     let load_ms = t_load.elapsed().as_millis();
     let volume = capture.volume_letter();
     let record_size = capture.record_size() as usize;
-    let total_records = capture.header.total_records as usize;
+    let total_records = crate::index::frs_to_usize(capture.header.total_records);
 
     debug!(
         %volume,
@@ -592,7 +572,7 @@ pub fn load_iocp_to_index<P: AsRef<Path>>(path: P) -> Result<crate::index::MftIn
     for ci in 0..num_chunks {
         let start_frs = capture.chunks[ci].start_frs;
         let records_in_chunk = capture.chunks[ci].record_count as usize;
-        let data_off = capture.chunks[ci].data_offset as usize;
+        let data_off = crate::index::frs_to_usize(capture.chunks[ci].data_offset);
         let data_sz = capture.chunks[ci].data_size as usize;
 
         for i in 0..records_in_chunk {

@@ -75,22 +75,14 @@ pub struct ParsedRecord {
 impl ParsedRecord {
     /// Returns the number of hard links (names).
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "names count is always < 65536"
-    )]
     pub fn name_count(&self) -> u16 {
-        self.names.len() as u16
+        crate::index::len_to_u16(self.names.len())
     }
 
     /// Returns the number of data streams.
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "stream count is always < 65536"
-    )]
     pub fn stream_count(&self) -> u16 {
-        self.streams.len() as u16
+        crate::index::len_to_u16(self.streams.len())
     }
 
     /// Returns the creation time (Unix microseconds).

@@ -5,9 +5,9 @@
 
 use std::path::PathBuf;
 
-use crate::error::Result;
 #[cfg(not(windows))]
 use crate::error::MftError;
+use crate::error::Result;
 #[cfg(windows)]
 use crate::platform::VolumeHandle;
 
@@ -20,6 +20,7 @@ mod index_read;
 mod index_timing;
 mod multi_drive;
 mod persistence;
+mod persistence_capture;
 mod read_mode;
 mod stats;
 

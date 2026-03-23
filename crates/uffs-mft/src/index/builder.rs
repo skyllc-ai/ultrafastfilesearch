@@ -2,7 +2,8 @@
 
 use super::{
     ChildInfo, ExtensionIndex, FileRecord, IndexBuildTiming, IndexNameRef, IndexStreamInfo,
-    InternalStreamInfo, LinkInfo, MftIndex, NO_ENTRY, SizeInfo, StandardInfo,
+    InternalStreamInfo, LinkInfo, MftIndex, NO_ENTRY, SizeInfo, StandardInfo, frs_to_usize,
+    len_to_u16, len_to_u32,
 };
 
 // ============================================================================
@@ -36,10 +37,6 @@ impl MftIndex {
     #[expect(
         clippy::too_many_lines,
         reason = "sequential field mapping from ParsedRecord"
-    )]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS fits in usize on 64-bit"
     )]
     #[expect(
         clippy::indexing_slicing,
@@ -102,7 +99,7 @@ impl MftIndex {
 
             // Add primary name to names buffer FIRST (before borrowing record)
             let name_offset = index.add_name(&parsed.name);
-            let name_len = parsed.name.len() as u16;
+            let name_len = len_to_u16(parsed.name.len());
             let is_ascii = parsed.name.is_ascii();
             // Extract and intern extension (must be done before get_or_create borrows
             // mutably)
@@ -189,7 +186,7 @@ impl MftIndex {
 
             // Update name_count to reflect actual stored names (1 primary + additional)
             // This must be done AFTER filtering to avoid counting duplicates
-            let actual_name_count = (1 + additional_names.len()).max(1) as u16;
+            let actual_name_count = len_to_u16((1 + additional_names.len()).max(1));
             index.get_or_create(parsed.frs).name_count = actual_name_count;
 
             if !additional_names.is_empty() {
@@ -197,11 +194,11 @@ impl MftIndex {
                 for extra_name in additional_names.iter().rev() {
                     // Add name to names buffer
                     let extra_offset = index.add_name(&extra_name.name);
-                    let extra_len = extra_name.name.len() as u16;
+                    let extra_len = len_to_u16(extra_name.name.len());
                     let extra_ascii = extra_name.name.is_ascii();
                     let extra_ext_id = index.intern_extension(&extra_name.name);
 
-                    let link_idx = index.links.len() as u32;
+                    let link_idx = len_to_u32(index.links.len());
                     index.links.push(LinkInfo {
                         next_entry: prev_link_idx,
                         name: IndexNameRef::new(extra_offset, extra_len, extra_ascii, extra_ext_id),
@@ -249,7 +246,7 @@ impl MftIndex {
 
                     let flags = u8::from(st.is_sparse) | (u8::from(st.is_resident) << 1_u8);
 
-                    let new_idx = index.internal_streams.len() as u32;
+                    let new_idx = len_to_u32(index.internal_streams.len());
                     index.internal_streams.push(InternalStreamInfo {
                         size: SizeInfo {
                             length: st.size,
@@ -273,11 +270,11 @@ impl MftIndex {
 
             // Set total_stream_count to include all streams for tree metrics.
             // This includes internal Windows streams like $REPARSE_POINT and $OBJECT_ID.
-            let total_stream_count = parsed.streams.len().max(1) as u16;
+            let total_stream_count = len_to_u16(parsed.streams.len().max(1));
 
             // Set stream_count to reflect only user-visible stored streams (1 default +
             // named) This is used for user-facing output (DataFrame export)
-            let actual_stream_count = (1 + named_streams.len()).max(1) as u16;
+            let actual_stream_count = len_to_u16((1 + named_streams.len()).max(1));
 
             let record = index.get_or_create(parsed.frs);
             record.total_stream_count = total_stream_count;
@@ -291,12 +288,12 @@ impl MftIndex {
                 for extra_stream in named_streams.iter().rev() {
                     // Add stream name to names buffer
                     let stream_name_offset = index.add_name(&extra_stream.name);
-                    let stream_name_len = extra_stream.name.len() as u16;
+                    let stream_name_len = len_to_u16(extra_stream.name.len());
                     let stream_ascii = extra_stream.name.is_ascii();
                     // Streams don't have extensions, use 0
                     let stream_ext_id = 0;
 
-                    let stream_idx = index.streams.len() as u32;
+                    let stream_idx = len_to_u32(index.streams.len());
                     let mut flags = 0_u8;
                     if extra_stream.is_sparse {
                         flags |= 0x01;
@@ -338,13 +335,13 @@ impl MftIndex {
 
                 // Ensure parent exists
                 let parent_idx = {
-                    let parent_frs_usize = parent_frs as usize;
+                    let parent_frs_usize = frs_to_usize(parent_frs);
                     if parent_frs_usize >= index.frs_to_idx.len() {
                         index.frs_to_idx.resize(parent_frs_usize + 1, NO_ENTRY);
                     }
                     if index.frs_to_idx[parent_frs_usize] == NO_ENTRY {
                         // Create placeholder parent
-                        let new_idx = index.records.len() as u32;
+                        let new_idx = len_to_u32(index.records.len());
                         index.frs_to_idx[parent_frs_usize] = new_idx;
                         index.records.push(FileRecord::new(parent_frs));
                     }
@@ -352,7 +349,7 @@ impl MftIndex {
                 };
 
                 // Add child entry with name_index for proportional share calculation
-                let child_idx = index.children.len() as u32;
+                let child_idx = len_to_u32(index.children.len());
 
                 // Get parent's first_child and update
                 let parent = &mut index.records[parent_idx as usize];
@@ -364,7 +361,7 @@ impl MftIndex {
                 index.children.push(ChildInfo {
                     next_entry: old_first_child,
                     child_frs: parsed.frs,
-                    name_index: name_idx as u16,
+                    name_index: len_to_u16(name_idx),
                 });
             }
 
@@ -374,19 +371,19 @@ impl MftIndex {
                 && parsed.parent_frs != u64::from(NO_ENTRY)
             {
                 let parent_idx = {
-                    let parent_frs_usize = parsed.parent_frs as usize;
+                    let parent_frs_usize = frs_to_usize(parsed.parent_frs);
                     if parent_frs_usize >= index.frs_to_idx.len() {
                         index.frs_to_idx.resize(parent_frs_usize + 1, NO_ENTRY);
                     }
                     if index.frs_to_idx[parent_frs_usize] == NO_ENTRY {
-                        let new_idx = index.records.len() as u32;
+                        let new_idx = len_to_u32(index.records.len());
                         index.frs_to_idx[parent_frs_usize] = new_idx;
                         index.records.push(FileRecord::new(parsed.parent_frs));
                     }
                     index.frs_to_idx[parent_frs_usize]
                 };
 
-                let child_idx = index.children.len() as u32;
+                let child_idx = len_to_u32(index.children.len());
                 let parent = &mut index.records[parent_idx as usize];
                 let old_first_child = parent.first_child;
                 parent.first_child = child_idx;

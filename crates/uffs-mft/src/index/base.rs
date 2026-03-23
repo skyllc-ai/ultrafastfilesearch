@@ -2,7 +2,7 @@
 
 use super::{
     ChildInfo, ExtensionIndex, ExtensionTable, FileRecord, IndexNameRef, IndexStreamInfo, LinkInfo,
-    MftIndex, MftStats, NO_ENTRY,
+    MftIndex, MftStats, NO_ENTRY, frs_to_usize, len_to_u32,
 };
 
 impl MftIndex {
@@ -184,15 +184,11 @@ impl MftIndex {
     /// Returns a mutable reference to the record. Creates a new record if
     /// one doesn't exist for the given FRS.
     #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS fits in usize on 64-bit"
-    )]
-    #[expect(
         clippy::indexing_slicing,
         reason = "bounds checked: resize ensures frs_usize < len"
     )]
     pub fn get_or_create(&mut self, frs: u64) -> &mut FileRecord {
-        let frs_usize = frs as usize;
+        let frs_usize = frs_to_usize(frs);
 
         // Expand lookup table if needed
         if frs_usize >= self.frs_to_idx.len() {
@@ -202,7 +198,7 @@ impl MftIndex {
         let idx = self.frs_to_idx[frs_usize];
         if idx == NO_ENTRY {
             // Create new record
-            let new_idx = self.records.len() as u32;
+            let new_idx = len_to_u32(self.records.len());
             self.frs_to_idx[frs_usize] = new_idx;
             self.records.push(FileRecord::new(frs));
             let len = self.records.len();
@@ -219,15 +215,11 @@ impl MftIndex {
     /// [`FileRecord::new_unified(frs)`](FileRecord::new_unified) which starts
     /// all counts at 0.  Existing records are returned as-is.
     #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS fits in usize on 64-bit"
-    )]
-    #[expect(
         clippy::indexing_slicing,
         reason = "bounds checked: resize ensures frs_usize < len"
     )]
     pub fn get_or_create_unified(&mut self, frs: u64) -> &mut FileRecord {
-        let frs_usize = frs as usize;
+        let frs_usize = frs_to_usize(frs);
 
         // Expand lookup table if needed
         if frs_usize >= self.frs_to_idx.len() {
@@ -237,7 +229,7 @@ impl MftIndex {
         let idx = self.frs_to_idx[frs_usize];
         if idx == NO_ENTRY {
             // Create new record with zero-based counts
-            let new_idx = self.records.len() as u32;
+            let new_idx = len_to_u32(self.records.len());
             self.frs_to_idx[frs_usize] = new_idx;
             self.records.push(FileRecord::new_unified(frs));
             let len = self.records.len();
@@ -270,15 +262,11 @@ impl MftIndex {
     /// then use `self.records[idx]` directly, avoiding redundant lookups.
     #[inline]
     #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS fits in usize on 64-bit"
-    )]
-    #[expect(
         clippy::indexing_slicing,
         reason = "bounds checked: resize ensures frs_usize < len"
     )]
     pub fn ensure_record(&mut self, frs: u64) -> u32 {
-        let frs_usize = frs as usize;
+        let frs_usize = frs_to_usize(frs);
 
         if frs_usize >= self.frs_to_idx.len() {
             self.frs_to_idx.resize(frs_usize + 1, NO_ENTRY);
@@ -286,7 +274,7 @@ impl MftIndex {
 
         let idx = self.frs_to_idx[frs_usize];
         if idx == NO_ENTRY {
-            let new_idx = self.records.len() as u32;
+            let new_idx = len_to_u32(self.records.len());
             self.frs_to_idx[frs_usize] = new_idx;
             self.records.push(FileRecord::new_unified(frs));
             new_idx
@@ -298,12 +286,8 @@ impl MftIndex {
     /// Find a record by FRS (returns None if not present)
     #[inline]
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS and record index fit in usize on 64-bit"
-    )]
     pub fn find(&self, frs: u64) -> Option<&FileRecord> {
-        let frs_usize = frs as usize;
+        let frs_usize = frs_to_usize(frs);
         let idx = *self.frs_to_idx.get(frs_usize)?;
         if idx == NO_ENTRY {
             None
@@ -431,12 +415,8 @@ impl MftIndex {
     /// Convert FRS to record index (returns None if not present).
     #[inline]
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS and record index fit in usize on 64-bit"
-    )]
     pub fn frs_to_idx_opt(&self, frs: u64) -> Option<usize> {
-        let frs_usize = frs as usize;
+        let frs_usize = frs_to_usize(frs);
         let idx = *self.frs_to_idx.get(frs_usize)?;
         if idx == NO_ENTRY {
             None

@@ -8,6 +8,11 @@ exception_file="scripts/ci/file_size_exceptions.txt"
 oversized_file="$(mktemp)"
 trap 'rm -f "$oversized_file"' EXIT
 
+if [[ ! -f "$exception_file" ]]; then
+  printf 'ERROR: exception file not found: %s\n' "$exception_file" >&2
+  exit 1
+fi
+
 find crates/ -name '*.rs' -exec wc -l {} \; \
   | awk '$1 > 800 { print $2 "|" $1 }' \
   | sort > "$oversized_file"

@@ -1,5 +1,7 @@
 //! Build timing and aggregate statistics for `MftIndex` construction.
 
+use super::frs_to_usize;
+
 /// Timing breakdown for `MftIndex` building phases.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IndexBuildTiming {
@@ -134,30 +136,23 @@ impl MftStats {
 
     /// Estimate average path depth based on collected stats.
     #[must_use]
-    #[expect(clippy::cast_possible_truncation, reason = "log2 result fits in usize")]
-    #[expect(
-        clippy::cast_sign_loss,
-        reason = "log2 of positive count is non-negative"
-    )]
     pub fn estimated_avg_depth(&self) -> usize {
         if self.dir_count == 0 {
             return 5;
         }
-        let log2 = f64::from(self.dir_count).log2() as usize;
-        (log2 + 2).clamp(3, 20)
+        // Integer log2: number of bits needed to represent dir_count.
+        // u32::BITS - leading_zeros gives the position of the highest set bit.
+        let log2 = (u32::BITS - self.dir_count.leading_zeros()) as usize;
+        (log2 + 1).clamp(3, 20) // +1 instead of +2 because ilog2 rounds down
     }
 
     /// Estimate average path length in bytes.
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "average name length fits in usize"
-    )]
     pub fn estimated_avg_path_bytes(&self) -> usize {
         if self.record_count == 0 {
             return 50;
         }
-        let avg_name_len = (self.total_name_bytes / u64::from(self.record_count)) as usize;
+        let avg_name_len = frs_to_usize(self.total_name_bytes / u64::from(self.record_count));
         let depth = self.estimated_avg_depth();
         3 + (avg_name_len + 1) * depth
     }

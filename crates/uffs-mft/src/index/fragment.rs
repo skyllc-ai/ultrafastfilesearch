@@ -2,6 +2,7 @@
 
 use super::{
     ChildInfo, ExtensionTable, FileRecord, IndexStreamInfo, InternalStreamInfo, LinkInfo, NO_ENTRY,
+    frs_to_usize, len_to_u32,
 };
 
 // ============================================================================
@@ -76,15 +77,11 @@ impl MftIndexFragment {
 
     /// Get or create a record for the given FRS.
     #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS fits in usize on 64-bit"
-    )]
-    #[expect(
         clippy::indexing_slicing,
         reason = "bounds checked: resize ensures frs_usize < len"
     )]
     pub fn get_or_create(&mut self, frs: u64) -> &mut FileRecord {
-        let frs_usize = frs as usize;
+        let frs_usize = frs_to_usize(frs);
 
         // Expand lookup table if needed
         if frs_usize >= self.frs_to_idx.len() {
@@ -94,7 +91,7 @@ impl MftIndexFragment {
         let idx = self.frs_to_idx[frs_usize];
         if idx == NO_ENTRY {
             // Create new record
-            let new_idx = self.records.len() as u32;
+            let new_idx = len_to_u32(self.records.len());
             self.frs_to_idx[frs_usize] = new_idx;
             self.records.push(FileRecord::new(frs));
             let len = self.records.len();

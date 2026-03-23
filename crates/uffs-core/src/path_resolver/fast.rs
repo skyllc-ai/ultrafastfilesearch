@@ -71,10 +71,6 @@ impl FastPathResolver {
     /// # Errors
     ///
     /// Returns an error if required columns are missing.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "u64 FRS fits in usize on 64-bit platforms"
-    )]
     pub fn build(df: &DataFrame, volume: char) -> Result<Self> {
         let frs_col = df.column("frs")?.u64()?;
         let parent_col = df.column("parent_frs")?.u64()?;
@@ -88,7 +84,7 @@ impl FastPathResolver {
         let mut names = NameArena::with_capacity(estimated_name_bytes);
 
         // Pre-allocate entries Vec (u64 to usize is safe for practical MFT sizes)
-        let entries_len = (max_frs + 1) as usize;
+        let entries_len = uffs_mft::frs_to_usize(max_frs + 1);
         let mut entries: Vec<Option<FastEntry>> = vec![None; entries_len];
 
         // Build entries
@@ -100,7 +96,7 @@ impl FastPathResolver {
             ) {
                 let (name_offset, name_len) = names.add(name);
                 // Use safe get_mut to avoid indexing panic
-                if let Some(slot) = entries.get_mut(frs as usize) {
+                if let Some(slot) = entries.get_mut(uffs_mft::frs_to_usize(frs)) {
                     *slot = Some(FastEntry {
                         parent_frs: parent,
                         name_offset,
@@ -143,11 +139,7 @@ impl FastPathResolver {
     /// Caches the result for future lookups.
     pub fn resolve_cached(&mut self, frs: u64) -> String {
         // Check cache first
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "u64 FRS fits in usize on 64-bit platforms"
-        )]
-        let frs_idx = frs as usize;
+        let frs_idx = uffs_mft::frs_to_usize(frs);
         if let Some(Some(cached)) = self.path_cache.get(frs_idx) {
             return cached.clone();
         }
@@ -164,13 +156,9 @@ impl FastPathResolver {
     }
 
     /// Get a cached path if available.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "u64 FRS fits in usize on 64-bit platforms"
-    )]
     fn get_cached(&self, frs: u64) -> Option<&str> {
         self.path_cache
-            .get(frs as usize)
+            .get(uffs_mft::frs_to_usize(frs))
             .and_then(|opt| opt.as_deref())
     }
 

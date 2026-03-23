@@ -1,7 +1,7 @@
 //! Binary serialization for `MftIndex` snapshots.
 
 use super::IndexHeader;
-use crate::index::MftIndex;
+use crate::index::{MftIndex, len_to_u16, len_to_u32};
 
 impl MftIndex {
     /// Serializes the index to a byte vector.
@@ -21,10 +21,6 @@ impl MftIndex {
     /// * `usn_journal_id` - USN Journal ID at time of serialization
     /// * `next_usn` - Next USN to read from (checkpoint)
     #[must_use]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "binary serialization requires many field writes"
-    )]
     pub fn serialize(&self, volume_serial: u64, usn_journal_id: u64, next_usn: i64) -> Vec<u8> {
         let header = IndexHeader::new(self, volume_serial, usn_journal_id, next_usn);
 
@@ -142,32 +138,20 @@ impl MftIndex {
 
         // Write ExtensionTable
         // Extension count (u32)
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "extension count is limited by u16::MAX"
-        )]
-        let ext_count = self.extensions.len() as u32;
+        let ext_count = len_to_u32(self.extensions.len());
         buffer.extend_from_slice(&ext_count.to_le_bytes());
 
         // For each extension (starting from index 1, since 0 is NO_EXTENSION)
         for i in 1..self.extensions.len() {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "FRS fits in usize on 64-bit"
-            )]
             // i is bounded by extensions.len() which is u16-based
-            let ext_id = i as u16;
+            let ext_id = len_to_u16(i);
             if let Some(ext_str) = self.extensions.get_extension(ext_id) {
                 let ext_bytes = ext_str.as_bytes();
                 let count = self.extensions.get_count(ext_id);
                 let bytes = self.extensions.get_bytes(ext_id);
 
                 // String length (u32)
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "extension strings are short"
-                )]
-                let str_len = ext_bytes.len() as u32;
+                let str_len = len_to_u32(ext_bytes.len());
                 buffer.extend_from_slice(&str_len.to_le_bytes());
                 // String bytes
                 buffer.extend_from_slice(ext_bytes);

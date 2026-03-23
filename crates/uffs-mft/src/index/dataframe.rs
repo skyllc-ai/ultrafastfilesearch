@@ -36,7 +36,6 @@ impl MftIndex {
     /// # Errors
     ///
     /// Returns an error if `DataFrame` construction fails.
-    #[expect(clippy::cast_possible_truncation, reason = "index counts fit in usize")]
     #[expect(
         clippy::too_many_lines,
         reason = "DataFrame construction has many columns"
@@ -98,7 +97,7 @@ impl MftIndex {
             Vec::with_capacity(n),
             Vec::with_capacity(n),
         );
-        let (mut flags, mut lnk, mut str, mut path): (Vec<u16>, Vec<u16>, Vec<u16>, Vec<String>) = (
+        let (mut flags, mut lnk, mut str, mut path): (Vec<u32>, Vec<u16>, Vec<u16>, Vec<String>) = (
             Vec::with_capacity(n),
             Vec::with_capacity(n),
             Vec::with_capacity(n),
@@ -160,7 +159,7 @@ impl MftIndex {
             off.push(si.is_offline());
             nix.push(si.is_not_indexed());
             tmp.push(si.is_temporary());
-            flags.push(si.to_attributes() as u16);
+            flags.push(si.to_attributes());
             lnk.push(rec.name_count);
             str.push(rec.stream_count);
             reparse_tag.push(rec.reparse_tag);

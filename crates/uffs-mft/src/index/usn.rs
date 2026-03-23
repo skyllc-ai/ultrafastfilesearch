@@ -2,6 +2,7 @@
 
 use super::{
     FileRecord, IndexNameRef, IndexStreamInfo, LinkInfo, MftIndex, NO_ENTRY, StandardInfo,
+    frs_to_usize, len_to_u16, len_to_u32,
 };
 
 // USN Journal Incremental Update Support
@@ -36,10 +37,6 @@ impl MftIndex {
     /// For full accuracy on creates/renames, a selective MFT read would be
     /// needed. This implementation provides a fast approximation that's
     /// sufficient for most search use cases.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS fits in usize on 64-bit"
-    )]
     pub fn apply_usn_changes(&mut self, changes: &[crate::usn::FileChange]) -> UsnApplyStats {
         // DELETED flag uses bit 31 of the u32 flags field
         const DELETED_FLAG: u32 = 0x8000_0000;
@@ -48,7 +45,7 @@ impl MftIndex {
 
         for change in changes {
             let frs = change.frs;
-            let frs_usize = frs as usize;
+            let frs_usize = frs_to_usize(frs);
 
             // Check if FRS is in our lookup table
             let idx = self.frs_to_idx.get(frs_usize).copied().unwrap_or(NO_ENTRY);
@@ -73,15 +70,15 @@ impl MftIndex {
                     }
 
                     // Create new record
-                    let new_idx = self.records.len() as u32;
+                    let new_idx = len_to_u32(self.records.len());
                     if let Some(slot) = self.frs_to_idx.get_mut(frs_usize) {
                         *slot = new_idx;
                     }
 
                     // Add filename to names buffer
-                    let name_start = self.names.len() as u32;
+                    let name_start = len_to_u32(self.names.len());
                     self.names.push_str(&change.filename);
-                    let name_len = change.filename.len() as u16;
+                    let name_len = len_to_u16(change.filename.len());
 
                     // Create placeholder record
                     let record = FileRecord {
@@ -137,9 +134,9 @@ impl MftIndex {
                     // Update the primary name
                     // Note: This appends to names buffer (old name becomes orphaned)
                     // A compaction pass could reclaim this space if needed
-                    let name_start = self.names.len() as u32;
+                    let name_start = len_to_u32(self.names.len());
                     self.names.push_str(&change.filename);
-                    let name_len = change.filename.len() as u16;
+                    let name_len = len_to_u16(change.filename.len());
 
                     record.first_name.name = IndexNameRef::new(
                         name_start,

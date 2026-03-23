@@ -2,7 +2,7 @@
 
 use alloc::sync::Arc;
 
-use super::{MftIndex, NO_ENTRY};
+use super::{MftIndex, NO_ENTRY, len_to_u16, len_to_u32};
 
 /// Extension interning table for O(1) lookups and statistics.
 #[derive(Debug, Clone, Default)]
@@ -52,8 +52,7 @@ impl ExtensionTable {
             return id;
         }
 
-        #[expect(clippy::cast_possible_truncation, reason = "checked: id < u16::MAX")]
-        let id = self.names.len() as u16;
+        let id = len_to_u16(self.names.len());
         if id == u16::MAX {
             return 0;
         }
@@ -108,14 +107,10 @@ impl ExtensionTable {
 
     /// Get top N extensions by total bytes.
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "extension count < u16::MAX"
-    )]
     pub fn top_by_bytes(&self, limit: usize) -> Vec<(u16, &str, u64, u32)> {
         let mut entries: Vec<(u16, &str, u64, u32)> = (0..self.names.len())
             .filter_map(|idx| {
-                let ext_id = idx as u16;
+                let ext_id = len_to_u16(idx);
                 let ext_str = self.names.get(idx)?.as_ref();
                 let bytes = self.bytes.get(idx).copied().unwrap_or(0);
                 let count = self.counts.get(idx).copied().unwrap_or(0);
@@ -130,14 +125,10 @@ impl ExtensionTable {
 
     /// Get top N extensions by file count.
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "extension count < u16::MAX"
-    )]
     pub fn top_by_count(&self, limit: usize) -> Vec<(u16, &str, u32, u64)> {
         let mut entries: Vec<(u16, &str, u32, u64)> = (0..self.names.len())
             .filter_map(|idx| {
-                let ext_id = idx as u16;
+                let ext_id = len_to_u16(idx);
                 let ext_str = self.names.get(idx)?.as_ref();
                 let count = self.counts.get(idx).copied().unwrap_or(0);
                 let bytes = self.bytes.get(idx).copied().unwrap_or(0);
@@ -203,13 +194,12 @@ impl ExtensionIndex {
         let mut postings = vec![0_u32; total_postings];
         let mut write_pos = offsets.clone();
 
-        #[expect(clippy::cast_possible_truncation, reason = "record count < u32::MAX")]
         for (record_idx, record) in index.records.iter().enumerate() {
             let ext_id = record.first_name.name.extension_id() as usize;
             if let Some(&pos_u32) = write_pos.get(ext_id) {
                 let pos = pos_u32 as usize;
                 if let Some(posting_slot) = postings.get_mut(pos) {
-                    *posting_slot = record_idx as u32;
+                    *posting_slot = len_to_u32(record_idx);
                     if let Some(write_slot) = write_pos.get_mut(ext_id) {
                         *write_slot += 1;
                     }
@@ -224,7 +214,7 @@ impl ExtensionIndex {
                         if let Some(&pos_u32) = write_pos.get(link_ext_id) {
                             let pos = pos_u32 as usize;
                             if let Some(posting_slot) = postings.get_mut(pos) {
-                                *posting_slot = record_idx as u32;
+                                *posting_slot = len_to_u32(record_idx);
                                 if let Some(write_slot) = write_pos.get_mut(link_ext_id) {
                                     *write_slot += 1;
                                 }

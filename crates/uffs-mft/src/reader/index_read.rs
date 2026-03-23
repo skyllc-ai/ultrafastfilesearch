@@ -1,4 +1,8 @@
 //! Lean-index read entrypoints and the core index read pipeline.
+//!
+//! Exception: Single `impl MftReader` block with tightly coupled cfg-gated
+//! pipeline stages. Permanent exception — see
+//! `docs/architecture/FILE_SIZE_REFACTOR_WAVES.md`.
 
 #[cfg(windows)]
 use std::time::Instant;

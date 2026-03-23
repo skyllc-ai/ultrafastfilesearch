@@ -1,9 +1,9 @@
 //! Cached lean-index read helpers.
 
 use super::MftReader;
-use crate::error::Result;
 #[cfg(not(windows))]
 use crate::error::MftError;
+use crate::error::Result;
 
 impl MftReader {
     /// Read MFT into lean `MftIndex` with automatic caching.

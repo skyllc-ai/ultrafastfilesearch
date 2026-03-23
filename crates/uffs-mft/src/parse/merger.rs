@@ -1,6 +1,7 @@
 //! Extension-record merge helpers for base parsed records and columns.
 
 use super::{ExtensionAttributes, ParseResult, ParsedColumns, ParsedRecord};
+use crate::index::frs_to_usize;
 use crate::ntfs::StreamInfo;
 
 /// Merges extension record attributes into base records.
@@ -80,14 +81,10 @@ impl MftRecordMerger {
         clippy::indexing_slicing,
         reason = "bounds checked: resize ensures FRS < len"
     )]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS fits in usize on 64-bit"
-    )]
     pub fn add_result(&mut self, result: ParseResult) {
         match result {
             ParseResult::Base(record) => {
-                let frs = record.frs as usize;
+                let frs = frs_to_usize(record.frs);
                 // Expand if needed (rare - only if FRS exceeds initial capacity)
                 if frs >= self.base_records.len() {
                     self.base_records.resize(frs + 1, None);
@@ -110,14 +107,10 @@ impl MftRecordMerger {
         clippy::indexing_slicing,
         reason = "bounds checked: base_frs < base_records.len()"
     )]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS fits in usize on 64-bit"
-    )]
     pub fn merge(mut self) -> Vec<ParsedRecord> {
         // Merge all extensions into their base records
         for ext in self.extensions {
-            let base_frs = ext.base_frs as usize;
+            let base_frs = frs_to_usize(ext.base_frs);
             if base_frs < self.base_records.len() {
                 if let Some(ref mut base) = self.base_records[base_frs] {
                     // Merge names from extension records (no dedup — matches established behavior)

@@ -2,7 +2,7 @@
 
 use super::{
     ChildInfo, ExtensionIndex, FileRecord, IndexNameRef, IndexStreamInfo, InternalStreamInfo,
-    LinkInfo, MftIndex, MftIndexFragment, NO_ENTRY,
+    LinkInfo, MftIndex, MftIndexFragment, NO_ENTRY, len_to_u32,
 };
 
 /// Returns true when a record carries overflow name/stream payload to merge.
@@ -64,15 +64,11 @@ impl MftIndex {
     }
 
     /// Merge a single fragment into this index.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "offset adjustments fit in u32"
-    )]
     fn merge_single_fragment(&mut self, fragment: MftIndexFragment) {
-        let name_offset_adjustment = self.names.len() as u32;
-        let link_offset_adjustment = self.links.len() as u32;
-        let stream_offset_adjustment = self.streams.len() as u32;
-        let internal_stream_offset_adjustment = self.internal_streams.len() as u32;
+        let name_offset_adjustment = len_to_u32(self.names.len());
+        let link_offset_adjustment = len_to_u32(self.links.len());
+        let stream_offset_adjustment = len_to_u32(self.streams.len());
+        let internal_stream_offset_adjustment = len_to_u32(self.internal_streams.len());
 
         let extension_id_map = self.build_extension_id_map(&fragment);
         self.names.push_str(&fragment.names);
@@ -125,10 +121,6 @@ impl MftIndex {
 
     /// Merge records from a fragment into this index, returning records that
     /// need deferred merging.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "offset adjustments fit in u32"
-    )]
     #[expect(clippy::indexing_slicing, reason = "indices bounded by valid FRS")]
     fn merge_fragment_records_with_deferred_merge(
         &mut self,
@@ -172,7 +164,7 @@ impl MftIndex {
 
             let existing_idx = self.frs_to_idx[frs_usize];
             if existing_idx == NO_ENTRY {
-                let new_idx = self.records.len() as u32;
+                let new_idx = len_to_u32(self.records.len());
                 self.frs_to_idx[frs_usize] = new_idx;
                 self.records.push(record);
             } else {
@@ -199,10 +191,6 @@ impl MftIndex {
     }
 
     /// Apply deferred name and stream merges from discarded records.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "offset adjustments fit in u32"
-    )]
     #[expect(clippy::indexing_slicing, reason = "indices validated before access")]
     #[expect(clippy::too_many_lines, reason = "name/stream merge has many steps")]
     fn apply_deferred_name_merges(
@@ -228,7 +216,7 @@ impl MftIndex {
                 });
 
                 let chain_start = if discarded.first_name.name.is_valid() {
-                    let new_link_idx = self.links.len() as u32;
+                    let new_link_idx = len_to_u32(self.links.len());
                     self.links.push(LinkInfo {
                         next_entry: discarded.first_name.next_entry,
                         name: discarded.first_name.name,
@@ -268,7 +256,7 @@ impl MftIndex {
                 });
 
                 let chain_start = if discarded.first_stream.name.is_valid() {
-                    let new_stream_idx = self.streams.len() as u32;
+                    let new_stream_idx = len_to_u32(self.streams.len());
                     self.streams.push(IndexStreamInfo {
                         next_entry: discarded.first_stream.next_entry,
                         name: discarded.first_stream.name,
@@ -353,17 +341,13 @@ impl MftIndex {
     }
 
     /// Merge links from a fragment into this index.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS fits in usize on 64-bit"
-    )]
     fn merge_fragment_links(
         &mut self,
         links: Vec<LinkInfo>,
         name_offset_adjustment: u32,
         extension_id_map: &[u16],
     ) {
-        let link_offset_adjustment = self.links.len() as u32;
+        let link_offset_adjustment = len_to_u32(self.links.len());
         for mut link in links {
             Self::adjust_name_ref(&mut link.name, name_offset_adjustment, extension_id_map);
             if link.next_entry != NO_ENTRY {
@@ -374,17 +358,13 @@ impl MftIndex {
     }
 
     /// Merge streams from a fragment into this index.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS fits in usize on 64-bit"
-    )]
     fn merge_fragment_streams(
         &mut self,
         streams: Vec<IndexStreamInfo>,
         name_offset_adjustment: u32,
         extension_id_map: &[u16],
     ) {
-        let stream_offset_adjustment = self.streams.len() as u32;
+        let stream_offset_adjustment = len_to_u32(self.streams.len());
         for mut stream in streams {
             Self::adjust_name_ref(&mut stream.name, name_offset_adjustment, extension_id_map);
             if stream.next_entry != NO_ENTRY {
@@ -395,12 +375,8 @@ impl MftIndex {
     }
 
     /// Merge internal streams from a fragment into this index.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS fits in usize on 64-bit"
-    )]
     fn merge_fragment_internal_streams(&mut self, internal_streams: Vec<InternalStreamInfo>) {
-        let internal_offset_adjustment = self.internal_streams.len() as u32;
+        let internal_offset_adjustment = len_to_u32(self.internal_streams.len());
         for mut st in internal_streams {
             if st.next_entry != NO_ENTRY {
                 st.next_entry += internal_offset_adjustment;
@@ -410,12 +386,8 @@ impl MftIndex {
     }
 
     /// Merge children from a fragment into this index.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS fits in usize on 64-bit"
-    )]
     fn merge_fragment_children(&mut self, children: Vec<ChildInfo>) {
-        let child_offset_adjustment = self.children.len() as u32;
+        let child_offset_adjustment = len_to_u32(self.children.len());
         for mut child in children {
             if child.next_entry != NO_ENTRY {
                 child.next_entry += child_offset_adjustment;

@@ -356,13 +356,8 @@ pub fn cmd_load(
                 if let ParseResult::Base(parsed) = result {
                     if parsed.names.len() > 1 {
                         hardlink_count += 1;
-                        #[expect(
-                            clippy::cast_possible_truncation,
-                            reason = "name count per mft record fits in u16"
-                        )]
-                        {
-                            max_name_count = max_name_count.max(parsed.names.len() as u16);
-                        }
+                        max_name_count =
+                            max_name_count.max(uffs_mft::len_to_u16(parsed.names.len()));
                     }
                     parsed_records.push(parsed);
                 }
@@ -373,13 +368,8 @@ pub fn cmd_load(
                 if let Some(parsed) = parse_record(&record_buf, frs) {
                     if parsed.names.len() > 1 {
                         hardlink_count += 1;
-                        #[expect(
-                            clippy::cast_possible_truncation,
-                            reason = "name count per mft record fits in u16"
-                        )]
-                        {
-                            max_name_count = max_name_count.max(parsed.names.len() as u16);
-                        }
+                        max_name_count =
+                            max_name_count.max(uffs_mft::len_to_u16(parsed.names.len()));
                     }
                     parsed_records.push(parsed);
                 }
@@ -641,12 +631,7 @@ fn cmd_load_iocp(
 
     let record_size = header.record_size as usize;
     let volume_letter = header.volume_letter;
-    // MFT record count always fits in memory on 64-bit systems
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "MFT record count fits in usize on 64-bit (target platform)"
-    )]
-    let capacity = header.total_records as usize;
+    let capacity = uffs_mft::frs_to_usize(header.total_records);
     let mut merger = MftRecordMerger::with_capacity(capacity);
     let mut records_parsed: u64 = 0;
     let mut chunks_processed: u32 = 0;

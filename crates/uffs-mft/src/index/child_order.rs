@@ -1,6 +1,6 @@
 //! Directory child-link maintenance and stable child ordering helpers.
 
-use super::{ChildInfo, FileRecord, MftIndex, NO_ENTRY};
+use super::{ChildInfo, FileRecord, MftIndex, NO_ENTRY, frs_to_usize, len_to_u16, len_to_u32};
 
 impl MftIndex {
     /// Add a child entry to a parent directory.
@@ -17,15 +17,11 @@ impl MftIndex {
     /// If the parent record does not exist yet, this creates a placeholder
     /// record so child entries are preserved even when chunks are processed
     /// out of order.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "FRS fits in usize on 64-bit"
-    )]
     #[expect(clippy::indexing_slicing, reason = "bounds checked via get_or_create")]
     pub fn add_child_entry(&mut self, parent_frs: u64, child_frs: u64, name_index: u16) {
         // Create a parent placeholder if it does not exist yet so
         // child edges are not dropped during out-of-order processing.
-        let parent_frs_usize = parent_frs as usize;
+        let parent_frs_usize = frs_to_usize(parent_frs);
 
         // Expand lookup table if needed
         if parent_frs_usize >= self.frs_to_idx.len() {
@@ -35,7 +31,7 @@ impl MftIndex {
         // Get or create parent record index
         let parent_idx = if self.frs_to_idx[parent_frs_usize] == NO_ENTRY {
             // Create placeholder parent record
-            let new_idx = self.records.len() as u32;
+            let new_idx = len_to_u32(self.records.len());
             self.frs_to_idx[parent_frs_usize] = new_idx;
             self.records.push(FileRecord::new(parent_frs));
             new_idx as usize
@@ -44,7 +40,7 @@ impl MftIndex {
         };
 
         // Create child entry
-        let child_idx = self.children.len() as u32;
+        let child_idx = len_to_u32(self.children.len());
         let old_first_child = self.records[parent_idx].first_child;
 
         // Update parent's first_child before pushing to children
@@ -97,15 +93,11 @@ impl MftIndex {
 
                 // Skip missing/placeholder parents and self-references (root has parent==self).
                 if parent_frs != no_entry_frs && parent_frs != child_frs {
-                    #[expect(
-                        clippy::cast_possible_truncation,
-                        reason = "FRS fits in usize on 64-bit"
-                    )]
                     // NOTE: ChildInfo.name_index must match the original FILE_NAME
                     // attribute encounter order. The stored link chain order
                     // is the reverse of encounter order because each new name becomes `first_name`.
                     // Therefore, list_index (0..name_count-1) must be remapped back to parse_index.
-                    let parse_index = (name_count - 1 - name_index) as u16;
+                    let parse_index = len_to_u16(name_count - 1 - name_index);
                     edges.push((parent_frs, child_frs, parse_index));
                 }
 

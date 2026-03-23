@@ -30,7 +30,9 @@ mod extensions;
 mod fragment;
 mod merge;
 mod model;
+mod path_resolver;
 mod paths;
+mod standard_info;
 mod stats;
 mod storage;
 mod tree;
@@ -40,14 +42,15 @@ mod usn;
 pub use self::extensions::{ExtensionIndex, ExtensionTable};
 pub use self::fragment::MftIndexFragment;
 pub use self::model::{ChildInfo, MftIndex};
-pub use self::paths::{CachedPath, PathCache, PathResolver};
+pub use self::path_resolver::{CachedPath, PathCache, PathResolver};
+pub use self::standard_info::StandardInfo;
 pub use self::stats::{IndexBuildTiming, MftStats};
 pub use self::storage::IndexHeader;
 #[cfg(test)]
 pub(crate) use self::types::cmp_ascii_case_insensitive;
 pub use self::types::{
     FileRecord, IndexNameRef, IndexStreamInfo, InternalStreamInfo, LinkInfo, NO_ENTRY, ROOT_FRS,
-    SizeInfo, StandardInfo,
+    SizeInfo, frs_to_usize, len_to_u16, len_to_u32,
 };
 pub use self::usn::UsnApplyStats;
 

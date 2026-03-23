@@ -1,51 +1,34 @@
 # SPDX-License-Identifier: MPL-2.0
-# Copyright (c) 2025 SKY, LLC.
+# Copyright (c) 2025-2026 SKY, LLC.
 #
-# REUSE ignore file
-# Files and directories to exclude from REUSE compliance checking
+# .reuseignore — Files excluded from REUSE (reuse.software) compliance checks.
+# Only list files that genuinely cannot carry SPDX headers (binary, generated,
+# or third-party). Prefer REUSE.toml annotations for files that CAN be tagged.
 
-# Generated files and build artifacts
+# ─────────────────────────────────────────────────────────────────────────────
+# Build artifacts & generated files (never committed or auto-generated)
+# ─────────────────────────────────────────────────────────────────────────────
 target/
 .git/
-*.lock
 Cargo.lock
+build/
 
-# IDE and editor files
-.idea.old/
+# ─────────────────────────────────────────────────────────────────────────────
+# IDE & editor state (user-specific, not source)
+# ─────────────────────────────────────────────────────────────────────────────
+.idea/
 .vscode/
+.qodo/
 *.swp
 *.swo
 *~
 
-# Temporary and backup files
-*.tmp
-*.bak
-*.backup.*
-hybrid_error_example.long-type-*
-src/app.rs.backup.*
-
-# Database files (generated content)
-*.sqlite
-.qodo/
-
-# Third-party and external files (JSON exports from external tools)
-Insomnia & Postman/
+# ─────────────────────────────────────────────────────────────────────────────
+# Third-party / machine-generated data (cannot carry headers)
+# ─────────────────────────────────────────────────────────────────────────────
 SPDXLICENSES
 
-# IDE configuration files (generated/user-specific)
-.vscode/
-
-# Build scripts (platform-specific)
-build/*.bat
-build/*.ps1
-build/last_environment
-
-# Git configuration files (already have headers)
-scripts/.gitmessage
-
-# Documentation that doesn't need headers
-docs/rust_excellence.md
-
-# Script parsing issues (sed commands confuse REUSE parser)
-scripts/fix-legacy-headers.sh
-scripts/complete-legal-compliance.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Trash / quarantine (local-only working area)
+# ─────────────────────────────────────────────────────────────────────────────
+_trash/
