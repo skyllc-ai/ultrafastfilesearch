@@ -1,122 +1,91 @@
-//! TUI Application state.
-
-// TUI applications have single-call constructors and methods
-#![expect(
-    clippy::single_call_fn,
-    reason = "TUI application methods are called once from main"
-)]
-#![expect(clippy::min_ident_chars, reason = "short closure vars conventional")]
-
-use std::path::PathBuf;
+//! TUI Application state — MftIndex-backed search.
 
 use ratatui::widgets::ListState;
-use uffs_core::MftQuery;
-use uffs_mft::MftReader;
-use uffs_polars::DataFrame;
 
-/// A search result item.
-#[derive(Debug, Clone)]
-pub struct SearchResult {
-    /// File or directory name.
-    pub name: String,
-    /// File size in bytes.
-    pub size: u64,
-    /// File Record Segment number (used for detail views).
-    #[expect(dead_code, reason = "populated for future detail view feature")]
-    pub frs: u64,
-    /// Whether this is a directory.
-    pub is_directory: bool,
-}
+use crate::backend::{DisplayRow, MultiDriveBackend, SortColumn};
 
 /// Application state.
-#[expect(
-    clippy::partial_pub_fields,
-    reason = "dataframe is intentionally private; accessed only through methods"
-)]
 pub struct App {
     /// Current search input.
     pub input: String,
-    /// Search results.
-    pub results: Vec<SearchResult>,
+    /// Search results (from last search).
+    pub results: Vec<DisplayRow>,
     /// List selection state.
     pub list_state: ListState,
-    /// Loaded `DataFrame` (if any).
-    dataframe: Option<DataFrame>,
-    /// Path to loaded index file.
-    pub index_path: Option<PathBuf>,
+    /// Search backend (multi-drive `MftIndex`).
+    pub backend: MultiDriveBackend,
     /// Status message.
     pub status: String,
     /// Error message (if any).
     pub error: Option<String>,
+    /// Last search duration in milliseconds.
+    pub last_search_ms: u128,
+    /// Whether name-only matching is active.
+    pub name_only: bool,
+    /// Whether a search is currently running in background (Wave 4: spinner).
+    #[expect(dead_code, reason = "will be used for UI loading spinner in Wave 4")]
+    pub searching: bool,
 }
 
 impl App {
-    /// Create a new application.
+    /// Create a new application with a pre-loaded backend.
+    #[expect(
+        dead_code,
+        reason = "public API for synchronous loading; async loading builds incrementally"
+    )]
+    pub fn with_backend(backend: MultiDriveBackend) -> Self {
+        let drive_info = backend
+            .drive_summary()
+            .iter()
+            .map(|(letter, count)| format!("{letter}:{count}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let total = backend.total_records();
+        let status = format!("Loaded {total} records [{drive_info}]");
+
+        Self {
+            input: String::new(),
+            results: Vec::new(),
+            list_state: ListState::default(),
+            backend,
+            status,
+            error: None,
+            last_search_ms: 0,
+            name_only: false,
+            searching: false,
+        }
+    }
+
+    /// Create an empty application (no drives loaded).
     pub fn new() -> Self {
         Self {
             input: String::new(),
             results: Vec::new(),
             list_state: ListState::default(),
-            dataframe: None,
-            index_path: None,
-            status: "No index loaded. Press 'l' to load an index file.".to_owned(),
+            backend: MultiDriveBackend::new(),
+            status: "No drives loaded. Use --mft-file or --drive to load data.".to_owned(),
             error: None,
+            last_search_ms: 0,
+            name_only: false,
+            searching: false,
         }
     }
 
-    /// Create application with a pre-loaded `DataFrame`.
-    pub fn with_dataframe(df: DataFrame, path: Option<PathBuf>) -> Self {
-        let record_count = df.height();
-        let status = format!(
-            "Loaded {} records{}",
-            record_count,
-            path.as_ref()
-                .map_or(String::new(), |p| format!(" from {}", p.display()))
-        );
-        Self {
-            input: String::new(),
-            results: Vec::new(),
-            list_state: ListState::default(),
-            dataframe: Some(df),
-            index_path: path,
-            status,
-            error: None,
-        }
-    }
-
-    /// Load an index from a Parquet file.
-    #[expect(
-        dead_code,
-        reason = "public API for runtime index loading; not yet wired to a keybinding"
-    )]
-    pub fn load_index(&mut self, path: &std::path::Path) -> Result<(), String> {
-        match MftReader::load_parquet(path) {
-            Ok(df) => {
-                let count = df.height();
-                self.dataframe = Some(df);
-                self.index_path = Some(path.to_path_buf());
-                self.status = format!("Loaded {} records from {}", count, path.display());
-                self.error = None;
-                Ok(())
-            }
-            Err(err) => {
-                self.error = Some(format!("Failed to load index: {err}"));
-                Err(format!("Failed to load index: {err}"))
-            }
-        }
-    }
-
-    /// Check if an index is loaded.
+    /// Check if any drives are loaded.
     #[must_use]
-    pub const fn has_index(&self) -> bool {
-        self.dataframe.is_some()
+    pub fn has_data(&self) -> bool {
+        !self.backend.drives.is_empty()
     }
 
     /// Move selection to next item.
     pub fn next(&mut self) {
+        let len = self.results.len();
+        if len == 0 {
+            return;
+        }
         let idx = match self.list_state.selected() {
             Some(current) => {
-                if current >= self.results.len().saturating_sub(1) {
+                if current >= len - 1 {
                     0
                 } else {
                     current + 1
@@ -129,10 +98,14 @@ impl App {
 
     /// Move selection to previous item.
     pub fn previous(&mut self) {
+        let len = self.results.len();
+        if len == 0 {
+            return;
+        }
         let idx = match self.list_state.selected() {
             Some(current) => {
                 if current == 0 {
-                    self.results.len().saturating_sub(1)
+                    len - 1
                 } else {
                     current - 1
                 }
@@ -148,40 +121,80 @@ impl App {
 
         if self.input.is_empty() {
             self.results.clear();
+            self.status = format!(
+                "Loaded {} records [{}]",
+                self.backend.total_records(),
+                self.backend
+                    .drive_summary()
+                    .iter()
+                    .map(|(letter, count)| format!("{letter}:{count}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
             return;
         }
 
-        let Some(df) = &self.dataframe else {
-            self.error = Some("No index loaded. Press 'l' to load an index file.".to_owned());
+        if !self.has_data() {
+            self.error = Some("No drives loaded. Use --mft-file or --drive.".to_owned());
             return;
-        };
+        }
 
-        // Build and execute query
-        let query = MftQuery::new(df.clone());
-        let pattern = if self.input.contains('*') || self.input.contains('?') {
-            self.input.clone()
+        let result = self.backend.search(&self.input, self.name_only);
+        self.last_search_ms = result.duration.as_millis();
+        self.results = result.rows;
+
+        // Show trigram debug info
+        let tri_info: String = self
+            .backend
+            .drives
+            .iter()
+            .map(|dr| format!("{}:{}tri", dr.letter, dr.trigram.posting_count()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.status = format!(
+            "{} matches in {}ms (scan:{}ms tri_cands:{}) {} records [{}]",
+            self.results.len(),
+            self.last_search_ms,
+            result.scan_ms,
+            result.trigram_candidates,
+            result.records_scanned,
+            tri_info,
+        );
+
+        if self.results.is_empty() {
+            self.list_state.select(None);
         } else {
-            // If no glob chars, wrap in wildcards for substring match
-            format!("*{}*", self.input)
-        };
-
-        match query.glob(&pattern) {
-            Ok(filtered) => match filtered.limit(100).collect() {
-                Ok(result_df) => {
-                    self.results = dataframe_to_results(&result_df);
-                    self.status = format!("Found {} results", self.results.len());
-                    if !self.results.is_empty() {
-                        self.list_state.select(Some(0));
-                    }
-                }
-                Err(err) => {
-                    self.error = Some(format!("Query failed: {err}"));
-                }
-            },
-            Err(err) => {
-                self.error = Some(format!("Invalid pattern: {err}"));
-            }
+            self.list_state.select(Some(0));
         }
+    }
+
+    /// Cycle sort column and re-sort results.
+    pub fn cycle_sort(&mut self) {
+        self.backend.cycle_sort();
+        self.results = self.backend.last_results.clone();
+    }
+
+    /// Toggle sort direction and re-sort results.
+    pub fn toggle_sort_direction(&mut self) {
+        self.backend.toggle_sort_direction();
+        self.results = self.backend.last_results.clone();
+    }
+
+    /// Get the current sort column.
+    #[must_use]
+    pub const fn sort_column(&self) -> SortColumn {
+        self.backend.sort_column
+    }
+
+    /// Get whether sort is descending.
+    #[must_use]
+    pub const fn sort_desc(&self) -> bool {
+        self.backend.sort_desc
+    }
+
+    /// Toggle name-only matching mode.
+    pub const fn toggle_name_only(&mut self) {
+        self.name_only = !self.name_only;
     }
 }
 
@@ -189,40 +202,6 @@ impl Default for App {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Convert a `DataFrame` to a vector of `SearchResult`.
-#[expect(
-    clippy::single_call_fn,
-    reason = "separated from search method for readability"
-)]
-fn dataframe_to_results(df: &DataFrame) -> Vec<SearchResult> {
-    let mut results = Vec::with_capacity(df.height());
-
-    let name_col = df.column("name").ok().and_then(|col| col.str().ok());
-    let size_col = df.column("size").ok().and_then(|col| col.u64().ok());
-    let frs_col = df.column("frs").ok().and_then(|col| col.u64().ok());
-    let flags_col = df.column("flags").ok().and_then(|col| col.u16().ok());
-
-    for idx in 0..df.height() {
-        let name = name_col
-            .and_then(|col| col.get(idx))
-            .unwrap_or("<unknown>")
-            .to_owned();
-        let size = size_col.and_then(|col| col.get(idx)).unwrap_or(0);
-        let frs = frs_col.and_then(|col| col.get(idx)).unwrap_or(0);
-        let flags = flags_col.and_then(|col| col.get(idx)).unwrap_or(0);
-        let is_directory = (flags & 0x0010) != 0;
-
-        results.push(SearchResult {
-            name,
-            size,
-            frs,
-            is_directory,
-        });
-    }
-
-    results
 }
 
 #[cfg(test)]
@@ -233,23 +212,29 @@ mod tests {
     fn test_navigation() {
         let mut app = App::new();
         app.results = vec![
-            SearchResult {
+            DisplayRow {
+                drive: 'C',
+                path: "C:\\a".to_owned(),
                 name: "a".to_owned(),
                 size: 0,
-                frs: 1,
                 is_directory: false,
+                modified: 0,
             },
-            SearchResult {
+            DisplayRow {
+                drive: 'C',
+                path: "C:\\b".to_owned(),
                 name: "b".to_owned(),
                 size: 0,
-                frs: 2,
                 is_directory: false,
+                modified: 0,
             },
-            SearchResult {
+            DisplayRow {
+                drive: 'C',
+                path: "C:\\c".to_owned(),
                 name: "c".to_owned(),
                 size: 0,
-                frs: 3,
                 is_directory: true,
+                modified: 0,
             },
         ];
 
@@ -264,18 +249,33 @@ mod tests {
     }
 
     #[test]
-    fn test_search_without_index() {
+    fn test_search_without_data() {
         let mut app = App::new();
         app.input = "test".to_owned();
         app.search();
-        // Without an index, search should set an error
         assert!(app.error.is_some());
         assert!(app.results.is_empty());
     }
 
     #[test]
-    fn test_has_index() {
+    fn test_has_data() {
         let app = App::new();
-        assert!(!app.has_index());
+        assert!(!app.has_data());
+    }
+
+    #[test]
+    fn test_empty_search_clears_results() {
+        let mut app = App::new();
+        app.results = vec![DisplayRow {
+            drive: 'C',
+            path: "C:\\x".to_owned(),
+            name: "x".to_owned(),
+            size: 0,
+            is_directory: false,
+            modified: 0,
+        }];
+        app.input.clear();
+        app.search();
+        assert!(app.results.is_empty());
     }
 }

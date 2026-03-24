@@ -43,6 +43,9 @@ clap.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 
+# Parallel search
+rayon.workspace = true
+
 # Error handling
 anyhow.workspace = true
 

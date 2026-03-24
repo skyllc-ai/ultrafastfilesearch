@@ -2,7 +2,7 @@
 
 > **Status**: Design phase — not yet implemented
 > **Date**: 2026-03-23
-> **Decision**: Option 1 (load all drives into RAM) for Phase 1
+implementation > **Decision**: Option 1 (load all drives into RAM) for Phase 1
 
 ---
 
