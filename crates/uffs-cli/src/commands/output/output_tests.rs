@@ -19,11 +19,14 @@ use super::{
 type TestResult = Result<()>;
 
 fn temp_output_path(extension: &str) -> PathBuf {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0_u128, |duration| duration.as_nanos());
     std::env::temp_dir().join(format!(
-        "uffs-cli-output-contract-{}-{nanos}.{extension}",
+        "uffs-cli-output-contract-{}-{nanos}-{seq}.{extension}",
         std::process::id()
     ))
 }
@@ -344,15 +347,15 @@ fn test_cpp_footer_includes_fast_scan_message_for_full_scan_pattern() -> TestRes
 }
 
 #[test]
-fn test_cpp_footer_omits_fast_scan_message_for_regex_pattern() -> TestResult {
+fn test_cpp_footer_includes_fast_scan_for_cpp_transformed_pattern() -> TestResult {
     let path = temp_output_path("txt");
     let results = sample_df()?;
     let output_config = OutputConfig::new()
         .with_columns("path,name")
         .with_header(false);
 
-    // Regex pattern with few results → should NOT trigger the warning
-    // (few results is expected for filtered queries)
+    // ">G:.*" is the cpp-transformed version of full-scan "*" for drive G.
+    // It should still trigger the MMMmmm warning (same as "*").
     write_results(
         &results,
         "custom",
@@ -361,6 +364,43 @@ fn test_cpp_footer_omits_fast_scan_message_for_regex_pattern() -> TestResult {
         &['G'],
         Duration::from_millis(999),
         ">G:.*",
+    )?;
+
+    let written = fs::read_to_string(&path)?;
+    drop(fs::remove_file(&path));
+
+    assert_eq!(
+        written,
+        concat!(
+            "\"C:\\Temp\\file.txt\",\"file.txt\"\n",
+            "\r\n",
+            "\r\n",
+            "Drives? \t1\tG:\r\n",
+            "\r\n",
+            "MMMmmm that was FAST ... maybe your searchstring was wrong?\t>G:.*\r\n",
+            "Search path. E.g. 'C:/' or 'C:\\Prog**' \r\n"
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn test_cpp_footer_omits_fast_scan_for_real_regex_pattern() -> TestResult {
+    let path = temp_output_path("txt");
+    let results = sample_df()?;
+    let output_config = OutputConfig::new()
+        .with_columns("path,name")
+        .with_header(false);
+
+    // A real regex filter (not full-scan) → should NOT trigger the warning
+    write_results(
+        &results,
+        "custom",
+        &path.to_string_lossy(),
+        &output_config,
+        &['G'],
+        Duration::from_millis(999),
+        r">G:.*\.(jpg|png)",
     )?;
 
     let written = fs::read_to_string(&path)?;

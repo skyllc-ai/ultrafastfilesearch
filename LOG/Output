@@ -1,180 +1,4 @@
-
-
-(production) ~\GitHub\UltraFastFileSearch on main> ~\bin\uffs.com "hallo" --drives=M
-
-
-Drives?         1       M:
-
-"Path","Name","Path Only","Size","Size on Disk","Created","Last Written","Last Accessed","Descendants","Read-only","Archive","System","Hidden","Offline","Not content indexed file","No scrub file","Integrity","Pinned","Unpinned","Directory Flag","Compressed","Encrypted","Sparse","Reparse","Attributes"
-
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Wholesale Bakery\Legacy Files\Main Office Briefcase\Hallo.txt","Hallo.txt","M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Wholesale Bakery\Legacy Files\Main Office Briefcase\",16,0,2016-10-07 19:02:00,2013-05-23 06:05:14,2016-10-07 19:02:01,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\Sign up Sheet for Halloween party Wednesday 10.doc","Sign up Sheet for Halloween party Wednesday 10.doc","M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\",35840,36864,2016-10-07 16:21:41,2013-05-23 12:11:41,2016-10-07 16:22:03,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\Shortcut to Hallo 09-02-03.doc.lnk","Shortcut to Hallo 09-02-03.doc.lnk","M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\",522,0,2016-10-07 16:21:30,2003-09-06 12:53:09,2016-10-07 16:21:31,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\Happy Halloween 10-31-2012.docx","Happy Halloween 10-31-2012.docx","M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\",214235,217088,2016-10-07 16:21:16,2013-05-23 12:07:44,2016-10-07 16:21:19,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\Halloween Booh 10-07-03.doc","Halloween Booh 10-07-03.doc","M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\",46592,49152,2016-10-07 16:20:58,2013-05-23 12:07:42,2016-10-07 16:20:59,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\Hallo 09-02-03.doc","Hallo 09-02-03.doc","M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\",19968,20480,2016-10-07 16:18:49,2013-05-23 12:07:40,2016-10-07 16:18:50,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\DATA.backup\Bakery\Main Office Briefcase\Hallo.txt","Hallo.txt","M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\DATA.backup\Bakery\Main Office Briefcase\",16,0,2016-10-07 11:30:18,2008-10-27 19:16:07,2016-10-07 11:30:22,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Wholesale Bakery\Publisher\Halloween.pub","Halloween.pub","M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Wholesale Bakery\Publisher\",238592,241664,2016-10-07 07:14:19,2015-10-28 05:34:34,2016-10-07 07:14:22,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Wholesale Bakery\Legacy Files\Main Office Briefcase\Hallo.txt","Hallo.txt","M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Wholesale Bakery\Legacy Files\Main Office Briefcase\",16,0,2016-10-07 06:38:17,2013-05-23 06:05:14,2016-10-07 06:38:17,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\Sign up Sheet for Halloween party Wednesday 10.doc","Sign up Sheet for Halloween party Wednesday 10.doc","M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\",35840,36864,2016-10-07 06:04:28,2013-05-23 12:11:41,2016-10-07 06:04:29,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\Shortcut to Hallo 09-02-03.doc.lnk","Shortcut to Hallo 09-02-03.doc.lnk","M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\",522,0,2016-10-07 04:19:05,2003-09-06 12:53:09,2016-10-07 04:19:07,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\Happy Halloween 10-31-2012.docx","Happy Halloween 10-31-2012.docx","M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\",214235,217088,2016-10-07 04:16:58,2013-05-23 12:07:44,2016-10-07 04:16:59,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\Halloween Booh 10-07-03.doc","Halloween Booh 10-07-03.doc","M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\",46592,49152,2016-10-07 04:13:08,2013-05-23 12:07:42,2016-10-07 04:13:10,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\Hallo 09-02-03.doc","Hallo 09-02-03.doc","M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\",19968,20480,2016-10-07 03:39:39,2013-05-23 12:07:40,2016-10-07 03:39:40,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\Data\Publisher\Halloween.pub","Halloween.pub","M:\Drop 10-06-2016\Wholesale 10-06-2016\Data\Publisher\",238592,241664,2016-10-07 05:37:14,2015-10-28 05:34:34,2016-10-07 05:37:15,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\iTunes\iTunes Media\Music\Various Artists\Romance - Music For Piano\12 Over Shallow Water.mp3","12 Over Shallow Water.mp3","M:\iTunes\iTunes Media\Music\Various Artists\Romance - Music For Piano\",8188363,8192000,2014-01-27 02:16:18,2014-01-27 02:16:24,2014-01-27 02:16:18,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\iTunes\iTunes Media\Music\Slayer\Soundtrack To The Apocalypse\13 Hallowed Point.m4a","13 Hallowed Point.m4a","M:\iTunes\iTunes Media\Music\Slayer\Soundtrack To The Apocalypse\",7832530,7835648,2014-01-27 03:16:45,2014-01-27 03:17:02,2014-01-27 03:16:56,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\iTunes\iTunes Media\Music\Alexandre Desplat\Harry Potter And The Deathly Hallows, Pa\","","M:\iTunes\iTunes Media\Music\Alexandre Desplat\Harry Potter And The Deathly Hallows, Pa\",2868987,2871296,2014-01-26 16:14:21,2014-01-26 16:14:21,2026-01-17 08:55:26,2,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\lib\ProFTPD\Tests\Config\PathAllowFilter.pm","PathAllowFilter.pm","M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\lib\ProFTPD\Tests\Config\",43620,45056,2019-05-10 16:58:45,2019-05-09 16:52:53,2019-05-10 16:58:45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\config\pathallowfilter.t","pathallowfilter.t","M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\config\",186,0,2019-05-10 16:58:44,2019-05-09 16:52:53,2019-05-10 16:58:44,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Pi-hole\.git\shallow","shallow","M:\Raspberry Pi\Pi-hole\.git\",41,0,2019-05-26 18:07:08,2019-05-26 18:07:08,2019-05-26 18:07:08,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 05-08-2019\var\www\html\admin\.git\shallow","shallow","M:\Raspberry Pi\Backup 05-08-2019\var\www\html\admin\.git\",41,0,2019-01-09 21:15:11,2019-01-09 21:15:11,2019-01-09 21:15:11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 05-08-2019\etc\.pihole\.git\shallow","shallow","M:\Raspberry Pi\Backup 05-08-2019\etc\.pihole\.git\",41,0,2019-01-09 21:15:10,2019-01-09 21:15:10,2019-01-09 21:15:10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\var\www\html\admin\.git\shallow","shallow","M:\Raspberry Pi\Backup 01-13-2019\var\www\html\admin\.git\",41,0,2019-01-09 21:15:11,2019-01-09 21:15:11,2019-01-09 21:15:11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\","","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\",13026,24576,2018-11-13 06:53:26,2018-11-13 06:53:26,2026-01-17 08:51:29,9,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\","","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\",5640,12288,2018-11-13 06:53:26,2018-11-13 06:53:26,2026-01-17 08:51:29,4,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\","","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\",4213,8192,2018-11-13 06:53:26,2018-11-13 06:53:26,2026-01-17 08:51:29,4,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\Raspberry Pi\Backup 01-13-2019\etc\.pihole\.git\shallow","shallow","M:\Raspberry Pi\Backup 01-13-2019\etc\.pihole\.git\",41,0,2019-01-09 21:15:10,2019-01-09 21:15:10,2019-01-09 21:15:10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\opt\libtool\gnulib\.git\shallow","shallow","M:\Raspberry Pi\2020-01-18\opt\libtool\gnulib\.git\",41,0,2019-06-08 22:05:59,2019-06-08 22:05:59,2019-06-08 22:05:59,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\shallow","shallow","M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\",41,0,2019-06-19 02:27:06,2019-06-19 02:27:06,2019-06-19 02:27:06,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\shallow","shallow","M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\",41,0,2019-06-19 02:27:06,2019-06-19 02:27:06,2019-06-19 02:27:06,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\shallow","shallow","M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\",41,0,2019-06-19 02:27:05,2019-06-19 02:27:05,2019-06-19 02:27:05,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\etc\.pihole\.git\shallow","shallow","M:\Raspberry Pi\2020-01-18\etc\.pihole\.git\",41,0,2019-05-10 06:23:24,2019-05-10 06:23:24,2019-05-10 06:23:24,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\shallow","shallow","M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\",41,0,2019-06-19 02:24:26,2019-06-19 02:24:26,2019-06-19 02:24:26,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\shallow","shallow","M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\",41,0,2019-06-19 02:24:27,2019-06-19 02:24:27,2019-06-19 02:24:27,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\shallow","shallow","M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\",41,0,2019-06-19 02:24:26,2019-06-19 02:24:26,2019-06-19 02:24:26,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Media\Movies\Harry Potter and the Deathly Hallows Part 2 (2011)\","","M:\Media\Movies\Harry Potter and the Deathly Hallows Part 2 (2011)\",2524124900,2524127232,2021-04-04 23:14:09,2021-04-04 23:14:10,2026-01-17 08:54:18,2,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\Media\Movies\Harry Potter and the Deathly Hallows Part 2 (2011)\Harry Potter and the Deathly Hallows Part 2 (2011).ts","Harry Potter and the Deathly Hallows Part 2 (2011).ts","M:\Media\Movies\Harry Potter and the Deathly Hallows Part 2 (2011)\",2524124660,2524127232,2021-04-04 23:13:55,2021-04-04 23:14:08,2024-05-13 02:54:39,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Media\Movies\Harry Potter and the Deathly Hallows Part 1 (2010)\","","M:\Media\Movies\Harry Potter and the Deathly Hallows Part 1 (2010)\",1904578516,1904578560,2021-04-04 20:13:06,2021-04-04 20:13:06,2026-01-17 08:54:18,3,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\Media\Movies\Harry Potter and the Deathly Hallows Part 1 (2010)\Harry Potter and the Deathly Hallows Part 1 (2010).ts","Harry Potter and the Deathly Hallows Part 1 (2010).ts","M:\Media\Movies\Harry Potter and the Deathly Hallows Part 1 (2010)\",1904578180,1904578560,2021-04-04 20:12:56,2021-04-04 20:13:05,2024-05-13 02:54:58,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\","","M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\",990376127,990384128,2015-06-01 14:02:28,2015-06-01 15:27:54,2026-01-17 08:54:17,4,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\Planet.Earth.09.Shallow.Seas.2006.1080p.HDDVD.x264.anoXmous_swe.srt","Planet.Earth.09.Shallow.Seas.2006.1080p.HDDVD.x264.anoXmous_swe.srt","M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\",25446,28672,2015-06-01 15:27:54,2015-06-01 15:27:54,2022-09-19 14:06:55,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\Planet.Earth.09.Shallow.Seas.2006.1080p.HDDVD.x264.anoXmous_eng.srt","Planet.Earth.09.Shallow.Seas.2006.1080p.HDDVD.x264.anoXmous_eng.srt","M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\",28895,32768,2015-06-01 15:27:45,2015-06-01 15:27:54,2022-09-19 14:06:55,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\Planet.Earth.09.Shallow.Seas.2006.1080p.HDDVD.x264.anoXmous_.mp4","Planet.Earth.09.Shallow.Seas.2006.1080p.HDDVD.x264.anoXmous_.mp4","M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\",990317626,990318592,2015-06-01 14:02:28,2015-06-01 15:28:41,2022-10-02 14:04:33,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\13 Hallo Welt.mp3","13 Hallo Welt.mp3","M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\",5640570,5644288,2015-10-29 13:18:48,2015-10-29 13:18:52,2020-12-22 04:03:11,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\02 Hallo Mama! Hallo Papa!.mp3","02 Hallo Mama! Hallo Papa!.mp3","M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\",3373570,3375104,2015-10-29 13:19:09,2015-10-29 13:19:12,2020-12-22 04:03:11,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\MyAudio\iTUNES\Music\sylver\Bravo Hits 43\Shallow Water.mp3","Shallow Water.mp3","M:\MyAudio\iTUNES\Music\sylver\Bravo Hits 43\",4631703,4632576,2015-10-29 12:53:18,2015-10-29 12:53:25,2020-12-22 04:04:11,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\MyAudio\iTUNES\Music\Over Shallow Water\","","M:\MyAudio\iTUNES\Music\Over Shallow Water\",8243983,8245248,2015-10-27 16:26:39,2015-10-27 16:26:39,2026-01-17 08:53:50,3,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\MyAudio\iTUNES\Music\Fips Asmussen\_Waldlust_ in Hamfelde 29.Juli\(05) Aber Hallo.mp3","(05) Aber Hallo.mp3","M:\MyAudio\iTUNES\Music\Fips Asmussen\_Waldlust_ in Hamfelde 29.Juli\",55857756,55861248,2015-10-30 11:38:12,2015-10-30 11:38:54,2020-11-22 05:47:42,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\MyAudio\Done\Comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\(05) Aber Hallo.mp3","(05) Aber Hallo.mp3","M:\MyAudio\Done\Comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\",55847416,55848960,2004-06-08 13:25:50,2002-10-08 20:57:20,2020-10-21 22:57:05,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\(05) Aber Hallo.JPG","(05) Aber Hallo.JPG","M:\MyAudio\Done\Comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\",94539,98304,2004-06-08 13:25:21,2002-10-08 20:52:12,2011-12-19 22:53:25,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Hoerspiel\comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\(05) Aber Hallo.mp3","(05) Aber Hallo.mp3","M:\MyAudio\Done\Hoerspiel\comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\",55847416,55848960,2004-06-08 13:25:50,2002-10-08 20:57:20,2020-11-18 04:32:51,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Hoerspiel\comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\(05) Aber Hallo.JPG","(05) Aber Hallo.JPG","M:\MyAudio\Done\Hoerspiel\comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\",94539,98304,2004-06-08 13:25:21,2002-10-08 20:52:12,2011-12-19 23:03:10,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Classical\Romance - Music For Piano\Newage - Romance - Music For Piano - Various - (12) Scooter Gettel - Over Shallow Water.mp3","Newage - Romance - Music For Piano - Various - (12) Scooter Gettel - Over Shallow Water.mp3","M:\MyAudio\Done\Classical\Romance - Music For Piano\",8178850,8146944,2003-12-29 10:19:54,2003-12-29 10:20:00,2020-11-21 05:32:26,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\","","M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\",6107547,6098944,2008-05-21 10:28:02,2008-05-21 10:28:02,2026-01-17 08:54:09,3,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,2064
-"M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\Romance - Music For Piano\(12) Scooter Gettel - Over Shallow Water.mp3","(12) Scooter Gettel - Over Shallow Water.mp3","M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\Romance - Music For Piano\",6107139,6098944,2000-01-29 23:55:18,1999-12-30 23:30:32,2020-11-15 05:44:57,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Various Artists\Rolf Zuckowski\Der Spielmann mit all seinen Freunden - CD 1\Misc - Der Spielmann mit all seinen Freunden - CD 1 - Rolf Zuckowski - (13) - Hallo Welt.mp3","Misc - Der Spielmann mit all seinen Freunden - CD 1 - Rolf Zuckowski - (13) - Hallo Welt.mp3","M:\MyAudio\Done\Various Artists\Rolf Zuckowski\Der Spielmann mit all seinen Freunden - CD 1\",5634326,5521408,2003-12-24 23:44:19,2003-12-24 23:44:20,2020-11-01 05:41:12,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Various Artists\Rolf Zuckowski\Der Spielmann mit all seinen Freunden - CD 1\Misc - Der Spielmann mit all seinen Freunden - CD 1 - Rolf Zuckowski - (02) - Hallo Mama! Hallo Papa!.mp3","Misc - Der Spielmann mit all seinen Freunden - CD 1 - Rolf Zuckowski - (02) - Hallo Mama! Hallo Papa!.mp3","M:\MyAudio\Done\Various Artists\Rolf Zuckowski\Der Spielmann mit all seinen Freunden - CD 1\",3367327,3252224,2003-12-24 23:06:46,2003-12-24 23:06:48,2020-11-01 05:41:08,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\TOP Hits\2004 - Bravo Hits Top 40\2004 - Bravo Hits Vol.43 (2004) - Top 40\CD2\212_sylver_-_shallow_water-mod.mp3","212_sylver_-_shallow_water-mod.mp3","M:\MyAudio\Done\TOP Hits\2004 - Bravo Hits Top 40\2004 - Bravo Hits Vol.43 (2004) - Top 40\CD2\",4621344,4616192,2004-12-28 06:40:35,2003-10-24 18:58:18,2020-11-21 05:23:15,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Sound Tools\Bass Test\THX.Surround.Sound.BASS.test\THX Test\(Misc) THX - Halloween Sound Effects  - Spooky Night Sounds.mp3","(Misc) THX - Halloween Sound Effects  - Spooky Night Sounds.mp3","M:\MyAudio\Done\Sound Tools\Bass Test\THX.Surround.Sound.BASS.test\THX Test\",1480704,1449984,2007-11-04 23:01:27,2002-11-17 05:37:24,2020-11-21 05:41:52,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\Dropbox.old\Esther_Shop\Documents\Sign up Sheet for Halloween party Wednesday 10.doc","Sign up Sheet for Halloween party Wednesday 10.doc","M:\Dropbox.old\Esther_Shop\Documents\",35840,36864,2013-05-03 01:37:09,2001-10-22 22:16:00,2012-12-06 15:49:51,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Dropbox.old\Esther_Shop\Documents\Shortcut to Hallo 09-02-03.doc.lnk","Shortcut to Hallo 09-02-03.doc.lnk","M:\Dropbox.old\Esther_Shop\Documents\",522,0,2013-05-03 01:37:09,2003-09-06 12:53:10,2012-12-06 15:22:31,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Dropbox.old\Esther_Shop\Documents\Happy Halloween 10-31-2012.docx","Happy Halloween 10-31-2012.docx","M:\Dropbox.old\Esther_Shop\Documents\",214235,217088,2013-05-03 01:36:58,2012-10-31 18:31:52,2012-12-06 17:12:05,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Dropbox.old\Esther_Shop\Documents\Halloween Booh 10-07-03.doc","Halloween Booh 10-07-03.doc","M:\Dropbox.old\Esther_Shop\Documents\",46592,49152,2013-05-03 01:36:58,2003-10-07 20:54:28,2012-12-06 15:57:28,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Dropbox.old\Esther_Shop\Documents\Hallo 09-02-03.doc","Hallo 09-02-03.doc","M:\Dropbox.old\Esther_Shop\Documents\",19968,20480,2013-05-03 01:36:58,2003-09-17 17:30:56,2012-12-06 15:39:51,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Dropbox.old\DATA\Bakery\Main Office Briefcase\Hallo.txt","Hallo.txt","M:\Dropbox.old\DATA\Bakery\Main Office Briefcase\",16,0,2013-05-03 01:10:49,2008-10-27 19:16:08,2012-12-06 15:16:50,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-
-Finished        in 19 s
-
-(production) ~\GitHub\UltraFastFileSearch on main>
-___________________________________________
-
-
-(production) ~\GitHub\UltraFastFileSearch on main> ~\bin\uffs.exe "hallo" --drives=M
-"Path","Name","Path Only","Size","Size on Disk","Created","Last Written","Last Accessed","Descendants","Read-only","Archive","System","Hidden","Offline","Not content indexed file","No scrub file","Integrity","Pinned","Unpinned","Directory Flag","Compressed","Encrypted","Sparse","Reparse","Attributes"
-
-"M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\","","M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\",990376127,990384128,2015-06-01 14:02:28,2015-06-01 15:27:54,2026-01-17 08:54:17,4,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\Planet.Earth.09.Shallow.Seas.2006.1080p.HDDVD.x264.anoXmous_.mp4","Planet.Earth.09.Shallow.Seas.2006.1080p.HDDVD.x264.anoXmous_.mp4","M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\",990317626,990318592,2015-06-01 14:02:28,2015-06-01 15:28:41,2022-10-02 14:04:33,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\Planet.Earth.09.Shallow.Seas.2006.1080p.HDDVD.x264.anoXmous_eng.srt","Planet.Earth.09.Shallow.Seas.2006.1080p.HDDVD.x264.anoXmous_eng.srt","M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\",28895,32768,2015-06-01 15:27:45,2015-06-01 15:27:54,2022-09-19 14:06:55,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\Planet.Earth.09.Shallow.Seas.2006.1080p.HDDVD.x264.anoXmous_swe.srt","Planet.Earth.09.Shallow.Seas.2006.1080p.HDDVD.x264.anoXmous_swe.srt","M:\Media\TV Shows\Planet.Earth\9.Planet.Earth.EP09.Shallow.Seas\",25446,28672,2015-06-01 15:27:54,2015-06-01 15:27:54,2022-09-19 14:06:55,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\MyAudio\iTUNES\Music\Fips Asmussen\_Waldlust_ in Hamfelde 29.Juli\(05) Aber Hallo.mp3","(05) Aber Hallo.mp3","M:\MyAudio\iTUNES\Music\Fips Asmussen\_Waldlust_ in Hamfelde 29.Juli\",55857756,55861248,2015-10-30 11:38:12,2015-10-30 11:38:54,2020-11-22 05:47:42,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\MyAudio\iTUNES\Music\Over Shallow Water\","","M:\MyAudio\iTUNES\Music\Over Shallow Water\",8243983,8245248,2015-10-27 16:26:39,2015-10-27 16:26:39,2026-01-17 08:53:50,3,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\MyAudio\iTUNES\Music\Over Shallow Water\Romance - Music For Piano\","","M:\MyAudio\iTUNES\Music\Over Shallow Water\Romance - Music For Piano\",8243799,8245248,2015-10-27 16:26:39,2015-10-27 16:26:39,2026-01-17 08:53:50,2,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\MyAudio\iTUNES\Music\Over Shallow Water\Romance - Music For Piano\12 Scooter Gettel.mp3","12 Scooter Gettel.mp3","M:\MyAudio\iTUNES\Music\Over Shallow Water\Romance - Music For Piano\",8243623,8245248,2015-10-27 16:26:34,2015-10-27 16:26:39,2020-12-22 04:05:44,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\","","M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\",6107547,6098944,2008-05-21 10:28:02,2008-05-21 10:28:02,2026-01-17 08:54:09,3,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,2064
-"M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\Romance - Music For Piano\","","M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\Romance - Music For Piano\",6107363,6098944,2008-05-21 10:28:02,2008-05-21 10:28:02,2026-01-17 08:54:09,2,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,2064
-"M:\MyAudio\Done\Classical\Romance - Music For Piano\Newage - Romance - Music For Piano - Various - (12) Scooter Gettel - Over Shallow Water.mp3","Newage - Romance - Music For Piano - Various - (12) Scooter Gettel - Over Shallow Water.mp3","M:\MyAudio\Done\Classical\Romance - Music For Piano\",8178850,8146944,2003-12-29 10:19:54,2003-12-29 10:20:00,2020-11-21 05:32:26,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\(05) Aber Hallo.JPG","(05) Aber Hallo.JPG","M:\MyAudio\Done\Comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\",94539,98304,2004-06-08 13:25:21,2002-10-08 20:52:12,2011-12-19 22:53:25,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\(05) Aber Hallo.mp3","(05) Aber Hallo.mp3","M:\MyAudio\Done\Comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\",55847416,55848960,2004-06-08 13:25:50,2002-10-08 20:57:20,2020-10-21 22:57:05,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Hoerspiel\comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\(05) Aber Hallo.JPG","(05) Aber Hallo.JPG","M:\MyAudio\Done\Hoerspiel\comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\",94539,98304,2004-06-08 13:25:21,2002-10-08 20:52:12,2011-12-19 23:03:10,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Hoerspiel\comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\(05) Aber Hallo.mp3","(05) Aber Hallo.mp3","M:\MyAudio\Done\Hoerspiel\comedy\[COMEDY]_Fips_Asmussen_18_Kassetten_RIP_full_album_DISCOGRAPHIE_humor_byHerrPRODUNIS_[128kbMP3]\",55847416,55848960,2004-06-08 13:25:50,2002-10-08 20:57:20,2020-11-18 04:32:51,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Sound Tools\Bass Test\THX.Surround.Sound.BASS.test\THX Test\(Misc) THX - Halloween Sound Effects  - Spooky Night Sounds.mp3","(Misc) THX - Halloween Sound Effects  - Spooky Night Sounds.mp3","M:\MyAudio\Done\Sound Tools\Bass Test\THX.Surround.Sound.BASS.test\THX Test\",1480704,1449984,2007-11-04 23:01:27,2002-11-17 05:37:24,2020-11-21 05:41:52,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\TOP Hits\2004 - Bravo Hits Top 40\2004 - Bravo Hits Vol.43 (2004) - Top 40\CD2\212_sylver_-_shallow_water-mod.mp3","212_sylver_-_shallow_water-mod.mp3","M:\MyAudio\Done\TOP Hits\2004 - Bravo Hits Top 40\2004 - Bravo Hits Vol.43 (2004) - Top 40\CD2\",4621344,4616192,2004-12-28 06:40:35,2003-10-24 18:58:18,2020-11-21 05:23:15,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Various Artists\Rolf Zuckowski\Der Spielmann mit all seinen Freunden - CD 1\Misc - Der Spielmann mit all seinen Freunden - CD 1 - Rolf Zuckowski - (02) - Hallo Mama! Hallo Papa!.mp3","Misc - Der Spielmann mit all seinen Freunden - CD 1 - Rolf Zuckowski - (02) - Hallo Mama! Hallo Papa!.mp3","M:\MyAudio\Done\Various Artists\Rolf Zuckowski\Der Spielmann mit all seinen Freunden - CD 1\",3367327,3252224,2003-12-24 23:06:46,2003-12-24 23:06:48,2020-11-01 05:41:08,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Various Artists\Rolf Zuckowski\Der Spielmann mit all seinen Freunden - CD 1\Misc - Der Spielmann mit all seinen Freunden - CD 1 - Rolf Zuckowski - (13) - Hallo Welt.mp3","Misc - Der Spielmann mit all seinen Freunden - CD 1 - Rolf Zuckowski - (13) - Hallo Welt.mp3","M:\MyAudio\Done\Various Artists\Rolf Zuckowski\Der Spielmann mit all seinen Freunden - CD 1\",5634326,5521408,2003-12-24 23:44:19,2003-12-24 23:44:20,2020-11-01 05:41:12,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\Romance - Music For Piano\(12) Scooter Gettel - Over Shallow Water.mp3","(12) Scooter Gettel - Over Shallow Water.mp3","M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\Romance - Music For Piano\",6107139,6098944,2000-01-29 23:55:18,1999-12-30 23:30:32,2020-11-15 05:44:57,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-"M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\02 Hallo Mama! Hallo Papa!.mp3","02 Hallo Mama! Hallo Papa!.mp3","M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\",3373570,3375104,2015-10-29 13:19:09,2015-10-29 13:19:12,2020-12-22 04:03:11,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\13 Hallo Welt.mp3","13 Hallo Welt.mp3","M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\",5640570,5644288,2015-10-29 13:18:48,2015-10-29 13:18:52,2020-12-22 04:03:11,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\MyAudio\iTUNES\Music\sylver\Bravo Hits 43\Shallow Water.mp3","Shallow Water.mp3","M:\MyAudio\iTUNES\Music\sylver\Bravo Hits 43\",4631703,4632576,2015-10-29 12:53:18,2015-10-29 12:53:25,2020-12-22 04:04:11,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Dropbox.old\Esther_Shop\Documents\Hallo 09-02-03.doc","Hallo 09-02-03.doc","M:\Dropbox.old\Esther_Shop\Documents\",19968,20480,2013-05-03 01:36:58,2003-09-17 17:30:56,2012-12-06 15:39:51,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Dropbox.old\Esther_Shop\Documents\Halloween Booh 10-07-03.doc","Halloween Booh 10-07-03.doc","M:\Dropbox.old\Esther_Shop\Documents\",46592,49152,2013-05-03 01:36:58,2003-10-07 20:54:28,2012-12-06 15:57:28,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Dropbox.old\Esther_Shop\Documents\Happy Halloween 10-31-2012.docx","Happy Halloween 10-31-2012.docx","M:\Dropbox.old\Esther_Shop\Documents\",214235,217088,2013-05-03 01:36:58,2012-10-31 18:31:52,2012-12-06 17:12:05,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Dropbox.old\Esther_Shop\Documents\Shortcut to Hallo 09-02-03.doc.lnk","Shortcut to Hallo 09-02-03.doc.lnk","M:\Dropbox.old\Esther_Shop\Documents\",522,0,2013-05-03 01:37:09,2003-09-06 12:53:10,2012-12-06 15:22:31,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Dropbox.old\Esther_Shop\Documents\Sign up Sheet for Halloween party Wednesday 10.doc","Sign up Sheet for Halloween party Wednesday 10.doc","M:\Dropbox.old\Esther_Shop\Documents\",35840,36864,2013-05-03 01:37:09,2001-10-22 22:16:00,2012-12-06 15:49:51,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\shallow","shallow","M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\",41,0,2019-06-19 02:24:26,2019-06-19 02:24:26,2019-06-19 02:24:26,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\shallow","shallow","M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\",41,0,2019-06-19 02:24:27,2019-06-19 02:24:27,2019-06-19 02:24:27,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\shallow","shallow","M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\",41,0,2019-06-19 02:24:26,2019-06-19 02:24:26,2019-06-19 02:24:26,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\etc\.pihole\.git\shallow","shallow","M:\Raspberry Pi\2020-01-18\etc\.pihole\.git\",41,0,2019-05-10 06:23:24,2019-05-10 06:23:24,2019-05-10 06:23:24,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\shallow","shallow","M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\",41,0,2019-06-19 02:27:05,2019-06-19 02:27:05,2019-06-19 02:27:05,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\shallow","shallow","M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\",41,0,2019-06-19 02:27:06,2019-06-19 02:27:06,2019-06-19 02:27:06,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\shallow","shallow","M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\",41,0,2019-06-19 02:27:06,2019-06-19 02:27:06,2019-06-19 02:27:06,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\etc\.pihole\.git\shallow","shallow","M:\Raspberry Pi\Backup 01-13-2019\etc\.pihole\.git\",41,0,2019-01-09 21:15:10,2019-01-09 21:15:10,2019-01-09 21:15:10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Dropbox.old\DATA\Bakery\Main Office Briefcase\Hallo.txt","Hallo.txt","M:\Dropbox.old\DATA\Bakery\Main Office Briefcase\",16,0,2013-05-03 01:10:49,2008-10-27 19:16:08,2012-12-06 15:16:50,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\","","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\",4213,8192,2018-11-13 06:53:26,2018-11-13 06:53:26,2026-01-17 08:51:29,4,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\index.js","index.js","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\",576,0,2015-06-29 00:55:32,2015-06-29 00:55:32,2018-11-13 07:22:48,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\LICENSE","LICENSE","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\",1088,4096,2015-03-02 13:03:21,2015-03-02 13:03:21,2018-11-13 07:22:48,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\package.json","package.json","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\",2189,4096,2018-09-17 12:18:37,2018-09-17 12:18:37,2018-11-13 07:22:48,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\","","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\",5640,12288,2018-11-13 06:53:26,2018-11-13 06:53:26,2026-01-17 08:51:29,4,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\index.js","index.js","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\",1806,4096,1985-10-26 01:15:00,1985-10-26 01:15:00,2018-11-13 07:22:49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\LICENSE","LICENSE","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\",1088,4096,1985-10-26 01:15:00,1985-10-26 01:15:00,2018-11-13 07:22:49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\package.json","package.json","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\",2386,4096,2018-09-17 12:18:33,2018-09-17 12:18:33,2018-11-13 07:22:49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\","","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\",13026,24576,2018-11-13 06:53:26,2018-11-13 06:53:26,2026-01-17 08:51:29,9,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\index.js","index.js","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\",1042,4096,2017-07-16 05:09:46,2017-07-16 05:09:46,2018-11-13 07:22:49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\LICENSE","LICENSE","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\",1087,4096,2017-07-16 05:09:49,2017-07-16 05:09:49,2018-11-13 07:22:49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\node_modules\","","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\node_modules\",7908,12288,2018-11-13 06:53:22,2018-11-13 06:53:22,2026-01-17 08:51:29,5,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\node_modules\kind-of\","","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\node_modules\kind-of\",7764,12288,2018-11-13 06:53:26,2018-11-13 06:53:26,2026-01-17 08:51:29,4,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\node_modules\kind-of\index.js","index.js","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\node_modules\kind-of\",3149,4096,2017-10-13 00:02:03,2017-10-13 00:02:03,2018-11-13 07:22:49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\node_modules\kind-of\LICENSE","LICENSE","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\node_modules\kind-of\",1088,4096,2017-10-13 00:02:03,2017-10-13 00:02:03,2018-11-13 07:22:49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\node_modules\kind-of\package.json","package.json","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\node_modules\kind-of\",3167,4096,2018-09-17 12:18:33,2018-09-17 12:18:33,2018-11-13 07:22:49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\package.json","package.json","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\",2517,4096,2018-09-17 12:18:33,2018-09-17 12:18:33,2018-11-13 07:22:49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 01-13-2019\var\www\html\admin\.git\shallow","shallow","M:\Raspberry Pi\Backup 01-13-2019\var\www\html\admin\.git\",41,0,2019-01-09 21:15:11,2019-01-09 21:15:11,2019-01-09 21:15:11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 05-08-2019\etc\.pihole\.git\shallow","shallow","M:\Raspberry Pi\Backup 05-08-2019\etc\.pihole\.git\",41,0,2019-01-09 21:15:10,2019-01-09 21:15:10,2019-01-09 21:15:10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Backup 05-08-2019\var\www\html\admin\.git\shallow","shallow","M:\Raspberry Pi\Backup 05-08-2019\var\www\html\admin\.git\",41,0,2019-01-09 21:15:11,2019-01-09 21:15:11,2019-01-09 21:15:11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\Pi-hole\.git\shallow","shallow","M:\Raspberry Pi\Pi-hole\.git\",41,0,2019-05-26 18:07:08,2019-05-26 18:07:08,2019-05-26 18:07:08,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\iTunes\iTunes Media\Music\Alexandre Desplat\Harry Potter And The Deathly Hallows, Pa\","","M:\iTunes\iTunes Media\Music\Alexandre Desplat\Harry Potter And The Deathly Hallows, Pa\",2868987,2871296,2014-01-26 16:14:21,2014-01-26 16:14:21,2026-01-17 08:55:26,2,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\iTunes\iTunes Media\Music\Alexandre Desplat\Harry Potter And The Deathly Hallows, Pa\08 Death Eaters.mp3","08 Death Eaters.mp3","M:\iTunes\iTunes Media\Music\Alexandre Desplat\Harry Potter And The Deathly Hallows, Pa\",2868819,2871296,2014-01-26 16:14:17,2014-01-26 16:14:21,2014-01-26 16:14:17,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\iTunes\iTunes Media\Music\Slayer\Soundtrack To The Apocalypse\13 Hallowed Point.m4a","13 Hallowed Point.m4a","M:\iTunes\iTunes Media\Music\Slayer\Soundtrack To The Apocalypse\",7832530,7835648,2014-01-27 03:16:45,2014-01-27 03:17:02,2014-01-27 03:16:56,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\iTunes\iTunes Media\Music\Various Artists\Romance - Music For Piano\12 Over Shallow Water.mp3","12 Over Shallow Water.mp3","M:\iTunes\iTunes Media\Music\Various Artists\Romance - Music For Piano\",8188363,8192000,2014-01-27 02:16:18,2014-01-27 02:16:24,2014-01-27 02:16:18,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\Data\Publisher\Halloween.pub","Halloween.pub","M:\Drop 10-06-2016\Wholesale 10-06-2016\Data\Publisher\",238592,241664,2016-10-07 05:37:14,2015-10-28 05:34:34,2016-10-07 05:37:15,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\Hallo 09-02-03.doc","Hallo 09-02-03.doc","M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\",19968,20480,2016-10-07 03:39:39,2013-05-23 12:07:40,2016-10-07 03:39:40,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\Halloween Booh 10-07-03.doc","Halloween Booh 10-07-03.doc","M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\",46592,49152,2016-10-07 04:13:08,2013-05-23 12:07:42,2016-10-07 04:13:10,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\Happy Halloween 10-31-2012.docx","Happy Halloween 10-31-2012.docx","M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\",214235,217088,2016-10-07 04:16:58,2013-05-23 12:07:44,2016-10-07 04:16:59,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\Shortcut to Hallo 09-02-03.doc.lnk","Shortcut to Hallo 09-02-03.doc.lnk","M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\",522,0,2016-10-07 04:19:05,2003-09-06 12:53:09,2016-10-07 04:19:07,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\Sign up Sheet for Halloween party Wednesday 10.doc","Sign up Sheet for Halloween party Wednesday 10.doc","M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Esther_Shop\Documents\",35840,36864,2016-10-07 06:04:28,2013-05-23 12:11:41,2016-10-07 06:04:29,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Wholesale Bakery\Legacy Files\Main Office Briefcase\Hallo.txt","Hallo.txt","M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Wholesale Bakery\Legacy Files\Main Office Briefcase\",16,0,2016-10-07 06:38:17,2013-05-23 06:05:14,2016-10-07 06:38:17,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Wholesale Bakery\Publisher\Halloween.pub","Halloween.pub","M:\Drop 10-06-2016\Wholesale 10-06-2016\My Box Files\Wholesale Bakery\Publisher\",238592,241664,2016-10-07 07:14:19,2015-10-28 05:34:34,2016-10-07 07:14:22,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\DATA.backup\Bakery\Main Office Briefcase\Hallo.txt","Hallo.txt","M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\DATA.backup\Bakery\Main Office Briefcase\",16,0,2016-10-07 11:30:18,2008-10-27 19:16:07,2016-10-07 11:30:22,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\Hallo 09-02-03.doc","Hallo 09-02-03.doc","M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\",19968,20480,2016-10-07 16:18:49,2013-05-23 12:07:40,2016-10-07 16:18:50,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\Halloween Booh 10-07-03.doc","Halloween Booh 10-07-03.doc","M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\",46592,49152,2016-10-07 16:20:58,2013-05-23 12:07:42,2016-10-07 16:20:59,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\Happy Halloween 10-31-2012.docx","Happy Halloween 10-31-2012.docx","M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\",214235,217088,2016-10-07 16:21:16,2013-05-23 12:07:44,2016-10-07 16:21:19,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\Shortcut to Hallo 09-02-03.doc.lnk","Shortcut to Hallo 09-02-03.doc.lnk","M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\",522,0,2016-10-07 16:21:30,2003-09-06 12:53:09,2016-10-07 16:21:31,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\Sign up Sheet for Halloween party Wednesday 10.doc","Sign up Sheet for Halloween party Wednesday 10.doc","M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Esther_Shop\Documents\",35840,36864,2016-10-07 16:21:41,2013-05-23 12:11:41,2016-10-07 16:22:03,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\config\pathallowfilter.t","pathallowfilter.t","M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\config\",186,0,2019-05-10 16:58:44,2019-05-09 16:52:53,2019-05-10 16:58:44,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\lib\ProFTPD\Tests\Config\PathAllowFilter.pm","PathAllowFilter.pm","M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\lib\ProFTPD\Tests\Config\",43620,45056,2019-05-10 16:58:45,2019-05-09 16:52:53,2019-05-10 16:58:45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Raspberry Pi\2020-01-18\opt\libtool\gnulib\.git\shallow","shallow","M:\Raspberry Pi\2020-01-18\opt\libtool\gnulib\.git\",41,0,2019-06-08 22:05:59,2019-06-08 22:05:59,2019-06-08 22:05:59,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-"M:\Media\Movies\Harry Potter and the Deathly Hallows Part 1 (2010)\","","M:\Media\Movies\Harry Potter and the Deathly Hallows Part 1 (2010)\",1904578516,1904578560,2021-04-04 20:13:06,2021-04-04 20:13:06,2026-01-17 08:54:18,3,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\Media\Movies\Harry Potter and the Deathly Hallows Part 2 (2011)\","","M:\Media\Movies\Harry Potter and the Deathly Hallows Part 2 (2011)\",2524124900,2524127232,2021-04-04 23:14:09,2021-04-04 23:14:10,2026-01-17 08:54:18,2,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-"M:\Media\Movies\Harry Potter and the Deathly Hallows Part 1 (2010)\Harry Potter and the Deathly Hallows Part 1 (2010).ts","Harry Potter and the Deathly Hallows Part 1 (2010).ts","M:\Media\Movies\Harry Potter and the Deathly Hallows Part 1 (2010)\",1904578180,1904578560,2021-04-04 20:12:56,2021-04-04 20:13:05,2024-05-13 02:54:58,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Media\Movies\Harry Potter and the Deathly Hallows Part 2 (2011)\Harry Potter and the Deathly Hallows Part 2 (2011).ts","Harry Potter and the Deathly Hallows Part 2 (2011).ts","M:\Media\Movies\Harry Potter and the Deathly Hallows Part 2 (2011)\",2524124660,2524127232,2021-04-04 23:13:55,2021-04-04 23:14:08,2024-05-13 02:54:39,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-"M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Wholesale Bakery\Legacy Files\Main Office Briefcase\Hallo.txt","Hallo.txt","M:\Drop 10-06-2016\Wholesale 10-06-2016\OLD\My Dropbox\Wholesale Bakery\Legacy Files\Main Office Briefcase\",16,0,2016-10-07 19:02:00,2013-05-23 06:05:14,2016-10-07 19:02:01,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-(production) ~\GitHub\UltraFastFileSearch on main>
-
-
-___________________________________________
-
-
-
-(production) ~\GitHub\UltraFastFileSearch on main> rust-script scripts/windows/parity_check_live.rs --pattern "hallo" --drive M
+(production) ~\GitHub\UltraFastFileSearch on main> rust-script scripts/windows/parity_check_live.rs --pattern "hallo"  --name-only
 
 ╔════════════════════════════════════════════════════════════════╗
 ║      UFFS LIVE PARITY CHECK — C++ vs Rust (Live MFT)           ║
@@ -182,21 +6,22 @@ ___________________________________________
 
   C++ binary : C:\Users\rnio\bin\uffs.com
   Rust binary: C:\Users\rnio\bin\uffs.exe
-  Drives     : ["M"]
+  Drives     : ["C", "D", "E", "F", "M", "S"]
   Pattern    : hallo
+  Name only  : yes (filename matching only)
   Output dir : C:\Users\rnio\GitHub\UltraFastFileSearch
   Sample size: 50
   Keep files : no (clean on success)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  [1/1] DRIVE M — Live MFT Scan
+  [1/6] DRIVE C — Live MFT Scan
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  [1/4] Running C++ scan... ✅ (19.67s)
-  [2/4] Running Rust scan... ✅ (24.18s)
-  [3/4] Sorting outputs... ✅ (1ms)
-       C++ lines : 72
-       Rust lines: 90
+  [1/4] Running C++ scan... ✅ (3.97s)
+  [2/4] Running Rust scan... ✅ (4.24s)
+  [3/4] Sorting outputs... ✅ (2ms)
+       C++ lines : 59
+       Rust lines: 75
 
   [4/4] Computing SHA256... ✅
 
@@ -205,132 +30,200 @@ ___________________________________________
   ╚═══════════════════════════════════════════════════════════╝
 
   Hashes:
-       C++ ordered SHA256 : 1dbc186bfe08a0e4...
-       Rust ordered SHA256: 3f29d710f9e48089...
-       C++ sorted SHA256  : 27b32093d0db4c51...
-       Rust sorted SHA256 : c6dc9298778580ea...
+       C++ ordered SHA256 : 6d3579ca35bac834...
+       Rust ordered SHA256: 8c6956907e06e5fe...
+       C++ sorted SHA256  : 65e455d853ac4a91...
+       Rust sorted SHA256 : 318d581233bc27fa...
 
-  Line count: 72 (C++) vs 90 (Rust)
+  Line count: 59 (C++) vs 75 (Rust)
 
 === SORTED SIDE-BY-SIDE COMPARISON (differences only) ===
-  C++ lines:   72
-  Rust lines:  90
-  Lines that differ: 29
+  C++ lines:   59
+  Rust lines:  75
+  Lines that differ: 3
 
---- FIRST 29 DIFFERENCES ---
-  Line 44:
-    C++:  "M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\Romance - Music For Piano\(12) Scooter Gettel - Over Shallow Water.mp3","(12) Scooter Gettel - Over Shallow Water.mp3","M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\Romance - Music For Piano\",6107139,6098944,2000-01-29 23:55:18,1999-12-30 23:30:32,2020-11-15 05:44:57,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-    RUST: "M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\Romance - Music For Piano\","","M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\Romance - Music For Piano\",6107363,6098944,2008-05-21 10:28:02,2008-05-21 10:28:02,2026-01-17 08:54:09,2,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,2064
-  Line 45:
-    C++:  "M:\MyAudio\iTUNES\Music\Fips Asmussen\_Waldlust_ in Hamfelde 29.Juli\(05) Aber Hallo.mp3","(05) Aber Hallo.mp3","M:\MyAudio\iTUNES\Music\Fips Asmussen\_Waldlust_ in Hamfelde 29.Juli\",55857756,55861248,2015-10-30 11:38:12,2015-10-30 11:38:54,2020-11-22 05:47:42,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-    RUST: "M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\Romance - Music For Piano\(12) Scooter Gettel - Over Shallow Water.mp3","(12) Scooter Gettel - Over Shallow Water.mp3","M:\MyAudio\Done\Various Songs\Latin\Over Shallow Water\Romance - Music For Piano\",6107139,6098944,2000-01-29 23:55:18,1999-12-30 23:30:32,2020-11-15 05:44:57,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,2080
-  Line 46:
-    C++:  "M:\MyAudio\iTUNES\Music\Over Shallow Water\","","M:\MyAudio\iTUNES\Music\Over Shallow Water\",8243983,8245248,2015-10-27 16:26:39,2015-10-27 16:26:39,2026-01-17 08:53:50,3,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-    RUST: "M:\MyAudio\iTUNES\Music\Fips Asmussen\_Waldlust_ in Hamfelde 29.Juli\(05) Aber Hallo.mp3","(05) Aber Hallo.mp3","M:\MyAudio\iTUNES\Music\Fips Asmussen\_Waldlust_ in Hamfelde 29.Juli\",55857756,55861248,2015-10-30 11:38:12,2015-10-30 11:38:54,2020-11-22 05:47:42,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-  Line 47:
-    C++:  "M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\02 Hallo Mama! Hallo Papa!.mp3","02 Hallo Mama! Hallo Papa!.mp3","M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\",3373570,3375104,2015-10-29 13:19:09,2015-10-29 13:19:12,2020-12-22 04:03:11,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-    RUST: "M:\MyAudio\iTUNES\Music\Over Shallow Water\","","M:\MyAudio\iTUNES\Music\Over Shallow Water\",8243983,8245248,2015-10-27 16:26:39,2015-10-27 16:26:39,2026-01-17 08:53:50,3,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-  Line 48:
-    C++:  "M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\13 Hallo Welt.mp3","13 Hallo Welt.mp3","M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\",5640570,5644288,2015-10-29 13:18:48,2015-10-29 13:18:52,2020-12-22 04:03:11,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-    RUST: "M:\MyAudio\iTUNES\Music\Over Shallow Water\Romance - Music For Piano\","","M:\MyAudio\iTUNES\Music\Over Shallow Water\Romance - Music For Piano\",8243799,8245248,2015-10-27 16:26:39,2015-10-27 16:26:39,2026-01-17 08:53:50,2,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-  Line 49:
-    C++:  "M:\MyAudio\iTUNES\Music\sylver\Bravo Hits 43\Shallow Water.mp3","Shallow Water.mp3","M:\MyAudio\iTUNES\Music\sylver\Bravo Hits 43\",4631703,4632576,2015-10-29 12:53:18,2015-10-29 12:53:25,2020-12-22 04:04:11,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-    RUST: "M:\MyAudio\iTUNES\Music\Over Shallow Water\Romance - Music For Piano\12 Scooter Gettel.mp3","12 Scooter Gettel.mp3","M:\MyAudio\iTUNES\Music\Over Shallow Water\Romance - Music For Piano\",8243623,8245248,2015-10-27 16:26:34,2015-10-27 16:26:39,2020-12-22 04:05:44,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-  Line 50:
-    C++:  "M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\config\pathallowfilter.t","pathallowfilter.t","M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\config\",186,0,2019-05-10 16:58:44,2019-05-09 16:52:53,2019-05-10 16:58:44,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\02 Hallo Mama! Hallo Papa!.mp3","02 Hallo Mama! Hallo Papa!.mp3","M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\",3373570,3375104,2015-10-29 13:19:09,2015-10-29 13:19:12,2020-12-22 04:03:11,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-  Line 51:
-    C++:  "M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\lib\ProFTPD\Tests\Config\PathAllowFilter.pm","PathAllowFilter.pm","M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\lib\ProFTPD\Tests\Config\",43620,45056,2019-05-10 16:58:45,2019-05-09 16:52:53,2019-05-10 16:58:45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\13 Hallo Welt.mp3","13 Hallo Welt.mp3","M:\MyAudio\iTUNES\Music\Rolf Zuckowski\Der Spielmann mit all seinen Freunden -\",5640570,5644288,2015-10-29 13:18:48,2015-10-29 13:18:52,2020-12-22 04:03:11,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-  Line 52:
-    C++:  "M:\Raspberry Pi\2020-01-18\etc\.pihole\.git\shallow","shallow","M:\Raspberry Pi\2020-01-18\etc\.pihole\.git\",41,0,2019-05-10 06:23:24,2019-05-10 06:23:24,2019-05-10 06:23:24,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\MyAudio\iTUNES\Music\sylver\Bravo Hits 43\Shallow Water.mp3","Shallow Water.mp3","M:\MyAudio\iTUNES\Music\sylver\Bravo Hits 43\",4631703,4632576,2015-10-29 12:53:18,2015-10-29 12:53:25,2020-12-22 04:04:11,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-  Line 53:
-    C++:  "M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\shallow","shallow","M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\",41,0,2019-06-19 02:24:26,2019-06-19 02:24:26,2019-06-19 02:24:26,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\config\pathallowfilter.t","pathallowfilter.t","M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\config\",186,0,2019-05-10 16:58:44,2019-05-09 16:52:53,2019-05-10 16:58:44,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 54:
-    C++:  "M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\shallow","shallow","M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\",41,0,2019-06-19 02:24:27,2019-06-19 02:24:27,2019-06-19 02:24:27,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\lib\ProFTPD\Tests\Config\PathAllowFilter.pm","PathAllowFilter.pm","M:\ROUTER\DD-WRT Master Source\src\router\proftpd\tests\t\lib\ProFTPD\Tests\Config\",43620,45056,2019-05-10 16:58:45,2019-05-09 16:52:53,2019-05-10 16:58:45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 55:
-    C++:  "M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\shallow","shallow","M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\",41,0,2019-06-19 02:24:26,2019-06-19 02:24:26,2019-06-19 02:24:26,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\Raspberry Pi\2020-01-18\etc\.pihole\.git\shallow","shallow","M:\Raspberry Pi\2020-01-18\etc\.pihole\.git\",41,0,2019-05-10 06:23:24,2019-05-10 06:23:24,2019-05-10 06:23:24,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 56:
-    C++:  "M:\Raspberry Pi\2020-01-18\opt\libtool\gnulib\.git\shallow","shallow","M:\Raspberry Pi\2020-01-18\opt\libtool\gnulib\.git\",41,0,2019-06-08 22:05:59,2019-06-08 22:05:59,2019-06-08 22:05:59,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\shallow","shallow","M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\",41,0,2019-06-19 02:24:26,2019-06-19 02:24:26,2019-06-19 02:24:26,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+--- FIRST 3 DIFFERENCES ---
   Line 57:
-    C++:  "M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\shallow","shallow","M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\",41,0,2019-06-19 02:27:05,2019-06-19 02:27:05,2019-06-19 02:27:05,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\shallow","shallow","M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\",41,0,2019-06-19 02:24:27,2019-06-19 02:24:27,2019-06-19 02:24:27,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+    C++:  "C:\uffs\boost_1_73_0\boost\statechart\shallow_history.hpp","shallow_history.hpp","C:\uffs\boost_1_73_0\boost\statechart\",2148,65536,2023-03-24 23:40:08,2020-04-22 06:36:16,2023-03-24 23:40:08,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+    RUST: "C:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-black\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","C:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-black\",611,65536,2024-04-01 00:22:52,2024-04-01 00:22:52,2026-03-10 19:50:51,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
   Line 58:
-    C++:  "M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\shallow","shallow","M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\",41,0,2019-06-19 02:27:06,2019-06-19 02:27:06,2019-06-19 02:27:06,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\shallow","shallow","M:\Raspberry Pi\2020-01-18\home\pi\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\",41,0,2019-06-19 02:24:26,2019-06-19 02:24:26,2019-06-19 02:24:26,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 59:
-    C++:  "M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\shallow","shallow","M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\",41,0,2019-06-19 02:27:06,2019-06-19 02:27:06,2019-06-19 02:27:06,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\Raspberry Pi\2020-01-18\opt\libtool\gnulib\.git\shallow","shallow","M:\Raspberry Pi\2020-01-18\opt\libtool\gnulib\.git\",41,0,2019-06-08 22:05:59,2019-06-08 22:05:59,2019-06-08 22:05:59,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 60:
-    C++:  "M:\Raspberry Pi\Backup 01-13-2019\etc\.pihole\.git\shallow","shallow","M:\Raspberry Pi\Backup 01-13-2019\etc\.pihole\.git\",41,0,2019-01-09 21:15:10,2019-01-09 21:15:10,2019-01-09 21:15:10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\shallow","shallow","M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\485d687ca416d643c3034b98c92c7cbc41ec0df9f87f419612add638ccae8637\",41,0,2019-06-19 02:27:05,2019-06-19 02:27:05,2019-06-19 02:27:05,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 61:
-    C++:  "M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\","","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\",4213,8192,2018-11-13 06:53:26,2018-11-13 06:53:26,2026-01-17 08:51:29,4,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-    RUST: "M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\shallow","shallow","M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\9950c06efbb2d90e85a58f1fbd6f3eb2db497b7c539a93fb5555656c5aba3c13\",41,0,2019-06-19 02:27:06,2019-06-19 02:27:06,2019-06-19 02:27:06,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 62:
-    C++:  "M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\","","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\",5640,12288,2018-11-13 06:53:26,2018-11-13 06:53:26,2026-01-17 08:51:29,4,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-    RUST: "M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\shallow","shallow","M:\Raspberry Pi\2020-01-18\root\go\pkg\mod\cache\vcs\b9a4b9bbdb4a59723f2348415ad7ffda91568455a1cfd92e97976132bdfbaf57\",41,0,2019-06-19 02:27:06,2019-06-19 02:27:06,2019-06-19 02:27:06,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 63:
-    C++:  "M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\","","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\",13026,24576,2018-11-13 06:53:26,2018-11-13 06:53:26,2026-01-17 08:51:29,9,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-    RUST: "M:\Raspberry Pi\Backup 01-13-2019\etc\.pihole\.git\shallow","shallow","M:\Raspberry Pi\Backup 01-13-2019\etc\.pihole\.git\",41,0,2019-01-09 21:15:10,2019-01-09 21:15:10,2019-01-09 21:15:10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 64:
-    C++:  "M:\Raspberry Pi\Backup 01-13-2019\var\www\html\admin\.git\shallow","shallow","M:\Raspberry Pi\Backup 01-13-2019\var\www\html\admin\.git\",41,0,2019-01-09 21:15:11,2019-01-09 21:15:11,2019-01-09 21:15:11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\","","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\",4213,8192,2018-11-13 06:53:26,2018-11-13 06:53:26,2026-01-17 08:51:29,4,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-  Line 65:
-    C++:  "M:\Raspberry Pi\Backup 05-08-2019\etc\.pihole\.git\shallow","shallow","M:\Raspberry Pi\Backup 05-08-2019\etc\.pihole\.git\",41,0,2019-01-09 21:15:10,2019-01-09 21:15:10,2019-01-09 21:15:10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\LICENSE","LICENSE","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\",1088,4096,2015-03-02 13:03:21,2015-03-02 13:03:21,2018-11-13 07:22:48,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 66:
-    C++:  "M:\Raspberry Pi\Backup 05-08-2019\var\www\html\admin\.git\shallow","shallow","M:\Raspberry Pi\Backup 05-08-2019\var\www\html\admin\.git\",41,0,2019-01-09 21:15:11,2019-01-09 21:15:11,2019-01-09 21:15:11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\index.js","index.js","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\",576,0,2015-06-29 00:55:32,2015-06-29 00:55:32,2018-11-13 07:22:48,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 67:
-    C++:  "M:\Raspberry Pi\Pi-hole\.git\shallow","shallow","M:\Raspberry Pi\Pi-hole\.git\",41,0,2019-05-26 18:07:08,2019-05-26 18:07:08,2019-05-26 18:07:08,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-    RUST: "M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\package.json","package.json","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\extend-shallow\",2189,4096,2018-09-17 12:18:37,2018-09-17 12:18:37,2018-11-13 07:22:48,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 68:
-    C++:  "M:\iTunes\iTunes Media\Music\Alexandre Desplat\Harry Potter And The Deathly Hallows, Pa\","","M:\iTunes\iTunes Media\Music\Alexandre Desplat\Harry Potter And The Deathly Hallows, Pa\",2868987,2871296,2014-01-26 16:14:21,2014-01-26 16:14:21,2026-01-17 08:55:26,2,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-    RUST: "M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\","","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\",5640,12288,2018-11-13 06:53:26,2018-11-13 06:53:26,2026-01-17 08:51:29,4,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
-  Line 69:
-    C++:  "M:\iTunes\iTunes Media\Music\Slayer\Soundtrack To The Apocalypse\13 Hallowed Point.m4a","13 Hallowed Point.m4a","M:\iTunes\iTunes Media\Music\Slayer\Soundtrack To The Apocalypse\",7832530,7835648,2014-01-27 03:16:45,2014-01-27 03:17:02,2014-01-27 03:16:56,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-    RUST: "M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\LICENSE","LICENSE","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\",1088,4096,1985-10-26 01:15:00,1985-10-26 01:15:00,2018-11-13 07:22:49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 70:
-    C++:  "M:\iTunes\iTunes Media\Music\Various Artists\Romance - Music For Piano\12 Over Shallow Water.mp3","12 Over Shallow Water.mp3","M:\iTunes\iTunes Media\Music\Various Artists\Romance - Music For Piano\",8188363,8192000,2014-01-27 02:16:18,2014-01-27 02:16:24,2014-01-27 02:16:18,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
-    RUST: "M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\index.js","index.js","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\",1806,4096,1985-10-26 01:15:00,1985-10-26 01:15:00,2018-11-13 07:22:49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 71:
     C++:  "Path","Name","Path Only","Size","Size on Disk","Created","Last Written","Last Accessed","Descendants","Read-only","Archive","System","Hidden","Offline","Not content indexed file","No scrub file","Integrity","Pinned","Unpinned","Directory Flag","Compressed","Encrypted","Sparse","Reparse","Attributes"
-    RUST: "M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\package.json","package.json","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\prompt-choices\node_modules\shallow-clone\",2386,4096,2018-09-17 12:18:33,2018-09-17 12:18:33,2018-11-13 07:22:49,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-  Line 72:
-    C++:  Drives?       1       M:
-    RUST: "M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\","","M:\Raspberry Pi\Backup 01-13-2019\usr\lib\node_modules\node-red-node-serialport\node_modules\shallow-clone\",13026,24576,2018-11-13 06:53:26,2018-11-13 06:53:26,2026-01-17 08:51:29,9,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,16
+    RUST: "C:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-standard\theme-dark\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","C:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-standard\theme-dark\",459,65536,2024-04-01 00:22:53,2024-04-01 00:22:53,2026-03-10 19:50:51,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+  Line 59:
+    C++:  Drives?       1       C:
+    RUST: "C:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-standard\theme-light\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","C:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-standard\theme-light\",614,65536,2024-04-01 00:22:54,2024-04-01 00:22:54,2026-03-10 19:50:50,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
 
-  Diff report: C:\Users\rnio\GitHub\UltraFastFileSearch\diff_m_1774306371.txt
-  Sorted C++:  C:\Users\rnio\GitHub\UltraFastFileSearch\cpp_m_1774306371_sorted.txt
-  Sorted Rust: C:\Users\rnio\GitHub\UltraFastFileSearch\rust_m_1774306371_sorted.txt
+  Diff report: C:\Users\rnio\GitHub\UltraFastFileSearch\diff_c_1774308527.txt
+  Sorted C++:  C:\Users\rnio\GitHub\UltraFastFileSearch\cpp_c_1774308527_sorted.txt
+  Sorted Rust: C:\Users\rnio\GitHub\UltraFastFileSearch\rust_c_1774308527_sorted.txt
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  [2/6] DRIVE D — Live MFT Scan
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  [1/4] Running C++ scan... ✅ (22.11s)
+  [2/4] Running Rust scan... ✅ (22.81s)
+  [3/4] Sorting outputs... ✅ (2ms)
+       C++ lines : 216
+       Rust lines: 216
+
+  [4/4] Computing SHA256... ✅
+
+  ╔═══════════════════════════════════════════════════════════╗
+  ║  ✅ PARITY: SORTED MATCH — Content identical              ║
+  ║     (traversal order differs, but all lines match)        ║
+  ╚═══════════════════════════════════════════════════════════╝
+       Sorted SHA256: 2a564ae511257225...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  [3/6] DRIVE E — Live MFT Scan
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  [1/4] Running C++ scan... ✅ (38.74s)
+  [2/4] Running Rust scan... ✅ (36.98s)
+  [3/4] Sorting outputs... ✅ (1ms)
+       C++ lines : 87
+       Rust lines: 87
+
+  [4/4] Computing SHA256... ✅
+
+  ╔═══════════════════════════════════════════════════════════╗
+  ║  ✅ PARITY: SORTED MATCH — Content identical              ║
+  ║     (traversal order differs, but all lines match)        ║
+  ╚═══════════════════════════════════════════════════════════╝
+       Sorted SHA256: e140af4429c09828...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  [4/6] DRIVE F — Live MFT Scan
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  [1/4] Running C++ scan... ✅ (1.97s)
+  [2/4] Running Rust scan... ✅ (2.43s)
+  [3/4] Sorting outputs... ✅ (1ms)
+       C++ lines : 58
+       Rust lines: 80
+
+  [4/4] Computing SHA256... ✅
+
+  ╔═══════════════════════════════════════════════════════════╗
+  ║  ❌ PARITY: MISMATCH — Outputs differ                     ║
+  ╚═══════════════════════════════════════════════════════════╝
+
+  Hashes:
+       C++ ordered SHA256 : cdc433759d96a5a6...
+       Rust ordered SHA256: b3843929ac676111...
+       C++ sorted SHA256  : 9b39dcaf7e5f3bc0...
+       Rust sorted SHA256 : f18ff5b9189fa127...
+
+  Line count: 58 (C++) vs 80 (Rust)
+
+=== SORTED SIDE-BY-SIDE COMPARISON (differences only) ===
+  C++ lines:   58
+  Rust lines:  80
+  Lines that differ: 9
+
+--- FIRST 9 DIFFERENCES ---
+  Line 50:
+    C++:  "F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.3672_none_3117fcb10f6219ce\n\FileExp\FileExplorerExtensions\Assets\images\contrast-black\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.3672_none_3117fcb10f6219ce\n\FileExp\FileExplorerExtensions\Assets\images\contrast-black\",374,65536,2023-07-26 11:24:20,2023-07-19 21:13:59,2024-03-02 11:46:04,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+    RUST: "F:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-black\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","F:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-black\",611,65536,2023-07-26 11:27:49,2023-07-26 11:27:49,2025-03-20 21:59:01,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+  Line 51:
+    C++:  "F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.5124_none_3148e1170f3e3cf6\n\FileExp\FileExplorerExtensions\Assets\images\contrast-standard\theme-dark\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.5124_none_3148e1170f3e3cf6\n\FileExp\FileExplorerExtensions\Assets\images\contrast-standard\theme-dark\",315,65536,2023-07-26 11:24:21,2023-07-19 21:14:02,2024-03-02 11:46:05,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+    RUST: "F:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-standard\theme-dark\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","F:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-standard\theme-dark\",459,65536,2023-07-26 11:27:49,2023-07-26 11:27:49,2025-03-20 21:59:01,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+  Line 52:
+    C++:  "F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.5124_none_3148e1170f3e3cf6\n\FileExp\FileExplorerExtensions\Assets\images\contrast-standard\theme-light\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.5124_none_3148e1170f3e3cf6\n\FileExp\FileExplorerExtensions\Assets\images\contrast-standard\theme-light\",377,65536,2023-07-26 11:24:21,2023-07-19 21:14:01,2024-03-02 11:46:05,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+    RUST: "F:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-standard\theme-light\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","F:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-standard\theme-light\",614,65536,2023-07-26 11:27:50,2023-07-26 11:27:50,2025-03-20 21:59:00,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+  Line 53:
+    C++:  "F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.5124_none_3148e1170f3e3cf6\n\FileExp\FileExplorerExtensions\Assets\images\contrast-white\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.5124_none_3148e1170f3e3cf6\n\FileExp\FileExplorerExtensions\Assets\images\contrast-white\",374,65536,2023-07-26 11:24:21,2023-07-19 21:13:37,2024-03-02 11:46:05,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+    RUST: "F:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-white\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","F:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-white\",611,65536,2023-07-26 11:27:51,2023-07-26 11:27:51,2025-03-20 21:59:00,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+  Line 54:
+    C++:  "F:\uffs\boost_1_73_0\boost\statechart\shallow_history.hpp","shallow_history.hpp","F:\uffs\boost_1_73_0\boost\statechart\",2148,65536,2023-03-24 23:40:08,2020-04-22 06:36:16,2023-03-24 23:40:08,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+    RUST: "F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.3672_none_3117fcb10f6219ce\FileExp\FileExplorerExtensions\Assets\images\contrast-black\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.3672_none_3117fcb10f6219ce\FileExp\FileExplorerExtensions\Assets\images\contrast-black\",611,65536,2023-07-26 11:27:49,2023-07-26 11:27:49,2025-03-20 21:59:01,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+  Line 55:
+    C++:  "Path","Name","Path Only","Size","Size on Disk","Created","Last Written","Last Accessed","Descendants","Read-only","Archive","System","Hidden","Offline","Not content indexed file","No scrub file","Integrity","Pinned","Unpinned","Directory Flag","Compressed","Encrypted","Sparse","Reparse","Attributes"
+    RUST: "F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.3672_none_3117fcb10f6219ce\FileExp\FileExplorerExtensions\Assets\images\contrast-standard\theme-dark\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.3672_none_3117fcb10f6219ce\FileExp\FileExplorerExtensions\Assets\images\contrast-standard\theme-dark\",459,65536,2023-07-26 11:27:49,2023-07-26 11:27:49,2025-03-20 21:59:01,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+  Line 56:
+    C++:  Drives?       1       F:
+    RUST: "F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.3672_none_3117fcb10f6219ce\FileExp\FileExplorerExtensions\Assets\images\contrast-standard\theme-light\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.3672_none_3117fcb10f6219ce\FileExp\FileExplorerExtensions\Assets\images\contrast-standard\theme-light\",614,65536,2023-07-26 11:27:50,2023-07-26 11:27:50,2025-03-20 21:59:00,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+  Line 57:
+    C++:  MMMmmm that was FAST ... maybe your searchstring was wrong?   hallo
+    RUST: "F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.3672_none_3117fcb10f6219ce\FileExp\FileExplorerExtensions\Assets\images\contrast-white\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.3672_none_3117fcb10f6219ce\FileExp\FileExplorerExtensions\Assets\images\contrast-white\",611,65536,2023-07-26 11:27:51,2023-07-26 11:27:51,2025-03-20 21:59:00,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+  Line 58:
+    C++:  Search path. E.g. 'C:/' or 'C:\Prog**'
+    RUST: "F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.3672_none_3117fcb10f6219ce\n\FileExp\FileExplorerExtensions\Assets\images\contrast-black\windows.searchoptionshallow.svg","windows.searchoptionshallow.svg","F:\Windows\WinSxS\amd64_userexperience-fileexp_31bf3856ad364e35_10.0.22621.3672_none_3117fcb10f6219ce\n\FileExp\FileExplorerExtensions\Assets\images\contrast-black\",374,65536,2023-07-26 11:24:20,2023-07-19 21:13:59,2024-03-02 11:46:04,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,32
+
+  Diff report: C:\Users\rnio\GitHub\UltraFastFileSearch\diff_f_1774308527.txt
+  Sorted C++:  C:\Users\rnio\GitHub\UltraFastFileSearch\cpp_f_1774308527_sorted.txt
+  Sorted Rust: C:\Users\rnio\GitHub\UltraFastFileSearch\rust_f_1774308527_sorted.txt
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  [5/6] DRIVE M — Live MFT Scan
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  [1/4] Running C++ scan... ✅ (19.67s)
+  [2/4] Running Rust scan... ✅ (24.07s)
+  [3/4] Sorting outputs... ✅ (1ms)
+       C++ lines : 72
+       Rust lines: 72
+
+  [4/4] Computing SHA256... ✅
+
+  ╔═══════════════════════════════════════════════════════════╗
+  ║  ✅ PARITY: SORTED MATCH — Content identical              ║
+  ║     (traversal order differs, but all lines match)        ║
+  ╚═══════════════════════════════════════════════════════════╝
+       Sorted SHA256: 27b32093d0db4c51...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  [6/6] DRIVE S — Live MFT Scan
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  [1/4] Running C++ scan... ✅ (41.22s)
+  [2/4] Running Rust scan... ✅ (1m 1.9s)
+  [3/4] Sorting outputs... ✅ (2ms)
+       C++ lines : 232
+       Rust lines: 232
+
+  [4/4] Computing SHA256... ✅
+
+  ╔═══════════════════════════════════════════════════════════╗
+  ║  ✅ PARITY: SORTED MATCH — Content identical              ║
+  ║     (traversal order differs, but all lines match)        ║
+  ╚═══════════════════════════════════════════════════════════╝
+       Sorted SHA256: 245303bc14f60792...
 
 
 ╔══════════════════════════════════════════════════════════════════╗
 ║                         SUMMARY                                  ║
 ╚══════════════════════════════════════════════════════════════════╝
 
-  ❌ Drive M: MISMATCH (72 / 90 lines)
+  ❌ Drive C: MISMATCH (59 / 75 lines)
+  ✅ Drive D: SORTED MATCH (216 / 216 lines)
+  ✅ Drive E: SORTED MATCH (87 / 87 lines)
+  ❌ Drive F: MISMATCH (58 / 80 lines)
+  ✅ Drive M: SORTED MATCH (72 / 72 lines)
+  ✅ Drive S: SORTED MATCH (232 / 232 lines)
 
-  Total drives:    1
-  Tested:          1
+  Total drives:    6
+  Tested:          6
   Strict matches:  0
-  Sorted matches:  0
-  Mismatches:      1
+  Sorted matches:  4
+  Mismatches:      2
 
-  ⚠️  1 drive(s) had mismatches
+  ⚠️  2 drive(s) had mismatches
 
 ╔══════════════════════════════════════════════════════════════════════════════════════╗
 ║                           SCAN PERFORMANCE COMPARISON                                ║
 ╠═══════════╦══════════════════╦══════════════════╦═════════════╦═════════════════════╣
 ║   Drive   ║   C++ Time       ║   Rust Time      ║  Speedup    ║   Files/sec (Rust)  ║
 ╠═══════════╬══════════════════╬══════════════════╬═════════════╬═════════════════════╣
-║     M     ║           19.67s ║           24.18s ║ 1.23x slower ║                 4/s ║
+║     C     ║            3.97s ║            4.24s ║ 1.07x slower ║                18/s ║
+║     D     ║           22.11s ║           22.81s ║ 1.03x slower ║                 9/s ║
+║     E     ║           38.74s ║           36.98s ║ 1.05x faster ║                 2/s ║
+║     F     ║            1.97s ║            2.43s ║ 1.23x slower ║                33/s ║
+║     M     ║           19.67s ║           24.07s ║ 1.22x slower ║                 3/s ║
+║     S     ║           41.22s ║          1m 1.9s ║ 1.50x slower ║                 4/s ║
+╠═══════════╬══════════════════╬══════════════════╬═════════════╬═════════════════════╣
+║   TOTAL   ║          2m 7.7s ║         2m 32.5s ║ 1.19x slower ║                 5/s ║
 ╚═══════════╩══════════════════╩══════════════════╩═════════════╩═════════════════════╝
 
 (production) ~\GitHub\UltraFastFileSearch on main>

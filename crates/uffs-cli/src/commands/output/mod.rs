@@ -437,7 +437,13 @@ fn write_cpp_drive_footer<W: Write + ?Sized>(
     // Only show the "too few results" warning for full-scan patterns (* or empty).
     // Filtered/regex/glob queries naturally return few results — that's not an
     // error.
-    let is_full_scan = matches!(ctx.pattern, "" | "*" | "**" | "**/*");
+    // Also recognize cpp-transformed full-scan patterns like ">G:.*" or
+    // ">C:.*|D:.*" which are the regex equivalents of "*".
+    let is_full_scan = matches!(ctx.pattern, "" | "*" | "**" | "**/*")
+        || ctx.pattern.strip_prefix('>').is_some_and(|rest| {
+            rest.split('|')
+                .all(|seg| seg.ends_with(".*") && seg.len() <= 4)
+        });
     if ctx.row_count < 20_000 && is_full_scan {
         write!(
             writer,
