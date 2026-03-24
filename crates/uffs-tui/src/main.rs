@@ -94,6 +94,10 @@ struct Cli {
     /// Drive letter(s) to override auto-detection from filenames.
     #[arg(long, value_delimiter = ',')]
     drive: Vec<char>,
+
+    /// Bypass cache and read MFT fresh (default: use cache + USN updates)
+    #[arg(long)]
+    no_cache: bool,
 }
 
 /// Initialize logging with terminal + file support.
@@ -246,6 +250,7 @@ fn main() -> Result<()> {
     let mut app = App::new();
 
     let total_to_load = mft_files.len() + live_drives.len();
+    let cli_no_cache = cli.no_cache;
 
     if total_to_load > 0 {
         app.status = format!("Loading {total_to_load} drive(s)...");
@@ -277,19 +282,20 @@ fn main() -> Result<()> {
                                 .and_then(|name| name.to_str())
                                 .unwrap_or("?")
                                 .to_owned();
-                            drop(thread_sender.send((file_name, result)));
+                            drop(thread_sender.send((file_name, result.map(|(di, t)| (di, t)))));
                         })
                     })
                     .collect();
 
                 // Spawn threads for live NTFS drives
                 // (live_drives is always empty on non-Windows)
+                let no_cache_flag = cli_no_cache;
                 for drive_letter in live_drives {
                     let thread_sender = sender.clone();
                     handles.push(scope.spawn(move || {
                         let label = format!("LIVE {drive_letter}:");
-                        let result = load_live_drive_impl(drive_letter);
-                        drop(thread_sender.send((label, result)));
+                        let result = load_live_drive_impl(drive_letter, no_cache_flag);
+                        drop(thread_sender.send((label, result.map(|(di, t)| (di, t)))));
                     }));
                 }
 
@@ -305,29 +311,29 @@ fn main() -> Result<()> {
 
         while loaded_count < total_to_load {
             // Render current state
-            terminal.draw(|frame| ui(frame, &app))?;
+            terminal.draw(|frame| ui(frame, &mut app))?;
 
             // Check for loaded drives (non-blocking)
             while let Ok((file_name, result)) = receiver.try_recv() {
                 loaded_count += 1;
                 match result {
-                    Ok(drive_index) => {
+                    Ok((drive_index, timing)) => {
+                        let fc = |n: usize| uffs_mft::format_number_commas(n as u64);
                         let msg = format!(
-                            "✅ Drive {}: {} records, {} paths, {} trigrams ({})",
+                            "✅ {}:  {:>10} rec  │  mft:{:>7}  paths:{:>7}  tri:{:>7}  │  {:>6} trigrams  ({})",
                             drive_index.letter,
-                            drive_index.index.records.len(),
-                            drive_index
-                                .paths_lower
-                                .iter()
-                                .filter(|path| !path.is_empty())
-                                .count(),
-                            drive_index.trigram.posting_count(),
+                            fc(drive_index.index.records.len()),
+                            format_ms_compact(timing.mft_ms),
+                            format_ms_compact(timing.path_ms),
+                            format_ms_compact(timing.tri_ms),
+                            fc(drive_index.trigram.posting_count()),
                             file_name,
                         );
+                        let dl = drive_index.letter;
                         app.backend.drives.push(drive_index);
-                        // Show progress as search results
+                        // Show progress as search results (path empty = loading msg)
                         app.results.push(backend::DisplayRow {
-                            drive: ' ',
+                            drive: dl,
                             path: String::new(),
                             name: msg,
                             size: 0,
@@ -337,7 +343,7 @@ fn main() -> Result<()> {
                     }
                     Err(err) => {
                         app.results.push(backend::DisplayRow {
-                            drive: ' ',
+                            drive: '!',
                             path: String::new(),
                             name: format!("❌ {file_name}: {err}"),
                             size: 0,
@@ -347,9 +353,9 @@ fn main() -> Result<()> {
                     }
                 }
                 app.status = format!(
-                    "Loading... {loaded_count}/{total_to_load} drives ({} records, {:.1}s)",
-                    app.backend.total_records(),
-                    load_start.elapsed().as_secs_f64()
+                    "Loading... {loaded_count}/{total_to_load} drives ({} records, {})",
+                    uffs_mft::format_number_commas(app.backend.total_records() as u64),
+                    uffs_mft::format_duration(load_start.elapsed()),
                 );
             }
 
@@ -363,16 +369,20 @@ fn main() -> Result<()> {
                             terminal.show_cursor()?;
                             return Ok(());
                         }
-                        #[expect(
-                            clippy::wildcard_enum_match_arm,
-                            reason = "only handling text input during loading; other keys are ignored"
-                        )]
-                        match key.code {
-                            KeyCode::Char(ch) => app.input.push(ch),
-                            KeyCode::Backspace => {
-                                app.input.pop();
+                        // Windows/Linux keybindings during loading
+                        if key.modifiers.contains(KeyModifiers::CONTROL) {
+                            match key.code {
+                                KeyCode::Char('u') => {
+                                    app.textarea.select_all();
+                                    app.textarea.cut();
+                                }
+                                KeyCode::Char('z') => { app.textarea.undo(); }
+                                KeyCode::Char('y') => { app.textarea.redo(); }
+                                KeyCode::Char('a') => { app.textarea.select_all(); }
+                                _ => { app.textarea.input(key); }
                             }
-                            _ => {}
+                        } else {
+                            app.textarea.input(key);
                         }
                     }
                 }
@@ -383,14 +393,14 @@ fn main() -> Result<()> {
         app.results.clear();
         let elapsed = load_start.elapsed();
         app.status = format!(
-            "Loaded {} drive(s), {} records in {:.1}s — type to search",
+            "Loaded {} drive(s), {} records in {} — type to search",
             app.backend.drives.len(),
-            app.backend.total_records(),
-            elapsed.as_secs_f64()
+            uffs_mft::format_number_commas(app.backend.total_records() as u64),
+            uffs_mft::format_duration(elapsed),
         );
 
         // If user typed a pattern during loading, search immediately
-        if !app.input.is_empty() {
+        if !app.input_text().is_empty() {
             app.search();
         }
     }
@@ -436,7 +446,7 @@ where
 
     loop {
         // 1. Always render first — input box is always up-to-date
-        terminal.draw(|frame| ui(frame, app))?;
+        terminal.draw(|frame| ui(frame, &mut *app))?;
 
         // 2. If search is pending, drain ALL buffered keystrokes first so the input box
         //    stays responsive even if search is slow.
@@ -449,22 +459,18 @@ where
                             return Ok(());
                         }
                         match key.code {
-                            KeyCode::Char(ch) => app.input.push(ch),
-                            KeyCode::Backspace => {
-                                app.input.pop();
-                            }
                             KeyCode::Down => app.next(),
                             KeyCode::Up => app.previous(),
                             KeyCode::Tab => app.cycle_sort(),
                             KeyCode::BackTab => app.toggle_sort_direction(),
-                            _ => {}
+                            _ => { app.textarea.input(key); }
                         }
                     }
                 }
             }
 
             // Re-render with ALL accumulated input BEFORE searching
-            terminal.draw(|frame| ui(frame, app))?;
+            terminal.draw(|frame| ui(frame, &mut *app))?;
 
             // Now search (blocks, but user already sees their typed text)
             app.search();
@@ -472,35 +478,76 @@ where
             continue;
         }
 
-        // 3. Wait for next keystroke (with debounce timeout)
+        // 3. Wait for next event (with debounce timeout)
         if event::poll(core::time::Duration::from_millis(200))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    if is_exit_key(key) {
+            let ev = event::read()?;
+            match &ev {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    if is_exit_key(*key) {
                         return Ok(());
                     }
 
+                    // Intercept our custom action keys BEFORE textarea
                     match key.code {
-                        KeyCode::Char(ch) => {
-                            app.input.push(ch);
-                            needs_search = true;
+                        KeyCode::Down => { app.next(); continue; }
+                        KeyCode::Up => { app.previous(); continue; }
+                        KeyCode::PageDown => { app.page_down(); continue; }
+                        KeyCode::PageUp => { app.page_up(); continue; }
+                        KeyCode::Enter => {
+                            // Show selected path in status bar
+                            if let Some(path) = app.selected_path() {
+                                app.status = format!("📋 {path}");
+                            }
+                            continue;
                         }
-                        KeyCode::Backspace => {
-                            app.input.pop();
-                            needs_search = true;
-                        }
-                        KeyCode::Down => app.next(),
-                        KeyCode::Up => app.previous(),
-                        KeyCode::Enter => app.search(),
-                        KeyCode::Tab => app.cycle_sort(),
-                        KeyCode::BackTab => app.toggle_sort_direction(),
+                        KeyCode::Tab => { app.cycle_sort(); continue; }
+                        KeyCode::BackTab => { app.toggle_sort_direction(); continue; }
                         KeyCode::F(2) => {
                             app.toggle_name_only();
                             needs_search = true;
+                            continue;
+                        }
+                        // Ctrl+R: refresh (Wave 3 — full USN + trigram rebuild)
+                        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.status = "🔄 Refresh: planned for Wave 3 (USN + incremental trigram update)".to_owned();
+                            continue;
+                        }
+                        // Ctrl+U: clear line (unix-style)
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.textarea.select_all();
+                            app.textarea.cut();
+                            app.search();
+                            continue;
+                        }
+                        // Ctrl+Z: undo (Windows/Linux convention)
+                        KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.textarea.undo();
+                            needs_search = true;
+                            continue;
+                        }
+                        // Ctrl+Y: redo (Windows/Linux convention)
+                        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.textarea.redo();
+                            needs_search = true;
+                            continue;
+                        }
+                        // Ctrl+A: select all
+                        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.textarea.select_all();
+                            continue;
                         }
                         _ => {}
                     }
                 }
+                _ => {}
+            }
+
+            // Forward ALL other events to textarea (keys, mouse, etc.)
+            let before = app.input_text();
+            app.textarea.input(ev);
+            let after = app.input_text();
+            if before != after {
+                needs_search = true;
             }
         } else if needs_search {
             // Debounce expired — no more typing, run search
@@ -513,9 +560,8 @@ where
 /// Returns whether the given key event should terminate the TUI.
 #[must_use]
 const fn is_exit_key(key: KeyEvent) -> bool {
-    matches!(key.code, KeyCode::Esc | KeyCode::Char('q'))
-        || (key.modifiers.contains(KeyModifiers::CONTROL)
-            && matches!(key.code, KeyCode::Char('c' | 'C')))
+    // Ctrl+Q exits — Esc and regular keys go to the textarea
+    key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('q'))
 }
 
 /// Render the TUI layout: search bar, status, results list, and help bar.
@@ -535,7 +581,7 @@ const fn is_exit_key(key: KeyEvent) -> bool {
     clippy::too_many_lines,
     reason = "UI rendering is a single cohesive function; splitting would fragment layout logic"
 )]
-fn ui(frame: &mut Frame, app: &App) {
+fn ui(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
@@ -547,27 +593,52 @@ fn ui(frame: &mut Frame, app: &App) {
         ])
         .split(frame.area());
 
-    // Search input with drive indicators
-    let drive_info = app
+    // Build drive color map (dynamic palette based on number of drives)
+    let drive_colors = backend::build_drive_colors(&app.backend.drives);
+    let get_drive_color = |letter: char| -> Color {
+        drive_colors
+            .get(&letter)
+            .copied()
+            .unwrap_or(Color::White)
+    };
+
+    // Search input with drive indicators (sorted, comma-formatted count)
+    let mut drive_letters: Vec<char> = app
         .backend
         .drive_summary()
         .iter()
-        .map(|(letter, _count)| letter.to_string())
-        .collect::<Vec<_>>()
-        .join(" ");
+        .map(|(letter, _count)| *letter)
+        .collect();
+    drive_letters.sort_unstable();
     let name_only_indicator = if app.name_only { " [NAME]" } else { "" };
-    let input_title = if app.has_data() {
-        format!(
-            " Search [{drive_info}] {}{name_only_indicator} ",
-            app.backend.total_records()
-        )
+    if app.has_data() {
+        // Build colored drive letters for the title
+        let mut title_spans: Vec<Span> = vec![Span::raw(" Search NTFS Drives [")];
+        for (idx, &letter) in drive_letters.iter().enumerate() {
+            if idx > 0 {
+                title_spans.push(Span::raw(" "));
+            }
+            title_spans.push(Span::styled(
+                letter.to_string(),
+                Style::default()
+                    .fg(get_drive_color(letter))
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        title_spans.push(Span::raw(format!(
+            "] {} Files{name_only_indicator} ",
+            uffs_mft::format_number_commas(app.backend.total_records() as u64),
+        )));
+        app.textarea
+            .set_block(Block::default().borders(Borders::ALL).title(Line::from(title_spans)));
     } else {
-        " Search (use --mft-file to load data) ".to_owned()
-    };
-    let input = Paragraph::new(app.input.as_str())
-        .style(Style::default().fg(Color::Yellow))
-        .block(Block::default().borders(Borders::ALL).title(input_title));
-    frame.render_widget(input, chunks[0]);
+        app.textarea.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Search (use --mft-file to load data) "),
+        );
+    }
+    frame.render_widget(&app.textarea, chunks[0]);
 
     // Status/Error bar
     let status_content = if let Some(err) = &app.error {
@@ -585,6 +656,9 @@ fn ui(frame: &mut Frame, app: &App) {
         .block(Block::default().borders(Borders::ALL).title(" Status "));
     frame.render_widget(status_bar, chunks[1]);
 
+    // Update page size from actual results area height (minus 2 for borders)
+    app.page_size = chunks[2].height.saturating_sub(2) as usize;
+
     // Sort indicator for title
     let sort_arrow = if app.sort_desc() { "▼" } else { "▲" };
     let sort_label = match app.sort_column() {
@@ -592,6 +666,9 @@ fn ui(frame: &mut Frame, app: &App) {
         backend::SortColumn::Size => "Size",
         backend::SortColumn::Modified => "Modified",
         backend::SortColumn::Path => "Path",
+        backend::SortColumn::Drive => "Drive",
+        backend::SortColumn::Extension => "Extension",
+        backend::SortColumn::Type => "Type",
     };
 
     // Results list with path and size
@@ -599,32 +676,52 @@ fn ui(frame: &mut Frame, app: &App) {
         .results
         .iter()
         .map(|row| {
-            let icon = if row.is_directory { "📁" } else { "📄" };
-            // Hide size/path for loading progress messages (drive=' ', path empty)
-            if row.drive == ' ' {
-                ListItem::new(Line::from(vec![Span::styled(
+            // Loading progress messages (path empty = loading msg)
+            if row.path.is_empty() {
+                return ListItem::new(Line::from(vec![Span::styled(
                     &row.name,
-                    Style::default().fg(Color::Cyan),
-                )]))
-            } else {
-                let size_str = format_size(row.size);
-                ListItem::new(Line::from(vec![
-                    Span::styled(
-                        format!("{}: ", row.drive),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                    Span::raw(icon),
-                    Span::raw(" "),
-                    Span::styled(&row.name, Style::default().fg(Color::Cyan)),
-                    Span::raw("  "),
-                    Span::styled(size_str, Style::default().fg(Color::Yellow)),
-                    Span::raw("  "),
-                    Span::styled(
-                        truncate_path(&row.path, 60),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]))
+                    Style::default()
+                        .fg(get_drive_color(row.drive))
+                        .add_modifier(Modifier::BOLD),
+                )]));
             }
+
+            // Get file-type icon from devicons (Nerd Font glyphs)
+            let fi = devicons::icon_for_file(&row.name, &None);
+            let icon_str = fi.icon.to_string();
+            let icon_color = devicon_color(fi.color);
+
+            let size_str = format_size(row.size);
+            let search_term = app.input_text().to_lowercase();
+            let mut spans = vec![
+                Span::styled(
+                    format!("{}: ", row.drive),
+                    Style::default()
+                        .fg(get_drive_color(row.drive))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(icon_str, Style::default().fg(icon_color)),
+                Span::raw(" "),
+            ];
+            // Highlight search term in filename
+            spans.extend(highlight_matches(
+                &row.name,
+                &search_term,
+                Style::default().fg(Color::Cyan),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(size_str, Style::default().fg(Color::Yellow)));
+            spans.push(Span::raw("  "));
+            // Highlight search term in path
+            let path_display = truncate_path(&row.path, 60);
+            spans.extend(highlight_matches(
+                &path_display,
+                &search_term,
+                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ));
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
@@ -646,13 +743,17 @@ fn ui(frame: &mut Frame, app: &App) {
     let help = Paragraph::new(Line::from(vec![
         Span::styled("↑↓", Style::default().fg(Color::Green)),
         Span::raw(" Nav  "),
+        Span::styled("PgUp/Dn", Style::default().fg(Color::Green)),
+        Span::raw(" Page  "),
+        Span::styled("Enter", Style::default().fg(Color::Green)),
+        Span::raw(" Path  "),
         Span::styled("Tab", Style::default().fg(Color::Green)),
         Span::raw(" Sort  "),
-        Span::styled("S-Tab", Style::default().fg(Color::Green)),
-        Span::raw(" Dir  "),
         Span::styled("F2", Style::default().fg(Color::Green)),
         Span::raw(" Name-only  "),
-        Span::styled("Esc/q", Style::default().fg(Color::Green)),
+        Span::styled("Ctrl+R", Style::default().fg(Color::Green)),
+        Span::raw(" Refresh  "),
+        Span::styled("Ctrl+Q", Style::default().fg(Color::Green)),
         Span::raw(" Quit"),
     ]))
     .block(Block::default().borders(Borders::ALL).title(" Help "));
@@ -661,8 +762,11 @@ fn ui(frame: &mut Frame, app: &App) {
 
 /// Load a live NTFS drive — platform dispatch.
 #[cfg(windows)]
-fn load_live_drive_impl(drive_letter: char) -> anyhow::Result<backend::DriveIndex> {
-    backend::load_live_drive(drive_letter)
+fn load_live_drive_impl(
+    drive_letter: char,
+    no_cache: bool,
+) -> anyhow::Result<(backend::DriveIndex, backend::LoadTiming)> {
+    backend::load_live_drive(drive_letter, no_cache)
 }
 
 /// Load a live NTFS drive — not available on non-Windows.
@@ -671,7 +775,10 @@ fn load_live_drive_impl(drive_letter: char) -> anyhow::Result<backend::DriveInde
     clippy::single_call_fn,
     reason = "platform-specific stub; Windows version in backend::load_live_drive"
 )]
-fn load_live_drive_impl(drive_letter: char) -> Result<backend::DriveIndex> {
+fn load_live_drive_impl(
+    drive_letter: char,
+    _no_cache: bool,
+) -> Result<(backend::DriveIndex, backend::LoadTiming)> {
     anyhow::bail!("Live drive loading requires Windows (drive {drive_letter}:)")
 }
 
@@ -707,6 +814,71 @@ fn find_best_mft_file(dir: &std::path::Path) -> Option<PathBuf> {
     }
 
     best.map(|(path, _)| path)
+}
+
+/// Split text into spans, highlighting case-insensitive matches of `needle`.
+///
+/// Non-matching parts use `normal_style`, matching parts use `highlight_style`.
+fn highlight_matches(
+    text: &str,
+    needle: &str,
+    normal_style: Style,
+    highlight_style: Style,
+) -> Vec<Span<'static>> {
+    if needle.is_empty() {
+        return vec![Span::styled(text.to_owned(), normal_style)];
+    }
+
+    let lower = text.to_lowercase();
+    let mut spans = Vec::new();
+    let mut last_end = 0;
+
+    for (start, _) in lower.match_indices(needle) {
+        if start > last_end {
+            spans.push(Span::styled(
+                text[last_end..start].to_owned(),
+                normal_style,
+            ));
+        }
+        spans.push(Span::styled(
+            text[start..start + needle.len()].to_owned(),
+            highlight_style,
+        ));
+        last_end = start + needle.len();
+    }
+
+    if last_end < text.len() {
+        spans.push(Span::styled(text[last_end..].to_owned(), normal_style));
+    }
+
+    if spans.is_empty() {
+        spans.push(Span::styled(text.to_owned(), normal_style));
+    }
+
+    spans
+}
+
+/// Convert a devicons hex color string (e.g., `"#e37933"`) to a ratatui `Color`.
+fn devicon_color(hex: &str) -> Color {
+    if hex.len() == 7 && hex.starts_with('#') {
+        if let (Ok(r), Ok(g), Ok(b)) = (
+            u8::from_str_radix(&hex[1..3], 16),
+            u8::from_str_radix(&hex[3..5], 16),
+            u8::from_str_radix(&hex[5..7], 16),
+        ) {
+            return Color::Rgb(r, g, b);
+        }
+    }
+    Color::White
+}
+
+/// Format milliseconds compactly: `23 ms`, `535 ms`, `1.1  s`, `19.6  s`.
+fn format_ms_compact(ms: u128) -> String {
+    if ms < 1000 {
+        format!("{ms} ms")
+    } else {
+        format!("{:.1}  s", ms as f64 / 1000.0)
+    }
 }
 
 /// Truncate a path string for display, keeping the end visible.
@@ -759,23 +931,26 @@ mod tests {
     use super::is_exit_key;
 
     #[test]
-    fn test_is_exit_key_accepts_quit_shortcuts() {
-        assert!(is_exit_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+    fn test_is_exit_key_accepts_ctrl_q() {
         assert!(is_exit_key(KeyEvent::new(
             KeyCode::Char('q'),
-            KeyModifiers::NONE,
-        )));
-        assert!(is_exit_key(KeyEvent::new(
-            KeyCode::Char('c'),
             KeyModifiers::CONTROL,
         )));
     }
 
     #[test]
     fn test_is_exit_key_rejects_regular_input() {
+        // Plain 'q' types the letter, doesn't exit
+        assert!(!is_exit_key(KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+        )));
+        // Esc goes to textarea, doesn't exit
+        assert!(!is_exit_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        // Ctrl+C goes to textarea, doesn't exit
         assert!(!is_exit_key(KeyEvent::new(
             KeyCode::Char('c'),
-            KeyModifiers::NONE,
+            KeyModifiers::CONTROL,
         )));
         assert!(!is_exit_key(KeyEvent::new(
             KeyCode::Enter,

@@ -186,3 +186,59 @@ pub use usn::{
     ChangeType, FileChange, UsnJournalInfo, UsnRecord, aggregate_changes, query_usn_journal,
     read_usn_journal, reason,
 };
+
+// ============================================================================
+// Shared utility functions
+// ============================================================================
+
+/// Formats a number with comma separators for readability.
+///
+/// Examples: `1234567` → `"1,234,567"`, `1000` → `"1,000"`
+#[must_use]
+pub fn format_number_commas(num: u64) -> String {
+    let num_str = num.to_string();
+    let mut result = String::with_capacity(num_str.len() + num_str.len() / 3);
+    for (idx, ch) in num_str.chars().rev().enumerate() {
+        if idx > 0 && idx % 3 == 0 {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+    result.chars().rev().collect()
+}
+
+/// Formats a duration intelligently based on magnitude.
+///
+/// - Days+: `2d 3h 5m 10s`
+/// - Hours+: `3h 5m 10s`
+/// - Minutes+: `5 m 10 s`
+/// - Seconds+: `10 s 500 ms`
+/// - Milliseconds+: `500 ms 250 μs`
+/// - Sub-ms: `250 μs 100 ns`
+#[must_use]
+pub fn format_duration(duration: core::time::Duration) -> String {
+    let total_seconds = duration.as_secs();
+    let seconds = total_seconds % 60;
+    let minutes = (total_seconds / 60) % 60;
+    let hours = (total_seconds / 3600) % 24;
+    let days = total_seconds / 86400;
+    let milliseconds = duration.subsec_millis();
+    let microseconds = duration.subsec_micros() % 1_000;
+    let nanoseconds = duration.subsec_nanos() % 1_000;
+
+    if days > 0 {
+        format!("{days:>2}d {hours:>2}h {minutes:>2}m {seconds:>2}s")
+    } else if hours > 0 {
+        format!("{hours:>2}h {minutes:>2}m {seconds:>2}s")
+    } else if minutes > 0 {
+        format!("{minutes:>3} m  {seconds:>3} s ")
+    } else if seconds > 0 {
+        format!("{seconds:>3} s  {milliseconds:>3} ms")
+    } else if milliseconds > 0 {
+        format!("{milliseconds:>3} ms {microseconds:>3} μs")
+    } else if microseconds > 0 {
+        format!("{microseconds:>3} μs {nanoseconds:>3} ns")
+    } else {
+        format!("{nanoseconds:>3} ns")
+    }
+}

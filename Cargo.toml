@@ -93,6 +93,8 @@ indicatif = "0.18.4"
 # ───── TUI ─────
 ratatui = "0.30.0"
 crossterm = "0.29.0"
+ratatui-textarea = { version = "0.8.0", features = ["crossterm", "search"] }
+devicons = "0.6.12"
 
 # ───── Error Handling ─────
 thiserror = "2.0.18"
@@ -110,7 +112,7 @@ dirs-next = "2.0.0"
 
 # ───── Testing & Benchmarking ─────
 criterion = "0.8.2"
-proptest = "1.10.0"
+proptest = "1.11.0"
 
 # ───── Memory Allocator ─────
 # mimalloc reduces fragmentation and improves allocation performance for large datasets

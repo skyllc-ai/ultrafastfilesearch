@@ -358,41 +358,193 @@ crates/uffs-tui/
 
 ---
 
+## Findings & Performance Analysis (2026-03-24)
+
+### Search Performance: Trigram Index
+
+Linear scan of 25M records took **2800ms** — unusable for interactive search.
+Trigram inverted index reduced this to **<10ms** — a **280× speedup**.
+
+| Pattern Length | Before (linear) | After (trigram) | Speedup |
+|---------------|-----------------|-----------------|---------|
+| 1-2 chars | 5-14ms (hits limit fast) | 5-14ms (unchanged) | — |
+| 3 chars | 150ms | <10ms | 15× |
+| 4 chars | 890ms | <10ms | 89× |
+| 5+ chars | 2800ms | <10ms | 280× |
+
+### Loading Performance Breakdown (Windows, 7 drives, 23M records)
+
+First run (cold, no cache):
+
+| Phase | Time | Notes |
+|-------|------|-------|
+| MFT read (NVMe) | 2-4s per drive | IOCP sliding window |
+| MFT read (HDD) | 20-60s per drive | Dominated by disk I/O wait |
+| Tree metrics | 0.3-0.6s per drive | Parent chain computation |
+| Cache save | 0.5-1s per drive | Serialize to `.uffs` file |
+| **Path resolution** | **8-15s per drive** | **Main bottleneck** — walks parent chain for every record |
+| Trigram build | 1-3s per drive | Extract trigrams from all paths |
+| **Total (cold)** | **~70s** | Parallel across drives, limited by slowest HDD |
+
+Second run (cached, USN):
+
+| Phase | Time | Notes |
+|-------|------|-------|
+| Cache load | 0.5-2s per drive | Deserialize `.uffs` file |
+| USN apply | <50ms | 18 changes applied |
+| **Path resolution** | **8-15s per drive** | **Still the bottleneck** — must resolve ALL paths |
+| Trigram build | 1-3s per drive | Must rebuild full trigram index |
+| **Total (cached)** | **~40s** | HDD I/O eliminated, but path+trigram still slow |
+
+**Key insight**: Path resolution + trigram build dominate the second run.
+This is the target for Wave 3 incremental refresh optimization.
+
+### USN Journal Findings
+
+The `MftReader::read_index_cached()` API correctly:
+1. Detects fresh cache (within 10 min TTL)
+2. Queries USN Journal for changes since last checkpoint
+3. Aggregates USN records and applies deltas to `MftIndex`
+4. Saves updated cache with new USN checkpoint
+
+**Known limitation**: `apply_usn_changes` returns `created=0` for newly
+created files in some cases. The USN aggregation (`aggregate_changes`)
+merges CREATE + DATA_EXTEND + CLOSE into a single entry that may be
+classified as "modified" or "skipped" if the FRS was previously
+deleted/reused. This affects both the CLI and TUI.
+
+**Workaround**: Use `--no-cache` to force a full fresh MFT read.
+
+**Root cause investigation needed**: The `aggregate_changes` function
+in `usn.rs` needs to handle the CREATE→MODIFY sequence correctly,
+ensuring new files with reused FRS numbers are classified as "created"
+rather than "skipped" (FRS not in existing index → skip).
+
+---
+
+## Incremental Refresh Design (Wave 3)
+
+### Current: Full Rebuild (slow)
+
+```
+USN applies 18 changes to MftIndex
+  → rebuild ALL 3M paths_lower   (~10s)
+  → rebuild ALL trigrams          (~2s)
+  Total: ~12s for 18 file changes
+```
+
+### Target: Incremental Update (<50ms)
+
+```
+USN applies 18 changes to MftIndex
+  → resolve paths for ONLY 18 changed records  (~1ms)
+  → update paths_lower[frs] for those records   (~0ms)
+  → append new trigrams to posting lists         (~1ms)
+  → mark deleted trigrams as stale               (~0ms)
+  Total: <10ms for 18 file changes
+```
+
+### Implementation
+
+```rust
+fn apply_usn_delta(drive: &mut DriveIndex, changes: &UsnStats) {
+    // For each created/modified record:
+    //   1. Resolve its path (single record, ~50μs)
+    //   2. Remove old trigrams from posting lists (if modified)
+    //   3. Extract new trigrams, append to posting lists
+    //   4. Update paths_lower[frs]
+    
+    // For each deleted record:
+    //   1. Clear paths_lower[frs] = ""
+    //   2. Trigrams become stale — filtered during verification
+    //      (lazy cleanup: posting lists cleaned on next full rebuild)
+}
+```
+
+**Key property**: Trigram posting lists are **append-only** for new files.
+Deletes are handled lazily — stale entries are filtered during the
+verification step (`paths.get(idx).is_some_and(|p| p.contains(needle))`).
+This means deletes have zero cost on the trigram index until a full rebuild.
+
+### Refresh Timer
+
+- Auto-refresh every 60s (configurable, 0 = manual only)
+- Background thread queries USN Journal, applies delta
+- UI shows spinner in status bar during refresh
+- Results update seamlessly — no flicker or reset
+
+---
+
+## Windows Auto-Detect Loading Flow
+
+```
+uffs_tui.exe (no args)
+    ↓
+detect_ntfs_drives() → [C, D, E, F, G, M, S]
+    ↓ (--drive C,D filters to subset)
+For each drive (parallel threads):
+    ↓
+MftReader::open(drive_letter)
+    ↓
+read_index_cached(TTL=600s)
+  ├─ Cache FRESH → load from .uffs + apply USN delta
+  ├─ Cache STALE → full IOCP read + save to .uffs
+  └─ No cache    → full IOCP read + save to .uffs
+    ↓
+build_drive_index(drive_letter, MftIndex)
+  ├─ Resolve ALL paths (parent chain walk) → paths_lower
+  └─ Build TrigramIndex from paths_lower
+    ↓
+DriveIndex ready → send to UI via channel
+```
+
+Same flow as `uffs.exe` — DRY, shared `MftReader` API. The only TUI-
+specific part is `build_drive_index` (paths_lower + trigram).
+
+---
+
 ## Implementation Wave Tracker
 
-### Wave 1: Core Search (MVP)
+### Wave 1: Core Search (MVP) ✅
 
 | Task | Status | Notes |
 |------|--------|-------|
-| CLI args: `--mft-file`, `--drive`, multi-file support | ⏳ | Cross-platform |
-| `MultiDriveIndex`: load MFT files into `Vec<(char, MftIndex)>` | ⏳ | Parallel loading |
-| `SearchBackend` trait + `search()` implementation | ⏳ | Pattern + filters |
-| `DisplayRow` struct + path resolution | ⏳ | Reuse CLI path resolver |
-| Basic ratatui table rendering | ⏳ | Replace current DataFrame-based UI |
-| Search-as-you-type with 50ms debounce | ⏳ | |
-| Result limit (10K default) | ⏳ | Early termination |
-| Status bar: match count + search latency | ⏳ | |
+| CLI args: `--mft-file`, `--drive`, `--data-dir`, positional files | ✅ | Cross-platform |
+| `MultiDriveBackend`: load MFT files with parallel loading | ✅ | `std::thread::scope` + mpsc |
+| Trigram inverted index for <10ms search | ✅ | `HashMap<[u8;3], Vec<u32>>` |
+| `DisplayRow` struct + path resolution | ✅ | Parent chain walk |
+| ratatui table rendering with drive/name/size/path columns | ✅ | Replaced DataFrame-based UI |
+| Search-as-you-type with debounce | ✅ | Drain keystrokes, render, then search |
+| Result limit (200 short, 1000 long patterns) | ✅ | Early termination |
+| Status bar: match count + search latency + trigram stats | ✅ | |
+| Windows LIVE drive auto-detection | ✅ | `detect_ntfs_drives()` + `MftReader` |
+| `--no-cache` flag for fresh MFT reads | ✅ | Bypasses cache + USN |
+| Per-drive timing breakdown (mft/paths/tri) | ✅ | Shown during loading |
+| In-TUI loading progress with input active | ✅ | Type while loading |
+| Mouse capture disabled for text selection | ✅ | |
 
-### Wave 2: Sort + Filter
+### Wave 2: Sort + Filter (partial ✅)
 
 | Task | Status | Notes |
 |------|--------|-------|
-| Column sorting (Tab / click header) | ⏳ | In-place sort on Vec |
+| Column sorting (Tab to cycle) | ✅ | Name → Size → Modified → Path |
+| Sort direction toggle (Shift+Tab) | ✅ | Ascending/descending |
+| `--name-only` toggle (F2) | ✅ | Filename-only matching |
 | Multi-tier sort (size, then name) | ⏳ | |
-| `--files-only`, `--dirs-only` toggle (F2/F3) | ⏳ | |
+| `--files-only`, `--dirs-only` toggle | ⏳ | |
 | `--attr` filter toggle panel | ⏳ | |
-| `--name-only` toggle | ⏳ | |
 | Column visibility toggle (F4) | ⏳ | |
 
 ### Wave 3: Refresh + Live
 
 | Task | Status | Notes |
 |------|--------|-------|
+| Incremental USN refresh (delta trigram update) | ⏳ | <50ms per refresh cycle |
 | Auto-refresh timer (60s default) | ⏳ | Background thread |
 | Manual refresh (F5) | ⏳ | |
-| Progress bar during load/refresh | ⏳ | |
-| Windows LIVE drive auto-detection | ⏳ | Windows only |
-| Cached `.uffs` index loading | ⏳ | Fastest startup |
+| Cache indicator (cached/fresh) in loading display | ⏳ | |
+| Fix USN `created=0` for new files with reused FRS | ⏳ | `aggregate_changes` bug |
+| `.uffs-tui` sidecar cache for trigram + paths_lower | ⏳ | Skip path resolve on cached restart |
 
 ### Wave 4: UX Polish
 

@@ -30,7 +30,8 @@ pub struct DisplayRow {
     pub name: String,
     /// File size in bytes.
     pub size: u64,
-    /// Whether this is a directory.
+    /// Whether this is a directory (used for future --files-only/--dirs-only filter).
+    #[expect(dead_code, reason = "populated for Wave 2 file/dir filtering")]
     pub is_directory: bool,
     /// Last modified time (Unix microseconds).
     pub modified: i64,
@@ -70,31 +71,51 @@ impl TrigramIndex {
         reason = "constructor called once per DriveIndex load; separation improves readability"
     )]
     fn build(paths_lower: &[String]) -> Self {
+        use rayon::prelude::*;
+
+        const CHUNK_SIZE: usize = 64 * 1024;
+
+        // Phase 1: parallel — each chunk builds a local postings map
+        let chunk_maps: Vec<std::collections::HashMap<[u8; 3], Vec<u32>>> = paths_lower
+            .par_chunks(CHUNK_SIZE)
+            .enumerate()
+            .map(|(chunk_idx, chunk)| {
+                let base = chunk_idx * CHUNK_SIZE;
+                let mut local: std::collections::HashMap<[u8; 3], Vec<u32>> =
+                    std::collections::HashMap::new();
+
+                for (offset, path) in chunk.iter().enumerate() {
+                    let bytes = path.as_bytes();
+                    if bytes.len() < 3 {
+                        continue;
+                    }
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "MFT record count bounded by NTFS limits"
+                    )]
+                    let record_idx = (base + offset) as u32;
+
+                    // Track last pushed idx per trigram to skip consecutive dupes
+                    // (cheaper than HashSet — paths have many repeated trigrams)
+                    for window in bytes.windows(3) {
+                        let tri: [u8; 3] = [window[0], window[1], window[2]];
+                        let list = local.entry(tri).or_default();
+                        if list.last() != Some(&record_idx) {
+                            list.push(record_idx);
+                        }
+                    }
+                }
+                local
+            })
+            .collect();
+
+        // Phase 2: merge all chunk maps into one (sequential but fast)
         let mut postings: std::collections::HashMap<[u8; 3], Vec<u32>> =
             std::collections::HashMap::new();
 
-        for (idx, path) in paths_lower.iter().enumerate() {
-            let bytes = path.as_bytes();
-            if bytes.len() < 3 {
-                continue;
-            }
-            // Safe: record count is bounded by MFT size (max ~4M records per drive)
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "MFT record count is bounded by NTFS limits (~4M max)"
-            )]
-            let record_idx = idx as u32;
-            // Extract unique trigrams from this path
-            let mut seen = std::collections::HashSet::new();
-            for window in bytes.windows(3) {
-                // windows(3) guarantees exactly 3 elements
-                // windows(3) guarantees exactly 3 elements, so try_into always succeeds
-                let Ok(tri): Result<[u8; 3], _> = window.try_into() else {
-                    continue;
-                };
-                if seen.insert(tri) {
-                    postings.entry(tri).or_default().push(record_idx);
-                }
+        for chunk_map in chunk_maps {
+            for (tri, indices) in chunk_map {
+                postings.entry(tri).or_default().extend(indices);
             }
         }
 
@@ -202,10 +223,6 @@ pub struct SearchResult {
     pub duration: core::time::Duration,
     /// Total records scanned across all drives.
     pub records_scanned: usize,
-    /// Time spent in scan phase (ms).
-    pub scan_ms: u128,
-    /// Number of trigram candidates (0 = trigram not used, >0 = trigram hit).
-    pub trigram_candidates: usize,
 }
 
 /// Multi-drive search backend.
@@ -231,6 +248,12 @@ pub enum SortColumn {
     Modified,
     /// Sort by full path.
     Path,
+    /// Sort by drive letter.
+    Drive,
+    /// Sort by file extension.
+    Extension,
+    /// Sort by devicon file type (groups similar types: music, images, code).
+    Type,
 }
 
 impl MultiDriveBackend {
@@ -279,8 +302,6 @@ impl MultiDriveBackend {
                 rows: Vec::new(),
                 duration: start.elapsed(),
                 records_scanned: 0,
-                scan_ms: 0,
-                trigram_candidates: 0,
             };
         }
 
@@ -290,8 +311,6 @@ impl MultiDriveBackend {
                 rows: Vec::new(),
                 duration: start.elapsed(),
                 records_scanned: 0,
-                scan_ms: 0,
-                trigram_candidates: 0,
             };
         };
 
@@ -301,8 +320,6 @@ impl MultiDriveBackend {
                 rows: Vec::new(),
                 duration: start.elapsed(),
                 records_scanned: 0,
-                scan_ms: 0,
-                trigram_candidates: 0,
             };
         };
 
@@ -317,7 +334,6 @@ impl MultiDriveBackend {
         let needle_lower = pattern.to_ascii_lowercase();
         let cancelled = AtomicBool::new(false);
 
-        let scan_start = Instant::now();
         let drive_results: Vec<Vec<DisplayRow>> = self
             .drives
             .par_iter()
@@ -332,8 +348,6 @@ impl MultiDriveBackend {
                 )
             })
             .collect();
-        let scan_ms = scan_start.elapsed().as_millis();
-
         for drive_rows in drive_results {
             rows.extend(drive_rows);
         }
@@ -342,23 +356,11 @@ impl MultiDriveBackend {
 
         sort_rows(&mut rows, self.sort_column, self.sort_desc);
 
-        // Count trigram candidates for diagnostics
-        let tri_candidates = self
-            .drives
-            .iter()
-            .filter_map(|dr| {
-                let needle = pattern.to_ascii_lowercase();
-                dr.trigram.search(&needle).map(|cands| cands.len())
-            })
-            .sum::<usize>();
-
         self.last_results.clone_from(&rows);
         SearchResult {
             rows,
             duration: start.elapsed(),
             records_scanned: scanned,
-            scan_ms,
-            trigram_candidates: tri_candidates,
         }
     }
 
@@ -378,8 +380,6 @@ impl MultiDriveBackend {
                 rows: Vec::new(),
                 duration: start.elapsed(),
                 records_scanned: 0,
-                scan_ms: 0,
-                trigram_candidates: 0,
             };
         }
 
@@ -388,8 +388,6 @@ impl MultiDriveBackend {
                 rows: Vec::new(),
                 duration: start.elapsed(),
                 records_scanned: 0,
-                scan_ms: 0,
-                trigram_candidates: 0,
             };
         };
 
@@ -398,8 +396,6 @@ impl MultiDriveBackend {
                 rows: Vec::new(),
                 duration: start.elapsed(),
                 records_scanned: 0,
-                scan_ms: 0,
-                trigram_candidates: 0,
             };
         };
 
@@ -440,8 +436,6 @@ impl MultiDriveBackend {
             rows,
             duration: start.elapsed(),
             records_scanned: scanned,
-            scan_ms: 0,
-            trigram_candidates: 0,
         }
     }
 
@@ -462,7 +456,10 @@ impl MultiDriveBackend {
             SortColumn::Name => SortColumn::Size,
             SortColumn::Size => SortColumn::Modified,
             SortColumn::Modified => SortColumn::Path,
-            SortColumn::Path => SortColumn::Name,
+            SortColumn::Path => SortColumn::Drive,
+            SortColumn::Drive => SortColumn::Extension,
+            SortColumn::Extension => SortColumn::Type,
+            SortColumn::Type => SortColumn::Name,
         };
         sort_rows(&mut self.last_results, self.sort_column, self.sort_desc);
     }
@@ -631,6 +628,59 @@ fn resolve_path(index: &MftIndex, record_idx: usize, volume_prefix: &str) -> Str
     path
 }
 
+/// Maximally distinct color palettes for 1–10 drives.
+///
+/// Each sub-palette is hand-tuned so that N drives get N maximally
+/// distinguishable colors on a dark terminal background.
+const PALETTES: &[&[(u8, u8, u8)]] = &[
+    // 1 drive
+    &[(255, 255, 255)],
+    // 2 drives
+    &[(100, 180, 255), (255, 150, 50)],
+    // 3 drives
+    &[(100, 180, 255), (80, 220, 80), (255, 150, 50)],
+    // 4 drives
+    &[(100, 180, 255), (80, 220, 80), (255, 150, 50), (200, 100, 255)],
+    // 5 drives
+    &[(100, 180, 255), (80, 220, 80), (255, 150, 50), (200, 100, 255), (255, 255, 80)],
+    // 6 drives
+    &[(100, 180, 255), (80, 220, 80), (255, 150, 50), (200, 100, 255), (255, 255, 80), (255, 100, 100)],
+    // 7 drives
+    &[(100, 180, 255), (80, 220, 80), (255, 150, 50), (200, 100, 255), (255, 255, 80), (255, 100, 100), (100, 255, 220)],
+    // 8 drives
+    &[(100, 180, 255), (80, 220, 80), (255, 150, 50), (200, 100, 255), (255, 255, 80), (255, 100, 100), (100, 255, 220), (255, 130, 200)],
+    // 9 drives
+    &[(100, 180, 255), (80, 220, 80), (255, 150, 50), (200, 100, 255), (255, 255, 80), (255, 100, 100), (100, 255, 220), (255, 130, 200), (255, 255, 255)],
+    // 10 drives
+    &[(100, 180, 255), (80, 220, 80), (255, 150, 50), (200, 100, 255), (255, 255, 80), (255, 100, 100), (100, 255, 220), (255, 130, 200), (255, 255, 255), (180, 140, 100)],
+];
+
+/// Build a drive-letter → color mapping for the currently loaded drives.
+///
+/// Assigns colors from the optimal palette for the given number of drives.
+/// Drives are sorted alphabetically so the mapping is deterministic.
+#[must_use]
+pub fn build_drive_colors(drives: &[DriveIndex]) -> std::collections::HashMap<char, ratatui::style::Color> {
+    use ratatui::style::Color;
+
+    let mut letters: Vec<char> = drives.iter().map(|dr| dr.letter).collect();
+    letters.sort_unstable();
+    letters.dedup();
+
+    let count = letters.len();
+    let palette_idx = count.saturating_sub(1).min(PALETTES.len() - 1);
+    let palette = PALETTES[palette_idx];
+
+    letters
+        .into_iter()
+        .enumerate()
+        .map(|(idx, letter)| {
+            let (r, g, b) = palette[idx % palette.len()];
+            (letter, Color::Rgb(r, g, b))
+        })
+        .collect()
+}
+
 /// Sort display rows by the given column.
 fn sort_rows(rows: &mut [DisplayRow], column: SortColumn, descending: bool) {
     rows.sort_unstable_by(|row_a, row_b| {
@@ -639,6 +689,17 @@ fn sort_rows(rows: &mut [DisplayRow], column: SortColumn, descending: bool) {
             SortColumn::Size => row_a.size.cmp(&row_b.size),
             SortColumn::Modified => row_a.modified.cmp(&row_b.modified),
             SortColumn::Path => row_a.path.to_lowercase().cmp(&row_b.path.to_lowercase()),
+            SortColumn::Drive => row_a.drive.cmp(&row_b.drive),
+            SortColumn::Extension => {
+                let ext_a = row_a.name.rsplit('.').next().unwrap_or("").to_lowercase();
+                let ext_b = row_b.name.rsplit('.').next().unwrap_or("").to_lowercase();
+                ext_a.cmp(&ext_b)
+            }
+            SortColumn::Type => {
+                let icon_a = devicons::icon_for_file(&row_a.name, &None).icon;
+                let icon_b = devicons::icon_for_file(&row_b.name, &None).icon;
+                icon_a.cmp(&icon_b)
+            }
         };
         if descending { ord.reverse() } else { ord }
     });
@@ -649,32 +710,60 @@ fn sort_rows(rows: &mut [DisplayRow], column: SortColumn, descending: bool) {
 ///
 /// Uses `MftReader::read_index_cached()` which is the recommended API.
 /// Requires Windows and Administrator privileges.
+/// Timing info returned alongside a loaded `DriveIndex`.
+pub struct LoadTiming {
+    /// Time to load/read the MFT (ms).
+    pub mft_ms: u128,
+    /// Time to resolve all paths (ms).
+    pub path_ms: u128,
+    /// Time to build trigram index (ms).
+    pub tri_ms: u128,
+}
+
 #[cfg(windows)]
-pub fn load_live_drive(drive_letter: char) -> anyhow::Result<DriveIndex> {
+pub fn load_live_drive(
+    drive_letter: char,
+    no_cache: bool,
+) -> anyhow::Result<(DriveIndex, LoadTiming)> {
     use anyhow::Context;
 
     /// Cache TTL in seconds (10 minutes, same as CLI).
     const INDEX_TTL_SECONDS: u64 = 600;
 
+    let mft_start = Instant::now();
     let rt = tokio::runtime::Runtime::new()?;
     let index = rt.block_on(async {
         let reader = uffs_mft::MftReader::open(drive_letter)
             .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
-        reader
-            .read_index_cached(INDEX_TTL_SECONDS)
-            .await
-            .with_context(|| format!("Failed to read MFT for drive {drive_letter}:"))
+        if no_cache {
+            reader
+                .read_all_index()
+                .await
+                .with_context(|| format!("Failed to read MFT fresh for drive {drive_letter}:"))
+        } else {
+            reader
+                .read_index_cached(INDEX_TTL_SECONDS)
+                .await
+                .with_context(|| format!("Failed to read MFT for drive {drive_letter}:"))
+        }
     })?;
+    let mft_ms = mft_start.elapsed().as_millis();
 
-    build_drive_index(drive_letter, index)
+    let (drive_index, path_ms, tri_ms) = build_drive_index(drive_letter, index)?;
+    Ok((drive_index, LoadTiming { mft_ms, path_ms, tri_ms }))
 }
 
 /// Build a `DriveIndex` from a loaded `MftIndex` (shared by live + file paths).
-#[cfg(windows)]
-fn build_drive_index(drive_letter: char, index: MftIndex) -> anyhow::Result<DriveIndex> {
+///
+/// Returns `(DriveIndex, path_resolve_ms, trigram_build_ms)`.
+fn build_drive_index(
+    drive_letter: char,
+    index: MftIndex,
+) -> anyhow::Result<(DriveIndex, u128, u128)> {
     let volume_prefix = format!("{drive_letter}:\\");
     let record_count = index.records.len();
 
+    let path_start = Instant::now();
     let paths_lower: Vec<String> = (0..record_count)
         .map(|record_idx| {
             let Some(record) = index.records.get(record_idx) else {
@@ -690,16 +779,23 @@ fn build_drive_index(drive_letter: char, index: MftIndex) -> anyhow::Result<Driv
             resolve_path(&index, record_idx, &volume_prefix).to_ascii_lowercase()
         })
         .collect();
+    let path_ms = path_start.elapsed().as_millis();
 
+    let tri_start = Instant::now();
     let trigram = TrigramIndex::build(&paths_lower);
+    let tri_ms = tri_start.elapsed().as_millis();
 
-    Ok(DriveIndex {
-        letter: drive_letter,
-        index,
-        trigram,
-        paths_lower,
-        source: IndexSource::MftFile(PathBuf::from(format!("{drive_letter}:"))),
-    })
+    Ok((
+        DriveIndex {
+            letter: drive_letter,
+            index,
+            trigram,
+            paths_lower,
+            source: IndexSource::MftFile(PathBuf::from(format!("{drive_letter}:"))),
+        },
+        path_ms,
+        tri_ms,
+    ))
 }
 
 /// Load an MFT file (raw, IOCP capture, or compressed) into a `DriveIndex`.
@@ -713,7 +809,7 @@ fn build_drive_index(drive_letter: char, index: MftIndex) -> anyhow::Result<Driv
 pub fn load_mft_file(
     mft_path: &std::path::Path,
     drive: Option<char>,
-) -> anyhow::Result<DriveIndex> {
+) -> anyhow::Result<(DriveIndex, LoadTiming)> {
     use uffs_mft::parse::{MftRecordMerger, apply_fixup, parse_record_full};
 
     let drive_letter = drive.unwrap_or_else(|| {
@@ -727,6 +823,7 @@ pub fn load_mft_file(
             .map_or('X', |ch| ch.to_ascii_uppercase())
     });
 
+    let mft_start = Instant::now();
     let options = uffs_mft::raw::LoadRawOptions::default();
     let raw = uffs_mft::raw::load_raw_mft(mft_path, &options)?;
     let capacity = uffs_mft::frs_to_usize(raw.header.record_count);
@@ -742,35 +839,14 @@ pub fn load_mft_file(
 
     let records = merger.merge();
     let index = MftIndex::from_parsed_records(drive_letter, records);
+    let mft_ms = mft_start.elapsed().as_millis();
 
-    // Build pre-resolved lowercase paths + trigram index for fast search.
-    // This is done once at load time so search is O(matches) not O(n).
-    let volume_prefix = format!("{drive_letter}:\\");
-    let record_count = index.records.len();
-
-    let paths_lower: Vec<String> = (0..record_count)
-        .map(|record_idx| {
-            let Some(record) = index.records.get(record_idx) else {
-                return String::new();
-            };
-            if !record.first_name.name.is_valid() {
-                return String::new();
-            }
-            let name = index.get_name(&record.first_name.name);
-            if name.is_empty() || name == "." {
-                return String::new();
-            }
-            resolve_path(&index, record_idx, &volume_prefix).to_ascii_lowercase()
-        })
-        .collect();
-
-    let trigram = TrigramIndex::build(&paths_lower);
-
-    Ok(DriveIndex {
-        letter: drive_letter,
-        index,
-        trigram,
-        paths_lower,
-        source: IndexSource::MftFile(mft_path.to_path_buf()),
-    })
+    let (drive_index, path_ms, tri_ms) = build_drive_index(drive_letter, index)?;
+    Ok((
+        DriveIndex {
+            source: IndexSource::MftFile(mft_path.to_path_buf()),
+            ..drive_index
+        },
+        LoadTiming { mft_ms, path_ms, tri_ms },
+    ))
 }

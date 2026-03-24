@@ -1,13 +1,14 @@
 //! TUI Application state — MftIndex-backed search.
 
 use ratatui::widgets::ListState;
+use ratatui_textarea::TextArea;
 
 use crate::backend::{DisplayRow, MultiDriveBackend, SortColumn};
 
 /// Application state.
 pub struct App {
-    /// Current search input.
-    pub input: String,
+    /// Search input text area (full editing: cursor, selection, clipboard).
+    pub textarea: TextArea<'static>,
     /// Search results (from last search).
     pub results: Vec<DisplayRow>,
     /// List selection state.
@@ -25,9 +26,16 @@ pub struct App {
     /// Whether a search is currently running in background (Wave 4: spinner).
     #[expect(dead_code, reason = "will be used for UI loading spinner in Wave 4")]
     pub searching: bool,
+    /// Visible page size for PageUp/Down (set by ui() on each render).
+    pub page_size: usize,
 }
 
 impl App {
+    /// Get the current search text from the textarea.
+    pub fn input_text(&self) -> String {
+        self.textarea.lines().first().map_or(String::new(), |line| line.to_owned())
+    }
+
     /// Create a new application with a pre-loaded backend.
     #[expect(
         dead_code,
@@ -44,7 +52,7 @@ impl App {
         let status = format!("Loaded {total} records [{drive_info}]");
 
         Self {
-            input: String::new(),
+            textarea: make_search_textarea(),
             results: Vec::new(),
             list_state: ListState::default(),
             backend,
@@ -53,13 +61,14 @@ impl App {
             last_search_ms: 0,
             name_only: false,
             searching: false,
+            page_size: 20,
         }
     }
 
     /// Create an empty application (no drives loaded).
     pub fn new() -> Self {
         Self {
-            input: String::new(),
+            textarea: make_search_textarea(),
             results: Vec::new(),
             list_state: ListState::default(),
             backend: MultiDriveBackend::new(),
@@ -68,6 +77,7 @@ impl App {
             last_search_ms: 0,
             name_only: false,
             searching: false,
+            page_size: 20,
         }
     }
 
@@ -115,21 +125,54 @@ impl App {
         self.list_state.select(Some(idx));
     }
 
+    /// Move selection down by one visible page.
+    pub fn page_down(&mut self) {
+        let len = self.results.len();
+        if len == 0 {
+            return;
+        }
+        let current = self.list_state.selected().unwrap_or(0);
+        let new_idx = (current + self.page_size).min(len - 1);
+        self.list_state.select(Some(new_idx));
+    }
+
+    /// Move selection up by one visible page.
+    pub fn page_up(&mut self) {
+        if self.results.is_empty() {
+            return;
+        }
+        let current = self.list_state.selected().unwrap_or(0);
+        let new_idx = current.saturating_sub(self.page_size);
+        self.list_state.select(Some(new_idx));
+    }
+
+    /// Get the full path of the currently selected result.
+    #[must_use]
+    pub fn selected_path(&self) -> Option<&str> {
+        let idx = self.list_state.selected()?;
+        self.results.get(idx).map(|row| row.path.as_str())
+    }
+
     /// Execute search with current input.
     pub fn search(&mut self) {
         self.error = None;
+        let input = self.input_text();
 
-        if self.input.is_empty() {
+        if input.is_empty() {
             self.results.clear();
+            let fc = |n: usize| uffs_mft::format_number_commas(n as u64);
+            let drive_info: String = self
+                .backend
+                .drive_summary()
+                .iter()
+                .map(|(letter, count)| format!("{letter}:{}", fc(*count)))
+                .collect::<Vec<_>>()
+                .join("  ");
             self.status = format!(
-                "Loaded {} records [{}]",
-                self.backend.total_records(),
-                self.backend
-                    .drive_summary()
-                    .iter()
-                    .map(|(letter, count)| format!("{letter}:{count}"))
-                    .collect::<Vec<_>>()
-                    .join(" ")
+                "Loaded {} records  │  {} drives  [{}]",
+                fc(self.backend.total_records()),
+                self.backend.drives.len(),
+                drive_info,
             );
             return;
         }
@@ -139,26 +182,27 @@ impl App {
             return;
         }
 
-        let result = self.backend.search(&self.input, self.name_only);
+        let result = self.backend.search(&input, self.name_only);
         self.last_search_ms = result.duration.as_millis();
         self.results = result.rows;
 
-        // Show trigram debug info
-        let tri_info: String = self
+        let fc = |n: usize| uffs_mft::format_number_commas(n as u64);
+        let total_trigrams: usize = self
             .backend
             .drives
             .iter()
-            .map(|dr| format!("{}:{}tri", dr.letter, dr.trigram.posting_count()))
-            .collect::<Vec<_>>()
-            .join(" ");
+            .map(|dr| dr.trigram.posting_count())
+            .sum();
         self.status = format!(
-            "{} matches in {}ms (scan:{}ms tri_cands:{}) {} records [{}]",
-            self.results.len(),
-            self.last_search_ms,
-            result.scan_ms,
-            result.trigram_candidates,
-            result.records_scanned,
-            tri_info,
+            "{} matches  │  {}  │  {} records across {} drives  │  {} trigrams",
+            fc(self.results.len()),
+            {
+                let ms = result.duration.as_millis();
+                if ms < 1000 { format!("{ms}ms") } else { format!("{:.1}s", ms as f64 / 1000.0) }
+            },
+            fc(result.records_scanned),
+            self.backend.drives.len(),
+            fc(total_trigrams),
         );
 
         if self.results.is_empty() {
@@ -196,6 +240,19 @@ impl App {
     pub const fn toggle_name_only(&mut self) {
         self.name_only = !self.name_only;
     }
+}
+
+
+/// Create a configured single-line TextArea for the search box.
+fn make_search_textarea<'a>() -> TextArea<'a> {
+    use ratatui::style::{Color, Style};
+
+    let mut textarea = TextArea::default();
+    textarea.set_cursor_line_style(Style::default());
+    textarea.set_style(Style::default().fg(Color::Yellow));
+    textarea.set_placeholder_text("Type to search...");
+    textarea.set_block(ratatui::widgets::Block::default());
+    textarea
 }
 
 impl Default for App {
@@ -251,7 +308,7 @@ mod tests {
     #[test]
     fn test_search_without_data() {
         let mut app = App::new();
-        app.input = "test".to_owned();
+        app.textarea.insert_str("test");
         app.search();
         assert!(app.error.is_some());
         assert!(app.results.is_empty());
@@ -274,7 +331,7 @@ mod tests {
             is_directory: false,
             modified: 0,
         }];
-        app.input.clear();
+        // textarea starts empty by default, search should clear results
         app.search();
         assert!(app.results.is_empty());
     }

@@ -46,6 +46,12 @@ crossterm.workspace = true
 # Parallel search
 rayon.workspace = true
 
+# Text input widget (full text editing: cursor, selection, clipboard, undo)
+ratatui-textarea.workspace = true
+
+# File type icons (Nerd Font glyphs)
+devicons.workspace = true
+
 # Error handling
 anyhow.workspace = true
 
