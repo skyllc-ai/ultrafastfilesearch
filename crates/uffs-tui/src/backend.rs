@@ -30,9 +30,7 @@ pub struct DisplayRow {
     pub name: String,
     /// File size in bytes.
     pub size: u64,
-    /// Whether this is a directory (used for future --files-only/--dirs-only
-    /// filter).
-    #[expect(dead_code, reason = "populated for Wave 2 file/dir filtering")]
+    /// Whether this is a directory (used for --files-only/--dirs-only filter).
     pub is_directory: bool,
     /// Last modified time (Unix microseconds).
     pub modified: i64,
@@ -260,6 +258,17 @@ pub enum SortColumn {
     Extension,
     /// Sort by devicon file type (groups similar types: music, images, code).
     Type,
+}
+
+/// Filter mode for file/directory results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterMode {
+    /// Show all results.
+    All,
+    /// Show only files.
+    FilesOnly,
+    /// Show only directories.
+    DirsOnly,
 }
 
 impl MultiDriveBackend {
@@ -754,10 +763,10 @@ pub fn build_drive_colors(
         .collect()
 }
 
-/// Sort display rows by the given column.
+/// Sort display rows by the given column with name as secondary tiebreaker.
 fn sort_rows(rows: &mut [DisplayRow], column: SortColumn, descending: bool) {
     rows.sort_unstable_by(|row_a, row_b| {
-        let ord = match column {
+        let primary = match column {
             SortColumn::Name => row_a.name.to_lowercase().cmp(&row_b.name.to_lowercase()),
             SortColumn::Size => row_a.size.cmp(&row_b.size),
             SortColumn::Modified => row_a.modified.cmp(&row_b.modified),
@@ -774,8 +783,23 @@ fn sort_rows(rows: &mut [DisplayRow], column: SortColumn, descending: bool) {
                 icon_a.cmp(&icon_b)
             }
         };
+        // Multi-tier: if primary column is equal, break ties by name (ascending)
+        let ord = if primary == core::cmp::Ordering::Equal && column != SortColumn::Name {
+            row_a.name.to_lowercase().cmp(&row_b.name.to_lowercase())
+        } else {
+            primary
+        };
         if descending { ord.reverse() } else { ord }
     });
+}
+
+/// Apply filter mode to a set of display rows.
+pub fn apply_filter(rows: &mut Vec<DisplayRow>, filter: FilterMode) {
+    match filter {
+        FilterMode::All => {} // no-op
+        FilterMode::FilesOnly => rows.retain(|row| !row.is_directory),
+        FilterMode::DirsOnly => rows.retain(|row| row.is_directory),
+    }
 }
 
 /// Load a live NTFS drive using the same flow as `uffs.exe`:

@@ -1,9 +1,9 @@
 //! TUI Application state — MftIndex-backed search.
 
-use ratatui::widgets::ListState;
+use ratatui::widgets::TableState;
 use ratatui_textarea::TextArea;
 
-use crate::backend::{DisplayRow, MultiDriveBackend, SortColumn};
+use crate::backend::{DisplayRow, FilterMode, MultiDriveBackend, SortColumn};
 
 /// Application state.
 pub struct App {
@@ -11,8 +11,8 @@ pub struct App {
     pub textarea: TextArea<'static>,
     /// Search results (from last search).
     pub results: Vec<DisplayRow>,
-    /// List selection state.
-    pub list_state: ListState,
+    /// Table selection state.
+    pub table_state: TableState,
     /// Search backend (multi-drive `MftIndex`).
     pub backend: MultiDriveBackend,
     /// Status message.
@@ -23,6 +23,8 @@ pub struct App {
     pub last_search_ms: u128,
     /// Whether name-only matching is active.
     pub name_only: bool,
+    /// Filter mode: `All`, `FilesOnly`, or `DirsOnly`.
+    pub filter_mode: FilterMode,
     /// Whether a search is currently running in background (Wave 4: spinner).
     #[expect(dead_code, reason = "will be used for UI loading spinner in Wave 4")]
     pub searching: bool,
@@ -57,12 +59,13 @@ impl App {
         Self {
             textarea: make_search_textarea(),
             results: Vec::new(),
-            list_state: ListState::default(),
+            table_state: TableState::default(),
             backend,
             status,
             error: None,
             last_search_ms: 0,
             name_only: false,
+            filter_mode: FilterMode::All,
             searching: false,
             page_size: 20,
         }
@@ -73,12 +76,13 @@ impl App {
         Self {
             textarea: make_search_textarea(),
             results: Vec::new(),
-            list_state: ListState::default(),
+            table_state: TableState::default(),
             backend: MultiDriveBackend::new(),
             status: "No drives loaded. Use --mft-file or --drive to load data.".to_owned(),
             error: None,
             last_search_ms: 0,
             name_only: false,
+            filter_mode: FilterMode::All,
             searching: false,
             page_size: 20,
         }
@@ -96,7 +100,7 @@ impl App {
         if len == 0 {
             return;
         }
-        let idx = match self.list_state.selected() {
+        let idx = match self.table_state.selected() {
             Some(current) => {
                 if current >= len - 1 {
                     0
@@ -106,7 +110,7 @@ impl App {
             }
             None => 0,
         };
-        self.list_state.select(Some(idx));
+        self.table_state.select(Some(idx));
     }
 
     /// Move selection to previous item.
@@ -115,7 +119,7 @@ impl App {
         if len == 0 {
             return;
         }
-        let idx = match self.list_state.selected() {
+        let idx = match self.table_state.selected() {
             Some(current) => {
                 if current == 0 {
                     len - 1
@@ -125,7 +129,7 @@ impl App {
             }
             None => 0,
         };
-        self.list_state.select(Some(idx));
+        self.table_state.select(Some(idx));
     }
 
     /// Move selection down by one visible page.
@@ -134,9 +138,9 @@ impl App {
         if len == 0 {
             return;
         }
-        let current = self.list_state.selected().unwrap_or(0);
+        let current = self.table_state.selected().unwrap_or(0);
         let new_idx = (current + self.page_size).min(len - 1);
-        self.list_state.select(Some(new_idx));
+        self.table_state.select(Some(new_idx));
     }
 
     /// Move selection up by one visible page.
@@ -144,15 +148,15 @@ impl App {
         if self.results.is_empty() {
             return;
         }
-        let current = self.list_state.selected().unwrap_or(0);
+        let current = self.table_state.selected().unwrap_or(0);
         let new_idx = current.saturating_sub(self.page_size);
-        self.list_state.select(Some(new_idx));
+        self.table_state.select(Some(new_idx));
     }
 
     /// Get the full path of the currently selected result.
     #[must_use]
     pub fn selected_path(&self) -> Option<&str> {
-        let idx = self.list_state.selected()?;
+        let idx = self.table_state.selected()?;
         self.results.get(idx).map(|row| row.path.as_str())
     }
 
@@ -188,6 +192,7 @@ impl App {
         let result = self.backend.search(&input, self.name_only);
         self.last_search_ms = result.duration.as_millis();
         self.results = result.rows;
+        crate::backend::apply_filter(&mut self.results, self.filter_mode);
 
         let fc = |n: usize| uffs_mft::format_number_commas(n as u64);
         let total_trigrams: usize = self
@@ -216,9 +221,9 @@ impl App {
         );
 
         if self.results.is_empty() {
-            self.list_state.select(None);
+            self.table_state.select(None);
         } else {
-            self.list_state.select(Some(0));
+            self.table_state.select(Some(0));
         }
     }
 
@@ -226,12 +231,14 @@ impl App {
     pub fn cycle_sort(&mut self) {
         self.backend.cycle_sort();
         self.results = self.backend.last_results.clone();
+        crate::backend::apply_filter(&mut self.results, self.filter_mode);
     }
 
     /// Toggle sort direction and re-sort results.
     pub fn toggle_sort_direction(&mut self) {
         self.backend.toggle_sort_direction();
         self.results = self.backend.last_results.clone();
+        crate::backend::apply_filter(&mut self.results, self.filter_mode);
     }
 
     /// Get the current sort column.
@@ -249,6 +256,25 @@ impl App {
     /// Toggle name-only matching mode.
     pub const fn toggle_name_only(&mut self) {
         self.name_only = !self.name_only;
+    }
+
+    /// Cycle filter mode: `All` → `FilesOnly` → `DirsOnly` → `All`.
+    pub const fn cycle_filter(&mut self) {
+        self.filter_mode = match self.filter_mode {
+            FilterMode::All => FilterMode::FilesOnly,
+            FilterMode::FilesOnly => FilterMode::DirsOnly,
+            FilterMode::DirsOnly => FilterMode::All,
+        };
+    }
+
+    /// Get a display label for the current filter mode.
+    #[must_use]
+    pub const fn filter_label(&self) -> &str {
+        match self.filter_mode {
+            FilterMode::All => "",
+            FilterMode::FilesOnly => " [FILES]",
+            FilterMode::DirsOnly => " [DIRS]",
+        }
     }
 }
 
@@ -305,13 +331,13 @@ mod tests {
         ];
 
         app.next();
-        assert_eq!(app.list_state.selected(), Some(0));
+        assert_eq!(app.table_state.selected(), Some(0));
 
         app.next();
-        assert_eq!(app.list_state.selected(), Some(1));
+        assert_eq!(app.table_state.selected(), Some(1));
 
         app.previous();
-        assert_eq!(app.list_state.selected(), Some(0));
+        assert_eq!(app.table_state.selected(), Some(0));
     }
 
     #[test]

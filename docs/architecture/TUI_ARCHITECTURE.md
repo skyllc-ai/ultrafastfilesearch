@@ -1,8 +1,8 @@
 # TUI Architecture Design
 
-> **Status**: Design phase — not yet implemented
-> **Date**: 2026-03-23
-implementation > **Decision**: Option 1 (load all drives into RAM) for Phase 1
+> **Status**: Implemented — Wave 1 ✅, Wave 2 ✅
+> **Date**: 2026-03-24
+> **Decision**: Option 1 (load all drives into RAM) for Phase 1
 
 ---
 
@@ -10,13 +10,15 @@ implementation > **Decision**: Option 1 (load all drives into RAM) for Phase 1
 
 The TUI is an interactive terminal interface for UFFS that provides:
 
-- **Real-time search-as-you-type** against NTFS MFT data (<10ms per keystroke)
-- **Multi-drive by default** — all NTFS drives loaded and searchable
-- **Sortable columns** (any/all: name, size, modified, created, etc.)
-- **Configurable output columns** (same as CLI `--columns`)
-- **Attribute filtering** (hidden, system, compressed, etc.)
-- **Auto-refresh** every ~60s to pick up file changes
-- **Cross-platform**: live drives (Windows) or saved MFT files (Mac/Linux)
+- **Real-time search-as-you-type** against NTFS MFT data (<10ms per keystroke) ✅
+- **Multi-drive by default** — all NTFS drives loaded and searchable ✅
+- **Sortable columns** (7 columns: Name, Size, Modified, Path, Drive, Extension, Type) ✅
+- **Devicons** — Nerd Font file-type icons with per-type colors ✅
+- **Search term highlighting** in filename and path ✅
+- **Per-drive color coding** with optimized palettes (1–10 drives) ✅
+- **Full text editing** — cursor, selection, clipboard, undo/redo via `ratatui_textarea` ✅
+- **Auto-refresh** every ~60s to pick up file changes (Wave 3 — planned)
+- **Cross-platform**: live drives (Windows) or saved MFT files (Mac/Linux) ✅
 
 ---
 
@@ -43,7 +45,28 @@ cost (2-8s), then every search is <10ms walking an in-memory array.
 | Platform | Default | CLI Override |
 |----------|---------|-------------|
 | Windows  | Auto-detect all NTFS drives, load all | `--drive C` or `--drive C,D` |
-| Mac/Linux | Must specify `--mft-file` paths | `--mft-file C.iocp,D.iocp` |
+| Mac/Linux | Must specify `--mft-file` or `--data-dir` | `--mft-file C.iocp D.iocp` |
+| Any | Auto-discover `drive_*` subdirectories | `--data-dir ~/uffs_data` |
+
+#### `--data-dir` Auto-Discovery
+
+```bash
+# Load all drives from a data directory
+cargo run --release --bin uffs_tui -- --data-dir ~/uffs_data
+
+# Directory structure expected:
+~/uffs_data/
+├── drive_c/
+│   └── C_mft.iocp    # auto-detected (prefers .iocp > .bin > .mft)
+├── drive_d/
+│   └── D_mft.iocp
+└── drive_s/
+    └── S_mft.bin
+```
+
+The `--data-dir` flag scans for subdirectories named `drive_X` (where X is a
+single letter), finds the best MFT file in each (preferring `.iocp` > `.bin`
+> `.mft`), and loads them all in parallel.
 
 ### Memory Footprint Analysis
 
@@ -154,207 +177,235 @@ Full metadata (on demand from .uffs file):
 
 ---
 
-## Phase 1 Implementation: Load All Into RAM
+## Phase 1 Implementation: Load All Into RAM ✅
 
-### Core Data Structure
+### Core Data Structures (as implemented)
 
 ```rust
-struct MultiDriveIndex {
-    drives: Vec<DriveIndex>,
+/// Multi-drive search backend (concrete struct, not a trait).
+pub struct MultiDriveBackend {
+    pub drives: Vec<DriveIndex>,
+    pub last_results: Vec<DisplayRow>,  // kept for re-sorting without re-searching
+    pub sort_column: SortColumn,
+    pub sort_desc: bool,
 }
 
-struct DriveIndex {
-    letter: char,
-    index: MftIndex,
-    source: IndexSource,
+/// A loaded drive with its MftIndex and trigram search index.
+pub struct DriveIndex {
+    pub letter: char,
+    pub index: MftIndex,
+    pub trigram: TrigramIndex,          // trigram inverted index for <10ms search
+    pub paths_lower: Vec<String>,       // pre-resolved lowercase full paths
+    pub source: IndexSource,
 }
 
-enum IndexSource {
-    LiveDrive,                     // Windows IOCP
-    MftFile(PathBuf),              // raw/IOCP/compressed
-    CachedIndex(PathBuf),          // .uffs cache file
+/// Trigram inverted index: maps 3-byte sequences to sorted record indices.
+pub struct TrigramIndex {
+    postings: HashMap<[u8; 3], Vec<u32>>,
+}
+
+pub enum IndexSource {
+    MftFile(PathBuf),  // raw/IOCP/compressed MFT file
 }
 ```
 
-### SearchBackend Trait
+### DisplayRow (as implemented)
 
 ```rust
-trait SearchBackend {
-    /// Search across all loaded drives. Returns up to `limit` results.
-    fn search(&self, pattern: &str, filters: &SearchFilters, limit: usize)
-        -> Vec<DisplayRow>;
-
-    /// Re-sort the last result set by a different column.
-    fn sort(&mut self, column: SortColumn, descending: bool);
-
-    /// Total record count across all drives.
-    fn record_count(&self) -> usize;
-
-    /// Reload indexes from source (picks up file changes).
-    fn refresh(&mut self) -> Result<()>;
-
-    /// List of loaded drives with record counts.
-    fn drives(&self) -> Vec<(char, usize)>;
+pub struct DisplayRow {
+    pub drive: char,       // drive letter
+    pub path: String,      // full resolved path (lowercase)
+    pub name: String,      // filename only (original case)
+    pub size: u64,         // file size in bytes
+    pub is_directory: bool,// for future --files-only/--dirs-only
+    pub modified: i64,     // last modified (Unix microseconds)
 }
 ```
 
-### DisplayRow
+### Sort Columns (7 implemented)
 
 ```rust
-struct DisplayRow {
-    drive: char,
-    path: String,          // full resolved path
-    name: String,          // filename only
-    size: u64,
-    allocated: u64,
-    created: i64,          // Unix micros
-    modified: i64,
-    accessed: i64,
-    descendants: u32,
-    is_directory: bool,
-    attributes: u32,       // NTFS attribute flags
-    extension: String,     // file extension
+pub enum SortColumn {
+    Name,       // filename (case-insensitive)
+    Size,       // file size
+    Modified,   // last modified time
+    Path,       // full path (case-insensitive)
+    Drive,      // drive letter
+    Extension,  // file extension
+    Type,       // devicon file type (groups similar types)
 }
 ```
 
-### Search Implementation
+### Search Implementation (as implemented)
 
 ```rust
-impl SearchBackend for MultiDriveIndex {
-    fn search(&self, pattern: &str, filters: &SearchFilters, limit: usize)
-        -> Vec<DisplayRow>
-    {
-        // 1. Compile pattern once
-        let compiled = compile_parsed_pattern(parsed)?;
+impl MultiDriveBackend {
+    pub fn search(&mut self, pattern: &str, name_only: bool) -> SearchResult {
+        // 1. Parse + compile pattern once
+        let parsed = ParsedPattern::parse(pattern)?;
+        let compiled = compile_parsed_pattern(&parsed)?;
 
         // 2. Search all drives (parallel via rayon)
-        let results: Vec<DisplayRow> = self.drives.par_iter()
-            .flat_map(|drive| {
-                // Try extension index pre-filter
-                let ext_indices = try_get_extension_indices(&drive.index, ...);
-
-                // Walk records, apply pattern + filters, collect
-                search_drive(&drive.index, &compiled, filters, ext_indices, limit)
-            })
+        let drive_results: Vec<Vec<DisplayRow>> = self.drives.par_iter()
+            .map(|drive| search_drive(drive, &compiled, &needle_lower, ...))
             .collect();
 
-        // 3. Apply global limit + sort
-        results.truncate(limit);
-        results
+        // 3. Merge, truncate, sort
+        rows.truncate(limit);  // 200 for short patterns, 1000 for long
+        sort_rows(&mut rows, self.sort_column, self.sort_desc);
+        self.last_results = rows.clone();  // cache for re-sorting
     }
 }
 ```
 
-### Data Flow
+### Data Flow (as implemented)
 
 ```
-TUI startup
+TUI startup → terminal enters alternate screen immediately
     ↓
-Load all drives in parallel (2-8s, show progress bar)
+Spawn background threads (std::thread::scope + mpsc channel)
+  ├─ MFT file threads: load_mft_file() per file
+  └─ Live drive threads: load_live_drive() per drive (Windows)
+    ↓
+While loading: UI renders progress, textarea accepts input
+  ├─ Each drive sends (DriveIndex, LoadTiming) via channel
+  └─ Progress: "✅ C: 3,400,000 rec │ mft: 2.1s paths: 8.3s tri: 1.2s"
+    ↓
+Loading complete → if user typed during loading, search immediately
     ↓
 User types "hallo"
     ↓
-UI debounces (50ms after last keypress)
+Event loop drains ALL buffered keystrokes, re-renders, THEN searches
     ↓
-SearchBackend::search("hallo", filters, 10_000)
+MultiDriveBackend::search("hallo", name_only)
     ↓
 For each drive (parallel via rayon):
-  1. compile_parsed_pattern("hallo") → Contains("hallo")
-  2. Walk MftIndex.records
-  3. For each record: resolve name, apply match + filters
-  4. Collect into Vec<DisplayRow>
+  1. Trigram index lookup: intersect posting lists for ["hal","all","llo"]
+  2. Verify candidates: paths_lower[idx].contains("hallo")
+  3. Build DisplayRow from MftIndex record
     ↓
-Merge results from all drives
+Merge results, truncate (200 short / 1000 long patterns), sort
     ↓
-Apply current sort order
+UI renders list with devicons, highlighted matches, drive colors
     ↓
-UI renders sortable table (top 10K results)
-    ↓
-User presses ↓/↑ to navigate, Enter to act, Tab to change sort
+User presses ↓/↑ to navigate, Tab to cycle sort, Shift+Tab to reverse
 ```
 
 ### Key Design Decisions
 
-**1. Don't use Polars DataFrame**
+**1. Don't use Polars DataFrame** ✅ (implemented)
 
-The current TUI uses `MftQuery` over a Polars `DataFrame`. Problems:
-- DataFrame creation from MftIndex: ~500ms for large drives
-- Every search creates a new filtered DataFrame: slow, allocates
-- Polars pulls in 50+ crates of dependencies
-- **Better**: Search directly on `MftIndex` — it IS the data store
+Polars DataFrame was removed. The TUI searches directly on `MftIndex`
+records with a trigram inverted index. No DataFrame creation, no Polars
+lazy API — just array walks and posting list intersections.
 
-**2. Limit display results to 10,000**
+**2. Limit display results** ✅ (implemented)
 
-Stop scanning after `limit` matches. Nobody scrolls through millions of
-rows in a terminal. 10K is generous. This also means partial patterns
-like "h" (matching millions) complete in <100ms instead of seconds.
+- Short patterns (1-2 chars): 200 results max
+- Long patterns (3+ chars): 1,000 results max
+- Early termination — stops scanning after limit reached
 
-**3. Debounce search input (50ms)**
+**3. Debounce search input** ✅ (implemented)
 
-Don't search on every keystroke — wait 50ms after the last keypress.
-Prevents wasting CPU on "h", "ha", "hal" when the user will type "hallo".
+200ms poll timeout. The event loop drains ALL buffered keystrokes before
+searching, so the textarea stays responsive even during slow searches.
+The user sees their typed text immediately; search runs after input settles.
 
-**4. Background refresh**
+**4. Background refresh** (Wave 3 — planned)
 
-Refresh runs on a separate thread. UI stays responsive with a spinner
-in the status bar. Configurable interval (default 60s, 0 = manual only).
+Ctrl+R shows a placeholder message. Full USN + incremental trigram
+update is planned for Wave 3.
 
-**5. Sort is instant (in-memory)**
+**5. Sort is instant (in-memory)** ✅ (implemented)
 
-After search produces `Vec<DisplayRow>`, sorting is just
-`results.sort_by()` — no re-search needed. User can click/key on any
-column header to re-sort instantly.
-
----
-
-## UI Layout
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ UFFS Search: hallo█                          [C D E F M S] 25.9M│
-├────────┬──────────────────────────────┬──────────┬──────────────┤
-│ Name ▼ │ Path                         │ Size     │ Modified     │
-├────────┼──────────────────────────────┼──────────┼──────────────┤
-│ 📁 Hallo.txt        │ M:\Dropbox\Docs\             │     16 B │ 2008-10-27 │
-│ 📄 Halloween.pub    │ M:\Drop\Wholesale\Publisher\  │  238 KB │ 2015-10-28 │
-│ 📁 Shallow.Seas\    │ M:\Media\TV Shows\Planet...   │  990 MB │ 2015-06-01 │
-│ 📄 Aber Hallo.mp3   │ M:\MyAudio\iTunes\Fips...     │   55 MB │ 2015-10-30 │
-│ 📄 Hallo Welt.mp3   │ M:\MyAudio\iTunes\Rolf...     │  5.6 MB │ 2015-10-29 │
-│                      │                               │         │            │
-├──────────────────────────────────────────────────────────────────┤
-│ 72 matches │ 7 drives │ Search: 3ms │ Last refresh: 12s ago     │
-│ [F1]Help [F5]Refresh [Tab]Sort [Esc]Quit [Enter]Open           │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-- **Search bar**: top, always focused, search-as-you-type
-- **Drive indicators**: show which drives are loaded, with record counts
-- **Results table**: sortable columns, scrollable, truncated paths
-- **Status bar**: match count, search latency, refresh timer
-- **Key hints**: bottom row with available actions
+After search produces `Vec<DisplayRow>`, re-sorting is just
+`sort_unstable_by()` on the cached `last_results` — no re-search needed.
+Tab cycles through 7 sort columns, Shift+Tab toggles direction.
 
 ---
 
-## File Structure
+## UI Layout (as implemented)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ Search NTFS Drives [C D E F M S] 25,900,000 Files                  │
+│ hallo█                                                              │
+├─────────────────────────────────────────────────────────────────────┤
+│ Status: 72 matches │ 3ms │ 25,900,000 records across 7 drives      │
+├─────────────────────────────────────────────────────────────────────┤
+│ Results (72) — Sort: Name ▲                                         │
+│ ▶ M:  Hallo.txt  16 B  …dropbox\docs\hallo.txt                    │
+│   M:  Halloween.pub  238.00 KB  …drop\wholesale\publisher\...     │
+│   M:  Shallow.Seas  990.00 MB  …media\tv shows\planet...          │
+│   M:  Aber Hallo.mp3  55.00 MB  …myaudio\itunes\fips...           │
+│   M:  Hallo Welt.mp3  5.60 MB  …myaudio\itunes\rolf...            │
+│                                                                     │
+├─────────────────────────────────────────────────────────────────────┤
+│ ↑↓ Nav  PgUp/Dn Page  Enter Path  Tab Sort  F2 Name-only           │
+│ Ctrl+R Refresh  Ctrl+Q Quit                                         │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Layout** (4 vertical sections, `ratatui::Layout`):
+
+| Section | Height | Content |
+|---------|--------|---------|
+| Search bar | 3 lines | `TextArea` widget + colored drive letters in title |
+| Status bar | 3 lines | Match count, search time, record count, trigram count |
+| Results table | fills remaining | `Table` with column headers (Drv, Name, Size, Modified, Path) + devicon + highlighting |
+| Help bar | 3 lines | Keybinding hints |
+
+**Visual features:**
+- **Drive letters** in search bar title are color-coded (optimized palettes for 1–10 drives)
+- **Devicons** — Nerd Font file-type icons with per-type colors (via `devicons` crate)
+- **Search term highlighting** — matching text in filename and path shown in bold white
+- **Path truncation** — long paths truncated from the left with `…` prefix (60 char max)
+- **Sort indicator** — current sort column + direction (▲/▼) shown in results title
+- **Selection highlight** — `▶` marker + dark gray background on selected row
+- **Name-only indicator** — `[NAME]` shown in search bar title when F2 toggled
+
+### Keybindings (as implemented)
+
+| Key | Action |
+|-----|--------|
+| Any text | Search-as-you-type (via `TextArea` widget) |
+| `↑` / `↓` | Navigate results |
+| `PageUp` / `PageDown` | Page through results |
+| `Enter` | Show selected file's full path in status bar |
+| `Tab` | Cycle sort column: Name → Size → Modified → Path → Drive → Extension → Type |
+| `Shift+Tab` | Toggle sort direction (ascending/descending) |
+| `F2` | Toggle name-only matching mode |
+| `F3` | Cycle filter: All → Files Only → Dirs Only |
+| `Ctrl+U` | Clear search input |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Y` | Redo |
+| `Ctrl+A` | Select all |
+| `Ctrl+R` | Refresh (placeholder — Wave 3) |
+| `Ctrl+Q` | Quit |
+
+---
+
+## File Structure (as implemented)
 
 ```
 crates/uffs-tui/
 ├── src/
-│   ├── main.rs              # CLI args, terminal setup, event loop
-│   ├── app.rs               # App state, keybindings, dispatch
-│   ├── backend/
-│   │   ├── mod.rs           # SearchBackend trait + SearchFilters
-│   │   ├── index.rs         # MultiDriveIndex (MftIndex direct search)
-│   │   └── display.rs       # DisplayRow, column defs, formatting
-│   ├── ui/
-│   │   ├── mod.rs           # Main render function
-│   │   ├── search_bar.rs    # Search input widget
-│   │   ├── results_table.rs # Sortable results table
-│   │   ├── status_bar.rs    # Status, timing, key hints
-│   │   └── drive_bar.rs     # Drive indicators
-│   └── loading.rs           # Progress bar during index loading
+│   ├── main.rs       # CLI args (clap), terminal setup, event loop, UI rendering
+│   │                 # Includes: ui(), run_app(), highlight_matches(), devicon_color(),
+│   │                 # format_size(), truncate_path(), find_best_mft_file(),
+│   │                 # init_logging() (dual terminal+file with rotation)
+│   ├── app.rs        # App state, TextArea, search dispatch, navigation,
+│   │                 # sort cycling, name-only toggle
+│   └── backend.rs    # MultiDriveBackend, DriveIndex, TrigramIndex, DisplayRow,
+│                     # SortColumn, search_drive(), resolve_path(), load_mft_file(),
+│                     # load_live_drive() (cfg(windows)), build_drive_colors(),
+│                     # PALETTES (1-10 drive color palettes)
 └── Cargo.toml
 ```
+
+**Note**: The original design proposed a nested `backend/` and `ui/` module
+structure. The implementation uses a flat 3-file layout instead — simpler
+and sufficient for the current feature set.
 
 ---
 
@@ -475,14 +526,16 @@ This means deletes have zero cost on the trigram index until a full rebuild.
 
 ---
 
-## Windows Auto-Detect Loading Flow
+## Loading Flow (as implemented)
+
+### Windows Auto-Detect (no args)
 
 ```
 uffs_tui.exe (no args)
     ↓
 detect_ntfs_drives() → [C, D, E, F, G, M, S]
     ↓ (--drive C,D filters to subset)
-For each drive (parallel threads):
+For each drive (parallel threads via std::thread::scope + mpsc):
     ↓
 MftReader::open(drive_letter)
     ↓
@@ -493,9 +546,30 @@ read_index_cached(TTL=600s)
     ↓
 build_drive_index(drive_letter, MftIndex)
   ├─ Resolve ALL paths (parent chain walk) → paths_lower
-  └─ Build TrigramIndex from paths_lower
+  └─ Build TrigramIndex from paths_lower (parallel via rayon chunks)
     ↓
-DriveIndex ready → send to UI via channel
+DriveIndex ready → send to UI via mpsc channel
+    ↓
+UI receives, shows: "✅ C: 3,400,000 rec │ mft:2.1s paths:8.3s tri:1.2s"
+```
+
+### Cross-Platform: `--data-dir` or `--mft-file`
+
+```
+uffs_tui --data-dir ~/uffs_data
+    ↓
+Scan ~/uffs_data/ for drive_* subdirectories
+    ↓
+find_best_mft_file(drive_c/) → C_mft.iocp  (prefers .iocp > .bin > .mft)
+find_best_mft_file(drive_d/) → D_mft.iocp
+    ↓
+For each file (parallel threads):
+    ↓
+load_mft_file(path, drive_letter)
+  ├─ load_raw_mft() → parse records → MftRecordMerger → MftIndex
+  └─ build_drive_index() → paths_lower + TrigramIndex
+    ↓
+DriveIndex ready → send to UI via mpsc channel
 ```
 
 Same flow as `uffs.exe` — DRY, shared `MftReader` API. The only TUI-
@@ -510,30 +584,44 @@ specific part is `build_drive_index` (paths_lower + trigram).
 | Task | Status | Notes |
 |------|--------|-------|
 | CLI args: `--mft-file`, `--drive`, `--data-dir`, positional files | ✅ | Cross-platform |
+| `--data-dir` auto-discovery of `drive_*` subdirectories | ✅ | Prefers `.iocp` > `.bin` > `.mft` |
 | `MultiDriveBackend`: load MFT files with parallel loading | ✅ | `std::thread::scope` + mpsc |
-| Trigram inverted index for <10ms search | ✅ | `HashMap<[u8;3], Vec<u32>>` |
-| `DisplayRow` struct + path resolution | ✅ | Parent chain walk |
-| ratatui table rendering with drive/name/size/path columns | ✅ | Replaced DataFrame-based UI |
+| Trigram inverted index for <10ms search | ✅ | `HashMap<[u8;3], Vec<u32>>`, parallel build |
+| `DisplayRow` struct + path resolution | ✅ | Parent chain walk via `resolve_path()` |
+| ratatui list rendering with devicons + drive colors | ✅ | Replaced DataFrame-based UI |
 | Search-as-you-type with debounce | ✅ | Drain keystrokes, render, then search |
 | Result limit (200 short, 1000 long patterns) | ✅ | Early termination |
-| Status bar: match count + search latency + trigram stats | ✅ | |
+| Status bar: match count + search latency + trigram stats | ✅ | Comma-formatted numbers |
 | Windows LIVE drive auto-detection | ✅ | `detect_ntfs_drives()` + `MftReader` |
 | `--no-cache` flag for fresh MFT reads | ✅ | Bypasses cache + USN |
-| Per-drive timing breakdown (mft/paths/tri) | ✅ | Shown during loading |
-| In-TUI loading progress with input active | ✅ | Type while loading |
+| Per-drive timing breakdown (mft/paths/tri) | ✅ | Compact format: `2.1s` / `350 ms` |
+| In-TUI loading progress with input active | ✅ | Type while loading, search on complete |
 | Mouse capture disabled for text selection | ✅ | |
+| Devicons (Nerd Font file-type icons + color) | ✅ | `devicons` crate, per-type hex colors |
+| Search term highlighting in filename and path | ✅ | Bold white on match, case-insensitive |
+| Per-drive color coding (1–10 drive palettes) | ✅ | Hand-tuned maximally distinct colors |
+| Path truncation with `…` prefix | ✅ | 60 char max, truncates from left |
+| `TextArea` widget (cursor, selection, undo/redo) | ✅ | `ratatui_textarea` crate |
+| PageUp/PageDown navigation | ✅ | Dynamic page size from terminal height |
+| Ctrl+U/Z/Y/A keybindings | ✅ | Clear, undo, redo, select all |
+| Structured dual logging (terminal + rolling file) | ✅ | `tracing_subscriber` + daily rotation |
+| `-v` / `--verbose` flag | ✅ | Sets terminal log level to `info` |
 
-### Wave 2: Sort + Filter (partial ✅)
+### Wave 2: Sort + Filter + Table ✅
 
 | Task | Status | Notes |
 |------|--------|-------|
-| Column sorting (Tab to cycle) | ✅ | Name → Size → Modified → Path |
-| Sort direction toggle (Shift+Tab) | ✅ | Ascending/descending |
+| Column sorting (Tab to cycle, 7 columns) | ✅ | Name → Size → Modified → Path → Drive → Extension → Type |
+| Sort direction toggle (Shift+Tab) | ✅ | Ascending ▲ / descending ▼ |
+| Sort by devicon Type (groups similar files) | ✅ | Music, images, code, etc. grouped |
 | `--name-only` toggle (F2) | ✅ | Filename-only matching |
-| Multi-tier sort (size, then name) | ⏳ | |
-| `--files-only`, `--dirs-only` toggle | ⏳ | |
-| `--attr` filter toggle panel | ⏳ | |
-| Column visibility toggle (F4) | ⏳ | |
+| Multi-tier sort (primary + name tiebreaker) | ✅ | Secondary sort by name when primary column is equal |
+| `--files-only`, `--dirs-only` toggle (F3) | ✅ | Cycles: All → Files Only → Dirs Only |
+| Table widget with column headers | ✅ | Replaced `List` → `Table` with Drv, Name, Size, Modified, Path columns |
+| Sort indicator on active column header | ✅ | Active column highlighted yellow with ▲/▼ arrow |
+| Modified timestamp column | ✅ | `YYYY-MM-DD HH:MM` format via Howard Hinnant civil calendar |
+| `--attr` filter toggle panel | ⏳ | Deferred to Wave 3+ |
+| Column visibility toggle (F4) | ⏳ | Deferred — Table widget now supports it |
 
 ### Wave 3: Refresh + Live
 
@@ -550,6 +638,7 @@ specific part is `build_drive_index` (paths_lower + trigram).
 
 | Task | Status | Notes |
 |------|--------|-------|
+| Enter → show path in status bar | ✅ | `📋 C:\path\to\file` |
 | Enter → copy path to clipboard | ⏳ | |
 | Enter → open file/folder in explorer | ⏳ | Windows only |
 | Detail panel (expand selected row) | ⏳ | All record fields |

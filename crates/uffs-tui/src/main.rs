@@ -43,7 +43,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 use ratatui::{Frame, Terminal};
 use tracing_appender::non_blocking::NonBlocking;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
@@ -565,6 +565,11 @@ where
                             needs_search = true;
                             continue;
                         }
+                        KeyCode::F(3) => {
+                            app.cycle_filter();
+                            app.search();
+                            continue;
+                        }
                         // Ctrl+R: refresh (Wave 3 — full USN + trigram rebuild)
                         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             "🔄 Refresh: planned for Wave 3 (USN + incremental trigram update)"
@@ -662,6 +667,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
         .collect();
     drive_letters.sort_unstable();
     let name_only_indicator = if app.name_only { " [NAME]" } else { "" };
+    let filter_indicator = app.filter_label();
     if app.has_data() {
         // Build colored drive letters for the title
         let mut title_spans: Vec<Span> = vec![Span::raw(" Search NTFS Drives [")];
@@ -677,7 +683,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
             ));
         }
         title_spans.push(Span::raw(format!(
-            "] {} Files{name_only_indicator} ",
+            "] {} Files{name_only_indicator}{filter_indicator} ",
             uffs_mft::format_number_commas(app.backend.total_records() as u64),
         )));
         app.textarea.set_block(
@@ -710,34 +716,70 @@ fn ui(frame: &mut Frame, app: &mut App) {
         .block(Block::default().borders(Borders::ALL).title(" Status "));
     frame.render_widget(status_bar, chunks[1]);
 
-    // Update page size from actual results area height (minus 2 for borders)
-    app.page_size = chunks[2].height.saturating_sub(2) as usize;
+    // Update page size from actual results area height (minus 3 for borders + header)
+    app.page_size = chunks[2].height.saturating_sub(3) as usize;
 
-    // Sort indicator for title
-    let sort_arrow = if app.sort_desc() { "▼" } else { "▲" };
-    let sort_label = match app.sort_column() {
-        backend::SortColumn::Name => "Name",
-        backend::SortColumn::Size => "Size",
-        backend::SortColumn::Modified => "Modified",
-        backend::SortColumn::Path => "Path",
-        backend::SortColumn::Drive => "Drive",
-        backend::SortColumn::Extension => "Extension",
-        backend::SortColumn::Type => "Type",
+    // Sort indicator helper — appends ▲/▼ to the active column header
+    let sort_arrow = if app.sort_desc() { " ▼" } else { " ▲" };
+    let current_sort = app.sort_column();
+    let col_header = |col: backend::SortColumn, label: &str| -> Line<'static> {
+        if col == current_sort {
+            Line::from(vec![
+                Span::styled(
+                    label.to_owned(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    sort_arrow.to_owned(),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ])
+        } else {
+            Line::from(Span::styled(
+                label.to_owned(),
+                Style::default().fg(Color::White),
+            ))
+        }
     };
 
-    // Results list with path and size
-    let items: Vec<ListItem> = app
+    // Build table header row
+    let header = Row::new(vec![
+        Cell::from(col_header(backend::SortColumn::Drive, "Drv")),
+        Cell::from(col_header(backend::SortColumn::Name, "Name")),
+        Cell::from(col_header(backend::SortColumn::Size, "Size")),
+        Cell::from(col_header(backend::SortColumn::Modified, "Modified")),
+        Cell::from(col_header(backend::SortColumn::Path, "Path")),
+    ])
+    .style(
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )
+    .bottom_margin(0);
+
+    let search_term = app.input_text().to_lowercase();
+
+    // Build table rows from results
+    let rows: Vec<Row> = app
         .results
         .iter()
         .map(|row| {
             // Loading progress messages (path empty = loading msg)
             if row.path.is_empty() {
-                return ListItem::new(Line::from(vec![Span::styled(
-                    &row.name,
-                    Style::default()
-                        .fg(get_drive_color(row.drive))
-                        .add_modifier(Modifier::BOLD),
-                )]));
+                return Row::new(vec![
+                    Cell::from(""),
+                    Cell::from(Line::from(Span::styled(
+                        row.name.clone(),
+                        Style::default()
+                            .fg(get_drive_color(row.drive))
+                            .add_modifier(Modifier::BOLD),
+                    ))),
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(""),
+                ]);
             }
 
             // Get file-type icon from devicons (Nerd Font glyphs)
@@ -745,20 +787,20 @@ fn ui(frame: &mut Frame, app: &mut App) {
             let icon_str = fi.icon.to_string();
             let icon_color = devicon_color(fi.color);
 
-            let size_str = format_size(row.size);
-            let search_term = app.input_text().to_lowercase();
-            let mut spans = vec![
-                Span::styled(
-                    format!("{}: ", row.drive),
-                    Style::default()
-                        .fg(get_drive_color(row.drive))
-                        .add_modifier(Modifier::BOLD),
-                ),
+            // Drive column (colored letter)
+            let drive_cell = Cell::from(Line::from(Span::styled(
+                row.drive.to_string(),
+                Style::default()
+                    .fg(get_drive_color(row.drive))
+                    .add_modifier(Modifier::BOLD),
+            )));
+
+            // Name column: icon + highlighted name
+            let mut name_spans = vec![
                 Span::styled(icon_str, Style::default().fg(icon_color)),
                 Span::raw(" "),
             ];
-            // Highlight search term in filename
-            spans.extend(highlight_matches(
+            name_spans.extend(highlight_matches(
                 &row.name,
                 &search_term,
                 Style::default().fg(Color::Cyan),
@@ -766,36 +808,59 @@ fn ui(frame: &mut Frame, app: &mut App) {
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ));
-            spans.push(Span::raw("  "));
-            spans.push(Span::styled(size_str, Style::default().fg(Color::Yellow)));
-            spans.push(Span::raw("  "));
-            // Highlight search term in path
+            let name_cell = Cell::from(Line::from(name_spans));
+
+            // Size column
+            let size_cell = Cell::from(Line::from(Span::styled(
+                uffs_mft::format_bytes(row.size),
+                Style::default().fg(Color::Yellow),
+            )));
+
+            // Modified column
+            let modified_cell = Cell::from(Line::from(Span::styled(
+                uffs_mft::format_timestamp(row.modified),
+                Style::default().fg(Color::DarkGray),
+            )));
+
+            // Path column (highlighted, truncated)
             let path_display = truncate_path(&row.path, 60);
-            spans.extend(highlight_matches(
+            let path_spans = highlight_matches(
                 &path_display,
                 &search_term,
                 Style::default().fg(Color::DarkGray),
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
-            ));
-            ListItem::new(Line::from(spans))
+            );
+            let path_cell = Cell::from(Line::from(path_spans));
+
+            Row::new(vec![drive_cell, name_cell, size_cell, modified_cell, path_cell])
         })
         .collect();
 
-    let results = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(format!(
-            " Results ({}) — Sort: {sort_label} {sort_arrow} ",
-            app.results.len()
-        )))
-        .highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▶ ");
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(3),    // Drive
+            Constraint::Min(20),      // Name (flexible, takes remaining space)
+            Constraint::Length(12),    // Size
+            Constraint::Length(19),    // Modified
+            Constraint::Length(62),    // Path
+        ],
+    )
+    .header(header)
+    .block(Block::default().borders(Borders::ALL).title(format!(
+        " Results ({}) ",
+        app.results.len()
+    )))
+    .row_highlight_style(
+        Style::default()
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol("▶ ");
 
-    frame.render_stateful_widget(results, chunks[2], &mut app.list_state.clone());
+    frame.render_stateful_widget(table, chunks[2], &mut app.table_state.clone());
 
     // Help bar
     let help = Paragraph::new(Line::from(vec![
@@ -809,6 +874,8 @@ fn ui(frame: &mut Frame, app: &mut App) {
         Span::raw(" Sort  "),
         Span::styled("F2", Style::default().fg(Color::Green)),
         Span::raw(" Name-only  "),
+        Span::styled("F3", Style::default().fg(Color::Green)),
+        Span::raw(" Filter  "),
         Span::styled("Ctrl+R", Style::default().fg(Color::Green)),
         Span::raw(" Refresh  "),
         Span::styled("Ctrl+Q", Style::default().fg(Color::Green)),
@@ -966,35 +1033,6 @@ fn truncate_path(path: &str, max_len: usize) -> String {
     let skip = path.chars().count() - max_len + 1;
     let truncated: String = path.chars().skip(skip).collect();
     format!("…{truncated}")
-}
-
-/// Format file size in human-readable format.
-#[expect(
-    clippy::single_call_fn,
-    reason = "separated for testability and readability"
-)]
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "f64 provides sufficient precision for human-readable file sizes"
-)]
-#[expect(
-    clippy::float_arithmetic,
-    reason = "float division is needed for human-readable size formatting"
-)]
-fn format_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes} B")
-    }
 }
 
 #[cfg(test)]
