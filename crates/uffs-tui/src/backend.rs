@@ -30,7 +30,8 @@ pub struct DisplayRow {
     pub name: String,
     /// File size in bytes.
     pub size: u64,
-    /// Whether this is a directory (used for future --files-only/--dirs-only filter).
+    /// Whether this is a directory (used for future --files-only/--dirs-only
+    /// filter).
     #[expect(dead_code, reason = "populated for Wave 2 file/dir filtering")]
     pub is_directory: bool,
     /// Last modified time (Unix microseconds).
@@ -98,7 +99,10 @@ impl TrigramIndex {
                     // Track last pushed idx per trigram to skip consecutive dupes
                     // (cheaper than HashSet — paths have many repeated trigrams)
                     for window in bytes.windows(3) {
-                        let tri: [u8; 3] = [window[0], window[1], window[2]];
+                        let tri: [u8; 3] = match <[u8; 3]>::try_from(window) {
+                            Ok(arr) => arr,
+                            Err(_) => continue,
+                        };
                         let list = local.entry(tri).or_default();
                         if list.last() != Some(&record_idx) {
                             list.push(record_idx);
@@ -114,7 +118,9 @@ impl TrigramIndex {
             std::collections::HashMap::new();
 
         for chunk_map in chunk_maps {
-            for (tri, indices) in chunk_map {
+            let mut sorted_entries: Vec<_> = chunk_map.into_iter().collect();
+            sorted_entries.sort_unstable_by_key(|(tri, _)| *tri);
+            for (tri, indices) in sorted_entries {
                 postings.entry(tri).or_default().extend(indices);
             }
         }
@@ -640,19 +646,75 @@ const PALETTES: &[&[(u8, u8, u8)]] = &[
     // 3 drives
     &[(100, 180, 255), (80, 220, 80), (255, 150, 50)],
     // 4 drives
-    &[(100, 180, 255), (80, 220, 80), (255, 150, 50), (200, 100, 255)],
+    &[
+        (100, 180, 255),
+        (80, 220, 80),
+        (255, 150, 50),
+        (200, 100, 255),
+    ],
     // 5 drives
-    &[(100, 180, 255), (80, 220, 80), (255, 150, 50), (200, 100, 255), (255, 255, 80)],
+    &[
+        (100, 180, 255),
+        (80, 220, 80),
+        (255, 150, 50),
+        (200, 100, 255),
+        (255, 255, 80),
+    ],
     // 6 drives
-    &[(100, 180, 255), (80, 220, 80), (255, 150, 50), (200, 100, 255), (255, 255, 80), (255, 100, 100)],
+    &[
+        (100, 180, 255),
+        (80, 220, 80),
+        (255, 150, 50),
+        (200, 100, 255),
+        (255, 255, 80),
+        (255, 100, 100),
+    ],
     // 7 drives
-    &[(100, 180, 255), (80, 220, 80), (255, 150, 50), (200, 100, 255), (255, 255, 80), (255, 100, 100), (100, 255, 220)],
+    &[
+        (100, 180, 255),
+        (80, 220, 80),
+        (255, 150, 50),
+        (200, 100, 255),
+        (255, 255, 80),
+        (255, 100, 100),
+        (100, 255, 220),
+    ],
     // 8 drives
-    &[(100, 180, 255), (80, 220, 80), (255, 150, 50), (200, 100, 255), (255, 255, 80), (255, 100, 100), (100, 255, 220), (255, 130, 200)],
+    &[
+        (100, 180, 255),
+        (80, 220, 80),
+        (255, 150, 50),
+        (200, 100, 255),
+        (255, 255, 80),
+        (255, 100, 100),
+        (100, 255, 220),
+        (255, 130, 200),
+    ],
     // 9 drives
-    &[(100, 180, 255), (80, 220, 80), (255, 150, 50), (200, 100, 255), (255, 255, 80), (255, 100, 100), (100, 255, 220), (255, 130, 200), (255, 255, 255)],
+    &[
+        (100, 180, 255),
+        (80, 220, 80),
+        (255, 150, 50),
+        (200, 100, 255),
+        (255, 255, 80),
+        (255, 100, 100),
+        (100, 255, 220),
+        (255, 130, 200),
+        (255, 255, 255),
+    ],
     // 10 drives
-    &[(100, 180, 255), (80, 220, 80), (255, 150, 50), (200, 100, 255), (255, 255, 80), (255, 100, 100), (100, 255, 220), (255, 130, 200), (255, 255, 255), (180, 140, 100)],
+    &[
+        (100, 180, 255),
+        (80, 220, 80),
+        (255, 150, 50),
+        (200, 100, 255),
+        (255, 255, 80),
+        (255, 100, 100),
+        (100, 255, 220),
+        (255, 130, 200),
+        (255, 255, 255),
+        (180, 140, 100),
+    ],
 ];
 
 /// Build a drive-letter → color mapping for the currently loaded drives.
@@ -660,7 +722,13 @@ const PALETTES: &[&[(u8, u8, u8)]] = &[
 /// Assigns colors from the optimal palette for the given number of drives.
 /// Drives are sorted alphabetically so the mapping is deterministic.
 #[must_use]
-pub fn build_drive_colors(drives: &[DriveIndex]) -> std::collections::HashMap<char, ratatui::style::Color> {
+#[expect(
+    clippy::single_call_fn,
+    reason = "public API: intentionally a standalone function for reuse and clarity"
+)]
+pub fn build_drive_colors(
+    drives: &[DriveIndex],
+) -> std::collections::HashMap<char, ratatui::style::Color> {
     use ratatui::style::Color;
 
     let mut letters: Vec<char> = drives.iter().map(|dr| dr.letter).collect();
@@ -668,15 +736,20 @@ pub fn build_drive_colors(drives: &[DriveIndex]) -> std::collections::HashMap<ch
     letters.dedup();
 
     let count = letters.len();
-    let palette_idx = count.saturating_sub(1).min(PALETTES.len() - 1);
-    let palette = PALETTES[palette_idx];
+    let palette_idx = count
+        .saturating_sub(1)
+        .min(PALETTES.len().saturating_sub(1));
+    let default_palette: &[(u8, u8, u8)] = &[(255, 255, 255)];
+    let palette = PALETTES.get(palette_idx).unwrap_or(&default_palette);
 
     letters
         .into_iter()
         .enumerate()
         .map(|(idx, letter)| {
-            let (r, g, b) = palette[idx % palette.len()];
-            (letter, Color::Rgb(r, g, b))
+            let &(red, green, blue) = palette
+                .get(idx % palette.len().max(1))
+                .unwrap_or(&(255, 255, 255));
+            (letter, Color::Rgb(red, green, blue))
         })
         .collect()
 }
@@ -712,12 +785,12 @@ fn sort_rows(rows: &mut [DisplayRow], column: SortColumn, descending: bool) {
 /// Requires Windows and Administrator privileges.
 /// Timing info returned alongside a loaded `DriveIndex`.
 pub struct LoadTiming {
-    /// Time to load/read the MFT (ms).
-    pub mft_ms: u128,
-    /// Time to resolve all paths (ms).
-    pub path_ms: u128,
-    /// Time to build trigram index (ms).
-    pub tri_ms: u128,
+    /// Time to load/read the MFT (milliseconds).
+    pub mft: u128,
+    /// Time to resolve all paths (milliseconds).
+    pub path: u128,
+    /// Time to build trigram index (milliseconds).
+    pub trigram: u128,
 }
 
 #[cfg(windows)]
@@ -747,19 +820,29 @@ pub fn load_live_drive(
                 .with_context(|| format!("Failed to read MFT for drive {drive_letter}:"))
         }
     })?;
-    let mft_ms = mft_start.elapsed().as_millis();
+    let mft_elapsed = mft_start.elapsed().as_millis();
 
-    let (drive_index, path_ms, tri_ms) = build_drive_index(drive_letter, index)?;
-    Ok((drive_index, LoadTiming { mft_ms, path_ms, tri_ms }))
+    let (drive_index, path_elapsed, tri_elapsed) = build_drive_index(drive_letter, index);
+    Ok((
+        drive_index,
+        LoadTiming {
+            mft: mft_elapsed,
+            path: path_elapsed,
+            trigram: tri_elapsed,
+        },
+    ))
 }
 
 /// Build a `DriveIndex` from a loaded `MftIndex` (shared by live + file paths).
 ///
 /// Returns `(DriveIndex, path_resolve_ms, trigram_build_ms)`.
-fn build_drive_index(
-    drive_letter: char,
-    index: MftIndex,
-) -> anyhow::Result<(DriveIndex, u128, u128)> {
+/// Called from both `load_live_drive` (cfg(windows)) and `load_mft_file`,
+/// so two call sites exist even though only one is visible per platform.
+#[expect(
+    clippy::single_call_fn,
+    reason = "called from both load_live_drive (cfg(windows)) and load_mft_file"
+)]
+fn build_drive_index(drive_letter: char, index: MftIndex) -> (DriveIndex, u128, u128) {
     let volume_prefix = format!("{drive_letter}:\\");
     let record_count = index.records.len();
 
@@ -779,13 +862,13 @@ fn build_drive_index(
             resolve_path(&index, record_idx, &volume_prefix).to_ascii_lowercase()
         })
         .collect();
-    let path_ms = path_start.elapsed().as_millis();
+    let path_elapsed = path_start.elapsed().as_millis();
 
     let tri_start = Instant::now();
     let trigram = TrigramIndex::build(&paths_lower);
-    let tri_ms = tri_start.elapsed().as_millis();
+    let tri_elapsed = tri_start.elapsed().as_millis();
 
-    Ok((
+    (
         DriveIndex {
             letter: drive_letter,
             index,
@@ -793,9 +876,9 @@ fn build_drive_index(
             paths_lower,
             source: IndexSource::MftFile(PathBuf::from(format!("{drive_letter}:"))),
         },
-        path_ms,
-        tri_ms,
-    ))
+        path_elapsed,
+        tri_elapsed,
+    )
 }
 
 /// Load an MFT file (raw, IOCP capture, or compressed) into a `DriveIndex`.
@@ -839,14 +922,18 @@ pub fn load_mft_file(
 
     let records = merger.merge();
     let index = MftIndex::from_parsed_records(drive_letter, records);
-    let mft_ms = mft_start.elapsed().as_millis();
+    let mft_elapsed = mft_start.elapsed().as_millis();
 
-    let (drive_index, path_ms, tri_ms) = build_drive_index(drive_letter, index)?;
+    let (drive_index, path_elapsed, tri_elapsed) = build_drive_index(drive_letter, index);
     Ok((
         DriveIndex {
             source: IndexSource::MftFile(mft_path.to_path_buf()),
             ..drive_index
         },
-        LoadTiming { mft_ms, path_ms, tri_ms },
+        LoadTiming {
+            mft: mft_elapsed,
+            path: path_elapsed,
+            trigram: tri_elapsed,
+        },
     ))
 }

@@ -26,14 +26,17 @@ pub struct App {
     /// Whether a search is currently running in background (Wave 4: spinner).
     #[expect(dead_code, reason = "will be used for UI loading spinner in Wave 4")]
     pub searching: bool,
-    /// Visible page size for PageUp/Down (set by ui() on each render).
+    /// Visible page size for PageUp/Down (set by `ui()` on each render).
     pub page_size: usize,
 }
 
 impl App {
     /// Get the current search text from the textarea.
     pub fn input_text(&self) -> String {
-        self.textarea.lines().first().map_or(String::new(), |line| line.to_owned())
+        self.textarea
+            .lines()
+            .first()
+            .map_or(String::new(), ToOwned::to_owned)
     }
 
     /// Create a new application with a pre-loaded backend.
@@ -198,7 +201,14 @@ impl App {
             fc(self.results.len()),
             {
                 let ms = result.duration.as_millis();
-                if ms < 1000 { format!("{ms}ms") } else { format!("{:.1}s", ms as f64 / 1000.0) }
+                if ms < 1000 {
+                    format!("{ms}ms")
+                } else {
+                    let tenths = (ms + 50) / 100;
+                    let whole = tenths / 10;
+                    let frac = tenths % 10;
+                    format!("{whole}.{frac}s")
+                }
             },
             fc(result.records_scanned),
             self.backend.drives.len(),
@@ -242,8 +252,7 @@ impl App {
     }
 }
 
-
-/// Create a configured single-line TextArea for the search box.
+/// Create a configured single-line `TextArea` for the search box.
 fn make_search_textarea<'a>() -> TextArea<'a> {
     use ratatui::style::{Color, Style};
 

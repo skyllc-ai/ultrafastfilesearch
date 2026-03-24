@@ -282,7 +282,7 @@ fn main() -> Result<()> {
                                 .and_then(|name| name.to_str())
                                 .unwrap_or("?")
                                 .to_owned();
-                            drop(thread_sender.send((file_name, result.map(|(di, t)| (di, t)))));
+                            drop(thread_sender.send((file_name, result)));
                         })
                     })
                     .collect();
@@ -295,7 +295,7 @@ fn main() -> Result<()> {
                     handles.push(scope.spawn(move || {
                         let label = format!("LIVE {drive_letter}:");
                         let result = load_live_drive_impl(drive_letter, no_cache_flag);
-                        drop(thread_sender.send((label, result.map(|(di, t)| (di, t)))));
+                        drop(thread_sender.send((label, result)));
                     }));
                 }
 
@@ -323,9 +323,9 @@ fn main() -> Result<()> {
                             "✅ {}:  {:>10} rec  │  mft:{:>7}  paths:{:>7}  tri:{:>7}  │  {:>6} trigrams  ({})",
                             drive_index.letter,
                             fc(drive_index.index.records.len()),
-                            format_ms_compact(timing.mft_ms),
-                            format_ms_compact(timing.path_ms),
-                            format_ms_compact(timing.tri_ms),
+                            format_ms_compact(timing.mft),
+                            format_ms_compact(timing.path),
+                            format_ms_compact(timing.trigram),
                             fc(drive_index.trigram.posting_count()),
                             file_name,
                         );
@@ -376,10 +376,44 @@ fn main() -> Result<()> {
                                     app.textarea.select_all();
                                     app.textarea.cut();
                                 }
-                                KeyCode::Char('z') => { app.textarea.undo(); }
-                                KeyCode::Char('y') => { app.textarea.redo(); }
-                                KeyCode::Char('a') => { app.textarea.select_all(); }
-                                _ => { app.textarea.input(key); }
+                                KeyCode::Char('z') => {
+                                    app.textarea.undo();
+                                }
+                                KeyCode::Char('y') => {
+                                    app.textarea.redo();
+                                }
+                                KeyCode::Char('a') => {
+                                    app.textarea.select_all();
+                                }
+                                KeyCode::Char(_)
+                                | KeyCode::Backspace
+                                | KeyCode::Enter
+                                | KeyCode::Left
+                                | KeyCode::Right
+                                | KeyCode::Up
+                                | KeyCode::Down
+                                | KeyCode::Home
+                                | KeyCode::End
+                                | KeyCode::PageUp
+                                | KeyCode::PageDown
+                                | KeyCode::Tab
+                                | KeyCode::BackTab
+                                | KeyCode::Delete
+                                | KeyCode::Insert
+                                | KeyCode::F(_)
+                                | KeyCode::Null
+                                | KeyCode::Esc
+                                | KeyCode::CapsLock
+                                | KeyCode::ScrollLock
+                                | KeyCode::NumLock
+                                | KeyCode::PrintScreen
+                                | KeyCode::Pause
+                                | KeyCode::Menu
+                                | KeyCode::KeypadBegin
+                                | KeyCode::Media(_)
+                                | KeyCode::Modifier(_) => {
+                                    app.textarea.input(key);
+                                }
                             }
                         } else {
                             app.textarea.input(key);
@@ -438,6 +472,10 @@ fn main() -> Result<()> {
     clippy::wildcard_enum_match_arm,
     reason = "only specific keys are handled; wildcard is idiomatic for key dispatch"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "event loop is a single cohesive state machine; splitting would fragment control flow"
+)]
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
 where
     <B as ratatui::backend::Backend>::Error: Send + Sync + 'static,
@@ -463,7 +501,9 @@ where
                             KeyCode::Up => app.previous(),
                             KeyCode::Tab => app.cycle_sort(),
                             KeyCode::BackTab => app.toggle_sort_direction(),
-                            _ => { app.textarea.input(key); }
+                            _ => {
+                                app.textarea.input(key);
+                            }
                         }
                     }
                 }
@@ -489,10 +529,22 @@ where
 
                     // Intercept our custom action keys BEFORE textarea
                     match key.code {
-                        KeyCode::Down => { app.next(); continue; }
-                        KeyCode::Up => { app.previous(); continue; }
-                        KeyCode::PageDown => { app.page_down(); continue; }
-                        KeyCode::PageUp => { app.page_up(); continue; }
+                        KeyCode::Down => {
+                            app.next();
+                            continue;
+                        }
+                        KeyCode::Up => {
+                            app.previous();
+                            continue;
+                        }
+                        KeyCode::PageDown => {
+                            app.page_down();
+                            continue;
+                        }
+                        KeyCode::PageUp => {
+                            app.page_up();
+                            continue;
+                        }
                         KeyCode::Enter => {
                             // Show selected path in status bar
                             if let Some(path) = app.selected_path() {
@@ -500,8 +552,14 @@ where
                             }
                             continue;
                         }
-                        KeyCode::Tab => { app.cycle_sort(); continue; }
-                        KeyCode::BackTab => { app.toggle_sort_direction(); continue; }
+                        KeyCode::Tab => {
+                            app.cycle_sort();
+                            continue;
+                        }
+                        KeyCode::BackTab => {
+                            app.toggle_sort_direction();
+                            continue;
+                        }
                         KeyCode::F(2) => {
                             app.toggle_name_only();
                             needs_search = true;
@@ -509,7 +567,8 @@ where
                         }
                         // Ctrl+R: refresh (Wave 3 — full USN + trigram rebuild)
                         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.status = "🔄 Refresh: planned for Wave 3 (USN + incremental trigram update)".to_owned();
+                            "🔄 Refresh: planned for Wave 3 (USN + incremental trigram update)"
+                                .clone_into(&mut app.status);
                             continue;
                         }
                         // Ctrl+U: clear line (unix-style)
@@ -574,10 +633,6 @@ const fn is_exit_key(key: KeyEvent) -> bool {
     reason = "layout split guarantees exactly 4 chunks matching the 4 constraints"
 )]
 #[expect(
-    clippy::option_if_let_else,
-    reason = "if-let is more readable for widget construction with different layouts per branch"
-)]
-#[expect(
     clippy::too_many_lines,
     reason = "UI rendering is a single cohesive function; splitting would fragment layout logic"
 )]
@@ -595,12 +650,8 @@ fn ui(frame: &mut Frame, app: &mut App) {
 
     // Build drive color map (dynamic palette based on number of drives)
     let drive_colors = backend::build_drive_colors(&app.backend.drives);
-    let get_drive_color = |letter: char| -> Color {
-        drive_colors
-            .get(&letter)
-            .copied()
-            .unwrap_or(Color::White)
-    };
+    let get_drive_color =
+        |letter: char| -> Color { drive_colors.get(&letter).copied().unwrap_or(Color::White) };
 
     // Search input with drive indicators (sorted, comma-formatted count)
     let mut drive_letters: Vec<char> = app
@@ -629,8 +680,11 @@ fn ui(frame: &mut Frame, app: &mut App) {
             "] {} Files{name_only_indicator} ",
             uffs_mft::format_number_commas(app.backend.total_records() as u64),
         )));
-        app.textarea
-            .set_block(Block::default().borders(Borders::ALL).title(Line::from(title_spans)));
+        app.textarea.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(Line::from(title_spans)),
+        );
     } else {
         app.textarea.set_block(
             Block::default()
@@ -708,7 +762,9 @@ fn ui(frame: &mut Frame, app: &mut App) {
                 &row.name,
                 &search_term,
                 Style::default().fg(Color::Cyan),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::raw("  "));
             spans.push(Span::styled(size_str, Style::default().fg(Color::Yellow)));
@@ -719,7 +775,9 @@ fn ui(frame: &mut Frame, app: &mut App) {
                 &path_display,
                 &search_term,
                 Style::default().fg(Color::DarkGray),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ));
             ListItem::new(Line::from(spans))
         })
@@ -833,22 +891,23 @@ fn highlight_matches(
     let mut spans = Vec::new();
     let mut last_end = 0;
 
-    for (start, _) in lower.match_indices(needle) {
+    for (start, matched) in lower.match_indices(needle) {
         if start > last_end {
-            spans.push(Span::styled(
-                text[last_end..start].to_owned(),
-                normal_style,
-            ));
+            if let Some(before) = text.get(last_end..start) {
+                spans.push(Span::styled(before.to_owned(), normal_style));
+            }
         }
-        spans.push(Span::styled(
-            text[start..start + needle.len()].to_owned(),
-            highlight_style,
-        ));
-        last_end = start + needle.len();
+        let end = start + matched.len();
+        if let Some(hit) = text.get(start..end) {
+            spans.push(Span::styled(hit.to_owned(), highlight_style));
+        }
+        last_end = end;
     }
 
     if last_end < text.len() {
-        spans.push(Span::styled(text[last_end..].to_owned(), normal_style));
+        if let Some(tail) = text.get(last_end..) {
+            spans.push(Span::styled(tail.to_owned(), normal_style));
+        }
     }
 
     if spans.is_empty() {
@@ -858,15 +917,25 @@ fn highlight_matches(
     spans
 }
 
-/// Convert a devicons hex color string (e.g., `"#e37933"`) to a ratatui `Color`.
+/// Convert a devicons hex color string (e.g., `"#e37933"`) to a ratatui
+/// `Color`.
+///
+/// Hex strings from devicons are always 7-byte ASCII (`#RRGGBB`), so
+/// byte-level `.get()` slicing is safe.
+#[expect(
+    clippy::single_call_fn,
+    reason = "standalone color-parsing helper; keeps rendering code readable"
+)]
 fn devicon_color(hex: &str) -> Color {
     if hex.len() == 7 && hex.starts_with('#') {
-        if let (Ok(r), Ok(g), Ok(b)) = (
-            u8::from_str_radix(&hex[1..3], 16),
-            u8::from_str_radix(&hex[3..5], 16),
-            u8::from_str_radix(&hex[5..7], 16),
-        ) {
-            return Color::Rgb(r, g, b);
+        if let (Some(rr), Some(gg), Some(bb)) = (hex.get(1..3), hex.get(3..5), hex.get(5..7)) {
+            if let (Ok(red), Ok(green), Ok(blue)) = (
+                u8::from_str_radix(rr, 16),
+                u8::from_str_radix(gg, 16),
+                u8::from_str_radix(bb, 16),
+            ) {
+                return Color::Rgb(red, green, blue);
+            }
         }
     }
     Color::White
@@ -877,7 +946,11 @@ fn format_ms_compact(ms: u128) -> String {
     if ms < 1000 {
         format!("{ms} ms")
     } else {
-        format!("{:.1}  s", ms as f64 / 1000.0)
+        // Integer arithmetic: tenths of a second to avoid float_arithmetic lint
+        let tenths = (ms + 50) / 100; // round to nearest tenth
+        let whole = tenths / 10;
+        let frac = tenths % 10;
+        format!("{whole}.{frac}  s")
     }
 }
 
@@ -946,7 +1019,10 @@ mod tests {
             KeyModifiers::NONE,
         )));
         // Esc goes to textarea, doesn't exit
-        assert!(!is_exit_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(!is_exit_key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE
+        )));
         // Ctrl+C goes to textarea, doesn't exit
         assert!(!is_exit_key(KeyEvent::new(
             KeyCode::Char('c'),
