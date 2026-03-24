@@ -220,6 +220,21 @@ fn main() -> Result<()> {
         mft_files.sort();
     }
 
+    // On Windows: auto-detect NTFS drives when no files specified
+    #[cfg(windows)]
+    let live_drives: Vec<char> = if mft_files.is_empty() && cli.data_dir.is_none() {
+        let mut drives = uffs_mft::detect_ntfs_drives();
+        // If --drive specified, filter to just those
+        if !cli.drive.is_empty() {
+            drives.retain(|dr| cli.drive.contains(dr));
+        }
+        drives
+    } else {
+        Vec::new()
+    };
+    #[cfg(not(windows))]
+    let live_drives: Vec<char> = Vec::new();
+
     // Setup terminal immediately so the TUI is visible during loading
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -230,11 +245,13 @@ fn main() -> Result<()> {
     // Create app and start loading MFT files on background threads
     let mut app = App::new();
 
-    if !mft_files.is_empty() {
-        app.status = format!("Loading {} MFT file(s)...", mft_files.len());
+    let total_to_load = mft_files.len() + live_drives.len();
 
-        // Build load tasks
-        let load_tasks: Vec<_> = mft_files
+    if total_to_load > 0 {
+        app.status = format!("Loading {total_to_load} drive(s)...");
+
+        // Build load tasks: MFT files + live drives unified
+        let file_tasks: Vec<_> = mft_files
             .iter()
             .enumerate()
             .map(|(idx, path)| (path.clone(), cli.drive.get(idx).copied()))
@@ -243,10 +260,11 @@ fn main() -> Result<()> {
         // Use a channel to receive loaded drives from background threads
         let (sender, receiver) = std::sync::mpsc::channel();
 
-        // Spawn loading threads
+        // Spawn loading threads for both MFT files and live drives
         let _load_handle = std::thread::spawn(move || {
             std::thread::scope(|scope| {
-                let senders: Vec<_> = load_tasks
+                // Spawn threads for MFT file loading
+                let mut handles: Vec<_> = file_tasks
                     .iter()
                     .map(|(file_path, drive_opt)| {
                         let thread_sender = sender.clone();
@@ -263,18 +281,29 @@ fn main() -> Result<()> {
                         })
                     })
                     .collect();
-                for handle in senders {
+
+                // Spawn threads for live NTFS drives
+                // (live_drives is always empty on non-Windows)
+                for drive_letter in live_drives {
+                    let thread_sender = sender.clone();
+                    handles.push(scope.spawn(move || {
+                        let label = format!("LIVE {drive_letter}:");
+                        let result = load_live_drive_impl(drive_letter);
+                        drop(thread_sender.send((label, result)));
+                    }));
+                }
+
+                for handle in handles {
                     drop(handle.join());
                 }
             });
         });
 
         // Poll for loaded drives while rendering the TUI
-        let total_files = mft_files.len();
         let mut loaded_count = 0_usize;
         let load_start = std::time::Instant::now();
 
-        while loaded_count < total_files {
+        while loaded_count < total_to_load {
             // Render current state
             terminal.draw(|frame| ui(frame, &app))?;
 
@@ -318,7 +347,7 @@ fn main() -> Result<()> {
                     }
                 }
                 app.status = format!(
-                    "Loading... {loaded_count}/{total_files} drives ({} records, {:.1}s)",
+                    "Loading... {loaded_count}/{total_to_load} drives ({} records, {:.1}s)",
                     app.backend.total_records(),
                     load_start.elapsed().as_secs_f64()
                 );
@@ -628,6 +657,22 @@ fn ui(frame: &mut Frame, app: &App) {
     ]))
     .block(Block::default().borders(Borders::ALL).title(" Help "));
     frame.render_widget(help, chunks[3]);
+}
+
+/// Load a live NTFS drive — platform dispatch.
+#[cfg(windows)]
+fn load_live_drive_impl(drive_letter: char) -> anyhow::Result<backend::DriveIndex> {
+    backend::load_live_drive(drive_letter)
+}
+
+/// Load a live NTFS drive — not available on non-Windows.
+#[cfg(not(windows))]
+#[expect(
+    clippy::single_call_fn,
+    reason = "platform-specific stub; Windows version in backend::load_live_drive"
+)]
+fn load_live_drive_impl(drive_letter: char) -> Result<backend::DriveIndex> {
+    anyhow::bail!("Live drive loading requires Windows (drive {drive_letter}:)")
 }
 
 /// Find the best MFT file in a drive directory, preferring .iocp > .bin > .mft.

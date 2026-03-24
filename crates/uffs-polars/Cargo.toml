@@ -32,6 +32,11 @@ categories.workspace = true
 [lib]
 name = "uffs_polars"
 path = "src/lib.rs"
+# Disable doc-tests and unit tests: this is a facade crate that re-exports polars.
+# Doc-tests/tests fail because rustdoc/clippy sometimes compile separately and
+# can't resolve the git-dependency polars crate in certain CI configurations.
+doctest = false
+test = false
 
 # ──────────────────────────────────────────────────────────────────────────────
 # POLARS SOURCE COMPILATION (ISOLATED HERE)

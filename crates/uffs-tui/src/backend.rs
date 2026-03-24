@@ -644,6 +644,64 @@ fn sort_rows(rows: &mut [DisplayRow], column: SortColumn, descending: bool) {
     });
 }
 
+/// Load a live NTFS drive using the same flow as `uffs.exe`:
+/// detect → use cache → apply USN journal → return `MftIndex`.
+///
+/// Uses `MftReader::read_index_cached()` which is the recommended API.
+/// Requires Windows and Administrator privileges.
+#[cfg(windows)]
+pub fn load_live_drive(drive_letter: char) -> anyhow::Result<DriveIndex> {
+    use anyhow::Context;
+
+    /// Cache TTL in seconds (10 minutes, same as CLI).
+    const INDEX_TTL_SECONDS: u64 = 600;
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let index = rt.block_on(async {
+        let reader = uffs_mft::MftReader::open(drive_letter)
+            .with_context(|| format!("Failed to open drive {drive_letter}:"))?;
+        reader
+            .read_index_cached(INDEX_TTL_SECONDS)
+            .await
+            .with_context(|| format!("Failed to read MFT for drive {drive_letter}:"))
+    })?;
+
+    build_drive_index(drive_letter, index)
+}
+
+/// Build a `DriveIndex` from a loaded `MftIndex` (shared by live + file paths).
+#[cfg(windows)]
+fn build_drive_index(drive_letter: char, index: MftIndex) -> anyhow::Result<DriveIndex> {
+    let volume_prefix = format!("{drive_letter}:\\");
+    let record_count = index.records.len();
+
+    let paths_lower: Vec<String> = (0..record_count)
+        .map(|record_idx| {
+            let Some(record) = index.records.get(record_idx) else {
+                return String::new();
+            };
+            if !record.first_name.name.is_valid() {
+                return String::new();
+            }
+            let name = index.get_name(&record.first_name.name);
+            if name.is_empty() || name == "." {
+                return String::new();
+            }
+            resolve_path(&index, record_idx, &volume_prefix).to_ascii_lowercase()
+        })
+        .collect();
+
+    let trigram = TrigramIndex::build(&paths_lower);
+
+    Ok(DriveIndex {
+        letter: drive_letter,
+        index,
+        trigram,
+        paths_lower,
+        source: IndexSource::MftFile(PathBuf::from(format!("{drive_letter}:"))),
+    })
+}
+
 /// Load an MFT file (raw, IOCP capture, or compressed) into a `DriveIndex`.
 ///
 /// Auto-detects the file format. If no drive letter is provided, infers it
