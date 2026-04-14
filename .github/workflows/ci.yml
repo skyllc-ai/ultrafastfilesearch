@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         run: rustup show
@@ -69,7 +69,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         run: rustup show
@@ -86,7 +86,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         run: rustup show
@@ -112,7 +112,7 @@ jobs:
       RUSTFLAGS: "-C debuginfo=1 -C target-cpu=native -C link-arg=-Wl,--gc-sections"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         run: rustup show
@@ -151,7 +151,7 @@ jobs:
       RUSTFLAGS: "-C debuginfo=1 -C target-cpu=native -C link-arg=-Wl,--gc-sections"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         run: rustup show
@@ -179,7 +179,7 @@ jobs:
       RUSTFLAGS: "-C debuginfo=1 -C target-cpu=native -C link-arg=-Wl,--gc-sections"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         run: rustup show
@@ -199,7 +199,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         run: rustup show
@@ -221,7 +221,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Enforce file size policy
         run: bash scripts/ci/check_file_size_policy.sh
