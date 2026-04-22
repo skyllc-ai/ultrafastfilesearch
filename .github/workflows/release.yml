@@ -548,20 +548,41 @@ jobs:
           **Full Changelog**: https://github.com/${{ github.repository }}/commits/${{ needs.release-preparation.outputs.version }}
           EOF
 
-      - name: Create Git tag (workflow_dispatch only)
-        if: github.event_name == 'workflow_dispatch'
-        shell: bash
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-          git tag -a "${{ needs.release-preparation.outputs.tag }}" -m "Release ${{ needs.release-preparation.outputs.version }}"
-          git push origin "${{ needs.release-preparation.outputs.tag }}"
-
-      - name: Create GitHub Release
+      - name: Create GitHub Release (creates tag via REST API)
+        # Tag creation is handled by action-gh-release's built-in
+        # logic rather than an explicit `git push origin $TAG`.
+        # Rationale — avoid GitHub's workflow-file protection:
+        #
+        # The git protocol-level tag push is rejected by GitHub's
+        # server-side check whenever the tag's target commit has
+        # different workflow files than the default branch's current
+        # HEAD.  That race fires whenever any PR touching
+        # `.github/workflows/*` merges while a release.yml run is
+        # in flight.  Observed with run #24795626228 (v99.98.99)
+        # where PR #31's merge at 19:00:55Z made the 19:01:37Z tag
+        # push fail with:
+        #
+        #   remote rejected: refusing to allow a GitHub App to
+        #   create or update workflow `.github/workflows/
+        #   auto-tag-release.yml` without `workflows` permission
+        #
+        # The REST API path (creating a `refs/tags/*` via
+        # `POST /repos/:owner/:repo/git/refs`, which action-gh-
+        # release uses internally when `tag_name` is set and the
+        # tag does not yet exist) is not subject to the same
+        # server-side guard, so it succeeds with just the default
+        # `contents: write` permission.
+        #
+        # `target_commitish` pins the tag to the specific commit
+        # we built from, not whatever main's HEAD happens to be at
+        # action runtime.  Falls back to `github.sha` when
+        # invoked via `push: tags: v*` (where `inputs.commit_sha`
+        # is unset — the tag already exists so this field is
+        # ignored anyway).
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
           tag_name: ${{ needs.release-preparation.outputs.tag }}
+          target_commitish: ${{ inputs.commit_sha || github.sha }}
           name: ${{ needs.release-preparation.outputs.release-name }}
           body_path: release-notes.md
           files: final-release/*
