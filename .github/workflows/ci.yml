@@ -20,6 +20,13 @@ on:
       - 'scripts/ci/check_file_size_policy.sh'
       - 'scripts/ci/file_size_exceptions.txt'
       - 'scripts/ci/ci-pipeline.rs'
+      # Doc-only changes must still trigger Tier 1 because
+      # `main-protection` has `bypass_actors: []` (no admin bypass) and
+      # requires 6 Tier 1 status checks.  Without docs in paths, a
+      # pure-doc PR (e.g. PR #35) would deadlock: paths filter skips
+      # CI → required checks never report → branch protection blocks
+      # merge indefinitely.  Cost is ~2 min of cached CI runs.
+      - '**/*.md'
   pull_request:
     branches: [ main ]
     paths:
@@ -35,6 +42,13 @@ on:
       - 'scripts/ci/check_file_size_policy.sh'
       - 'scripts/ci/file_size_exceptions.txt'
       - 'scripts/ci/ci-pipeline.rs'
+      # Doc-only changes must still trigger Tier 1 because
+      # `main-protection` has `bypass_actors: []` (no admin bypass) and
+      # requires 6 Tier 1 status checks.  Without docs in paths, a
+      # pure-doc PR (e.g. PR #35) would deadlock: paths filter skips
+      # CI → required checks never report → branch protection blocks
+      # merge indefinitely.  Cost is ~2 min of cached CI runs.
+      - '**/*.md'
   workflow_dispatch:
 
 permissions:
