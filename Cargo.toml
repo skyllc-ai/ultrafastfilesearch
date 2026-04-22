@@ -43,7 +43,7 @@ members = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.5.67"
+version = "0.5.68"
 edition = "2024"
 # MSRV: Pure Rust code compiles on stable 1.91+ (Duration::from_mins),
 # but Polars is built with features = ["nightly", "simd"] which requires
@@ -116,6 +116,14 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# ───── Windows Build Tooling (build-dependency only) ─────
+# Embeds the UFFS icon + `app.manifest` (asInvoker, PerMonitorV2 DPI, long-path
+# aware) into the `uffs.exe` PE on MSVC targets.  Used exclusively in
+# `crates/uffs-cli/build.rs`; inert on non-Windows and on non-MSVC Windows
+# toolchains.  Kept at workspace scope for version consistency even though
+# only one crate currently imports it.
+winresource = "0.1.31"
+
 # ───── Serialization ─────
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -157,8 +165,13 @@ globset = "0.4.18"
 # ───── Time ─────
 chrono = { version = "0.4.44", features = ["serde"] }
 
-# ───── Directories ─────
+# ───── Directories / Path utilities ─────
 dirs-next = "2.0.0"
+# `which` locates executables on `PATH`; used by `uffs-cli` to resolve the
+# daemon binary when the client auto-spawns it.  Workspace-scoped for
+# version consistency across any future consumers (e.g. `uffs-client`
+# when async spawn lands).
+which = "8.0.2"
 
 # ───── Hashing ─────
 rustc-hash = "2.1.2"
@@ -173,7 +186,7 @@ rayon = "1.12.0"
 crossbeam-channel = "0.5.15"
 
 # ───── Memory ─────
-mimalloc = "0.1.49"
+mimalloc = "0.1.50"
 memmap2 = "0.9.10"
 
 # ───── System ─────

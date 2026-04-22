@@ -72,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     packaging configuration lives under the tracked `packaging/`
     root (new top-level folder).  End-to-end verified on macOS:
     `dist/UFFS.app/Contents/MacOS/uffs --version` returns
-    `uffs 0.5.67` with the plist version fields templated correctly.
+    `uffs 0.5.68` with the plist version fields templated correctly.
   - **Linux `.desktop` + installer** (Phase 4 —
     `packaging/linux/uffs.desktop`,
     `packaging/linux/install.sh`, `just/packaging.just`).  New
@@ -479,7 +479,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search"; `ensure_drives_loaded` as "tree metrics computation").
   Replaced with accurate per-function justifications.
 
-## [0.5.67] - 2026-04-19
+## [0.5.68] - 2026-04-19
 
 ### Added
 - **Phase 2 performance measurement series** (closed): 11 instrumented
@@ -637,8 +637,8 @@ thin clients over a unified `uffsd` process.
 ### Fixed
 - Various MFT parsing edge cases
 
-[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.67...HEAD
-[0.5.67]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.0...v0.5.67
+[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.68...HEAD
+[0.5.68]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.0...v0.5.68
 [0.5.0]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.2.208...v0.3.0
