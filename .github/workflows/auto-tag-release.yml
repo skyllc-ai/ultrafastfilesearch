@@ -4,21 +4,28 @@
 # Auto-Tag Release — the bridge between `just ship` and `release.yml`.
 #
 # When a commit lands on `main` that changes the `[workspace.package]`
-# `version` in `Cargo.toml`, this workflow:
+# `version` in `Cargo.toml`, this workflow invokes `release.yml` via
+# `workflow_dispatch` with the new version and commit SHA.  `release.yml`
+# itself creates + pushes the `vX.Y.Z` tag and publishes the release.
 #
-#   1. Creates tag `vX.Y.Z` pointing at the commit (no-op if it exists).
-#   2. Pushes the tag to origin.
-#   3. Invokes `release.yml` via `workflow_dispatch` with the same version.
+# Why NOT push the tag from here:
 #
-# Why the explicit `gh workflow run` invocation in step 3:
+#   `release.yml`'s `workflow_dispatch` path has a guard that fails if
+#   the tag already exists (release.yml:101-108) and a later step that
+#   creates + pushes the tag itself (release.yml:491-499).  Delegating
+#   tag creation to `release.yml` makes it the single source of truth
+#   for "did this version ship" — a tag on origin means a release was
+#   built successfully, nothing weaker.
+#
+# Why the explicit `gh workflow run` invocation:
 #
 #   The default `GITHUB_TOKEN` is prevented from triggering downstream
-#   workflow runs (infinite-loop guard), so pushing the tag would NOT
-#   fire `release.yml`'s `push: tags: v*` trigger.  Rather than taking
-#   on PAT rotation maintenance, we explicitly invoke `release.yml` via
-#   `workflow_dispatch` — the default token has sufficient `actions:
-#   write` permission for that.  Developers pushing tags manually still
-#   hit the normal `push: tags: v*` trigger — both paths are supported.
+#   workflow runs (infinite-loop guard), so relying on the tag push to
+#   fire `release.yml`'s `push: tags: v*` trigger would require a PAT.
+#   Instead we explicitly invoke `release.yml` via `workflow_dispatch`,
+#   which the default token IS permitted to do (actions: write).
+#   Developers pushing tags manually still hit the normal `push: tags:
+#   v*` trigger — both paths remain supported.
 #
 # This workflow completes the hands-off release flow:
 #
@@ -48,15 +55,16 @@ on:
         default: ""
 
 permissions:
-  # Push tags to the repo and read commit history.
-  contents: write
+  # Read commit history (for the HEAD vs HEAD~1 version diff).
+  contents: read
   # Invoke `release.yml` via `gh workflow run`.
   actions: write
 
 concurrency:
   # Serialise auto-tag attempts.  Two version bumps landing in quick
   # succession is rare but possible; queue them so the second sees the
-  # first's tag already on origin and becomes a no-op skip.
+  # first's release workflow already running (or tag already on origin)
+  # and becomes a no-op skip.
   group: auto-tag-release
   cancel-in-progress: false
 
@@ -66,16 +74,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Belt-and-suspenders loop guard.  This workflow doesn't modify
-    # Cargo.toml, so its tag push wouldn't re-trigger itself anyway,
-    # but skip bot-authored pushes defensively.
+    # Cargo.toml or push tags, so nothing it does could re-trigger
+    # itself anyway, but skip bot-authored pushes defensively.
     if: github.actor != 'github-actions[bot]'
     steps:
       - name: Checkout (fetch HEAD + HEAD~1 for version diff)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 2
-          # Use the default GITHUB_TOKEN to authenticate the checkout +
-          # subsequent tag push.  No PAT needed.
+          # Default GITHUB_TOKEN authenticates the checkout.  We no
+          # longer push anything from this workflow (release.yml
+          # pushes the tag itself), so credential persistence is
+          # optional; keep it on for any future git reads.
           persist-credentials: true
 
       - name: Extract current and previous workspace versions
@@ -98,7 +108,7 @@ jobs:
           printf 'new=%s\n' "$new" >> "$GITHUB_OUTPUT"
           printf 'old=%s\n' "${old:-}" >> "$GITHUB_OUTPUT"
 
-      - name: Decide whether to tag
+      - name: Decide whether to invoke release.yml
         id: plan
         shell: bash
         env:
@@ -115,51 +125,31 @@ jobs:
           fi
 
           if [[ -z "$NEW_VERSION" ]]; then
-            echo "::notice::No [workspace.package].version found in Cargo.toml — nothing to tag."
+            echo "::notice::No [workspace.package].version found in Cargo.toml — nothing to do."
             echo "tag=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           if [[ "$NEW_VERSION" == "$OLD_VERSION" ]]; then
-            echo "::notice::Workspace version unchanged ($NEW_VERSION) — nothing to tag."
+            echo "::notice::Workspace version unchanged ($NEW_VERSION) — nothing to do."
             echo "tag=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           tag="v$NEW_VERSION"
 
-          # Idempotency: if the tag already exists on origin, this is a
-          # replay (e.g. `just ship` re-ran on a branch that was already
-          # auto-merged).  Skip silently.
+          # Idempotency: if the tag already exists on origin, a release
+          # has already been produced for this version.  Skip silently
+          # (supports `just ship` replays on a branch that was already
+          # auto-merged).
           if git ls-remote --exit-code origin "refs/tags/$tag" >/dev/null 2>&1; then
-            echo "::notice::Tag $tag already exists on origin — skipping."
+            echo "::notice::Tag $tag already exists on origin — release already shipped, skipping."
             echo "tag=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "Will tag HEAD as $tag"
+          echo "Will invoke release.yml for $tag (commit ${{ github.sha }})"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      - name: Configure git identity
-        if: steps.plan.outputs.tag != ''
-        shell: bash
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Create + push tag
-        if: steps.plan.outputs.tag != ''
-        shell: bash
-        env:
-          TAG: ${{ steps.plan.outputs.tag }}
-        run: |
-          # Lightweight tag — no annotation, no signing.  The commit the
-          # tag points at is already signed (branch protection on main
-          # enforces `required_signatures`), so the tag inherits the
-          # authenticity chain from that commit.
-          git tag "$TAG"
-          git push origin "$TAG"
-          echo "::notice::Pushed tag $TAG"
 
       - name: Trigger release.yml via workflow_dispatch
         if: steps.plan.outputs.tag != ''
@@ -169,10 +159,14 @@ jobs:
           TAG: ${{ steps.plan.outputs.tag }}
           SHA: ${{ github.sha }}
         run: |
-          # Explicit workflow_dispatch invocation — default GITHUB_TOKEN
-          # pushes do not cascade into `push: tags: v*` triggers, so we
-          # fire the release workflow explicitly.  The version + sha
-          # inputs match release.yml's workflow_dispatch schema.
+          # Explicit workflow_dispatch invocation.  `release.yml` itself
+          # creates + pushes the vX.Y.Z tag after a successful build
+          # (release.yml:491-499), so we do NOT push the tag here —
+          # that would collide with release.yml's own tag-exists guard
+          # (release.yml:101-108) and abort the run.
+          #
+          # The version + commit_sha inputs match release.yml's
+          # workflow_dispatch schema exactly.
           gh workflow run release.yml \
             --repo "${{ github.repository }}" \
             --ref main \
