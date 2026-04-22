@@ -49,7 +49,9 @@ anyhow.workspace = true
 
 # Serialization
 serde_json.workspace = true
-which = "8.0.2"
+
+# Locates executables on `PATH` (e.g. the daemon binary when auto-spawning).
+which.workspace = true
 
 # FILETIME arithmetic only — zero-dep crate extracted from uffs-mft so
 # the CLI does not transitively link polars, tokio/net, reqwest, or
@@ -83,8 +85,9 @@ workspace = true
 # to embed the UFFS icon (`assets/brand/icons/uffs.ico`) and the
 # `app.manifest` (asInvoker, PerMonitorV2 DPI, long-path aware) into
 # the `uffs.exe` PE binary on MSVC targets.  Inert on non-Windows.
+# Version is pinned at workspace scope — see root Cargo.toml.
 [build-dependencies]
-winresource = "0.1"
+winresource.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
