@@ -50,7 +50,7 @@ edition = "2024"
 # a nightly toolchain. See rust-toolchain.toml for the pinned nightly channel.
 rust-version = "1.91"
 license = "MPL-2.0"
-repository = "https://github.com/githubrobbi/UltraFastFileSearch"
+repository = "https://github.com/skyllc-ai/UltraFastFileSearch"
 authors = ["Robert Nio <50460704+githubrobbi@users.noreply.github.com>"]
 description = "UFFS - Ultra Fast File Search using direct NTFS MFT reading and Polars DataFrames"
 documentation = "https://docs.rs/uffs"

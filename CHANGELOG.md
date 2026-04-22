@@ -534,11 +534,11 @@ thin clients over a unified `uffsd` process.
 ### Fixed
 - Various MFT parsing edge cases
 
-[Unreleased]: https://github.com/githubrobbi/UltraFastFileSearch/compare/v0.5.67...HEAD
-[0.5.67]: https://github.com/githubrobbi/UltraFastFileSearch/compare/v0.5.0...v0.5.67
-[0.5.0]: https://github.com/githubrobbi/UltraFastFileSearch/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/githubrobbi/UltraFastFileSearch/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/githubrobbi/UltraFastFileSearch/compare/v0.2.208...v0.3.0
-[0.2.208]: https://github.com/githubrobbi/UltraFastFileSearch/compare/v0.2.114...v0.2.208
-[0.2.114]: https://github.com/githubrobbi/UltraFastFileSearch/releases/tag/v0.2.114
+[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.67...HEAD
+[0.5.67]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.0...v0.5.67
+[0.5.0]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.2.208...v0.3.0
+[0.2.208]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.2.114...v0.2.208
+[0.2.114]: https://github.com/skyllc-ai/UltraFastFileSearch/releases/tag/v0.2.114
 

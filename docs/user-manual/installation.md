@@ -1,7 +1,7 @@
 # Installation
 
 Pre-built Windows binaries are available from
-[GitHub Releases](https://github.com/githubrobbi/UltraFastFileSearch/releases).
+[GitHub Releases](https://github.com/skyllc-ai/UltraFastFileSearch/releases).
 Most users do not need to build from source.
 
 > **See also:** [Getting Started](getting-started.md) ·
@@ -13,7 +13,7 @@ Most users do not need to build from source.
 ## 1  Pre-Built Binaries (Recommended)
 
 Download the latest Windows x64 binaries from the
-[GitHub Releases page](https://github.com/githubrobbi/UltraFastFileSearch/releases/latest).
+[GitHub Releases page](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest).
 
 Each release includes:
 - `uffs-windows-x64.exe` — main CLI (starts daemon + MCP)
@@ -35,7 +35,7 @@ This downloads the latest release binaries and installs them to `~/bin`.
 **Option B — Manual download:**
 
 1. Download `uffs-windows-x64.exe` from the
-   [latest release](https://github.com/githubrobbi/UltraFastFileSearch/releases/latest).
+   [latest release](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest).
 
 2. Copy to a directory on your PATH and **rename to `uffs.exe`**.
 
@@ -159,7 +159,7 @@ running on macOS/Linux.
 ### Build
 
 ```bash
-git clone https://github.com/githubrobbi/UltraFastFileSearch.git
+git clone https://github.com/skyllc-ai/UltraFastFileSearch.git
 cd UltraFastFileSearch
 
 # Build release binaries (Rust nightly installs automatically)

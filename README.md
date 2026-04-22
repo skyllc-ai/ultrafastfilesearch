@@ -1,9 +1,9 @@
 # UFFS — Ultra Fast File Search
 
-[![CI](https://github.com/githubrobbi/UltraFastFileSearch/actions/workflows/ci.yml/badge.svg)](https://github.com/githubrobbi/UltraFastFileSearch/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/githubrobbi/UltraFastFileSearch?label=release)](https://github.com/githubrobbi/UltraFastFileSearch/releases/latest)
+[![CI](https://github.com/skyllc-ai/UltraFastFileSearch/actions/workflows/ci.yml/badge.svg)](https://github.com/skyllc-ai/UltraFastFileSearch/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/skyllc-ai/UltraFastFileSearch?label=release)](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
-[![Platform: Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://github.com/githubrobbi/UltraFastFileSearch/releases/latest)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest)
 
 **A benchmark-driven NTFS search engine for Windows.** UFFS reads the Master File Table directly, builds a compact persisted index, and keeps large NTFS estates searchable through a background daemon.
 
@@ -195,4 +195,4 @@ See [LICENSES/MPL-2.0.txt](LICENSES/MPL-2.0.txt) for the full license text and [
 
 UFFS benefits from the broader NTFS tooling ecosystem, including [SwiftSearch](https://sourceforge.net/projects/swiftsearch/) by wfunction.
 
-**Author:** Robert Nio · [github.com/githubrobbi/UltraFastFileSearch](https://github.com/githubrobbi/UltraFastFileSearch)
+**Author:** Robert Nio · [github.com/skyllc-ai/UltraFastFileSearch](https://github.com/skyllc-ai/UltraFastFileSearch)

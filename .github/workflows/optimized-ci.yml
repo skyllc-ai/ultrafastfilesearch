@@ -78,7 +78,7 @@ jobs:
           # Explicit slug so the uploader doesn't have to infer the repo
           # from GitHub Actions env vars (more robust on fork PRs, workflow
           # renames, etc.).  Recommended by the Codecov setup wizard.
-          slug: githubrobbi/UltraFastFileSearch
+          slug: skyllc-ai/UltraFastFileSearch
           # Token is optional: the Codecov org currently allows tokenless
           # uploads.  If `CODECOV_TOKEN` is ever added as a repo secret,
           # this reference picks it up automatically without a YAML edit.
