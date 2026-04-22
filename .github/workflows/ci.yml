@@ -13,8 +13,9 @@ on:
       - 'Cargo.lock'
       - '**/Cargo.toml'
       - '**/Cargo.lock'
-      - '.github/workflows/ci.yml'
-      - '.github/workflows/optimized-ci.yml'
+      # Any workflow edit re-runs CI so branch-protection checks always
+      # report on PRs that touch e.g. release.yml (see PR #25 deadlock).
+      - '.github/workflows/*.yml'
       - 'rust-toolchain.toml'
       - 'scripts/ci/check_file_size_policy.sh'
       - 'scripts/ci/file_size_exceptions.txt'
@@ -27,8 +28,9 @@ on:
       - 'Cargo.lock'
       - '**/Cargo.toml'
       - '**/Cargo.lock'
-      - '.github/workflows/ci.yml'
-      - '.github/workflows/optimized-ci.yml'
+      # Any workflow edit re-runs CI so branch-protection checks always
+      # report on PRs that touch e.g. release.yml (see PR #25 deadlock).
+      - '.github/workflows/*.yml'
       - 'rust-toolchain.toml'
       - 'scripts/ci/check_file_size_policy.sh'
       - 'scripts/ci/file_size_exceptions.txt'
