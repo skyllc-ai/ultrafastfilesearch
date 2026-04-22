@@ -1386,7 +1386,7 @@ fn main() -> Result<()> {
             bail!(
                 "Companion binary `{mcp_name}` not found at {}\n\
                  `uffs mcp *` delegates to `{mcp_name}` which must sit alongside `uffs`.\n\
-                 Rebuild and deploy: just build-local   (or: just use)",
+                 Rebuild and deploy: just build-local   (or: just use-local)",
                 mcp_path.display(),
             );
         }

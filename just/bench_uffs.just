@@ -6,7 +6,7 @@
 #
 # Thin wrapper around `scripts/windows/cross-tool-benchmark.rs` that
 # uses the binary already installed in `~/bin/` (i.e. the one produced
-# by `just use`).  This is the command used to generate the numbers
+# by `just use-local`).  This is the command used to generate the numbers
 # tracked in `docs/research/perf-phase2-measurement-plan.md` §0.1.
 #
 # Arguments:
@@ -31,7 +31,7 @@ bench-cross drives="D" rounds="30" patterns="exact,prefix,ext_rare,ext_dll,subst
     $uffsBin = Join-Path $HOME 'bin\uffs.exe'
     if (-not (Test-Path $uffsBin)) {
         Write-Host "[bench-cross] uffs.exe missing at $uffsBin" -ForegroundColor Red
-        Write-Host "              Run 'just use' first to install the current workspace binary." -ForegroundColor DarkGray
+        Write-Host "              Run 'just use-local' first to install the current workspace binary." -ForegroundColor DarkGray
         exit 1
     }
     Write-Host "[bench-cross] drives={{drives}} rounds={{rounds}} patterns={{patterns}} tools={{tools}}" -ForegroundColor Blue
@@ -59,7 +59,7 @@ bench-verify:
     $ErrorActionPreference = 'Stop'
     $bin = Join-Path $HOME 'bin\uffs.exe'
     if (-not (Test-Path $bin)) {
-        Write-Host "[bench-verify] uffs.exe missing at $bin -- run 'just use' first" -ForegroundColor Red
+        Write-Host "[bench-verify] uffs.exe missing at $bin -- run 'just use-local' first" -ForegroundColor Red
         exit 1
     }
 
