@@ -901,7 +901,7 @@ async fn git_commit(ctx: &PipelineContext) -> Result<()> {
 }
 
 async fn git_push(ctx: &PipelineContext) -> Result<()> {
-    println!("{}", "🚀 Pushing to remote...".blue());
+    println!("{}", "🚀 Opening release PR (branch-protection-compatible)...".blue());
 
     // Get current branch name dynamically
     let branch_output = std::process::Command::new("git")
@@ -916,6 +916,8 @@ async fn git_push(ctx: &PipelineContext) -> Result<()> {
 
     println!("📌 Current branch: {}", current_branch.cyan());
 
+    // Stay current with upstream before opening the release PR.  Rebase keeps
+    // the auto-commit on top of any intervening mainline changes.
     execute_command(
         "Git pull rebase",
         "git",
@@ -923,7 +925,121 @@ async fn git_push(ctx: &PipelineContext) -> Result<()> {
         ctx,
     )
     .await?;
-    execute_command("Git push", "git", &["push", "origin", &current_branch], ctx).await?;
+
+    // Derive the release branch name from the workspace version that Phase 2
+    // step 07 bumped.  Example: `release/v0.5.68`.
+    let version = get_current_version()?;
+    let release_branch = format!("release/v{}", version);
+    let push_ref = format!("HEAD:refs/heads/{}", release_branch);
+
+    // Push HEAD to the release branch.  No-op / fast-forward on re-runs of a
+    // resumable ship that has already pushed the same commit.
+    println!("📤 Pushing HEAD to {}", release_branch.cyan());
+    execute_command(
+        "Git push (release branch)",
+        "git",
+        &["push", "origin", &push_ref],
+        ctx,
+    )
+    .await?;
+
+    // Idempotent PR creation: reuse an existing open PR for the same release
+    // branch if the pipeline is resuming from a previously-failed step 11.
+    let existing_pr_output = std::process::Command::new("gh")
+        .args([
+            "pr",
+            "list",
+            "--head",
+            &release_branch,
+            "--state",
+            "open",
+            "--json",
+            "number",
+            "-q",
+            ".[0].number",
+        ])
+        .output()
+        .context("Failed to query existing release PR via gh")?;
+    let existing_pr = String::from_utf8_lossy(&existing_pr_output.stdout)
+        .trim()
+        .to_string();
+
+    if existing_pr.is_empty() {
+        let pr_title = format!("chore: release v{version} — ship pipeline auto-commit");
+        let pr_body = format!(
+            "## Summary\n\n\
+             `just ship` Phase 2 auto-commit for **v{version}**.  Binaries + \
+             GitHub Release v{version} are already live (step 09).  This PR \
+             routes the corresponding commit through branch-protection rules.\n\n\
+             ## Auto-merge\n\n\
+             `--auto --rebase` is queued — GitHub will merge as soon as the \
+             required status checks pass.  Rebase preserves the GPG signature \
+             on single-commit release PRs.\n\n\
+             ## After merge\n\n\
+             Local `{current_branch}` already contains this commit; \
+             `git pull` will fast-forward cleanly once CI merges the PR."
+        );
+
+        println!("📬 Opening release PR");
+        execute_command(
+            "Open release PR",
+            "gh",
+            &[
+                "pr",
+                "create",
+                "--base",
+                &current_branch,
+                "--head",
+                &release_branch,
+                "--title",
+                &pr_title,
+                "--body",
+                &pr_body,
+            ],
+            ctx,
+        )
+        .await?;
+    } else {
+        println!(
+            "ℹ️  Reusing existing release PR #{}",
+            existing_pr.as_str().cyan()
+        );
+    }
+
+    // Enable auto-merge (rebase).  If the 6 required status checks are already
+    // green by this point, GitHub merges immediately.  Rebase-merging a
+    // single-commit release PR preserves the author's GPG signature on the
+    // commit that lands on `main` — matching the pre-refactor semantics where
+    // the pipeline pushed the signed commit directly.
+    println!("⚡ Ensuring auto-merge is enabled (rebase strategy)");
+    execute_command(
+        "Enable auto-merge",
+        "gh",
+        &[
+            "pr",
+            "merge",
+            &release_branch,
+            "--auto",
+            "--rebase",
+        ],
+        ctx,
+    )
+    .await?;
+
+    println!(
+        "{} Release PR for v{} opened with auto-merge queued",
+        "✅".green(),
+        version
+    );
+    println!(
+        "   💡 Watch checks: {}",
+        format!("gh pr checks {} --watch", release_branch).cyan()
+    );
+    println!(
+        "   💡 After merge:  {}",
+        format!("git pull origin {} --rebase", current_branch).cyan()
+    );
+
     Ok(())
 }
 
