@@ -149,7 +149,7 @@ pgo:
     printf "\033[0;32m  ✓ merged profile: %s\033[0m\n" "$MERGED"
     RUSTFLAGS="-Cprofile-use=${MERGED}" cargo build --release -p uffs-cli
     printf "\033[0;32m✅ PGO build complete — %s/release/uffs now uses the merged profile\033[0m\n" "$TARGET_DIR"
-    printf "\033[0;34m   Run `just use` to install, then re-bench against the pre-PGO baseline.\033[0m\n"
+    printf "\033[0;34m   Run `just use-local` to install, then re-bench against the pre-PGO baseline.\033[0m\n"
 
 # Windows variant of the PGO pipeline.  Uses PowerShell because
 # `shared.just` sets `windows-shell := powershell.exe` — the bash
@@ -252,5 +252,5 @@ pgo:
         Remove-Item Env:RUSTFLAGS
     }
     Write-Host "`n[pgo] complete -- $INSTRUMENTED now uses the merged profile" -ForegroundColor Green
-    Write-Host "      Run 'just use' to install, then re-bench against the pre-PGO baseline." -ForegroundColor DarkGray
+    Write-Host "      Run 'just use-local' to install, then re-bench against the pre-PGO baseline." -ForegroundColor DarkGray
 

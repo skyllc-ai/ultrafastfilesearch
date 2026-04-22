@@ -277,8 +277,8 @@ impl LifecycleManager {
 
         // Process is dead.  The exe hash is only useful for detecting
         // leftover PID files from a *different* binary installation (e.g.
-        // after `just use` rebuilt everything), but only when the process
-        // is already gone.
+        // after `just use-local` rebuilt everything), but only when the
+        // process is already gone.
         let expected_hash = Self::expected_daemon_exe_hash();
         if expected_hash != 0 && exe_hash != expected_hash {
             tracing::info!(

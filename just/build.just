@@ -72,11 +72,17 @@ copy-binary profile:
     done
     if ! echo "$PATH" | grep -q "$HOME/bin"; then printf "\033[1;33m⚠️  ~/bin not in PATH. Add this to your shell profile:\033[0m\n"; printf "   export PATH=\"\$HOME/bin:\$PATH\"\n"; fi
 
-# Build the entire workspace (release) and copy ALL binary artifacts to ~/bin.
-# One `cargo build --release --workspace` does the heavy lifting; then every
-# binary in target/release/ is installed.
+# Build the entire workspace (release) locally and copy ALL binary artifacts
+# to ~/bin.  One `cargo build --release --workspace` does the heavy lifting;
+# then every binary in target/release/ is installed.
+#
+# Use this when you want to test in-development code.  Prefer `just use`
+# when you want the reproducible, GitHub-built release binaries — those
+# bytes are what your end users download.
+#
+# Build workspace from source and install all binaries to ~/bin (dev).
 [unix]
-use:
+use-local:
     #!/usr/bin/env bash
     set -euo pipefail
     printf "\033[1;34m📦 Build + install ALL UFFS binaries to ~/bin\033[0m\n"
@@ -125,10 +131,21 @@ use:
         printf "   export PATH=\"\$HOME/bin:\$PATH\"\n"
     fi
 
-# Install UFFS binaries from dist/ cache or GitHub Release to ~/bin.
-# For pre-built release assets (cross-compiled). Use `just use` for local dev builds.
+# Install UFFS binaries from GitHub Release (cached in dist/) to ~/bin.
+#
+# This is the default `just use` on both Unix and Windows — the binaries
+# are produced by GitHub Actions' release workflow, so the bytes in ~/bin
+# are bit-identical to what your end users download.  For local dev builds
+# from source, use `just use-local` instead.
+#
+# Strategy:
+#   1. Prefer `dist/vX.Y.Z/` matching the current `Cargo.toml` version
+#   2. Fall back to latest `dist/v*` if matching cache missing
+#   3. Fall back to `gh release download` otherwise (requires `gh` CLI)
+#
+# Install binaries from the matching GitHub Release to ~/bin.
 [unix]
-use-dist:
+use:
     #!/usr/bin/env bash
     set -euo pipefail
     printf "\033[0;34m📦 Installing UFFS binaries from dist/ cache...\033[0m\n"

@@ -175,16 +175,25 @@ cargo build --release
 
 ```bash
 just build       # Release build
-just use         # Build + copy all binaries to ~/bin (renamed correctly)
+just use         # Install binaries to ~/bin from the latest GitHub Release
+just use-local   # Build workspace from source and install to ~/bin (dev)
 just check       # Format + lint + build (no tests)
 just go          # Full validation: format, lint, test, coverage
 just test        # Run all tests with nextest
 ```
 
-`just use` is the easiest way to get going — on macOS/Linux it builds
-release binaries from source and installs them to `~/bin`; on Windows
-it downloads the latest release from GitHub.  If `~/bin` is not on your
-PATH, it prints the line to add to your shell profile.
+`just use` is the easiest way to get going on any OS — it downloads
+the Release bundle that GitHub Actions built for your platform and
+installs the binaries to `~/bin`.  Those bytes are identical to what
+every other end user runs, so bug reports are reproducible.
+
+`just use-local` is the dev-loop variant — it runs a full
+`cargo build --release --workspace` and installs the just-built
+binaries to `~/bin`.  Use this when you want to test local changes
+before opening a PR.
+
+If `~/bin` is not on your PATH, either recipe prints the line to add
+to your shell profile.
 
 Run `just` with no arguments to see all available tasks.
 
