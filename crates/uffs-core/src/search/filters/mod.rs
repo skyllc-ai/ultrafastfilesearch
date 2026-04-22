@@ -37,7 +37,14 @@ pub fn apply_filter(rows: &mut Vec<DisplayRow>, filter: FilterMode) {
 ///
 /// All fields are pre-parsed so the per-row `retain` loop is branch-only
 /// (no parsing).
-#[derive(Debug, Default)]
+///
+/// `Clone` is provided so the per-drive scan in
+/// `collect_global_top_n_numeric` can hand each rayon worker its own
+/// `resolved_ext_ids` without contending on a shared `&mut` reference.
+/// The clone cost is one `Vec<String>` + one `Vec<u16>` per drive
+/// (~100 B per drive at typical filter sizes) — negligible against the
+/// ~4 M-record per-drive scan the parallelism enables.
+#[derive(Debug, Default, Clone)]
 pub struct SearchFilters {
     /// Hide files whose name starts with `$`.
     pub hide_system: bool,

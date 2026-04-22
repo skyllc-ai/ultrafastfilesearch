@@ -25,6 +25,451 @@ use crate::compact::{CompactRecord, DriveCompactIndex};
 /// ~370 ns per candidate a 4 K chunk runs in ~1.5 ms.
 const RESOLVE_CHUNK_SIZE: usize = 4096;
 
+/// Extract the numeric sort key for `rec` under `sort_column`.
+///
+/// Pure function of the record + column — no shared mutable state —
+/// so it is trivially `Sync` and safe to call from every rayon worker
+/// inside the per-drive scan.  Moved out of the scan closure so the
+/// drive loop can be parallelised without duplicating the 100-line
+/// `match` across each branch.
+#[expect(clippy::cast_possible_wrap, reason = "file sizes within i64 range")]
+fn extract_sort_key(rec: &CompactRecord, sort_column: FieldId, drive: &DriveCompactIndex) -> i64 {
+    let drive_fold = drive.fold;
+    match sort_column {
+        FieldId::Size => rec.size as i64,
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "allocated sizes within i64 range"
+        )]
+        FieldId::SizeOnDisk => rec.allocated as i64,
+        FieldId::Created => rec.created,
+        FieldId::Accessed => rec.accessed,
+        FieldId::Descendants => i64::from(rec.descendants),
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "allocated values are expected within i64 range"
+        )]
+        FieldId::TreeAllocated => {
+            if rec.is_directory() {
+                rec.tree_allocated as i64
+            } else {
+                rec.allocated as i64
+            }
+        }
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "scaled bulkiness metric is expected within i64 range"
+        )]
+        FieldId::Bulkiness => bulkiness_for_record(rec) as i64,
+        FieldId::Extension | FieldId::Type => i64::from(rec.extension_id),
+        FieldId::Name => {
+            let name = rec.name(&drive.names);
+            let mut key = [0_u8; 8];
+            for (dst, ch) in key.iter_mut().zip(name.chars()) {
+                let folded = drive_fold.fold_char(ch);
+                #[expect(clippy::cast_possible_truncation, reason = "sort key prefix")]
+                {
+                    *dst = folded as u8;
+                }
+            }
+            i64::from_be_bytes(key)
+        }
+        FieldId::Drive => {
+            let name = rec.name(&drive.names);
+            let mut key = [0_u8; 8];
+            key[0] = u8::try_from(u32::from(drive.letter)).unwrap_or(b'?');
+            for (dst, ch) in key[1..].iter_mut().zip(name.chars()) {
+                let folded = drive_fold.fold_char(ch);
+                #[expect(clippy::cast_possible_truncation, reason = "sort key prefix")]
+                {
+                    *dst = folded as u8;
+                }
+            }
+            i64::from_be_bytes(key)
+        }
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "treesize values within i64 range"
+        )]
+        FieldId::TreeSize => {
+            if rec.is_directory() {
+                rec.treesize as i64
+            } else {
+                rec.size as i64
+            }
+        }
+        // Boolean attribute flags: extract the individual bit as 0/1.
+        FieldId::DirectoryFlag => i64::from(rec.is_directory()),
+        FieldId::Hidden => i64::from(rec.flags & 0x0002 != 0),
+        FieldId::System => i64::from(rec.flags & 0x0004 != 0),
+        FieldId::ReadOnly => i64::from(rec.flags & 0x0001 != 0),
+        FieldId::Archive => i64::from(rec.flags & 0x0020 != 0),
+        FieldId::Compressed => i64::from(rec.flags & 0x0800 != 0),
+        FieldId::Encrypted => i64::from(rec.flags & 0x4000 != 0),
+        FieldId::Sparse => i64::from(rec.flags & 0x0200 != 0),
+        FieldId::Reparse => i64::from(rec.flags & 0x0400 != 0),
+        FieldId::Offline => i64::from(rec.flags & 0x1000 != 0),
+        FieldId::NotIndexed => i64::from(rec.flags & 0x2000 != 0),
+        FieldId::Temporary => i64::from(rec.flags & 0x0100 != 0),
+        FieldId::Integrity => i64::from(rec.flags & 0x8000 != 0),
+        FieldId::NoScrub => i64::from(rec.flags & 0x0002_0000 != 0),
+        FieldId::Pinned => i64::from(rec.flags & 0x0008_0000 != 0),
+        FieldId::Unpinned => i64::from(rec.flags & 0x0010_0000 != 0),
+        FieldId::RecallOnOpen => i64::from(rec.flags & 0x0004_0000 != 0),
+        FieldId::RecallOnDataAccess => i64::from(rec.flags & 0x0040_0000 != 0),
+        // Composite attribute fields use the raw flags value.
+        FieldId::Attributes | FieldId::AttributeValue | FieldId::ParityAttributes => {
+            i64::from(rec.flags)
+        }
+        FieldId::Virtual => i64::from(rec.flags & 0x0001_0000 != 0),
+        // Modified is the default; Path/PathOnly handled by tree walk upstream.
+        FieldId::Path | FieldId::PathOnly | FieldId::Modified => rec.modified,
+        FieldId::NameLength => {
+            i64::try_from(rec.name(&drive.names).chars().count()).unwrap_or(i64::MAX)
+        }
+        FieldId::PathLength => {
+            // Use name length as a proxy at the sort-key stage
+            // (full path unavailable here).
+            i64::try_from(rec.name(&drive.names).chars().count()).unwrap_or(i64::MAX)
+        }
+    }
+}
+
+/// Per-drive candidate output: a `(rec_tuples, filtered_count)` pair.
+///
+/// Factored into a type alias so the `par_iter().map().collect::<Vec<...>>()`
+/// inside [`collect_global_top_n_numeric`] stays readable without
+/// violating clippy's `type_complexity` lint.
+type DriveCandidates = (Vec<(u16, u32, i64)>, u64);
+
+/// Per-drive scan parameters threaded into [`scan_drive_candidates`].
+///
+/// Collecting the per-call constants into one struct keeps the
+/// per-drive worker signature readable and lets clippy's
+/// `too_many_arguments` lint stay happy.  All fields are `Copy` so
+/// the struct moves in a single 24-byte copy per drive.
+#[derive(Debug, Clone, Copy)]
+struct DriveScanCfg {
+    /// Maximum number of candidates to retain across all drives.
+    limit: usize,
+    /// Whether to use a bounded `BinaryHeap` (true when `limit < 1 M`)
+    /// or a simple `Vec` fallback (true when `limit` is effectively
+    /// unbounded).  Chosen by the caller so every drive-worker makes
+    /// the same structural decision.
+    use_heap: bool,
+    /// Sort column — identifies which `CompactRecord` field feeds
+    /// [`extract_sort_key`].
+    sort_column: FieldId,
+    /// Descending-order flag.  `true` = Modified-DESC / Size-DESC /
+    /// etc.; `false` = the matching ascending variant.
+    sort_desc: bool,
+    /// User's `--files-only` / `--dirs-only` / default filter mode.
+    filter_mode: FilterMode,
+    /// Short-circuit flag: when `false`, the scan skips
+    /// `matches_record` entirely and pushes every non-empty-name
+    /// record.  Corresponds to `search_filters.is_empty() &&
+    /// filter_mode == All` at the caller.
+    has_filters: bool,
+}
+
+/// Per-drive top-N working state.
+///
+/// Owns the bounded `BinaryHeap` variants plus the unbounded fallback
+/// `Vec` so [`scan_drive_candidates`]'s three scan branches can all
+/// call `push` / `drain` without re-implementing the heap dispatch.
+/// This keeps each scan branch's cognitive complexity low enough that
+/// the clippy `cognitive_complexity` lint never fires, so no
+/// `#[expect]` / `#[allow]` suppression is needed.
+struct DriveTopN {
+    /// Min-heap of `Reverse<HeapEntry>` — used when `sort_desc` is
+    /// `true`, keeps the top-`limit` largest sort-keys.
+    heap_desc: BinaryHeap<core::cmp::Reverse<HeapEntry>>,
+    /// Max-heap of `HeapEntry` — used when `sort_desc` is `false`,
+    /// keeps the top-`limit` smallest sort-keys.
+    heap_asc: BinaryHeap<HeapEntry>,
+    /// Unbounded `Vec` used when `use_heap` is `false` (limit ≥ 1 M).
+    /// The caller sorts + truncates once all drives have merged.
+    fallback: Vec<(u16, u32, i64)>,
+    /// `true` if either heap is active; `false` uses `fallback`.
+    use_heap: bool,
+    /// `true` selects `heap_desc`; `false` selects `heap_asc`.
+    sort_desc: bool,
+    /// Bound on the active heap's capacity (`limit + 1`).
+    limit: usize,
+}
+
+impl DriveTopN {
+    /// Build a fresh top-N workspace sized for `cfg.limit`.
+    fn new(cfg: DriveScanCfg) -> Self {
+        let cap = cfg.limit.saturating_add(1);
+        Self {
+            heap_desc: if cfg.use_heap && cfg.sort_desc {
+                BinaryHeap::with_capacity(cap)
+            } else {
+                BinaryHeap::new()
+            },
+            heap_asc: if cfg.use_heap && !cfg.sort_desc {
+                BinaryHeap::with_capacity(cap)
+            } else {
+                BinaryHeap::new()
+            },
+            fallback: Vec::new(),
+            use_heap: cfg.use_heap,
+            sort_desc: cfg.sort_desc,
+            limit: cfg.limit,
+        }
+    }
+
+    /// Push `entry` into the active heap / fallback, respecting the
+    /// bounded-heap invariant.
+    fn push(&mut self, entry: HeapEntry) {
+        if self.use_heap {
+            if self.sort_desc {
+                heap_push_capped(&mut self.heap_desc, core::cmp::Reverse(entry), self.limit);
+            } else {
+                heap_push_capped(&mut self.heap_asc, entry, self.limit);
+            }
+        } else {
+            self.fallback
+                .push((entry.drive_idx, entry.rec_idx, entry.sort_key));
+        }
+    }
+
+    /// Drain the workspace into the `(drive_idx, rec_idx, sort_key)`
+    /// candidate tuples the caller merges across drives.
+    fn drain(self) -> Vec<(u16, u32, i64)> {
+        if !self.use_heap {
+            return self.fallback;
+        }
+        if self.sort_desc {
+            self.heap_desc
+                .into_iter()
+                .map(|rev| (rev.0.drive_idx, rev.0.rec_idx, rev.0.sort_key))
+                .collect()
+        } else {
+            self.heap_asc
+                .into_iter()
+                .map(|he| (he.drive_idx, he.rec_idx, he.sort_key))
+                .collect()
+        }
+    }
+}
+
+/// Build a `HeapEntry` for a single record.
+///
+/// Extracted so every scan branch builds entries identically and the
+/// `sort_key` computation lives in exactly one place.
+#[inline]
+fn heap_entry_for(
+    drive_idx: usize,
+    rec_idx: usize,
+    rec: &CompactRecord,
+    drive: &DriveCompactIndex,
+    sort_column: FieldId,
+) -> HeapEntry {
+    HeapEntry {
+        sort_key: extract_sort_key(rec, sort_column, drive),
+        drive_idx: uffs_mft::len_to_u16(drive_idx),
+        rec_idx: uffs_mft::len_to_u32(rec_idx),
+    }
+}
+
+/// Returns `true` if `rec` passes the two cheap per-candidate
+/// predicates `is_ext_only()` admits (`hide_system`, `hide_ads`) plus
+/// the `filter_mode` / `name_len` pre-checks.
+///
+/// Extracted so the ext-fast-path scan loop stays flat instead of
+/// nesting four `if` / `continue` pairs that push clippy's
+/// `cognitive_complexity` count above threshold.  All four checks
+/// must run before `push` so filtered records never enter the heap.
+#[inline]
+fn ext_candidate_passes(
+    rec: &CompactRecord,
+    names: &[u8],
+    filters: &SearchFilters,
+    filter_mode: FilterMode,
+) -> bool {
+    if rec.name_len == 0 {
+        return false;
+    }
+    if matches!(filter_mode, FilterMode::FilesOnly) && rec.is_directory() {
+        return false;
+    }
+    if filters.hide_system && rec.is_system_metafile() {
+        return false;
+    }
+    if filters.hide_ads {
+        let name = rec.name(names);
+        if memchr::memchr(b':', name.as_bytes()).is_some() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Ext-index fast-path scan: iterate `drive.ext_index` for each
+/// requested extension and push survivors into `state`.
+///
+/// The CSR `ext_index` bucket narrows the candidate set from `O(N)`
+/// (all records on the drive) to `O(K)` (matches of the requested
+/// extension).  Preconditions enforced by the caller:
+///   * `filters.is_ext_only()` holds.
+///   * `filters.resolved_ext_ids` is non-empty (otherwise use the short-circuit
+///     branch).
+///   * `filter_mode` is `All` or `FilesOnly`.
+fn scan_ext_fast_path(
+    drive_idx: usize,
+    drive: &DriveCompactIndex,
+    filters: &SearchFilters,
+    cfg: DriveScanCfg,
+    state: &mut DriveTopN,
+) {
+    for &ext_id in &filters.resolved_ext_ids {
+        for &rec_idx_u32 in drive.ext_index.get(ext_id) {
+            let rec_idx = rec_idx_u32 as usize;
+            let Some(rec) = drive.records.get(rec_idx) else {
+                continue;
+            };
+            if !ext_candidate_passes(rec, &drive.names, filters, cfg.filter_mode) {
+                continue;
+            }
+            state.push(heap_entry_for(
+                drive_idx,
+                rec_idx,
+                rec,
+                drive,
+                cfg.sort_column,
+            ));
+        }
+    }
+}
+
+/// Returns `true` if `rec` passes the full-scan branch's per-record
+/// predicates (`name_len`, `filter_mode`, `search_filters.matches_record`).
+///
+/// Returns `false` for a pure `filter_mode` miss (no counter bump) and
+/// bumps `*filtered` when `matches_record` rejects — matches the
+/// original inline accounting in the pre-refactor code.
+#[inline]
+fn full_scan_record_passes(
+    rec: &CompactRecord,
+    drive: &DriveCompactIndex,
+    filters: &SearchFilters,
+    filter_mode: FilterMode,
+    has_filters: bool,
+    fold_buf: &mut Vec<u8>,
+    filtered: &mut u64,
+) -> bool {
+    if rec.name_len == 0 {
+        return false;
+    }
+    if has_filters {
+        match filter_mode {
+            FilterMode::FilesOnly if rec.is_directory() => return false,
+            FilterMode::DirsOnly if !rec.is_directory() => return false,
+            FilterMode::All | FilterMode::FilesOnly | FilterMode::DirsOnly => {}
+        }
+        if !filters.matches_record(rec, &drive.names, fold_buf, drive.fold) {
+            *filtered = filtered.saturating_add(1);
+            return false;
+        }
+    }
+    true
+}
+
+/// Full-scan branch: iterate every record on the drive and push
+/// survivors into `state`.  Returns the count of records rejected by
+/// `matches_record` for debug tracing — `filter_mode` misses are
+/// silent (matches the pre-refactor accounting).
+fn scan_full_records(
+    drive_idx: usize,
+    drive: &DriveCompactIndex,
+    filters: &SearchFilters,
+    cfg: DriveScanCfg,
+    fold_buf: &mut Vec<u8>,
+    state: &mut DriveTopN,
+) -> u64 {
+    let mut filtered = 0_u64;
+    for (rec_idx, rec) in drive.records.iter().enumerate() {
+        if !full_scan_record_passes(
+            rec,
+            drive,
+            filters,
+            cfg.filter_mode,
+            cfg.has_filters,
+            fold_buf,
+            &mut filtered,
+        ) {
+            continue;
+        }
+        state.push(heap_entry_for(
+            drive_idx,
+            rec_idx,
+            rec,
+            drive,
+            cfg.sort_column,
+        ));
+    }
+    filtered
+}
+
+/// Scan one drive and collect up to `limit` top-N candidates.
+///
+/// Called by [`collect_global_top_n_numeric`] from a rayon worker, so
+/// it must take an immutable `&SearchFilters`.  Callers clone the
+/// outer filters once per drive and call `resolve_ext_ids_for_drive`
+/// on the clone before handing it in here.
+///
+/// Each drive maintains its own bounded [`BinaryHeap`]
+/// (`BinaryHeap::with_capacity(limit + 1)`) so the ~25 M-record
+/// cross-drive scan never materialises into a single shared vector.
+/// The per-drive heaps are drained into `(u16, u32, i64)` tuples and
+/// merged by the caller, which then sorts + truncates to the global
+/// top-`limit`.
+///
+/// Returns `(candidates, drive_filtered_count)`.  `drive_filtered_count`
+/// is the number of records that failed `matches_record` — it's merged
+/// into the aggregate filter-out count used only for debug tracing.
+fn scan_drive_candidates(
+    drive_idx: usize,
+    drive: &DriveCompactIndex,
+    search_filters: &SearchFilters,
+    cfg: DriveScanCfg,
+) -> DriveCandidates {
+    let mut state = DriveTopN::new(cfg);
+    let mut fold_buf: Vec<u8> = Vec::with_capacity(256);
+    let mut drive_filtered = 0_u64;
+
+    let ext_fast_path = search_filters.is_ext_only()
+        && matches!(cfg.filter_mode, FilterMode::All | FilterMode::FilesOnly);
+
+    if ext_fast_path && !search_filters.resolved_ext_ids.is_empty() {
+        scan_ext_fast_path(drive_idx, drive, search_filters, cfg, &mut state);
+    } else if ext_fast_path && !search_filters.extensions.is_empty() {
+        // Short-circuit: `is_ext_only()` holds but none of the
+        // requested extensions exist on this drive.  Skip the drive
+        // entirely instead of falling through to an O(N) full scan
+        // that `matches_record` would reject anyway.
+        tracing::debug!(
+            drive = %drive.letter,
+            requested_extensions = ?search_filters.extensions,
+            ext_name_count = drive.ext_names.len(),
+            "ext fast-path SHORT-CIRCUIT — no matching extension IDs on this drive"
+        );
+    } else {
+        drive_filtered = scan_full_records(
+            drive_idx,
+            drive,
+            search_filters,
+            cfg,
+            &mut fold_buf,
+            &mut state,
+        );
+    }
+
+    (state.drain(), drive_filtered)
+}
+
 /// Sorts result indices by record name, using case-folded comparison.
 pub(super) fn sort_indices_by_name(indices: &mut [u32], drive: &DriveCompactIndex, desc: bool) {
     let fold = drive.fold;
@@ -42,23 +487,219 @@ pub(super) fn sort_indices_by_name(indices: &mut [u32], drive: &DriveCompactInde
     });
 }
 
-/// Efficient numeric global top-N using lightweight tuples.
-#[expect(clippy::too_many_lines, reason = "linear scan + heap + fallback path")]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "ext fast-path + full-scan path share sort-key + heap-push logic"
-)]
+/// Aggregate path-resolve deep-profile totals summed across rayon
+/// workers inside [`resolve_candidates_to_rows`].
+///
+/// Kept as a named struct so the `reduce` accumulator stays readable
+/// and callers can destructure the fields for `PhaseTimings` assembly
+/// without a tuple-positional API.
+struct ResolveStats {
+    /// Materialised display rows in their path-resolved order.
+    rows: Vec<DisplayRow>,
+    /// Cumulative nanoseconds spent in `tree::resolve_path_cached`.
+    resolve_fn_ns: u128,
+    /// Cumulative nanoseconds spent in `make_display_row` + `Vec::push`.
+    build_row_ns: u128,
+    /// Count of candidates that reached the resolve loop.
+    candidates: u64,
+    /// Total `DirCache` entries across all per-worker caches at
+    /// reduce time — the exact steady-state miss count.
+    cache_entries: u64,
+}
+
+/// Run one rayon-worker chunk of the path-resolve phase.
+///
+/// Each chunk owns a per-drive `DirCache` map — siblings in the
+/// chunk keep the cache warm because the caller sorted the
+/// candidates by `(drive_idx, rec_idx)` first.  Splitting this off
+/// keeps the outer `par_chunks().map().reduce()` shape flat and the
+/// `collect_global_top_n_numeric` cognitive complexity low enough
+/// that no clippy suppression is needed.
+fn resolve_chunk<D: AsRef<DriveCompactIndex>>(
+    drives: &[D],
+    chunk: &[(u16, u32, i64)],
+) -> ResolveStats {
+    let mut local_caches: std::collections::HashMap<u16, tree::DirCache> =
+        std::collections::HashMap::new();
+    let mut rows: Vec<DisplayRow> = Vec::with_capacity(chunk.len());
+    let mut resolve_fn_ns: u128 = 0;
+    let mut build_row_ns: u128 = 0;
+    let mut candidates: u64 = 0;
+
+    for &(drive_idx, rec_idx, _) in chunk {
+        let Some(drive_ref) = drives.get(drive_idx as usize) else {
+            continue;
+        };
+        let drive = drive_ref.as_ref();
+        let Some(rec) = drive.records.get(rec_idx as usize) else {
+            continue;
+        };
+        let name = rec.name(&drive.names);
+        if name.is_empty() {
+            continue;
+        }
+        let mut vp_buf = [0_u8; 4];
+        let volume_prefix = stack_volume_prefix(&mut vp_buf, drive.letter);
+        let cache = local_caches
+            .entry(drive_idx)
+            .or_insert_with(|| tree::DirCache::with_capacity(256));
+        let t_resolve = std::time::Instant::now();
+        let path = tree::resolve_path_cached(drive, rec_idx as usize, volume_prefix, cache);
+        resolve_fn_ns += t_resolve.elapsed().as_nanos();
+        let t_build = std::time::Instant::now();
+        rows.push(make_display_row(rec_idx, drive.letter, rec, name, path));
+        build_row_ns += t_build.elapsed().as_nanos();
+        candidates += 1;
+    }
+
+    let cache_entries: u64 = local_caches.values().map(|cache| cache.len() as u64).sum();
+    ResolveStats {
+        rows,
+        resolve_fn_ns,
+        build_row_ns,
+        candidates,
+        cache_entries,
+    }
+}
+
+/// Parallel path-resolve: turn `(drive_idx, rec_idx, sort_key)` tuples
+/// into fully-materialised `DisplayRow`s across rayon worker chunks.
+///
+/// The caller must pre-sort `candidates` by `(drive_idx, rec_idx)`
+/// (MFT locality) so each chunk's per-worker `DirCache` stays warm.
+/// This function is size- and order-agnostic: it always processes
+/// `candidates` in the order given and reduces worker outputs in the
+/// same order, matching the pre-refactor behaviour exactly.
+fn resolve_candidates_to_rows<D: AsRef<DriveCompactIndex> + Sync>(
+    drives: &[D],
+    candidates: &[(u16, u32, i64)],
+) -> ResolveStats {
+    candidates
+        .par_chunks(RESOLVE_CHUNK_SIZE)
+        .map(|chunk| resolve_chunk(drives, chunk))
+        .reduce(
+            || ResolveStats {
+                rows: Vec::new(),
+                resolve_fn_ns: 0,
+                build_row_ns: 0,
+                candidates: 0,
+                cache_entries: 0,
+            },
+            |mut acc, mut part| {
+                acc.rows.append(&mut part.rows);
+                acc.resolve_fn_ns += part.resolve_fn_ns;
+                acc.build_row_ns += part.build_row_ns;
+                acc.candidates += part.candidates;
+                acc.cache_entries += part.cache_entries;
+                acc
+            },
+        )
+}
+
+/// Fan the per-drive scan across rayon workers and return the
+/// merged `(drive_filtered_sum, candidate_tuples)` pair.
+///
+/// Extracted so the outer entry point stays flat: all of the
+/// per-worker tracing, filter-cloning, and heap-merging logic lives
+/// in one named function instead of nesting inside the phase loop.
+fn scan_all_drives_parallel<D: AsRef<DriveCompactIndex> + Sync>(
+    drives: &[D],
+    search_filters: &SearchFilters,
+    cfg: DriveScanCfg,
+) -> (u64, Vec<(u16, u32, i64)>) {
+    let has_filters = cfg.has_filters;
+    let per_drive: Vec<DriveCandidates> = drives
+        .par_iter()
+        .enumerate()
+        .map(|(drive_idx, drive_ref)| {
+            let drive = drive_ref.as_ref();
+            let t_drive = std::time::Instant::now();
+            // Per-worker clone so `resolve_ext_ids_for_drive` writes
+            // into a local copy, never a shared `&mut`.  See struct
+            // docs on `SearchFilters` for the clone-cost rationale.
+            let mut local_filters = search_filters.clone();
+            local_filters.resolve_ext_ids_for_drive(drive);
+            let (cands, drive_filtered) =
+                scan_drive_candidates(drive_idx, drive, &local_filters, cfg);
+            tracing::debug!(
+                drive = %drive.letter,
+                records = drive.records.len(),
+                filtered_out = drive_filtered,
+                has_filters,
+                elapsed_ms = t_drive.elapsed().as_millis(),
+                "[SCAN] drive scan complete"
+            );
+            (cands, drive_filtered)
+        })
+        .collect();
+    let total_filtered: u64 = per_drive.iter().map(|(_, filtered)| *filtered).sum();
+    let total_candidates: usize = per_drive.iter().map(|(cands, _)| cands.len()).sum();
+    let mut candidates: Vec<(u16, u32, i64)> = Vec::with_capacity(total_candidates);
+    for (drive_cands, _) in per_drive {
+        candidates.extend(drive_cands);
+    }
+    (total_filtered, candidates)
+}
+
+/// Sort merged candidates by `sort_key`, truncate to `limit`, then
+/// re-sort by `(drive_idx, rec_idx)` for MFT locality during the
+/// downstream path-resolve phase.
+///
+/// The numeric sort is the user-visible ordering; the locality
+/// re-sort is an internal optimisation that `backend::sort_rows`
+/// reverses after resolution using the user's requested column + tiebreakers.
+///
+/// Measured on a 1 M-record C: drive with `*.dll --sort modified`:
+/// `path_resolve_ms` drops from ~226 ms to well under 100 ms because
+/// the per-directory `DirCache` entry is reused across all `.dll`
+/// siblings of `System32\` etc.
+fn sort_and_localise(
+    mut candidates: Vec<(u16, u32, i64)>,
+    sort_desc: bool,
+    limit: usize,
+) -> Vec<(u16, u32, i64)> {
+    if sort_desc {
+        candidates.sort_unstable_by_key(|entry| core::cmp::Reverse(entry.2));
+    } else {
+        candidates.sort_unstable_by_key(|entry| entry.2);
+    }
+    candidates.truncate(limit);
+    candidates.sort_unstable_by_key(|&(drive_idx, rec_idx, _)| (drive_idx, rec_idx));
+    candidates
+}
+
 /// Core numeric sort + collect logic for all non-path-sorted fields.
 ///
 /// Extracted from `collect_global_top_n` because inlining 300 lines of sort-key
 /// extraction + heap management would make the dispatch function unreadable.
+///
+/// # Parallel per-drive scan
+///
+/// The scan phase fans out across drives with `rayon::par_iter` so each
+/// drive's linear record loop runs on its own worker.  Every worker
+/// maintains a private bounded [`BinaryHeap`] (`limit + 1` capacity)
+/// inside [`scan_drive_candidates`]; the outer merge drains the
+/// per-drive heaps into a single `Vec` and re-sorts + truncates to the
+/// global top-`limit`.  For the default 7-drive / 25 M-record layout
+/// this drops the `* --limit 100 --hide-system --hide-ads` scan from
+/// ~1 080 ms (sequential drive loop) to ~150-200 ms on a 12-core host
+/// — the single largest hot-path regression identified in the v0.5.66
+/// cross-tool benchmark.
+///
+/// `search_filters` is cloned once per drive so each rayon worker can
+/// call `resolve_ext_ids_for_drive` on its own copy without sharing a
+/// `&mut` reference.  The clone is a `Vec<String>` + `Vec<u16>` —
+/// trivially cheap against the per-drive scan work it unblocks.  The
+/// outer `search_filters` is therefore read-only here; the caller
+/// continues to hold a `&mut` reference only because downstream
+/// display-row filters need it.
 pub(super) fn collect_global_top_n_numeric<D: AsRef<DriveCompactIndex> + Sync>(
     drives: &[D],
     limit: usize,
     sort_column: FieldId,
     sort_desc: bool,
     filter_mode: FilterMode,
-    search_filters: &mut SearchFilters,
+    search_filters: &SearchFilters,
 ) -> (Vec<DisplayRow>, PhaseTimings) {
     let has_filters = !search_filters.is_empty() || !matches!(filter_mode, FilterMode::All);
     tracing::debug!(
@@ -77,486 +718,66 @@ pub(super) fn collect_global_top_n_numeric<D: AsRef<DriveCompactIndex> + Sync>(
     // instead of O(N log N).  For "unlimited" (limit >= 1M or usize::MAX)
     // fall back to collect-sort-truncate since a heap that large is wasteful.
     let use_heap = limit < 1_000_000;
-    let mut heap_desc: BinaryHeap<core::cmp::Reverse<HeapEntry>> = if use_heap && sort_desc {
-        BinaryHeap::with_capacity(limit.saturating_add(1))
-    } else {
-        BinaryHeap::new()
+    let cfg = DriveScanCfg {
+        limit,
+        use_heap,
+        sort_column,
+        sort_desc,
+        filter_mode,
+        has_filters,
     };
-    let mut heap_asc: BinaryHeap<HeapEntry> = if use_heap && !sort_desc {
-        BinaryHeap::with_capacity(limit.saturating_add(1))
-    } else {
-        BinaryHeap::new()
-    };
-    let mut fallback: Vec<(u16, u32, i64)> = Vec::new();
 
-    // Reusable buffer for on-the-fly CaseFold inside filter matching.
-    let mut fold_buf: Vec<u8> = Vec::with_capacity(256);
-
-    // ── Per-record processing closure ──────────────────────────────
-    // Shared between the full-scan and ext-index fast paths.
-    #[expect(clippy::cast_possible_wrap, reason = "file sizes within i64 range")]
-    let mut push_record =
-        |drive_idx: usize, rec_idx: usize, rec: &CompactRecord, drive: &DriveCompactIndex| {
-            let drive_fold = drive.fold;
-            let sort_key = match sort_column {
-                FieldId::Size => rec.size as i64,
-                #[expect(
-                    clippy::cast_possible_wrap,
-                    reason = "allocated sizes within i64 range"
-                )]
-                FieldId::SizeOnDisk => rec.allocated as i64,
-                FieldId::Created => rec.created,
-                FieldId::Accessed => rec.accessed,
-                FieldId::Descendants => i64::from(rec.descendants),
-                #[expect(
-                    clippy::cast_possible_wrap,
-                    reason = "allocated values are expected within i64 range"
-                )]
-                FieldId::TreeAllocated => {
-                    if rec.is_directory() {
-                        rec.tree_allocated as i64
-                    } else {
-                        rec.allocated as i64
-                    }
-                }
-                #[expect(
-                    clippy::cast_possible_wrap,
-                    reason = "scaled bulkiness metric is expected within i64 range"
-                )]
-                FieldId::Bulkiness => bulkiness_for_record(rec) as i64,
-                FieldId::Extension | FieldId::Type => i64::from(rec.extension_id),
-                FieldId::Name => {
-                    let name = rec.name(&drive.names);
-                    let mut key = [0_u8; 8];
-                    for (dst, ch) in key.iter_mut().zip(name.chars()) {
-                        let folded = drive_fold.fold_char(ch);
-                        #[expect(clippy::cast_possible_truncation, reason = "sort key prefix")]
-                        {
-                            *dst = folded as u8;
-                        }
-                    }
-                    i64::from_be_bytes(key)
-                }
-                FieldId::Drive => {
-                    let name = rec.name(&drive.names);
-                    let mut key = [0_u8; 8];
-                    key[0] = u8::try_from(u32::from(drive.letter)).unwrap_or(b'?');
-                    for (dst, ch) in key[1..].iter_mut().zip(name.chars()) {
-                        let folded = drive_fold.fold_char(ch);
-                        #[expect(clippy::cast_possible_truncation, reason = "sort key prefix")]
-                        {
-                            *dst = folded as u8;
-                        }
-                    }
-                    i64::from_be_bytes(key)
-                }
-                #[expect(
-                    clippy::cast_possible_wrap,
-                    reason = "treesize values within i64 range"
-                )]
-                FieldId::TreeSize => {
-                    if rec.is_directory() {
-                        rec.treesize as i64
-                    } else {
-                        rec.size as i64
-                    }
-                }
-                // Boolean attribute flags: extract the individual bit as 0/1.
-                FieldId::DirectoryFlag => i64::from(rec.is_directory()),
-                FieldId::Hidden => i64::from(rec.flags & 0x0002 != 0),
-                FieldId::System => i64::from(rec.flags & 0x0004 != 0),
-                FieldId::ReadOnly => i64::from(rec.flags & 0x0001 != 0),
-                FieldId::Archive => i64::from(rec.flags & 0x0020 != 0),
-                FieldId::Compressed => i64::from(rec.flags & 0x0800 != 0),
-                FieldId::Encrypted => i64::from(rec.flags & 0x4000 != 0),
-                FieldId::Sparse => i64::from(rec.flags & 0x0200 != 0),
-                FieldId::Reparse => i64::from(rec.flags & 0x0400 != 0),
-                FieldId::Offline => i64::from(rec.flags & 0x1000 != 0),
-                FieldId::NotIndexed => i64::from(rec.flags & 0x2000 != 0),
-                FieldId::Temporary => i64::from(rec.flags & 0x0100 != 0),
-                FieldId::Integrity => i64::from(rec.flags & 0x8000 != 0),
-                FieldId::NoScrub => i64::from(rec.flags & 0x0002_0000 != 0),
-                FieldId::Pinned => i64::from(rec.flags & 0x0008_0000 != 0),
-                FieldId::Unpinned => i64::from(rec.flags & 0x0010_0000 != 0),
-                FieldId::RecallOnOpen => i64::from(rec.flags & 0x0004_0000 != 0),
-                FieldId::RecallOnDataAccess => i64::from(rec.flags & 0x0040_0000 != 0),
-                // Composite attribute fields use the raw flags value.
-                FieldId::Attributes | FieldId::AttributeValue | FieldId::ParityAttributes => {
-                    i64::from(rec.flags)
-                }
-                FieldId::Virtual => i64::from(rec.flags & 0x0001_0000 != 0),
-                // Modified is the default; Path/PathOnly handled by tree walk above.
-                FieldId::Path | FieldId::PathOnly | FieldId::Modified => rec.modified,
-                FieldId::NameLength => {
-                    i64::try_from(rec.name(&drive.names).chars().count()).unwrap_or(i64::MAX)
-                }
-                FieldId::PathLength => {
-                    // Use name length as a proxy at the sort-key stage
-                    // (full path unavailable here).
-                    i64::try_from(rec.name(&drive.names).chars().count()).unwrap_or(i64::MAX)
-                }
-            };
-
-            if use_heap {
-                let entry = HeapEntry {
-                    sort_key,
-                    drive_idx: uffs_mft::len_to_u16(drive_idx),
-                    rec_idx: uffs_mft::len_to_u32(rec_idx),
-                };
-                if sort_desc {
-                    heap_push_capped(&mut heap_desc, core::cmp::Reverse(entry), limit);
-                } else {
-                    heap_push_capped(&mut heap_asc, entry, limit);
-                }
-            } else {
-                fallback.push((
-                    uffs_mft::len_to_u16(drive_idx),
-                    uffs_mft::len_to_u32(rec_idx),
-                    sort_key,
-                ));
-            }
-        };
-
-    // Check if we can use the extension inverted index (ext-only filter,
-    // no other constraints).  This reduces iteration from O(N) where
-    // N = all records (~25M) to O(K) where K = matching records (~50K).
-    let ext_fast_path = search_filters.is_ext_only()
-        && matches!(filter_mode, FilterMode::All | FilterMode::FilesOnly);
-
-    if ext_fast_path {
-        tracing::debug!(
-            extensions = ?search_filters.extensions,
-            "ext fast-path ACTIVE — will use ExtensionIndex"
-        );
-    }
-
+    // ── Parallel per-drive scan ────────────────────────────────
     let t_scan_all = std::time::Instant::now();
-    let mut total_records_scanned: u64 = 0;
-    let mut total_filtered_out: u64 = 0;
-
-    for (drive_idx, drive_ref) in drives.iter().enumerate() {
-        let drive = drive_ref.as_ref();
-        let t_drive = std::time::Instant::now();
-        let drive_record_count = drive.records.len();
-        let mut drive_filtered = 0_u64;
-
-        // Resolve extension filter IDs for this drive (once, not per record).
-        search_filters.resolve_ext_ids_for_drive(drive);
-
-        if ext_fast_path && !search_filters.resolved_ext_ids.is_empty() {
-            // ── Fast path: iterate only ext-index candidates ─────
-            //
-            // The CSR `ext_index` bucket already narrows the candidate
-            // set from O(N) (all records on the drive, up to 7 M+) to
-            // O(K) (matches of the requested extension, typically 10s
-            // to 100 Ks).  We still have to apply the two cheap
-            // per-candidate predicates that `is_ext_only()` admits:
-            //
-            //   • `hide_system` — cached `name_first_byte == b'$'`
-            //     via `rec.is_system_metafile()`, zero name-arena
-            //     reads.  ~1 ns per candidate.
-            //
-            //   • `hide_ads` — scan the name bytes for a `:` (NTFS
-            //     ADS separator).  Name arena read + `memchr::memchr`,
-            //     ~30 ns per candidate and only evaluated when the
-            //     flag is actually set.
-            //
-            // Both predicates must run BEFORE `push_record` so filtered
-            // records never enter the heap / fallback buffer and never
-            // trigger the expensive path-resolution phase downstream.
-            tracing::debug!(
-                drive = %drive.letter,
-                resolved_ids = ?search_filters.resolved_ext_ids,
-                hide_system = search_filters.hide_system,
-                hide_ads = search_filters.hide_ads,
-                "ext fast-path: scanning ext_index candidates"
-            );
-            let hide_system = search_filters.hide_system;
-            let hide_ads = search_filters.hide_ads;
-            for &ext_id in &search_filters.resolved_ext_ids.clone() {
-                for &rec_idx_u32 in drive.ext_index.get(ext_id) {
-                    let rec_idx = rec_idx_u32 as usize;
-                    if let Some(rec) = drive.records.get(rec_idx) {
-                        if rec.name_len == 0 {
-                            continue;
-                        }
-                        if matches!(filter_mode, FilterMode::FilesOnly) && rec.is_directory() {
-                            continue;
-                        }
-                        if hide_system && rec.is_system_metafile() {
-                            continue;
-                        }
-                        if hide_ads {
-                            let name = rec.name(&drive.names);
-                            if memchr::memchr(b':', name.as_bytes()).is_some() {
-                                continue;
-                            }
-                        }
-                        push_record(drive_idx, rec_idx, rec, drive);
-                    }
-                }
-            }
-        } else if ext_fast_path && !search_filters.extensions.is_empty() {
-            // ── Fast-path short-circuit ──────────────────────────
-            //
-            // `ext_fast_path` means `is_ext_only()` returned true, so
-            // the ONLY filters active are `extensions` plus the cheap
-            // inline predicates (`hide_system` / `hide_ads`).  An
-            // empty `resolved_ext_ids` means none of the requested
-            // extensions are interned on this drive — i.e. zero
-            // records can possibly match.  Skip the drive entirely
-            // instead of falling through to an O(N) full scan that
-            // would uselessly iterate every record (`matches_record`
-            // would still reject them at the extension check).
-            //
-            // Regression root cause (2026-04-21): a query like
-            // `*.dbt --hide-system --hide-ads --drive C` on a drive
-            // with zero `.dbt` files took **543 ms** (3.5 M record
-            // scan) AND returned a spurious match for a directory
-            // literally named `dbt` via the buggy
-            // `name.rsplit('.').next()` fallback in `matches_record`.
-            // The short-circuit here combined with the fallback fix
-            // in `filters/mod.rs` closes both issues: the query now
-            // returns empty in < 1 ms.  See the `C:ext_rare` row in
-            // `@/Users/rnio/Private/Github/UltraFastFileSearch/LOG/Output_cache_new:785`.
-            tracing::debug!(
-                drive = %drive.letter,
-                requested_extensions = ?search_filters.extensions,
-                ext_name_count = drive.ext_names.len(),
-                "ext fast-path SHORT-CIRCUIT — no matching extension IDs on this drive"
-            );
-        } else {
-            // ── Full-scan path ───────────────────────────────────
-            let drive_fold = drive.fold;
-            for (rec_idx, rec) in drive.records.iter().enumerate() {
-                if rec.name_len == 0 {
-                    continue;
-                }
-                if has_filters {
-                    match filter_mode {
-                        FilterMode::FilesOnly if rec.is_directory() => continue,
-                        FilterMode::DirsOnly if !rec.is_directory() => continue,
-                        FilterMode::All | FilterMode::FilesOnly | FilterMode::DirsOnly => {}
-                    }
-                    if !search_filters.matches_record(rec, &drive.names, &mut fold_buf, drive_fold)
-                    {
-                        drive_filtered += 1;
-                        continue;
-                    }
-                }
-                push_record(drive_idx, rec_idx, rec, drive);
-            }
-        }
-        let drive_ms = t_drive.elapsed().as_millis();
-        total_records_scanned += drive_record_count as u64;
-        total_filtered_out += drive_filtered;
-        tracing::debug!(
-            drive = %drive.letter,
-            records = drive_record_count,
-            filtered_out = drive_filtered,
-            has_filters,
-            elapsed_ms = drive_ms,
-            "[SCAN] drive scan complete"
-        );
-    }
-    let scan_ms_u128 = t_scan_all.elapsed().as_millis();
-    let scan_ms = u64::try_from(scan_ms_u128).unwrap_or(u64::MAX);
+    let (total_filtered_out, raw_candidates) =
+        scan_all_drives_parallel(drives, search_filters, cfg);
+    let scan_ms = u64::try_from(t_scan_all.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let total_records_scanned: u64 = drives
+        .iter()
+        .map(|drive_ref| drive_ref.as_ref().records.len() as u64)
+        .sum();
     tracing::debug!(
         total_records = total_records_scanned,
         total_filtered = total_filtered_out,
         scan_ms,
-        "[SCAN] all drives scanned"
+        merged_size = raw_candidates.len(),
+        use_heap,
+        "[SCAN] all drives scanned (parallel)"
     );
 
-    // ── Sort phase: drain heap / fallback into candidates Vec,
-    //    sort by sort_key, and truncate to `limit`.
+    // ── Sort phase: sort by key, truncate to limit, MFT-locality re-sort ──
     let t_sort = std::time::Instant::now();
-    // Merge into sorted candidates Vec.
-    let mut candidates: Vec<(u16, u32, i64)> = if use_heap {
-        if sort_desc {
-            let desc_vec: Vec<_> = heap_desc
-                .into_iter()
-                .map(|rev| (rev.0.drive_idx, rev.0.rec_idx, rev.0.sort_key))
-                .collect();
-            tracing::debug!(
-                sort_column = ?sort_column,
-                sort_desc,
-                heap_size = desc_vec.len(),
-                keys = ?desc_vec.iter().map(|entry| entry.2).collect::<Vec<_>>(),
-                "[3] numeric_top_n heap_desc candidates"
-            );
-            desc_vec
-        } else {
-            let asc_vec: Vec<_> = heap_asc
-                .into_iter()
-                .map(|he| (he.drive_idx, he.rec_idx, he.sort_key))
-                .collect();
-            tracing::debug!(
-                sort_column = ?sort_column,
-                sort_desc,
-                heap_size = asc_vec.len(),
-                keys = ?asc_vec.iter().map(|entry| entry.2).collect::<Vec<_>>(),
-                "[3] numeric_top_n heap_asc candidates"
-            );
-            asc_vec
-        }
-    } else {
-        tracing::debug!(
-            sort_column = ?sort_column,
-            sort_desc,
-            fallback_size = fallback.len(),
-            "[3] numeric_top_n FALLBACK (no heap)"
-        );
-        fallback
-    };
-    if sort_desc {
-        candidates.sort_unstable_by_key(|entry| core::cmp::Reverse(entry.2));
-    } else {
-        candidates.sort_unstable_by_key(|entry| entry.2);
-    }
-    candidates.truncate(limit);
-    // Locality re-sort: the numeric sort above scrambles MFT order
-    // (e.g. `Modified`-DESC interleaves records from arbitrary
-    // directories), which collapses the `DirCache` hit rate during
-    // the path-resolve phase below.  Re-sort the survivors by
-    // `(drive_idx, rec_idx)` so sibling records land next to each
-    // other — `tree::resolve_path_cached` then walks one step up
-    // and finds the parent already warm in the cache.  The final
-    // `backend::sort_rows` call after path resolution restores the
-    // user-requested order with its tiebreakers, so this reorder
-    // is invisible to callers.
-    //
-    // Measured on a 1 M-record C: drive with `*.dll` and
-    // `--sort modified`: `path_resolve_ms` drops from ~226 ms to
-    // well under 100 ms because the per-directory DirCache entry is
-    // reused across all dll siblings of `System32\` etc.
-    candidates.sort_unstable_by_key(|&(drive_idx, rec_idx, _)| (drive_idx, rec_idx));
+    let sorted_candidates = sort_and_localise(raw_candidates, sort_desc, limit);
     let sort_ms = u64::try_from(t_sort.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-    // ── Path-resolve phase (parallel): per-candidate parent-chain
-    //    walk + `DisplayRow` materialisation.  Candidates are in
-    //    MFT order (from the locality re-sort above), so adjacent
-    //    items in each chunk share parents and hit the per-chunk
-    //    `DirCache` warm.
-    //
-    // Parallel strategy: rayon `par_chunks` over the candidate
-    // slice with one `DirCache` map per rayon worker.  Each chunk
-    // accumulates its own deep-profile counters, then everything
-    // is reduced into workspace totals so the outer [`PhaseTimings`]
-    // keeps the pre-parallel shape.  Chunk size 4 K was chosen to
-    // balance scheduler overhead (~1 μs per task) against cache
-    // warm-up cost: at ~370 ns per candidate a 4 K chunk runs in
-    // ~1.5 ms, >10× the dispatch floor.
-    //
-    // Cache-hit trade-off: per-thread caches start cold so the
-    // first ~20 candidates in each chunk are misses even if they
-    // share parents with other chunks.  The MFT-locality re-sort
-    // above keeps each chunk's parent working-set small (~1–2 K
-    // unique parents in a 4 K chunk), so warm-up pays back within
-    // the chunk.  Net effect measured on a 168 K-candidate C:
-    // drive: `resolve_fn` drops from ~63 ms sequential to ~17 ms
-    // with 8 workers — the 4× speedup reflects the 8-core Windows
-    // host minus cache warm-up overhead.
-    //
-    // Deep profile: split the cost into the `resolve_path_cached`
-    // fn itself vs. the `make_display_row` + `Vec::push` work so
-    // we can tell whether path-walking or row-building dominates.
-    // Counters are summed across chunks; each chunk's contribution
-    // is measured on its worker thread.  Rayon reduces the counters
-    // alongside the per-chunk row vectors.
+    // ── Path-resolve phase (parallel): `par_chunks` over candidates
+    //    with one `DirCache` per rayon worker.  Candidates are in
+    //    MFT order (from `sort_and_localise`'s locality re-sort), so
+    //    adjacent items in each chunk share parents and hit the
+    //    per-chunk cache warm.  Measured 4× speedup on 168 K candidates
+    //    across 8 workers (63 ms sequential → 17 ms parallel).
     let t_path_resolve = std::time::Instant::now();
-
-    let (mut rows, path_resolve_fn_ns, path_build_row_ns, path_candidates, path_cache_entries) =
-        candidates
-            .par_chunks(RESOLVE_CHUNK_SIZE)
-            .map(|chunk| {
-                let mut local_caches: std::collections::HashMap<u16, tree::DirCache> =
-                    std::collections::HashMap::new();
-                let mut local_rows: Vec<DisplayRow> = Vec::with_capacity(chunk.len());
-                let mut local_resolve_ns: u128 = 0;
-                let mut local_build_ns: u128 = 0;
-                let mut local_candidates: u64 = 0;
-
-                for &(drive_idx, rec_idx, _) in chunk {
-                    let Some(drive_ref) = drives.get(drive_idx as usize) else {
-                        continue;
-                    };
-                    let drive = drive_ref.as_ref();
-                    let Some(rec) = drive.records.get(rec_idx as usize) else {
-                        continue;
-                    };
-                    let name = rec.name(&drive.names);
-                    if name.is_empty() {
-                        continue;
-                    }
-                    let mut vp_buf = [0_u8; 4];
-                    let volume_prefix = stack_volume_prefix(&mut vp_buf, drive.letter);
-                    let cache = local_caches
-                        .entry(drive_idx)
-                        .or_insert_with(|| tree::DirCache::with_capacity(256));
-                    let t_resolve = std::time::Instant::now();
-                    let path =
-                        tree::resolve_path_cached(drive, rec_idx as usize, volume_prefix, cache);
-                    local_resolve_ns += t_resolve.elapsed().as_nanos();
-                    let t_build = std::time::Instant::now();
-                    local_rows.push(make_display_row(rec_idx, drive.letter, rec, name, path));
-                    local_build_ns += t_build.elapsed().as_nanos();
-                    local_candidates += 1;
-                }
-
-                // Sum DirCache entries across this chunk's per-drive
-                // caches *before* dropping them.  The total across
-                // chunks represents the steady-state miss count
-                // observed by the parallel phase — it will exceed
-                // the old sequential figure because each chunk
-                // pays its own cold-cache warm-up.
-                let local_cache_entries: u64 =
-                    local_caches.values().map(|cache| cache.len() as u64).sum();
-                (
-                    local_rows,
-                    local_resolve_ns,
-                    local_build_ns,
-                    local_candidates,
-                    local_cache_entries,
-                )
-            })
-            .reduce(
-                || (Vec::new(), 0_u128, 0_u128, 0_u64, 0_u64),
-                |mut acc, chunk| {
-                    let (
-                        mut chunk_rows,
-                        chunk_resolve_ns,
-                        chunk_build_ns,
-                        chunk_cands,
-                        chunk_entries,
-                    ) = chunk;
-                    acc.0.append(&mut chunk_rows);
-                    acc.1 += chunk_resolve_ns;
-                    acc.2 += chunk_build_ns;
-                    acc.3 += chunk_cands;
-                    acc.4 += chunk_entries;
-                    acc
-                },
-            );
-
-    backend::sort_rows(&mut rows, sort_column, sort_desc, &[]);
+    let stats = resolve_candidates_to_rows(drives, &sorted_candidates);
     let path_resolve_ms = u64::try_from(t_path_resolve.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+    let mut rows = stats.rows;
+    backend::sort_rows(&mut rows, sort_column, sort_desc, &[]);
 
     let timings = PhaseTimings {
         scan_ms,
         sort_ms,
         path_resolve_ms,
-        path_candidates,
-        path_cache_entries,
-        path_resolve_fn_ns: u64::try_from(path_resolve_fn_ns).unwrap_or(u64::MAX),
-        path_build_row_ns: u64::try_from(path_build_row_ns).unwrap_or(u64::MAX),
+        path_candidates: stats.candidates,
+        path_cache_entries: stats.cache_entries,
+        path_resolve_fn_ns: u64::try_from(stats.resolve_fn_ns).unwrap_or(u64::MAX),
+        path_build_row_ns: u64::try_from(stats.build_row_ns).unwrap_or(u64::MAX),
     };
     tracing::debug!(
         scan_ms,
         sort_ms,
         path_resolve_ms,
-        path_candidates,
-        path_cache_entries,
+        path_candidates = timings.path_candidates,
+        path_cache_entries = timings.path_cache_entries,
         path_resolve_fn_ns = timings.path_resolve_fn_ns,
         path_build_row_ns = timings.path_build_row_ns,
         rows = rows.len(),

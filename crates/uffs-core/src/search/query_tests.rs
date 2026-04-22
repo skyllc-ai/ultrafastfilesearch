@@ -1198,3 +1198,315 @@ fn top_n_sort_by_bulkiness_asc_orders_by_ratio() {
         "bulkiness asc must rank dense < medium < sparse at the tail; got {got:?}",
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Phase 5 regression tests — parallel per-drive scan + ext fast path on
+// `FieldId::Path` sort.  Both pin fixes published in the v0.5.66
+// cross-tool benchmark:
+//
+//   • `* --limit 100`  (regressed from 163 ms → 1 112 ms in Phase 2)
+//   • `*.dll --sort path` (scaled with drive size, not match count)
+//
+// See `docs/benchmarks/2026-04-v0.5.66-vs-everything-and-cpp.md`.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Build a drive with `count` files plus a root.  Each file has a
+/// *unique* `modified` timestamp equal to its FRS so the top-N by
+/// Modified-DESC is fully determined by the fixture (the N largest
+/// FRS values).
+fn build_modified_gradient_drive(letter: char, base_frs: u64, count: usize) -> DriveCompactIndex {
+    let mut idx = MftIndex::new(letter);
+    let root_off = idx.add_name(".");
+    let root = idx.get_or_create(ROOT_FRS);
+    root.stdinfo.set_directory(true);
+    root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
+    root.first_name.parent_frs = ROOT_FRS;
+    for i in 0..count {
+        let frs = base_frs + (i as u64);
+        let name = format!("{letter}_f{i:05}.txt");
+        let off = idx.add_name(&name);
+        let ext = idx.intern_extension(&name);
+        let rec = idx.get_or_create(frs);
+        rec.first_name.name = IndexNameRef::new(
+            off,
+            u16::try_from(name.len()).expect("name too long"),
+            true,
+            ext,
+        );
+        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_stream.size = SizeInfo {
+            length: 100,
+            allocated: 512,
+        };
+        rec.stdinfo.flags = 0x20;
+        // Monotonic timestamps: ensures Modified-DESC order is
+        // fully determined by FRS, independent of drive order or
+        // rayon scheduling.
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "small test-only FRS values stay well inside i64"
+        )]
+        {
+            rec.stdinfo.modified = frs as i64;
+        }
+    }
+    let (drive, _, _) = build_compact_index(letter, &idx);
+    drive
+}
+
+/// Parallel per-drive scan must produce the same global top-N
+/// regardless of the order drives arrive.  Uses three drives, each
+/// with 200 files, and a limit of 10 — the 10 newest records across
+/// the union must be the 10 highest-FRS records from drive C
+/// (because C's FRS range is highest).
+///
+/// Regression target: the parallel rayon drive scan introduced by
+/// the Phase 5 fix.  If per-drive heaps were swapped for a shared
+/// `&mut` reference (or if merge / truncate dropped rows from any
+/// drive) this test would fail.
+#[test]
+fn parallel_drive_scan_merges_global_top_n_across_drives() {
+    // Three drives, non-overlapping FRS ranges → deterministic
+    // global top-10 = drive-C's highest 10 FRS values.
+    let drive_a = build_modified_gradient_drive('A', 100, 200);
+    let drive_b = build_modified_gradient_drive('B', 10_000, 200);
+    let drive_c = build_modified_gradient_drive('C', 1_000_000, 200);
+    let drives = vec![drive_a, drive_b, drive_c];
+    let mut filters = SearchFilters::default();
+
+    let (rows, _) = collect_global_top_n(
+        &drives,
+        10,
+        FieldId::Modified,
+        true,
+        FilterMode::All,
+        &mut filters,
+    );
+
+    assert_eq!(rows.len(), 10, "limit=10 must return exactly 10 rows");
+    for row in &rows {
+        assert_eq!(
+            row.drive,
+            'C',
+            "Modified-DESC top-10 must all come from drive C \
+             (highest FRS range); got {}:{}",
+            row.drive,
+            row.name()
+        );
+    }
+    // The 10 rows must be modified-DESC sorted.
+    for pair in rows.windows(2) {
+        let [lhs, rhs] = pair else {
+            continue;
+        };
+        assert!(
+            lhs.modified >= rhs.modified,
+            "Modified-DESC order violated: {} ({}) came before {} ({})",
+            lhs.name(),
+            lhs.modified,
+            rhs.name(),
+            rhs.modified
+        );
+    }
+}
+
+/// Parallel per-drive scan must respect the global `limit` even
+/// when each individual drive holds *more* records than the limit.
+///
+/// Exercises the scenario that triggered the `BinaryHeap::with_capacity(limit)`
+/// requirement: a bounded per-drive heap plus an outer merge +
+/// truncate that never allocates `drives.len() * drive.records.len()`
+/// intermediate memory.
+#[test]
+fn parallel_drive_scan_respects_limit_smaller_than_per_drive_count() {
+    let drive_a = build_modified_gradient_drive('A', 100, 500);
+    let drive_b = build_modified_gradient_drive('B', 10_000, 500);
+    let drives = vec![drive_a, drive_b];
+    let mut filters = SearchFilters::default();
+
+    let (rows, _) = collect_global_top_n(
+        &drives,
+        5,
+        FieldId::Modified,
+        true,
+        FilterMode::All,
+        &mut filters,
+    );
+
+    assert_eq!(rows.len(), 5, "limit=5 must cap merged result set");
+    // Top-5 Modified-DESC across both drives must all come from B
+    // (B's FRS range is higher, so B has the 5 newest records).
+    for row in &rows {
+        assert_eq!(row.drive, 'B', "top-5 must all be from drive B");
+    }
+}
+
+/// Build a drive with `count` files split across two extensions:
+/// half `.dll`, half `.txt`.  All share the same parent.  Used by
+/// the `FieldId::Path` ext fast-path regression test to verify that
+/// the ext-only fast path returns exactly the `.dll` rows — no
+/// `.txt` leakage — and in lexicographic full-path order.
+fn build_two_extension_drive(letter: char, count: usize) -> DriveCompactIndex {
+    let mut idx = MftIndex::new(letter);
+    let root_off = idx.add_name(".");
+    let root = idx.get_or_create(ROOT_FRS);
+    root.stdinfo.set_directory(true);
+    root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
+    root.first_name.parent_frs = ROOT_FRS;
+    for i in 0..count {
+        let frs = 100 + (i as u64);
+        let ext_part = if i % 2 == 0 { "dll" } else { "txt" };
+        let name = format!("file_{i:05}.{ext_part}");
+        let off = idx.add_name(&name);
+        let ext = idx.intern_extension(&name);
+        let rec = idx.get_or_create(frs);
+        rec.first_name.name = IndexNameRef::new(
+            off,
+            u16::try_from(name.len()).expect("name too long"),
+            true,
+            ext,
+        );
+        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_stream.size = SizeInfo {
+            length: 100,
+            allocated: 512,
+        };
+        rec.stdinfo.flags = 0x20;
+    }
+    let (drive, _, _) = build_compact_index(letter, &idx);
+    drive
+}
+
+/// `FieldId::Path` with an ext-only filter must take the ext-index
+/// fast path: the result must contain *only* the matching-extension
+/// rows (not the other extension's rows) and must be full-path
+/// sorted.
+///
+/// Regression target: `collect_path_sorted_top_n`'s newly-added
+/// ext-index fast path.  If the fast-path branch leaks non-matching
+/// records, or if `backend::sort_rows(.., FieldId::Path, ..)` is
+/// bypassed, this test fails.
+#[test]
+fn path_sort_ext_only_returns_matching_ext_in_path_order() {
+    let drive = build_two_extension_drive('C', 20);
+    let drives = vec![drive];
+    let mut filters = SearchFilters {
+        extensions: vec!["dll".into()],
+        ..Default::default()
+    };
+
+    let (rows, _) = collect_global_top_n(
+        &drives,
+        100,
+        FieldId::Path,
+        false,
+        FilterMode::All,
+        &mut filters,
+    );
+
+    // Only `.dll` rows — no `.txt` leakage.
+    for row in &rows {
+        let ext = std::path::Path::new(row.name())
+            .extension()
+            .and_then(std::ffi::OsStr::to_str);
+        assert!(
+            ext.is_some_and(|found| found.eq_ignore_ascii_case("dll")),
+            "ext fast path leaked non-matching extension: {}",
+            row.name()
+        );
+    }
+    // 20 files, half are `.dll`, so 10 rows.
+    assert_eq!(rows.len(), 10, "expected 10 .dll rows, got {}", rows.len());
+    // Paths must be in lexicographic ascending order (case-folded,
+    // same contract as `backend::sort_rows(.., FieldId::Path, false, ..)`).
+    for pair in rows.windows(2) {
+        let [lhs, rhs] = pair else {
+            continue;
+        };
+        assert!(
+            lhs.path.to_lowercase() <= rhs.path.to_lowercase(),
+            "Path-ASC violated: {} came before {}",
+            lhs.path,
+            rhs.path
+        );
+    }
+}
+
+/// `FieldId::Path` DESC with ext-only filter must produce the
+/// reverse-lex order via the same fast path.  Pins that the
+/// `sort_desc` flag is threaded through `backend::sort_rows(..,
+/// FieldId::Path, sort_desc, ..)` inside the fast path.
+#[test]
+fn path_sort_ext_only_desc_returns_reverse_lex_order() {
+    let drive = build_two_extension_drive('C', 20);
+    let drives = vec![drive];
+    let mut filters = SearchFilters {
+        extensions: vec!["dll".into()],
+        ..Default::default()
+    };
+
+    let (rows, _) = collect_global_top_n(
+        &drives,
+        100,
+        FieldId::Path,
+        true,
+        FilterMode::All,
+        &mut filters,
+    );
+
+    assert_eq!(rows.len(), 10, "expected 10 .dll rows");
+    for pair in rows.windows(2) {
+        let [lhs, rhs] = pair else {
+            continue;
+        };
+        assert!(
+            lhs.path.to_lowercase() >= rhs.path.to_lowercase(),
+            "Path-DESC violated: {} came before {}",
+            lhs.path,
+            rhs.path
+        );
+    }
+}
+
+/// `FieldId::Path` with a non-ext filter (e.g. `min_size`) must
+/// route through the legacy tree walk — not the ext fast path.
+/// Pins the `is_ext_only()` gate: adding a size predicate
+/// disqualifies the fast path, so the tree walk runs instead.
+#[test]
+fn path_sort_non_ext_filter_uses_tree_walk() {
+    let drive = build_two_extension_drive('C', 20);
+    let drives = vec![drive];
+    let mut filters = SearchFilters {
+        // min_size disqualifies is_ext_only, forcing the tree walk.
+        min_size: Some(50),
+        ..Default::default()
+    };
+
+    let (rows, _) = collect_global_top_n(
+        &drives,
+        100,
+        FieldId::Path,
+        false,
+        FilterMode::All,
+        &mut filters,
+    );
+
+    // All 20 files are 100 bytes so all pass min_size=50.  Plus the
+    // root directory.  Rows must still be full-path sorted.
+    assert!(
+        rows.len() >= 20,
+        "expected ≥20 rows (20 files passing min_size), got {}",
+        rows.len()
+    );
+    for pair in rows.windows(2) {
+        let [lhs, rhs] = pair else {
+            continue;
+        };
+        assert!(
+            lhs.path.to_lowercase() <= rhs.path.to_lowercase(),
+            "Path-ASC violated on tree-walk fallback: {} came before {}",
+            lhs.path,
+            rhs.path
+        );
+    }
+}

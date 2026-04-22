@@ -8,12 +8,14 @@
 
 mod numeric_top_n;
 mod path_only_top_n;
+mod path_sorted_top_n;
 
 use alloc::collections::BinaryHeap;
 use std::sync::LazyLock;
 
-use numeric_top_n::{collect_global_top_n_numeric, sort_indices_by_name};
+use numeric_top_n::collect_global_top_n_numeric;
 use path_only_top_n::collect_path_only_sorted_top_n;
+use path_sorted_top_n::collect_path_sorted_top_n;
 
 use super::backend::{DisplayRow, FilterMode, PhaseTimings};
 use super::field::FieldId;
@@ -151,114 +153,6 @@ pub fn collect_global_top_n<D: AsRef<DriveCompactIndex> + Sync>(
             (rows, Some(timings))
         }
     }
-}
-
-/// Depth-first path-sorted top-N walk.
-///
-/// Walks each drive's directory tree in pre-order DFS (sorted by name
-/// per level) and collects up to `limit` rows that satisfy
-/// `filter_mode` and `search_filters`.  Non-matching records are
-/// skipped but their children are still explored — a filtered-out
-/// directory may contain matching descendants (e.g. `FilesOnly` must
-/// walk through directories to reach files inside them, and an
-/// `extensions=["exe"]` filter must walk through `.txt` directories
-/// to reach `.exe` grandchildren).
-///
-/// Extracted from `collect_global_top_n` to isolate the filter
-/// application so the `PathOnly` branch stays readable and under the
-/// `cognitive_complexity` lint threshold.
-#[expect(
-    clippy::indexing_slicing,
-    reason = "drive_order indices are from 0..drives.len(); always valid"
-)]
-fn collect_path_sorted_top_n<D: AsRef<DriveCompactIndex>>(
-    drives: &[D],
-    limit: usize,
-    sort_desc: bool,
-    filter_mode: FilterMode,
-    search_filters: &SearchFilters,
-) -> Vec<DisplayRow> {
-    let mut path_results: Vec<DisplayRow> = Vec::new();
-    let mut drive_order: Vec<usize> = (0..drives.len()).collect();
-    drive_order.sort_unstable_by(|&idx_a, &idx_b| {
-        let ord = drives[idx_a]
-            .as_ref()
-            .letter
-            .cmp(&drives[idx_b].as_ref().letter);
-        if sort_desc { ord.reverse() } else { ord }
-    });
-
-    // Per-walk fold state, reused across every row for zero-alloc
-    // filter checks.  `fold` is always the default $UpCase table — per-
-    // drive $UpCase tables aren't available in the compact snapshot.
-    let fold = uffs_text::case_fold::CaseFold::default_table();
-    let mut fold_buf: Vec<u8> = Vec::with_capacity(256);
-
-    for &drive_idx in &drive_order {
-        if path_results.len() >= limit {
-            break;
-        }
-        let Some(drive_ref) = drives.get(drive_idx) else {
-            continue;
-        };
-        let drive = drive_ref.as_ref();
-        let mut vp_buf = [0_u8; 4];
-        let volume_prefix = stack_volume_prefix(&mut vp_buf, drive.letter);
-
-        let mut roots: Vec<u32> = drive
-            .records
-            .iter()
-            .enumerate()
-            .filter(|(_, rec)| rec.parent_idx == u32::MAX && rec.name_len > 0)
-            .map(|(idx, _)| uffs_mft::len_to_u32(idx))
-            .collect();
-        sort_indices_by_name(&mut roots, drive, sort_desc);
-
-        let mut dir_cache = tree::DirCache::with_capacity(256);
-        let mut stack: Vec<u32> = roots.into_iter().rev().collect();
-        while let Some(idx) = stack.pop() {
-            if path_results.len() >= limit {
-                return path_results;
-            }
-            let Some(rec) = drive.records.get(idx as usize) else {
-                continue;
-            };
-            let name = rec.name(&drive.names);
-            if name.is_empty() {
-                continue;
-            }
-
-            // Enqueue children BEFORE the filter check — a directory
-            // that fails the filter (e.g. `FilesOnly` drops dirs) may
-            // still contain matching descendants that must be visited.
-            let child_slice = drive.children.get(idx as usize);
-            if !child_slice.is_empty() {
-                let mut sorted_children = child_slice.to_vec();
-                sort_indices_by_name(&mut sorted_children, drive, sort_desc);
-                for &child in sorted_children.iter().rev() {
-                    stack.push(child);
-                }
-            }
-
-            // `filter_mode` is cheap — check before resolving path.
-            let is_dir = rec.is_directory();
-            if !passes_filter_mode(is_dir, filter_mode) {
-                continue;
-            }
-
-            // Remaining filters need the full `DisplayRow` (resolved
-            // path + semantic type).  Build it, then check.
-            let path =
-                tree::resolve_path_cached(drive, idx as usize, volume_prefix, &mut dir_cache);
-            let row = make_display_row(idx, drive.letter, rec, name, path);
-            if !super::filters::row_passes_filters(&row, search_filters, &fold, &mut fold_buf) {
-                continue;
-            }
-            path_results.push(row);
-        }
-    }
-
-    path_results
 }
 
 /// Returns `true` if a record with `is_directory` passes `filter_mode`.
