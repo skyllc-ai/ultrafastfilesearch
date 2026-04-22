@@ -12,6 +12,12 @@ Status as of **2026-04-22** · Maintainer: `@githubrobbi` · Review cadence: mon
   imports (Mozilla, Google, Bytecode Alliance, ISRG, Zcash),
   `cargo vet check --locked` gate in CI, weekly
   `cargo-vet-refresh.yml` import-refresh workflow.
+- 2026-04-22 — Committed `Cargo.lock` (PR #33b hotfix): switched
+  from gitignored-lockfile to committed-lockfile for reproducibility,
+  SLSA-attestation integrity, and cargo-vet stability.  See
+  [Lockfile pinning](#lockfile-pinning-cargolock) below.
+- 2026-04-22 — Documented known softprops old-commit 403 limitation
+  in the release flow (PR #33c).  See [Known limitations](#known-limitations-in-the-release-flow) below.
 
 This document captures UFFS's current supply-chain defences, the threat
 model they address, and the concrete gaps that are deferred (with
@@ -32,6 +38,7 @@ control lands or a deferred item is promoted.
 | Build-provenance | `actions/attest-build-provenance` | Every release asset signed with Sigstore OIDC | Every `v*` release | **Yes** — release.yml |
 | Commit ancestry check | Custom step in `release.yml` | `workflow_dispatch` `commit_sha` must be ancestor of main | Every release dispatch | **Yes** — release.yml |
 | Dep-tree growth | `dependabot-review.yml` | Cargo.lock crate-count delta on Dependabot PRs | Every Dependabot PR | Annotation only |
+| Lockfile pinning | Committed `Cargo.lock` | Every resolved crate-version frozen across devs / CI / releases | Always | **Yes** — `cargo vet check --locked` would fail any drift |
 | Audit trail | `cargo-vet check --locked` | Every resolved crate-version must have import / own audit / exemption | Every PR | **Yes** — `ci.yml` Security job |
 | Import refresh | `cargo-vet-refresh.yml` | Weekly `cargo vet regenerate imports` → PR | Mondays 08:00 UTC | GitHub schedules |
 | Structural audit | `cargo-geiger` via `just geiger` | unsafe / build.rs / proc-macro footprint | On-demand (monthly) | No |
@@ -76,6 +83,102 @@ SmartScreen / Gatekeeper reputation signal rather than
 attestation covers the technical threat for the audience who
 verifies; deferring the UX-layer signing until there's enterprise
 demand.
+
+## Lockfile pinning (`Cargo.lock`)
+
+As of 2026-04-22, `Cargo.lock` is committed to the repository
+(previously in `.gitignore`).  This is the standard recommendation
+for binary-crate workspaces per the [Cargo book](https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html),
+but for UFFS specifically it plays three supply-chain roles:
+
+### Role 1 — Reproducible builds
+
+Every developer clone, every CI run, every release build now resolves
+the identical dep graph.  Before, a fresh CI runner without a
+lockfile would `cargo generate-lockfile` on the spot, picking up
+whatever versions crates.io had published in the meantime.  This
+made the binary that got built from "commit X" non-deterministic,
+which in turn weakened the SLSA attestation's "I built this
+artifact from these sources" claim.
+
+### Role 2 — `cargo-vet` stability
+
+`cargo-vet` exemptions are keyed on specific `crate@version` pairs.
+With a floating lockfile, any transitive dep getting a patch
+release on crates.io (literally hundreds per week across our ~500
+transitive deps) would fail CI's `cargo vet check` for reasons
+unrelated to our PRs.  We hit this concretely on PR #33b when
+`pastey 0.2.2` was published between `cargo vet init` and the
+first CI run — the PR was blocked on an "unvetted" dep we hadn't
+intentionally upgraded.  Committing the lockfile eliminates this
+class of spurious failures; real bumps now only come via
+deliberate `cargo update` / Dependabot PRs.
+
+### Role 3 — Dependabot review surface
+
+With the lockfile in-tree, every Dependabot PR visibly changes
+`Cargo.lock` — the `dependabot-review.yml` workflow's tree-growth
+annotation has a real artifact to compare against.  The ~500-line
+`Cargo.lock` diff a bump produces is also a quick skim for
+unexpected fan-out.
+
+### Cost
+
+- **Repo size**: one-time +300 KB (5512-line `Cargo.lock`).
+- **Merge conflicts**: Dependabot PRs may conflict with each
+  other on `Cargo.lock`.  Mitigation: merge Dependabot PRs one at
+  a time (we already review them manually per
+  [Operational playbook](#per-dependabot-pr-review-5-10-min),
+  so the cost is zero).
+
+## Known limitations in the release flow
+
+### `softprops/action-gh-release` 403 on non-HEAD commits
+
+**Symptom**: `Create GitHub Release` step fails with
+
+```
+GitHub release failed with status: 403
+{"message":"Resource not accessible by integration"}
+```
+
+even though `permissions: contents: write` is set on the workflow.
+
+**Root cause**: documented in
+[softprops/action-gh-release README](https://github.com/softprops/action-gh-release):
+
+> When creating a new tag for an older commit, `github.token` may
+> not have permission to create the ref; use a PAT or another
+> token with sufficient contents permissions if you hit
+> `403 Resource not accessible by integration`.
+
+This is a hardcoded restriction of the GitHub Apps token model:
+`GITHUB_TOKEN` can create refs pointing at the default branch's
+current HEAD, but not at arbitrary older commits.
+
+**When this surfaces for UFFS**:
+
+- Smoke tests dispatched against an old commit (e.g. we replay
+  `release.yml` against a pre-fix commit to verify a fix works)
+  — always fails.
+- Real `just ship` flow where another commit lands on `main`
+  during the ~10-15 min release build window — `commit_sha`
+  stops matching `main` HEAD by the time softprops runs.
+  Theoretically possible but rare at current solo-maintainer
+  merge cadence (~1 PR/day).
+
+**Mitigation**: accept and document.  If we ever hit the race in
+practice, operator response is "re-dispatch `release.yml`, do not
+merge during release window".  A PAT-based workaround would
+re-introduce a supply-chain secret for a single edge-case — not
+worth the trade.
+
+**Separate from** the workflow-file-protection race that PR #32
+fixed (which was `remote rejected: refusing to allow a GitHub App
+to create or update workflow ... without 'workflows' permission`
+at `git push origin v*` time).  That path is closed; softprops
+now creates the tag via REST API, which has no workflow-file
+guard.
 
 ## Baseline metrics
 
