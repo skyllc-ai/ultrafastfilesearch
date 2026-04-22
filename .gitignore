@@ -6,7 +6,16 @@
 # =============================================================================
 debug/
 target/
-Cargo.lock
+# Cargo.lock IS committed for this workspace (binary crates: uffs-cli,
+# uffs-daemon, uffs-mcp, etc.).  Committing it is required for:
+#   * Reproducible builds (every dev + CI + release resolves the same graph)
+#   * Supply-chain integrity (pairs with cargo-vet + cargo-deny pinning)
+#   * SLSA attestation integrity (release provenance references a specific
+#     dep graph; without Cargo.lock that graph would drift every run)
+#   * cargo-vet stability (exemptions are keyed on specific crate-versions
+#     — a floating Cargo.lock would break cargo vet check on every
+#     unrelated upstream patch release)
+# To deliberately update deps, use `cargo update` or a Dependabot PR.
 **/*.rs.bk
 *.pdb
 # macOS sed -i backup files
