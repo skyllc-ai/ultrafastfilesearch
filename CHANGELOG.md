@@ -95,6 +95,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `analysis` modules.  Keeps packaging concerns isolated so
     `just --list` groups them and `build.just` stays focused on
     compilation rather than distribution.
+  - **Release workflow bundles brand assets with every tag** (Phase 8
+    — `.github/workflows/release.yml`).  New `Stage release bundle`
+    step runs per matrix target after the existing binary build,
+    staging binaries + `README` / `LICENSE` / `TRADEMARK.md` /
+    `CHANGELOG.md` + platform-specific brand assets + packaging
+    helpers into `release-staging/<artifact-name>/`, then zipping
+    into `release-artifacts/<artifact-name>.zip` (7z on Windows,
+    `zip` on macOS / Linux).  macOS additionally runs
+    `packaging/macos/bundle.sh` so the ZIP ships a ready-to-run
+    `UFFS.app` — end users don't need to run the bundler themselves.
+    Linux ZIP embeds the full `assets/brand/icons/hicolor/` tree and
+    `packaging/linux/install.sh` so `sudo
+    packaging/linux/install.sh` works from the unzipped directory
+    with no extra downloads.  `Organize release assets` step updated
+    to copy per-platform ZIPs into `final-release/` as-is (the
+    platform suffix is already baked into
+    `matrix.artifact-name`); raw-binary platform-suffix loop kept
+    intact so existing automation that `wget`s a single binary keeps
+    working.  `CHECKSUMS.txt` covers every asset (ZIPs + raw
+    binaries).  Release notes rewritten to front the ZIP bundles as
+    the recommended path with raw-binary URLs documented as the
+    automation alternative.
 
 - **Regex alternation → ExtensionIndex fast path** (Phase 4, 2026-04-21 —
   `crates/uffs-core/src/search/dispatch.rs`,

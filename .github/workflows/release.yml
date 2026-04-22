@@ -235,6 +235,92 @@ jobs:
           echo "📦 Packaged binaries:"
           ls -la
 
+      - name: Stage release bundle
+        shell: bash
+        run: |
+          echo "🎁 Staging release bundle for ${{ matrix.target }}..."
+
+          STAGE_DIR="release-staging/${{ matrix.artifact-name }}"
+          mkdir -p "$STAGE_DIR/assets"
+
+          # ── Binaries ───────────────────────────────────────────────────────
+          # Same shipping set as `Package binaries` above.  Diagnostic
+          # binaries (uffs-diag) stay workspace-only and are not shipped.
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            for bin in uffs.exe uffsd.exe uffsmcp.exe uffs_mft.exe; do
+              if [[ -f "target/${{ matrix.target }}/release/$bin" ]]; then
+                cp "target/${{ matrix.target }}/release/$bin" "$STAGE_DIR/"
+              fi
+            done
+          else
+            for bin in uffs uffsd uffsmcp uffs_mft; do
+              if [[ -f "target/${{ matrix.target }}/release/$bin" ]]; then
+                cp "target/${{ matrix.target }}/release/$bin" "$STAGE_DIR/"
+              fi
+            done
+          fi
+
+          # ── Documentation (common across every platform) ─────────────────────
+          cp README.md LICENSE TRADEMARK.md CHANGELOG.md "$STAGE_DIR/"
+
+          # ── Platform-specific brand assets + packaging helpers ──────────────
+          case "${{ matrix.target }}" in
+            *-windows-*)
+              cp assets/brand/icons/uffs.ico     "$STAGE_DIR/assets/"
+              cp assets/brand/uffs-hero-1024.png "$STAGE_DIR/assets/"
+              ;;
+            *-apple-*)
+              cp assets/brand/icons/uffs.icns    "$STAGE_DIR/assets/"
+              cp assets/brand/uffs-hero-1024.png "$STAGE_DIR/assets/"
+              mkdir -p "$STAGE_DIR/packaging/macos"
+              cp packaging/macos/Info.plist.in   "$STAGE_DIR/packaging/macos/"
+              cp packaging/macos/bundle.sh       "$STAGE_DIR/packaging/macos/"
+              chmod +x "$STAGE_DIR/packaging/macos/bundle.sh"
+
+              # Pre-build a ready-to-run UFFS.app inside the bundle so
+              # end users don't need to run bundle.sh themselves.  Runs
+              # the committed script from the repo root (not the staged
+              # copy) since bundle.sh expects repo-root-relative paths.
+              chmod +x packaging/macos/bundle.sh
+              packaging/macos/bundle.sh \
+                "target/${{ matrix.target }}/release/uffs" \
+                "$STAGE_DIR/UFFS.app"
+              ;;
+            *-linux-*)
+              cp -r assets/brand/icons/hicolor   "$STAGE_DIR/assets/"
+              cp assets/brand/uffs-hero-1024.png "$STAGE_DIR/assets/"
+              mkdir -p "$STAGE_DIR/packaging/linux"
+              cp packaging/linux/install.sh      "$STAGE_DIR/packaging/linux/"
+              cp packaging/linux/uffs.desktop    "$STAGE_DIR/packaging/linux/"
+              chmod +x "$STAGE_DIR/packaging/linux/install.sh"
+              ;;
+          esac
+
+          echo "📂 Staging tree:"
+          find "$STAGE_DIR" -maxdepth 4 -type f | sort
+
+          # ── ZIP the bundle ─────────────────────────────────────────────────
+          # 7z on Windows (pre-installed, no Git-Bash zip dependency);
+          # `zip` on macOS/Linux.  The ZIP goes straight into
+          # release-artifacts/ so the existing Upload step picks it up
+          # alongside the raw binaries.
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            7z a -tzip \
+              "release-artifacts/${{ matrix.artifact-name }}.zip" \
+              "$STAGE_DIR/*" > /dev/null
+          else
+            (cd release-staging && \
+             zip -rq "../release-artifacts/${{ matrix.artifact-name }}.zip" \
+                     "${{ matrix.artifact-name }}")
+          fi
+
+          echo "📦 Bundle ZIP:"
+          ls -la "release-artifacts/${{ matrix.artifact-name }}.zip"
+
+          # Clean up staging; only the ZIP needs to survive into the
+          # uploaded artifact.
+          rm -rf release-staging
+
       - name: Upload release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -268,16 +354,26 @@ jobs:
         run: |
           mkdir -p final-release
 
-          # Organize artifacts by platform
+          # Organize artifacts by platform.  Two shipping formats:
+          #   - Per-platform ZIP bundle (everything: binaries + brand +
+          #     docs + packaging helpers; the recommended download).
+          #   - Individual raw binaries with platform suffix
+          #     (backwards-compat URLs for users automating \`wget\` of
+          #     a single binary).
           for artifact_dir in release-artifacts/*/; do
             artifact_name=$(basename "$artifact_dir")
             echo "Processing $artifact_name..."
 
-            # Copy binaries with platform suffix
             for file in "$artifact_dir"*; do
               if [[ -f "$file" && "$file" != *"checksums.txt" ]]; then
                 filename=$(basename "$file")
-                # Add platform suffix to binary names
+                # ZIP bundles keep their original name (the platform
+                # suffix is already baked into matrix.artifact-name).
+                if [[ "$filename" == *.zip ]]; then
+                  cp "$file" "final-release/$filename"
+                  continue
+                fi
+                # Raw binaries get a platform suffix appended.
                 if [[ "$artifact_name" == *"linux"* ]]; then
                   cp "$file" "final-release/${filename}-linux-x64"
                 elif [[ "$artifact_name" == *"windows"* ]]; then
@@ -291,7 +387,8 @@ jobs:
             done
           done
 
-          # Create combined checksums
+          # Create combined checksums across every release asset
+          # (both the ZIP bundles and the raw binaries).
           cd final-release
           sha256sum * > CHECKSUMS.txt
 
@@ -317,18 +414,34 @@ jobs:
           cross-platform, so macOS and Linux builds are shipped for
           **offline MFT analysis** from captured `.mft` / `.bin` snapshots.
 
+          Each platform ships as a **one-download ZIP bundle** with the
+          binaries, the UFFS brand assets, the full documentation set
+          (`README.md`, `LICENSE`, `TRADEMARK.md`, `CHANGELOG.md`), and
+          the platform's packaging helper.  Individual binaries are also
+          attached for automation that `wget`s a single file.
+
           ### 🟦 Windows x86_64 — primary live-indexing target
-          - `uffs-windows-x64.exe` — CLI
-          - `uffsd-windows-x64.exe` — background daemon
-          - `uffsmcp-windows-x64.exe` — MCP stdio adapter for AI agents
-          - `uffs_mft-windows-x64.exe` — MFT tooling
+          - **`uffs-windows-x64.zip`** — recommended: CLI + daemon + MCP
+            + MFT tooling + icon + docs.  The `.exe`s ship with the UFFS
+            icon and `asInvoker` manifest embedded.
+          - Raw binaries: `uffs-windows-x64.exe`, `uffsd-windows-x64.exe`,
+            `uffsmcp-windows-x64.exe`, `uffs_mft-windows-x64.exe`.
 
           ### 🍏 macOS Apple Silicon — offline MFT analysis
-          - `uffs-macos-arm64`, `uffsd-macos-arm64`, `uffsmcp-macos-arm64`, `uffs_mft-macos-arm64`
+          - **`uffs-macos-arm64.zip`** — recommended: raw binaries + a
+            ready-to-run `UFFS.app` bundle + icns + docs +
+            `packaging/macos/bundle.sh` for rebuilding.
+          - Raw binaries: `uffs-macos-arm64`, `uffsd-macos-arm64`,
+            `uffsmcp-macos-arm64`, `uffs_mft-macos-arm64`.
           - Intel Macs: run the arm64 build under Rosetta 2.
 
           ### 🐧 Linux x86_64 — offline MFT analysis
-          - `uffs-linux-x64`, `uffsd-linux-x64`, `uffsmcp-linux-x64`, `uffs_mft-linux-x64`
+          - **`uffs-linux-x64.zip`** — recommended: binaries + full
+            hicolor icon tree + `packaging/linux/install.sh` (drops the
+            `.desktop` entry and icons under `/usr/local` with one
+            `sudo` invocation) + docs.
+          - Raw binaries: `uffs-linux-x64`, `uffsd-linux-x64`,
+            `uffsmcp-linux-x64`, `uffs_mft-linux-x64`.
           - Use with `--mft-file` to analyse captured MFT snapshots on servers, forensics VMs, or in Docker.
 
           ## 🔐 Verification
@@ -341,9 +454,17 @@ jobs:
 
           ## 📋 Installation
 
-          1. Download the appropriate binary for your platform.
-          2. macOS / Linux: `chmod +x uffs-*` then optionally `mv uffs-* /usr/local/bin/uffs`.
-          3. Windows: the `.exe` is ready to run; place it on `PATH`.
+          ### Recommended: ZIP bundle
+          1. Download `uffs-<platform>.zip` for your platform.
+          2. Unzip anywhere.
+          3. **Windows**: the `.exe`s are ready to run; place them on `PATH`.  Icon + `asInvoker` manifest are already baked into the PE.
+          4. **macOS**: double-click `UFFS.app`, or move the raw `uffs` binary into `/usr/local/bin/`.  First launch: Gatekeeper warns because the bundle is unsigned — right-click → Open to confirm, or run `xattr -dr com.apple.quarantine UFFS.app`.
+          5. **Linux**: run `sudo packaging/linux/install.sh` from the unzipped directory — installs the binary, the `.desktop` entry, and the full hicolor icon set.  Override prefix with `sudo PREFIX=/opt/uffs packaging/linux/install.sh`.
+
+          ### Raw-binary path (automation)
+          - Download the individual binary, e.g. `uffs-linux-x64`.
+          - macOS / Linux: `chmod +x uffs-*` then optionally `mv uffs-* /usr/local/bin/uffs`.
+          - Windows: the `.exe` is ready to run; place it on `PATH`.
 
           ## 🛠️ Build Information
 
