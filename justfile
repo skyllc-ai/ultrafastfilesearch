@@ -17,6 +17,7 @@ import 'just/bench_ci.just'
 import 'just/bench_uffs.just'
 import 'just/profile_usb.just'
 import 'just/profile_load.just'
+import 'just/packaging.just'
 
 # Default recipe - show available commands.
 default: _default-help

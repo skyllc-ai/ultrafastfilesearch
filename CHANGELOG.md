@@ -59,6 +59,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `docs/user-manual/index.md`).  Centred `uffs-wordmark.png` at
     560 px above the H1 so the published docs carry the brand
     consistently with the README.
+  - **macOS `.app` bundle layout** (Phase 3 —
+    `packaging/macos/Info.plist.in`,
+    `packaging/macos/bundle.sh`, `just/packaging.just`,
+    `justfile`).  New `just dist-macos` recipe: builds the release
+    binary and wraps it in `dist/UFFS.app` with the UFFS icns,
+    `LSUIElement` CLI-mode plist, and `CFBundleIdentifier =
+    com.skyllc.uffs`.  `Info.plist.in` carries a `@@VERSION@@`
+    placeholder that `bundle.sh` sed-substitutes from
+    `cargo pkgid -p uffs-cli`, so the bundle version can never drift
+    from `Cargo.toml`.  Output goes to the gitignored `dist/` tree;
+    packaging configuration lives under the tracked `packaging/`
+    root (new top-level folder).  End-to-end verified on macOS:
+    `dist/UFFS.app/Contents/MacOS/uffs --version` returns
+    `uffs 0.5.67` with the plist version fields templated correctly.
+  - **Linux `.desktop` + installer** (Phase 4 —
+    `packaging/linux/uffs.desktop`,
+    `packaging/linux/install.sh`, `just/packaging.just`).  New
+    `just install-linux` recipe (wraps `sudo
+    packaging/linux/install.sh`): builds the release binary,
+    drops it at `$PREFIX/bin/uffs` (default `/usr/local`), installs
+    the freedesktop entry under
+    `$PREFIX/share/applications/uffs.desktop`, and lays out the
+    full hicolor icon tree under
+    `$PREFIX/share/icons/hicolor/{16..512}/apps/uffs.png`.  `install.sh`
+    uses a portable `mkdir -p` + `install -m` helper (GNU `install
+    -D` is a GNU-only extension; the helper also works with BSD
+    `install` on macOS, which lets the script smoke-test from a mac
+    dev box).  `gtk-update-icon-cache` and `update-desktop-database`
+    run best-effort; absent tools fail silently.  End-to-end smoke-
+    tested from macOS against `PREFIX=/tmp/uffs-linux-install-test`:
+    9 files installed, binary runs, `.desktop` fields correct.
+  - **`just/packaging.just`** — new module imported from the root
+    `justfile` alongside the existing `build` / `bench_ci` /
+    `analysis` modules.  Keeps packaging concerns isolated so
+    `just --list` groups them and `build.just` stays focused on
+    compilation rather than distribution.
 
 - **Regex alternation → ExtensionIndex fast path** (Phase 4, 2026-04-21 —
   `crates/uffs-core/src/search/dispatch.rs`,

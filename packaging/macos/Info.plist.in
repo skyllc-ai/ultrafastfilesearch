@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPDX-FileCopyrightText: 2025-2026 SKY, LLC.
+  SPDX-License-Identifier: MPL-2.0
+
+  macOS bundle Info.plist template for UFFS.
+
+  `@@VERSION@@` is substituted by `packaging/macos/bundle.sh` using the
+  version reported by `cargo pkgid -p uffs-cli` so the bundle always
+  matches the currently-building binary.  Do NOT hard-code a version
+  number here.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>              <string>UFFS</string>
+    <key>CFBundleDisplayName</key>       <string>UltraFastFileSearch</string>
+    <key>CFBundleIdentifier</key>        <string>com.skyllc.uffs</string>
+    <key>CFBundleVersion</key>           <string>@@VERSION@@</string>
+    <key>CFBundleShortVersionString</key><string>@@VERSION@@</string>
+    <key>CFBundleExecutable</key>        <string>uffs</string>
+    <key>CFBundleIconFile</key>          <string>uffs.icns</string>
+    <key>CFBundlePackageType</key>       <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>LSMinimumSystemVersion</key>    <string>11.0</string>
+    <!-- CLI utility, not a Dock app: hide from the Dock and the
+         application switcher.  Drop this key if UFFS ever ships a
+         real GUI front-end on macOS. -->
+    <key>LSUIElement</key>               <true/>
+    <key>NSHumanReadableCopyright</key>  <string>(c) 2025-2026 SKY, LLC. MPL-2.0.</string>
+    <key>NSHighResolutionCapable</key>   <true/>
+</dict>
+</plist>

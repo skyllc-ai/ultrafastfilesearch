@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2025-2026 SKY, LLC.
+# SPDX-License-Identifier: MPL-2.0
+#
+# freedesktop.org Desktop Entry for UFFS.  Installed to
+# $PREFIX/share/applications/uffs.desktop by packaging/linux/install.sh.
+# Icon lookup resolves `Icon=uffs` against the hicolor tree populated by
+# the same installer.
+
+[Desktop Entry]
+Type=Application
+Name=UFFS
+GenericName=Ultra Fast File Search
+Comment=Wire-speed file search across NTFS drives via direct MFT analysis.
+Exec=uffs %U
+Icon=uffs
+Terminal=true
+Categories=Utility;FileTools;Filesystem;System;
+Keywords=search;file;ntfs;mft;fast;find;
+StartupNotify=false
