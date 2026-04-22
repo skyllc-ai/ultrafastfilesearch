@@ -919,12 +919,17 @@ async fn git_push(ctx: &PipelineContext) -> Result<()> {
              GitHub Release v{version} are already live (step 09).  This PR \
              routes the corresponding commit through branch-protection rules.\n\n\
              ## Auto-merge\n\n\
-             `--auto --rebase` is queued — GitHub will merge as soon as the \
-             required status checks pass.  Rebase preserves the GPG signature \
-             on single-commit release PRs.\n\n\
+             `--auto --squash` is queued — GitHub will merge as soon as the \
+             required status checks pass.  Squash is required because \
+             `main-protection` mandates signed commits, and GitHub's \
+             rebase-auto-merge cannot sign the rebased commit; the \
+             squash-merge commit is signed by GitHub's own key, which \
+             satisfies `required_signatures: true`.  The original author's \
+             signed commit remains verifiable in the PR branch history.\n\n\
              ## After merge\n\n\
-             Local `{current_branch}` already contains this commit; \
-             `git pull` will fast-forward cleanly once CI merges the PR."
+             Local `{current_branch}` had this commit with a different SHA \
+             before squash rewrote it onto main; recover with \
+             `git fetch origin && git reset --hard origin/{current_branch}`."
         );
 
         println!("📬 Opening release PR");
@@ -953,12 +958,22 @@ async fn git_push(ctx: &PipelineContext) -> Result<()> {
         );
     }
 
-    // Enable auto-merge (rebase).  If the 6 required status checks are already
-    // green by this point, GitHub merges immediately.  Rebase-merging a
-    // single-commit release PR preserves the author's GPG signature on the
-    // commit that lands on `main` — matching the pre-refactor semantics where
-    // the pipeline pushed the signed commit directly.
-    println!("⚡ Ensuring auto-merge is enabled (rebase strategy)");
+    // Enable auto-merge (squash).  Squash is mandatory on this repo because:
+    //
+    //   1. `main-protection` ruleset requires `required_signatures: true`
+    //      (every commit on main must be signed).
+    //   2. GitHub's rebase-auto-merge cannot sign the rebased commit; it
+    //      fails with `GraphQL: Base branch requires signed commits.
+    //      Rebase merges cannot be automatically signed by GitHub`
+    //      (observed on PR #36, the first real `just ship` for v0.5.69).
+    //   3. GitHub signs the squash-merge commit with its own key, which
+    //      satisfies `required_signatures: true` on main.
+    //
+    // Trust trade-off: the author's GPG signature is lost on the commit
+    // that lands on main (it becomes a GitHub-signed squash).  The
+    // original signed commit remains verifiable in the PR branch history,
+    // and every prior merged PR on this repo uses the same pattern.
+    println!("⚡ Ensuring auto-merge is enabled (squash strategy)");
     execute_command(
         "Enable auto-merge",
         "gh",
@@ -967,7 +982,7 @@ async fn git_push(ctx: &PipelineContext) -> Result<()> {
             "merge",
             &release_branch,
             "--auto",
-            "--rebase",
+            "--squash",
         ],
         ctx,
     )
@@ -984,7 +999,11 @@ async fn git_push(ctx: &PipelineContext) -> Result<()> {
     );
     println!(
         "   💡 After merge:  {}",
-        format!("git pull origin {} --rebase", current_branch).cyan()
+        format!(
+            "git fetch origin && git reset --hard origin/{} (squash rewrites commit SHA)",
+            current_branch
+        )
+        .cyan()
     );
 
     Ok(())
