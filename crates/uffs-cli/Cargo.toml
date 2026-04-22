@@ -76,6 +76,16 @@ mcp-http-probe = []
 [lints]
 workspace = true
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Build dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+# `winresource`: actively-maintained fork of `winres`.  Used in build.rs
+# to embed the UFFS icon (`assets/brand/icons/uffs.ico`) and the
+# `app.manifest` (asInvoker, PerMonitorV2 DPI, long-path aware) into
+# the `uffs.exe` PE binary on MSVC targets.  Inert on non-Windows.
+[build-dependencies]
+winresource = "0.1"
+
 [dev-dependencies]
 assert_cmd.workspace = true
 

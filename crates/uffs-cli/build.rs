@@ -1,6 +1,17 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
+// Build scripts run on the build host, not on the shipping binary's target.
+// The workspace `deny(expect_used)` / `deny(unwrap_used)` lints exist to keep
+// runtime code panic-free; forcing Result propagation through a build script
+// whose only failure modes are `link.exe not found` or `icon file missing`
+// adds noise without adding safety.  `expect` with a readable message is the
+// idiomatic shape for build-script error reporting.
+#![allow(
+    clippy::expect_used,
+    reason = "build scripts may panic on build-host failure; workspace deny-expect exists for runtime code"
+)]
+
 //! Build script for `uffs-cli`.
 //!
 //! Emits MSVC `/DELAYLOAD` linker directives for DLLs that are imported
@@ -35,11 +46,33 @@
 //! will resolve lazily on first call — it will NOT crash.  The cost is
 //! simply a one-time per-DLL load at the call site instead of at process
 //! start.  See `perf-phase2-measurement-plan.md` §2.4 for A/B results.
+//!
+//! # Windows resources (icon + app manifest)
+//!
+//! On the same MSVC gate, embeds Windows PE resources via the
+//! [`winresource`](https://crates.io/crates/winresource) crate:
+//!
+//! - **Icon** from `../../assets/brand/icons/uffs.ico` — picked up by Explorer,
+//!   the taskbar, and Alt-Tab.
+//! - **`app.manifest`** declaring `asInvoker`, `PerMonitorV2` DPI awareness,
+//!   and long-path support.
+//!
+//! **The CLI stays `asInvoker`.**  Elevation policy lives in
+//! [`uffs_client::daemon_ctl::ElevationPolicy`] and
+//! [`crate::main::format_elevation_help`], not the manifest.  Requiring
+//! admin at the manifest level would pop UAC on every `uffs <pattern>`
+//! invocation and defeat the v0.5.36 elevation refactor.  See
+//! `docs/refactor/elevation-posture.md` for the full posture doc.
 
 fn main() {
-    // Re-run only when this file changes.  Nothing else in the source tree
-    // affects the linker flags emitted here.
+    // Re-run when this file, the app manifest, or the icon change.  The
+    // manifest and icon are embedded into the PE as resources on MSVC
+    // targets; without these extra hints Cargo would reuse stale .rsrc
+    // data on edits.  On non-Windows the three extra print! lines are
+    // harmless no-ops (Cargo just watches files that happen to exist).
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=app.manifest");
+    println!("cargo:rerun-if-changed=../../assets/brand/icons/uffs.ico");
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
@@ -53,5 +86,23 @@ fn main() {
         }
         // Stub resolver used by /DELAYLOAD.
         println!("cargo:rustc-link-arg-bins=delayimp.lib");
+
+        // Embed the UFFS icon and `app.manifest` as Windows PE resources.
+        // See the crate-level doc for why the manifest declares
+        // `asInvoker` instead of `requireAdministrator`.
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("../../assets/brand/icons/uffs.ico")
+            .set("ProductName", "UltraFastFileSearch")
+            .set("FileDescription", "UFFS — Ultra Fast File Search")
+            .set("CompanyName", "SKY, LLC.")
+            .set("LegalCopyright", "(c) 2025-2026 SKY, LLC. MPL-2.0.")
+            .set("OriginalFilename", "uffs.exe")
+            .set_manifest_file("app.manifest");
+
+        // Panic on failure is acceptable here: build.rs runs on a build
+        // host, and the workspace deny-unwrap lint applies to runtime
+        // code (not build scripts).
+        res.compile()
+            .expect("winresource: failed to embed icon + manifest");
     }
 }

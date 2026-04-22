@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../../assets/brand/uffs-wordmark.png" alt="UFFS — Ultra Fast File Search" width="560">
+</p>
+
 # UFFS User Manual
 
 UFFS (Ultra Fast File Search) is a high-performance file search engine

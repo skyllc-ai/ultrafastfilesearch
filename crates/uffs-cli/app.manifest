@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  SPDX-FileCopyrightText: 2025-2026 SKY, LLC.
+  SPDX-License-Identifier: MPL-2.0
+
+  UFFS CLI application manifest.
+
+  Declares:
+    - asInvoker UAC level (NOT requireAdministrator — the v0.5.36
+      elevation refactor moved that decision into
+      uffs_client::daemon_ctl::ElevationPolicy; see
+      docs/refactor/elevation-posture.md)
+    - PerMonitorV2 DPI awareness (crisp text on mixed-DPI setups)
+    - Long-path support (Windows 10+ opt-in for paths > 260 chars)
+    - Supported OS IDs for Windows 10 and 11
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="UFFS.CLI" version="0.0.0.0"/>
+
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <!--
+          UFFS CLI is a thin RPC client.  The daemon is the component
+          that needs Administrator for raw MFT reads.  The CLI must stay
+          asInvoker; otherwise every `uffs <pattern>` pops UAC, which
+          the v0.5.36 ElevationPolicy refactor explicitly exists to
+          prevent.  See docs/refactor/elevation-posture.md.
+        -->
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+      <!-- Windows 11 uses the same supportedOS GUID as Windows 10 per MS docs. -->
+    </application>
+  </compatibility>
+</assembly>

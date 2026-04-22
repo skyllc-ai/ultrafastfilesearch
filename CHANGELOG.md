@@ -36,6 +36,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `CONTRIBUTING.md` gets a one-line contribution-agreement note
     covering MPL-2.0 and TRADEMARK.md, plus a Contact section so
     `TRADEMARK.md`'s "contact in CONTRIBUTING.md" pointer resolves.
+  - **Windows binary icon + `app.manifest`** (Phase 2 —
+    `crates/uffs-cli/build.rs`, `crates/uffs-cli/Cargo.toml`,
+    `crates/uffs-cli/app.manifest`).  The existing MSVC `/DELAYLOAD`
+    build-script block is now augmented with a `winresource` resource
+    embed on the same MSVC gate: icon from
+    `assets/brand/icons/uffs.ico`, plus `ProductName` /
+    `FileDescription` / `CompanyName` / `LegalCopyright` /
+    `OriginalFilename` version-info fields.  The manifest declares
+    `asInvoker`, `PerMonitorV2` DPI awareness, and long-path support.
+    Critical: the manifest stays `asInvoker` — elevation policy lives
+    in `uffs_client::daemon_ctl::ElevationPolicy` (v0.5.36 refactor);
+    a `requireAdministrator` manifest would pop UAC on every
+    `uffs <pattern>` invocation and defeat that work.  `winresource`
+    added as a build-dep (MSVC-only effect; compiles inertly on
+    other targets).  New `cargo:rerun-if-changed=app.manifest` +
+    `cargo:rerun-if-changed=../../assets/brand/icons/uffs.ico` so
+    edits retrigger the resource embed.  Clippy lint gate satisfied
+    with `#![allow(clippy::expect_used, reason = "…")]` scoped to the
+    build script — runtime code stays panic-free.
+  - **UFFS wordmark on user manual landing** (Phase 6 —
+    `docs/user-manual/index.md`).  Centred `uffs-wordmark.png` at
+    560 px above the H1 so the published docs carry the brand
+    consistently with the README.
 
 - **Regex alternation → ExtensionIndex fast path** (Phase 4, 2026-04-21 —
   `crates/uffs-core/src/search/dispatch.rs`,
