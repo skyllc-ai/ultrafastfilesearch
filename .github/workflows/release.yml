@@ -29,6 +29,16 @@ permissions:
   contents: write
   actions: read
   issues: write
+  # SLSA build-provenance attestation flow (P1 hardening):
+  #   - `id-token: write` lets the runner mint an OIDC token
+  #     identifying this workflow run to the Sigstore Fulcio CA.
+  #   - `attestations: write` lets `actions/attest-build-provenance`
+  #     post the resulting attestation to this repository via the
+  #     GitHub Attestations API.
+  # Both scopes are idle unless the attest step actually runs, so
+  # there is no exposure outside the create-github-release job.
+  id-token: write
+  attestations: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -107,6 +117,29 @@ jobs:
             exit 1
           fi
           echo "✅ Tag is available"
+
+      - name: Validate commit_sha is ancestor of main (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch' && inputs.commit_sha != ''
+        shell: bash
+        run: |
+          # Rollback-attack guard.  An attacker with `actions: write`
+          # (e.g. a compromised bot token) could otherwise invoke this
+          # workflow with a `commit_sha` pointing at an ARBITRARY
+          # commit — including one from an unreviewed feature branch,
+          # or a commit prior to a security fix — and have the
+          # release assets built from that code.  This step rejects
+          # any commit_sha that isn't on main's history.
+          #
+          # `git merge-base --is-ancestor A B` exits 0 iff A is an
+          # ancestor of B (commits equal count as ancestor).
+          git fetch origin main:refs/remotes/origin/main --quiet
+          if ! git merge-base --is-ancestor "${{ inputs.commit_sha }}" origin/main; then
+            echo "::error::commit_sha ${{ inputs.commit_sha }} is not an ancestor of origin/main."
+            echo "  Only commits that have already landed on main can be released."
+            echo "  If this commit is legitimate, merge it to main first."
+            exit 1
+          fi
+          echo "✅ commit_sha ${{ inputs.commit_sha }} is on main's history"
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Phase 2: Cross-Platform Binary Builds
@@ -404,6 +437,24 @@ jobs:
           echo "📦 Final release assets:"
           ls -la
 
+      - name: Generate SLSA build-provenance attestation
+        # Signs every file in `final-release/` with the workflow's
+        # Sigstore OIDC identity, producing a SLSA Level 3 build-
+        # provenance claim bound to (this workflow run, this commit,
+        # this set of inputs).  Consumers then verify with:
+        #
+        #   gh attestation verify <asset> \
+        #     --owner ${{ github.repository_owner }}
+        #
+        # Attestation is stored in the repo's attestations API, so it
+        # survives independently of the GitHub Release asset (even if
+        # someone with `contents: write` silently swaps a binary, the
+        # SHA256 in the attestation won't match and `gh attestation
+        # verify` fails).
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: "final-release/*"
+
       - name: Generate release notes
         id: release-notes
         shell: bash
@@ -460,6 +511,15 @@ jobs:
           ```bash
           sha256sum -c CHECKSUMS.txt
           ```
+
+          Additionally, every release asset carries a **SLSA build-
+          provenance attestation** signed with the workflow's Sigstore
+          OIDC identity.  Verify with GitHub CLI:
+          ```bash
+          gh attestation verify <file> --owner ${{ github.repository_owner }}
+          ```
+          A successful verification proves the bytes were produced by
+          this exact workflow run on this exact commit.
 
           ## 📋 Installation
 

@@ -45,14 +45,12 @@ on:
     paths:
       - "Cargo.toml"
   workflow_dispatch:
-    # Manual re-trigger for testing.  When dispatched, replays the
-    # HEAD-vs-HEAD~1 version diff logic against current main.
-    inputs:
-      force_tag:
-        description: "Force-create a tag even if version is unchanged (smoke-test only; leave empty normally)"
-        required: false
-        type: string
-        default: ""
+    # Manual re-trigger.  When dispatched (with no inputs), replays
+    # the HEAD-vs-HEAD~1 version diff logic against current main.
+    # Useful if `release.yml` has been fixed after a failed run and
+    # the same version-bump commit should be retried.  The
+    # idempotency guard (tag already on origin) handles double-fire
+    # races automatically.
 
 permissions:
   # Read commit history (for the HEAD vs HEAD~1 version diff).
@@ -114,16 +112,7 @@ jobs:
         env:
           NEW_VERSION: ${{ steps.versions.outputs.new }}
           OLD_VERSION: ${{ steps.versions.outputs.old }}
-          FORCE_TAG: ${{ inputs.force_tag }}
         run: |
-          # workflow_dispatch override: explicit tag bypasses version-diff.
-          # Used only for manual smoke tests of this workflow itself.
-          if [[ -n "$FORCE_TAG" ]]; then
-            echo "Manual dispatch with force_tag=$FORCE_TAG"
-            echo "tag=$FORCE_TAG" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           if [[ -z "$NEW_VERSION" ]]; then
             echo "::notice::No [workspace.package].version found in Cargo.toml — nothing to do."
             echo "tag=" >> "$GITHUB_OUTPUT"
