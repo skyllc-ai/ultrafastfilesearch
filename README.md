@@ -1,9 +1,21 @@
-# UFFS — Ultra Fast File Search
+<p align="center">
+  <img src="assets/brand/uffs-hero-1024.png" alt="UFFS — Ultra Fast File Search" width="480">
+</p>
 
-[![CI](https://github.com/skyllc-ai/UltraFastFileSearch/actions/workflows/ci.yml/badge.svg)](https://github.com/skyllc-ai/UltraFastFileSearch/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/skyllc-ai/UltraFastFileSearch?label=release)](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest)
-[![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
-[![Platform: Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest)
+<h1 align="center">UFFS — Ultra Fast File Search</h1>
+
+<p align="center">
+  <b>Wire-speed search across your NTFS drives. No indexing. No waiting.</b><br>
+  <sub>A Rust-native engine by <a href="https://github.com/skyllc-ai">Sky, LLC</a> — open source, MPL-2.0.</sub>
+</p>
+
+<p align="center">
+  <a href="https://github.com/skyllc-ai/UltraFastFileSearch/actions/workflows/ci.yml"><img src="https://github.com/skyllc-ai/UltraFastFileSearch/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest"><img src="https://img.shields.io/github/v/release/skyllc-ai/UltraFastFileSearch?label=release" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg" alt="License: MPL 2.0"></a>
+  <a href="https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest"><img src="https://img.shields.io/badge/platform-Windows-blue.svg" alt="Platform: Windows"></a>
+  <a href="TRADEMARK.md"><img src="https://img.shields.io/badge/brand-TRADEMARK.md-ce422b.svg" alt="Brand policy"></a>
+</p>
 
 **A benchmark-driven NTFS search engine for Windows.** UFFS reads the Master File Table directly, builds a compact persisted index, and keeps large NTFS estates searchable through a background daemon.
 
@@ -181,18 +193,36 @@ Start with [CONTRIBUTING.md](CONTRIBUTING.md) for the pinned toolchain, `just`/`
 
 ---
 
-## License
+## License & Trademarks
 
-UFFS is licensed under the [Mozilla Public License 2.0 (MPL-2.0)](LICENSE).
+**Code.** UFFS is licensed under the [Mozilla Public License 2.0 (MPL-2.0)](LICENSE).
 
 You can use, modify, and distribute UFFS freely. If you modify MPL-covered source files and distribute the result, those file-level changes must remain under MPL-2.0. Building proprietary applications on top of UFFS does not require opening your application.
 
 See [LICENSES/MPL-2.0.txt](LICENSES/MPL-2.0.txt) for the full license text and [Mozilla's MPL FAQ](https://www.mozilla.org/en-US/MPL/2.0/FAQ/) for plain-language guidance.
 
+**Brand.** The UFFS name, the UltraFastFileSearch wordmark, and the UFFS logo are project trademarks owned by [Sky, LLC](https://github.com/skyllc-ai). Usage is governed by [TRADEMARK.md](TRADEMARK.md) — not the MPL. Linking, reviews, tutorials, and unmodified redistributions are fine without asking; forks, merchandise, and commercial use of the mark need permission first.
+
 ---
+
+## Maintainership & Commercial
+
+UFFS is developed and maintained by **[Sky, LLC](https://github.com/skyllc-ai)** — a systems-engineering shop focused on high-performance Rust tooling.
+
+- **Commercial UFFS frontends** (polished GUI / premium TUI) are in development on top of this open-source engine. For waitlist or partnership inquiries: [`uffs@nios.net`](mailto:uffs@nios.net) or open a [discussion](https://github.com/skyllc-ai/UltraFastFileSearch/discussions) with the `commercial-interest` label.
+- **Hiring / collaboration.** This repository is also the public engineering portfolio of its maintainer; see the [Sky, LLC org page](https://github.com/skyllc-ai) for the full pitch and contact details.
+- **Sponsorship.** Formal sponsor channels (GitHub Sponsors, Ko-fi) are being set up. Star the repo and watch for the sponsor CTA to appear here once approvals land.
 
 ## Acknowledgments
 
-UFFS benefits from the broader NTFS tooling ecosystem, including [SwiftSearch](https://sourceforge.net/projects/swiftsearch/) by wfunction.
+UFFS benefits from the broader NTFS tooling ecosystem, including [SwiftSearch](https://sourceforge.net/projects/swiftsearch/) by wfunction. Deep competitive landscape analysis in [docs/mft_competitor_landscape_deep_research.md](docs/mft_competitor_landscape_deep_research.md).
 
-**Author:** Robert Nio · [github.com/skyllc-ai/UltraFastFileSearch](https://github.com/skyllc-ai/UltraFastFileSearch)
+---
+
+<p align="center">
+  <sub>
+    <b>Maintainer:</b> Robert Nio ·
+    <b>Organization:</b> <a href="https://github.com/skyllc-ai">Sky, LLC</a> ·
+    <b>Repo:</b> <a href="https://github.com/skyllc-ai/UltraFastFileSearch">skyllc-ai/UltraFastFileSearch</a>
+  </sub>
+</p>

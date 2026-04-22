@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- UFFS Primary — Monochrome Dark (use on LIGHT backgrounds) -->
+  <title>UFFS — Monochrome Dark</title>
+  <!-- All shapes in charcoal; transparent background -->
+  <g transform="rotate(45 680 680)">
+    <rect x="680" y="680" width="296" height="92" rx="46" ry="46" fill="#1A1A1A"/>
+  </g>
+  <circle cx="432" cy="432" r="312" fill="none" stroke="#1A1A1A" stroke-width="44"/>
+  <path d="
+    M 492 192 L 280 468 L 412 468 L 348 688 L 600 392 L 460 392 L 540 192 Z"
+    fill="#1A1A1A"/>
+</svg>

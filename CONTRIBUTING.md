@@ -2,6 +2,15 @@
 
 Thanks for helping improve UFFS.
 
+> By contributing you agree your contribution is licensed under [MPL-2.0](LICENSE) and that the UFFS name and logo remain governed by [TRADEMARK.md](TRADEMARK.md).
+
+## Contact
+
+- **Bug reports, feature requests, questions:** open a GitHub issue on [skyllc-ai/UltraFastFileSearch](https://github.com/skyllc-ai/UltraFastFileSearch/issues).
+- **Brand / trademark questions:** open an issue tagged `brand`, or email [`uffs@nios.net`](mailto:uffs@nios.net).
+- **Commercial / partnership inquiries:** [`uffs@nios.net`](mailto:uffs@nios.net), or a [discussion](https://github.com/skyllc-ai/UltraFastFileSearch/discussions) with the `commercial-interest` label.
+- **Organization:** [Sky, LLC](https://github.com/skyllc-ai).
+
 ## Platform and privilege model
 
 - UFFS is Windows-first: live NTFS MFT reads require Windows and Administrator privileges.

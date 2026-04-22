@@ -1,0 +1,10 @@
+The UFFS brand assets in assets/brand/ (logos, icons, wordmark, favicons,
+source SVGs, and associated web assets) are project trademarks owned by
+Sky, LLC.
+
+See TRADEMARK.md at the repository root for the full usage policy.
+
+These assets are NOT covered by the Mozilla Public License 2.0 that
+governs the UFFS source code. Trademark and copyright are separate
+legal regimes; MPL-2.0 grants rights over code but says nothing about
+the UFFS name or logo.

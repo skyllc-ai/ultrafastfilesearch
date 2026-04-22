@@ -8,3 +8,12 @@ version = 1
 path = "**"
 SPDX-FileCopyrightText = "2025-2026 SKY, LLC."
 SPDX-License-Identifier = "MPL-2.0"
+
+# Brand assets (logos, icons, wordmark, favicons, source SVGs) are project
+# trademarks governed by TRADEMARK.md. They are NOT covered by the MPL-2.0
+# that governs the source code. Trademark and copyright are distinct legal
+# regimes; this annotation makes that separation machine-readable.
+[[annotations]]
+path = "assets/brand/**"
+SPDX-FileCopyrightText = "2025-2026 SKY, LLC."
+SPDX-License-Identifier = "LicenseRef-UFFS-Brand"

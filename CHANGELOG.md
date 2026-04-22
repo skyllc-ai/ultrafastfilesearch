@@ -15,6 +15,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Brand identity pass** (chore, 2026-04-21) — publishing-grade brand
+  and trademark layer:
+  - `assets/brand/` with logos (ICO, ICNS, 7 hicolor PNG sizes),
+    wordmark, hero mark, web assets (favicons, Apple / Android touch
+    icons, Safari pinned-tab SVG, web manifest), and source SVGs —
+    23 files, ~600 KB.
+  - `LICENSES/LicenseRef-UFFS-Brand.txt` and a second `REUSE.toml`
+    annotation block carving `assets/brand/**` out of the MPL-2.0
+    default under `LicenseRef-UFFS-Brand`. Trademark and copyright
+    stay cleanly separated and machine-readable for REUSE lint.
+  - `TRADEMARK.md` at the repo root — canonical policy separating the
+    UFFS name and logo from the MPL-2.0-licensed source, modeled on
+    the Rust Foundation and CNCF trademark policies.
+  - README hero banner, centered header + 5-badge row, new
+    "License & Trademarks" section, and new "Maintainership &
+    Commercial" section crediting [Sky, LLC](https://github.com/skyllc-ai)
+    as the maintaining organization and outlining commercial UFFS
+    frontends currently in development.
+  - `CONTRIBUTING.md` gets a one-line contribution-agreement note
+    covering MPL-2.0 and TRADEMARK.md, plus a Contact section so
+    `TRADEMARK.md`'s "contact in CONTRIBUTING.md" pointer resolves.
+
 - **Regex alternation → ExtensionIndex fast path** (Phase 4, 2026-04-21 —
   `crates/uffs-core/src/search/dispatch.rs`,
   `crates/uffs-client/src/protocol/cli_args_helpers.rs`,
