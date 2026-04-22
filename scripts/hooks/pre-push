@@ -4,35 +4,23 @@
 #
 # Tracked pre-push git hook for the UFFS workspace.
 #
-# Purpose: run the same clippy gate that CI runs
-# (`cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings`)
-# before every `git push`, so locally-reproducible CI failures cannot
-# reach the remote.
+# Purpose: run the full local quality-gate bundle (clippy + fmt-check +
+# rustdoc + cargo deny + file-size + typos + reuse) in parallel before
+# every `git push`, so locally-reproducible CI failures cannot reach
+# the remote.
+#
+# The implementation lives in `scripts/hooks/_lint_pre_push.sh` so the
+# same logic runs via `just lint-pre-push` (manual) and through the
+# git hook (automated) — single source of truth.
 #
 # Install via: `just install-hooks` (sets core.hooksPath to scripts/hooks/).
 # Bypass once: `git push --no-verify`.
 # Uninstall:   `just uninstall-hooks`.
+#
+# Mirrors the CI lint gate in `.github/workflows/ci.yml`.  The Linux-only
+# drift gate (`just lint-ci-linux`) is deliberately NOT invoked here —
+# that class of regression is caught by CI on push to the remote.
 
 set -euo pipefail
 
-# `just lint-ci` is kept in exact lockstep with .github/workflows/ci.yml.
-# See crates/uffs-client/src/format.rs commit history for an example of
-# a Linux-only clippy regression this hook is intended to NOT let slip —
-# that particular class (platform-dependent type aliases) still requires
-# `just lint-ci-linux` to fully reproduce on macOS, but the vast majority
-# of clippy drift is caught by the local gate alone.
-printf '\033[0;34m🚨 pre-push: running local CI lint gate (just lint-ci)...\033[0m\n'
-
-if ! command -v just >/dev/null 2>&1; then
-    printf '\033[0;31m❌ pre-push: `just` not found in PATH — install it or bypass with --no-verify.\033[0m\n' >&2
-    exit 1
-fi
-
-# Respect the caller's TTY so clippy output colourises naturally.
-if ! just lint-ci; then
-    printf '\033[0;31m❌ pre-push: lint gate FAILED — push aborted.\033[0m\n' >&2
-    printf '\033[0;33m   Fix the warnings and retry, or bypass once with `git push --no-verify`.\033[0m\n' >&2
-    exit 1
-fi
-
-printf '\033[0;32m✅ pre-push: lint gate passed — proceeding with push.\033[0m\n'
+exec bash "$(dirname "$0")/_lint_pre_push.sh"

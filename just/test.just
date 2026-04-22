@@ -115,24 +115,99 @@ lint-all:
     just fmt-check
     @printf "\033[0;32m✅ All lint checks passed\033[0m\n"
 
-# Install the tracked git hooks (pre-push lint gate).
+# ── Shift-left quality gates ───────────────────────────────────────────
+# Four-layer model (documented in CONTRIBUTING.md):
+#   IDE save   → rust-analyzer check-on-save
+#   pre-commit → `just lint-fast`       (staged-scoped, sub-2 s)
+#   pre-push   → `just lint-pre-push`   (workspace-parallel, ≤ 60 s)
+#   PR CI      → .github/workflows/ci.yml (matrix + cross-platform)
+# Recipes below back both the git hooks and manual invocations so the
+# two surfaces never drift — see `scripts/hooks/_lint_*.sh` for the
+# shared parallel runners.
+
+# Spell-check the workspace (requires `typos-cli`).
+# Pass scopes or flags, e.g. `just typos crates/uffs-core/src`.
+typos *ARGS:
+    @printf "\033[0;34m🔤 typos (spell check)...\033[0m\n"
+    typos {{ ARGS }}
+
+# REUSE / SPDX compliance lint (requires `reuse`, install via pipx).
+reuse:
+    @printf "\033[0;34m📜 REUSE/SPDX lint...\033[0m\n"
+    reuse lint --quiet
+
+# Check TOML formatting (requires `taplo-cli`).
+taplo-check *ARGS:
+    @printf "\033[0;34m📋 taplo fmt --check...\033[0m\n"
+    taplo fmt --check {{ ARGS }}
+
+# Apply TOML formatting (requires `taplo-cli`).
+taplo-fmt *ARGS:
+    @printf "\033[0;34m📋 taplo fmt (apply)...\033[0m\n"
+    taplo fmt {{ ARGS }}
+
+# Install optional dev-tool binaries used by the pre-commit / pre-push hooks.
+# `typos-cli` and `taplo-cli` are cargo-installable; `reuse` needs pipx.
+# Idempotent: prints a ✓ line for each tool already present.
+install-dev-tools:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf "\033[0;34m📦 Installing dev tools (typos-cli, taplo-cli)...\033[0m\n"
+    if ! command -v typos >/dev/null 2>&1; then
+        cargo install --locked typos-cli
+    else
+        printf "   \033[0;32m✓\033[0m typos already installed\n"
+    fi
+    if ! command -v taplo >/dev/null 2>&1; then
+        cargo install --locked taplo-cli
+    else
+        printf "   \033[0;32m✓\033[0m taplo already installed\n"
+    fi
+    if ! command -v reuse >/dev/null 2>&1; then
+        printf "   \033[1;33m!\033[0m reuse not found — install with: \033[0;36mpipx install reuse\033[0m\n"
+    else
+        printf "   \033[0;32m✓\033[0m reuse already installed\n"
+    fi
+    printf "\033[0;32m✅ Dev tools check complete.\033[0m\n"
+
+# Fast staged-scoped gate (the pre-commit bundle; also runnable manually).
+# Runs fmt-check (if *.rs staged), taplo-check (if *.toml staged + taplo),
+# typos (optional), reuse (optional) and the file-size-policy script in
+# parallel.  Budget: sub-2 s.  Soft-skips missing optional tools.
+lint-fast:
+    @bash scripts/hooks/_lint_fast.sh
+
+# Parallel pre-push gate (the pre-push bundle; also runnable manually).
+# Fans out clippy (-D warnings) + fmt-check + rustdoc (-D warnings) +
+# cargo deny + nextest --no-run (test-binary link check) + file-size-policy
+# + typos (optional) + reuse (optional).  Budget: ≈ 25–45 s warm, ≈ 60–90 s
+# cold.  All failures surface in one pass — per-job ✅/❌ grid, then every
+# failing job's full output is dumped before exit.
+lint-pre-push:
+    @bash scripts/hooks/_lint_pre_push.sh
+
+# Install the tracked git hooks (pre-commit + pre-push).
 # Idempotent — safe to re-run.  Sets `git config core.hooksPath` to the
-# tracked `scripts/hooks/` directory so the hook survives `git clone` and
-# cannot be accidentally deleted from `.git/hooks/`.
+# tracked `scripts/hooks/` directory so the hooks survive `git clone`
+# and cannot be accidentally deleted from `.git/hooks/`.
 install-hooks:
     #!/usr/bin/env bash
     set -euo pipefail
     printf "\033[0;34m🪝 Installing tracked git hooks...\033[0m\n"
     git config core.hooksPath scripts/hooks
-    chmod +x scripts/hooks/pre-push
-    printf "\033[0;32m✅ Git hooks installed — pre-push will run 'just lint-ci' before each push.\033[0m\n"
-    printf "\033[0;36m   Bypass with 'git push --no-verify' when you need to.\033[0m\n"
+    chmod +x scripts/hooks/pre-commit scripts/hooks/pre-push \
+             scripts/hooks/_lint_fast.sh scripts/hooks/_lint_pre_push.sh
+    printf "\033[0;32m✅ Git hooks installed:\033[0m\n"
+    printf "   \033[0;36mpre-commit\033[0m → just lint-fast     (staged-scoped, sub-2 s)\n"
+    printf "   \033[0;36mpre-push\033[0m   → just lint-pre-push  (workspace parallel)\n"
+    printf "   \033[0;33mBypass once\033[0m with \`git commit --no-verify\` / \`git push --no-verify\`.\n"
+    printf "   \033[0;33mInstall optional tools\033[0m with \`just install-dev-tools\`.\n"
 
 # Uninstall the tracked git hooks (resets to .git/hooks/ default).
 uninstall-hooks:
     @printf "\033[0;34m🪝 Uninstalling tracked git hooks...\033[0m\n"
     git config --unset core.hooksPath || true
-    @printf "\033[0;32m✅ Git hooks uninstalled — pushes are no longer gated.\033[0m\n"
+    @printf "\033[0;32m✅ Git hooks uninstalled — commits and pushes are no longer gated.\033[0m\n"
 
 # Validate rustdoc links and warnings (catches private-intra-doc-links etc.).
 rustdoc:

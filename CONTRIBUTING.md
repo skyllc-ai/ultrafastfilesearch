@@ -57,6 +57,56 @@ Focused examples from the current workflow canon:
 
 Most tests run cross-platform. Tests that need live MFT access are typically `#[ignore]` and should only be run on Windows with elevation.
 
+## Four-layer quality gates
+
+UFFS uses a shift-left pipeline: cheap checks fire close to the keystroke, expensive ones move rightward into CI. Each layer is fully opt-in via `just install-hooks` and can be bypassed with `--no-verify` for a single commit or push when you need to.
+
+| Layer | Trigger | Recipe | Budget | What it runs |
+|------|--------|--------|--------|-------------|
+| **IDE save** | On save | `rust-analyzer` | instant | type-check-on-save, clippy-on-save |
+| **pre-commit** | `git commit` | `just lint-fast` | sub-2 s | `fmt --check` (if `*.rs` staged), `taplo fmt --check` (if `*.toml` staged), `typos`, `reuse lint`, file-size policy — all in parallel; missing optional tools soft-skip |
+| **pre-push** | `git push` | `just lint-pre-push` | 25–45 s warm | `clippy -D warnings --all-targets --all-features`, `fmt --check`, `rustdoc -D warnings`, `cargo deny check`, `nextest run --no-run` (test-binary link check), file-size policy, `typos`, `reuse lint` — all in parallel |
+| **PR CI** | on PR to `main` | `.github/workflows/ci.yml` | minutes | Tier 1 matrix: Format, Clippy, Rustdoc, Security, Test Build, Tests, Doc Tests, File Size Policy |
+| **Release** | manual | `just ship` | minutes | version bump + `release/vX.Y.Z` PR + signed commit + auto-tag + binary build |
+
+### First-time setup
+
+```bash
+just install-hooks         # sets core.hooksPath → scripts/hooks/
+just install-dev-tools     # installs typos-cli + taplo-cli; prints pipx hint for `reuse`
+```
+
+Re-run `just install-hooks` after any rebase that touches `scripts/hooks/` — it's idempotent.
+
+### Running gates manually
+
+```bash
+just lint-fast             # the pre-commit bundle on demand
+just lint-pre-push         # the pre-push bundle on demand
+just lint-ci               # the single clippy gate that CI runs (`--all-targets --all-features --no-deps`)
+just lint-ci-linux         # same clippy gate under a Linux x86_64 Docker image (catches macOS↔Linux drift)
+just phase1-test           # the full `just ship` Phase-1 validation (pre-ship rehearsal)
+```
+
+### Bypass escape hatches
+
+```bash
+git commit --no-verify     # skip pre-commit
+git push   --no-verify     # skip pre-push
+```
+
+Use them for work-in-progress commits on a feature branch. CI will still enforce the same gates on the PR.
+
+### Keeping hook output fast
+
+The hooks are tuned for an sccache-warm workspace. If you notice cold-cache slowness, verify:
+
+- `cargo install sccache` is installed and `.cargo/config.toml` has `rustc-wrapper = "sccache"` (default).
+- `sccache --show-stats` shows a healthy cache-hit rate after a few rebuilds.
+- The shared `target/` directory is not being wiped by unrelated tools.
+
+See `@scripts/hooks/_lint_fast.sh` and `@scripts/hooks/_lint_pre_push.sh` for the shared parallel runners both the hooks and the `just` recipes call into — edit there when adjusting the gate set, not in the hooks themselves.
+
 ## Architecture guardrails
 
 - Do not depend on `polars` directly; use `uffs-polars`.
