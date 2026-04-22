@@ -1,0 +1,185 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025-2026 SKY, LLC.
+#
+# Auto-Tag Release — the bridge between `just ship` and `release.yml`.
+#
+# When a commit lands on `main` that changes the `[workspace.package]`
+# `version` in `Cargo.toml`, this workflow:
+#
+#   1. Creates tag `vX.Y.Z` pointing at the commit (no-op if it exists).
+#   2. Pushes the tag to origin.
+#   3. Invokes `release.yml` via `workflow_dispatch` with the same version.
+#
+# Why the explicit `gh workflow run` invocation in step 3:
+#
+#   The default `GITHUB_TOKEN` is prevented from triggering downstream
+#   workflow runs (infinite-loop guard), so pushing the tag would NOT
+#   fire `release.yml`'s `push: tags: v*` trigger.  Rather than taking
+#   on PAT rotation maintenance, we explicitly invoke `release.yml` via
+#   `workflow_dispatch` — the default token has sufficient `actions:
+#   write` permission for that.  Developers pushing tags manually still
+#   hit the normal `push: tags: v*` trigger — both paths are supported.
+#
+# This workflow completes the hands-off release flow:
+#
+#   just ship  -->  opens release/vX.Y.Z PR  -->  auto-merge on CI green
+#                                                       |
+#                                                       v
+#                                              auto-tag-release.yml
+#                                                       |
+#                                                       v
+#                                              release.yml (build + publish)
+
+name: "🏷️ Auto-Tag Release"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+  workflow_dispatch:
+    # Manual re-trigger for testing.  When dispatched, replays the
+    # HEAD-vs-HEAD~1 version diff logic against current main.
+    inputs:
+      force_tag:
+        description: "Force-create a tag even if version is unchanged (smoke-test only; leave empty normally)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  # Push tags to the repo and read commit history.
+  contents: write
+  # Invoke `release.yml` via `gh workflow run`.
+  actions: write
+
+concurrency:
+  # Serialise auto-tag attempts.  Two version bumps landing in quick
+  # succession is rare but possible; queue them so the second sees the
+  # first's tag already on origin and becomes a no-op skip.
+  group: auto-tag-release
+  cancel-in-progress: false
+
+jobs:
+  maybe-tag:
+    name: "🏷️ Tag if workspace version bumped"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Belt-and-suspenders loop guard.  This workflow doesn't modify
+    # Cargo.toml, so its tag push wouldn't re-trigger itself anyway,
+    # but skip bot-authored pushes defensively.
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - name: Checkout (fetch HEAD + HEAD~1 for version diff)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          # Use the default GITHUB_TOKEN to authenticate the checkout +
+          # subsequent tag push.  No PAT needed.
+          persist-credentials: true
+
+      - name: Extract current and previous workspace versions
+        id: versions
+        shell: bash
+        run: |
+          extract_version() {
+            # Read the `version = "..."` line from the [workspace.package]
+            # section of the given Cargo.toml content (stdin).
+            awk '/^\[workspace\.package\]/{flag=1; next} flag && /^version/{print; exit}' \
+              | cut -d'"' -f2
+          }
+
+          new=$(extract_version < Cargo.toml)
+          old=$(git show HEAD~1:Cargo.toml 2>/dev/null | extract_version || true)
+
+          echo "Current:  ${new:-<not found>}"
+          echo "Previous: ${old:-<not found>}"
+
+          printf 'new=%s\n' "$new" >> "$GITHUB_OUTPUT"
+          printf 'old=%s\n' "${old:-}" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to tag
+        id: plan
+        shell: bash
+        env:
+          NEW_VERSION: ${{ steps.versions.outputs.new }}
+          OLD_VERSION: ${{ steps.versions.outputs.old }}
+          FORCE_TAG: ${{ inputs.force_tag }}
+        run: |
+          # workflow_dispatch override: explicit tag bypasses version-diff.
+          # Used only for manual smoke tests of this workflow itself.
+          if [[ -n "$FORCE_TAG" ]]; then
+            echo "Manual dispatch with force_tag=$FORCE_TAG"
+            echo "tag=$FORCE_TAG" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ -z "$NEW_VERSION" ]]; then
+            echo "::notice::No [workspace.package].version found in Cargo.toml — nothing to tag."
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$NEW_VERSION" == "$OLD_VERSION" ]]; then
+            echo "::notice::Workspace version unchanged ($NEW_VERSION) — nothing to tag."
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          tag="v$NEW_VERSION"
+
+          # Idempotency: if the tag already exists on origin, this is a
+          # replay (e.g. `just ship` re-ran on a branch that was already
+          # auto-merged).  Skip silently.
+          if git ls-remote --exit-code origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::notice::Tag $tag already exists on origin — skipping."
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Will tag HEAD as $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Configure git identity
+        if: steps.plan.outputs.tag != ''
+        shell: bash
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create + push tag
+        if: steps.plan.outputs.tag != ''
+        shell: bash
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          # Lightweight tag — no annotation, no signing.  The commit the
+          # tag points at is already signed (branch protection on main
+          # enforces `required_signatures`), so the tag inherits the
+          # authenticity chain from that commit.
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "::notice::Pushed tag $TAG"
+
+      - name: Trigger release.yml via workflow_dispatch
+        if: steps.plan.outputs.tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          # Explicit workflow_dispatch invocation — default GITHUB_TOKEN
+          # pushes do not cascade into `push: tags: v*` triggers, so we
+          # fire the release workflow explicitly.  The version + sha
+          # inputs match release.yml's workflow_dispatch schema.
+          gh workflow run release.yml \
+            --repo "${{ github.repository }}" \
+            --ref main \
+            -f version="$TAG" \
+            -f commit_sha="$SHA" \
+            -f triggered_by="auto-tag-release[sha:${SHA:0:7}]"
+
+          echo "::notice::Invoked release.yml for $TAG (commit ${SHA:0:7})"
+          echo ""
+          echo "Watch: gh run list --repo ${{ github.repository }} --workflow=release.yml --limit 1"
