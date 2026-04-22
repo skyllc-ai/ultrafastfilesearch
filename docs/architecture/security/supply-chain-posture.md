@@ -5,6 +5,14 @@
 
 Status as of **2026-04-22** · Maintainer: `@githubrobbi` · Review cadence: monthly
 
+**Changelog**:
+- 2026-04-22 — Initial baseline (PR #33a).  Added `cargo-geiger`
+  on-demand, `dependabot-review.yml` dep-tree-growth annotation.
+- 2026-04-22 — Added cargo-vet audit trail (PR #33b): 5 upstream
+  imports (Mozilla, Google, Bytecode Alliance, ISRG, Zcash),
+  `cargo vet check --locked` gate in CI, weekly
+  `cargo-vet-refresh.yml` import-refresh workflow.
+
 This document captures UFFS's current supply-chain defences, the threat
 model they address, and the concrete gaps that are deferred (with
 rationale).  It's a living reference — update it whenever a new
@@ -24,6 +32,8 @@ control lands or a deferred item is promoted.
 | Build-provenance | `actions/attest-build-provenance` | Every release asset signed with Sigstore OIDC | Every `v*` release | **Yes** — release.yml |
 | Commit ancestry check | Custom step in `release.yml` | `workflow_dispatch` `commit_sha` must be ancestor of main | Every release dispatch | **Yes** — release.yml |
 | Dep-tree growth | `dependabot-review.yml` | Cargo.lock crate-count delta on Dependabot PRs | Every Dependabot PR | Annotation only |
+| Audit trail | `cargo-vet check --locked` | Every resolved crate-version must have import / own audit / exemption | Every PR | **Yes** — `ci.yml` Security job |
+| Import refresh | `cargo-vet-refresh.yml` | Weekly `cargo vet regenerate imports` → PR | Mondays 08:00 UTC | GitHub schedules |
 | Structural audit | `cargo-geiger` via `just geiger` | unsafe / build.rs / proc-macro footprint | On-demand (monthly) | No |
 | Human review | Dependabot PRs are NOT auto-merged | Every dependency bump | Every Dependabot PR | GitHub enforces |
 
@@ -34,33 +44,14 @@ control lands or a deferred item is promoted.
 | Known CVE in a dep | High | `cargo-deny` RustSec DB on every PR | Low — CI gates |
 | Unknown (zero-day) CVE | High | None specific; detection delayed | Medium — industry-wide |
 | Typo-squatted dep added via PR | Medium | `deny.toml` `[sources]` allow-list + `unknown-git = warn` | Low |
-| Maintainer-account compromise → silent minor-version malicious bump | **High** | Dependabot-manual-merge + `dependabot-review.yml` tree-growth annotation + human review of diffs | **Medium** — per-bump human judgment |
-| Malicious `build.rs` / proc-macro executing in CI | **High** | Dependabot PRs run with **read-only `GITHUB_TOKEN`** + no repo secrets (GitHub default); `permissions:` block denies writes elsewhere | **Medium** — blast radius is bounded (runner has no sensitive tokens), but can still exfil public source / waste CI minutes |
+| Maintainer-account compromise → silent minor-version malicious bump | **High** | `cargo-vet check` requires upstream or local audit for the new version; Dependabot-manual-merge + `dependabot-review.yml` tree-growth annotation + human review of diffs | **Low-medium** — cargo-vet covers most crates via Mozilla/Google imports; residual is the first N days after a malicious version lands until upstream audits it (or we audit locally) |
+| Malicious `build.rs` / proc-macro executing in CI | **High** | Dependabot PRs run with **read-only `GITHUB_TOKEN`** + no repo secrets (GitHub default); `permissions:` block denies writes elsewhere; `cargo-vet` imports from Mozilla/Google are the primary vetting signal for new build-script crates | **Medium** — blast radius bounded (runner has no sensitive tokens); new unaudited crate bumps are caught by `cargo vet check`, forcing a conscious decision |
 | Release binary swapped on GitHub Release page | Medium | SHA256 `CHECKSUMS.txt` + SLSA build-provenance attestation via `gh attestation verify` | Low — requires attacker to also swap attestation, which is stored in GitHub Attestations API (separate audit trail) |
 | Rollback attack (release an older vulnerable commit) | Medium | `commit_sha` ancestor-of-main guard in `release.yml` | Low |
 | Rogue `v*` tag push by write-access user | Low | `tag-protection-v-prefix` ruleset blocks deletion + update | **Medium on creation** — GitHub API does not support `Integration` bypass for user-owned repos, so `creation` rule not enforced (bot couldn't push tags if it were).  Partial protection only. |
 | Compromised runner (GitHub Actions infra itself) | Low | None — SLSA L2 attestation trusts the runner | Industry-wide; accept |
 
 ## Explicitly deferred (with rationale)
-
-### cargo-vet initialisation
-
-**Status**: Deferred to PR #33b (queued).
-
-**What it does**: Requires every resolved crate-version to have an
-audit record (either our own, or an imported one from Mozilla /
-Google / Bytecode Alliance).  Dependabot PRs that bump to an
-un-audited version fail CI until we audit the delta.
-
-**Why deferred**: One-shot grandfather-in cost (~2 h) is low, but the
-ongoing per-Dependabot-PR audit burden (~15-30 min/month at current
-cadence of ~1-2 Dependabot PRs/month) needs a dedicated habit.  The
-value compounds over time as the exemption list converts to real
-audits via scheduled import-refresh from upstream.
-
-**Promotion trigger**: When the project starts publishing
-`uffs-core` as a library (others will depend on us transitively) or
-when a second long-term contributor joins.
 
 ### Reproducible builds + independent rebuild verifier
 
@@ -123,6 +114,43 @@ this time.
 `target/geiger-YYYYMMDD.txt`).  Review monthly; flag any new top-20
 entry that isn't obviously platform / SIMD / foundational.
 
+### cargo-vet coverage (2026-04-22)
+
+From `cargo vet check` immediately after init:
+
+```
+Vetting Succeeded (121 fully audited, 2 partially audited, 387 exempted)
+```
+
+**Interpretation**:
+
+- **121 fully audited** — covered by an imported audit record from
+  Mozilla / Google / Bytecode Alliance / ISRG / Zcash.  Zero
+  maintenance on our side; refreshed weekly.
+- **2 partially audited** — some criteria (`safe-to-deploy` vs
+  `safe-to-run`) covered by imports, others exempted.
+- **387 exempted** — grandfathered in at init time.  The weekly
+  refresh workflow auto-prunes any exemption that becomes covered
+  by a fresh upstream audit (numbers should trend down over
+  months).
+
+**Target trajectory**:
+
+- 2026-04 (initial): 121 audited / 387 exempted (24% coverage)
+- 2026-10 (6 months): aim for >40% coverage via upstream refreshes
+- Long-term: >70% coverage via upstream; remaining exemptions are
+  niche / rare-maintainer crates that are unlikely to be audited
+  upstream.
+
+**Ongoing cost**:
+
+- Dependabot PR where the bump is covered by upstream: **0 min**
+  (sails through CI).
+- Dependabot PR where the bump isn't covered: **~2 min** to run
+  `cargo vet regenerate exemptions && git commit --amend` locally
+  and push.  Weekly refresh minimises how often this happens.
+- Weekly refresh PR review: **~5 min** to skim the diff + merge.
+
 ### Cargo.lock crate count (2026-04-22)
 
 <!-- Populate with actual count next time you run `grep -c '^name = ' Cargo.lock` -->
@@ -147,9 +175,19 @@ on `main` at branch-open time.
 1. Read the PR description (Dependabot summarises the changelog).
 2. Check the `dep-tree-growth` annotation — if flagged, inspect the
    "Newly-resolved crate names" summary.
-3. `gh pr diff <N>` and scan `Cargo.lock` for unexpected additions.
-4. If the bump is a known crate and the diff looks clean, merge.
-5. If anything looks off — typo-squat, sudden fan-out, unexplained
+3. Check the `cargo vet check` CI status — if red, the bump isn't
+   covered by any imported audit.  Fix locally:
+   ```bash
+   gh pr checkout <N>
+   cargo vet regenerate imports     # try upstream first
+   cargo vet check                  # still red?
+   cargo vet regenerate exemptions  # grandfather in
+   git commit -S -am "chore: refresh cargo-vet imports/exemptions"
+   git push
+   ```
+4. `gh pr diff <N>` and scan `Cargo.lock` for unexpected additions.
+5. If the bump is a known crate and the diff looks clean, merge.
+6. If anything looks off — typo-squat, sudden fan-out, unexplained
    git source change — ask the maintainer upstream before merging.
 
 ### Incident response (suspected compromise)
@@ -159,20 +197,38 @@ on `main` at branch-open time.
    --disable-auto`.
 2. Pin the suspected crate to its last-known-good version via
    `[patch.crates-io]` in workspace `Cargo.toml`.
-3. Run `cargo audit` and `cargo deny check` locally for
+3. Record a `cargo-vet` violation for the compromised version so
+   future runs fail loudly:
+   ```bash
+   cargo vet record-violation --criteria safe-to-deploy \
+     <crate> <bad-version>
+   ```
+4. Run `cargo audit` and `cargo deny check` locally for
    cross-confirmation.
-4. Run `just geiger` and diff against the last monthly baseline —
+5. Run `just geiger` and diff against the last monthly baseline —
    look for unexpected unsafe-count spikes in the suspected crate.
-5. Rotate the repo's `GITHUB_TOKEN` (via GitHub settings) if any
+6. Rotate the repo's `GITHUB_TOKEN` (via GitHub settings) if any
    workflow had `write`-level scopes during the suspected window.
 
 ## References
 
+### In-repo
+
 - `deny.toml` — `cargo-deny` policy
-- `.github/workflows/ci.yml` §Security — CI enforcement
+- `supply-chain/config.toml` — `cargo-vet` imports + exemptions
+- `supply-chain/audits.toml` — our local audit records (starts empty)
+- `supply-chain/imports.lock` — pinned upstream audit snapshots
+- `.github/workflows/ci.yml` §Security — `cargo-deny` + `cargo-vet check` enforcement
 - `.github/workflows/release.yml` — SLSA attestation + ancestor check
 - `.github/workflows/dependabot-review.yml` — dep-tree growth annotation
+- `.github/workflows/cargo-vet-refresh.yml` — weekly imports refresh
 - `.github/workflows/auto-tag-release.yml` — tagging bridge
 - `just/analysis.just` — `just geiger` / `just geiger-summary` recipes
+
+### External
+
 - GitHub [Attestations API](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
 - SLSA [build-provenance v1](https://slsa.dev/spec/v1.0/provenance)
+- cargo-vet [user guide](https://mozilla.github.io/cargo-vet/)
+- Mozilla's [supply-chain audits](https://github.com/mozilla/supply-chain)
+- Google's [supply-chain audits](https://github.com/google/supply-chain)

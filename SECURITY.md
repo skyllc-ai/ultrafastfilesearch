@@ -79,6 +79,13 @@ rationale, and operational playbook.
 
 - **Dependency auditing** — `cargo deny check` runs on every PR
   (advisories, licenses, bans, sources)
+- **Audit trail** — `cargo vet check --locked` runs on every PR.
+  Every resolved crate-version must be covered by an imported audit
+  (Mozilla, Google, Bytecode Alliance, ISRG, Zcash), a local audit
+  in `supply-chain/audits.toml`, or a grandfathered exemption in
+  `supply-chain/config.toml`.  The
+  `.github/workflows/cargo-vet-refresh.yml` workflow refreshes
+  upstream imports weekly via PR.
 - **Structural audit** — `just geiger` produces an on-demand
   `unsafe` / `build.rs` / proc-macro footprint report for the
   resolved dep tree (run monthly; compare against baseline).

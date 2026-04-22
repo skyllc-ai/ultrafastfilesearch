@@ -253,6 +253,47 @@ jobs:
       - name: Run dependency & license check
         run: cargo deny check
 
+      # ─── cargo-vet: audit trail for every resolved crate ──────────────
+      #
+      # What this enforces:
+      #
+      #   Every crate-version in the resolved dep graph must be covered
+      #   by either (a) an imported audit from a trusted upstream
+      #   (Mozilla, Google, Bytecode Alliance, ISRG, Zcash), (b) an
+      #   entry in our own `supply-chain/audits.toml`, or (c) a
+      #   time-limited exemption in `supply-chain/config.toml`.
+      #
+      # When this fails:
+      #
+      #   A Dependabot PR (or any PR) bumping to a version the imports
+      #   don't cover will fail here.  The fix is one of:
+      #
+      #     1. `cargo vet regenerate imports` — pulls the latest
+      #        upstream audits; most bumps become covered this way
+      #        because Mozilla/Google are fast to re-audit.
+      #     2. `cargo vet regenerate exemptions` — grandfathers the
+      #        new version in.  Acceptable for incidental bumps
+      #        (pragmatic trade-off for a small team).
+      #     3. `cargo vet certify <crate> <version>` — do the audit
+      #        yourself; highest value but highest cost.
+      #
+      # The scheduled `cargo-vet-refresh.yml` workflow runs option 1
+      # weekly, so in practice most Dependabot PRs sail through
+      # without intervention.
+      - name: Install cargo-vet
+        uses: taiki-e/install-action@dfc84ffb7254b048a0a843316ff5a2714dcdc7bd # v2
+        with:
+          tool: cargo-vet
+
+      - name: Run cargo-vet check
+        # `--locked` forbids fetching new imports at check time — the
+        # dev (or the scheduled refresh) is responsible for keeping
+        # imports.lock current.  This prevents a silent upstream
+        # compromise from slipping through CI just because a fresh
+        # audit record was added between the PR being opened and
+        # the check running.
+        run: cargo vet check --locked
+
   file-size-policy:
     name: Tier 1 / File Size Policy
     runs-on: ubuntu-22.04
