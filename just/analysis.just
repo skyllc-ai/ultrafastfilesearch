@@ -16,6 +16,71 @@ audit-comprehensive:
     printf "\033[0;34m  → Running cargo-deny (dependency analysis)...\033[0m\n"
     if command -v cargo-deny >/dev/null 2>&1; then cargo deny check; else printf "\033[1;33m⚠️  cargo-deny not found, run 'just setup' first\033[0m\n"; fi
 
+# Audit `unsafe` / `build.rs` / proc-macro footprint across the dep tree.
+#
+# Why cargo-geiger (on top of cargo-audit + cargo-deny):
+#
+#   cargo-audit    → known CVEs in the RustSec database (advisories).
+#   cargo-deny     → license policy + multiple-version / source checks.
+#   cargo-geiger   → structural: how many `unsafe` blocks, how many
+#                    `build.rs` scripts, how many proc-macros — the
+#                    crates worth auditing *first* if you're worried
+#                    about a supply-chain attack at the code level.
+#
+# When to run:
+#
+#   • Periodically (monthly) to track the trend — is the `unsafe`
+#     footprint growing disproportionately to added features?
+#   • Before merging a Dependabot PR that flips a crate to a new
+#     major version (compare the summary before vs after).
+#   • When investigating an incident — see which crates in the tree
+#     execute `build.rs` (= arbitrary code at compile time).
+#
+# Why NOT in CI:
+#
+#   cargo-geiger's output goes stale fast (any dep bump changes it),
+#   it occasionally breaks on fresh nightly toolchains, and the
+#   information is advisory rather than binary pass/fail.  Baking it
+#   into Tier 1 would produce noisy failures without real signal.
+#   Keeping it as a local recipe means the dev runs it when they
+#   actually want the data — and the report lives under `target/`
+#   so it doesn't pollute the repo.
+#
+# Install once: `cargo install cargo-geiger`.  First run rebuilds
+# every crate with `--release` (~3-5 min); subsequent runs hit the
+# incremental cache.
+geiger:
+    #!/usr/bin/env bash
+    printf "\033[0;34m☢️  cargo-geiger: unsafe / build.rs / proc-macro footprint\033[0m\n"
+    if ! command -v cargo-geiger >/dev/null 2>&1; then
+        printf "\033[1;33m⚠️  cargo-geiger not found\033[0m\n"
+        printf "\033[0;34m   Install: cargo install cargo-geiger\033[0m\n"
+        printf "\033[0;34m   (takes ~3 min; no special toolchain needed)\033[0m\n"
+        exit 1
+    fi
+    mkdir -p target
+    REPORT="target/geiger-$(date +%Y%m%d).txt"
+    # Workspace root is a virtual manifest; cargo-geiger requires a
+    # concrete package.  uffs-cli is the primary user-facing binary
+    # and its dep tree is a superset of uffs-core's, so auditing it
+    # covers the full attack surface that ships to end users.
+    cargo geiger --manifest-path "$(pwd)/crates/uffs-cli/Cargo.toml" --all-features --update-readme=false 2>&1 | tee "$REPORT"
+    printf "\033[0;32m✅ Report saved to %s\033[0m\n" "$REPORT"
+    printf "\033[0;34m   Interpretation guide: docs/architecture/security/supply-chain-posture.md\033[0m\n"
+
+# Quick summary: top crates by unsafe + build-script hotspot.
+geiger-summary:
+    #!/usr/bin/env bash
+    if ! command -v cargo-geiger >/dev/null 2>&1; then
+        printf "\033[1;33m⚠️  cargo-geiger not found; run 'cargo install cargo-geiger' first\033[0m\n"
+        exit 1
+    fi
+    printf "\033[0;34m☢️  cargo-geiger — top hotspots\033[0m\n"
+    cargo geiger --manifest-path "$(pwd)/crates/uffs-cli/Cargo.toml" --all-features --update-readme=false 2>&1 | \
+        grep -E '^[[:space:]]*[0-9]+/[0-9]+' | \
+        sort -t/ -k2,2 -n -r | \
+        head -25
+
 
 # Dependency optimization and cleanup.
 deps-optimize:

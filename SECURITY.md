@@ -60,19 +60,54 @@ This policy covers:
 
 ## Security Measures
 
-This project maintains the following security practices:
+This project maintains the following security practices.  See
+[`docs/architecture/security/supply-chain-posture.md`](docs/architecture/security/supply-chain-posture.md)
+for the full threat-model matrix, layered-defence table, deferred-item
+rationale, and operational playbook.
+
+### Code
 
 - **Signed commits** — All commits are cryptographically signed (GPG/Ed25519)
-- **Dependency auditing** — `cargo deny check` runs on every PR
-  (advisories, licenses, bans, sources)
-- **Automated dependency updates** — Dependabot monitors Cargo and GitHub
-  Actions dependencies
-- **CI action pinning** — All GitHub Actions are pinned to immutable commit
-  SHAs to prevent supply chain attacks
 - **Strict Clippy** — `unsafe_code = "deny"`, `unwrap_used = "deny"`,
   `expect_used = "deny"` enforced workspace-wide
 - **No unsafe code** — Zero `unsafe` blocks in production code without
   explicit `#[allow(unsafe_code)]` and safety documentation
-- **Least-privilege CI** — Workflows use `permissions: contents: read`
 - **SPDX compliance** — Every source file carries
   `SPDX-License-Identifier: MPL-2.0`
+
+### Dependencies
+
+- **Dependency auditing** — `cargo deny check` runs on every PR
+  (advisories, licenses, bans, sources)
+- **Structural audit** — `just geiger` produces an on-demand
+  `unsafe` / `build.rs` / proc-macro footprint report for the
+  resolved dep tree (run monthly; compare against baseline).
+- **Dep-tree growth annotation** — every Dependabot PR is
+  automatically annotated if `Cargo.lock` grows by more than a small
+  threshold, surfacing unexpected transitive fan-out for human review.
+- **Automated dependency updates** — Dependabot monitors Cargo and GitHub
+  Actions dependencies; PRs are **NOT** auto-merged — every bump
+  requires human review.
+
+### CI / release pipeline
+
+- **CI action pinning** — All GitHub Actions are pinned to immutable commit
+  SHAs to prevent supply chain attacks
+- **Least-privilege CI** — Workflows use `permissions: contents: read`
+  by default; `write` scopes are explicit and scoped to the minimum
+  job that needs them.
+- **Branch protection** — `main` requires signed commits + passing
+  Tier 1 checks (Clippy, tests, doc tests, security, build, file-size
+  policy) before merge.
+- **Tag protection** — the `tag-protection-v-prefix` ruleset blocks
+  deletion / force-update of any `v*` tag (release integrity).
+- **SLSA build-provenance** — every release asset is signed via
+  Sigstore OIDC by `actions/attest-build-provenance`.  Verify:
+  ```bash
+  gh attestation verify <file> --owner skyllc-ai
+  ```
+- **Commit-ancestry guard** — `release.yml` rejects any
+  `workflow_dispatch` whose `commit_sha` isn't an ancestor of `main`,
+  blocking rollback attacks.
+- **SHA256 checksums** — `CHECKSUMS.txt` accompanies every release;
+  the checksums file is itself covered by the SLSA attestation.
