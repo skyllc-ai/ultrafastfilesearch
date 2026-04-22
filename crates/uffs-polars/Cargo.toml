@@ -44,7 +44,7 @@ test = false
 [dependencies]
 # ONLY Polars — all other dependencies provided by consuming crates.
 # Pinned to a specific commit on main. Bump via: just polars
-polars = { git = "https://github.com/pola-rs/polars", rev = "21f150fdee9dc9dd7623e7f56b1a833f546f95bf", default-features = false, features = [
+polars = { git = "https://github.com/pola-rs/polars", rev = "344a0ea39753771f893144939f2b70c3144f8ebf", default-features = false, features = [
     # ===== Core =====
     "lazy",              # Lazy evaluation (query optimization)
     "new_streaming",     # Streaming engine for large queries
