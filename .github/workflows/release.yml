@@ -244,7 +244,13 @@ jobs:
           # The previous `CARGO_PROFILE_RELEASE_LTO=false` override silently
           # disabled LTO in release artifacts; removed so users get the
           # perf the profile was designed for.
-          cargo build --release --target ${{ matrix.target }} --workspace --bins
+          #
+          # --locked per §2.8 policy.  Release builds MUST resolve
+          # through the committed Cargo.lock or the binaries we ship
+          # may differ from what the tests validated — worst-case a
+          # silent dep drift ships to end-users.  CI fails loudly
+          # instead.
+          cargo build --locked --release --target ${{ matrix.target }} --workspace --bins
 
           echo "✅ Build completed for ${{ matrix.target }}"
 

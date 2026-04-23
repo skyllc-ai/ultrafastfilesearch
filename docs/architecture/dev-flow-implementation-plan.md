@@ -1520,7 +1520,7 @@ Status legend: ⬜ not started · 🟡 in progress · 🔵 blocked (see notes)
 | 3 | Cache policy single source (`.cargo/config.toml` owns `incremental`) | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
 | 6 | Resumable-push fix in `ci-pipeline.rs` | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
 | 4 | Split `ci.yml` → `pr-fast.yml` + `preview-artifacts.yml` | 🟡 | 2026-04-23 | — | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
-| 4b | Actions hardening retrofit across existing workflows | ⬜ | | | | |
+| 4b | Actions hardening retrofit across existing workflows | 🟡 | 2026-04-23 | — | (pending PR) | — |
 | 5 | Preview lane fleshed out (smoke runner + manifest) | 🟡 | 2026-04-23 | — | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
 | 7 | `ci-pipeline.rs` promoted to workspace binary | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
 | 8 | (stretch) `gates.toml` machine-readable manifest | ⬜ | | | | |
@@ -1738,15 +1738,79 @@ the `uffs-client` package.  Runtime remains within budget.
 
 Audit each existing workflow against §2.8 policy:
 
-- [ ] `tier-2.yml` — permissions, SHA pinning, timeouts, merge_group.
-- [ ] `codeql.yml` — same.
-- [ ] `release.yml` — same.
-- [ ] `auto-tag-release.yml` — same.
-- [ ] `cargo-vet-refresh.yml` — same.
-- [ ] `dependabot-review.yml` — same.
-- [ ] `dependabot-auto-merge.yml` — same.
+- [x] `tier-2.yml` — narrowed workflow-level `permissions` from
+      `contents: read, issues: write` to just `contents: read`
+      (notify-failure re-declares `issues: write` on its own block,
+      so the broader scope was over-privileged for the other 7 jobs);
+      added `timeout-minutes: 2` to notify-failure (only job that
+      was missing one); added `--locked` to all 5 cargo invocations
+      (coverage / windows-check / build-validation / udeps / miri).
+- [x] `codeql.yml` — added explicit
+      `ref: github.event.pull_request.head.sha || github.sha` on the
+      checkout so CodeQL analyses the exact bytes pushed / proposed
+      instead of the synthetic merge commit that `actions/checkout`
+      defaults to on `pull_request` events.
+- [x] `release.yml` — added `--locked` to the matrix
+      `cargo build --release` step.  Deliberately did NOT refactor
+      the workflow-level permissions block (sophisticated
+      `contents/actions/id-token/attestations/issues` grants are all
+      commented + justified; tightening is a distinct change best
+      kept out of a housekeeping retrofit commit).
+- [x] `auto-tag-release.yml` — already conformant; verified (1) no
+      PR trigger so `merge_group:` N/A, (2) minimum-privilege
+      `contents: read, actions: write` with comments, (3) single job
+      with `timeout-minutes: 5`, (4) no cargo commands (pure git +
+      gh CLI).  Zero changes.
+- [x] `cargo-vet-refresh.yml` — already conformant; verified (1) no
+      PR trigger, (2) minimum-privilege `contents: write,
+      pull-requests: write` (both needed for refresh-PR creation,
+      both justified with comments), (3) `timeout-minutes: 10`,
+      (4) `cargo vet check --locked` already present, (5) `cargo vet
+      regenerate imports` / `cargo vet prune` deliberately run
+      unlocked (they mutate the lockfile by design).  Zero changes.
+- [x] `dependabot-review.yml` — added explicit
+      `ref: github.event.pull_request.head.sha || github.sha` on
+      checkout so `git show HEAD~1:Cargo.lock` is deterministically
+      the pre-bump lockfile, not whatever the synthetic merge commit
+      resolves to.  Other §2.8 properties already conformant
+      (contents:read + pull-requests:read, actor-gated to Dependabot
+      only, `timeout-minutes: 3`, full-SHA action pins).
+- [x] `dependabot-auto-merge.yml` — already conformant; verified
+      (1) PR trigger but actor-gated so `merge_group:` wouldn't fire
+      anyway, (2) minimum-privilege `contents: write,
+      pull-requests: write` for `gh pr merge --auto`, (3)
+      `timeout-minutes: 5`, (4) no checkout step (uses dependabot/
+      fetch-metadata + gh CLI), (5) full-SHA action pins.  Zero
+      changes.
 
 **Notes**:
+- `merge_group:` triggers were NOT added retroactively because
+  §2.8's requirement is scoped to "workflows that report required
+  checks".  Today that's only `pr-fast.yml` (and the soon-to-be-
+  deleted `ci.yml`).  The 7 workflows audited here don't report
+  required checks, so merge-queue compatibility is moot until that
+  changes.
+- The permissions refactor in `release.yml` (workflow-level
+  `contents: write` → workflow-level `contents: read` +
+  per-job write grants on `create-github-release`) was deliberately
+  scoped out of this pass.  Release infra is critical path; a
+  per-job permissions restructure deserves its own focused PR with
+  a full release dry-run.
+- Pre-existing shellcheck `style` / `warning` notes in unmodified
+  shell blocks (tier-2-summary, release-preparation summary,
+  dependabot-review summary) are explicitly out of scope — cleaning
+  them up would balloon the diff and obscure the actual hardening.
+  Track them separately if ever desired.
+
+Post-retrofit verification (2026-04-23):
+- `actionlint` exits 0 on all 4 modified files (remaining warnings
+  are pre-existing style-level SC2129 / SC2010 in unmodified
+  blocks).
+- `ruby -ryaml -e 'YAML.load_file(...)'` passes on all 4 files.
+- Diff touches only the 4 files listed above; zero behavioural
+  changes on already-conformant workflows.
+
+**Original notes**:
 
 #### Phase 5 — Preview lane
 
