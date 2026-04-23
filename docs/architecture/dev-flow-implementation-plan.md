@@ -1324,32 +1324,89 @@ Deferred to a future session.  See §2.7 for target shape.
 
 ## 4. Branch-protection migration checklist
 
-Today's required checks (from repo settings, best-effort
-reconstruction; verify before executing):
+Branch protection on `main` is enforced via the **rulesets API**
+(ID `11889528`, name `main-protection`), not classic branch protection.
+Classic `/branches/main/protection` returns 404 — verified
+2026-04-23.  Inspect or update via:
+
+```bash
+gh api repos/skyllc-ai/UltraFastFileSearch/rulesets/11889528
+gh api --method PUT repos/skyllc-ai/UltraFastFileSearch/rulesets/11889528 --input <body.json>
+```
+
+### 4.1 Baseline (pre-Phase-4) required checks
+
+Verified against the ruleset on 2026-04-21, 6 entries (not 8 —
+`Tier 1 / Doc Tests` and `Tier 1 / Test Build` were never required,
+they run informationally):
 
 ```
-Tier 1 / Format
 Tier 1 / Clippy
-Tier 1 / Rustdoc
-Tier 1 / Test Build
 Tier 1 / Tests
-Tier 1 / Doc Tests
 Tier 1 / Security
 Tier 1 / File Size Policy
+Tier 1 / Format
+Tier 1 / Rustdoc
 ```
 
-During Phase 4 **parallel window** (1 week):
+### 4.2 Parallel-window posture (current, 2026-04-23 → 2026-04-30)
 
-- Keep all above required.
-- Add `PR Fast CI / required` as required too.
-- Both must pass.
+Ruleset updated 2026-04-23 11:38 PDT.  Current required-check set has
+**7 entries**:
 
-After Phase 4 **cutover**:
+```
+Tier 1 / Clippy
+Tier 1 / Tests
+Tier 1 / Security
+Tier 1 / File Size Policy
+Tier 1 / Format
+Tier 1 / Rustdoc
+PR Fast CI / required        ← new, added in parallel window
+```
 
-- Remove all 8 `Tier 1 / *` checks from required list.
-- Keep only `PR Fast CI / required`.
-- Delete `ci.yml` file in the same commit as the branch-protection
-  update, so GitHub never enforces a check from a deleted workflow.
+Both lanes must pass; neither alone unblocks merge.  This is the state
+the `pr-fast.yml:22-25` comment anticipates for the 7-day bake-in.
+
+### 4.3 Cutover procedure (end of parallel window)
+
+**Do everything in a single commit** so GitHub never enforces a check
+from a deleted workflow:
+
+1. Delete `.github/workflows/ci.yml`.
+2. PUT the ruleset with only `PR Fast CI / required` in the
+   `required_status_checks` array (drop all 6 `Tier 1 / *`).
+3. Update `CHANGELOG.md`.
+
+End-state required-check set (1 entry):
+
+```
+PR Fast CI / required
+```
+
+### 4.4 Required-check context string — gotcha
+
+**The context string matches the job's `name:` attribute, NOT the UI
+display string.**  GitHub's PR UI concatenates `<workflow-name> / 
+<job-name>` for display (e.g. `PR Fast CI / PR Fast CI / required`),
+but branch-protection matches against `check_run.name` which is the
+raw job name.  Worked examples:
+
+| Workflow | Job `name:` | UI display | Ruleset context |
+|---|---|---|---|
+| `🧪 UFFS Tier 1 Nightly CI` | `Tier 1 / Clippy` | `🧪 UFFS Tier 1 Nightly CI / Tier 1 / Clippy` | **`Tier 1 / Clippy`** |
+| `PR Fast CI` | `PR Fast CI / required` | `PR Fast CI / PR Fast CI / required` | **`PR Fast CI / required`** |
+
+Getting this wrong produces `mergeStateStatus: BLOCKED` with zero
+failing and zero pending checks — the protection engine waits forever
+for a check-name that no workflow produces.  Verify via:
+
+```bash
+gh pr view <N> --json statusCheckRollup \
+  --jq '.statusCheckRollup[] | select(.name | contains("required")) | .name'
+```
+
+The returned value is the correct context string.  This was hit and
+resolved live on 2026-04-23 (see §10.5 Deviations log).
 
 ---
 
@@ -1458,15 +1515,24 @@ Status legend: ⬜ not started · 🟡 in progress · 🔵 blocked (see notes)
 
 | # | Phase | Status | Started | Completed | Commit(s) | PR |
 |---|-------|--------|---------|-----------|-----------|-----|
-| 1 | Hardened pre-push gates (cargo vet + doctests + smoke profile) | ✅ | 2026-04-23 | 2026-04-23 | (pending commit) | — |
-| 2 | Bucket-ordered scheduler + xwin removed from pre-commit | ✅ | 2026-04-23 | 2026-04-23 | (pending commit) | — |
-| 3 | Cache policy single source (`.cargo/config.toml` owns `incremental`) | ✅ | 2026-04-23 | 2026-04-23 | (pending commit) | — |
-| 6 | Resumable-push fix in `ci-pipeline.rs` | ✅ | 2026-04-23 | 2026-04-23 | (pending commit) | — |
-| 4 | Split `ci.yml` → `pr-fast.yml` + `preview-artifacts.yml` | 🟡 | 2026-04-23 | — | (pending commit) | — |
+| 1 | Hardened pre-push gates (cargo vet + doctests + smoke profile) | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
+| 2 | Bucket-ordered scheduler + xwin removed from pre-commit | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
+| 3 | Cache policy single source (`.cargo/config.toml` owns `incremental`) | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
+| 6 | Resumable-push fix in `ci-pipeline.rs` | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
+| 4 | Split `ci.yml` → `pr-fast.yml` + `preview-artifacts.yml` | 🟡 | 2026-04-23 | — | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
 | 4b | Actions hardening retrofit across existing workflows | ⬜ | | | | |
-| 5 | Preview lane fleshed out (smoke runner + manifest) | 🟡 | 2026-04-23 | — | (pending commit) | — |
-| 7 | `ci-pipeline.rs` promoted to workspace binary | ✅ | 2026-04-23 | 2026-04-23 | (pending commit) | — |
+| 5 | Preview lane fleshed out (smoke runner + manifest) | 🟡 | 2026-04-23 | — | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
+| 7 | `ci-pipeline.rs` promoted to workspace binary | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
 | 8 | (stretch) `gates.toml` machine-readable manifest | ⬜ | | | | |
+
+**Phase 4 sub-status (2026-04-23)**: static implementation landed in
+`780c1dbb1`; broken-classify simulation executed live on PR #45 and
+passed with full fidelity (required=failure propagated correctly
+through 8 skipped downstream jobs); 7-day parallel-window bake-in
+opened on 2026-04-23; ruleset `main-protection` updated to require
+`PR Fast CI / required` alongside the 6 existing `Tier 1 / *` checks.
+Cutover (drop Tier 1, delete `ci.yml`) scheduled for 2026-04-30 or
+earlier if no regressions surface.
 
 **Legend**: ✅ = complete and validated; 🟡 = static-complete (actionlint
 clean, ruby-yaml clean, pins/permissions correct, classify-aggregation
@@ -1622,21 +1688,36 @@ the `uffs-client` package.  Runtime remains within budget.
          check** (plan doc § 10.3 classify-failure bullet).
        * Second step aggregates downstream results, `success|skipped`
          pass, anything else fails.
-- [ ] **Broken-classify simulation** on a real PR: deliberately break
-      classify (`exit 1` as final step) and confirm `required` →
-      `failure`.  🔴 Critical gate — **must be run before branch
-      protection cutover**.  Deferred to first test PR after merge.
+- [x] **Broken-classify simulation** on a real PR — ✅ executed
+      2026-04-23 on PR #45.  Inserted `exit 1` as the FIRST step of
+      the `classify` job (before outputs were populated), observed:
+      `classify`=failure (4 s), 8 downstream jobs skipped (empty
+      `needs.classify.outputs.*`), `required`=failure (4 s, via the
+      explicit `Gate on classify` step), legacy `Tier 1 / *` lane
+      stayed all green.  Reverted same day; PR #45 merged green.
+      This proves the `required` aggregator fails correctly when
+      downstream jobs are **skipped** (the exact GitHub Actions
+      "skipped counts as success" trap the plan warned about).
 - [ ] **Docs-only PR** real-world bake: `pr-fast` skips the heavy
-      jobs (code == 'false'); `required` = success.  Deferred.
+      jobs (`code == 'false'`); `required` = success.  🟡 Exercised
+      by this very PR (the plan-doc update).
 - [ ] **Dep-only PR** real-world bake: Cargo.toml bump runs full
-      matrix + cargo-vet in sanity.  Deferred.
+      matrix + cargo-vet in sanity.  Deferred to next dependabot
+      or explicit version-bump PR.
 - [ ] **Infra-only PR** real-world bake: workflow/justfile edit
-      runs full matrix.  Deferred.
-- [ ] **Rust-change PR** real-world bake: `pr-fast` p50 wall time
-      ≤ `ci.yml`.  Deferred.
-- [ ] 7-day parallel window with `ci.yml` (dates: _____ → _____).
+      runs full matrix.  Partially covered by PR #45 (mixed
+      rust+dep+infra change — infra classification branch exercised
+      green).  Still want a pure-infra bake for completeness.
+- [x] **Rust-change PR** real-world bake (mixed rust+dep+infra on
+      PR #45): `pr-fast` p50 wall time **~7 min** (rustdoc+doctests
+      dominates; next-longest is `clippy` ~1 min, `sanity` ~1 min,
+      `tests` buried inside `test-build+tests` pipeline).  Legacy
+      `ci.yml` on the same PR: comparable ~5–7 min p50.  No regression.
+- [ ] 7-day parallel window with `ci.yml` (dates: **2026-04-23**
+      → **2026-04-30**).
 - [ ] Branch-protection cutover: `ci.yml` deleted + required-checks
       updated to `PR Fast CI / required` in the **same commit**.
+      See §4.3 for the procedure.
 
 **Notes**:
 - Rather than pulling in `dorny/paths-filter`, `classify` uses a
@@ -1804,7 +1885,8 @@ don't infer the wrong reason from commit messages.
 
 | Date | Phase | Deviation | Resolution |
 |------|-------|-----------|------------|
-| _ | _ | _ | _ |
+| 2026-04-23 | 4 | Plan §4 claimed 8 `Tier 1 / *` checks were required.  Actual ruleset had 6 (no `Doc Tests`, no `Test Build`). | Corrected baseline to 6 entries in §4.1; parallel-window math in §4.2 adjusted accordingly. |
+| 2026-04-23 | 4 | First ruleset PUT used context `"PR Fast CI / PR Fast CI / required"` (matching the UI display string).  PR entered `mergeStateStatus: BLOCKED` with zero failing checks because no real check reports under that name — the protection engine matches `check_run.name` = job `name:` attribute only. | Second PUT used `"PR Fast CI / required"` (bare job name).  PR went to `CLEAN/MERGEABLE`.  Gotcha documented in §4.4 to prevent recurrence at Tier 1 cutover. |
 
 ### 10.6 Open blockers
 
@@ -1813,11 +1895,25 @@ one-line outcome when cleared.
 
 **Active**:
 
-(none currently)
+- **7-day parallel-window bake** — started 2026-04-23, scheduled to
+  end 2026-04-30.  Not a blocker per se; a scheduled milestone.  At
+  end of window (or sooner if signal is overwhelmingly green),
+  execute the §4.3 cutover.
+- **Phase 4b** — actions-hardening retrofit across `tier-2.yml`,
+  `codeql.yml`, `release.yml`, `auto-tag-release.yml`,
+  `cargo-vet-refresh.yml`, `dependabot-review.yml`,
+  `dependabot-auto-merge.yml` not yet audited against the §2.8 policy.
+  Independent of the bake window; can land any time.
+- **Real-world bake gaps** — `Dep-only PR` and pure `Infra-only PR`
+  still need a natural exercise.  Opportunistic — wait for dependabot
+  or an infra-only edit; don't synthesize a test PR just for this.
 
 **Resolved**:
 
-(none yet)
+- **Broken-classify simulation** — ✅ 2026-04-23, on PR #45.  `required`
+  correctly propagated failure through 8 skipped downstream jobs.
+- **Ruleset context-string gotcha** — ✅ 2026-04-23, same day.  See
+  §4.4 for the write-up.
 
 ### 10.7 Post-mortem triggers
 
@@ -1841,7 +1937,24 @@ before continuing to the next phase:
 
 ## 11. Revision history
 
-- **2026-04-23 v3** — Current.  Incorporates second-round external
+- **2026-04-23 v3.1** — Current.  Post-PR #45 reconciliation:
+  - Phases 1, 2, 3, 6, 7 marked complete with commit + PR references
+    (squash `780c1dbb1`).
+  - Phase 4 annotated with live-bake progress: broken-classify sim
+    executed and passed; parallel-window opened; cutover scheduled.
+  - §4 rewritten to reflect reality: ruleset-based protection
+    (ID `11889528`), 6-entry (not 8) Tier 1 baseline, 7-entry
+    parallel-window state, documented cutover procedure, and a
+    required-check context-string gotcha section.
+  - §10.3 Phase 4 checklist: broken-classify and rust-change bakes
+    ticked with evidence; 7-day window dates filled
+    (2026-04-23 → 2026-04-30); infra-only partially credited.
+  - §10.5 Deviations log: baseline-count correction + ruleset
+    context-string gotcha recorded.
+  - §10.6 Open blockers: bake-window + 4b retrofit + two real-world
+    bake gaps marked active; broken-classify + context gotcha moved
+    to resolved.
+- **2026-04-23 v3** — Incorporates second-round external
   review.  Eleven correctness fixes:
   1. `required` aggregator explicitly depends on `classify` and
      fails unless `needs.classify.result == 'success'` — closes
