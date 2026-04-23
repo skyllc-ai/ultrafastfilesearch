@@ -1349,10 +1349,11 @@ Tier 1 / Format
 Tier 1 / Rustdoc
 ```
 
-### 4.2 Parallel-window posture (current, 2026-04-23 → 2026-04-30)
+### 4.2 Parallel-window posture (historical: 2026-04-23 11:38 → 14:13 PDT)
 
-Ruleset updated 2026-04-23 11:38 PDT.  Current required-check set has
-**7 entries**:
+Ruleset was updated 2026-04-23 11:38 PDT to expand the required-check
+set from 6 entries (the §4.1 baseline) to 7 entries, running
+`ci.yml` and `pr-fast.yml` side-by-side as required lanes:
 
 ```
 Tier 1 / Clippy
@@ -1361,27 +1362,78 @@ Tier 1 / Security
 Tier 1 / File Size Policy
 Tier 1 / Format
 Tier 1 / Rustdoc
-PR Fast CI / required        ← new, added in parallel window
+PR Fast CI / required        ← added for the parallel window
 ```
 
-Both lanes must pass; neither alone unblocks merge.  This is the state
-the `pr-fast.yml:22-25` comment anticipates for the 7-day bake-in.
+Both lanes had to pass; neither alone unblocked merge.  This is the
+state the (now-removed) `pr-fast.yml:22-25` comment anticipated for
+the 7-day bake-in.  The window actually lasted **~2h35m** (compressed
+same-day — see §10.5 deviations for the decision rationale); cutover
+executed 14:13 PDT the same day.  PRs that merged during this window:
+#45 (Phase 1-7 rollout, mixed rust+dep+infra), #46 (docs-only plan-
+doc reconcile), #47 (Phase 4b infra-only actions hardening).  Zero
+disagreements observed between `ci.yml` and `pr-fast.yml` on any of
+the three.
 
-### 4.3 Cutover procedure (end of parallel window)
+### 4.3 Cutover procedure (executed 2026-04-23 14:13 PDT)
 
-**Do everything in a single commit** so GitHub never enforces a check
-from a deleted workflow:
+**The plan v1 language "do everything in a single commit" was a
+category error** — the ruleset PUT is an API call, not a commit, so
+it cannot be bundled with the `ci.yml` deletion into one atomic unit
+reviewable via GitHub PR.  Worse: if `ci.yml` is deleted in a PR, the
+6 `Tier 1 / *` required checks reference a workflow that will not
+run on that PR's head SHA → `mergeStateStatus: BLOCKED` with zero
+failing and zero pending.  GitHub will not merge until the ruleset
+stops requiring checks that no workflow produces.  Therefore **the
+ruleset PUT must precede the `ci.yml`-deletion PR merge**.
 
-1. Delete `.github/workflows/ci.yml`.
+Correct sequence (verified executed 2026-04-23):
+
+1. Open a PR that deletes `.github/workflows/ci.yml` and updates
+   `CHANGELOG.md`.  Let it bake green on `PR Fast CI / required`
+   alone (the legacy `Tier 1 / *` lane still runs against the PR
+   branch via the unchanged ruleset, but is about to become
+   no-signal).
 2. PUT the ruleset with only `PR Fast CI / required` in the
-   `required_status_checks` array (drop all 6 `Tier 1 / *`).
-3. Update `CHANGELOG.md`.
+   `required_status_checks` array (drop all 6 `Tier 1 / *`).  The
+   PR's `mergeStateStatus` flips `BLOCKED` → `CLEAN` within seconds.
+3. Squash-merge the PR immediately (ideally within seconds of the
+   PUT — see §10.5 deviation for the window-size rationale).
+4. Verify post-merge ruleset still has exactly 1 required check.
 
 End-state required-check set (1 entry):
 
 ```
 PR Fast CI / required
 ```
+
+**Evidence (2026-04-23)**:
+
+- PR #48 squash-merge commit: `6f99b86aa` at 14:13:41 PDT.
+- Ruleset PUT timestamp: 14:13:25 PDT (16-second window between
+  PUT and merge; no new PRs opened in-window).
+- Post-cutover verify: `gh api
+  repos/skyllc-ai/UltraFastFileSearch/rulesets/11889528 |
+  jq '[.rules[]|select(.type=="required_status_checks") |
+  .parameters.required_status_checks[]|.context]'` returns
+  `["PR Fast CI / required"]` — single entry confirmed.
+- Ruleset backup pre-PUT saved to `/tmp/ruleset-rollback.json` for
+  emergency reverse.  Not committed — discard after 7 days if
+  stable.
+
+**Rollback (if the cutover regresses post-landing)**:
+
+1. `git revert 6f99b86aa` — restores `.github/workflows/ci.yml`
+   verbatim (squash-merge preserved full diff).
+2. `gh api --method PUT
+   repos/skyllc-ai/UltraFastFileSearch/rulesets/11889528
+   --input /tmp/ruleset-rollback.json` — restores the 7-entry
+   parallel-window shape.
+3. Verify `gh pr view <N> --json statusCheckRollup` on any open
+   PR shows both lanes reporting.
+
+Both steps are required; the revert alone is insufficient because
+the ruleset is separate state.
 
 ### 4.4 Required-check context string — gotcha
 
@@ -1519,20 +1571,23 @@ Status legend: ⬜ not started · 🟡 in progress · 🔵 blocked (see notes)
 | 2 | Bucket-ordered scheduler + xwin removed from pre-commit | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
 | 3 | Cache policy single source (`.cargo/config.toml` owns `incremental`) | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
 | 6 | Resumable-push fix in `ci-pipeline.rs` | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
-| 4 | Split `ci.yml` → `pr-fast.yml` + `preview-artifacts.yml` | 🟡 | 2026-04-23 | — | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
-| 4b | Actions hardening retrofit across existing workflows | 🟡 | 2026-04-23 | — | (pending PR) | — |
+| 4 | Split `ci.yml` → `pr-fast.yml` + `preview-artifacts.yml` | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (parallel lane) + `6f99b86aa` (cutover) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) + [#48](https://github.com/skyllc-ai/UltraFastFileSearch/pull/48) |
+| 4b | Actions hardening retrofit across existing workflows | ✅ | 2026-04-23 | 2026-04-23 | `eef3359b2` (squash) | [#47](https://github.com/skyllc-ai/UltraFastFileSearch/pull/47) |
 | 5 | Preview lane fleshed out (smoke runner + manifest) | 🟡 | 2026-04-23 | — | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
 | 7 | `ci-pipeline.rs` promoted to workspace binary | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
 | 8 | (stretch) `gates.toml` machine-readable manifest | ⬜ | | | | |
 
-**Phase 4 sub-status (2026-04-23)**: static implementation landed in
-`780c1dbb1`; broken-classify simulation executed live on PR #45 and
-passed with full fidelity (required=failure propagated correctly
-through 8 skipped downstream jobs); 7-day parallel-window bake-in
-opened on 2026-04-23; ruleset `main-protection` updated to require
-`PR Fast CI / required` alongside the 6 existing `Tier 1 / *` checks.
-Cutover (drop Tier 1, delete `ci.yml`) scheduled for 2026-04-30 or
-earlier if no regressions surface.
+**Phase 4 sub-status (2026-04-23, end-of-day)**: fully cutover.
+Static implementation landed in `780c1dbb1` (PR #45, morning);
+broken-classify simulation executed live on PR #45 and passed with
+full fidelity (required=failure propagated correctly through 8
+skipped downstream jobs); parallel window ran 11:38 → 14:13 PDT
+(~2h35m; compressed from the planned 7 days, see §10.5); cutover
+executed via PR #48 squash `6f99b86aa` at 14:13:41 PDT; ruleset
+`main-protection` PUT at 14:13:25 PDT reduced required-check set
+from 7 entries (parallel) to 1 entry (`PR Fast CI / required`).
+`.github/workflows/ci.yml` deleted.  See §4.3 for the step-by-step
+sequence and rollback procedure.
 
 **Legend**: ✅ = complete and validated; 🟡 = static-complete (actionlint
 clean, ruby-yaml clean, pins/permissions correct, classify-aggregation
@@ -1713,11 +1768,17 @@ the `uffs-client` package.  Runtime remains within budget.
       dominates; next-longest is `clippy` ~1 min, `sanity` ~1 min,
       `tests` buried inside `test-build+tests` pipeline).  Legacy
       `ci.yml` on the same PR: comparable ~5–7 min p50.  No regression.
-- [ ] 7-day parallel window with `ci.yml` (dates: **2026-04-23**
-      → **2026-04-30**).
-- [ ] Branch-protection cutover: `ci.yml` deleted + required-checks
-      updated to `PR Fast CI / required` in the **same commit**.
-      See §4.3 for the procedure.
+- [x] Parallel window with `ci.yml` (dates: **2026-04-23 11:38 PDT**
+      → **2026-04-23 14:13 PDT**, ~2h35m).  Compressed from the
+      planned 7 days — see §10.5 for decision rationale.  Zero
+      disagreements observed between the two lanes on PRs #45, #46,
+      and #47 (the three PRs that merged in-window).
+- [x] Branch-protection cutover: `ci.yml` deleted (PR #48 squash
+      `6f99b86aa`, 14:13:41 PDT); ruleset `main-protection` PUT
+      14:13:25 PDT reduced `required_status_checks` from 7 entries
+      to 1 (`PR Fast CI / required`).  The plan v1 wording
+      "in the same commit" was corrected to "ruleset PUT precedes
+      the merge" — see §4.3 and §10.5.
 
 **Notes**:
 - Rather than pulling in `dorny/paths-filter`, `classify` uses a
@@ -1951,6 +2012,8 @@ don't infer the wrong reason from commit messages.
 |------|-------|-----------|------------|
 | 2026-04-23 | 4 | Plan §4 claimed 8 `Tier 1 / *` checks were required.  Actual ruleset had 6 (no `Doc Tests`, no `Test Build`). | Corrected baseline to 6 entries in §4.1; parallel-window math in §4.2 adjusted accordingly. |
 | 2026-04-23 | 4 | First ruleset PUT used context `"PR Fast CI / PR Fast CI / required"` (matching the UI display string).  PR entered `mergeStateStatus: BLOCKED` with zero failing checks because no real check reports under that name — the protection engine matches `check_run.name` = job `name:` attribute only. | Second PUT used `"PR Fast CI / required"` (bare job name).  PR went to `CLEAN/MERGEABLE`.  Gotcha documented in §4.4 to prevent recurrence at Tier 1 cutover. |
+| 2026-04-23 | 4 | Plan §10.3 scheduled a 7-day parallel window (2026-04-23 → 2026-04-30).  Compressed to ~2h35m same-day on explicit maintainer direction. | Rationale: the confidence budget had already been exhausted by the same morning — broken-classify simulation executed and passed on PR #45, all four classification paths (mixed-code, docs-only, infra-only, broken-classify) validated with zero disagreements between lanes, and continuing the window would have burned ~5–7 min of runner time per PR for no additional signal.  Rollback path preserved: `git revert 6f99b86aa` restores `ci.yml` verbatim (no squash-merge loss), and `/tmp/ruleset-rollback.json` restores the 7-entry ruleset shape.  §4.3 updated with the two-step reverse sequence. |
+| 2026-04-23 | 4 | Plan v1 §4.3 instructed "do everything in a single commit" for the cutover.  This is a category error — the ruleset PUT is an API call, not a commit, so it cannot share atomicity with `.github/workflows/ci.yml` deletion.  Worse: with `ci.yml` deleted in a PR, the 6 `Tier 1 / *` required checks gate on a workflow that will never run on the PR's head SHA, producing `mergeStateStatus: BLOCKED` indefinitely. | Correct sequence (now in §4.3): (1) open the `ci.yml`-deletion PR and let it bake green on `PR Fast CI / required`; (2) PUT the ruleset BEFORE merge to drop the 6 `Tier 1 / *` checks; (3) squash-merge the PR; (4) verify.  Executed in a 16-second PUT→merge window on 2026-04-23 14:13:25 → 14:13:41 PDT with no PRs opened mid-window. |
 
 ### 10.6 Open blockers
 
@@ -1959,18 +2022,21 @@ one-line outcome when cleared.
 
 **Active**:
 
-- **7-day parallel-window bake** — started 2026-04-23, scheduled to
-  end 2026-04-30.  Not a blocker per se; a scheduled milestone.  At
-  end of window (or sooner if signal is overwhelmingly green),
-  execute the §4.3 cutover.
-- **Phase 4b** — actions-hardening retrofit across `tier-2.yml`,
-  `codeql.yml`, `release.yml`, `auto-tag-release.yml`,
-  `cargo-vet-refresh.yml`, `dependabot-review.yml`,
-  `dependabot-auto-merge.yml` not yet audited against the §2.8 policy.
-  Independent of the bake window; can land any time.
-- **Real-world bake gaps** — `Dep-only PR` and pure `Infra-only PR`
-  still need a natural exercise.  Opportunistic — wait for dependabot
-  or an infra-only edit; don't synthesize a test PR just for this.
+- **Real-world bake gaps** — pure `Dep-only PR` and pure `Infra-only
+  PR` classification paths still want a natural exercise post-cutover
+  (on `pr-fast.yml` alone, now that `ci.yml` is gone).  PR #47 was
+  the last infra-only bake in the parallel-window era; first
+  post-cutover dependabot run and first post-cutover infra-only PR
+  will close these opportunistically.  Don't synthesize a test PR
+  just for this.
+- **Stale `ci.yml` references in comments** — housekeeping: a handful
+  of comments in `pr-fast.yml`, `release.yml`, `dependabot-review.yml`,
+  and `scripts/hooks/_lint_pre_push.sh` still mention `ci.yml`.
+  Separate PR; non-blocking.
+- **Phase 4b `release.yml` permissions refactor** — workflow-level
+  `contents: write` → per-job grants on `create-github-release` only.
+  Deliberately scoped out of PR #47 per its scope note; track as a
+  future focused PR with a release dry-run.
 
 **Resolved**:
 
@@ -1978,6 +2044,16 @@ one-line outcome when cleared.
   correctly propagated failure through 8 skipped downstream jobs.
 - **Ruleset context-string gotcha** — ✅ 2026-04-23, same day.  See
   §4.4 for the write-up.
+- **7-day parallel-window bake** — ✅ 2026-04-23.  Compressed to
+  ~2h35m same-day on maintainer direction; all four classification
+  paths validated with zero lane disagreements.  See §10.5.
+- **Phase 4b actions-hardening retrofit** — ✅ 2026-04-23 via PR #47
+  (squash `eef3359b2`).  7 workflows audited, 4 modified
+  (`tier-2.yml`, `codeql.yml`, `release.yml`, `dependabot-review.yml`),
+  3 already conformant.  See §10.3 Phase 4b checklist.
+- **Phase 4 branch-protection cutover** — ✅ 2026-04-23 14:13 PDT
+  via PR #48 (squash `6f99b86aa`) + ruleset PUT.  `ci.yml` retired,
+  `pr-fast.yml` is sole required lane.  See §4.3.
 
 ### 10.7 Post-mortem triggers
 
@@ -2001,7 +2077,33 @@ before continuing to the next phase:
 
 ## 11. Revision history
 
-- **2026-04-23 v3.1** — Current.  Post-PR #45 reconciliation:
+- **2026-04-23 v3.2** — Current.  Post-cutover reconciliation
+  (evening of the same day as v3.1):
+  - §4.2 re-framed from "current parallel window" to "historical"
+    with actual duration (~2h35m, 11:38 → 14:13 PDT) and in-window
+    PR list (#45, #46, #47).
+  - §4.3 materially corrected: the v1 "do everything in a single
+    commit" instruction was a category error (ruleset PUT is an
+    API call, not a commit; bundled-atomicity is not available).
+    Correct sequence is PUT-before-merge with a sub-minute window;
+    executed on 2026-04-23 with a 16-second PUT → merge gap.
+    Added evidence block (commit SHAs, PUT timestamp) and a
+    two-step rollback procedure (git revert + ruleset restore).
+  - §10.2 dashboard: Phase 4 + Phase 4b rows flipped 🟡 → ✅ with
+    completion dates and both phase-4 commits (`780c1dbb1` parallel
+    + `6f99b86aa` cutover).
+  - §10.2 Phase 4 sub-status paragraph rewritten as "fully cutover,
+    end-of-day" narrative with precise timestamps.
+  - §10.3 Phase 4 checklist: parallel-window and branch-protection
+    cutover rows both ticked with evidence and the wording
+    correction noted.
+  - §10.5 Deviations log: two new entries (bake-window compressed;
+    plan v1 "single commit" category error + corrected sequence).
+  - §10.6 Open blockers: bake window, Phase 4b, and branch-
+    protection cutover all moved from Active to Resolved.  Two
+    new Active items surfaced (stale `ci.yml` references in
+    comments; deferred `release.yml` permissions refactor).
+- **2026-04-23 v3.1** — Post-PR #45 reconciliation:
   - Phases 1, 2, 3, 6, 7 marked complete with commit + PR references
     (squash `780c1dbb1`).
   - Phase 4 annotated with live-bake progress: broken-classify sim
