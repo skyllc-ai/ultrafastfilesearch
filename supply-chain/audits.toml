@@ -1,4 +1,38 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.pastey]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+version = "0.2.2"
+notes = """
+Audit rationale (Apr 2026, v0.5.71):
+- Transitive via rmcp → uffs-mcp (MCP framework proc-macro dependency).
+- Successor fork of dtolnay's 'paste'; David Tolnay (dtolnay) is listed as
+  co-author with the fork maintainer Aditya Kumar (as1100k).
+- Zero runtime dependencies. Pure proc-macro crate, 1649 LOC across 4 .rs files.
+- No 'unsafe' blocks anywhere in the source tree.
+- No filesystem, process, or network access.
+- Single ambient capability: std::env::var() in segment.rs:187, used for the
+  crate's advertised compile-time env-var interpolation in paste!() macros
+  (analogous to stdlib env!()). Bounded to compile time, returns a compile
+  error on missing var rather than silently succeeding.
+- License: MIT OR Apache-2.0 (inherited from paste)."""
+
+[[audits.rustls]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.23.38 -> 0.23.39"
+notes = """
+Delta audit (Apr 2026, v0.5.71):
+- Maintenance patch release. Total diff: 4 files changed, 10 insertions(+), 9 deletions(-).
+- Cargo.toml / Cargo.toml.orig: mechanical version bump 0.23.38 → 0.23.39.
+- src/client/hs.rs (ExpectServerHelloOrHelloRetryRequest::handle): the
+  ECH-acceptance check's 'if !ech_state.confirm_hrr_acceptance(...)' was
+  promoted from the match-arm body to a guard on the match-arm pattern.
+  Semantically identical: same arm, same predicate, same side effect
+  (EchStatus::Rejected). Error propagation via '?' preserved.
+- src/lib.rs: adds '#![cfg_attr(read_buf, feature(core_io))]'. Pure
+  nightly-only cfg-gated feature flag addition; inert on stable toolchains.
+  No runtime behavior change.
+- No unsafe additions, no API changes, no new ambient capabilities."""
