@@ -86,23 +86,6 @@ jobs:
       docs_only: ${{ steps.f.outputs.docs_only }}
       code:      ${{ steps.f.outputs.code }}
     steps:
-      # ═══════════════════════════════════════════════════════════════
-      # TEMPORARY — classify-failure simulation (PR #45 smoke test).
-      # Proves `PR Fast CI / required` reports `failure` when classify
-      # itself dies, instead of accidentally greening via the GitHub
-      # Actions "skipped counts as success for required checks" quirk.
-      # This commit MUST be reverted before merge (see follow-up
-      # commit on this same PR).  Tracking ref:
-      # docs/architecture/dev-flow-implementation-plan.md § 4.5.
-      # ═══════════════════════════════════════════════════════════════
-      - name: TEST — simulate classify failure (REVERT BEFORE MERGE)
-        run: |
-          echo "::error::Deliberate classify failure for required-gate verification."
-          echo "If this step is still running on a non-test PR, revert the"
-          echo "corresponding commit on this branch — the real classify logic"
-          echo "lives in the step below."
-          exit 1
-
       - name: Checkout (full history for diff base resolution)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
