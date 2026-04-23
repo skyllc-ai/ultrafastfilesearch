@@ -18,14 +18,14 @@
 #     is typo-squatted / malicious) surfaces as a PR annotation for
 #     the reviewer to investigate before merge.
 #
-# Rationale — why a dedicated workflow and not a step in `ci.yml`:
+# Rationale — why a dedicated workflow and not a step in `pr-fast.yml`:
 #
 #   Security policy is strongest when it's legible in one file.  A
 #   separate workflow lets a future maintainer find every
 #   Dependabot-specific guard in one place without sifting through the
-#   full Tier 1 pipeline.  Zero runtime cost on human PRs (guard
+#   full PR-blocking pipeline.  Zero runtime cost on human PRs (guard
 #   short-circuits via the `actor` filter), and the output surfaces as
-#   a PR-level annotation / check, not buried in a Tier 1 log.
+#   a PR-level annotation / check, not buried in a pr-fast log.
 #
 # What this does NOT do:
 #

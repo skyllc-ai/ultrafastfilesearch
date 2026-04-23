@@ -17,9 +17,10 @@
 # Bypass once: `git push --no-verify`.
 # Uninstall:   `just uninstall-hooks`.
 #
-# Mirrors the CI lint gate in `.github/workflows/ci.yml`.  The Linux-only
-# drift gate (`just lint-ci-linux`) is deliberately NOT invoked here —
-# that class of regression is caught by CI on push to the remote.
+# Mirrors the CI lint gate in `.github/workflows/pr-fast.yml`.  The
+# Linux-only drift gate (`just lint-ci-linux`) is deliberately NOT
+# invoked here — that class of regression is caught by CI on push to
+# the remote.
 
 set -euo pipefail
 

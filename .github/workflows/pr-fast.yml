@@ -18,11 +18,11 @@
 #   required fails).  See § 2.5 / § 10.2 in the plan doc for the
 #   correctness argument.
 #
-# Phase 4 of the shift-left rollout:
-#   - Runs *in parallel* with `ci.yml` for a 7-day bake-in window.
-#   - Branch-protection cutover (remove `Tier 1 / *` required
-#     checks, add single `PR Fast CI / required`) happens in the
-#     same commit that deletes `ci.yml`.  See § 4 of the plan doc.
+# Phase 4 cutover completed 2026-04-23:
+#   - Legacy `ci.yml` retired (PR #48, squash `6f99b86aa`).
+#   - Ruleset `main-protection` (ID `11889528`) updated in the same
+#     window to require only `PR Fast CI / required`.
+#   - Historical rollout notes: § 4 / § 10.3 of the plan doc.
 
 name: PR Fast CI
 
@@ -64,9 +64,10 @@ env:
   RUST_BACKTRACE: 1
   CARGO_TARGET_DIR: target
   CARGO_BUILD_JOBS: 2
-  # Stable CPU baseline — same rationale as ci.yml's top-level env
-  # (avoids SIGILL under LLVM mis-detection on some Azure/KVM
-  # runners).
+  # Stable CPU baseline — avoids SIGILL under LLVM mis-detection on
+  # some Azure/KVM runners.  Never `target-cpu=native`: a binary
+  # compiled on today's runner can trap on a runner migrated to a
+  # narrower ISA tomorrow.  Matches the baselines used in release.yml.
   RUSTFLAGS: "-C target-cpu=x86-64-v3 -C link-arg=-Wl,--gc-sections"
 
 jobs:
@@ -328,7 +329,9 @@ jobs:
     timeout-minutes: 30
     env:
       # `debuginfo=1` for useful backtraces without paying the full
-      # debuginfo=2 cost — mirrors ci.yml's test-build env.
+      # debuginfo=2 cost.  `tests` job env below MUST match this
+      # string exactly so the cargo fingerprint lines up and the
+      # test binaries built here are reused rather than rebuilt.
       RUSTFLAGS: "-C debuginfo=1 -C target-cpu=x86-64-v3 -C link-arg=-Wl,--gc-sections"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -391,9 +394,10 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────
   # security — cargo-deny + cargo-vet.  Re-runs vet here (also runs in
-  # sanity when dep changed) because the security gate historically
-  # lived at this tier in ci.yml and external observers (branch
-  # protection) may still look for a named "Security" check.  Cheap.
+  # sanity when dep changed) because external observers (branch
+  # protection history, search tooling, audit trails) expect a
+  # distinct "Security" check in the check-runs list.  Cheap on warm
+  # cache (~10 s).
   # ─────────────────────────────────────────────────────────────────────
   security:
     name: Security (deny + vet)
@@ -454,16 +458,16 @@ jobs:
       - run: cargo check --workspace --all-targets --all-features --locked
 
   # ─────────────────────────────────────────────────────────────────────
-  # required — single branch-protection target.  Aggregates the result
-  # of every job above.  MUST depend on `classify` explicitly so that
-  # a failed classify (whose downstream jobs therefore `skipped`)
-  # cannot green-light the PR via GitHub Actions' "skipped counts as
-  # success for required checks" quirk.
+  # required — sole branch-protection target (post-2026-04-23 cutover).
+  # Aggregates the result of every job above.  MUST depend on
+  # `classify` explicitly so that a failed classify (whose downstream
+  # jobs therefore `skipped`) cannot green-light the PR via GitHub
+  # Actions' "skipped counts as success for required checks" quirk.
   #
-  # Branch-protection config for this workflow: remove the 8
-  # `Tier 1 / *` checks, add the single `PR Fast CI / required`
-  # check, in the SAME commit that deletes `ci.yml`.  See § 4 of
-  # dev-flow-implementation-plan.md for the cutover procedure.
+  # Ruleset `main-protection` (ID `11889528`) requires exactly one
+  # status check: `PR Fast CI / required` (the job `name:` below, NOT
+  # the workflow/job UI-concat).  See § 4.3 / § 4.4 of the plan doc
+  # for the cutover history and the context-string gotcha.
   # ─────────────────────────────────────────────────────────────────────
   required:
     name: PR Fast CI / required
@@ -519,7 +523,7 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────
   # notify-failure — file a tracking issue when the workflow breaks,
-  # using the same per-workflow label convention as ci.yml / tier-2.yml.
+  # using the same per-workflow label convention as tier-2.yml.
   # ─────────────────────────────────────────────────────────────────────
   notify-failure:
     name: 🔔 Notify on Failure

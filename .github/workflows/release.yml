@@ -60,14 +60,15 @@ env:
   # (see fork test run #24777036796 where all three build targets hit
   # exit code 101 on this).  An empty `RUSTC_WRAPPER` disables the wrapper
   # without touching config.toml (which would hurt local dev UX).
-  # ci.yml carries the same override (line 46 there).
+  # `pr-fast.yml` carries the same override for the same reason.
   RUSTC_WRAPPER: ""
   # NOTE: no workflow-level RUSTFLAGS here.  Each matrix row carries its own
   # `rustflags` field so every target gets a stable CPU baseline appropriate
   # for its ISA — never `target-cpu=native`, because a release binary built
   # on today's GitHub runner would SIGILL on any end-user CPU missing the
   # runner's detected feature set (observed previously with `target-cpu=native`
-  # → proc-macro dylib SIGILL on nightly-2026-04-21; see ci.yml comment).
+  # → proc-macro dylib SIGILL on nightly-2026-04-21; same rationale noted
+  # in `pr-fast.yml`'s top-level env block).
   # Baselines used below:
   #   x86_64 Linux / Windows   : x86-64-v3 (Haswell+/Zen+, AVX2+BMI2+FMA)
   #   aarch64-apple-darwin     : apple-m1  (M1+, forward-compatible with M2/M3/M4)

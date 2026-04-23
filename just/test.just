@@ -63,8 +63,8 @@ lint-tests:
     cargo clippy --workspace --tests --all-features --no-deps -- {{ test_flags }}
 
 # Gate residual lints in CI (deny all warnings).
-# MUST mirror .github/workflows/ci.yml `Run nightly clippy gate` exactly so
-# local runs catch everything CI catches.  Keep the two commands in lockstep.
+# MUST mirror .github/workflows/pr-fast.yml `clippy` job exactly so local
+# runs catch everything CI catches.  Keep the two commands in lockstep.
 lint-ci:
     @printf "\033[0;34m🚨 CI lint gating (FAST-FAIL)...\033[0m\n"
     cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
@@ -120,7 +120,7 @@ lint-all:
 #   IDE save   → rust-analyzer check-on-save
 #   pre-commit → `just lint-fast`       (staged-scoped, sub-2 s)
 #   pre-push   → `just lint-pre-push`   (workspace-parallel, ≤ 60 s)
-#   PR CI      → .github/workflows/ci.yml (matrix + cross-platform)
+#   PR CI      → .github/workflows/pr-fast.yml (classify-gated matrix + native windows-check)
 # Recipes below back both the git hooks and manual invocations so the
 # two surfaces never drift — see `scripts/hooks/_lint_*.sh` for the
 # shared parallel runners.

@@ -37,7 +37,7 @@
 # Mandatory jobs (any failure aborts the push):
 #   * lint-ci   — `cargo clippy -D warnings --all-targets --all-features
 #                 --no-deps`: CI-mirror baseline, kept in lockstep with
-#                 `.github/workflows/ci.yml`.
+#                 `.github/workflows/pr-fast.yml`'s `clippy` job.
 #   * lint-prod — `cargo clippy --lib --bins -- $prod_flags`:
 #                 ULTRA-STRICT production lints (pedantic + nursery +
 #                 cargo + unwrap_used + missing_docs_in_private_items).

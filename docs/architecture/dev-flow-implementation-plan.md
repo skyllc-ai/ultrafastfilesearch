@@ -2029,10 +2029,6 @@ one-line outcome when cleared.
   post-cutover dependabot run and first post-cutover infra-only PR
   will close these opportunistically.  Don't synthesize a test PR
   just for this.
-- **Stale `ci.yml` references in comments** — housekeeping: a handful
-  of comments in `pr-fast.yml`, `release.yml`, `dependabot-review.yml`,
-  and `scripts/hooks/_lint_pre_push.sh` still mention `ci.yml`.
-  Separate PR; non-blocking.
 - **Phase 4b `release.yml` permissions refactor** — workflow-level
   `contents: write` → per-job grants on `create-github-release` only.
   Deliberately scoped out of PR #47 per its scope note; track as a
@@ -2054,6 +2050,15 @@ one-line outcome when cleared.
 - **Phase 4 branch-protection cutover** — ✅ 2026-04-23 14:13 PDT
   via PR #48 (squash `6f99b86aa`) + ruleset PUT.  `ci.yml` retired,
   `pr-fast.yml` is sole required lane.  See §4.3.
+- **Stale `ci.yml` references in comments** — ✅ 2026-04-23 via the
+  housekeeping PR that carries this bullet.  8 files updated
+  (`README.md` CI badge, `CONTRIBUTING.md` PR-CI table + cross-
+  platform paragraph, `pr-fast.yml` 7 comment blocks, `release.yml`
+  2 comments, `dependabot-review.yml` rationale comment, both
+  `pre-push` hook files, `just/test.just` shift-left diagram +
+  lockstep note).  Only remaining live reference is the intentional
+  historical marker at the top of `pr-fast.yml` documenting the
+  cutover event itself.
 
 ### 10.7 Post-mortem triggers
 
