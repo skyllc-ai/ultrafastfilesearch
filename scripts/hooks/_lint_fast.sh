@@ -135,33 +135,11 @@ if has_staged_toml_nonvet && command -v taplo >/dev/null 2>&1; then
 fi
 
 # Supply-chain TOML changes → format-drift detector for cargo-vet's
-# store.  cargo-vet owns the format of `audits.toml`, `config.toml`,
-# and `imports.lock`; `cargo vet check` hard-fails at pre-push if the
-# store drifts.  We catch that at pre-commit too by snapshotting the
-# store, running the (mutating-only) `cargo vet fmt`, and comparing
-# hashes — so the working tree is restored to exactly the pre-fmt
-# state when no drift exists, and the hook tells the user to re-run
-# `cargo vet fmt` + `git add supply-chain/` when drift *is* found.
-# `cargo vet fmt` has no native `--check` mode in 0.10.x, hence the
-# snapshot-compare dance; revisit once upstream adds one.
+# store.  Logic lives in `scripts/hooks/_check_vet_fmt.sh`; the hook
+# just wires it into the parallel scheduler.  See that script's
+# header for the cargo-vet-owns-supply-chain rationale.
 if has_staged_vet && command -v cargo-vet >/dev/null 2>&1; then
-    spawn "vet-fmt" bash -c '
-        set -euo pipefail
-        snap=$(mktemp -d)
-        trap "rm -rf $snap" EXIT
-        cp -R supply-chain "$snap/"
-        cargo vet fmt >/dev/null 2>&1
-        if ! diff -rq supply-chain "$snap/supply-chain" >/dev/null 2>&1; then
-            # Drift found — restore pre-fmt state, then fail so the
-            # working tree is untouched and the operator can decide
-            # whether to accept the reformatting.
-            rm -rf supply-chain
-            mv "$snap/supply-chain" .
-            echo "supply-chain format drift detected."
-            echo "Run: cargo vet fmt && git add supply-chain/ && re-commit"
-            exit 1
-        fi
-    '
+    spawn "vet-fmt" bash scripts/hooks/_check_vet_fmt.sh
 fi
 
 # Any staged text → typos (optional).  Runs against the full workspace
@@ -203,7 +181,12 @@ command -v typos >/dev/null 2>&1 || missing+=("typos-cli")
 command -v taplo >/dev/null 2>&1 || missing+=("taplo-cli")
 command -v reuse >/dev/null 2>&1 || missing+=("reuse (pipx install reuse)")
 if (( ${#missing[@]} > 0 )); then
-    printf '  %s💡%s optional tools missing: %s — run %s`just install-dev-tools`%s\n' \
+    # NOTE: no backticks around `just install-dev-tools` — the cyan
+    # ANSI codes already emphasise the command, and literal backticks
+    # inside a single-quoted printf format string trip shellcheck
+    # SC2016 ("expressions don't expand in single quotes") even
+    # though they are harmless literal bytes in this context.
+    printf '  %s💡%s optional tools missing: %s — run %sjust install-dev-tools%s\n' \
         "$C_CYAN" "$C_RESET" "${missing[*]}" "$C_CYAN" "$C_RESET"
 fi
 
