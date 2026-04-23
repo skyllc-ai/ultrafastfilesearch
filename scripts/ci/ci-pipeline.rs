@@ -522,9 +522,22 @@ impl PipelineContext {
         ));
 
         // Optional sccache integration (massive win in CI and on developer machines).
+        //
+        // sccache refuses to wrap rustc when CARGO_INCREMENTAL=1 because
+        // incremental builds produce non-cacheable artifacts (sccache bails
+        // out at `sccache rustc -vV` with
+        // "incremental compilation is prohibited").  `just/shared.just`
+        // exports CARGO_INCREMENTAL=1 for local dev UX, so whenever we enable
+        // sccache for the pipeline we must pair it with CARGO_INCREMENTAL=0
+        // at the SAME scope.  Previously the unset lived in a per-command
+        // guard further down — which caught `cargo` and `rust-script` but
+        // not `git` (whose pre-push hook shells out to cargo internally and
+        // inherits this env).  Keeping the pair in the global env is the
+        // only scope that covers every subprocess the pipeline spawns.
         let sccache_available = !no_sccache && command_exists("sccache");
         if sccache_available {
             global_env.push(("RUSTC_WRAPPER".into(), "sccache".into()));
+            global_env.push(("CARGO_INCREMENTAL".into(), "0".into()));
         }
 
         // Create log file for non-verbose mode
@@ -613,12 +626,13 @@ async fn execute_command_with_env(
         command.env(key, value);
     }
 
-    // sccache prohibits incremental compilation - it conflicts with its caching model.
-    // Force CARGO_INCREMENTAL=0 for cargo and rust-script (which runs cargo internally).
-    // This overrides the `incremental = true` in profile.dev from Cargo.toml.
-    if ctx.sccache_enabled && (cmd == "cargo" || cmd == "rust-script") {
-        command.env("CARGO_INCREMENTAL", "0");
-    }
+    // NOTE: the sccache/`CARGO_INCREMENTAL=0` pairing is enforced in the
+    // global env at context-construction time (see `ContextBuilder`),
+    // which correctly covers every subprocess the pipeline spawns —
+    // including `git`, whose pre-push hook shells out to cargo.  A
+    // per-command guard here would only have caught `cargo` /
+    // `rust-script`, leaving hook-invoked cargo processes to fail with
+    // "incremental compilation is prohibited".
 
     // In verbose mode, inherit stdio; otherwise capture to log file
     if ctx.verbose {
