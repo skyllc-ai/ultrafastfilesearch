@@ -45,7 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **CodeQL (Rust SAST)** workflow
     (`.github/workflows/codeql.yml`) on every PR and weekly
     Tuesday 06:30 UTC baseline.  Pinned to
-    `github/codeql-action` v3.35.2.  Rust is in CodeQL's public
+    `github/codeql-action` v4.35.2.  Uses `build-mode: none` (the
+    only mode Rust currently supports) so the extractor parses
+    source directly without a cargo build — run budget is ~5-10 min
+    rather than the 15-25 min a compiled-extraction pipeline would
+    need.  Rust is in CodeQL's public
     preview since CodeQL 2.22.1 (July 2025) — findings are
     informational until a clean baseline settles, so this is NOT
     yet a required branch-protection gate.

@@ -19,9 +19,13 @@
 # Rust support status:
 #
 #   CodeQL 2.22.1 (July 2025) brought Rust to **public preview**; CodeQL
-#   2.23.3 / 2.23.7 / 2.23.8 added additional queries.  Treat failures as
-#   informational on first rollout — the query pack is still maturing.
-#   Not wired into branch protection for this reason.
+#   2.23.3 / 2.23.7 / 2.23.8 added additional queries; CodeQL 2.25.x
+#   (bundled with codeql-action v4.35.x) is the current baseline.  Rust
+#   support currently ONLY accepts `build-mode: none` — the CodeQL
+#   bundle includes its own Rust parser / analyzer and resolves crate
+#   metadata without invoking cargo.  Treat failures as informational
+#   on first rollout; the query pack is still maturing, and the check
+#   is NOT wired into branch protection for that reason.
 #
 # Triggers:
 #
@@ -31,15 +35,17 @@
 #     jobs don't share a runner queue.
 #   * `push: main` — capture the baseline on every merge.
 #   * `pull_request: main` — catches regressions before merge.  If the
-#     query pack gets noisy on a PR and blocks a human, the workflow can
-#     be re-run or temporarily disabled via `workflow_dispatch`; it is
-#     deliberately NOT added to required checks.
+#     query pack gets noisy on a PR and blocks a human, the workflow
+#     can be re-run or temporarily disabled via `workflow_dispatch`; it
+#     is deliberately NOT added to required checks.
 #
 # Cost:
 #
-#   ~15-25 min per run on ubuntu-22.04; builds the workspace once for
-#   CodeQL's extractor.  Re-uses the Swatinem rust-cache key namespace
-#   so subsequent runs warm in 5-8 min.
+#   ~5-10 min per run on ubuntu-22.04.  `build-mode: none` means no
+#   cargo build, no rust-cache, no debuginfo fetch — the Rust extractor
+#   parses source directly and emits a small DB (hundreds of MB rather
+#   than the multi-GB DB a compiled-extraction language like C++ would
+#   produce).
 
 name: "🔍 CodeQL (Rust SAST)"
 
@@ -88,7 +94,7 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -98,52 +104,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Free up disk space
-        # CodeQL's extractor materialises a large intermediate database on
-        # top of a full workspace build.  Reclaim the same ~20 GB that
-        # the other Tier 1 heavy jobs free, so we stay well clear of the
-        # ubuntu-22.04 14 GB default budget.
-        run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
-          sudo rm -rf /usr/local/share/boost /usr/local/graalvm
-          df -h /
-
-      - name: Install pinned nightly (from rust-toolchain.toml)
-        run: rustup show
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          # Dedicated cache namespace so CodeQL's full-debuginfo build
-          # doesn't evict the release-profile caches used by the Tier 1
-          # jobs (different fingerprint anyway, but be explicit).
-          shared-key: codeql
-
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3.35.2
+        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4.35.2
         with:
           languages: ${{ matrix.language }}
-          # `manual` build mode: we invoke cargo ourselves below so the
-          # extractor observes the real workspace graph, including all
-          # feature-gated code paths.
-          build-mode: manual
+          # Rust support (public preview) currently only accepts
+          # `build-mode: none`.  In this mode the extractor parses the
+          # source tree directly and resolves crate metadata via
+          # CodeQL's own bundled tooling — no cargo / rustc invocation,
+          # no build cache required.
+          build-mode: none
           # security-extended adds higher-recall queries at the cost of
           # more findings to triage; start with the default `security`
           # pack and upgrade once we've seen a few weeks of baseline.
           # queries: security-and-quality
 
-      - name: Build workspace for CodeQL extractor
-        # `--all-features --all-targets` so every gated module (live MFT,
-        # IOCP, USN journal, polars integration, etc.) is visible to the
-        # CodeQL dataflow analysis.
-        env:
-          # CodeQL benefits from full debuginfo.  The x86-64-v3 CPU
-          # baseline still applies (workflow-level default in ci.yml does
-          # NOT propagate here — this is a separate workflow).
-          RUSTFLAGS: "-C debuginfo=2 -C target-cpu=x86-64-v3"
-        run: cargo build --workspace --all-features --all-targets
-
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3.35.2
+        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4.35.2
         with:
           category: "/language:${{ matrix.language }}"
