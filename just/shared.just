@@ -12,7 +12,11 @@ export CLICOLOR_FORCE := "1"
 export TERM := "xterm-256color"
 export COLORTERM := "truecolor"
 export CARGO_TERM_COLOR := "always"
-export CARGO_INCREMENTAL := "1"
+# CARGO_INCREMENTAL is deliberately NOT exported here.  `.cargo/config.toml`
+# owns the cache policy: `build.rustc-wrapper = "sccache"` + `build.incremental
+# = false`.  Env var overrides config, so exporting `CARGO_INCREMENTAL=1`
+# from just would defeat sccache (incremental artifacts are non-cacheable)
+# and recreate v0.5.71's Bug B.  See docs/architecture/dev-flow-implementation-plan.md § 2.1.
 export CARGO_NET_RETRY := "3"
 export CARGO_HTTP_TIMEOUT := "30"
 export CARGO_HTTP_MULTIPLEXING := "true"

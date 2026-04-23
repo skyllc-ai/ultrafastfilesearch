@@ -21,8 +21,18 @@
 # Windows users can set: CARGO_TARGET_DIR=C:\rust-target\uffs
 target-dir = "target"
 
-# sccache for compilation caching (significant speedup on rebuilds)
+# sccache + incremental=false is the canonical local cache policy.
+# Paired here (not split between `.cargo/config.toml` and `just/shared.just`)
+# so every cargo invocation — including those spawned by git hooks,
+# rust-script, IDE plugins, etc. — inherits both settings as one atomic
+# config.  sccache refuses to wrap rustc when CARGO_INCREMENTAL=1 because
+# incremental artifacts are non-cacheable; pairing them here eliminates
+# the drift that caused v0.5.71's sccache-inheritance bug (Bug B in
+# docs/architecture/dev-flow.md § 5.2).  See
+# docs/architecture/dev-flow-implementation-plan.md § 2.1 / 6.4 and
+# https://doc.rust-lang.org/cargo/reference/config.html#build
 rustc-wrapper = "sccache"
+incremental = false
 
 [net]
 retry = 3
@@ -33,20 +43,14 @@ git-fetch-with-cli = true
 # =============================================================================
 [target.aarch64-apple-darwin]
 linker = "clang"
-rustflags = [
-    "-C", "target-cpu=native",
-    "-C", "link-arg=-Wl,-dead_strip",
-]
+rustflags = ["-C", "target-cpu=native", "-C", "link-arg=-Wl,-dead_strip"]
 
 # =============================================================================
 # macOS Intel
 # =============================================================================
 [target.x86_64-apple-darwin]
 linker = "clang"
-rustflags = [
-    "-C", "target-cpu=native",
-    "-C", "link-arg=-Wl,-dead_strip",
-]
+rustflags = ["-C", "target-cpu=native", "-C", "link-arg=-Wl,-dead_strip"]
 
 # =============================================================================
 # Windows x86_64 MSVC
@@ -63,9 +67,12 @@ rustflags = [
 [target.x86_64-pc-windows-msvc]
 linker = "link.exe"
 rustflags = [
-    "-C", "target-cpu=x86-64-v3",
-    "-C", "link-arg=/OPT:REF",
-    "-C", "link-arg=/OPT:ICF",
+  "-C",
+  "target-cpu=x86-64-v3",
+  "-C",
+  "link-arg=/OPT:REF",
+  "-C",
+  "link-arg=/OPT:ICF",
 ]
 
 # =============================================================================
@@ -73,10 +80,7 @@ rustflags = [
 # =============================================================================
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
-rustflags = [
-    "-C", "target-cpu=native",
-    "-C", "link-arg=-Wl,--gc-sections",
-]
+rustflags = ["-C", "target-cpu=native", "-C", "link-arg=-Wl,--gc-sections"]
 
 # =============================================================================
 # Terminal
