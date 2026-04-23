@@ -36,7 +36,8 @@ members = [
   "crates/uffs-cli", # 🖥️  Command-line interface
   # NOTE: uffs-tui and uffs-gui have moved to the private uffs-products repo.
   # ── Tools ──
-  "crates/uffs-diag", # 🔬 Retained workspace-only diagnostic tools (not shipped in dist/)
+  "crates/uffs-diag",    # 🔬 Retained workspace-only diagnostic tools (not shipped in dist/)
+  "scripts/ci-pipeline", # 🛠️ Promoted CI pipeline driver (dev-flow-implementation-plan.md § 7)
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -93,6 +94,10 @@ tokio = { version = "1.52.1", default-features = false, features = [
   "time",
   "tracing",
 ] }
+# Async combinators (`try_join_all`, `FutureExt`).  Used by the internal
+# `uffs-ci-pipeline` tool to fan out parallel cargo invocations; kept at
+# workspace scope so any future consumer tracks the same version.
+futures = "0.3.32"
 
 # ───── Windows APIs (Windows only) ─────
 windows = { version = "0.62.2", features = [
@@ -164,6 +169,11 @@ clap = { version = "4.6.1", features = [
 ] }
 indicatif = "0.18.4"
 devicons = "0.6.12"
+# ANSI terminal colouring.  Used by the `uffs-ci-pipeline` tool; kept at
+# workspace scope so a future UI surface that wants colored output inherits
+# the same pin.  Pinned to 2.x because the 3.x rewrite changes the API in
+# ways we have not audited for cross-platform Windows console behaviour.
+colored = "3.1.1"
 
 # ───── Pattern Matching ─────
 regex = "1.12.3"
@@ -201,6 +211,14 @@ memmap2 = "0.9.10"
 # ───── System ─────
 libc = "0.2"
 hostname = "0.4.2"
+# CPU-core count detection.  `std::thread::available_parallelism` is the
+# modern alternative, but `num_cpus` handles cgroup / container quotas more
+# gracefully on Linux CI runners.  Kept at workspace scope for consistency
+# if any other crate starts tuning parallelism.
+num_cpus = "1.17.0"
+# Random unique identifiers.  Only the `v4` (random) feature is enabled
+# workspace-wide; consumers that need v1/v5/v7 etc. re-add the feature.
+uuid = { version = "1.23.1", features = ["v4"] }
 
 # ───── Security / Crypto ─────
 aes-gcm = "0.10"

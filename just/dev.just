@@ -35,7 +35,7 @@ setup-cross:
 # Cross-compile check for GitHub Actions compatibility.
 check-cross:
     @printf "\033[0;34m Cross-compilation validation using CI pipeline...\033[0m\n"
-    rust-script scripts/ci/ci-pipeline.rs cross-check
+    cargo run -q --release -p uffs-ci-pipeline -- cross-check
 
 # Type-check all #[cfg(windows)] code paths from macOS using cargo-xwin.
 #

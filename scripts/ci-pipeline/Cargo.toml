@@ -1,0 +1,65 @@
+# =============================================================================
+# scripts/ci-pipeline/Cargo.toml - UFFS CI Pipeline Driver
+# =============================================================================
+#
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025-2026 SKY, LLC.
+#
+# Phase 7 promotion of `scripts/ci/ci-pipeline.rs` from a standalone
+# `rust-script` to a proper Cargo workspace binary.  See
+# `docs/architecture/dev-flow-implementation-plan.md` § 7 for the
+# rationale (kill stale rust-script caches, get inline-doc IDE support,
+# inherit workspace-wide tooling like `cargo nextest`/`cargo deny`).
+#
+# NOTE ON LINTS: This crate intentionally does NOT opt into
+# `[lints] workspace = true`.  The workspace lints are calibrated for
+# production library/CLI code (deny unwrap, deny println!, deny
+# missing_docs_in_private_items).  This crate is an operational tool
+# that uses println! + expect() by design; inheriting the production
+# lints would require thousands of lines of edits without making the
+# tool materially better.  Regular `cargo clippy` on this package uses
+# the default lint set only.
+# =============================================================================
+
+[package]
+name = "uffs-ci-pipeline"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "UFFS internal CI pipeline driver (promoted from rust-script; not published)"
+publish = false
+
+[[bin]]
+name = "uffs-ci-pipeline"
+path = "src/main.rs"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+# Every dependency is aliased to `[workspace.dependencies]` in the root
+# Cargo.toml so a single Cargo.lock entry serves this tool and every other
+# crate.  If this crate ever needs a crate that the rest of the workspace
+# does not, ADD IT TO THE ROOT Cargo.toml FIRST — we do not tolerate per-
+# crate direct pins because they let different consumers drift onto
+# different major versions of the same crate.
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+colored = { workspace = true }
+futures = { workspace = true }
+indicatif = { workspace = true }
+num_cpus = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
+# tokio: workspace baseline is net-free.  This tool needs `process` for
+# `tokio::process::Command`.  Feature addition is additive and does not
+# leak into other crates (each consumer sees the union of features it
+# requests).
+tokio = { workspace = true, features = ["process"] }

@@ -14,7 +14,7 @@ benchmark-flows-debug:
     cargo clean
     TEST1_START=$(date +%s)
     printf "\033[0;34m  → Running Rust script validation workflow with async/parallel optimization (VERBOSE)...\033[0m\n"
-    if rust-script scripts/ci/ci-pipeline.rs go -v; then TEST1_END=$(date +%s); TEST1_TOTAL=$((TEST1_END - TEST1_START)); printf "\033[0;32m  ✅ Rust script completed successfully in ${TEST1_TOTAL}s\033[0m\n"; else TEST1_END=$(date +%s); TEST1_TOTAL=-1; printf "\033[0;31m  ❌ Rust script failed\033[0m\n"; fi
+    if cargo run -q --release -p uffs-ci-pipeline -- go -v; then TEST1_END=$(date +%s); TEST1_TOTAL=$((TEST1_END - TEST1_START)); printf "\033[0;32m  ✅ Rust script completed successfully in ${TEST1_TOTAL}s\033[0m\n"; else TEST1_END=$(date +%s); TEST1_TOTAL=-1; printf "\033[0;31m  ❌ Rust script failed\033[0m\n"; fi
     printf "\033[0;34m\n🔄 Test 2: JUST File Validation Workflow (just go-justfile)\033[0m\n"
     printf "═══════════════════════════════════════════════════════\n"
     cargo clean

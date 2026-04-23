@@ -20,6 +20,10 @@ on:
       - 'scripts/ci/check_file_size_policy.sh'
       - 'scripts/ci/file_size_exceptions.txt'
       - 'scripts/ci/ci-pipeline.rs'
+      # Phase 7 of dev-flow plan promoted ci-pipeline.rs to this crate;
+      # include it so changes to the pipeline driver trigger Tier 1
+      # during the parallel window with pr-fast.yml.
+      - 'scripts/ci-pipeline/**'
       # Doc-only changes must still trigger Tier 1 because
       # `main-protection` has `bypass_actors: []` (no admin bypass) and
       # requires 6 Tier 1 status checks.  Without docs in paths, a
@@ -42,6 +46,10 @@ on:
       - 'scripts/ci/check_file_size_policy.sh'
       - 'scripts/ci/file_size_exceptions.txt'
       - 'scripts/ci/ci-pipeline.rs'
+      # Phase 7 of dev-flow plan promoted ci-pipeline.rs to this crate;
+      # include it so changes to the pipeline driver trigger Tier 1
+      # during the parallel window with pr-fast.yml.
+      - 'scripts/ci-pipeline/**'
       # Doc-only changes must still trigger Tier 1 because
       # `main-protection` has `bypass_actors: []` (no admin bypass) and
       # requires 6 Tier 1 status checks.  Without docs in paths, a
