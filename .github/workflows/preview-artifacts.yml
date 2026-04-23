@@ -1,0 +1,344 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025-2026 SKY, LLC.
+#
+# Preview Artifacts — the *opt-in* artifact-producing lane.
+#
+# Architecture (dev-flow-implementation-plan.md § 2.5 — Phases 4+5):
+#
+#   "Is this SHA worth human validation on real binaries?" is a
+#   different question from "is this PR mergeable?".  The former is
+#   rare and expensive; the latter is frequent and cheap.  This
+#   workflow answers the former and DOES NOT block merges.
+#
+#   Triggered only when:
+#     (a) a maintainer applies the `preview-binaries` label to a PR, or
+#     (b) a maintainer invokes workflow_dispatch.
+#
+#   The `verify-pr-fast-green` gate refuses to build artifacts unless
+#   `PR Fast CI / required` is *already green* on the exact SHA being
+#   previewed — previewing a commit that wouldn't merge is wasted
+#   human time.
+#
+#   Phase 5 scope: Windows binaries + nextest archive + Windows smoke
+#   + per-file SHA256 manifest.  macOS / Linux preview binaries are
+#   deferred to a future phase (see § 7 Non-goals in the plan doc).
+
+name: Preview Artifacts
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit SHA to build (default: latest on default branch)'
+        required: false
+
+permissions:
+  contents: read
+  # Needed by verify-pr-fast-green to query check-runs on the target SHA.
+  checks: read
+  # Needed to inspect labels on pull_request events.
+  pull-requests: read
+
+# One preview run per PR (or per dispatch); a new push or label event
+# cancels any in-progress run against the previous SHA so we never
+# publish artifacts the submitter didn't actually ask about.
+concurrency:
+  group: preview-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.inputs.sha || github.sha }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTC_WRAPPER: ""
+  RUST_BACKTRACE: 1
+  CARGO_TARGET_DIR: target
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # gate — guard on label or manual dispatch, then emit the pinned SHA
+  # that every downstream job will build and validate against.  Using a
+  # pinned SHA (not github.sha, which can drift on subsequent synchronize
+  # events) prevents artifact / manifest mismatches.
+  # ─────────────────────────────────────────────────────────────────────
+  gate:
+    name: Gate (label / dispatch)
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'preview-binaries'))
+    runs-on: ubuntu-22.04
+    timeout-minutes: 2
+    outputs:
+      sha: ${{ steps.s.outputs.sha }}
+    steps:
+      - name: Resolve target SHA
+        id: s
+        env:
+          PR_HEAD_SHA:    ${{ github.event.pull_request.head.sha }}
+          DISPATCH_SHA:   ${{ github.event.inputs.sha }}
+          FALLBACK_SHA:   ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          SHA="${PR_HEAD_SHA:-${DISPATCH_SHA:-$FALLBACK_SHA}}"
+          if [[ -z "$SHA" ]]; then
+            echo "::error::Could not resolve a target SHA"
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "::notice::preview: building SHA $SHA"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # verify-pr-fast-green — refuse to waste runner minutes on a SHA that
+  # isn't already merge-confidence-green.  Polls the GitHub Checks API
+  # for up to 10 minutes so a preview requested while PR-fast is still
+  # running just waits rather than failing.
+  # ─────────────────────────────────────────────────────────────────────
+  verify-pr-fast-green:
+    name: Verify PR Fast CI is green
+    needs: gate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 12
+    steps:
+      - name: Poll check-runs for PR Fast CI / required
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const sha = '${{ needs.gate.outputs.sha }}';
+            const want = 'PR Fast CI / required';
+            // Retry for up to ~10 min (60 × 10 s) to absorb the case
+            // where PR-fast is still running when the label lands.
+            for (let i = 0; i < 60; i++) {
+              const { data } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                ref:   sha,
+                per_page: 100,
+              });
+              const run = data.check_runs.find(r => r.name === want);
+              if (run && run.status === 'completed') {
+                if (run.conclusion === 'success') {
+                  core.info(`✅ ${want} is success on ${sha.slice(0,7)}`);
+                  return;
+                }
+                core.setFailed(`❌ ${want} on ${sha.slice(0,7)}: ${run.conclusion}`);
+                return;
+              }
+              core.info(`⏳ ${want} not complete yet (status=${run?.status ?? 'missing'}); retry ${i+1}/60`);
+              await new Promise(r => setTimeout(r, 10_000));
+            }
+            core.setFailed(`⏱  Timed out waiting for ${want} on ${sha.slice(0,7)}`);
+
+  # ─────────────────────────────────────────────────────────────────────
+  # build-windows — cross-compile a Windows release binary on Linux via
+  # cargo-xwin.  Matches `just check-windows` but with `--release` and
+  # `--bins` so the output is shippable-shaped.
+  # ─────────────────────────────────────────────────────────────────────
+  build-windows:
+    name: Build Windows binaries
+    needs: [gate, verify-pr-fast-green]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    env:
+      # Same CPU baseline as release.yml's Windows matrix rows.
+      RUSTFLAGS: "-C target-cpu=x86-64-v3"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          sudo rm -rf /usr/local/share/boost /usr/local/graalvm
+          df -h /
+
+      - run: rustup show
+      - run: rustup target add x86_64-pc-windows-msvc
+
+      - uses: taiki-e/install-action@dfc84ffb7254b048a0a843316ff5a2714dcdc7bd # v2
+        with:
+          tool: cargo-xwin
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: preview-windows
+
+      - name: cargo xwin build --release --bins --locked
+        run: |
+          cargo xwin build --release --bins --locked \
+            --target x86_64-pc-windows-msvc
+
+      - name: Stage Windows artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist/windows
+          shopt -s nullglob
+          for exe in target/x86_64-pc-windows-msvc/release/*.exe; do
+            cp "$exe" dist/windows/
+          done
+          ls -la dist/windows/
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-preview-${{ needs.gate.outputs.sha }}
+          path: dist/windows/
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────
+  # build-test-archive — build-once / run-anywhere via `cargo nextest
+  # archive`.  The target machine running this archive later needs (a)
+  # the same source revision checked out (see smoke-windows / the
+  # manifest's git_sha field) and (b) a matching nextest version
+  # (captured as an output so the manifest can advertise it).
+  # ─────────────────────────────────────────────────────────────────────
+  build-test-archive:
+    name: Build Windows nextest archive
+    needs: [gate, verify-pr-fast-green]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    outputs:
+      nextest_version: ${{ steps.nxv.outputs.version }}
+    env:
+      RUSTFLAGS: "-C target-cpu=x86-64-v3"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          sudo rm -rf /usr/local/share/boost /usr/local/graalvm
+          df -h /
+
+      - run: rustup show
+      - run: rustup target add x86_64-pc-windows-msvc
+
+      - uses: taiki-e/install-action@dfc84ffb7254b048a0a843316ff5a2714dcdc7bd # v2
+        with:
+          tool: cargo-xwin,nextest
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: preview-windows
+
+      - id: nxv
+        name: Capture nextest version for the manifest
+        run: echo "version=$(cargo nextest --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: cargo nextest archive --target x86_64-pc-windows-msvc
+        run: |
+          cargo nextest archive --workspace --locked \
+            --target x86_64-pc-windows-msvc \
+            --archive-file "uffs-tests-${{ needs.gate.outputs.sha }}.tar.zst"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: nextest-archive-${{ needs.gate.outputs.sha }}
+          path: uffs-tests-${{ needs.gate.outputs.sha }}.tar.zst
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────
+  # smoke-windows — download the nextest archive on a GitHub-hosted
+  # Windows runner and execute it.  Satisfies both of nextest's
+  # archive-on-target requirements: (a) matching source revision
+  # checked out, (b) nextest installed.  NEVER run on self-hosted —
+  # fork-PR code cannot execute on privileged infra (see § 2.8 in the
+  # plan doc).
+  # ─────────────────────────────────────────────────────────────────────
+  smoke-windows:
+    name: Windows smoke (run nextest archive)
+    needs: [gate, build-windows, build-test-archive]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      - uses: taiki-e/install-action@dfc84ffb7254b048a0a843316ff5a2714dcdc7bd # v2
+        with:
+          tool: nextest
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nextest-archive-${{ needs.gate.outputs.sha }}
+
+      - name: cargo nextest run --archive-file
+        shell: bash
+        run: |
+          cargo nextest run \
+            --archive-file "uffs-tests-${{ needs.gate.outputs.sha }}.tar.zst" \
+            --profile ci
+
+  # ─────────────────────────────────────────────────────────────────────
+  # manifest — emit a human-readable manifest.json with per-file SHA256,
+  # tool versions, and the pinned git SHA.  GitHub's UI shows an
+  # artifact-level digest on download; this manifest adds per-FILE
+  # integrity so a human downloading via the browser can verify without
+  # trusting the UI.
+  # ─────────────────────────────────────────────────────────────────────
+  manifest:
+    name: Emit manifest.json
+    needs: [gate, build-windows, build-test-archive, smoke-windows]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: preview
+
+      - name: Emit manifest.json
+        env:
+          SHA: ${{ needs.gate.outputs.sha }}
+          NXV: ${{ needs.build-test-archive.outputs.nextest_version }}
+        run: |
+          set -euo pipefail
+          RUSTC="$(rustc --version | head -n1)"
+          LOCK_SHA="$(sha256sum Cargo.lock | awk '{print $1}')"
+          export RUSTC LOCK_SHA
+
+          python3 - > manifest.json <<'PY'
+          import hashlib, json, os
+
+          sha       = os.environ["SHA"]
+          lock_sha  = os.environ["LOCK_SHA"]
+          rustc     = os.environ["RUSTC"]
+          nextest   = os.environ["NXV"]
+
+          files = []
+          for root, _, names in os.walk("preview"):
+              for n in names:
+                  p = os.path.join(root, n)
+                  with open(p, "rb") as fh:
+                      h = hashlib.sha256(fh.read()).hexdigest()
+                  files.append({"path": p, "sha256": h, "bytes": os.path.getsize(p)})
+          files.sort(key=lambda f: f["path"])
+
+          print(json.dumps({
+              "git_sha":           sha,
+              "tested_sha":        sha,
+              "cargo_lock_sha256": lock_sha,
+              "rustc_version":     rustc,
+              "nextest_version":   nextest,
+              "target":            "x86_64-pc-windows-msvc",
+              "build_os":          "ubuntu-22.04 (cargo-xwin)",
+              "files":             files,
+          }, indent=2))
+          PY
+
+          echo "::group::manifest.json"
+          cat manifest.json
+          echo "::endgroup::"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: manifest-${{ needs.gate.outputs.sha }}
+          path: manifest.json
+          if-no-files-found: error
