@@ -1,6 +1,18 @@
 
 # cargo-vet audits file
 
+[[audits.colored]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+version = "3.1.1"
+notes = "Reviewed v3.1.1 source. Scope: ANSI terminal coloring. One unsafe block in control.rs (Windows Console FFI via windows-sys: GetStdHandle / GetConsoleMode / SetConsoleMode) — standard Win32 terminal setup, properly cfg(windows)-gated. No network I/O, no filesystem writes, no process spawning. Only std types plus windows-sys on Windows. Dev-deps (rspec, insta, ansiterm) are standard testing crates. MPL-2.0 licensed, same as our workspace."
+
+[[audits.hermit-abi]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+version = "0.5.2"
+notes = "Reviewed v0.5.2 source. Transitive dep of num_cpus. Two files: errno.rs is pure i32 constants (EPERM, ENOENT, ...); lib.rs is #![no_std] FFI declarations for the Hermit unikernel syscall interface (sys_mmap, sys_getpagesize, sys_errno, thread scheduling primitives, ...) plus two unsafe wrapper fns for get/set_priority. No network I/O, no filesystem I/O, no std dependency. On non-Hermit targets the extern C symbols are never linked and the functions are inert — num_cpus only touches hermit-abi when target_os=hermit, which none of our shipping targets hit. Apache-2.0 OR MIT; author Stefan Lankes, Hermit OS project lead."
+
 [[audits.pastey]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -36,3 +48,63 @@ Delta audit (Apr 2026, v0.5.71):
   nightly-only cfg-gated feature flag addition; inert on stable toolchains.
   No runtime behavior change.
 - No unsafe additions, no API changes, no new ambient capabilities."""
+
+[[trusted.h2]]
+criteria = "safe-to-deploy"
+user-id = 359               # Sean McArthur (seanmonstar)
+start = "2019-03-13"
+end = "2027-04-23"
+
+[[trusted.http]]
+criteria = "safe-to-deploy"
+user-id = 359               # Sean McArthur (seanmonstar)
+start = "2019-04-05"
+end = "2027-04-23"
+
+[[trusted.http-body-util]]
+criteria = "safe-to-deploy"
+user-id = 359               # Sean McArthur (seanmonstar)
+start = "2022-10-25"
+end = "2027-04-23"
+
+[[trusted.httparse]]
+criteria = "safe-to-deploy"
+user-id = 359               # Sean McArthur (seanmonstar)
+start = "2019-07-03"
+end = "2027-04-23"
+
+[[trusted.hyper]]
+criteria = "safe-to-deploy"
+user-id = 359               # Sean McArthur (seanmonstar)
+start = "2019-03-01"
+end = "2027-04-23"
+
+[[trusted.hyper-util]]
+criteria = "safe-to-deploy"
+user-id = 359               # Sean McArthur (seanmonstar)
+start = "2022-01-15"
+end = "2027-04-23"
+
+[[trusted.mime]]
+criteria = "safe-to-deploy"
+user-id = 359               # Sean McArthur (seanmonstar)
+start = "2019-09-09"
+end = "2027-04-23"
+
+[[trusted.num_cpus]]
+criteria = "safe-to-deploy"
+user-id = 359               # Sean McArthur (seanmonstar)
+start = "2019-06-10"
+end = "2027-04-23"
+
+[[trusted.reqwest]]
+criteria = "safe-to-deploy"
+user-id = 359               # Sean McArthur (seanmonstar)
+start = "2019-03-04"
+end = "2027-04-23"
+
+[[trusted.unicase]]
+criteria = "safe-to-deploy"
+user-id = 359               # Sean McArthur (seanmonstar)
+start = "2019-03-05"
+end = "2027-04-23"

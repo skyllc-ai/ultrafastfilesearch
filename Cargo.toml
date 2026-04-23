@@ -171,8 +171,8 @@ indicatif = "0.18.4"
 devicons = "0.6.12"
 # ANSI terminal colouring.  Used by the `uffs-ci-pipeline` tool; kept at
 # workspace scope so a future UI surface that wants colored output inherits
-# the same pin.  Pinned to 2.x because the 3.x rewrite changes the API in
-# ways we have not audited for cross-platform Windows console behaviour.
+# the same pin.  Audited and `cargo vet certify`'d at 3.1.1 — see
+# supply-chain/audits.toml for the review trail.
 colored = "3.1.1"
 
 # ───── Pattern Matching ─────

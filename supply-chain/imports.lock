@@ -8,6 +8,76 @@ user-id = 696
 user-login = "fitzgen"
 user-name = "Nick Fitzgerald"
 
+[[publisher.h2]]
+version = "0.4.13"
+when = "2026-01-05"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.http]]
+version = "1.4.0"
+when = "2025-11-24"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.http-body-util]]
+version = "0.1.3"
+when = "2025-03-11"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.httparse]]
+version = "1.10.1"
+when = "2025-03-03"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.hyper]]
+version = "1.9.0"
+when = "2026-03-31"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.hyper-util]]
+version = "0.1.20"
+when = "2026-02-02"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.mime]]
+version = "0.3.17"
+when = "2023-03-20"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.num_cpus]]
+version = "1.17.0"
+when = "2025-05-30"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.reqwest]]
+version = "0.12.28"
+when = "2025-12-22"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.unicase]]
+version = "2.9.0"
+when = "2026-01-06"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
 [[publisher.unicode-normalization]]
 version = "0.1.25"
 when = "2025-10-30"
@@ -436,12 +506,6 @@ who = "Chris Fallin <chris@cfallin.org>"
 criteria = "safe-to-deploy"
 version = "2.2.1"
 notes = "forbid-unsafe crate with straightforward imports."
-
-[[audits.bytecode-alliance.audits.pastey]]
-who = "Chris Fallin <chris@cfallin.org>"
-criteria = "safe-to-deploy"
-version = "0.2.1"
-notes = "No unsafe code."
 
 [[audits.bytecode-alliance.audits.percent-encoding]]
 who = "Alex Crichton <alex@alexcrichton.com>"
