@@ -152,7 +152,7 @@ taplo-fmt *ARGS:
 install-dev-tools:
     #!/usr/bin/env bash
     set -euo pipefail
-    printf "\033[0;34m📦 Installing dev tools (typos-cli, taplo-cli)...\033[0m\n"
+    printf "\033[0;34m📦 Installing dev tools (typos-cli, taplo-cli, cargo-xwin)...\033[0m\n"
     if ! command -v typos >/dev/null 2>&1; then
         cargo install --locked typos-cli
     else
@@ -162,6 +162,21 @@ install-dev-tools:
         cargo install --locked taplo-cli
     else
         printf "   \033[0;32m✓\033[0m taplo already installed\n"
+    fi
+    # cargo-xwin is required by the pre-commit / pre-push `check-windows`
+    # gate.  Optional on Windows hosts (where `cargo check` is native), but
+    # effectively mandatory on macOS / Linux dev machines since CI only
+    # runs Ubuntu and cannot catch Windows-specific compile errors.
+    if ! command -v cargo-xwin >/dev/null 2>&1; then
+        cargo install --locked cargo-xwin
+    else
+        printf "   \033[0;32m✓\033[0m cargo-xwin already installed\n"
+    fi
+    # Ensure the Windows cross-compilation target is available for
+    # `cargo xwin check`.  `rustup target add` is idempotent.
+    rustup target add x86_64-pc-windows-msvc >/dev/null 2>&1 || true
+    if rustup target list --installed 2>/dev/null | grep -q '^x86_64-pc-windows-msvc$'; then
+        printf "   \033[0;32m✓\033[0m x86_64-pc-windows-msvc target installed\n"
     fi
     if ! command -v reuse >/dev/null 2>&1; then
         printf "   \033[1;33m!\033[0m reuse not found — install with: \033[0;36mpipx install reuse\033[0m\n"

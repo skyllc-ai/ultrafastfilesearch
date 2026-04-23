@@ -641,7 +641,7 @@ mod tests {
             .with_concurrency(16)
             .with_io_size(2 * 1024 * 1024)
             .with_parallel_parse(true)
-            .with_parse_workers(4);
+            .with_parse_workers(Some(4));
 
         // Verify values are set
         assert_eq!(reader.concurrency, Some(16));

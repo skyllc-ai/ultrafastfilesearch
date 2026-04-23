@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025-2026 SKY, LLC.
+#
+# typos-cli configuration for the UFFS workspace.
+#
+# Invoked by the pre-commit / pre-push hooks and by `just typos`.  Each
+# `extend-words` entry below is a real English word, technical term, or
+# crate name the default typos dictionary mis-flags; next time we bump
+# typos-cli we should re-audit this list to drop upstream-caught terms.
+#
+# Docs: https://github.com/crate-ci/typos/blob/master/docs/reference.md
+
+[default.extend-words]
+# ── NTFS-specific identifiers ───────────────────────────────────────
+INDX = "INDX"           # NTFS $INDX (Index Allocation) record type
+indx = "indx"           # lower-case form — still the file-system term
+filetimes = "filetimes" # plural of Windows FILETIME
+FileTimes = "FileTimes"
+Filetimes = "Filetimes"
+
+# ── Hyphenated English prefixes typos splits into bogus tokens ──────
+mis = "mis" # e.g. "mis-interpreted", "mis-align"
+
+# ── Crate names (part-matches on full crate slug) ───────────────────
+ratatui = "ratatui"     # terminal-UI crate
+flate = "flate"         # part of "flate2"
+writeable = "writeable" # common crate / identifier spelling
+
+# ── Valid English spelling variants ─────────────────────────────────
+unparseable = "unparseable"
+Unparseable = "Unparseable"
+Invokable = "Invokable"     # "capable of being invoked"
+
+# ── 2–3 char test identifiers in text/fold/trigram test data ────────
+# These are test fixtures, not typos.  The trigram / case-folding
+# crates deliberately use alphabetic sequences like `abc`, `abd`,
+# `abe`, `fo`, `ba` to pin lexicographic ordering semantics.
+abc = "abc"
+abd = "abd"
+abe = "abe"
+fo = "fo"
+ba = "ba"
+
+# ── Acronyms / identifier fragments found in docs & code ────────────
+anc = "anc"               # ancestry / ancestor abbreviations in MFT docs
+Ded = "Ded"               # acronym / identifier fragment
+Pn = "Pn"                 # pin / pinning abbreviations in trait bounds
+ist = "ist"               # German-origin glosses in a few comments
+sav = "sav"               # part of "sav_filename" / "sav" internal label
+secur = "secur"           # part of "secure" cut off by the typos tokenizer
+fnd = "fnd"               # internal `FileNameData` abbreviation
+Connct = "Connct"         # historical log-message identifier
+decendents = "decendents" # alt-English of descendants (used in internal docs)
+
+[files]
+# Frozen / historical / third-party-metadata locations — not subject
+# to spelling review.
+extend-exclude = [
+  "CHANGELOG.md",    # historical release notes
+  "LOG/",            # timestamped changelogs
+  "supply-chain/",   # cargo-vet metadata keyed by real crate names
+  "tests/fixtures/", # frozen test fixtures
+  "target/",         # build artefacts
+  ".git/",           # git internals
+]

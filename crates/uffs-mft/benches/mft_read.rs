@@ -55,9 +55,7 @@ extern crate zstd as _;
 
 #[cfg(windows)]
 mod windows_benches {
-    use criterion::{
-        BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
-    };
+    use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group};
     use uffs_mft::{AlignedBuffer, ParsedColumns};
 
     /// Benchmark AlignedBuffer allocation at various sizes (4KB to 8MB).
@@ -173,24 +171,15 @@ mod windows_benches {
         group.finish();
     }
 
-    /// Benchmark ParsedColumns to DataFrame conversion.
-    fn bench_parsed_columns_to_dataframe(c: &mut Criterion) {
-        let mut group = c.benchmark_group("parsed_columns/to_dataframe");
-        group.sample_size(20); // Expensive operation
-
-        for count in [1_000, 10_000, 100_000] {
-            group.throughput(Throughput::Elements(count as u64));
-            group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, &count| {
-                b.iter_batched(
-                    || create_test_columns(count),
-                    |cols: ParsedColumns| core::hint::black_box(cols.into_dataframe()),
-                    BatchSize::SmallInput,
-                );
-            });
-        }
-
-        group.finish();
-    }
+    // NOTE: `bench_parsed_columns_to_dataframe` was removed — the
+    // `ParsedColumns → DataFrame` conversion is only accessible through
+    // `MftReader::build_dataframe_from_columns`, which is `pub(super)` and
+    // therefore not visible to external benchmark targets.  The bench
+    // compiled silently on macOS (because the whole `windows_benches`
+    // module is `#[cfg(windows)]`-gated) but failed with E0599 under
+    // `cargo xwin check --target x86_64-pc-windows-msvc`.  The cross-
+    // platform pre-push gate added in this same PR now catches
+    // regressions of this class.
 
     criterion_group!(
         buffer_benches,
@@ -201,12 +190,19 @@ mod windows_benches {
     criterion_group!(
         columns_benches,
         bench_parsed_columns_alloc,
-        bench_parsed_columns_extend,
-        bench_parsed_columns_to_dataframe
+        bench_parsed_columns_extend
     );
-
-    criterion_main!(buffer_benches, columns_benches);
 }
+
+// `criterion_main!` expands to `fn main() { ... }` at its call-site, which
+// Rust requires to live at the crate root — not inside the
+// `#[cfg(windows)] mod windows_benches { ... }` module.  We therefore wire
+// it up here and re-export the two criterion groups from the module.
+#[cfg(windows)]
+use windows_benches::{buffer_benches, columns_benches};
+
+#[cfg(windows)]
+criterion::criterion_main!(buffer_benches, columns_benches);
 
 // Non-Windows stub - benchmarks only run on Windows
 #[cfg(not(windows))]

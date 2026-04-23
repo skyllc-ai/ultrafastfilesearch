@@ -8,24 +8,50 @@
 #   - `scripts/hooks/pre-commit` (git hook)
 #   - `just lint-fast`           (manual runs)
 #
-# Budget: sub-2 seconds on a warm repo.  Soft-skips missing optional tools
-# (typos, taplo, reuse) with a one-line install hint so new contributors
-# are not blocked before running `just install-dev-tools`.
+# Budget:
+#   * docs / config-only commits:        sub-2 s
+#   * Rust commits (warm sccache):       ~15–25 s (three clippy passes +
+#                                        xwin Windows check)
+#   * Rust commits (cold xwin / cache):  ~40–90 s on first run after
+#                                        `cargo-xwin` downloads the MSVC
+#                                        SDK into `~/Library/Caches/xwin/`
+#
+# Soft-skips missing optional tools (typos, taplo, reuse) with a
+# one-line install hint so new contributors are not blocked before
+# running `just install-dev-tools`.
 #
 # Design notes
 # ------------
 # 1. Fan all applicable jobs out in parallel and wait on all PIDs.  Cargo
-#    target-dir locks serialise inside cargo anyway, so the extra parallelism
-#    is free for the non-cargo jobs (typos, reuse, file-size, taplo).
+#    target-dir locks serialise the three clippy invocations anyway, but
+#    the non-cargo jobs (typos, reuse, file-size, taplo) genuinely run
+#    concurrently, and incremental / sccache keep the second and third
+#    clippy passes cheap (≈ 1–3 s each when fed warm artifacts).
 # 2. Job scope:
 #      * Rust changes staged  → `cargo fmt --all -- --check`
+#                              + `just lint-prod`   (ULTRA-STRICT prod
+#                                  lints: pedantic + nursery + cargo +
+#                                  unwrap_used + missing_docs_in_private)
+#                              + `just lint-tests`  (same base with
+#                                  unwrap/expect allowed in tests)
+#                              + `just lint-ci`     (CI-mirror
+#                                  `--all-targets -D warnings`)
+#                              + `just check-windows` (cargo-xwin cross-
+#                                  check of `#[cfg(windows)]` paths; CI
+#                                  only runs Ubuntu so this is the ONLY
+#                                  pre-PR gate that exercises Windows-
+#                                  specific code)
+#                              Same lint stack CI and `just ship` Phase 1
+#                              enforce — nothing dirty gets committed.
 #      * TOML changes staged  → `taplo fmt --check` (if installed)
 #      * Any changes staged   → `typos .`           (if installed)
 #      * Always-on            → `reuse lint`        (if installed)
 #      * Always-on            → `file-size-policy`
 #    When invoked without a staged set (e.g. `just lint-fast` on a clean
-#    worktree) we still run the always-on gates plus an fmt-check / typos
-#    scan so the recipe is useful as a "quick sanity" pass.
+#    worktree) we still run the always-on gates plus an fmt-check so
+#    the recipe is useful as a "quick sanity" pass.  Clippy passes and
+#    the Windows cross-check are skipped on the no-staged path to keep
+#    manual invocations snappy.
 # 3. Per-job output is captured to a tmpdir and only dumped on failure so
 #    the success path stays uncluttered.
 
@@ -45,8 +71,9 @@ fi
 
 # ── Staged-file inventory ──────────────────────────────────────────────
 STAGED_ALL=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || true)
+STAGED_TOML=$(printf '%s\n' "$STAGED_ALL" | grep '\.toml$' || true)
 has_staged_rs()   { printf '%s\n' "$STAGED_ALL" | grep -q '\.rs$';   }
-has_staged_toml() { printf '%s\n' "$STAGED_ALL" | grep -q '\.toml$'; }
+has_staged_toml() { [[ -n "${STAGED_TOML//[[:space:]]/}" ]]; }
 has_any_staged()  { [[ -n "${STAGED_ALL//[[:space:]]/}" ]]; }
 
 printf '%s🚦 lint-fast — staged-scoped parallel gate%s\n' "$C_BLUE" "$C_RESET"
@@ -75,9 +102,31 @@ if has_staged_rs || ! has_any_staged; then
     spawn "fmt-check" cargo fmt --all -- --check
 fi
 
-# TOML changes → taplo fmt --check (optional).
+# Rust changes → full ultra-strict clippy trio (same lints `just ship`
+# Phase 1 runs) PLUS Windows cross-check (catches `#[cfg(windows)]`
+# drift CI can't see — GitHub Actions only runs Ubuntu).  Skipped on
+# no-staged invocations so manual `just lint-fast` stays snappy;
+# `just lint-pre-push` or `just lint-all` cover the clippy passes on a
+# clean worktree.
+#
+# `check-windows` is soft-skipped when `cargo-xwin` is missing so first-
+# time contributors aren't blocked before running
+# `just install-dev-tools`.
+if has_staged_rs; then
+    spawn "lint-prod"    just lint-prod
+    spawn "lint-tests"   just lint-tests
+    spawn "lint-ci"      just lint-ci
+    if command -v cargo-xwin >/dev/null 2>&1; then
+        spawn "check-windows" just check-windows
+    fi
+fi
+
+# TOML changes → taplo fmt --check on staged files only.  Checking the
+# whole workspace would drive-by-flag unrelated TOML drift (test
+# definitions, historical configs) that is out of scope for this commit.
 if has_staged_toml && command -v taplo >/dev/null 2>&1; then
-    spawn "taplo" taplo fmt --check
+    # shellcheck disable=SC2086
+    spawn "taplo" bash -c "taplo fmt --check $(printf '%s ' $STAGED_TOML)"
 fi
 
 # Any staged text → typos (optional).  Runs against the full workspace

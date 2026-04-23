@@ -64,19 +64,31 @@ UFFS uses a shift-left pipeline: cheap checks fire close to the keystroke, expen
 | Layer | Trigger | Recipe | Budget | What it runs |
 |------|--------|--------|--------|-------------|
 | **IDE save** | On save | `rust-analyzer` | instant | type-check-on-save, clippy-on-save |
-| **pre-commit** | `git commit` | `just lint-fast` | sub-2 s | `fmt --check` (if `*.rs` staged), `taplo fmt --check` (if `*.toml` staged), `typos`, `reuse lint`, file-size policy — all in parallel; missing optional tools soft-skip |
-| **pre-push** | `git push` | `just lint-pre-push` | 25–45 s warm | `clippy -D warnings --all-targets --all-features`, `fmt --check`, `rustdoc -D warnings`, `cargo deny check`, `nextest run --no-run` (test-binary link check), file-size policy, `typos`, `reuse lint` — all in parallel |
-| **PR CI** | on PR to `main` | `.github/workflows/ci.yml` | minutes | Tier 1 matrix: Format, Clippy, Rustdoc, Security, Test Build, Tests, Doc Tests, File Size Policy |
+| **pre-commit** | `git commit` | `just lint-fast` | sub-2 s (docs-only) / 15–25 s warm (`*.rs` staged) | `fmt --check`, **`lint-prod`** (ultra-strict: pedantic + nursery + cargo + unwrap_used + missing_docs_in_private_items), **`lint-tests`** (same base + unwrap allowed), **`lint-ci`** (CI-mirror `-D warnings --all-targets`), **`check-windows`** (`cargo xwin check` of Windows-only `#[cfg(windows)]` paths) — all when `*.rs` staged; plus `taplo fmt --check` (if `*.toml` staged), `typos`, `reuse lint`, file-size policy — all in parallel; missing optional tools soft-skip |
+| **pre-push** | `git push` | `just lint-pre-push` | 25–40 s warm | Same three ultra-strict clippy passes + **Windows `cargo xwin check`** + `fmt --check` + `rustdoc -D warnings` + `cargo deny check` + `nextest run --no-run` (test-binary link check) + file-size policy + `typos` + `reuse lint` — all in parallel. Full parity with `just ship` Phase 1 lint surface plus cross-platform Windows coverage; only the full test runtime (`nextest run`) is deferred to CI. |
+| **PR CI** | on PR to `main` | `.github/workflows/ci.yml` | minutes | Tier 1 matrix: Format, Clippy, Rustdoc, Security, Test Build, Tests, Doc Tests, File Size Policy (all on `ubuntu-22.04` — the pre-push Windows gate is the only pre-PR check that exercises `#[cfg(windows)]` code) |
 | **Release** | manual | `just ship` | minutes | version bump + `release/vX.Y.Z` PR + signed commit + auto-tag + binary build |
+
+The ultra-strict flag stack — `common_flags` / `prod_flags` / `test_flags` — is defined in `@/Users/rnio/Private/Github/UltraFastFileSearch/just/shared.just:21-26` and pulled in identically by the local hooks and by `just ship` Phase 1, so **the rules a commit is checked against locally are the exact rules CI enforces**.
+
+### Cross-platform coverage
+
+CI today runs only on `ubuntu-22.04`, so Windows-specific compile errors (e.g. `#[cfg(windows)]` tests / benches, `std::os::windows::*` usage, type drift between platforms) would not surface until a user tried to build on Windows. The pre-commit / pre-push hooks run `cargo xwin check` against `x86_64-pc-windows-msvc` as a first-class gate to close that gap:
+
+- **Windows** — `cargo xwin check --workspace --all-targets --all-features` via `cargo-xwin` (provisions the MSVC SDK under `~/Library/Caches/xwin/`). Runs in **2–5 s warm** once the SDK is cached. Mandatory at pre-commit (when `*.rs` is staged) and pre-push.
+- **Linux** — covered by CI matrix (`ubuntu-22.04`); a local Docker-based gate is available via `just lint-ci-linux` for conscious cross-platform sweeps but is **not** run at pre-push (minutes-scale, disproportionate for commit-time).
+- **macOS / native host** — covered by the three native clippy passes (`lint-ci` / `lint-prod` / `lint-tests`) at both pre-commit and pre-push.
+
+For a full sweep across all three targets, run `just check-all-targets` (native + xwin + Docker Linux). The recipe soft-skips tools that are not installed and reports which targets were exercised.
 
 ### First-time setup
 
 ```bash
 just install-hooks         # sets core.hooksPath → scripts/hooks/
-just install-dev-tools     # installs typos-cli + taplo-cli; prints pipx hint for `reuse`
+just install-dev-tools     # installs typos-cli + taplo-cli + cargo-xwin + x86_64-pc-windows-msvc target; prints pipx hint for `reuse`
 ```
 
-Re-run `just install-hooks` after any rebase that touches `scripts/hooks/` — it's idempotent.
+Re-run `just install-hooks` after any rebase that touches `scripts/hooks/` — it's idempotent. The first time `cargo xwin check` runs it will download the MSVC SDK into `~/Library/Caches/xwin/` (~1–2 GB); subsequent runs reuse the cache.
 
 ### Running gates manually
 
@@ -85,6 +97,8 @@ just lint-fast             # the pre-commit bundle on demand
 just lint-pre-push         # the pre-push bundle on demand
 just lint-ci               # the single clippy gate that CI runs (`--all-targets --all-features --no-deps`)
 just lint-ci-linux         # same clippy gate under a Linux x86_64 Docker image (catches macOS↔Linux drift)
+just check-windows         # cargo xwin check against x86_64-pc-windows-msvc (Windows cross-platform gate)
+just check-all-targets     # full sweep: native + Windows (xwin) + Linux (Docker)
 just phase1-test           # the full `just ship` Phase-1 validation (pre-ship rehearsal)
 ```
 

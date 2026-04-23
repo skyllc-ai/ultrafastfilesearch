@@ -5,7 +5,12 @@
 //!
 //! Runs a SINGLE daemon process and tests all JSON-RPC methods through
 //! one connection. This avoids socket conflicts from parallel tests.
+//!
+//! Unix-only: uses `UnixStream` + `libc` to talk to the daemon over a
+//! Unix-domain socket.  The Windows daemon transport (named pipes) is
+//! covered by a separate integration test.
 #![cfg(test)]
+#![cfg(unix)]
 
 // These crates are runtime dependencies of uffs-daemon, not used by this test
 // target. Acknowledge them so `unused-crate-dependencies` doesn't fire.

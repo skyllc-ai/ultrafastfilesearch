@@ -724,13 +724,14 @@ mod tests {
     fn duplicates_verified_windows() {
         use crate::compact_loader::{MftSource, load_drive};
 
-        // Load C: drive index.
-        let source = MftSource::live('C');
-        let drive = load_drive(&source, false).expect("failed to load C: drive");
+        // Load C: drive index.  `load_drive` returns `(index, timing)`;
+        // the test only uses the index itself.
+        let source = MftSource::Live('C');
+        let (drive, _load_timing) = load_drive(&source, false).expect("failed to load C: drive");
 
         let mut acc = DuplicateAccumulator::new(
             vec![FieldId::Size, FieldId::Name],
-            DuplicateVerify::FirstBytes,
+            DuplicateVerify::FirstBytes { count: 4096 },
             500_000,
             5,
         );

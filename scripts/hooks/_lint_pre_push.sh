@@ -13,9 +13,19 @@
 # file lock serialises them as needed, while the non-cargo jobs (deny,
 # typos, reuse, file-size) genuinely run in parallel.
 #
-# Mandatory jobs (any failure aborts the push):
-#   * clippy    — `-D warnings`, `--all-targets --all-features`
-#                 (covers test / example / bench compile as a side-effect).
+# Mandatory jobs (any failure aborts the push) — same lint surface as
+# `just ship` Phase 1, minus the full nextest run (kept as `--no-run`
+# to bound push latency):
+#   * lint-ci   — `cargo clippy -D warnings --all-targets --all-features
+#                 --no-deps`: CI-mirror baseline, kept in lockstep with
+#                 `.github/workflows/ci.yml`.
+#   * lint-prod — `cargo clippy --lib --bins -- $prod_flags`:
+#                 ULTRA-STRICT production lints (pedantic + nursery +
+#                 cargo + unwrap_used + missing_docs_in_private_items).
+#                 Redundant with pre-commit if hooks were honoured, but
+#                 acts as a backstop when `--no-verify` was used.
+#   * lint-tests— `cargo clippy --tests -- $test_flags`: same base lint
+#                 stack with unwrap/expect allowed for test code.
 #   * fmt       — `cargo fmt --all -- --check`.
 #   * rustdoc   — `RUSTDOCFLAGS=-Dwarnings cargo doc --no-deps`.
 #   * deny      — advisories / bans / licences / sources.
@@ -27,13 +37,26 @@
 #                 misses.  On sccache-warm runs this costs ~5 s on top
 #                 of clippy's compile; on cold it dominates the push.
 #
+# Cross-platform coverage (soft-skipped when tool missing):
+#   * check-windows — `cargo xwin check --workspace --all-targets
+#                     --all-features --target x86_64-pc-windows-msvc`.
+#                     CI today only runs `ubuntu-22.04`, so this gate is
+#                     the only pre-PR check that exercises Windows-only
+#                     code (`#[cfg(windows)]` tests, benches, and
+#                     `std::os::windows::*` usage).  Catches type drift
+#                     between platforms in ~2–5 s warm.  Requires
+#                     `cargo-xwin` (installed by `just install-dev-tools`).
+#
 # Optional jobs (soft-skipped when tool missing):
 #   * typos     — cheap spell-check across the repo.
 #   * reuse     — SPDX / licence-header compliance.
 #
 # The Linux-only lint drift gate (`just lint-ci-linux` via Docker) is NOT
 # run here — it is a minutes-scale cross-platform check best left to CI
-# or a conscious manual invocation.
+# or a conscious manual invocation.  Run `just check-all-targets` for a
+# full sweep across macOS + Linux (Docker) + Windows (xwin).  The full
+# runtime test suite (`cargo nextest run` without `--no-run`) and doc
+# tests are likewise deferred to `just phase1-test` or CI.
 
 set -euo pipefail
 
@@ -69,12 +92,25 @@ spawn() {
 # NOTE: clippy `--all-targets --all-features --no-deps` kept in lockstep with
 # `.github/workflows/ci.yml`'s `Tier 1 / Clippy` step.  Keep the flag set
 # identical to avoid local / CI drift (see `just lint-ci`).
-spawn "clippy"    cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
-spawn "fmt"       cargo fmt --all -- --check
-spawn "rustdoc"   env RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --all-features --no-deps
-spawn "deny"      cargo deny check --hide-inclusion-graph
-spawn "tests"     cargo nextest run --workspace --all-targets --all-features --no-run --hide-progress-bar
-spawn "file-size" bash scripts/ci/check_file_size_policy.sh
+spawn "lint-ci"      just lint-ci
+spawn "lint-prod"    just lint-prod
+spawn "lint-tests"   just lint-tests
+spawn "fmt"          cargo fmt --all -- --check
+spawn "rustdoc"      env RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --all-features --no-deps
+spawn "deny"         cargo deny check --hide-inclusion-graph
+spawn "tests"        cargo nextest run --workspace --all-targets --all-features --no-run --hide-progress-bar
+spawn "file-size"    bash scripts/ci/check_file_size_policy.sh
+
+# Cross-platform: Windows compile-check via cargo-xwin.  CI today only
+# runs Linux (Ubuntu), so without this gate any Windows-specific compile
+# error (e.g. `#[cfg(windows)]` tests, `std::os::windows::*` usage, type
+# drift in Windows-only code paths) would not surface until a user tries
+# to build on Windows.  Soft-skipped when `cargo-xwin` is missing so
+# first-time clones don't hard-fail — `just install-dev-tools` is the
+# canonical installer.
+if command -v cargo-xwin >/dev/null 2>&1; then
+    spawn "check-windows" just check-windows
+fi
 
 # ── Optional gates ─────────────────────────────────────────────────────
 if command -v typos >/dev/null 2>&1; then

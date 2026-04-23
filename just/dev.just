@@ -38,12 +38,52 @@ check-cross:
     rust-script scripts/ci/ci-pipeline.rs cross-check
 
 # Type-check all #[cfg(windows)] code paths from macOS using cargo-xwin.
+#
 # Catches missing imports, wrong types, and dead code in Windows-only blocks
-# that `cargo check` on macOS silently skips.
+# that `cargo check` on macOS silently skips — including `#[cfg(windows)]`
+# tests, benches, and `std::os::windows::*` usage.  CI today only runs on
+# Linux (`ubuntu-22.04`), so this recipe is the ONLY pre-PR gate that
+# exercises Windows-specific code.
+#
+# Uses `--all-targets --all-features` so tests and benches are checked
+# alongside libs and bins (this is how the Windows-only bench / test bugs
+# that motivated this gate were surfaced).  Runs in ~2–5 s warm once
+# xwin has cached the MSVC SDK under `~/Library/Caches/xwin/`.
 check-windows:
-    @printf "\033[0;34m🪟 Windows cross-check (cargo xwin check)...\033[0m\n"
-    cargo xwin check --workspace --target x86_64-pc-windows-msvc
+    @printf "\033[0;34m🪟 Windows cross-check (cargo xwin check, all-targets all-features)...\033[0m\n"
+    cargo xwin check --workspace --all-targets --all-features --target x86_64-pc-windows-msvc
     @printf "\033[0;32m✅ Windows cross-check passed\033[0m\n"
+
+# Cross-platform compile check across all three supported targets.
+#
+# Runs native (host) + Linux (via Docker, through `lint-ci-linux`) +
+# Windows (via xwin, through `check-windows`).  Intended as a manual
+# "pre-PR sweep"; the pre-push hook runs the host + Windows subset only
+# (Linux-in-Docker is too slow for a commit-time gate — CI covers it).
+#
+# Skips silently if a prerequisite tool (cargo-xwin, docker) is missing,
+# but reports which targets were exercised so you know the coverage.
+check-all-targets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf "\033[0;34m🌐 Cross-platform compile check (macOS + Linux + Windows)...\033[0m\n"
+    printf "\033[0;36m   ── macOS (native host) ──\033[0m\n"
+    cargo check --workspace --all-targets --all-features
+    printf "\033[0;32m   ✅ native host\033[0m\n\n"
+    printf "\033[0;36m   ── Windows x86_64-pc-windows-msvc (xwin) ──\033[0m\n"
+    if command -v cargo-xwin >/dev/null 2>&1; then
+        cargo xwin check --workspace --all-targets --all-features --target x86_64-pc-windows-msvc
+        printf "\033[0;32m   ✅ Windows (xwin)\033[0m\n\n"
+    else
+        printf "\033[1;33m   ⚠  cargo-xwin not installed — skipping; install with: \033[0;36mcargo install cargo-xwin\033[0m\n\n"
+    fi
+    printf "\033[0;36m   ── Linux x86_64-unknown-linux-gnu (Docker) ──\033[0m\n"
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        just lint-ci-linux
+    else
+        printf "\033[1;33m   ⚠  Docker not available — skipping; start Docker Desktop / colima / OrbStack\033[0m\n"
+    fi
+    printf "\033[0;32m✅ Cross-platform check complete\033[0m\n"
 
 # Update everything: Rust toolchain, cargo tools, system packages.
 # Uses cargo-binstall (pre-built binaries) when available for ~100× faster installs.
