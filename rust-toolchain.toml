@@ -30,27 +30,27 @@
 # CI pipeline will auto-refresh on `ship --fresh` unless `--skip-toolchain-sync`
 # is passed — use that flag (or plain `just ship`) while the upstream regression
 # persists.
-channel = "nightly-2026-04-22"
+channel = "nightly-2026-04-23"
 
 # Specify components that should always be available
 components = [
-    "rustc",          # The Rust compiler
-    "cargo",          # Package manager and build tool
-    "rustfmt",        # Code formatter
-    "clippy",         # Linter for catching common mistakes
-    "rust-src",       # Source code for standard library (needed for IDE features)
-    "rust-analyzer",  # Language server for IDE support
-    "llvm-tools",     # LLVM tools for coverage and profiling
-    "miri",           # Interpreter for detecting undefined behavior
+  "rustc",         # The Rust compiler
+  "cargo",         # Package manager and build tool
+  "rustfmt",       # Code formatter
+  "clippy",        # Linter for catching common mistakes
+  "rust-src",      # Source code for standard library (needed for IDE features)
+  "rust-analyzer", # Language server for IDE support
+  "llvm-tools",    # LLVM tools for coverage and profiling
+  "miri",          # Interpreter for detecting undefined behavior
 ]
 
 # Specify targets for cross-compilation support
 targets = [
-    "x86_64-unknown-linux-gnu",    # Linux x64
-    "x86_64-pc-windows-msvc",      # Windows x64
-    "x86_64-apple-darwin",         # macOS Intel
-    "aarch64-apple-darwin",        # macOS Apple Silicon
-    "aarch64-unknown-linux-gnu",   # Linux ARM64
+  "x86_64-unknown-linux-gnu",  # Linux x64
+  "x86_64-pc-windows-msvc",    # Windows x64
+  "x86_64-apple-darwin",       # macOS Intel
+  "aarch64-apple-darwin",      # macOS Apple Silicon
+  "aarch64-unknown-linux-gnu", # Linux ARM64
 ]
 
 # Profile for development - optimized for fast compilation and good debugging

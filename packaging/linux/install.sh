@@ -41,8 +41,23 @@ _install 755 "$BIN"                        "$PREFIX/bin/uffs"
 _install 644 packaging/linux/uffs.desktop  "$PREFIX/share/applications/uffs.desktop"
 
 # Hicolor icon set — every size the assets/brand/ tree provides.
+#
+# The tree lives in two places depending on where install.sh is run from:
+#   • repo root      → assets/brand/icons/hicolor/…
+#   • extracted ZIP  → assets/hicolor/…   (release.yml flattens the path
+#                                          so the staged bundle is shallower)
+# Auto-detect so the same script works in both contexts.
+if   [[ -d "assets/brand/icons/hicolor" ]]; then
+    ICON_ROOT="assets/brand/icons/hicolor"
+elif [[ -d "assets/hicolor" ]]; then
+    ICON_ROOT="assets/hicolor"
+else
+    printf '\033[1;31merror:\033[0m hicolor icon tree not found under assets/\n' >&2
+    exit 1
+fi
+
 for size in 16 32 48 64 128 256 512; do
-    _install 644 "assets/brand/icons/hicolor/${size}x${size}/uffs.png" \
+    _install 644 "$ICON_ROOT/${size}x${size}/uffs.png" \
                  "$PREFIX/share/icons/hicolor/${size}x${size}/apps/uffs.png"
 done
 

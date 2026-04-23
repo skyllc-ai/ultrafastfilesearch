@@ -2167,9 +2167,9 @@ dependencies = [
 
 [[package]]
 name = "pastey"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b867cad97c0791bbd3aaa6472142568c6c9e8f71937e98379f584cfb0cf35bec"
+checksum = "c5a797f0e07bdf071d15742978fc3128ec6c22891c31a3a931513263904c982a"
 
 [[package]]
 name = "percent-encoding"
@@ -3399,9 +3399,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.38"
+version = "0.23.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69f9466fb2c14ea04357e91413efb882e2a6d4a406e625449bc0a5d360d53a21"
+checksum = "7c2c118cb077cca2822033836dfb1b975355dfb784b5e8da48f7b6c5db74e60e"
 dependencies = [
  "once_cell",
  "ring",
@@ -4310,7 +4310,7 @@ checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
 
 [[package]]
 name = "uffs-broker"
-version = "0.5.69"
+version = "0.5.70"
 dependencies = [
  "anyhow",
  "tracing",
@@ -4321,7 +4321,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-cli"
-version = "0.5.69"
+version = "0.5.70"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -4335,7 +4335,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-client"
-version = "0.5.69"
+version = "0.5.70"
 dependencies = [
  "dirs-next",
  "libc",
@@ -4353,7 +4353,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-core"
-version = "0.5.69"
+version = "0.5.70"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -4383,7 +4383,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-daemon"
-version = "0.5.69"
+version = "0.5.70"
 dependencies = [
  "anyhow",
  "clap",
@@ -4409,7 +4409,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-diag"
-version = "0.5.69"
+version = "0.5.70"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4422,7 +4422,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-format"
-version = "0.5.69"
+version = "0.5.70"
 dependencies = [
  "chrono",
  "itoa",
@@ -4434,7 +4434,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-mcp"
-version = "0.5.69"
+version = "0.5.70"
 dependencies = [
  "anyhow",
  "axum",
@@ -4455,7 +4455,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-mft"
-version = "0.5.69"
+version = "0.5.70"
 dependencies = [
  "anyhow",
  "bitflags",
@@ -4491,14 +4491,14 @@ dependencies = [
 
 [[package]]
 name = "uffs-polars"
-version = "0.5.69"
+version = "0.5.70"
 dependencies = [
  "polars",
 ]
 
 [[package]]
 name = "uffs-security"
-version = "0.5.69"
+version = "0.5.70"
 dependencies = [
  "aes-gcm",
  "dirs-next",
@@ -4511,14 +4511,14 @@ dependencies = [
 
 [[package]]
 name = "uffs-text"
-version = "0.5.69"
+version = "0.5.70"
 dependencies = [
  "bytemuck",
 ]
 
 [[package]]
 name = "uffs-time"
-version = "0.5.69"
+version = "0.5.70"
 
 [[package]]
 name = "unarray"
