@@ -68,11 +68,21 @@ else
 fi
 
 # ── Staged-file inventory ──────────────────────────────────────────────
+# Tool-routing rationale (see also .taplo.toml):
+# `supply-chain/*.toml` is cargo-vet's data store, formatted by
+# `cargo vet fmt` (which has opinions taplo does not share — e.g.
+# column-aligned trailing comments).  Two formatters fighting over the
+# same file is a pre-push dead-end, so we split ownership at the
+# pre-commit hook: taplo handles every other TOML; cargo-vet handles
+# the store.
 STAGED_ALL=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || true)
 STAGED_TOML=$(printf '%s\n' "$STAGED_ALL" | grep '\.toml$' || true)
-has_staged_rs()   { printf '%s\n' "$STAGED_ALL" | grep -q '\.rs$';   }
-has_staged_toml() { [[ -n "${STAGED_TOML//[[:space:]]/}" ]]; }
-has_any_staged()  { [[ -n "${STAGED_ALL//[[:space:]]/}" ]]; }
+STAGED_TOML_NONVET=$(printf '%s\n' "$STAGED_TOML" | grep -v '^supply-chain/' || true)
+STAGED_VET=$(printf '%s\n' "$STAGED_TOML" | grep '^supply-chain/' || true)
+has_staged_rs()          { printf '%s\n' "$STAGED_ALL" | grep -q '\.rs$';   }
+has_staged_toml_nonvet() { [[ -n "${STAGED_TOML_NONVET//[[:space:]]/}" ]]; }
+has_staged_vet()         { [[ -n "${STAGED_VET//[[:space:]]/}" ]]; }
+has_any_staged()         { [[ -n "${STAGED_ALL//[[:space:]]/}" ]]; }
 
 printf '%s🚦 lint-fast — staged-scoped parallel gate%s\n' "$C_BLUE" "$C_RESET"
 START=$(date +%s)
@@ -115,12 +125,43 @@ if has_staged_rs; then
     spawn "lint-ci"      just lint-ci
 fi
 
-# TOML changes → taplo fmt --check on staged files only.  Checking the
-# whole workspace would drive-by-flag unrelated TOML drift (test
-# definitions, historical configs) that is out of scope for this commit.
-if has_staged_toml && command -v taplo >/dev/null 2>&1; then
+# TOML changes (non-supply-chain) → taplo fmt --check on staged files
+# only.  Checking the whole workspace would drive-by-flag unrelated
+# TOML drift (test definitions, historical configs) that is out of
+# scope for this commit.
+if has_staged_toml_nonvet && command -v taplo >/dev/null 2>&1; then
     # shellcheck disable=SC2086
-    spawn "taplo" bash -c "taplo fmt --check $(printf '%s ' $STAGED_TOML)"
+    spawn "taplo" bash -c "taplo fmt --check $(printf '%s ' $STAGED_TOML_NONVET)"
+fi
+
+# Supply-chain TOML changes → format-drift detector for cargo-vet's
+# store.  cargo-vet owns the format of `audits.toml`, `config.toml`,
+# and `imports.lock`; `cargo vet check` hard-fails at pre-push if the
+# store drifts.  We catch that at pre-commit too by snapshotting the
+# store, running the (mutating-only) `cargo vet fmt`, and comparing
+# hashes — so the working tree is restored to exactly the pre-fmt
+# state when no drift exists, and the hook tells the user to re-run
+# `cargo vet fmt` + `git add supply-chain/` when drift *is* found.
+# `cargo vet fmt` has no native `--check` mode in 0.10.x, hence the
+# snapshot-compare dance; revisit once upstream adds one.
+if has_staged_vet && command -v cargo-vet >/dev/null 2>&1; then
+    spawn "vet-fmt" bash -c '
+        set -euo pipefail
+        snap=$(mktemp -d)
+        trap "rm -rf $snap" EXIT
+        cp -R supply-chain "$snap/"
+        cargo vet fmt >/dev/null 2>&1
+        if ! diff -rq supply-chain "$snap/supply-chain" >/dev/null 2>&1; then
+            # Drift found — restore pre-fmt state, then fail so the
+            # working tree is untouched and the operator can decide
+            # whether to accept the reformatting.
+            rm -rf supply-chain
+            mv "$snap/supply-chain" .
+            echo "supply-chain format drift detected."
+            echo "Run: cargo vet fmt && git add supply-chain/ && re-commit"
+            exit 1
+        fi
+    '
 fi
 
 # Any staged text → typos (optional).  Runs against the full workspace
