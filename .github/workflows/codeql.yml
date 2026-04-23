@@ -103,6 +103,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # §2.8: pin checkout to the PR head SHA (not the synthetic
+          # merge commit that `actions/checkout` defaults to for PR
+          # events).  For `push` / `schedule` / `workflow_dispatch`,
+          # `pull_request.head.sha` is undefined and we fall back to
+          # `github.sha` — which is already the correct commit for
+          # those triggers.  Net effect: CodeQL always analyses the
+          # exact bytes pushed / proposed, never a synthetic merge.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4.35.2
