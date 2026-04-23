@@ -2,20 +2,39 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2025-2026 SKY, LLC.
 #
-# Workspace-wide parallel pre-push gate.
+# Workspace-wide two-bucket pre-push gate.
 #
 # Called by:
 #   - `scripts/hooks/pre-push` (git hook)
 #   - `just lint-pre-push`     (manual runs)
 #
-# Budget: ≈ 25–45 s on an sccache-warm workspace; ≈ 60–90 s cold.  The
-# heaviest jobs (clippy, rustdoc) share the same target-dir; cargo's
-# file lock serialises them as needed, while the non-cargo jobs (deny,
-# typos, reuse, file-size) genuinely run in parallel.
+# Budget: ≈ 25–60 s on an sccache-warm workspace; ≈ 60–90 s cold.
 #
-# Mandatory jobs (any failure aborts the push) — same lint surface as
-# `just ship` Phase 1, minus the full nextest run (kept as `--no-run`
-# to bound push latency):
+# Architecture (Phase 2 of dev-flow-implementation-plan.md § 1.4):
+#
+#   Bucket 1 — cheap, parallel, fire-and-forget.  Non-cargo jobs plus
+#              cargo-vet (which is fast and dep-gated).  Waits at the
+#              end of the script; all Bucket 1 results report even
+#              when Bucket 2 fails.
+#
+#   Bucket 2 — cargo-heavy, sequential, FAIL-FAST.  Ordered cheapest →
+#              most expensive so the first actionable red surfaces
+#              within ~15 s rather than the old ~40-60 s.  After the
+#              first failure, remaining jobs are marked `skip` and
+#              not executed.  Cargo's target-dir lock would serialise
+#              these anyway; explicit ordering lets us abort sooner.
+#
+# Change classification (see git's pre-push stdin protocol):
+#   rust_changed  = any `*.rs`
+#   dep_changed   = Cargo.{toml,lock} | supply-chain/**
+#   infra_changed = .github/** | scripts/** | .cargo/** | .config/** |
+#                   just/** | rust-toolchain* | {clippy,rustfmt,deny,REUSE}.toml
+#   code_changed  = rust | dep | infra
+#
+# Bucket 2 only runs when code_changed.  Pure-docs-only pushes skip
+# the compile/test gate entirely.
+#
+# Mandatory jobs (any failure aborts the push):
 #   * lint-ci   — `cargo clippy -D warnings --all-targets --all-features
 #                 --no-deps`: CI-mirror baseline, kept in lockstep with
 #                 `.github/workflows/ci.yml`.
@@ -28,14 +47,28 @@
 #                 stack with unwrap/expect allowed for test code.
 #   * fmt       — `cargo fmt --all -- --check`.
 #   * rustdoc   — `RUSTDOCFLAGS=-Dwarnings cargo doc --no-deps`.
+#   * doc-tests — `RUSTDOCFLAGS=-Dwarnings cargo test --doc --workspace
+#                 --all-features` (Phase 1 addition): actually EXECUTES
+#                 the `/// ```rust` blocks rustdoc only compiled.  CI
+#                 catches this today, but the local gate closes a ~30 s
+#                 round-trip for broken doctests.
 #   * deny      — advisories / bans / licences / sources.
-#   * file-size — oversized-Rust-file policy.
 #   * tests     — `cargo nextest run --no-run`: links every test binary
 #                 without running it.  Catches `#[cfg(test)]` drift,
 #                 missing dev-dep, and linker-level regressions that
 #                 `cargo clippy --all-targets` (check-only, no linking)
-#                 misses.  On sccache-warm runs this costs ~5 s on top
-#                 of clippy's compile; on cold it dominates the push.
+#                 misses.
+#   * smoke     — `cargo nextest run --profile pre-push-smoke` (Phase 1
+#                 addition): actually RUNS a fast unit-test subset
+#                 (~6 s warm on this workspace).  Excludes the
+#                 validation suite and `uffs-client` shmem tests which
+#                 would blow the budget.  Full suite still runs in CI.
+#   * file-size — oversized-Rust-file policy.
+#   * vet       — `cargo vet check --locked` when Cargo.{toml,lock} or
+#                 supply-chain/** changed in the pushed range (detected
+#                 via git's pre-push stdin protocol).  HARD-FAIL if
+#                 `cargo-vet` is missing in that case — this closes the
+#                 CI-only loophole that caused PR #43's 4x round-trip.
 #
 # Cross-platform coverage (soft-skipped when tool missing):
 #   * check-windows — `cargo xwin check --workspace --all-targets
@@ -72,80 +105,200 @@ else
     C_BLUE= C_CYAN= C_GREEN= C_YELLOW= C_RED= C_RESET=
 fi
 
+# ── Change classification ──────────────────────────────────────────────
+# Detect whether invoked by git pre-push (stdin pipe with ref updates)
+# or manually (e.g. `just lint-pre-push`).  git's pre-push hook protocol
+# (https://git-scm.com/docs/githooks#_pre_push) pipes one line per ref:
+#     <local_ref> <local_oid> <remote_ref> <remote_oid>
+# In manual mode we can't know what's about to be pushed so we
+# conservatively treat ALL file classes as changed (runs every gate;
+# never silently skips a hard one).  See
+# docs/architecture/dev-flow-implementation-plan.md § 2.3 for details.
+ZERO='0000000000000000000000000000000000000000'
+CHANGED_FILES=""
+if [[ ! -t 0 ]]; then
+    # stdin is piped; try git's pre-push protocol.
+    while IFS=' ' read -r _local_ref local_oid _remote_ref remote_oid; do
+        [[ -z "${local_oid:-}" || "$local_oid" == "$ZERO" ]] && continue
+        if [[ "$remote_oid" == "$ZERO" ]]; then
+            # New remote ref (first push of this branch).  Diff against
+            # best available base: merge-base with origin/main, fall back
+            # to the root commit if none.
+            base=$(git merge-base "$local_oid" origin/main 2>/dev/null \
+                || git rev-list --max-parents=0 "$local_oid" 2>/dev/null | tail -n1 \
+                || echo "")
+        else
+            base="$remote_oid"
+        fi
+        if [[ -n "$base" ]]; then
+            CHANGED_FILES+=$'\n'$(git diff --name-only "$base" "$local_oid" 2>/dev/null || true)
+        else
+            CHANGED_FILES="__UNKNOWN__"
+            break
+        fi
+    done
+fi
+# Empty stdin (manual invocation, or push with only deletions) → conservative.
+[[ -z "${CHANGED_FILES// /}" ]] && CHANGED_FILES="__UNKNOWN__"
+
+class_matches() {
+    [[ "$CHANGED_FILES" == "__UNKNOWN__" ]] && return 0
+    printf '%s\n' "$CHANGED_FILES" | grep -E "$1" >/dev/null
+}
+
+RUST_CHANGED=0;  class_matches '\.rs$' && RUST_CHANGED=1
+DEP_CHANGED=0;   class_matches '^(.*Cargo\.toml$|Cargo\.lock$|supply-chain/)' && DEP_CHANGED=1
+INFRA_CHANGED=0; class_matches '^(\.github/|scripts/|\.cargo/|\.config/|just/|rust-toolchain|clippy\.toml$|rustfmt\.toml$|deny\.toml$|REUSE\.toml$|codecov\.yml$)' && INFRA_CHANGED=1
+CODE_CHANGED=$(( RUST_CHANGED || DEP_CHANGED || INFRA_CHANGED ))
+
 printf '%s🚦 lint-pre-push — workspace parallel gate%s\n' "$C_BLUE" "$C_RESET"
+if [[ "$CHANGED_FILES" == "__UNKNOWN__" ]]; then
+    printf '   %s(manual mode — no pushed range detected; running all gates)%s\n' "$C_CYAN" "$C_RESET"
+else
+    printf '   %s(rust=%d dep=%d infra=%d code=%d)%s\n' \
+        "$C_CYAN" "$RUST_CHANGED" "$DEP_CHANGED" "$INFRA_CHANGED" "$CODE_CHANGED" "$C_RESET"
+fi
 START=$(date +%s)
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-NAMES=()
-PIDS=()
-spawn() {
-    local name="$1"
-    shift
-    NAMES+=("$name")
+# ── Bucket 1 (cheap, parallel) ─────────────────────────────────────────
+# Non-cargo jobs + cargo-vet (dep-gated).  All run concurrently; we wait
+# at the end.  Cargo-heavy jobs are deliberately NOT here — they would
+# serialise on cargo's target-dir lock and stall the cheap jobs.
+BG_NAMES=()
+BG_PIDS=()
+spawn_bg() {
+    local name="$1"; shift
+    BG_NAMES+=("$name")
     ( "$@" ) >"$TMP/$name.out" 2>&1 &
-    PIDS+=($!)
+    BG_PIDS+=($!)
 }
 
-# ── Mandatory gates ────────────────────────────────────────────────────
-# NOTE: clippy `--all-targets --all-features --no-deps` kept in lockstep with
-# `.github/workflows/ci.yml`'s `Tier 1 / Clippy` step.  Keep the flag set
-# identical to avoid local / CI drift (see `just lint-ci`).
-spawn "lint-ci"      just lint-ci
-spawn "lint-prod"    just lint-prod
-spawn "lint-tests"   just lint-tests
-spawn "fmt"          cargo fmt --all -- --check
-spawn "rustdoc"      env RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --all-features --no-deps
-spawn "deny"         cargo deny check --hide-inclusion-graph
-spawn "tests"        cargo nextest run --workspace --all-targets --all-features --no-run --hide-progress-bar
-spawn "file-size"    bash scripts/ci/check_file_size_policy.sh
+# ── Bucket 2 (sequential, fail-fast) ───────────────────────────────────
+# Cargo-heavy jobs run in deliberate order so the FIRST actionable red
+# aborts the rest.  Order is cheapest → most expensive so most failures
+# surface within ~15 s rather than the old ~40-60 s.  See
+# docs/architecture/dev-flow-implementation-plan.md § 1.4 / 2.3.
+SEQ_RESULTS=()    # "name:ok|fail|skip"
+SEQ_FIRST_FAIL=""
+run_seq() {
+    local name="$1"; shift
+    if [[ -n "$SEQ_FIRST_FAIL" ]]; then
+        SEQ_RESULTS+=("$name:skip")
+        return 0
+    fi
+    local stamp=$(date +%s)
+    if "$@" >"$TMP/$name.out" 2>&1; then
+        local dt=$(( $(date +%s) - stamp ))
+        SEQ_RESULTS+=("$name:ok:$dt")
+    else
+        local dt=$(( $(date +%s) - stamp ))
+        SEQ_RESULTS+=("$name:fail:$dt")
+        SEQ_FIRST_FAIL="$name"
+    fi
+}
 
-# Cross-platform: Windows compile-check via cargo-xwin.  CI today only
-# runs Linux (Ubuntu), so without this gate any Windows-specific compile
-# error (e.g. `#[cfg(windows)]` tests, `std::os::windows::*` usage, type
-# drift in Windows-only code paths) would not surface until a user tries
-# to build on Windows.  Soft-skipped when `cargo-xwin` is missing so
-# first-time clones don't hard-fail — `just install-dev-tools` is the
-# canonical installer.
-if command -v cargo-xwin >/dev/null 2>&1; then
-    spawn "check-windows" just check-windows
+# ── Dispatch ───────────────────────────────────────────────────────────
+# Bucket 1 — fire-and-forget.  `file-size` and `fmt` are always safe to
+# run (no cargo lock contention, cheap).  `vet` is HARD-REQUIRED when
+# Cargo.{toml,lock} or supply-chain/** changed; missing tool in that
+# case hard-fails the whole push with an install hint.
+spawn_bg "fmt"       cargo fmt --all -- --check
+spawn_bg "file-size" bash scripts/ci/check_file_size_policy.sh
+
+if (( DEP_CHANGED )); then
+    if ! command -v cargo-vet >/dev/null 2>&1; then
+        printf '%s❌ cargo-vet required (Cargo.{toml,lock} or supply-chain/ changed)%s\n' "$C_RED" "$C_RESET" >&2
+        printf '   %sinstall: %scargo install cargo-vet --locked%s\n' "$C_YELLOW" "$C_CYAN" "$C_RESET" >&2
+        printf '   %sor run:  %sjust install-dev-tools%s\n'           "$C_YELLOW" "$C_CYAN" "$C_RESET" >&2
+        exit 2
+    fi
+    spawn_bg "vet" cargo vet check --locked
+fi
+command -v typos >/dev/null 2>&1 && spawn_bg "typos" typos .
+command -v reuse >/dev/null 2>&1 && spawn_bg "reuse" reuse lint --quiet
+# taplo is NOT run here — its natural tier is pre-commit (staged scope).
+# At pre-push there is no staged set, and running `taplo fmt --check`
+# over the whole workspace surfaces pre-existing TOML drift that is out
+# of scope for the push-being-validated.
+
+# Bucket 2 — sequential, fail-fast.  Only when code changed (rust | dep
+# | infra).  Pure-docs-only pushes skip the compile/test gate entirely.
+if (( CODE_CHANGED )); then
+    run_seq "cargo-check" cargo check --workspace --all-targets --all-features --locked
+    run_seq "lint-ci"     just lint-ci
+    run_seq "lint-prod"   just lint-prod
+    run_seq "lint-tests"  just lint-tests
+    run_seq "rustdoc"     env RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --all-features --no-deps --locked
+    run_seq "doc-tests"   env RUSTDOCFLAGS=-Dwarnings cargo test --doc --workspace --all-features --locked
+    run_seq "tests"       cargo nextest run --workspace --all-targets --all-features --no-run --locked --hide-progress-bar
+    run_seq "smoke"       cargo nextest run --workspace --profile pre-push-smoke --locked
+    # cargo-deny runs in Bucket 2 only when DEP_CHANGED so pure-rust
+    # PRs don't pay the ~5 s cost.  Covered unconditionally by CI.
+    # Note: cargo-deny does not accept --locked (it reads Cargo.lock
+    # from disk directly); cargo-vet takes --locked on the bucket-1 side.
+    if (( DEP_CHANGED )); then
+        run_seq "deny"    cargo deny check --hide-inclusion-graph
+    fi
+    # Windows xwin is ADVISORY locally (see dev-flow-implementation-plan.md
+    # § 1.3.3) — PR-fast's native `windows-check` job is the authoritative
+    # gate.  Soft-skip with install hint when `cargo-xwin` is missing.
+    if command -v cargo-xwin >/dev/null 2>&1; then
+        run_seq "check-windows" just check-windows
+    fi
 fi
 
-# ── Optional gates ─────────────────────────────────────────────────────
-if command -v typos >/dev/null 2>&1; then
-    spawn "typos" typos .
-fi
-if command -v reuse >/dev/null 2>&1; then
-    spawn "reuse" reuse lint --quiet
-fi
-
-# ── Wait on all, collect failures ──────────────────────────────────────
-FAILED=()
-for i in "${!PIDS[@]}"; do
-    if ! wait "${PIDS[$i]}"; then
-        FAILED+=("${NAMES[$i]}")
+# ── Wait on Bucket 1 ───────────────────────────────────────────────────
+BG_FAILED=()
+for i in "${!BG_PIDS[@]}"; do
+    if ! wait "${BG_PIDS[$i]}"; then
+        BG_FAILED+=("${BG_NAMES[$i]}")
     fi
 done
 
-# ── Per-job status line ────────────────────────────────────────────────
-for i in "${!NAMES[@]}"; do
-    name="${NAMES[$i]}"
+# ── Report Bucket 1 ────────────────────────────────────────────────────
+for i in "${!BG_NAMES[@]}"; do
+    name="${BG_NAMES[$i]}"
     failed=0
-    for f in "${FAILED[@]+"${FAILED[@]}"}"; do
+    for f in "${BG_FAILED[@]+"${BG_FAILED[@]}"}"; do
         [[ "$f" == "$name" ]] && { failed=1; break; }
     done
     if (( failed )); then
-        printf '  %s❌%s %s\n' "$C_RED" "$C_RESET" "$name"
+        printf '  %s❌%s [1] %s\n' "$C_RED" "$C_RESET" "$name"
     else
-        printf '  %s✅%s %s\n' "$C_GREEN" "$C_RESET" "$name"
+        printf '  %s✅%s [1] %s\n' "$C_GREEN" "$C_RESET" "$name"
     fi
 done
 
+# ── Report Bucket 2 ────────────────────────────────────────────────────
+for r in "${SEQ_RESULTS[@]+"${SEQ_RESULTS[@]}"}"; do
+    IFS=':' read -r name status dt <<< "$r"
+    case "$status" in
+        ok)   printf '  %s✅%s [2] %s (%ss)\n' "$C_GREEN"  "$C_RESET" "$name" "${dt:-0}" ;;
+        fail) printf '  %s❌%s [2] %s (%ss)\n' "$C_RED"    "$C_RESET" "$name" "${dt:-0}" ;;
+        skip) printf '  %s⏭ %s [2] %s (skipped after fail-fast)\n' "$C_YELLOW" "$C_RESET" "$name" ;;
+    esac
+done
+
+# If we ran Bucket 2 at all but nothing fired (pure docs), say so.
+if (( ! CODE_CHANGED )); then
+    printf '  %sℹ%s  Bucket 2 skipped — no rust/dep/infra files changed\n' "$C_CYAN" "$C_RESET"
+fi
+
+# Aggregate failure list for final dump.
+FAILED=("${BG_FAILED[@]+"${BG_FAILED[@]}"}")
+[[ -n "$SEQ_FIRST_FAIL" ]] && FAILED+=("$SEQ_FIRST_FAIL")
+
 # ── Optional-tool hint ─────────────────────────────────────────────────
 missing=()
-command -v typos >/dev/null 2>&1 || missing+=("typos-cli")
-command -v reuse >/dev/null 2>&1 || missing+=("reuse (pipx install reuse)")
+command -v typos     >/dev/null 2>&1 || missing+=("typos-cli")
+command -v reuse     >/dev/null 2>&1 || missing+=("reuse (pipx install reuse)")
+# cargo-vet is listed here as an advisory when we reach this point without
+# having hard-failed — i.e. current push did NOT hit `dep_changed`.  The
+# future push that does hit it will hard-fail unless the tool is present.
+command -v cargo-vet >/dev/null 2>&1 || missing+=("cargo-vet (required for dep-change pushes)")
 if (( ${#missing[@]} > 0 )); then
     printf '  %s💡%s optional tools missing: %s — run %s`just install-dev-tools`%s\n' \
         "$C_CYAN" "$C_RESET" "${missing[*]}" "$C_CYAN" "$C_RESET"

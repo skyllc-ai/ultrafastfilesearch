@@ -21,7 +21,7 @@ leak-timeout = "100ms"
 
 failure-output = "immediate-final"
 success-output = "never"
-status-level  = "pass"
+status-level = "pass"
 final-status-level = "flaky"
 
 # ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ leak-timeout = "500ms"
 
 failure-output = "immediate-final"
 success-output = "never"
-status-level  = "skip"
+status-level = "skip"
 final-status-level = "all"
 
 [profile.ci.junit]
@@ -47,6 +47,41 @@ path = "junit.xml"
 report-name = "uffs-ci"
 store-success-output = false
 store-failure-output = true
+
+# ---------------------------------------------------------------------------
+# pre-push-smoke — mandatory fast test subset at git-push time (Phase 1 of
+# dev-flow-implementation-plan.md § 3).  Budget: 10-20 s warm on a developer
+# laptop.
+# Usage: cargo nextest run --profile pre-push-smoke --locked
+#
+# Selection is a denylist expressed in nextest's filterset language:
+#   - Exclude the validation suite (`test_validate_*`) — heavy integration,
+#     runs in the CI `ci` profile.
+#   - Exclude the entire `uffs-client` package — its shmem tests serialise
+#     globally via `threads-required = num-cpus` and would dominate wall-time.
+#   - Everything else: unit tests across all remaining crates.
+#
+# Long term: replace package-level denylist with per-test overrides that
+# carry an explicit `slow` attribute, so the filter becomes
+# `not attr(slow)` rather than a list of package / binary names.
+# ---------------------------------------------------------------------------
+[profile.pre-push-smoke]
+test-threads = -2
+retries = 0
+fail-fast = true
+
+slow-timeout = { period = "30s", terminate-after = 1 }
+leak-timeout = "100ms"
+
+failure-output = "immediate-final"
+success-output = "never"
+status-level = "fail"
+final-status-level = "flaky"
+
+default-filter = """
+    not test(/^test_validate/)
+  & not package(uffs-client)
+"""
 
 # ---------------------------------------------------------------------------
 # Slow / integration profile — for #[ignore] tests on Windows with live MFT

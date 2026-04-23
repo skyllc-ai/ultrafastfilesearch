@@ -10,11 +10,15 @@
 #
 # Budget:
 #   * docs / config-only commits:        sub-2 s
-#   * Rust commits (warm sccache):       ~15–25 s (three clippy passes +
-#                                        xwin Windows check)
-#   * Rust commits (cold xwin / cache):  ~40–90 s on first run after
-#                                        `cargo-xwin` downloads the MSVC
-#                                        SDK into `~/Library/Caches/xwin/`
+#   * Rust commits (warm sccache):       ~8–15 s (three clippy passes;
+#                                        cargo's target-dir lock serialises
+#                                        them so the 2nd and 3rd are
+#                                        incremental-cheap)
+#
+# Windows xwin check was removed from this gate in Phase 2 of
+# dev-flow-implementation-plan.md § 2.4 because its 40-90 s cold cost
+# violated the T1 budget.  xwin lives at pre-push (advisory) and
+# `pr-fast.yml` (authoritative native `windows-check` job).
 #
 # Soft-skips missing optional tools (typos, taplo, reuse) with a
 # one-line install hint so new contributors are not blocked before
@@ -36,11 +40,6 @@
 #                                  unwrap/expect allowed in tests)
 #                              + `just lint-ci`     (CI-mirror
 #                                  `--all-targets -D warnings`)
-#                              + `just check-windows` (cargo-xwin cross-
-#                                  check of `#[cfg(windows)]` paths; CI
-#                                  only runs Ubuntu so this is the ONLY
-#                                  pre-PR gate that exercises Windows-
-#                                  specific code)
 #                              Same lint stack CI and `just ship` Phase 1
 #                              enforce — nothing dirty gets committed.
 #      * TOML changes staged  → `taplo fmt --check` (if installed)
@@ -49,9 +48,8 @@
 #      * Always-on            → `file-size-policy`
 #    When invoked without a staged set (e.g. `just lint-fast` on a clean
 #    worktree) we still run the always-on gates plus an fmt-check so
-#    the recipe is useful as a "quick sanity" pass.  Clippy passes and
-#    the Windows cross-check are skipped on the no-staged path to keep
-#    manual invocations snappy.
+#    the recipe is useful as a "quick sanity" pass.  Clippy passes are
+#    skipped on the no-staged path to keep manual invocations snappy.
 # 3. Per-job output is captured to a tmpdir and only dumped on failure so
 #    the success path stays uncluttered.
 
@@ -103,22 +101,18 @@ if has_staged_rs || ! has_any_staged; then
 fi
 
 # Rust changes → full ultra-strict clippy trio (same lints `just ship`
-# Phase 1 runs) PLUS Windows cross-check (catches `#[cfg(windows)]`
-# drift CI can't see — GitHub Actions only runs Ubuntu).  Skipped on
-# no-staged invocations so manual `just lint-fast` stays snappy;
-# `just lint-pre-push` or `just lint-all` cover the clippy passes on a
-# clean worktree.
+# Phase 1 runs).  Skipped on no-staged invocations so manual
+# `just lint-fast` stays snappy; `just lint-pre-push` or `just lint-all`
+# cover the clippy passes on a clean worktree.
 #
-# `check-windows` is soft-skipped when `cargo-xwin` is missing so first-
-# time contributors aren't blocked before running
-# `just install-dev-tools`.
+# Windows cross-check (cargo-xwin) was REMOVED from pre-commit in
+# Phase 2 of dev-flow-implementation-plan.md § 2.4 because its 40-90 s
+# cold cost violates the < 15 s T1 budget.  xwin lives at pre-push
+# (advisory) and `pr-fast.yml` (authoritative native `windows-check`).
 if has_staged_rs; then
     spawn "lint-prod"    just lint-prod
     spawn "lint-tests"   just lint-tests
     spawn "lint-ci"      just lint-ci
-    if command -v cargo-xwin >/dev/null 2>&1; then
-        spawn "check-windows" just check-windows
-    fi
 fi
 
 # TOML changes → taplo fmt --check on staged files only.  Checking the
