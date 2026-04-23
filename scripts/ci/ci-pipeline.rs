@@ -538,6 +538,15 @@ impl PipelineContext {
         if sccache_available {
             global_env.push(("RUSTC_WRAPPER".into(), "sccache".into()));
             global_env.push(("CARGO_INCREMENTAL".into(), "0".into()));
+            // Diagnostic marker — presence of this line in the pipeline
+            // output proves the fresh binary (post-`fix(ci): pair
+            // CARGO_INCREMENTAL=0 with RUSTC_WRAPPER=sccache`) is the
+            // one being executed, not a stale rust-script cache entry.
+            if verbose {
+                eprintln!(
+                    "[ci-pipeline][sccache-fix] global_env: RUSTC_WRAPPER=sccache + CARGO_INCREMENTAL=0 paired"
+                );
+            }
         }
 
         // Create log file for non-verbose mode
