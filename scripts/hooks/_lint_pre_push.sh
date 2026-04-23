@@ -102,7 +102,17 @@ if [[ -t 1 ]] && [[ -z "${NO_COLOR:-}" ]]; then
     C_RED=$'\033[0;31m'
     C_RESET=$'\033[0m'
 else
-    C_BLUE= C_CYAN= C_GREEN= C_YELLOW= C_RED= C_RESET=
+    # Explicit empty-string form.  The `VAR=` shorthand works but
+    # trips SC1007 because a stray trailing space would turn it into
+    # `VAR= other_cmd` (a single-line env override in front of a
+    # command invocation).  Using `VAR=''` makes the intent
+    # unambiguous and keeps the linter quiet.
+    C_BLUE=''
+    C_CYAN=''
+    C_GREEN=''
+    C_YELLOW=''
+    C_RED=''
+    C_RESET=''
 fi
 
 # ── Change classification ──────────────────────────────────────────────
@@ -189,12 +199,19 @@ run_seq() {
         SEQ_RESULTS+=("$name:skip")
         return 0
     fi
-    local stamp=$(date +%s)
+    # Split `local` from assignment so a non-zero exit from the
+    # command substitution propagates (shellcheck SC2155: the `local`
+    # builtin itself always returns 0 and would otherwise mask a
+    # failure of `date +%s`).
+    local stamp
+    stamp=$(date +%s)
     if "$@" >"$TMP/$name.out" 2>&1; then
-        local dt=$(( $(date +%s) - stamp ))
+        local dt
+        dt=$(( $(date +%s) - stamp ))
         SEQ_RESULTS+=("$name:ok:$dt")
     else
-        local dt=$(( $(date +%s) - stamp ))
+        local dt
+        dt=$(( $(date +%s) - stamp ))
         SEQ_RESULTS+=("$name:fail:$dt")
         SEQ_FIRST_FAIL="$name"
     fi
@@ -300,7 +317,12 @@ command -v reuse     >/dev/null 2>&1 || missing+=("reuse (pipx install reuse)")
 # future push that does hit it will hard-fail unless the tool is present.
 command -v cargo-vet >/dev/null 2>&1 || missing+=("cargo-vet (required for dep-change pushes)")
 if (( ${#missing[@]} > 0 )); then
-    printf '  %s💡%s optional tools missing: %s — run %s`just install-dev-tools`%s\n' \
+    # NOTE: no backticks around `just install-dev-tools` — the cyan
+    # ANSI codes already emphasise the command, and literal backticks
+    # inside a single-quoted printf format string trip shellcheck
+    # SC2016 ("expressions don't expand in single quotes") even
+    # though they are harmless literal bytes in this context.
+    printf '  %s💡%s optional tools missing: %s — run %sjust install-dev-tools%s\n' \
         "$C_CYAN" "$C_RESET" "${missing[*]}" "$C_CYAN" "$C_RESET"
 fi
 
@@ -312,7 +334,10 @@ if (( ${#FAILED[@]} > 0 )); then
     done
     DUR=$(( $(date +%s) - START ))
     printf '\n%s❌ lint-pre-push FAILED (%ss) — push aborted%s\n' "$C_RED" "$DUR" "$C_RESET" >&2
-    printf '%s   Fix the warnings and retry, or bypass once with `git push --no-verify`.%s\n' "$C_YELLOW" "$C_RESET" >&2
+    # Same SC2016 avoidance as the install-dev-tools hint above:
+    # drop the visual backticks around the escape-hatch command and
+    # let the yellow ANSI color carry the emphasis.
+    printf '%s   Fix the warnings and retry, or bypass once with: git push --no-verify%s\n' "$C_YELLOW" "$C_RESET" >&2
     exit 1
 fi
 
