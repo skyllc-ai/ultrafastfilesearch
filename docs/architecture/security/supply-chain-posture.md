@@ -18,6 +18,31 @@ Status as of **2026-04-22** · Maintainer: `@githubrobbi` · Review cadence: mon
   [Lockfile pinning](#lockfile-pinning-cargolock) below.
 - 2026-04-22 — Documented known softprops old-commit 403 limitation
   in the release flow (PR #33c).  See [Known limitations](#known-limitations-in-the-release-flow) below.
+- 2026-04-22 — Pipeline hardening batch:
+  - Added concurrency groups to `ci.yml` and `release.yml` so
+    superseded PR runs are cancelled and release dispatches queue
+    cleanly.
+  - Renamed `optimized-ci.yml` → `tier-2.yml` for clarity.
+  - Added **Tier 2 / Windows Compile Check** on `windows-latest` so
+    Windows regressions surface weekly, not 10-15 minutes into a
+    `just ship` release run.
+  - Added **CycloneDX 1.5 SBOMs** to every release: one
+    `sbom-<crate>.cdx.json` per workspace crate, covered by the
+    same SLSA build-provenance attestation as the binaries.
+  - Added **CodeQL (Rust SAST)** workflow on PR + weekly
+    schedule.  Rust support is in public preview (CodeQL ≥ 2.22.1)
+    so the check is not a required gate yet; promoted after a
+    few weeks of clean baselines.
+  - Split `notify-failure` labels per workflow
+    (`ci-failure-tier-1`, `ci-failure-tier-2`,
+    `ci-failure-release`) so a release failure is never buried as a
+    comment on a week-old Tier 2 flake issue.
+  - **Narrow Dependabot auto-merge** (`dependabot-auto-merge.yml`)
+    — patch-level bumps with no active security advisory queue for
+    auto-merge once all required checks + branch-protection rules
+    are satisfied.  Minor, major, and security-advisory bumps keep
+    the existing manual-review path.  Net effect: reviewer time
+    reclaimed for the bumps that actually carry review signal.
 
 This document captures UFFS's current supply-chain defences, the threat
 model they address, and the concrete gaps that are deferred (with
@@ -34,15 +59,20 @@ control lands or a deferred item is promoted.
 | License policy | `cargo-deny` `[licenses]` | Permitted list (MIT, Apache-2.0, MPL-2.0, …) | Every PR | **Yes** — same job |
 | Source whitelist | `cargo-deny` `[sources]` | crates.io + pinned polars git | Every PR | **Yes** — same job |
 | Workflow permissions | `permissions:` in every workflow | Minimal (`contents: read` default, `write` only where proven needed) | Reviewed per PR | N/A |
+| Concurrency hygiene | `concurrency:` groups on every workflow | Cancel superseded PR runs; queue (never cancel) release / scheduled runs | Every workflow | N/A |
 | Tag integrity | `main-protection` + `tag-protection-v-prefix` rulesets | Required reviews + signed commits on main; `v*` tag deletion/update blocked | Always | GitHub enforces |
 | Build-provenance | `actions/attest-build-provenance` | Every release asset signed with Sigstore OIDC | Every `v*` release | **Yes** — release.yml |
+| SBOM | `cargo-cyclonedx` → CycloneDX 1.5 JSON | One SBOM per workspace crate, shipped alongside binaries; covered by SLSA attestation | Every `v*` release | **Yes** — release.yml |
 | Commit ancestry check | Custom step in `release.yml` | `workflow_dispatch` `commit_sha` must be ancestor of main | Every release dispatch | **Yes** — release.yml |
 | Dep-tree growth | `dependabot-review.yml` | Cargo.lock crate-count delta on Dependabot PRs | Every Dependabot PR | Annotation only |
 | Lockfile pinning | Committed `Cargo.lock` | Every resolved crate-version frozen across devs / CI / releases | Always | **Yes** — `cargo vet check --locked` would fail any drift |
 | Audit trail | `cargo-vet check --locked` | Every resolved crate-version must have import / own audit / exemption | Every PR | **Yes** — `ci.yml` Security job |
 | Import refresh | `cargo-vet-refresh.yml` | Weekly `cargo vet regenerate imports` → PR | Mondays 08:00 UTC | GitHub schedules |
 | Structural audit | `cargo-geiger` via `just geiger` | unsafe / build.rs / proc-macro footprint | On-demand (monthly) | No |
-| Human review | Dependabot PRs are NOT auto-merged | Every dependency bump | Every Dependabot PR | GitHub enforces |
+| Semantic SAST | `codeql.yml` (Rust, public preview) | Dataflow-based bug patterns (path / SQL / regex injection, crypto misuse, unvalidated redirects) | PR + Tuesdays 06:30 UTC | Informational (not a required gate yet) |
+| Windows regression check | Tier 2 `windows-check` job | `cargo check --workspace --all-features --all-targets` on `windows-latest` | Weekly (Mondays 06:00 UTC) | GitHub schedules |
+| Human review for minor/major bumps | Dependabot PRs for minor + major + security advisories are NOT auto-merged | Minor / major / security-advisory bumps | Every Dependabot PR | GitHub enforces |
+| Gated auto-merge for patch bumps | `dependabot-auto-merge.yml` | Only `version-update:semver-patch` bumps with NO active security advisory, gated on all required checks (cargo-deny, cargo-vet, clippy, tests, doc-tests, file-size policy) + branch-protection rules (signed commits, required reviews) | Every Dependabot PR | Gates enforced via required checks + branch protection |
 
 ## Threat model and coverage matrix
 
@@ -51,9 +81,12 @@ control lands or a deferred item is promoted.
 | Known CVE in a dep | High | `cargo-deny` RustSec DB on every PR | Low — CI gates |
 | Unknown (zero-day) CVE | High | None specific; detection delayed | Medium — industry-wide |
 | Typo-squatted dep added via PR | Medium | `deny.toml` `[sources]` allow-list + `unknown-git = warn` | Low |
-| Maintainer-account compromise → silent minor-version malicious bump | **High** | `cargo-vet check` requires upstream or local audit for the new version; Dependabot-manual-merge + `dependabot-review.yml` tree-growth annotation + human review of diffs | **Low-medium** — cargo-vet covers most crates via Mozilla/Google imports; residual is the first N days after a malicious version lands until upstream audits it (or we audit locally) |
+| Maintainer-account compromise → silent minor-version malicious bump | **High** | `cargo-vet check` requires upstream or local audit for the new version; human review mandatory for minor+ / security-advisory bumps; `dependabot-review.yml` tree-growth annotation + human review of diffs.  Patch-level auto-merge is gated on cargo-vet + cargo-deny + the dep-tree-growth annotation, so a malicious patch still hits the same audit-trail wall as a manual-merge path | **Low-medium** — cargo-vet covers most crates via Mozilla/Google imports; residual is the first N days after a malicious version lands until upstream audits it (or we audit locally) |
 | Malicious `build.rs` / proc-macro executing in CI | **High** | Dependabot PRs run with **read-only `GITHUB_TOKEN`** + no repo secrets (GitHub default); `permissions:` block denies writes elsewhere; `cargo-vet` imports from Mozilla/Google are the primary vetting signal for new build-script crates | **Medium** — blast radius bounded (runner has no sensitive tokens); new unaudited crate bumps are caught by `cargo vet check`, forcing a conscious decision |
 | Release binary swapped on GitHub Release page | Medium | SHA256 `CHECKSUMS.txt` + SLSA build-provenance attestation via `gh attestation verify` | Low — requires attacker to also swap attestation, which is stored in GitHub Attestations API (separate audit trail) |
+| SBOM swapped on GitHub Release page (misleading component inventory) | Medium | `sbom-*.cdx.json` files are covered by the same SLSA attestation as the binaries — `gh attestation verify` on the SBOM matches only if the bytes match this workflow run | Low — inherits the binary-swap residual |
+| Windows-only build regression lands on main and only surfaces at release time | Low | Tier 2 `windows-check` job runs weekly on `windows-latest`; `cargo check --workspace --all-features --all-targets` catches type / link errors before `just ship` does | Low — up to a week of lag between merge and detection (acceptable given human-review gating on every merge) |
+| Semantic bug class (path / SQL / regex injection, crypto misuse) slipping past clippy | Medium | `codeql.yml` Rust SAST on every PR + weekly baseline | Medium — Rust support is in public preview; false-negative rate unknown |
 | Rollback attack (release an older vulnerable commit) | Medium | `commit_sha` ancestor-of-main guard in `release.yml` | Low |
 | Rogue `v*` tag push by write-access user | Low | `tag-protection-v-prefix` ruleset blocks deletion + update | **Medium on creation** — GitHub API does not support `Integration` bypass for user-owned repos, so `creation` rule not enforced (bot couldn't push tags if it were).  Partial protection only. |
 | Compromised runner (GitHub Actions infra itself) | Low | None — SLSA L2 attestation trusts the runner | Industry-wide; accept |
@@ -321,9 +354,12 @@ on `main` at branch-open time.
 - `supply-chain/config.toml` — `cargo-vet` imports + exemptions
 - `supply-chain/audits.toml` — our local audit records (starts empty)
 - `supply-chain/imports.lock` — pinned upstream audit snapshots
-- `.github/workflows/ci.yml` §Security — `cargo-deny` + `cargo-vet check` enforcement
-- `.github/workflows/release.yml` — SLSA attestation + ancestor check
+- `.github/workflows/ci.yml` §Security — `cargo-deny` + `cargo-vet check` enforcement (Tier 1)
+- `.github/workflows/tier-2.yml` — weekly coverage / udeps / Miri / Windows compile check
+- `.github/workflows/release.yml` — SLSA attestation + ancestor check + CycloneDX SBOM
+- `.github/workflows/codeql.yml` — Rust SAST (public preview)
 - `.github/workflows/dependabot-review.yml` — dep-tree growth annotation
+- `.github/workflows/dependabot-auto-merge.yml` — patch-level auto-merge gate
 - `.github/workflows/cargo-vet-refresh.yml` — weekly imports refresh
 - `.github/workflows/auto-tag-release.yml` — tagging bridge
 - `just/analysis.just` — `just geiger` / `just geiger-summary` recipes
@@ -335,3 +371,6 @@ on `main` at branch-open time.
 - cargo-vet [user guide](https://mozilla.github.io/cargo-vet/)
 - Mozilla's [supply-chain audits](https://github.com/mozilla/supply-chain)
 - Google's [supply-chain audits](https://github.com/google/supply-chain)
+- CycloneDX [1.5 specification](https://cyclonedx.org/specification/overview/)
+- [cargo-cyclonedx](https://github.com/CycloneDX/cyclonedx-rust-cargo)
+- CodeQL [Rust public preview changelog](https://github.blog/changelog/2025-07-02-codeql-2-22-1-bring-rust-support-to-public-preview/)

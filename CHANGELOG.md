@@ -14,6 +14,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **CI / release supply-chain hardening batch** (2026-04-22 —
+  `.github/workflows/*.yml`, `SECURITY.md`,
+  `docs/architecture/security/supply-chain-posture.md`).  Closes
+  the gaps + nits from the 2026-04-22 supply-chain review:
+  - **Concurrency groups** on `ci.yml` and `release.yml`.  Tier 1
+    now cancels superseded PR runs (but queues on `main` pushes so
+    branch-protection required checks stay stable); `release.yml`
+    queues instead of cancelling, so a half-signed release asset
+    can never ship.
+  - **`optimized-ci.yml` → `tier-2.yml`** rename for clarity; the
+    filename now matches the workflow's advertised "Tier 2" identity.
+  - **Tier 2 / Windows Compile Check** runs
+    `cargo check --workspace --all-features --all-targets` natively
+    on `windows-latest` weekly.  Previously Windows-only build
+    regressions only surfaced 10-15 minutes into a `just ship`
+    release build; the earlier Linux-hosted MSVC cross-check was
+    removed because ubuntu has no MSVC linker.  Tier 2 summary +
+    `notify-failure` are now wired to this job AND to the
+    pre-existing `file-size-policy` job (which was dangling before
+    this change, so a file-size-policy Tier 2 failure used to be
+    silent).
+  - **CycloneDX 1.5 SBOMs on every release** via `cargo-cyclonedx`,
+    emitted as `sbom-<crate>.cdx.json` into `final-release/` BEFORE
+    `CHECKSUMS.txt` is regenerated and BEFORE the SLSA attestation
+    step, so the SBOMs are in the checksum manifest AND covered by
+    the Sigstore OIDC attestation.  Verify with the same
+    `gh attestation verify` flow that already exists for binaries.
+  - **CodeQL (Rust SAST)** workflow
+    (`.github/workflows/codeql.yml`) on every PR and weekly
+    Tuesday 06:30 UTC baseline.  Pinned to
+    `github/codeql-action` v3.35.2.  Rust is in CodeQL's public
+    preview since CodeQL 2.22.1 (July 2025) — findings are
+    informational until a clean baseline settles, so this is NOT
+    yet a required branch-protection gate.
+  - **Narrowly-scoped Dependabot auto-merge**
+    (`.github/workflows/dependabot-auto-merge.yml`) — only
+    `version-update:semver-patch` bumps with no active security
+    advisory queue for auto-merge, and only once every required
+    check is green (`cargo-deny`, `cargo vet check --locked`,
+    clippy, tests, doc-tests, file-size policy).  Branch
+    protection (signed commits, required reviews) is NOT
+    bypassed — this just saves the "merge when green" clickwork.
+    Minor / major / security-advisory bumps keep the existing
+    manual-review flow.  Updates
+    `docs/architecture/security/supply-chain-posture.md` +
+    `SECURITY.md` to reflect the narrowed policy.
+  - **Free-up-disk-space step on the clippy job** matching the
+    other heavy Tier 1 jobs, so future dep-tree fan-out does not
+    tip `--all-features` clippy past ubuntu-22.04's default disk
+    budget.
+  - **Per-workflow `notify-failure` labels**
+    (`ci-failure-tier-1`, `ci-failure-tier-2`,
+    `ci-failure-release`) so a release failure is never buried
+    as a comment on a week-old Tier 2 flake issue.  Keeps the
+    legacy `ci-failure` label as a secondary label for
+    backwards-compatible issue queries.
+  - **Updated threat-model + layered-defences tables** in
+    `docs/architecture/security/supply-chain-posture.md` with
+    rows for SBOM, SAST, Windows regression check, and the split
+    between manual-review (minor/major) vs gated auto-merge
+    (patch) on Dependabot PRs.
+
 ### Added
 - **Brand identity pass** (chore, 2026-04-21) — publishing-grade brand
   and trademark layer:

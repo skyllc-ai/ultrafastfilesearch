@@ -1,0 +1,149 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025-2026 SKY, LLC.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# CodeQL — static-analysis (SAST) for Rust
+#
+# What this catches that the other gates don't:
+#
+#   * cargo-deny   → known CVEs + license policy + source allow-list
+#   * cargo-vet    → trust chain for every resolved crate-version
+#   * cargo-geiger → structural unsafe / build.rs / proc-macro footprint
+#   * clippy       → lint-level correctness + idiom issues
+#   * CodeQL       → *semantic* bug patterns (path injection, SQL/regex
+#                    injection, cryptographic misuse, unsafe cryptographic
+#                    default picks, unvalidated URL redirections, …) that
+#                    fire on whole-program dataflow rather than local AST
+#                    shape.
+#
+# Rust support status:
+#
+#   CodeQL 2.22.1 (July 2025) brought Rust to **public preview**; CodeQL
+#   2.23.3 / 2.23.7 / 2.23.8 added additional queries.  Treat failures as
+#   informational on first rollout — the query pack is still maturing.
+#   Not wired into branch protection for this reason.
+#
+# Triggers:
+#
+#   * `schedule` — weekly baseline, independent of PR traffic.  Tuesday
+#     06:30 UTC is a deliberate offset from the Monday 06:00 Tier 2 cron
+#     and the Monday 08:00 cargo-vet-refresh cron so the three weekly
+#     jobs don't share a runner queue.
+#   * `push: main` — capture the baseline on every merge.
+#   * `pull_request: main` — catches regressions before merge.  If the
+#     query pack gets noisy on a PR and blocks a human, the workflow can
+#     be re-run or temporarily disabled via `workflow_dispatch`; it is
+#     deliberately NOT added to required checks.
+#
+# Cost:
+#
+#   ~15-25 min per run on ubuntu-22.04; builds the workspace once for
+#   CodeQL's extractor.  Re-uses the Swatinem rust-cache key namespace
+#   so subsequent runs warm in 5-8 min.
+
+name: "🔍 CodeQL (Rust SAST)"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/codeql.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/codeql.yml'
+  schedule:
+    # Weekly baseline — Tuesday 06:30 UTC (offset from Monday Tier 2 +
+    # Monday cargo-vet refresh so they don't share a runner queue).
+    - cron: '30 6 * * 2'
+  workflow_dispatch:
+
+permissions:
+  # Read source + write SARIF to the repo's code-scanning panel.
+  # `security-events: write` is the permission that lets
+  # `codeql-action/analyze` post findings to the Security tab.
+  contents: read
+  security-events: write
+  # Required by codeql-action for CI artifact publishing on old runners.
+  actions: read
+
+# Cancel superseded PR runs; let scheduled / main-push runs complete.
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Free up disk space
+        # CodeQL's extractor materialises a large intermediate database on
+        # top of a full workspace build.  Reclaim the same ~20 GB that
+        # the other Tier 1 heavy jobs free, so we stay well clear of the
+        # ubuntu-22.04 14 GB default budget.
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          sudo rm -rf /usr/local/share/boost /usr/local/graalvm
+          df -h /
+
+      - name: Install pinned nightly (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          # Dedicated cache namespace so CodeQL's full-debuginfo build
+          # doesn't evict the release-profile caches used by the Tier 1
+          # jobs (different fingerprint anyway, but be explicit).
+          shared-key: codeql
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3.35.2
+        with:
+          languages: ${{ matrix.language }}
+          # `manual` build mode: we invoke cargo ourselves below so the
+          # extractor observes the real workspace graph, including all
+          # feature-gated code paths.
+          build-mode: manual
+          # security-extended adds higher-recall queries at the cost of
+          # more findings to triage; start with the default `security`
+          # pack and upgrade once we've seen a few weeks of baseline.
+          # queries: security-and-quality
+
+      - name: Build workspace for CodeQL extractor
+        # `--all-features --all-targets` so every gated module (live MFT,
+        # IOCP, USN journal, polars integration, etc.) is visible to the
+        # CodeQL dataflow analysis.
+        env:
+          # CodeQL benefits from full debuginfo.  The x86-64-v3 CPU
+          # baseline still applies (workflow-level default in ci.yml does
+          # NOT propagate here — this is a separate workflow).
+          RUSTFLAGS: "-C debuginfo=2 -C target-cpu=x86-64-v3"
+        run: cargo build --workspace --all-features --all-targets
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3.35.2
+        with:
+          category: "/language:${{ matrix.language }}"

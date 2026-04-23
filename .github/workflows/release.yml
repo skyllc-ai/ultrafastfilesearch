@@ -25,6 +25,16 @@ on:
     tags:
       - 'v*'
 
+# Serialise release dispatches so two version bumps landing in quick
+# succession (or a tag-push colliding with an auto-tag-release dispatch)
+# queue cleanly.  `cancel-in-progress: false` because a half-finished
+# release must either complete or fail with an attestation — never be
+# killed mid-upload — so the SLSA provenance in the Attestations API
+# can never claim an artifact that was not actually published.
+concurrency:
+  group: release-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   actions: read
@@ -429,12 +439,89 @@ jobs:
             done
           done
 
-          # Create combined checksums across every release asset
-          # (both the ZIP bundles and the raw binaries).
+          echo "📦 Staged release assets (pre-SBOM, pre-checksum):"
+          ls -la final-release/
+
+      # ─── CycloneDX SBOM ──────────────────────────────────────────────────
+      #
+      # Emits one `sbom-<crate>.cdx.json` per workspace crate into
+      # `final-release/` so every shipped binary has a machine-readable
+      # inventory of its resolved transitive dependencies.  cargo-cyclonedx
+      # reads `Cargo.lock` — which is committed — so the SBOMs are
+      # deterministic for (commit, features) and bit-identical across
+      # re-runs.
+      #
+      # The SBOMs are produced BEFORE `CHECKSUMS.txt` is written and
+      # BEFORE the SLSA attestation step so that:
+      #
+      #   1. `CHECKSUMS.txt` lists them, giving downloaders a single
+      #      sha256-verifiable manifest.
+      #   2. The SLSA attestation (`subject-path: final-release/*`) covers
+      #      the SBOM bytes too, so a downstream consumer can:
+      #
+      #        gh attestation verify sbom-uffs-cli.cdx.json \
+          #          --owner ${{ github.repository_owner }}
+      #
+      #      and prove the SBOM came from this exact workflow run.
+      - name: Install cargo-cyclonedx
+        uses: taiki-e/install-action@dfc84ffb7254b048a0a843316ff5a2714dcdc7bd # v2
+        with:
+          tool: cargo-cyclonedx
+
+      - name: Install pinned nightly (needed by cargo-cyclonedx to read workspace)
+        # cargo-cyclonedx shells out to `cargo metadata`, which requires
+        # the workspace's pinned toolchain to be resolvable (rust-toolchain.toml).
+        # `rustup show` installs & activates it in one step.
+        run: rustup show
+
+      - name: Generate CycloneDX SBOMs for every workspace crate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "📋 Generating CycloneDX 1.5 SBOMs for workspace..."
+          # --format json           : machine-readable
+          # --all-features          : match the release-build feature set
+          # --spec-version 1.5      : newest stable CycloneDX schema
+          # default --describe=crate: one SBOM per crate, Cargo targets as subcomponents
+          #
+          # Output goes adjacent to each `Cargo.toml` as `<crate>.cdx.json`.
+          cargo cyclonedx \
+            --format json \
+            --all-features \
+            --spec-version 1.5
+
+          # Collect the per-crate SBOMs into final-release/ with a uniform
+          # `sbom-<crate>.cdx.json` prefix so downloaders can tell at a
+          # glance which files are SBOMs.  `find` is used instead of a
+          # glob because crates live one level down under crates/<crate>/.
+          count=0
+          while IFS= read -r sbom; do
+            crate=$(basename "$(dirname "$sbom")")
+            dest="final-release/sbom-${crate}.cdx.json"
+            cp "$sbom" "$dest"
+            count=$((count + 1))
+          done < <(find crates -name '*.cdx.json' -type f)
+
+          if (( count == 0 )); then
+            echo "::error::cargo-cyclonedx produced no SBOMs — investigate the log above"
+            exit 1
+          fi
+
+          echo "✅ Emitted $count SBOM(s):"
+          ls -lh final-release/sbom-*.cdx.json
+
+      - name: Finalize CHECKSUMS.txt (covers binaries, ZIP bundles, and SBOMs)
+        shell: bash
+        run: |
           cd final-release
+          # Regenerate AFTER SBOMs are placed so the manifest is complete.
+          # The SLSA attestation runs next and covers every file in this
+          # directory, so there is no window where CHECKSUMS.txt is stale
+          # relative to what ships.
           sha256sum * > CHECKSUMS.txt
 
-          echo "📦 Final release assets:"
+          echo "📦 Final release assets (SBOMs + checksums included):"
           ls -la
 
       - name: Generate SLSA build-provenance attestation
@@ -520,6 +607,17 @@ jobs:
           ```
           A successful verification proves the bytes were produced by
           this exact workflow run on this exact commit.
+
+          ### 📋 SBOM (Software Bill of Materials)
+
+          Each workspace crate ships a CycloneDX 1.5 SBOM alongside the
+          binaries: `sbom-<crate>.cdx.json`.  The SBOMs are covered by
+          the same SLSA attestation as the binaries, so you can verify
+          the inventory with the same command above.  Inspect with any
+          CycloneDX-aware tool, e.g.:
+          ```bash
+          jq '.components[] | {name, version, purl}' sbom-uffs-cli.cdx.json
+          ```
 
           ## 📋 Installation
 
@@ -628,6 +726,9 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
+            // Per-workflow label so Release / Tier 1 / Tier 2 failures
+            // triage to distinct issues instead of piling onto one.
+            const label = 'ci-failure-release';
             const title = `🔴 Release Pipeline Failed — ${context.sha.substring(0, 7)}`;
             const body = [
               `## Release Pipeline Failed`,
@@ -649,7 +750,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
-              labels: 'ci-failure',
+              labels: label,
               per_page: 1,
             });
 
@@ -667,7 +768,7 @@ jobs:
                 repo: context.repo.repo,
                 title: title,
                 body: body,
-                labels: ['ci-failure'],
+                labels: [label, 'ci-failure'],
                 assignees: ['githubrobbi'],
               });
               core.info('Created new failure issue');

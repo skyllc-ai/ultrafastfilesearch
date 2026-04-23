@@ -55,6 +55,17 @@ permissions:
   contents: read
   issues: write
 
+# Cancel superseded CI runs on a PR branch (new push supersedes the
+# previous), but do NOT cancel in-progress runs on `main` / `develop`
+# pushes — those feed into required checks and cancelling them can
+# deadlock branch protection on a fast-follow merge.  Same keying
+# scheme as the other workflows in this repo (auto-tag-release,
+# dependabot-review, cargo-vet-refresh) so GitHub's cross-workflow
+# concurrency display stays consistent.
+concurrency:
+  group: tier-1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -99,6 +110,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Free up disk space
+        # `--all-targets --all-features` on a Polars-heavy workspace consumes
+        # significant disk on ubuntu-22.04's default ~14 GB free budget.
+        # Reclaim ~20 GB from preinstalled SDKs we do not use in CI so that
+        # future dep-tree growth does not push the job over the edge.  Same
+        # block as test-build / rustdoc / tests / doc-tests.
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          sudo rm -rf /usr/local/share/boost /usr/local/graalvm
+          df -h /
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         run: rustup show
@@ -350,12 +372,19 @@ jobs:
               `📧 Notification sent to: githubrobbi@nios.net`,
             ].join('\n');
 
+            // Per-workflow label so Tier 1 / Tier 2 / Release failures
+            // triage to distinct issues.  Previously all three workflows
+            // deduped onto a single `ci-failure` label, which meant a
+            // release failure could end up buried as a comment on an
+            // old Tier 2 flake issue.
+            const label = 'ci-failure-tier-1';
+
             // Check for existing open issue to avoid duplicates
             const existing = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
-              labels: 'ci-failure',
+              labels: label,
               per_page: 1,
             });
 
@@ -374,7 +403,7 @@ jobs:
                 repo: context.repo.repo,
                 title: title,
                 body: body,
-                labels: ['ci-failure'],
+                labels: [label, 'ci-failure'],
                 assignees: ['githubrobbi'],
               });
               core.info('Created new failure issue');

@@ -16,6 +16,15 @@ permissions:
   contents: read
   issues: write
 
+# Tier 2 runs on a weekly cron; a manual `workflow_dispatch` landing
+# on top of a cron run should queue, not cancel — we want the full
+# Miri / coverage report to complete.  Keyed the same way as the
+# other workflows in this repo so GitHub's concurrency UI stays
+# consistent across the pipeline.
+concurrency:
+  group: tier-2-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -86,16 +95,51 @@ jobs:
           fail_ci_if_error: false
           verbose: true
 
-  # NOTE: A `Tier 2 / Windows Cross-Check` job lived here until 2026-04-21.
-  # It ran `cargo check --target x86_64-pc-windows-msvc` from `ubuntu-latest`,
-  # which has no MSVC linker / import libraries, so the check could never
-  # succeed without a full `xwin` SDK install (see
-  # `docs/xwin-msvc-rlib-size-root-cause-and-workarounds.md`).  Real Windows
-  # validation happens on `windows-latest` in `release.yml` and on the user's
-  # Windows hardware via `cross-tool-benchmark.rs`; cross-compiling the
-  # workspace from Linux added no signal and permanently red-X'd Tier 2.
-  # The job has been removed from both the job list and the summary
-  # `needs:` array below.
+  # ══════════════════════════════════════════════════════════════════════════
+  # Windows Compile Check — catches Windows-only build regressions between
+  # releases.  Runs NATIVELY on `windows-latest` (not Linux → MSVC cross),
+  # so it picks up any breakage that would otherwise first surface 10-15
+  # minutes into a `just ship` release build.  `cargo check` (not `build`)
+  # because we only care about type-checks / linking metadata; full builds
+  # happen in `release.yml`.
+  #
+  # History: an earlier `Tier 2 / Windows Cross-Check` cross-compiled from
+  # ubuntu-latest and permanently red-X'd Tier 2 because ubuntu has no MSVC
+  # linker / import libraries (see
+  # `docs/xwin-msvc-rlib-size-root-cause-and-workarounds.md`).  Running on
+  # `windows-latest` sidesteps that entirely.
+  # ══════════════════════════════════════════════════════════════════════════
+  windows-check:
+    name: Tier 2 / Windows Compile Check
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      # Mirror the release-time Windows rustflags so the check runs under
+      # the same compilation conditions as a real release build.  If a
+      # target-cpu bump starts breaking compilation, this job fails
+      # BEFORE `just ship` does.
+      RUSTFLAGS: "-C target-cpu=x86-64-v3"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install pinned nightly (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          # Dedicated cache key — the Linux Tier 2 jobs below have fragments
+          # that make the default key hash to something different on Windows
+          # anyway, but be explicit so a future refactor does not cross the
+          # streams.
+          shared-key: tier-2-windows-check
+
+      - name: cargo check --workspace --all-features
+        # --all-features to exercise every feature-gated path that only
+        # compiles on Windows (e.g. live MFT / USN / IOCP code paths).
+        # --tests so test-only Windows code is also type-checked.
+        run: cargo check --workspace --all-features --all-targets
 
   build-validation:
     name: Tier 2 / Build Validation
@@ -180,16 +224,18 @@ jobs:
   tier-2-summary:
     name: Tier 2 / Summary
     runs-on: ubuntu-latest
-    needs: [coverage, build-validation, udeps, miri]
+    needs: [file-size-policy, coverage, build-validation, udeps, miri, windows-check]
     if: always()
     timeout-minutes: 5
     steps:
       - name: Check pipeline success
         run: |
-          if [[ "${{ needs.coverage.result }}" == "success" && \
+          if [[ "${{ needs.file-size-policy.result }}" == "success" && \
+                "${{ needs.coverage.result }}" == "success" && \
                 "${{ needs.build-validation.result }}" == "success" && \
                 "${{ needs.udeps.result }}" == "success" && \
-                "${{ needs.miri.result }}" == "success" ]]; then
+                "${{ needs.miri.result }}" == "success" && \
+                "${{ needs.windows-check.result }}" == "success" ]]; then
             echo "✅ All Tier 2 nightly checks passed!"
           else
             echo "❌ Some Tier 2 nightly checks failed - review above"
@@ -203,10 +249,12 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| File size policy | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Coverage | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Build validation | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| cargo-udeps | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Miri | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Windows Compile Check | ✅ |" >> $GITHUB_STEP_SUMMARY
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Failure Notification — opens a GitHub Issue on any job failure
@@ -215,7 +263,7 @@ jobs:
   notify-failure:
     name: 🔔 Notify on Failure
     runs-on: ubuntu-latest
-    needs: [coverage, build-validation, udeps, miri]
+    needs: [file-size-policy, coverage, build-validation, udeps, miri, windows-check]
     if: failure()
     permissions:
       issues: write
@@ -224,6 +272,9 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
+            // Per-workflow label so Tier 1 / Tier 2 / Release failures
+            // triage to distinct issues instead of piling onto one.
+            const label = 'ci-failure-tier-2';
             const title = `🔴 CI Failure: Tier 2 Nightly CI — ${context.sha.substring(0, 7)}`;
             const body = [
               `## CI Pipeline Failed`,
@@ -243,7 +294,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
-              labels: 'ci-failure',
+              labels: label,
               per_page: 1,
             });
 
@@ -261,7 +312,7 @@ jobs:
                 repo: context.repo.repo,
                 title: title,
                 body: body,
-                labels: ['ci-failure'],
+                labels: [label, 'ci-failure'],
                 assignees: ['githubrobbi'],
               });
               core.info('Created new failure issue');
