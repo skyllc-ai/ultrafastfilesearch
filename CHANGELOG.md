@@ -14,6 +14,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Phase 4 CI cutover — `ci.yml` retired, `pr-fast.yml` is now
+  the sole required lane** (2026-04-23 —
+  `.github/workflows/ci.yml` deleted,
+  `docs/architecture/dev-flow-implementation-plan.md` §4
+  branch-protection checklist).  Completes the shift-left rollout
+  scoped by the dev-flow implementation plan:
+  - **Before**: two parallel CI lanes.  `ci.yml` (legacy Tier 1)
+    with 6 required `Tier 1 / *` checks — Format, Clippy, Rustdoc,
+    Security, File Size Policy, and the tests matrix — ran on
+    every push to `main` / `develop` and on every PR to `main`
+    regardless of what files changed.  `pr-fast.yml`
+    (bucket-ordered PR-fast) was added in PR #45 and ran in
+    parallel with `ci.yml` to validate equivalence.
+  - **After**: single required lane.  `pr-fast.yml` reports exactly
+    one required status check — `PR Fast CI / required` — which
+    aggregates the 8 classify-gated downstream jobs (fmt, sanity,
+    clippy, docs, test-build, tests, security, windows-check) plus
+    the unconditional `file-size` job via `success|skipped` logic.
+    Docs-only / dep-only / pure-infra-only PRs skip the heavy jobs
+    and still report green, saving ~5-7 min of runner time per
+    non-code PR.  The classify-aggregation branch explicitly
+    depends on the classify job's own result, so a classify
+    failure flips `required` red even though every downstream job
+    would otherwise be `skipped` (validated live on PR #45 via
+    broken-classify simulation — classify=red 4s, 8 downstream
+    skipped, `required`=red 4s).
+  - **Branch-protection ruleset** (`main-protection`, ID
+    `11889528`) updated in the same window via the rulesets API
+    (classic `/branches/main/protection` is 404 on this repo):
+    required-checks list goes from the 7-entry parallel-window
+    shape (6 `Tier 1 / *` + `PR Fast CI / required`) to a single
+    `PR Fast CI / required` entry.  The context string is the
+    job's `name:` attribute (`PR Fast CI / required`), NOT the
+    UI-displayed `<workflow> / <job>` concatenation — a gotcha
+    first hit on 2026-04-23 and documented in §4.4 of the plan
+    doc.
+  - **Bake-in evidence**: PR #45 (mixed rust + dep + infra,
+    code=true) ran the full PR-fast matrix alongside `ci.yml` and
+    both stayed green; PR #46 (docs-only, code=false) exercised
+    the classify skip branch — downstream skipped 8 jobs,
+    `required` green in ~4 s, `ci.yml` path-filter correctly
+    didn't fire; PR #47 (infra-only Phase 4b retrofit) ran every
+    PR-fast gate and stayed green.  Combined with the live broken-
+    classify simulation on PR #45 (required=failure propagated
+    correctly through 8 skipped downstream jobs), all four
+    classification paths (mixed-code, docs-only, infra-only, and
+    the broken-classify failure mode) are validated.  Zero
+    disagreements between `pr-fast.yml` and `ci.yml` observed.
+    The dev-flow implementation plan §10.3 originally scheduled
+    a 7-day parallel-window bake; the cutover was brought forward
+    because the confidence budget was already exhausted by the
+    same-day evidence above — continuing to run `ci.yml` on every
+    PR would burn ~5-7 min of runner time per PR with no
+    additional signal.  See plan §10.5 "Deviations from the plan
+    v1" for the decision log.
+  - **Follow-ups NOT in this commit**: (1) stale `ci.yml`-
+    referencing comments in `pr-fast.yml`, `release.yml`,
+    `dependabot-review.yml`, and `scripts/hooks/_lint_pre_push.sh`
+    — tracked as a separate housekeeping PR so this cutover
+    commit stays minimal and reviewable; (2) Phase 4b release.yml
+    workflow-level permissions refactor (workflow-level
+    `contents: write` → per-job grants on `create-github-release`
+    only) — still deferred per the Phase 4b PR's scope note;
+    (3) plan-doc §10.2 / §10.3 reconciliation (tick the Phase 4
+    "cutover" checkbox, flip the dashboard status to ✅) — handled
+    as a docs-only follow-up PR per the pattern PR #45 → PR #46.
+  - **Rollback**: `git revert` this commit restores `ci.yml`
+    verbatim (full history preserved; no squash-merge loss), AND
+    the ruleset needs to be PUT back to the 7-entry shape.  The
+    revert alone is not sufficient — the ruleset change is
+    separate state.  See §4.3 of the plan doc for the exact
+    reverse sequence.
+
 ### Security
 - **CI / release supply-chain hardening batch** (2026-04-22 —
   `.github/workflows/*.yml`, `SECURITY.md`,
