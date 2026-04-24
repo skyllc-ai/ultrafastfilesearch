@@ -79,13 +79,13 @@ impl ParallelMftReader {
 
         // Sort chunks by disk_offset (LCN order) for optimal disk scheduling
         let mut sorted_chunks: Vec<ReadChunk> = chunks;
-        sorted_chunks.sort_by_key(|c| c.disk_offset);
+        sorted_chunks.sort_by_key(|chunk| chunk.disk_offset);
 
         // Calculate actual bytes to read (after skip optimization)
         let bytes_to_read: u64 = sorted_chunks
             .iter()
-            .map(|c| {
-                let effective_records = c.record_count - c.skip_begin - c.skip_end;
+            .map(|chunk| {
+                let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
                 effective_records * record_size as u64
             })
             .sum();

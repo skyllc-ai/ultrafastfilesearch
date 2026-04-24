@@ -509,6 +509,10 @@ impl MftReader {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::min_ident_chars,
+    reason = "test code uses short idiomatic bindings (r, e) in Ok/Err match arms"
+)]
 mod tests {
     use core::time::Duration;
 

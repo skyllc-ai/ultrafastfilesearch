@@ -121,7 +121,7 @@ impl PipelinedMftReader {
         // Calculate total bytes for progress
         let total_bytes: u64 = chunks
             .iter()
-            .map(|c| c.record_count * u64::from(record_size))
+            .map(|chunk| chunk.record_count * u64::from(record_size))
             .sum();
 
         // Estimate capacity
@@ -145,7 +145,7 @@ impl PipelinedMftReader {
         // Pre-allocate buffer pool for the reader thread
         let max_chunk_size = chunks
             .iter()
-            .map(|c| c.record_count * u64::from(record_size))
+            .map(|chunk| chunk.record_count * u64::from(record_size))
             .max()
             .unwrap_or(self.chunk_size as u64) as usize;
 
@@ -183,8 +183,8 @@ impl PipelinedMftReader {
                             break;
                         }
                     }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to read chunk, skipping");
+                    Err(err) => {
+                        warn!(error = %err, "Failed to read chunk, skipping");
                         // Return buffer to pool
                         buffer_pool.push(buffer);
                     }
@@ -246,8 +246,8 @@ impl PipelinedMftReader {
         }
 
         // Wait for reader thread to finish
-        if let Err(e) = reader_handle.join() {
-            warn!("Reader thread panicked: {:?}", e);
+        if let Err(join_err) = reader_handle.join() {
+            warn!("Reader thread panicked: {:?}", join_err);
         }
 
         // Merge extensions and get final results
@@ -303,7 +303,7 @@ impl PipelinedMftReader {
         // Calculate total bytes for progress
         let total_bytes: u64 = chunks
             .iter()
-            .map(|c| c.record_count * u64::from(record_size))
+            .map(|chunk| chunk.record_count * u64::from(record_size))
             .sum();
 
         // Estimate capacity
@@ -330,7 +330,7 @@ impl PipelinedMftReader {
         // Pre-allocate buffer pool for the reader thread
         let max_chunk_size = chunks
             .iter()
-            .map(|c| c.record_count * u64::from(record_size))
+            .map(|chunk| chunk.record_count * u64::from(record_size))
             .max()
             .unwrap_or(self.chunk_size as u64) as usize;
 
@@ -368,8 +368,8 @@ impl PipelinedMftReader {
                             break;
                         }
                     }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to read chunk, skipping");
+                    Err(err) => {
+                        warn!(error = %err, "Failed to read chunk, skipping");
                         // Return buffer to pool
                         buffer_pool.push(buffer);
                     }
@@ -394,8 +394,8 @@ impl PipelinedMftReader {
         }
 
         // Wait for reader thread to finish
-        if let Err(e) = reader_handle.join() {
-            warn!("Reader thread panicked: {:?}", e);
+        if let Err(join_err) = reader_handle.join() {
+            warn!("Reader thread panicked: {:?}", join_err);
         }
 
         info!(

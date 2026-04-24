@@ -120,7 +120,7 @@ impl IocpMftReader {
         // Calculate total bytes for progress
         let total_bytes: u64 = chunks
             .iter()
-            .map(|c| c.record_count * u64::from(record_size))
+            .map(|chunk| chunk.record_count * u64::from(record_size))
             .sum();
 
         // Estimate capacity
@@ -150,13 +150,13 @@ impl IocpMftReader {
         // Create buffer pool and in-flight operations
         let max_chunk_size = chunks
             .iter()
-            .map(|c| c.record_count * u64::from(record_size))
+            .map(|chunk| chunk.record_count * u64::from(record_size))
             .max()
             .unwrap_or(self.chunk_size as u64) as usize;
 
         // Sort chunks by disk_offset (LCN order) to minimize seek time on HDD
         let mut sorted_chunks: Vec<ReadChunk> = chunks;
-        sorted_chunks.sort_by_key(|c| c.disk_offset);
+        sorted_chunks.sort_by_key(|chunk| chunk.disk_offset);
 
         // Use a VecDeque for chunks to process (now in LCN order)
         let mut pending_chunks: VecDeque<ReadChunk> = sorted_chunks.into_iter().collect();

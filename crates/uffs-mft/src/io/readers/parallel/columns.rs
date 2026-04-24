@@ -76,7 +76,7 @@ impl ParallelMftReader {
         // Calculate total bytes to read for progress reporting
         let total_bytes_to_read: u64 = chunks
             .iter()
-            .map(|c| c.record_count * u64::from(record_size))
+            .map(|chunk| chunk.record_count * u64::from(record_size))
             .sum();
 
         // Read all chunks (sequential I/O for handle safety)
@@ -98,8 +98,8 @@ impl ParallelMftReader {
                     }
                     chunk_data.push((chunk, data));
                 }
-                Err(e) => {
-                    warn!(chunk_idx = idx, error = ?e, "Failed to read chunk");
+                Err(err) => {
+                    warn!(chunk_idx = idx, error = ?err, "Failed to read chunk");
                 }
             }
         }
@@ -152,11 +152,11 @@ impl ParallelMftReader {
                     }
                     acc
                 })
-                .reduce(ChunkStats::default, |mut a, b| {
-                    a.results.extend(b.results);
-                    a.skipped += b.skipped;
-                    a.processed += b.processed;
-                    a
+                .reduce(ChunkStats::default, |mut acc, other| {
+                    acc.results.extend(other.results);
+                    acc.skipped += other.skipped;
+                    acc.processed += other.processed;
+                    acc
                 });
 
             records_processed.fetch_add(combined.processed, Ordering::Relaxed);

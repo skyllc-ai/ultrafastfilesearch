@@ -78,7 +78,7 @@ impl PrefetchMftReader {
         // Calculate total bytes for progress
         let total_bytes: u64 = chunks
             .iter()
-            .map(|c| c.record_count * u64::from(record_size))
+            .map(|chunk| chunk.record_count * u64::from(record_size))
             .sum();
 
         // Estimate capacity
@@ -102,7 +102,7 @@ impl PrefetchMftReader {
         // Pre-allocate two buffers for double-buffering
         let max_chunk_size = chunks
             .iter()
-            .map(|c| c.record_count * u64::from(record_size))
+            .map(|chunk| chunk.record_count * u64::from(record_size))
             .max()
             .unwrap_or(self.chunk_size as u64) as usize;
 

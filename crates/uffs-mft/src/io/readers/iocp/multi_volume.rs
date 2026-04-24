@@ -144,9 +144,9 @@ impl MultiVolumeIocpReader {
         let mut buffer_pools: Vec<Vec<AlignedBuffer>> = self
             .volumes
             .iter()
-            .map(|v| {
-                (0..v.max_concurrency)
-                    .map(|_| AlignedBuffer::new(v.io_chunk_size))
+            .map(|volume| {
+                (0..volume.max_concurrency)
+                    .map(|_| AlignedBuffer::new(volume.io_chunk_size))
                     .collect()
             })
             .collect();
@@ -154,7 +154,7 @@ impl MultiVolumeIocpReader {
         let mut in_flight: Vec<Vec<Option<Pin<Box<InFlightOp>>>>> = self
             .volumes
             .iter()
-            .map(|v| (0..v.max_concurrency).map(|_| None).collect())
+            .map(|volume| (0..volume.max_concurrency).map(|_| None).collect())
             .collect();
 
         // Issue initial reads for all volumes
@@ -394,9 +394,9 @@ impl MultiVolumeIocpReader {
         Ok(self
             .volumes
             .drain(..)
-            .map(|v| {
-                let parsed_records = v.merger.merge();
-                crate::index::MftIndex::from_parsed_records(v.drive_letter, parsed_records)
+            .map(|volume| {
+                let parsed_records = volume.merger.merge();
+                crate::index::MftIndex::from_parsed_records(volume.drive_letter, parsed_records)
             })
             .collect())
     }
@@ -424,7 +424,7 @@ pub fn prepare_volume_state(
     // Generate I/O operations
     let chunks = generate_read_chunks(&extent_map, bitmap.as_ref(), 64 * 1024);
     let mut sorted_chunks: Vec<ReadChunk> = chunks;
-    sorted_chunks.sort_by_key(|c| c.disk_offset);
+    sorted_chunks.sort_by_key(|chunk| chunk.disk_offset);
 
     let mut io_queue = std::collections::VecDeque::new();
 
@@ -456,7 +456,9 @@ pub fn prepare_volume_state(
     }
 
     let total_io_ops = io_queue.len();
-    let _estimated_records = bitmap.as_ref().map_or(total_records, |b| b.count_in_use());
+    let _estimated_records = bitmap
+        .as_ref()
+        .map_or(total_records, |bm| bm.count_in_use());
 
     VolumeState {
         drive_letter,

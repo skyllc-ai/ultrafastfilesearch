@@ -41,10 +41,10 @@ impl IoCompletionPort {
         let handle = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, None, 0, concurrency) };
 
         match handle {
-            Ok(h) => Ok(Self { handle: h }),
-            Err(e) => Err(MftError::Io(std::io::Error::new(
+            Ok(handle) => Ok(Self { handle }),
+            Err(err) => Err(MftError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("Failed to create IOCP: {e}"),
+                format!("Failed to create IOCP: {err}"),
             ))),
         }
     }
@@ -66,9 +66,9 @@ impl IoCompletionPort {
 
         match result {
             Ok(_) => Ok(()),
-            Err(e) => Err(MftError::Io(std::io::Error::new(
+            Err(err) => Err(MftError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("Failed to associate handle with IOCP: {e}"),
+                format!("Failed to associate handle with IOCP: {err}"),
             ))),
         }
     }
