@@ -974,7 +974,14 @@ replaces.
 **Steps**:
 
 1. Delete `build/update_all_versions.rs` (1028 lines).
-2. Delete version-bump functions from
+2. Delete the thin wrapper `scripts/ci/ci-pipeline.rs` (49 lines)
+   — dev-flow Phase 7 kept it as a deprecation shim with header
+   marker `REMOVE-AFTER: v0.5.73`.  R5 retires it alongside the
+   bespoke bumper; coordinating here avoids a follow-up cleanup PR.
+   If the current workspace version is still ≤ `0.5.73`, note in
+   the PR body that the REMOVE-AFTER marker was met by R5's
+   landing rather than by a version threshold.
+3. Delete version-bump functions from
    `scripts/ci-pipeline/src/version.rs`:
    - `increment_version()` — deleted
    - `version_bump()` — deleted
@@ -984,21 +991,24 @@ replaces.
      names).
    - Keep `update_polars_git()` — unrelated to versioning,
      updates the polars git dep pin.
-3. Remove the version-bump step from the `ship` pipeline in
+4. Remove the version-bump step from the `ship` pipeline in
    `scripts/ci-pipeline/src/`.  `just ship` is now **only**:
    check → lint → test → push.  Version bumping happens via
    release-plz on `main`, not via local ship commands.
-4. Delete `.github/workflows/auto-tag-release.yml` (169 lines).
-5. Update `dev-flow-implementation-plan.md`:
+5. Delete `.github/workflows/auto-tag-release.yml` (169 lines).
+6. Update `dev-flow-implementation-plan.md`:
    - Remove references to the `auto-tag-release.yml` bridge
      workflow.
+   - Flip the final `[ ]` bake-in item in Phase 7 dashboard
+     (§10.3) to `[x]` — the R4 release that preceded this PR
+     satisfied it.  Cross-reference this PR's SHA in the tick.
    - Add cross-reference to
      `release-automation-plan.md` in §1 or §2 intro.
-6. Update `CONTRIBUTING.md`:
+7. Update `CONTRIBUTING.md`:
    - Remove any mention of `./build/update_all_versions.rs`.
    - Explain the new "just write conventional commits, releases
      are automatic" flow.
-7. Update `justfile`:
+8. Update `justfile`:
    - Remove the version-bump step from `just ship` (if present as a
      distinct target).
    - Keep any `just release` target that dispatches `release.yml`
@@ -1018,10 +1028,11 @@ replaces.
 - Next release after Phase R5 lands cleanly — the release PR
   opens, merges, tag creates, `release.yml` fires.
 
-**PR shape**: 3-4 files deleted (rust-script + workflow +
-CI-pipeline/src version bits), 2-3 files modified (doc + justfile +
-version.rs trim).  Net diff: **~1350 lines removed**, ~30 lines
-added.
+**PR shape**: 4-5 files deleted (bespoke bumper + thin wrapper +
+auto-tag workflow + CI-pipeline version functions), 3-4 files
+modified (dev-flow plan Phase 7 bake-in tick + CONTRIBUTING +
+justfile + version.rs trim).  Net diff: **~1400 lines removed**,
+~30 lines added.
 
 **Rollback**: `git revert` restores everything.  This is where the
 "reversibility" discipline earns its keep — reverting Phase R5 is
@@ -1918,15 +1929,20 @@ If a rollback is executed after a public release has shipped:
 Single source of truth for phase progress.  Mirror the format of
 `dev-flow-implementation-plan.md §5 status dashboard`.
 
+**Settled decisions** (recorded 2026-04-24 before R0 opened):
+
+1. **R0 step-5 lockfile patch**: **INCLUDE**.  Adds the one-line `cargo generate-lockfile --offline` step to `build/update_all_versions.rs` so interim releases during R1-R4 are byte-reproducible from `Cargo.lock`.  Eliminates risk #13 during the transition window.
+2. **Dev-flow Phase 7 sequencing**: R5 lands AFTER dev-flow Phase 7's final bake-in observation.  Automatically satisfied by the plan's natural order — dev-flow Phase 7 needs one `just ship` bake (its only remaining `[ ]` item); release-auto R3/R4 also need ≥1 live release for shadow-mode observation.  **The same release cycle satisfies both.**  R5 is the first phase where the two plans mutually unblock; no explicit wait needed.
+
 | # | Phase | Status | Commit | Date | PR | Notes |
 |---|---|---|---|---|---|---|
-| R0 | Baseline & cleanup (remove dead cargo-dist config, rename commit-style doc) | ⬜ | | | | Cleanup before forward movement |
+| R0 | Baseline & cleanup (remove dead cargo-dist + release-plz metadata, add lockfile-drift patch per decision 1, new baseline doc) | ⬜ | | | | Includes the interim lockfile patch |
 | R1a | Conventional commits (advisory) | ⬜ | | | | PR title + commit messages scanned, comment-only |
 | R1b | Conventional commits (mandatory gate) | ⬜ | | | | After ≥1 month of advisory observation |
 | R2 | `git-cliff` + `cliff.toml` (local validation) | ⬜ | | | | No workflow change; just the template |
 | R3 | release-plz shadow mode | ⬜ | | | | Observe 1-2 weeks / 3-5 merges |
-| R4 | release-plz active (release PR mode) | ⬜ | | | | At least 1 full release cut through the new flow |
-| R5 | Retire bespoke tooling | ⬜ | | | | ~1350 lines deleted; point of no return for easy rollback |
+| R4 | release-plz active (release PR mode) | ⬜ | | | | At least 1 full release cut through the new flow; same release satisfies dev-flow Phase 7 bake-in (decision 2) |
+| R5 | Retire bespoke tooling (incl. `scripts/ci/ci-pipeline.rs` thin wrapper per its `REMOVE-AFTER: v0.5.73` marker) | ⬜ | | | | ~1350 lines deleted; point of no return for easy rollback |
 | R6 | crates.io metadata audit + dry-run CI | ⬜ | | | | Names reserved externally; per-crate metadata complete |
 | R7 | OIDC trusted publisher (dormant) | ⬜ | | | | Scaffolding, `if: false` gate |
 | R8 | First publish dress rehearsal (`uffs-time` only) | ⬜ | | | | **External state change** — one crate goes live on crates.io |
