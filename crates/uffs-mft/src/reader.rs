@@ -509,10 +509,6 @@ impl MftReader {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::min_ident_chars,
-    reason = "test code uses short idiomatic bindings (r, e) in Ok/Err match arms"
-)]
 mod tests {
     use core::time::Duration;
 
@@ -603,12 +599,12 @@ mod tests {
     fn test_mft_reader_uses_none_defaults() {
         // This test requires admin privileges, so we check if we can open
         let reader = match MftReader::open('C') {
-            Ok(r) => r,
+            Ok(opened) => opened,
             Err(MftError::InsufficientPrivileges) => {
                 // Skip test if not running as admin
                 return;
             }
-            Err(e) => panic!("Unexpected error: {:?}", e),
+            Err(err) => panic!("Unexpected error: {:?}", err),
         };
 
         // Verify that concurrency and io_size are None (will use optimal defaults)

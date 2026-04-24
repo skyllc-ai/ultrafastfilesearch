@@ -5,8 +5,8 @@
 //!
 //! **Module-scoped cast justification:** `as usize` / `as u32` casts convert
 //! NTFS disk offsets (`u64`) and record sizes (`u32`) into `usize` / `u32`
-//! respectively.  `usize` ≥ 32 bits on every supported target; NTFS disk offsets
-//! are physically bounded by the volume size (≤ 2⁶⁴ bytes).
+//! respectively.  `usize` ≥ 32 bits on every supported target; NTFS disk
+//! offsets are physically bounded by the volume size (≤ 2⁶⁴ bytes).
 #![expect(
     clippy::cast_possible_truncation,
     reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
@@ -116,8 +116,8 @@ impl IocpMftReader {
     where
         F: FnMut(u64, u64),
     {
-        use std::collections::VecDeque;
         use core::pin::Pin;
+        use std::collections::VecDeque;
 
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
         use windows::Win32::Storage::FileSystem::ReadFile;
@@ -203,8 +203,7 @@ impl IocpMftReader {
                 let overlapped_ptr = unsafe { op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
                 // SAFETY: same justification as above — pinned Box, sole writer.
                 let op_mut = unsafe { op.as_mut().get_unchecked_mut() };
-                let Some(read_slice) = op_mut.buffer.as_mut_slice().get_mut(..aligned_size)
-                else {
+                let Some(read_slice) = op_mut.buffer.as_mut_slice().get_mut(..aligned_size) else {
                     // Unreachable: buffer was sized to ≥ aligned_size at allocation.
                     return Err(MftError::Io(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
@@ -309,8 +308,7 @@ impl IocpMftReader {
                 // Issue next read if there are more chunks
                 if let Some(next_chunk) = pending_chunks.pop_front() {
                     // Reuse the buffer
-                    let mut buffer =
-                        core::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
+                    let mut buffer = core::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
 
                     // Resize if needed
                     let next_read_size = next_chunk.record_count * u64::from(record_size);
@@ -341,8 +339,10 @@ impl IocpMftReader {
                         unsafe { new_op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
                     // SAFETY: same justification as above — pinned Box, sole writer.
                     let new_op_mut = unsafe { new_op.as_mut().get_unchecked_mut() };
-                    let Some(read_slice) =
-                        new_op_mut.buffer.as_mut_slice().get_mut(..next_aligned_size)
+                    let Some(read_slice) = new_op_mut
+                        .buffer
+                        .as_mut_slice()
+                        .get_mut(..next_aligned_size)
                     else {
                         // Unreachable: buffer was (re)sized to ≥ next_aligned_size above.
                         return Err(MftError::Io(std::io::Error::new(
@@ -353,14 +353,8 @@ impl IocpMftReader {
                     // SAFETY: `handle` is a live overlapped-capable file handle,
                     // the buffer slice lives inside the pinned operation for the
                     // duration of the async I/O, and `overlapped_ptr` points into it.
-                    let read_result = unsafe {
-                        ReadFile(
-                            handle,
-                            Some(read_slice),
-                            None,
-                            Some(overlapped_ptr),
-                        )
-                    };
+                    let read_result =
+                        unsafe { ReadFile(handle, Some(read_slice), None, Some(overlapped_ptr)) };
 
                     if read_result.is_err() {
                         // SAFETY: `GetLastError` reads the calling thread's last-error

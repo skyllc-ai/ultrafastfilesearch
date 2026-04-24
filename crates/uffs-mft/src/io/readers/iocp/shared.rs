@@ -55,7 +55,11 @@ impl IoCompletionPort {
                     format!("Failed to create IOCP: {err}"),
                 )))
             },
-            |iocp_handle| Ok(Self { handle: iocp_handle }),
+            |iocp_handle| {
+                Ok(Self {
+                    handle: iocp_handle,
+                })
+            },
         )
     }
 

@@ -46,8 +46,7 @@ pub(super) fn parse_buffer_zero_copy_inner(
 
         let frs = start_frs + skip_begin as u64 + i as u64;
 
-        let Some(record_slice) = buffer_slice.get_mut(offset..offset + record_size_usize)
-        else {
+        let Some(record_slice) = buffer_slice.get_mut(offset..offset + record_size_usize) else {
             break;
         };
 

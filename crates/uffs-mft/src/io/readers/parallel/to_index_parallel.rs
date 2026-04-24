@@ -79,10 +79,10 @@ impl ParallelMftReader {
     where
         F: Fn(u64, u64),
     {
-        use std::collections::VecDeque;
         use core::pin::Pin;
-        use std::sync::Arc;
         use core::sync::atomic::{AtomicUsize, Ordering};
+        use std::collections::VecDeque;
+        use std::sync::Arc;
 
         use crossbeam_channel::{Sender, bounded};
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
@@ -436,8 +436,7 @@ impl ParallelMftReader {
             let mut completed_slot = None;
             for (idx, slot) in in_flight.iter().enumerate() {
                 if let Some(op) = slot {
-                    let op_overlapped_ptr = (&raw const op.overlapped)
-                        .cast_mut();
+                    let op_overlapped_ptr = (&raw const op.overlapped).cast_mut();
                     if op_overlapped_ptr == overlapped_ptr {
                         completed_slot = Some(idx);
                         break;
@@ -454,8 +453,7 @@ impl ParallelMftReader {
                 let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
 
                 // Send buffer to workers (copy the data)
-                let Some(buffer_slice) =
-                    op_mut.buffer.as_slice().get(..bytes_transferred as usize)
+                let Some(buffer_slice) = op_mut.buffer.as_slice().get(..bytes_transferred as usize)
                 else {
                     // Unreachable: bytes_transferred ≤ allocated buffer size.
                     drop(tx);
@@ -479,8 +477,7 @@ impl ParallelMftReader {
                 completed_count += 1;
 
                 // Recycle buffer and queue next read
-                let recycled_buffer =
-                    core::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
+                let recycled_buffer = core::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
                 buffer_pool.push(recycled_buffer);
 
                 if let Some(next_op) = io_ops.pop_front() {
@@ -508,8 +505,7 @@ impl ParallelMftReader {
 
                     let new_overlapped_ptr = &raw mut new_op_mut.overlapped;
                     let read_size = new_op_mut.op.size;
-                    let Some(read_slice) =
-                        new_op_mut.buffer.as_mut_slice().get_mut(..read_size)
+                    let Some(read_slice) = new_op_mut.buffer.as_mut_slice().get_mut(..read_size)
                     else {
                         // Unreachable: buffer was sized to ≥ read_size at allocation.
                         drop(tx);

@@ -467,14 +467,12 @@ mod windows_impl {
 
             // First 8 bytes of output = next USN to continue from
             let bytes_returned_usize = bytes_returned as usize; // u32→usize is lossless
-            let next_usn_slice = buffer
-                .get(..8)
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        "USN journal buffer shorter than 8 bytes",
-                    )
-                })?;
+            let next_usn_slice = buffer.get(..8).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "USN journal buffer shorter than 8 bytes",
+                )
+            })?;
             let mut next_usn_bytes = [0_u8; 8];
             next_usn_bytes.copy_from_slice(next_usn_slice);
             let next_usn = i64::from_le_bytes(next_usn_bytes);

@@ -267,7 +267,11 @@ struct FullBenchmarkReport {
 #[cfg(windows)]
 impl FullBenchmarkReport {
     fn to_json(&self) -> String {
-        let drives_json: Vec<String> = self.drives.iter().map(uffs_mft::BenchmarkResult::to_json).collect();
+        let drives_json: Vec<String> = self
+            .drives
+            .iter()
+            .map(uffs_mft::BenchmarkResult::to_json)
+            .collect();
         format!(
             r#"{{
   "metadata": {{
@@ -388,7 +392,10 @@ pub(crate) async fn cmd_bench_all(
     // Build full report
     let report = FullBenchmarkReport {
         timestamp: chrono::Local::now().to_rfc3339(),
-        hostname: hostname::get().map_or_else(|_| "unknown".to_owned(), |h| h.to_string_lossy().to_string()),
+        hostname: hostname::get().map_or_else(
+            |_| "unknown".to_owned(),
+            |h| h.to_string_lossy().to_string(),
+        ),
         cpu_count: std::thread::available_parallelism().map_or(1, core::num::NonZero::get),
         uffs_version: env!("CARGO_PKG_VERSION").to_owned(),
         drives: results,

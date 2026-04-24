@@ -80,14 +80,7 @@ impl ParallelMftReader {
         // SAFETY: `handle` is live, the aligned buffer slice spans
         // `aligned_size` writable bytes, and `bytes_read` is a valid
         // out-parameter.
-        unsafe {
-            ReadFile(
-                handle,
-                Some(read_slice),
-                Some(&raw mut bytes_read),
-                None,
-            )
-        }?;
+        unsafe { ReadFile(handle, Some(read_slice), Some(&raw mut bytes_read), None) }?;
 
         // Extract the actual data (accounting for alignment offset)
         let actual_size = (bytes_read as usize).saturating_sub(offset_adjustment);

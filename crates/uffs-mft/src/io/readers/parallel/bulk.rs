@@ -143,7 +143,12 @@ impl ParallelMftReader {
             // SAFETY: `handle` is live and `new_pos` is valid writable storage
             // for the seek result.
             unsafe {
-                SetFilePointerEx(handle, disk_offset as i64, Some(&raw mut new_pos), FILE_BEGIN)
+                SetFilePointerEx(
+                    handle,
+                    disk_offset as i64,
+                    Some(&raw mut new_pos),
+                    FILE_BEGIN,
+                )
             }?;
 
             let Some(target_slice) = mft_buffer
@@ -219,8 +224,7 @@ impl ParallelMftReader {
                         }
 
                         let offset = i * record_size;
-                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size)
-                        else {
+                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size) else {
                             break;
                         };
 
@@ -292,8 +296,7 @@ impl ParallelMftReader {
                         }
 
                         let offset = i * record_size;
-                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size)
-                        else {
+                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size) else {
                             break;
                         };
 

@@ -43,7 +43,9 @@ pub(crate) async fn cmd_index_save(drive: char, output: &Path) -> Result<()> {
     let volume_data = handle.volume_data();
     let volume_serial = volume_data.volume_serial_number;
 
-    let (usn_journal_id, next_usn) = if let Ok(info) = query_usn_journal(drive) { (info.journal_id, info.next_usn) } else {
+    let (usn_journal_id, next_usn) = if let Ok(info) = query_usn_journal(drive) {
+        (info.journal_id, info.next_usn)
+    } else {
         println!("⚠️  USN Journal not available, saving without checkpoint");
         (0, 0)
     };
@@ -63,9 +65,7 @@ pub(crate) async fn cmd_index_save(drive: char, output: &Path) -> Result<()> {
 
     if usn_journal_id != 0 {
         println!();
-        println!(
-            "📍 USN Checkpoint: {next_usn} (Journal ID: 0x{usn_journal_id:016X})"
-        );
+        println!("📍 USN Checkpoint: {next_usn} (Journal ID: 0x{usn_journal_id:016X})");
         println!("   Use this to apply incremental updates later.");
     }
 
@@ -170,10 +170,7 @@ pub(crate) async fn cmd_cache_status(clean: bool, purge: bool) -> Result<()> {
         let (age_str, status) = match age {
             Some(secs) if secs < INDEX_TTL_SECONDS => {
                 let remaining = INDEX_TTL_SECONDS - secs;
-                (
-                    format!("{secs}s"),
-                    format!("✅ Fresh ({remaining}s left)"),
-                )
+                (format!("{secs}s"), format!("✅ Fresh ({remaining}s left)"))
             }
             Some(secs) => (format!("{secs}s"), "⚠️  Expired".to_owned()),
             None => ("?".to_owned(), "❓ Unknown".to_owned()),
@@ -253,7 +250,9 @@ pub(crate) async fn cmd_cache_get(drive: char, force: bool, ttl: Option<u64>) ->
     let volume_data = handle.volume_data();
     let volume_serial = volume_data.volume_serial_number;
 
-    let (usn_journal_id, next_usn) = if let Ok(info) = query_usn_journal(drive) { (info.journal_id, info.next_usn) } else {
+    let (usn_journal_id, next_usn) = if let Ok(info) = query_usn_journal(drive) {
+        (info.journal_id, info.next_usn)
+    } else {
         println!("⚠️  USN Journal not available");
         (0, 0)
     };
@@ -269,9 +268,7 @@ pub(crate) async fn cmd_cache_get(drive: char, force: bool, ttl: Option<u64>) ->
     );
 
     if usn_journal_id != 0 {
-        println!(
-            "📍 USN Checkpoint: {next_usn} (Journal ID: 0x{usn_journal_id:016X})"
-        );
+        println!("📍 USN Checkpoint: {next_usn} (Journal ID: 0x{usn_journal_id:016X})");
     }
 
     Ok(())
@@ -548,7 +545,9 @@ async fn do_full_index_build(drive: char) -> Result<()> {
     let volume_data = handle.volume_data();
     let volume_serial = volume_data.volume_serial_number;
 
-    let (usn_journal_id, next_usn) = if let Ok(info) = query_usn_journal(drive) { (info.journal_id, info.next_usn) } else {
+    let (usn_journal_id, next_usn) = if let Ok(info) = query_usn_journal(drive) {
+        (info.journal_id, info.next_usn)
+    } else {
         println!("⚠️  USN Journal not available");
         (0, 0)
     };
@@ -564,9 +563,7 @@ async fn do_full_index_build(drive: char) -> Result<()> {
     );
 
     if usn_journal_id != 0 {
-        println!(
-            "📍 USN Checkpoint: {next_usn} (Journal ID: 0x{usn_journal_id:016X})"
-        );
+        println!("📍 USN Checkpoint: {next_usn} (Journal ID: 0x{usn_journal_id:016X})");
     }
 
     let total_time = start.elapsed();

@@ -269,8 +269,9 @@ fn get_client_exe_path(pid: u32) -> Option<String> {
         QueryFullProcessImageNameW,
     };
 
-    // SAFETY: OpenProcess is a read-only query with PROCESS_QUERY_LIMITED_INFORMATION;
-    // failure returns an Error (caught by ok()?), not a dangling handle.
+    // SAFETY: OpenProcess is a read-only query with
+    // PROCESS_QUERY_LIMITED_INFORMATION; failure returns an Error (caught by
+    // ok()?), not a dangling handle.
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
     let mut buf = vec![0_u16; 4096];
     let mut size = u32::try_from(buf.len()).unwrap_or(u32::MAX);
@@ -300,8 +301,7 @@ fn get_client_exe_path(pid: u32) -> Option<String> {
 #[cfg(windows)]
 fn audit_log(action: &str, pid: u32, exe: Option<&str>, drive: Option<char>, detail: &str) {
     let exe_str = exe.unwrap_or("<unknown>");
-    let drive_str =
-        drive.map_or_else(|| "-".to_owned(), |drive_char| drive_char.to_string());
+    let drive_str = drive.map_or_else(|| "-".to_owned(), |drive_char| drive_char.to_string());
     tracing::info!(
         target: "uffs_broker::audit",
         action,
@@ -462,10 +462,7 @@ fn disconnect_and_close(pipe: windows::Win32::Foundation::HANDLE) {
 
 /// Get the PID of the connected pipe client.
 #[cfg(windows)]
-#[expect(
-    unsafe_code,
-    reason = "GetNamedPipeClientProcessId is an FFI call"
-)]
+#[expect(unsafe_code, reason = "GetNamedPipeClientProcessId is an FFI call")]
 fn get_pipe_client_pid(pipe: windows::Win32::Foundation::HANDLE) -> Option<u32> {
     use windows::Win32::System::Pipes::GetNamedPipeClientProcessId;
 
@@ -491,11 +488,10 @@ fn verify_client(pid: u32) -> bool {
         QueryFullProcessImageNameW,
     };
 
-    // SAFETY: OpenProcess is a read-only query with PROCESS_QUERY_LIMITED_INFORMATION;
-    // failure returns Err (handled by the let-else) rather than an invalid handle.
-    let Ok(handle) =
-        (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) })
-    else {
+    // SAFETY: OpenProcess is a read-only query with
+    // PROCESS_QUERY_LIMITED_INFORMATION; failure returns Err (handled by the
+    // let-else) rather than an invalid handle.
+    let Ok(handle) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else {
         return false;
     };
 
@@ -544,9 +540,7 @@ fn verify_client(pid: u32) -> bool {
 /// Open the NTFS volume for a drive letter with read-only backup semantics.
 #[cfg(windows)]
 #[expect(unsafe_code, reason = "CreateFileW is an FFI call")]
-fn open_volume_read_only(
-    drive_letter: char,
-) -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
+fn open_volume_read_only(drive_letter: char) -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ, FILE_SHARE_READ,
         FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -568,8 +562,7 @@ fn open_volume_read_only(
             None,
         )
     };
-    create_file_result
-        .map_err(|err| anyhow::anyhow!("CreateFileW failed for {volume_path}: {err}"))
+    create_file_result.map_err(|err| anyhow::anyhow!("CreateFileW failed for {volume_path}: {err}"))
 }
 
 /// Duplicate `volume_handle` into the client process with read-only access.

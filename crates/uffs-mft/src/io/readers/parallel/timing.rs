@@ -9,12 +9,11 @@
 // Module-scoped pedantic allows with prose justification.  All
 // `cast_possible_truncation` hits in this file fall into two domain-bounded
 // categories:
-//   1. `Duration::as_nanos() as u64` — 584 years of nanoseconds fit in u64;
-//      timing values measured here are sub-second in practice.
-//   2. `u32 / u64 -> usize` for on-disk NTFS record counts and byte offsets —
-//      usize is ≥ 32 bits on every supported target, and u64 values come from
-//      the NTFS MFT which is physically bounded by the disk size (≤ 2⁶⁴ bytes
-//      but practically always < 2⁶⁴ records).
+//   1. `Duration::as_nanos() as u64` — 584 years of nanoseconds fit in u64; timing values measured
+//      here are sub-second in practice.
+//   2. `u32 / u64 -> usize` for on-disk NTFS record counts and byte offsets — usize is ≥ 32 bits on
+//      every supported target, and u64 values come from the NTFS MFT which is physically bounded by
+//      the disk size (≤ 2⁶⁴ bytes but practically always < 2⁶⁴ records).
 #![expect(
     clippy::cast_possible_truncation,
     reason = "timing (u128 ns -> u64) and NTFS record-count (u32/u64 -> usize) casts are \

@@ -114,9 +114,7 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
     };
 
     println!("=== Benchmark Results ===");
-    println!(
-        "Time Elapsed: {elapsed_ms} ms ({elapsed_secs:.3} seconds)"
-    );
+    println!("Time Elapsed: {elapsed_ms} ms ({elapsed_secs:.3} seconds)");
     println!("MFT Read Speed: {mft_read_speed:.2} MB/s");
     println!("Record Processing: {records_per_sec} records/sec");
     println!("File Indexing: {entries_per_sec} files+dirs/sec");
@@ -126,9 +124,7 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
     // Print summary using the historical layout
     // =========================================================================
     println!("=== Summary ===");
-    println!(
-        "Indexed {total_entries} items in {elapsed_secs:.3} seconds"
-    );
+    println!("Indexed {total_entries} items in {elapsed_secs:.3} seconds");
 
     Ok(())
 }
@@ -367,9 +363,7 @@ pub(crate) async fn cmd_benchmark_index_lean(
     };
 
     println!("=== Benchmark Results ===");
-    println!(
-        "Time Elapsed: {elapsed_ms} ms ({elapsed_secs:.3} seconds)"
-    );
+    println!("Time Elapsed: {elapsed_ms} ms ({elapsed_secs:.3} seconds)");
     println!("MFT Read Speed: {mft_read_speed:.2} MB/s");
     println!("Record Processing: {records_per_sec} records/sec");
     println!("File Indexing: {entries_per_sec} files+dirs/sec");
@@ -381,9 +375,7 @@ pub(crate) async fn cmd_benchmark_index_lean(
     println!("=== Reference Benchmark Guide ===");
     println!("To compare with the reference uffs.com binary:");
     println!("  uffs.com --benchmark-mft={drive_upper}:   Raw I/O only");
-    println!(
-        "  uffs.com --benchmark-index={drive_upper}: I/O + Parse + Preprocess"
-    );
+    println!("  uffs.com --benchmark-index={drive_upper}: I/O + Parse + Preprocess");
     println!();
     println!("Rust equivalent phases:");
     println!(
@@ -445,7 +437,9 @@ pub(crate) async fn cmd_benchmark_tree(
             .with_context(|| format!("Failed to read MFT from {drive_upper}:"))?
     } else {
         println!("Loading index from cache...");
-        if let Some((cached, _header)) = load_cached_index(drive_upper, INDEX_TTL_SECONDS) { cached } else {
+        if let Some((cached, _header)) = load_cached_index(drive_upper, INDEX_TTL_SECONDS) {
+            cached
+        } else {
             println!("Cache miss - building fresh index...");
             let reader = MftReader::open(drive_upper)
                 .with_context(|| format!("Failed to open drive {drive_upper}:"))?;
@@ -594,7 +588,7 @@ pub(crate) async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> 
                 vcn: 0,
                 cluster_count: volume_data.mft_valid_data_length
                     / u64::from(volume_data.bytes_per_cluster),
-                lcn: volume_data.mft_start_lcn as i64,
+                lcn: volume_data.mft_start_lcn.cast_signed(),
             }]
         });
 

@@ -17,9 +17,7 @@ pub(crate) async fn cmd_bitmap_diag(drive: char, show_samples: bool) -> Result<(
     let drive_upper = drive.to_ascii_uppercase();
 
     println!("═══════════════════════════════════════════════════════════════");
-    println!(
-        "              MFT BITMAP DIAGNOSTIC - Drive {drive_upper}:"
-    );
+    println!("              MFT BITMAP DIAGNOSTIC - Drive {drive_upper}:");
     println!("═══════════════════════════════════════════════════════════════");
     println!();
 

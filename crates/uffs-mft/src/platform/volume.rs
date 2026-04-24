@@ -481,14 +481,7 @@ impl VolumeHandle {
         let mut new_position = 0_i64;
         // SAFETY: `self.handle` is a live volume handle and `new_position`
         // points to writable stack storage for the duration of the call.
-        unsafe {
-            SetFilePointerEx(
-                self.handle,
-                0,
-                Some(&raw mut new_position),
-                FILE_BEGIN,
-            )
-        }?;
+        unsafe { SetFilePointerEx(self.handle, 0, Some(&raw mut new_position), FILE_BEGIN) }?;
 
         let mut buffer = [0_u8; 512];
         let mut bytes_read = 0_u32;
@@ -559,7 +552,7 @@ impl VolumeHandle {
                 vcn: 0,
                 cluster_count: self.volume_data.mft_valid_data_length
                     / u64::from(self.volume_data.bytes_per_cluster),
-                lcn: self.volume_data.mft_start_lcn as i64,
+                lcn: self.volume_data.mft_start_lcn.cast_signed(),
             }]);
         };
 
@@ -787,7 +780,7 @@ impl VolumeHandle {
                     );
                 }
                 return Ok(MftBitmap::new_all_valid(
-                    self.estimated_record_count() as usize,
+                    self.estimated_record_count() as usize
                 ));
             };
             // SAFETY: `self.handle` is a live volume handle, the slice points to

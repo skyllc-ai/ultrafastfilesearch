@@ -226,9 +226,7 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     println!("=== Benchmark Results ===");
     println!("Total bytes read: {total_bytes_read} ({total_mb} MB)");
     println!("Total records: {record_count}");
-    println!(
-        "Time elapsed: {elapsed_ms} ms ({elapsed_secs:.3} seconds)"
-    );
+    println!("Time elapsed: {elapsed_ms} ms ({elapsed_secs:.3} seconds)");
     println!("Read speed: {read_speed_mb_s:.2} MB/s");
     println!();
 
@@ -249,9 +247,7 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
         char_or_dot(first_4_bytes[2]),
         char_or_dot(first_4_bytes[3])
     );
-    println!(
-        "First 4 bytes (hex): {first_hex}  (ASCII: {first_ascii})"
-    );
+    println!("First 4 bytes (hex): {first_hex}  (ASCII: {first_ascii})");
 
     // Format last 4 bytes
     let last_hex = format!(

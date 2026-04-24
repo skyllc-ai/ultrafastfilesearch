@@ -217,14 +217,7 @@ impl StreamingMftReader {
         // SAFETY: `handle` is live, the aligned buffer slice spans
         // `aligned_size` writable bytes, and `bytes_read` is a valid
         // out-parameter.
-        unsafe {
-            ReadFile(
-                handle,
-                Some(read_slice),
-                Some(&raw mut bytes_read),
-                None,
-            )
-        }?;
+        unsafe { ReadFile(handle, Some(read_slice), Some(&raw mut bytes_read), None) }?;
 
         Ok(bytes_read as usize)
     }

@@ -518,14 +518,8 @@ fn read_chunk_into_buffer_static(
     };
     // SAFETY: `handle` is live, the aligned buffer slice spans `aligned_size`
     // writable bytes, and `bytes_read` is a valid out-parameter.
-    let read_result = unsafe {
-        ReadFile(
-            handle,
-            Some(read_slice),
-            Some(&raw mut bytes_read),
-            None,
-        )
-    };
+    let read_result =
+        unsafe { ReadFile(handle, Some(read_slice), Some(&raw mut bytes_read), None) };
 
     if read_result.is_err() {
         return Err(MftError::Io(std::io::Error::last_os_error()));

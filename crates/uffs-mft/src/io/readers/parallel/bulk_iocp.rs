@@ -5,8 +5,8 @@
 //!
 //! **Module-scoped cast justification:** `as usize` / `as u32` casts convert
 //! NTFS disk offsets (`u64`) and record sizes (`u32`) into `usize` / `u32`
-//! respectively.  `usize` ≥ 32 bits on every supported target; NTFS disk offsets
-//! are physically bounded by the volume size (≤ 2⁶⁴ bytes).
+//! respectively.  `usize` ≥ 32 bits on every supported target; NTFS disk
+//! offsets are physically bounded by the volume size (≤ 2⁶⁴ bytes).
 #![expect(
     clippy::cast_possible_truncation,
     reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
@@ -49,10 +49,29 @@ impl ParallelMftReader {
         F: Fn(u64, u64),
     {
         use core::pin::Pin;
+        use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+        use std::sync::Arc;
 
         use rayon::prelude::*;
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
+
+        // Prepare all overlapped operations
+        // Each operation needs: OVERLAPPED struct for async I/O tracking
+        struct BulkOverlappedRead {
+            overlapped: windows::Win32::System::IO::OVERLAPPED,
+        }
+
+        // Share IOCP handle across threads (IOCP is thread-safe)
+        // We need to wrap the raw pointer in a Send-safe wrapper
+        #[derive(Clone, Copy)]
+        struct SendHandle(isize);
+        // SAFETY: `SendHandle` only copies the raw IOCP handle value; the kernel
+        // object itself is thread-safe and ownership stays external to this wrapper.
+        unsafe impl Send for SendHandle {}
+        // SAFETY: Sharing copied IOCP handle values across threads is sound because
+        // all synchronization is provided by the kernel-managed completion port.
+        unsafe impl Sync for SendHandle {}
 
         let record_size = self.extent_map.bytes_per_record as usize;
         let total_records = self.extent_map.total_records() as usize;
@@ -108,12 +127,6 @@ impl ParallelMftReader {
         let read_start = std::time::Instant::now();
         let iocp = IoCompletionPort::new(0)?;
         iocp.associate(overlapped_handle, 0)?;
-
-        // Prepare all overlapped operations
-        // Each operation needs: OVERLAPPED struct for async I/O tracking
-        struct BulkOverlappedRead {
-            overlapped: windows::Win32::System::IO::OVERLAPPED,
-        }
 
         // Estimate number of I/O operations
         let estimated_ops = (bytes_to_read as usize / io_chunk_size) + sorted_chunks.len();
@@ -216,23 +229,9 @@ impl ParallelMftReader {
 
         // Wait for all completions using multiple worker threads
         // This keeps the I/O pipeline full by processing completions in parallel
-        use std::sync::Arc;
-        use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-
         let bytes_read_total = Arc::new(AtomicU64::new(0));
         let completed = Arc::new(AtomicUsize::new(0));
         let error_flag = Arc::new(AtomicUsize::new(0)); // 0 = no error
-
-        // Share IOCP handle across threads (IOCP is thread-safe)
-        // We need to wrap the raw pointer in a Send-safe wrapper
-        #[derive(Clone, Copy)]
-        struct SendHandle(isize);
-        // SAFETY: `SendHandle` only copies the raw IOCP handle value; the kernel
-        // object itself is thread-safe and ownership stays external to this wrapper.
-        unsafe impl Send for SendHandle {}
-        // SAFETY: Sharing copied IOCP handle values across threads is sound because
-        // all synchronization is provided by the kernel-managed completion port.
-        unsafe impl Sync for SendHandle {}
 
         let iocp_handle_raw = SendHandle(iocp.raw_handle().0 as isize);
 
@@ -362,8 +361,7 @@ impl ParallelMftReader {
                         }
 
                         let offset = i * record_size;
-                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size)
-                        else {
+                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size) else {
                             break;
                         };
 
@@ -423,8 +421,7 @@ impl ParallelMftReader {
                         }
 
                         let offset = i * record_size;
-                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size)
-                        else {
+                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size) else {
                             break;
                         };
 

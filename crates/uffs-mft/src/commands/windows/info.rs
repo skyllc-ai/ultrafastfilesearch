@@ -142,9 +142,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
         ));
     }
     if utilization > 95.0 {
-        warnings.push(format!(
-            "MFT utilization is very high ({utilization:.1}%)"
-        ));
+        warnings.push(format!("MFT utilization is very high ({utilization:.1}%)"));
     }
 
     let elapsed = start_time.elapsed();
@@ -156,9 +154,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
     } else {
         println!("                    MFT INFO (Lightweight)");
     }
-    println!(
-        "                    Drive: {drive_upper}: ({drive_type_str})"
-    );
+    println!("                    Drive: {drive_upper}: ({drive_type_str})");
     println!("═══════════════════════════════════════════════════════════════");
     println!();
     println!("📐 VOLUME GEOMETRY");

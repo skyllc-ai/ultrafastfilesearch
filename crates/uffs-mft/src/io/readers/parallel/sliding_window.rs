@@ -51,12 +51,26 @@ impl ParallelMftReader {
     where
         F: Fn(u64, u64),
     {
-        use std::collections::VecDeque;
         use core::pin::Pin;
+        use std::collections::VecDeque;
 
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
+
+        // Break chunks into 1MB I/O operations
+        struct IoOp {
+            disk_offset: u64,
+            buffer_offset: usize, // Where in final buffer this goes
+            size: usize,
+        }
+
+        // Sliding window state
+        struct InFlightOp {
+            overlapped: windows::Win32::System::IO::OVERLAPPED,
+            buffer: AlignedBuffer,
+            op: IoOp,
+        }
 
         let record_size = self.extent_map.bytes_per_record as usize;
         let total_records = self.extent_map.total_records() as usize;
@@ -95,13 +109,6 @@ impl ParallelMftReader {
         let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
         let mut sorted_chunks: Vec<ReadChunk> = chunks;
         sorted_chunks.sort_by_key(|chunk| chunk.disk_offset);
-
-        // Break chunks into 1MB I/O operations
-        struct IoOp {
-            disk_offset: u64,
-            buffer_offset: usize, // Where in final buffer this goes
-            size: usize,
-        }
 
         let mut io_ops: VecDeque<IoOp> = VecDeque::new();
         let mut buffer_offset = 0_usize;
@@ -184,13 +191,6 @@ impl ParallelMftReader {
         let read_start = std::time::Instant::now();
         let iocp = IoCompletionPort::new(0)?;
         iocp.associate(overlapped_handle, 0)?;
-
-        // Sliding window state
-        struct InFlightOp {
-            overlapped: windows::Win32::System::IO::OVERLAPPED,
-            buffer: AlignedBuffer,
-            op: IoOp,
-        }
 
         // Pre-allocate buffer pool (concurrency buffers, recycled)
         let mut buffer_pool: Vec<AlignedBuffer> = (0..concurrency)
@@ -304,8 +304,7 @@ impl ParallelMftReader {
             let mut completed_slot = None;
             for (idx, slot) in in_flight.iter().enumerate() {
                 if let Some(op) = slot {
-                    let op_overlapped_ptr = (&raw const op.overlapped)
-                        .cast_mut();
+                    let op_overlapped_ptr = (&raw const op.overlapped).cast_mut();
                     if op_overlapped_ptr == overlapped_ptr {
                         completed_slot = Some(idx);
                         break;
@@ -323,8 +322,7 @@ impl ParallelMftReader {
 
                 // Copy data to final buffer
                 let dest_offset = op_mut.op.buffer_offset;
-                let Some(src_slice) =
-                    op_mut.buffer.as_slice().get(..bytes_transferred as usize)
+                let Some(src_slice) = op_mut.buffer.as_slice().get(..bytes_transferred as usize)
                 else {
                     return Err(MftError::Io(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
@@ -356,8 +354,7 @@ impl ParallelMftReader {
                 if let Some(next_op) = io_ops.pop_front() {
                     let Some(buffer) = buffer_pool.pop() else {
                         return Err(MftError::InvalidData(
-                            "I/O buffer pool exhausted while recycling overlapped reads"
-                                .to_owned(),
+                            "I/O buffer pool exhausted while recycling overlapped reads".to_owned(),
                         ));
                     };
                     let mut new_in_flight = Box::pin(InFlightOp {
@@ -378,8 +375,7 @@ impl ParallelMftReader {
 
                     let new_overlapped_ptr = &raw mut new_op_mut.overlapped;
                     let read_size = new_op_mut.op.size;
-                    let Some(read_slice) =
-                        new_op_mut.buffer.as_mut_slice().get_mut(..read_size)
+                    let Some(read_slice) = new_op_mut.buffer.as_mut_slice().get_mut(..read_size)
                     else {
                         return Err(MftError::Io(std::io::Error::new(
                             std::io::ErrorKind::UnexpectedEof,
@@ -466,8 +462,7 @@ impl ParallelMftReader {
                         }
 
                         let offset = i * record_size;
-                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size)
-                        else {
+                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size) else {
                             break;
                         };
 
@@ -527,8 +522,7 @@ impl ParallelMftReader {
                         }
 
                         let offset = i * record_size;
-                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size)
-                        else {
+                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size) else {
                             break;
                         };
 

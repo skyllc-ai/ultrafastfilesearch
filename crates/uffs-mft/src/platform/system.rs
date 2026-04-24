@@ -8,10 +8,10 @@ use core::mem::size_of;
 
 /// Narrow u32 size-of helper for Win32 FFI sizing parameters.
 ///
-/// Every struct passed here is a small fixed-size Win32 type (`TOKEN_ELEVATION`,
-/// `MEMORYSTATUSEX`, `StoragePropertyQuery`, etc.) whose size is provably well
-/// under `u32::MAX`.  A saturating cast keeps the function total without
-/// introducing an `#[expect]` per call site.
+/// Every struct passed here is a small fixed-size Win32 type
+/// (`TOKEN_ELEVATION`, `MEMORYSTATUSEX`, `StoragePropertyQuery`, etc.) whose
+/// size is provably well under `u32::MAX`.  A saturating cast keeps the
+/// function total without introducing an `#[expect]` per call site.
 #[cfg(windows)]
 const fn u32_size_of<T>() -> u32 {
     // Saturating truncation: Win32 structs are always < u32::MAX bytes, so this
@@ -58,8 +58,7 @@ pub fn is_elevated() -> bool {
     let mut token_handle = HANDLE::default();
     // SAFETY: `GetCurrentProcess()` returns the current pseudo-handle, and
     // `token_handle` points to writable storage for the returned token handle.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token_handle) }
-        .is_err()
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token_handle) }.is_err()
     {
         return false;
     }
@@ -437,8 +436,7 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
 
             // Compare in usize space to avoid truncating the compile-time
             // constant offset into u32.
-            if result.is_ok()
-                && (bytes_returned as usize) >= STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_END
+            if result.is_ok() && (bytes_returned as usize) >= STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_END
             {
                 buffer
                     .get(
@@ -487,9 +485,7 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
             )
         };
 
-        if result.is_ok()
-            && (bytes_returned as usize) >= size_of::<DeviceSeekPenaltyDescriptor>()
-        {
+        if result.is_ok() && (bytes_returned as usize) >= size_of::<DeviceSeekPenaltyDescriptor>() {
             Some(if descriptor.incurs_seek_penalty == 0 {
                 DriveType::Ssd
             } else {

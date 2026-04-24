@@ -61,7 +61,7 @@ impl MftReader {
                 vcn: 0,
                 cluster_count: volume_data.mft_valid_data_length
                     / u64::from(volume_data.bytes_per_cluster),
-                lcn: volume_data.mft_start_lcn as i64,
+                lcn: volume_data.mft_start_lcn.cast_signed(),
             }]
         });
         let extent_map = MftExtentMap::new(extents, volume_data.bytes_per_cluster, record_size);
@@ -131,14 +131,8 @@ impl MftReader {
                 // SAFETY: `handle` is live, the aligned buffer slice covers
                 // `aligned_size` writable bytes, and `bytes_read` is a valid
                 // out-parameter for the call.
-                let read_result = unsafe {
-                    ReadFile(
-                        handle,
-                        Some(read_slice),
-                        Some(&raw mut bytes_read),
-                        None,
-                    )
-                };
+                let read_result =
+                    unsafe { ReadFile(handle, Some(read_slice), Some(&raw mut bytes_read), None) };
                 if read_result.is_err() {
                     return Err(MftError::Io(std::io::Error::last_os_error()));
                 }
@@ -204,8 +198,8 @@ impl MftReader {
         path: P,
         options: &crate::raw_iocp::IocpCaptureOptions,
     ) -> Result<crate::raw_iocp::IocpCaptureHeader> {
-        use std::collections::VecDeque;
         use core::pin::Pin;
+        use std::collections::VecDeque;
 
         use windows::Win32::Foundation::{CloseHandle, ERROR_IO_PENDING, GetLastError, HANDLE};
         use windows::Win32::Storage::FileSystem::ReadFile;
@@ -228,7 +222,7 @@ impl MftReader {
                 vcn: 0,
                 cluster_count: volume_data.mft_valid_data_length
                     / u64::from(volume_data.bytes_per_cluster),
-                lcn: volume_data.mft_start_lcn as i64,
+                lcn: volume_data.mft_start_lcn.cast_signed(),
             }]
         });
 
@@ -302,7 +296,8 @@ impl MftReader {
                 let op_mut = unsafe { op.as_mut().get_unchecked_mut() };
                 let Some(read_slice) = op_mut.buffer.as_mut_slice().get_mut(..aligned_size) else {
                     // Unreachable: buffer sized to max_chunk_size + SECTOR_SIZE ≥ aligned_size.
-                    // SAFETY: handle was opened by open_overlapped_handle and is not used afterwards.
+                    // SAFETY: handle was opened by open_overlapped_handle and is not used
+                    // afterwards.
                     unsafe { CloseHandle(handle) }.ok();
                     return Err(MftError::Io(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
@@ -311,9 +306,8 @@ impl MftReader {
                 };
                 // SAFETY: `handle` is live, `read_slice` spans `aligned_size` writable bytes,
                 // `overlapped_ptr` points to `op`'s pinned OVERLAPPED struct.
-                let read_result = unsafe {
-                    ReadFile(handle, Some(read_slice), None, Some(overlapped_ptr))
-                };
+                let read_result =
+                    unsafe { ReadFile(handle, Some(read_slice), None, Some(overlapped_ptr)) };
 
                 if read_result.is_err() {
                     let err = unsafe { GetLastError() };
@@ -372,8 +366,7 @@ impl MftReader {
                 // Extract chunk data in completion order
                 let chunk = &op.chunk;
                 let read_size = chunk.record_count * u64::from(record_size);
-                let aligned_offset =
-                    (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
+                let aligned_offset = (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
                 let offset_adjustment = (chunk.disk_offset - aligned_offset) as usize;
 
                 let data = op
@@ -415,10 +408,8 @@ impl MftReader {
                     new_op.set_offset(aligned_offset);
 
                     let read_size = new_op.chunk.record_count * u64::from(record_size);
-                    let offset_adjustment =
-                        (new_op.chunk.disk_offset - aligned_offset) as usize;
-                    let aligned_size = ((read_size as usize + offset_adjustment + SECTOR_SIZE
-                        - 1)
+                    let offset_adjustment = (new_op.chunk.disk_offset - aligned_offset) as usize;
+                    let aligned_size = ((read_size as usize + offset_adjustment + SECTOR_SIZE - 1)
                         / SECTOR_SIZE)
                         * SECTOR_SIZE;
 
@@ -428,11 +419,11 @@ impl MftReader {
                         unsafe { new_op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
                     // SAFETY: same justification as above — pinned Box, sole writer.
                     let new_op_mut = unsafe { new_op.as_mut().get_unchecked_mut() };
-                    let Some(read_slice) =
-                        new_op_mut.buffer.as_mut_slice().get_mut(..aligned_size)
+                    let Some(read_slice) = new_op_mut.buffer.as_mut_slice().get_mut(..aligned_size)
                     else {
                         // Unreachable: buffer sized to max_chunk_size + SECTOR_SIZE ≥ aligned_size.
-                        // SAFETY: handle was opened by open_overlapped_handle and is not used afterwards.
+                        // SAFETY: handle was opened by open_overlapped_handle and is not used
+                        // afterwards.
                         unsafe { CloseHandle(handle) }.ok();
                         return Err(MftError::Io(std::io::Error::new(
                             std::io::ErrorKind::UnexpectedEof,
@@ -441,9 +432,8 @@ impl MftReader {
                     };
                     // SAFETY: `handle` is live, `read_slice` spans `aligned_size` writable bytes,
                     // `overlapped_ptr` points to `new_op`'s pinned OVERLAPPED struct.
-                    let read_result = unsafe {
-                        ReadFile(handle, Some(read_slice), None, Some(overlapped_ptr))
-                    };
+                    let read_result =
+                        unsafe { ReadFile(handle, Some(read_slice), None, Some(overlapped_ptr)) };
 
                     if read_result.is_err() {
                         let err = unsafe { GetLastError() };

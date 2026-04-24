@@ -5,8 +5,8 @@
 //!
 //! **Module-scoped cast justification:** `as usize` / `as u32` casts convert
 //! NTFS disk offsets (`u64`) and record sizes (`u32`) into `usize` / `u32`
-//! respectively.  `usize` ≥ 32 bits on every supported target; NTFS disk offsets
-//! are physically bounded by the volume size (≤ 2⁶⁴ bytes).
+//! respectively.  `usize` ≥ 32 bits on every supported target; NTFS disk
+//! offsets are physically bounded by the volume size (≤ 2⁶⁴ bytes).
 #![expect(
     clippy::cast_possible_truncation,
     reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
@@ -118,6 +118,13 @@ impl MultiVolumeIocpReader {
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
+        // In-flight operation tracking per volume
+        struct InFlightOp {
+            overlapped: windows::Win32::System::IO::OVERLAPPED,
+            buffer: AlignedBuffer,
+            op: MultiVolumeIoOp,
+        }
+
         let record_size = self
             .volumes
             .first()
@@ -138,13 +145,6 @@ impl MultiVolumeIocpReader {
                 io_size_kb = vol.io_chunk_size / 1024,
                 "📎 Associated volume with IOCP"
             );
-        }
-
-        // In-flight operation tracking per volume
-        struct InFlightOp {
-            overlapped: windows::Win32::System::IO::OVERLAPPED,
-            buffer: AlignedBuffer,
-            op: MultiVolumeIoOp,
         }
 
         // Create buffer pools and in-flight tracking per volume

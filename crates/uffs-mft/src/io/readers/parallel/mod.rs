@@ -135,7 +135,8 @@ pub struct ParallelMftReader {
     /// Skipped records counter (not in use or invalid).
     skipped_records: Arc<AtomicU64>,
     /// M1 8.4: Reusable aligned buffer for sequential I/O.
-    /// Wrapped in `RefCell` for interior mutability since read_chunk needs &mut.
+    /// Wrapped in `RefCell` for interior mutability since read_chunk needs
+    /// &mut.
     buffer: RefCell<AlignedBuffer>,
 }
 

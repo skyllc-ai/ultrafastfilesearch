@@ -335,7 +335,7 @@ impl MftReader {
                 vcn: 0,
                 cluster_count: volume_data.mft_valid_data_length
                     / u64::from(volume_data.bytes_per_cluster),
-                lcn: volume_data.mft_start_lcn as i64,
+                lcn: volume_data.mft_start_lcn.cast_signed(),
             }]
         });
 
@@ -515,8 +515,12 @@ impl MftReader {
                 };
 
                 // Close the overlapped raw_handle
-                // SAFETY: overlapped_handle is a valid raw_handle opened by open_overlapped_handle
-                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped raw_handle")]
+                // SAFETY: overlapped_handle is a valid raw_handle opened by
+                // open_overlapped_handle
+                #[expect(
+                    unsafe_code,
+                    reason = "FFI: CloseHandle on valid overlapped raw_handle"
+                )]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
                 };
@@ -589,7 +593,10 @@ impl MftReader {
                 // Close the overlapped raw_handle
                 // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
                 // no longer used after the read completes, and is closed exactly once.
-                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped raw_handle")]
+                #[expect(
+                    unsafe_code,
+                    reason = "FFI: CloseHandle on valid overlapped raw_handle"
+                )]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
                 };
@@ -633,7 +640,10 @@ impl MftReader {
                 // Close the overlapped raw_handle
                 // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
                 // no longer used after the read completes, and is closed exactly once.
-                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped raw_handle")]
+                #[expect(
+                    unsafe_code,
+                    reason = "FFI: CloseHandle on valid overlapped raw_handle"
+                )]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
                 };
@@ -660,7 +670,10 @@ impl MftReader {
                 // Close the overlapped raw_handle
                 // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
                 // no longer used after the read completes, and is closed exactly once.
-                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped raw_handle")]
+                #[expect(
+                    unsafe_code,
+                    reason = "FFI: CloseHandle on valid overlapped raw_handle"
+                )]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
                 };

@@ -157,9 +157,7 @@ fn real_main() -> Result<()> {
     println!("  extent_count      = {}", extents.len());
     println!("  total_clusters    = {total_clusters}");
     println!("  total_bytes       = {total_bytes}");
-    println!(
-        "  approx_records    = {approx_records} (total_bytes / record_size)"
-    );
+    println!("  approx_records    = {approx_records} (total_bytes / record_size)");
 
     Ok(())
 }

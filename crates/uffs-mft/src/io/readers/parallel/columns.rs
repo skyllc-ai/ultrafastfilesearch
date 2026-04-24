@@ -22,7 +22,8 @@
 use super::*;
 
 impl ParallelMftReader {
-    /// Reads all MFT records and returns them as `ParsedColumns` (`SoA` layout).
+    /// Reads all MFT records and returns them as `ParsedColumns` (`SoA`
+    /// layout).
     ///
     /// This is the optimized path that avoids the `AoS`→`SoA` transpose by:
     /// 1. Parsing records into `ParseResult` (same as before)
@@ -228,7 +229,8 @@ impl ParallelMftReader {
 
                         for i in 0..effective_count {
                             let offset = (skip_begin + i) * record_size_bytes;
-                            let Some(record_data) = data.get(offset..offset + record_size_bytes) else {
+                            let Some(record_data) = data.get(offset..offset + record_size_bytes)
+                            else {
                                 break;
                             };
 

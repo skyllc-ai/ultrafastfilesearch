@@ -341,14 +341,7 @@ impl BatchMftReader {
         };
         // SAFETY: `handle` is live, the buffer slice spans `read_size` writable
         // bytes, and `bytes_read` is a valid out-parameter.
-        unsafe {
-            ReadFile(
-                handle,
-                Some(read_slice),
-                Some(&raw mut bytes_read),
-                None,
-            )
-        }?;
+        unsafe { ReadFile(handle, Some(read_slice), Some(&raw mut bytes_read), None) }?;
 
         // Calculate offset within buffer for the first record
         let offset_in_buffer = (start_offset - aligned_offset) as usize;

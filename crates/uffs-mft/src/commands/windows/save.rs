@@ -105,9 +105,7 @@ pub(crate) async fn cmd_save(
     // Print formatted output
     println!("═══════════════════════════════════════════════════════════════");
     println!("                         MFT SAVED");
-    println!(
-        "                    Drive: {drive_upper}: ({drive_type_str})"
-    );
+    println!("                    Drive: {drive_upper}: ({drive_type_str})");
     println!("═══════════════════════════════════════════════════════════════");
     println!();
     println!("📁 MFT STRUCTURE");
@@ -202,9 +200,7 @@ async fn cmd_save_iocp(
 
     println!("═══════════════════════════════════════════════════════════════");
     println!("                    MFT IOCP CAPTURE");
-    println!(
-        "                    Drive: {drive_upper}: ({drive_type_str})"
-    );
+    println!("                    Drive: {drive_upper}: ({drive_type_str})");
     println!("═══════════════════════════════════════════════════════════════");
     println!();
     println!("📊 MFT INFO");

@@ -2,15 +2,6 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! `DataFrame` construction helpers for parsed MFT output.
-//!
-//! **Module-scoped cast justification:** the single `as` cast converts an
-//! NTFS-record count (`u64`) into a Polars Series length (`u32`).  Record
-//! counts that fit in a `DataFrame` are bounded by Polars internals, well within
-//! u32.
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS record count -> Polars Series length cast is bounded by Polars row limit"
-)]
 
 use uffs_polars::DataFrame;
 
@@ -350,8 +341,12 @@ impl MftReader {
         expand_links: bool,
     ) -> Result<DataFrame> {
         let base_capacity = parsed_records.len();
+        // 20 % headroom for hard-link expansion, computed in integer space to
+        // avoid an f64 round-trip and the associated `cast_possible_truncation`
+        // / `cast_precision_loss` lints.  `base_capacity / 5` is exact for any
+        // `usize` and saturates safely on add (the result feeds `Vec::with_capacity`).
         let capacity = if expand_links {
-            (base_capacity as f64 * 1.2_f64) as usize
+            base_capacity.saturating_add(base_capacity / 5)
         } else {
             base_capacity
         };
