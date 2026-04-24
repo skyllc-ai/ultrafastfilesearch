@@ -178,6 +178,26 @@ jobs:
         with:
           shared-key: preview-windows
 
+      - name: Locate llvm-rc for winresource (xwin cross-compile)
+        # `winresource` v0.1.31 (`lib.rs:735-736`) hardcodes
+        # `PathBuf::from("llvm-rc")` on `cfg(unix)` and spawns it without
+        # any PATH augmentation from `cargo-xwin`.  On ubuntu-22.04 runners
+        # `llvm-rc` ships with the preinstalled LLVM toolchain but lives
+        # at `/usr/lib/llvm-<N>/bin/llvm-rc` — NOT on the default PATH.
+        # Result: `crates/uffs-cli/build.rs` panics at `res.compile()` with
+        # `Os { code: 2, kind: NotFound }` on every fresh xwin build, even
+        # though the tool is installed.  Exporting `RC_PATH` tells
+        # `winresource` exactly where to spawn from (lib.rs:733-734 takes
+        # `RC_PATH` precedence over the hardcoded fallback).  Version-
+        # robust: picks the highest-numbered LLVM dir so a runner image
+        # bump doesn't re-break this.
+        run: |
+          set -euo pipefail
+          RC_PATH="$(find /usr/lib/llvm-* -name llvm-rc 2>/dev/null | sort -V | tail -1)"
+          test -x "$RC_PATH" || { echo "llvm-rc not found under /usr/lib/llvm-*"; exit 1; }
+          echo "Located llvm-rc at: $RC_PATH"
+          echo "RC_PATH=$RC_PATH" >> "$GITHUB_ENV"
+
       - name: cargo xwin build --release --bins --locked
         run: |
           cargo xwin build --release --bins --locked \
