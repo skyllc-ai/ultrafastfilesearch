@@ -11,6 +11,14 @@
     reason = "NTFS record-size (u32 -> usize) casts are lossless on supported 32/64-bit targets"
 )]
 
+#[expect(
+    clippy::wildcard_imports,
+    reason = "parent module's `pub(super) use` prelude \
+              (HANDLE, MftError, ReadFile, rayon::prelude::*, tracing \
+              macros, etc.) is designed to be consumed by submodules; \
+              re-enumerating ~15 items here would duplicate the prelude \
+              across every sibling reader file"
+)]
 use super::*;
 
 /// Inner zero-copy parsing function that works with raw parameters.

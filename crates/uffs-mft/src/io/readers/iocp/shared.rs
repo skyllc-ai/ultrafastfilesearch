@@ -11,6 +11,14 @@
     reason = "Win32 OVERLAPPED low-32 / high-32 offset split is the documented struct layout"
 )]
 
+#[expect(
+    clippy::wildcard_imports,
+    reason = "parent module's `pub(super) use` prelude \
+              (HANDLE, MftError, ReadFile, rayon::prelude::*, tracing \
+              macros, etc.) is designed to be consumed by submodules; \
+              re-enumerating ~15 items here would duplicate the prelude \
+              across every sibling reader file"
+)]
 use super::*;
 
 /// I/O Completion Port wrapper for Windows async I/O.
