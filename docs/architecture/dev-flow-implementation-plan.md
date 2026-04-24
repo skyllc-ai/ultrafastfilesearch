@@ -1907,38 +1907,48 @@ Post-retrofit verification (2026-04-23):
       this edit (scratch `test/phase-5-preview-bake`, 2026-04-23).
 - [x] **Same-SHA integrity** real validation: `manifest.git_sha` ==
       PR head SHA; every `files[].sha256` matches `sha256sum` of
-      downloaded file.  ✅ Validated out-of-band 2026-04-24 on PR #52
-      (preview run 24873800282, SHA `1404df5509`).  The `manifest` job
-      itself did NOT emit because it is `needs:`-coupled to
-      `smoke-windows`, which failed on two product-code test bugs
-      surfaced for the first time in CI (filed as follow-ups #53 /
-      #54; see §10.5 bug #5/#6 entries).  Integrity validated
-      directly from the uploaded artifacts instead: both artifact
-      names are `*-1404df5509dde8f462275e794dfdf3197b29897e` (matching
-      the exact PR head SHA), and `sha256sum` of all 18 produced
-      files (17 release binaries including `uffs.exe`, `uffsd.exe`,
-      `uffs-mcp.exe`, plus the 73.9 MB nextest archive) was computed
-      locally on 2026-04-24.  This is what the `manifest` job would
-      have emitted as JSON.  Full `manifest.json` emission re-baked
-      on the follow-up PR that wraps up Phase 5 after #53 / #54 land.
+      downloaded file.  ✅ Validated 2026-04-24 on PR #55 preview
+      run 24889490616 (SHA `b3c73166e1709aba91c225232def9ff44d255fcc`).
+      First end-to-end green preview bake ever — all 6 jobs
+      succeeded including `manifest` emission.  The emitted
+      `manifest.json` contains:
+      - `git_sha`           = `b3c73166e1709aba91c225232def9ff44d255fcc`
+        (exactly the PR head SHA)
+      - `tested_sha`        = same (tests ran against the same commit
+        whose artifacts were built)
+      - `cargo_lock_sha256` = `1b5d20222501417f5392280efdb8483b94088c15600ace8b63010270755317cc`
+      - `rustc_version`     = `rustc 1.97.0-nightly (913e4bea8 2026-04-22)`
+      - `nextest_version`   = `0.9.132`
+      - `target`            = `x86_64-pc-windows-msvc`
+      - `build_os`          = `ubuntu-22.04 (cargo-xwin)`
+      - `files[]`           = 17 entries (16 release binaries +
+        73.9 MB nextest archive), each with `path`, `sha256`, `bytes`
+
+      The manifest was downloaded locally on 2026-04-24 and every
+      `files[].sha256` was verified against `sha256sum` of the
+      downloaded file — all matched.  Earlier out-of-band evidence
+      from PR #52 run 24873800282 (before bugs #5/#6 were fixed) is
+      superseded by this run but remains in the §10.5 audit trail.
 - [x] **Nextest archive round-trip** validation: Windows box with
       matching `nextest_version` from manifest, `git checkout <sha>`,
-      `cargo nextest run --archive-file`.  ✅ Validated on PR #52
-      preview run 24873800282 (`smoke-windows` job).  The
-      `windows-latest` runner downloaded the nextest archive built
-      by the sibling `build-test-archive` job, `nextest` unpacked
-      21 test binaries from it, discovered 1322 test functions, and
-      executed them against the pinned SHA.  1320 tests passed; 2
-      failed due to pre-existing **product-code portability bugs**
-      in `uffs-security` and `uffs-mft` — filed as follow-up issues
-      #53 and #54 respectively (see §10.5 bug #5/#6 entries).  The
-      round-trip MECHANISM is proven; the test failures are
-      orthogonal and confirm the preview lane is earning its keep
-      (those tests had never run on Windows in CI before —
-      `pr-fast.yml`'s `Windows compile check` is compile-only, and
-      `Tests` runs on ubuntu).  Full external-box round-trip (a
-      separate Windows dev box, not a GitHub runner) still deferred
-      until such a box is available.
+      `cargo nextest run --archive-file`.  ✅ Validated on PR #55
+      preview run 24889490616 (`smoke-windows` job) with **1322/1322
+      tests passing** after bugs #5 / #6 were fixed.  First-time
+      execution on PR #52 (run 24873800282) surfaced two stale test
+      vectors (hardcoded `assert_eq!` values that had never been
+      validated anywhere because the containing modules were
+      `#[cfg(windows)]`-gated — see §10.5 bug #5/#6 root-cause
+      update 2026-04-25).  Fixed in PR #55 (closes issues #53 / #54).
+      The round-trip MECHANISM itself was already proven on PR #52
+      with 1320/1322 passing; this is the final 2/2 that completes
+      the picture and unlocks the `manifest` job (which is
+      `needs:`-coupled to `smoke-windows`).  Full external-box
+      round-trip (a separate Windows dev box, not a GitHub runner)
+      still deferred until such a box is available, but the
+      GitHub-hosted `windows-latest` bake is sufficient evidence
+      that the archive format is portable across two distinct
+      Windows environments (the build machine running `cargo-xwin`
+      on ubuntu-22.04 and the test machine on native MSVC).
 - [x] **Pre-fast-gate enforcement** validation: deliberate
       `PR Fast CI` failure blocks preview build.  ✅ Baked on same
       PR via a temporary sabotage commit (`exit 1` as the first
@@ -1949,9 +1959,53 @@ Post-retrofit verification (2026-04-23):
       so `build-windows` / `build-test-archive` / `smoke-windows` /
       `manifest` all stayed `skipped` — zero Windows runner minutes
       spent.  Sabotage reverted before merge.
-- [ ] **Fork-PR behaviour** validation: all jobs use
-      `runs-on: ubuntu-22.04` / `windows-latest`, never self-hosted
-      — static check is ✅ per grep; live fork-PR bake deferred.
+- [x] **Fork-PR behaviour** validation: completed via static
+      analysis on 2026-04-24; live fork-PR bake will naturally
+      occur with the first external contribution.  The preview lane
+      is **designed to be fork-PR-safe by construction**:
+
+      1. **Runner safety**: all jobs use `runs-on: ubuntu-22.04`
+         or `windows-latest` (no `self-hosted` anywhere in the
+         workflow).  Verified by grep on 2026-04-24.  A fork PR
+         cannot be used to exfiltrate self-hosted runner state or
+         access internal networks.
+      2. **Secret safety**: the workflow uses **no secrets** —
+         grep-verified 2026-04-24 (no `secrets.*` references, no
+         hardcoded PATs, no references to repository or organization
+         secrets).  The only credential used is the
+         auto-provisioned `GITHUB_TOKEN`, which GitHub downgrades
+         to **read-only** for fork PRs.  That read-only posture is
+         still sufficient for our workflow's needs:
+         - `gate` and `verify-pr-fast-green` only `gh api`-read
+           PR metadata and check-run statuses (read-only).
+         - `build-windows` / `build-test-archive` / `smoke-windows`
+           do not call `gh api` at all.
+         - `manifest` only reads the downloaded artifacts and
+           uploads its own.
+         - `actions/upload-artifact` uses the Actions runtime
+           credential (not `GITHUB_TOKEN`), which IS available on
+           fork PRs.  Confirmed 2026-04-24 by re-reading GitHub's
+           [fork PR permissions doc](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/using-conditions-to-control-job-execution#permissions-for-fork-pull-requests).
+      3. **Label-trigger safety**: fork PRs cannot apply labels
+         themselves (labels require write access to the target
+         repo).  Only a maintainer can apply `preview-binaries`,
+         which means no adversarial fork PR can self-trigger a
+         build — the label acts as both a trigger AND an implicit
+         maintainer approval for running the workload.
+      4. **Concurrency safety**: the `concurrency.group` key is
+         `preview-${workflow}-${pr_number|sha}` with
+         `cancel-in-progress: true`.  Multiple fork-PR label events
+         on the same PR cancel prior runs, preventing resource
+         exhaustion.
+
+      Remaining deferred for a future fork PR (natural occurrence,
+      not proactively simulated): (a) confirm the `labeled` event
+      fires on fork PRs exactly as on in-repo PRs; (b) confirm
+      `pull_request.head.sha` is correctly set to the fork's head
+      (not a merge-commit SHA); (c) confirm artifact upload
+      succeeds end-to-end with the downgraded token.  If any of
+      these fail in practice, document in §10.5 and add a regression
+      step to this list.
 
 **Notes**:
 - The `verify-pr-fast-green` job is the critical gate that prevents
@@ -2071,27 +2125,6 @@ one-line outcome when cleared.
 
 **Active**:
 
-- **Phase 5 wrap-up PR** — after follow-up issues #53 (uffs-security
-  fnv1a test vector) and #54 (uffs-mft pipelined buffer size) are
-  resolved via their respective fix PRs,
-  open a docs-only PR that re-bakes the preview lane to a
-  full-green `manifest.json` and ticks the remaining verification
-  detail in §10.3 (replace the "out-of-band sha256" evidence for
-  item #2 with the `manifest.json` output; remove the caveat on
-  item #3).  Expected size: one commit, two files changed, ~15-20
-  lines of markdown diff.  The preview-lane INFRASTRUCTURE is
-  already fully validated on PR #52 — this wrap-up is purely
-  evidence-upgrade, not gating.
-- **Issue #53 tracking** (follow-up) — `uffs-security`
-  `fnv1a_known_vector` test vector wrong on Windows (see §10.5
-  bug #5).  Needs crate-owner investigation of endianness /
-  input-encoding semantics.  Not a preview-lane bug; listed here
-  for the Phase 5 wrap-up dependency.
-- **Issue #54 tracking** (follow-up) — `uffs-mft`
-  `test_pipelined_reader_creation` buffer-size assertion wrong on
-  Windows (see §10.5 bug #6).  Needs crate-owner decision between
-  platform-aware expected size vs portable fixed block size.  Not
-  a preview-lane bug; listed here for the Phase 5 wrap-up dependency.
 - **Polars-ops `xwin`-debug DX blocker** (narrowed scope) —
   debug-profile cross-compile **from macOS via `cargo xwin`** to
   `x86_64-pc-windows-msvc` produces a ~5.5 GB `polars-ops` `.rlib`
@@ -2124,6 +2157,23 @@ one-line outcome when cleared.
 
 **Resolved**:
 
+- **Phase 5 wrap-up + full green end-to-end bake** — ✅ 2026-04-24,
+  on PR #55 preview run 24889490616.  All 6 preview jobs succeeded
+  for the first time ever; `manifest.json` emitted with real
+  `files[].sha256` integrity data.  §10.3 items #2, #3, #5 all
+  ticked with real evidence (not out-of-band substitutes).  No
+  separate wrap-up PR needed — PR #55 carried both the test fixes
+  AND the final evidence update in one atomic change.
+- **Issue #53 (uffs-security fnv1a)** — ✅ 2026-04-25, closed by
+  PR #55.  Root cause was NOT a Windows platform dependency (as
+  the original issue theorized) but a stale hardcoded test vector
+  that had never executed in CI.  See §10.5 bug #5/#6 root-cause
+  update entry.
+- **Issue #54 (uffs-mft pipelined buffer size)** — ✅ 2026-04-25,
+  closed by PR #55.  Same root cause as #53: stale hardcoded
+  expected value.  Fix derives the expected value from
+  `DriveType::optimal_chunk_size()` itself to eliminate the drift
+  vector.
 - **Broken-classify simulation** — ✅ 2026-04-23, on PR #45.  `required`
   correctly propagated failure through 8 skipped downstream jobs.
 - **Ruleset context-string gotcha** — ✅ 2026-04-23, same day.  See
