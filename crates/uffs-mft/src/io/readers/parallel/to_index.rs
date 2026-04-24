@@ -225,12 +225,13 @@ impl ParallelMftReader {
         }
 
         let total_io_ops = io_ops.len();
-        let (estimated_records, max_frs) = if let Some(bm) = &self.bitmap {
-            (bm.count_in_use(), bm.max_frs_in_use())
-        } else {
-            // No bitmap: use total records as both count and max FRS
-            (total_records, total_records.saturating_sub(1) as u64)
-        };
+        let (estimated_records, max_frs) = self.bitmap.as_ref().map_or_else(
+            || {
+                // No bitmap: use total records as both count and max FRS
+                (total_records, total_records.saturating_sub(1) as u64)
+            },
+            |bitmap| (bitmap.count_in_use(), bitmap.max_frs_in_use()),
+        );
 
         // Calculate total bytes to read and max I/O size for buffer allocation
         let total_bytes_to_read: u64 = io_ops.iter().map(|op| op.size as u64).sum();

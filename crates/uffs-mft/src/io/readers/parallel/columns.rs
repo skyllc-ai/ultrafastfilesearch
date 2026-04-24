@@ -77,11 +77,10 @@ impl ParallelMftReader {
         info!(num_chunks, "Generated read chunks");
 
         // Estimate capacity
-        let estimated_records = if let Some(bm) = &self.bitmap {
-            bm.count_in_use()
-        } else {
-            self.extent_map.total_records() as usize
-        };
+        let estimated_records = self.bitmap.as_ref().map_or_else(
+            || self.extent_map.total_records() as usize,
+            |bitmap| bitmap.count_in_use(),
+        );
         info!(estimated_records, "Estimated record count");
 
         let record_size = self.extent_map.bytes_per_record;

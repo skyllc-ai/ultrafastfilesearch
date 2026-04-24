@@ -235,11 +235,10 @@ impl MftReader {
                         handle,
                         true,
                         Some(move |bytes_read: u64, total_bytes_expected: u64| {
-                            let records_approx = if total_bytes_expected > 0 {
-                                (bytes_read * total_records) / total_bytes_expected
-                            } else {
-                                0
-                            };
+                            let records_approx = bytes_read
+                                .saturating_mul(total_records)
+                                .checked_div(total_bytes_expected)
+                                .unwrap_or(0);
                             cb_ref(MftProgress {
                                 records_read: records_approx,
                                 total_records: Some(total_records),
@@ -265,11 +264,10 @@ impl MftReader {
                         handle,
                         true,
                         Some(move |bytes_read: u64, total_bytes_expected: u64| {
-                            let records_approx = if total_bytes_expected > 0 {
-                                (bytes_read * total_records) / total_bytes_expected
-                            } else {
-                                0
-                            };
+                            let records_approx = bytes_read
+                                .saturating_mul(total_records)
+                                .checked_div(total_bytes_expected)
+                                .unwrap_or(0);
                             cb_ref(MftProgress {
                                 records_read: records_approx,
                                 total_records: Some(total_records),
@@ -294,11 +292,10 @@ impl MftReader {
                         handle,
                         true,
                         Some(move |bytes_read: u64, total_bytes_expected: u64| {
-                            let records_approx = if total_bytes_expected > 0 {
-                                (bytes_read * total_records) / total_bytes_expected
-                            } else {
-                                0
-                            };
+                            let records_approx = bytes_read
+                                .saturating_mul(total_records)
+                                .checked_div(total_bytes_expected)
+                                .unwrap_or(0);
                             cb_ref(MftProgress {
                                 records_read: records_approx,
                                 total_records: Some(total_records),
@@ -323,11 +320,10 @@ impl MftReader {
                         handle,
                         true,
                         Some(move |bytes_read: u64, total_bytes_expected: u64| {
-                            let records_approx = if total_bytes_expected > 0 {
-                                (bytes_read * total_records) / total_bytes_expected
-                            } else {
-                                0
-                            };
+                            let records_approx = bytes_read
+                                .saturating_mul(total_records)
+                                .checked_div(total_bytes_expected)
+                                .unwrap_or(0);
                             cb_ref(MftProgress {
                                 records_read: records_approx,
                                 total_records: Some(total_records),
@@ -352,11 +348,10 @@ impl MftReader {
                         handle,
                         true,
                         Some(move |bytes_read: u64, total_bytes_expected: u64| {
-                            let records_approx = if total_bytes_expected > 0 {
-                                (bytes_read * total_records) / total_bytes_expected
-                            } else {
-                                0
-                            };
+                            let records_approx = bytes_read
+                                .saturating_mul(total_records)
+                                .checked_div(total_bytes_expected)
+                                .unwrap_or(0);
                             cb_ref(MftProgress {
                                 records_read: records_approx,
                                 total_records: Some(total_records),
@@ -376,29 +371,29 @@ impl MftReader {
                 let overlapped_handle = self.require_handle().open_overlapped_handle()?;
                 let iocp_reader = crate::io::IocpMftReader::new(extent_map, bitmap, drive_type);
 
-                let result = if let Some(cb) = &callback {
-                    let cb_ref = cb;
-                    let start = start_time;
-                    iocp_reader.read_all_iocp(
-                        overlapped_handle,
-                        true,
-                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
-                            let records_approx = if total_bytes_expected > 0 {
-                                (bytes_read * total_records) / total_bytes_expected
-                            } else {
-                                0
-                            };
-                            cb_ref(MftProgress {
-                                records_read: records_approx,
-                                total_records: Some(total_records),
-                                bytes_read,
-                                elapsed: start.elapsed(),
-                            });
-                        }),
-                    )
-                } else {
-                    iocp_reader.read_all_iocp::<fn(u64, u64)>(overlapped_handle, true, None)
-                };
+                let result = callback.as_ref().map_or_else(
+                    || iocp_reader.read_all_iocp::<fn(u64, u64)>(overlapped_handle, true, None),
+                    |cb| {
+                        let cb_ref = cb;
+                        let start = start_time;
+                        iocp_reader.read_all_iocp(
+                            overlapped_handle,
+                            true,
+                            Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                                let records_approx = bytes_read
+                                    .saturating_mul(total_records)
+                                    .checked_div(total_bytes_expected)
+                                    .unwrap_or(0);
+                                cb_ref(MftProgress {
+                                    records_read: records_approx,
+                                    total_records: Some(total_records),
+                                    bytes_read,
+                                    elapsed: start.elapsed(),
+                                });
+                            }),
+                        )
+                    },
+                );
 
                 // Close the overlapped handle
                 // SAFETY: overlapped_handle is a valid handle opened by open_overlapped_handle
@@ -421,11 +416,10 @@ impl MftReader {
                         handle,
                         true,
                         Some(move |bytes_read: u64, total_bytes_expected: u64| {
-                            let records_approx = if total_bytes_expected > 0 {
-                                (bytes_read * total_records) / total_bytes_expected
-                            } else {
-                                0
-                            };
+                            let records_approx = bytes_read
+                                .saturating_mul(total_records)
+                                .checked_div(total_bytes_expected)
+                                .unwrap_or(0);
                             cb_ref(MftProgress {
                                 records_read: records_approx,
                                 total_records: Some(total_records),
@@ -444,33 +438,35 @@ impl MftReader {
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
-                let result = if let Some(cb) = &callback {
-                    let cb_ref = cb;
-                    let start = start_time;
-                    parallel_reader.read_all_bulk_iocp(
-                        overlapped_handle,
-                        true,
-                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
-                            let records_approx = if total_bytes_expected > 0 {
-                                (bytes_read * total_records) / total_bytes_expected
-                            } else {
-                                0
-                            };
-                            cb_ref(MftProgress {
-                                records_read: records_approx,
-                                total_records: Some(total_records),
-                                bytes_read,
-                                elapsed: start.elapsed(),
-                            });
-                        }),
-                    )
-                } else {
-                    parallel_reader.read_all_bulk_iocp::<fn(u64, u64)>(
-                        overlapped_handle,
-                        true,
-                        None,
-                    )
-                };
+                let result = callback.as_ref().map_or_else(
+                    || {
+                        parallel_reader.read_all_bulk_iocp::<fn(u64, u64)>(
+                            overlapped_handle,
+                            true,
+                            None,
+                        )
+                    },
+                    |cb| {
+                        let cb_ref = cb;
+                        let start = start_time;
+                        parallel_reader.read_all_bulk_iocp(
+                            overlapped_handle,
+                            true,
+                            Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                                let records_approx = bytes_read
+                                    .saturating_mul(total_records)
+                                    .checked_div(total_bytes_expected)
+                                    .unwrap_or(0);
+                                cb_ref(MftProgress {
+                                    records_read: records_approx,
+                                    total_records: Some(total_records),
+                                    bytes_read,
+                                    elapsed: start.elapsed(),
+                                });
+                            }),
+                        )
+                    },
+                );
 
                 // Close the overlapped handle
                 // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
@@ -488,33 +484,35 @@ impl MftReader {
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
-                let result = if let Some(cb) = &callback {
-                    let cb_ref = cb;
-                    let start = start_time;
-                    parallel_reader.read_all_sliding_window_iocp(
-                        overlapped_handle,
-                        true,
-                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
-                            let records_approx = if total_bytes_expected > 0 {
-                                (bytes_read * total_records) / total_bytes_expected
-                            } else {
-                                0
-                            };
-                            cb_ref(MftProgress {
-                                records_read: records_approx,
-                                total_records: Some(total_records),
-                                bytes_read,
-                                elapsed: start.elapsed(),
-                            });
-                        }),
-                    )
-                } else {
-                    parallel_reader.read_all_sliding_window_iocp::<fn(u64, u64)>(
-                        overlapped_handle,
-                        true,
-                        None,
-                    )
-                };
+                let result = callback.as_ref().map_or_else(
+                    || {
+                        parallel_reader.read_all_sliding_window_iocp::<fn(u64, u64)>(
+                            overlapped_handle,
+                            true,
+                            None,
+                        )
+                    },
+                    |cb| {
+                        let cb_ref = cb;
+                        let start = start_time;
+                        parallel_reader.read_all_sliding_window_iocp(
+                            overlapped_handle,
+                            true,
+                            Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                                let records_approx = bytes_read
+                                    .saturating_mul(total_records)
+                                    .checked_div(total_bytes_expected)
+                                    .unwrap_or(0);
+                                cb_ref(MftProgress {
+                                    records_read: records_approx,
+                                    total_records: Some(total_records),
+                                    bytes_read,
+                                    elapsed: start.elapsed(),
+                                });
+                            }),
+                        )
+                    },
+                );
 
                 // Close the overlapped handle
                 // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
@@ -534,33 +532,35 @@ impl MftReader {
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
-                let result = if let Some(cb) = &callback {
-                    let cb_ref = cb;
-                    let start = start_time;
-                    parallel_reader.read_all_sliding_window_iocp(
-                        overlapped_handle,
-                        true,
-                        Some(move |bytes_read: u64, total_bytes_expected: u64| {
-                            let records_approx = if total_bytes_expected > 0 {
-                                (bytes_read * total_records) / total_bytes_expected
-                            } else {
-                                0
-                            };
-                            cb_ref(MftProgress {
-                                records_read: records_approx,
-                                total_records: Some(total_records),
-                                bytes_read,
-                                elapsed: start.elapsed(),
-                            });
-                        }),
-                    )
-                } else {
-                    parallel_reader.read_all_sliding_window_iocp::<fn(u64, u64)>(
-                        overlapped_handle,
-                        true,
-                        None,
-                    )
-                };
+                let result = callback.as_ref().map_or_else(
+                    || {
+                        parallel_reader.read_all_sliding_window_iocp::<fn(u64, u64)>(
+                            overlapped_handle,
+                            true,
+                            None,
+                        )
+                    },
+                    |cb| {
+                        let cb_ref = cb;
+                        let start = start_time;
+                        parallel_reader.read_all_sliding_window_iocp(
+                            overlapped_handle,
+                            true,
+                            Some(move |bytes_read: u64, total_bytes_expected: u64| {
+                                let records_approx = bytes_read
+                                    .saturating_mul(total_records)
+                                    .checked_div(total_bytes_expected)
+                                    .unwrap_or(0);
+                                cb_ref(MftProgress {
+                                    records_read: records_approx,
+                                    total_records: Some(total_records),
+                                    bytes_read,
+                                    elapsed: start.elapsed(),
+                                });
+                            }),
+                        )
+                    },
+                );
 
                 // Close the overlapped handle
                 // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is

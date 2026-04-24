@@ -155,13 +155,14 @@ impl MultiDriveMftReader {
         tokio::task::spawn_blocking(move || {
             let reader = MftReader::open(drive)?;
 
-            if let Some(cb) = callback {
-                reader.read_with_progress(move |progress| {
-                    cb(drive, progress);
-                })
-            } else {
-                reader.read_all()
-            }
+            callback.map_or_else(
+                || reader.read_all(),
+                |cb| {
+                    reader.read_with_progress(move |progress| {
+                        cb(drive, progress);
+                    })
+                },
+            )
         })
         .await
         .map_err(|error| MftError::InvalidInput(format!("Task join error: {error}")))?

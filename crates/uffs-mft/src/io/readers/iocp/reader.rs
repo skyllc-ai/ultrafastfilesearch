@@ -138,11 +138,10 @@ impl IocpMftReader {
             .sum();
 
         // Estimate capacity
-        let estimated_records = if let Some(bm) = &self.bitmap {
-            bm.count_in_use()
-        } else {
-            self.extent_map.total_records() as usize
-        };
+        let estimated_records = self.bitmap.as_ref().map_or_else(
+            || self.extent_map.total_records() as usize,
+            |bitmap| bitmap.count_in_use(),
+        );
 
         info!(
             chunks = num_chunks,
