@@ -201,15 +201,34 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────
   # build-test-archive — build-once / run-anywhere via `cargo nextest
-  # archive`.  The target machine running this archive later needs (a)
-  # the same source revision checked out (see smoke-windows / the
-  # manifest's git_sha field) and (b) a matching nextest version
-  # (captured as an output so the manifest can advertise it).
+  # archive`.  Runs natively on `windows-latest` (not Linux+xwin like
+  # build-windows) for two reasons:
+  #
+  #   (1) `cargo-xwin` only wraps the `build|check|test|run|clippy|
+  #       rustc` subcommands.  `cargo nextest archive` is NOT one of
+  #       them, so a bare invocation on Linux runs without xwin's
+  #       MSVC cross-compile env and fails in `ring`'s build.rs with
+  #       `cc-rs: failed to find tool "lib.exe"`.  Observed on the
+  #       2026-04-23 Phase 5 bake.
+  #
+  #   (2) Debug-profile xcompile via `lld-link` / `llvm-lib` hits a
+  #       COFF archive format ceiling on `polars-ops` (~5.5 GB rlib).
+  #       That ceiling is format-level in the LLVM toolchain only;
+  #       native MSVC `link.exe` / `lib.exe` handle the same rlib
+  #       without issue (confirmed 2026-04-24 on a local VS 2026
+  #       dev box producing all 17 workspace binaries including
+  #       polars-consumer crates).  See `docs/xwin-msvc-rlib-size-
+  #       root-cause-and-workarounds.md` for the xcompile-path
+  #       failure mode.
+  #
+  # Trade-off: no cache sharing with `build-windows` (Linux and
+  # Windows caches cannot cross).  Separate `preview-test-archive-
+  # windows` shared-key.  Acceptable for a preview-only lane.
   # ─────────────────────────────────────────────────────────────────────
   build-test-archive:
     name: Build Windows nextest archive
     needs: [gate, verify-pr-fast-green]
-    runs-on: ubuntu-22.04
+    runs-on: windows-latest
     timeout-minutes: 40
     outputs:
       nextest_version: ${{ steps.nxv.outputs.version }}
@@ -220,25 +239,19 @@ jobs:
         with:
           ref: ${{ needs.gate.outputs.sha }}
 
-      - name: Free up disk space
-        run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
-          sudo rm -rf /usr/local/share/boost /usr/local/graalvm
-          df -h /
-
       - run: rustup show
-      - run: rustup target add x86_64-pc-windows-msvc
 
       - uses: taiki-e/install-action@dfc84ffb7254b048a0a843316ff5a2714dcdc7bd # v2
         with:
-          tool: cargo-xwin,nextest
+          tool: nextest
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          shared-key: preview-windows
+          shared-key: preview-test-archive-windows
 
       - id: nxv
         name: Capture nextest version for the manifest
+        shell: bash
         # Restrict awk to the first line (NR==1) so any banner / upgrade-notice
         # lines nextest emits on subsequent lines cannot pollute $GITHUB_OUTPUT
         # — a multi-line capture would produce a bare second line like
@@ -247,6 +260,7 @@ jobs:
         run: echo "version=$(cargo nextest --version | awk 'NR==1 {print $2}')" >> "$GITHUB_OUTPUT"
 
       - name: cargo nextest archive --target x86_64-pc-windows-msvc
+        shell: bash
         run: |
           cargo nextest archive --workspace --locked \
             --target x86_64-pc-windows-msvc \
