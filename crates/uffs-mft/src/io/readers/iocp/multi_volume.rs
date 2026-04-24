@@ -11,6 +11,10 @@
     clippy::cast_possible_truncation,
     reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
 )]
+#![expect(
+    clippy::indexing_slicing,
+    reason = "slot / volume indices are bounded by the loop (0..max_concurrency); buffer slices are bounded by bytes_transferred from the OS"
+)]
 
 use super::*;
 
