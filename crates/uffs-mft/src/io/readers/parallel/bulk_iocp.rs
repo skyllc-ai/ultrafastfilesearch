@@ -27,6 +27,10 @@ impl ParallelMftReader {
         unsafe_code,
         reason = "FFI: ReadFile, GetQueuedCompletionStatus for IOCP bulk reads"
     )]
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] when `CreateIoCompletionPort`, `ReadFile`, or
+    /// `GetQueuedCompletionStatus` fails for any submitted operation.
     pub fn read_all_bulk_iocp<F>(
         &self,
         overlapped_handle: HANDLE,

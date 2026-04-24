@@ -277,6 +277,13 @@ impl BatchMftReader {
     /// # Returns
     ///
     /// A tuple of (buffer slice, first FRS in buffer, number of records read).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::RecordRead`] if `start_frs` falls outside the MFT
+    /// extent map, and [`MftError::Io`] if the underlying
+    /// `SetFilePointerEx`/`ReadFile` calls fail or the volume returns fewer
+    /// bytes than requested for the aligned range.
     #[expect(
         unsafe_code,
         reason = "FFI: SetFilePointerEx and ReadFile for batched MFT access"

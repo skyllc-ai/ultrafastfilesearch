@@ -35,6 +35,11 @@ impl ParallelMftReader {
     ///
     /// A tuple of (records, timing) where timing contains accurate measurements
     /// for each phase.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if the I/O phase cannot read a chunk. Phase
+    /// timing measurements are only populated on success.
     pub fn read_all_parallel_with_timing(
         &self,
         handle: HANDLE,

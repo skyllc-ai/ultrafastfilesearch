@@ -58,6 +58,12 @@ impl PrefetchMftReader {
     ///
     /// This method uses a background thread to prefetch the next chunk while
     /// processing the current one, maximizing throughput.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] when `ReadFile`/`SetFilePointerEx` fails for
+    /// the current or prefetch chunk, or the prefetch thread panics before
+    /// delivering its buffer.
     pub fn read_all_prefetch<F>(
         &self,
         handle: HANDLE,

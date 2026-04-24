@@ -55,6 +55,10 @@ impl ParallelMftReader {
         clippy::too_many_lines,
         reason = "parallel I/O orchestration with worker threads requires sequential setup"
     )]
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if IOCP setup, `ReadFile`, or completion wait
+    /// fails in either the I/O or parse worker pool.
     pub fn read_all_sliding_window_iocp_to_index_parallel<F>(
         &self,
         overlapped_handle: HANDLE,

@@ -44,6 +44,11 @@ impl ParallelMftReader {
     /// Bulk read using IOCP - queues ALL reads at once, lets Windows optimize
     /// disk scheduling. All I/O is submitted
     /// operations, then wait for completions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if any bulk `SetFilePointerEx`/`ReadFile`
+    /// invocation fails; the Windows error code is forwarded.
     pub fn read_all_bulk<F>(
         &self,
         handle: HANDLE,

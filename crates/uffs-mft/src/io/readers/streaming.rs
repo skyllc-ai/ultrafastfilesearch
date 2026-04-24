@@ -61,6 +61,11 @@ impl StreamingMftReader {
     ///
     /// This method reads chunks and processes them immediately, reducing
     /// memory pressure compared to buffering the entire MFT.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if any streaming `ReadFile`/`SetFilePointerEx`
+    /// call fails mid-enumeration.
     pub fn read_all_streaming<F>(
         &mut self,
         handle: HANDLE,

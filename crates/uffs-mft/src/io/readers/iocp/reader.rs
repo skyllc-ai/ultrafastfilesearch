@@ -89,6 +89,12 @@ impl IocpMftReader {
     /// This method issues multiple overlapped reads simultaneously,
     /// processing completions as they arrive and issuing new reads
     /// to maintain the target concurrency level.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if I/O completion port setup, `ReadFile`, or
+    /// `GetQueuedCompletionStatus` fails for any outstanding chunk; the error
+    /// surfaces the underlying Win32 code.
     #[expect(
         unsafe_code,
         reason = "FFI: ReadFile, GetQueuedCompletionStatus for overlapped IOCP reads"

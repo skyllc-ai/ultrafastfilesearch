@@ -30,6 +30,10 @@ impl ParallelMftReader {
         unsafe_code,
         reason = "FFI: ReadFile, GetQueuedCompletionStatus for sliding window IOCP"
     )]
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] when any `ReadFile` or
+    /// `GetQueuedCompletionStatus` in the sliding-window pipeline fails.
     pub fn read_all_sliding_window_iocp<F>(
         &self,
         overlapped_handle: HANDLE,

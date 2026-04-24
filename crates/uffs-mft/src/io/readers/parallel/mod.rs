@@ -226,6 +226,11 @@ impl ParallelMftReader {
     /// # Returns
     ///
     /// Vector of parsed records.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if any chunk read fails. Per-record fixup or
+    /// parse failures are logged and skipped rather than propagated.
     pub fn read_all_parallel(&self, handle: HANDLE) -> Result<Vec<ParsedRecord>> {
         self.read_all_parallel_with_progress::<fn(u64, u64)>(handle, false, None)
     }
@@ -244,6 +249,11 @@ impl ParallelMftReader {
     /// # Returns
     ///
     /// Vector of parsed records with all attributes merged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if any chunk read fails. Extension-record
+    /// merge failures are counted internally rather than propagated.
     pub fn read_all_parallel_with_merge(
         &self,
         handle: HANDLE,
@@ -275,6 +285,11 @@ impl ParallelMftReader {
     /// # Returns
     ///
     /// Vector of parsed records with all attributes merged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if any chunk read fails; progress callback
+    /// invocations do not short-circuit the read pipeline.
     pub fn read_all_parallel_with_progress<F>(
         &self,
         handle: HANDLE,

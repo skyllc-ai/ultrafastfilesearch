@@ -42,6 +42,11 @@ impl ParallelMftReader {
     /// # Returns
     ///
     /// `ParsedColumns` ready for direct conversion to Polars `DataFrame`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if any chunk read fails. Record-level fixup
+    /// failures are counted internally and do not propagate.
     pub fn read_all_parallel_to_columns<F>(
         &self,
         handle: HANDLE,

@@ -23,6 +23,10 @@ impl ParallelMftReader {
         unsafe_code,
         reason = "FFI: SetFilePointerEx and ReadFile for chunk-based MFT access"
     )]
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if `SetFilePointerEx` or `ReadFile` fails, or
+    /// if the volume read returns fewer bytes than the requested chunk size.
     pub fn read_chunk(
         &self,
         handle: HANDLE,

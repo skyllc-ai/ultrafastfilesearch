@@ -324,6 +324,13 @@ pub const fn read_upcase_table(_drive: char) -> Result<Box<[u16; 65_536]>> {
 }
 
 /// Read the `$UpCase` table from a live NTFS volume (Windows).
+///
+/// # Errors
+///
+/// Returns [`MftError::Io`] if opening the volume, locating `$UpCase`, or
+/// reading its data runs via `ReadFile`/`SetFilePointerEx` fails, and
+/// [`MftError::InvalidData`] if the assembled table is shorter than the
+/// expected 128 KiB (65 536 code-point entries).
 #[cfg(windows)]
 pub fn read_upcase_table(drive: char) -> Result<Box<[u16; 65_536]>> {
     use crate::parse::apply_fixup;

@@ -170,6 +170,13 @@ impl NtfsVolumeData {
 
 impl VolumeHandle {
     /// Opens a volume for direct MFT reading.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if `CreateFileW` on the `\\.\<letter>:`
+    /// path fails (typically `ERROR_ACCESS_DENIED` when the caller is not
+    /// elevated), or if `FSCTL_GET_NTFS_VOLUME_DATA` cannot read the volume
+    /// descriptor for the opened handle.
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
     pub fn open(volume: char) -> Result<Self> {
         let volume = volume.to_ascii_uppercase();
@@ -469,6 +476,13 @@ impl VolumeHandle {
     }
 
     /// Reads the boot sector from the volume.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if `SetFilePointerEx`/`ReadFile` on the
+    /// volume handle fails, and [`MftError::InvalidData`] if the sector
+    /// returns fewer bytes than `size_of::<NtfsBootSector>()` or decoding
+    /// the boot-sector layout fails.
     #[expect(unsafe_code, reason = "FFI: windows API to read the boot sector")]
     pub fn read_boot_sector(&self) -> Result<NtfsBootSector> {
         use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
@@ -521,6 +535,11 @@ impl VolumeHandle {
     }
 
     /// Gets the MFT extents (data runs) using `FSCTL_GET_RETRIEVAL_POINTERS`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if `CreateFileW` on `\\.\<letter>:\$MFT`
+    /// or `DeviceIoControl(FSCTL_GET_RETRIEVAL_POINTERS, ..)` fails.
     #[expect(
         unsafe_code,
         reason = "FFI: windows API (CreateFileW, DeviceIoControl, CloseHandle)"
@@ -563,11 +582,22 @@ impl VolumeHandle {
     }
 
     /// Gets the MFT bitmap which indicates which records are in use.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if opening `\\.\<letter>:\$MFT::$BITMAP`,
+    /// seeking to its extents, or reading bitmap bytes via `ReadFile` fails.
     pub fn get_mft_bitmap(&self) -> Result<MftBitmap> {
         self.get_mft_bitmap_internal(false)
     }
 
     /// Gets the MFT bitmap with optional verbose diagnostic output.
+    ///
+    /// # Errors
+    ///
+    /// Same failure modes as [`Self::get_mft_bitmap`]; additionally emits
+    /// diagnostic tracing for partial reads before falling back to an
+    /// all-valid bitmap.
     pub fn get_mft_bitmap_verbose(&self) -> Result<MftBitmap> {
         self.get_mft_bitmap_internal(true)
     }

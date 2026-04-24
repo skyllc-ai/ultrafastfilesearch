@@ -353,6 +353,13 @@ mod windows_impl {
     }
 
     /// Queries the USN Journal for a volume.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`std::io::Error`] if opening the volume handle or issuing
+    /// `FSCTL_QUERY_USN_JOURNAL` fails — typically `ERROR_JOURNAL_NOT_ACTIVE`
+    /// when the NTFS USN journal has not been enabled for the volume, or
+    /// `ERROR_ACCESS_DENIED` when the caller is not elevated.
     pub fn query_usn_journal(volume: char) -> Result<UsnJournalInfo, std::io::Error> {
         let handle = open_volume_handle(volume)?;
         let mut journal_data = UsnJournalDataV0::default();
@@ -392,6 +399,13 @@ mod windows_impl {
     /// Loops the `FSCTL_READ_USN_JOURNAL` ioctl until all changes are consumed,
     /// preventing data loss on busy volumes where a single 64KB buffer would
     /// only return a subset of changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`std::io::Error`] if the volume handle cannot be opened or
+    /// `FSCTL_READ_USN_JOURNAL` fails for any iteration of the
+    /// read-loop. `ERROR_JOURNAL_ENTRY_DELETED` is surfaced unchanged so
+    /// callers can decide whether to rebuild their checkpoint.
     pub fn read_usn_journal(
         volume: char,
         journal_id: u64,

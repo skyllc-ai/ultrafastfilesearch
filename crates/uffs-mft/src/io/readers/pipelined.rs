@@ -97,6 +97,13 @@ impl PipelinedMftReader {
     /// possible, sending them through a bounded channel to the main thread
     /// for parsing. The bounded channel provides backpressure to prevent
     /// memory explosion.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if a chunk read fails, if the reader thread
+    /// terminates early, or if the bounded channel is closed before all
+    /// chunks have been processed. Any platform syscall failure surfaces the
+    /// underlying Win32 error code.
     pub fn read_all_pipelined<F>(
         &self,
         handle: HANDLE,
@@ -283,6 +290,12 @@ impl PipelinedMftReader {
     ///   Read chunks                                 Parse records in
     ///   from disk                                   parallel batches
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if a chunk read fails or the reader thread
+    /// terminates early, or [`MftError::RecordRead`] for record-level
+    /// fixup/parse failures surfaced by the parallel parsing stage.
     pub fn read_all_pipelined_parallel<F>(
         &self,
         handle: HANDLE,
