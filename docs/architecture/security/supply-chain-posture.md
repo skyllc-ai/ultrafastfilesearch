@@ -66,7 +66,7 @@ control lands or a deferred item is promoted.
 | Commit ancestry check | Custom step in `release.yml` | `workflow_dispatch` `commit_sha` must be ancestor of main | Every release dispatch | **Yes** — release.yml |
 | Dep-tree growth | `dependabot-review.yml` | Cargo.lock crate-count delta on Dependabot PRs | Every Dependabot PR | Annotation only |
 | Lockfile pinning | Committed `Cargo.lock` | Every resolved crate-version frozen across devs / CI / releases | Always | **Yes** — `cargo vet check --locked` would fail any drift |
-| Audit trail | `cargo-vet check --locked` | Every resolved crate-version must have import / own audit / exemption | Every PR | **Yes** — `ci.yml` Security job |
+| Audit trail | `cargo-vet check --locked` | Every resolved crate-version must have import / own audit / exemption | Every PR | **Yes** — `pr-fast.yml` security job |
 | Import refresh | `cargo-vet-refresh.yml` | Weekly `cargo vet regenerate imports` → PR | Mondays 08:00 UTC | GitHub schedules |
 | Structural audit | `cargo-geiger` via `just geiger` | unsafe / build.rs / proc-macro footprint | On-demand (monthly) | No |
 | Semantic SAST | `codeql.yml` (Rust, public preview) | Dataflow-based bug patterns (path / SQL / regex injection, crypto misuse, unvalidated redirects) | PR + Tuesdays 06:30 UTC | Informational (not a required gate yet) |
@@ -354,7 +354,7 @@ on `main` at branch-open time.
 - `supply-chain/config.toml` — `cargo-vet` imports + exemptions
 - `supply-chain/audits.toml` — our local audit records (starts empty)
 - `supply-chain/imports.lock` — pinned upstream audit snapshots
-- `.github/workflows/ci.yml` §Security — `cargo-deny` + `cargo-vet check` enforcement (Tier 1)
+- `.github/workflows/pr-fast.yml` — required per-PR gate (fmt, clippy, docs, tests, windows-check, `cargo-deny` + `cargo-vet check` in `security` job) (Tier 1)
 - `.github/workflows/tier-2.yml` — weekly coverage / udeps / Miri / Windows compile check
 - `.github/workflows/release.yml` — SLSA attestation + ancestor check + CycloneDX SBOM
 - `.github/workflows/codeql.yml` — Rust SAST (public preview)

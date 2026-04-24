@@ -3,7 +3,17 @@
 <!-- SPDX-License-Identifier: MPL-2.0 -->
 <!-- Copyright (c) 2025-2026 SKY, LLC. -->
 
-Companion to `dev-flow.md`.  Incorporates external review (2026-04-23)
+Companion to `dev-flow.md`.  **Sibling plan**: see
+[`release-automation-plan.md`](release-automation-plan.md) for the
+release/versioning architecture (release-plz + git-cliff + eventual
+crates.io publishing).  This document owns **merge-time CI gates**;
+the release-automation plan owns **what happens after merge to main**
+— version bump, changelog generation, tag creation, binary + crate
+publishing.  Both plans share `release.yml` (binary distribution,
+left unchanged) and `scripts/ci-pipeline/src/version.rs` (whose
+version-bump functions are retired in release-automation Phase R5).
+
+Incorporates external review (2026-04-23)
 that correctly identified structural gaps in v1:
 
 - v1 still treated CI as **one long lane** instead of separating
@@ -1501,6 +1511,14 @@ Measured against current `v0.5.71` baseline:
 - **Does not adopt a pre-commit framework** (e.g. `pre-commit` the
   Python tool).  Bash + `just` stays; rationale: one less dependency
   for new contributors.
+- **Does not own release automation.**  Version bumping, changelog
+  generation, release PR cadence, tag creation semantics, and eventual
+  crates.io publishing are the concern of
+  [`release-automation-plan.md`](release-automation-plan.md).  Phases
+  in that plan (R0-R9) are sequenced independently of Phases 1-8 here;
+  they share only `release.yml` (unchanged by both) and the version-
+  bump bits of `scripts/ci-pipeline/src/version.rs` (retired in
+  release-automation R5).
 
 ---
 
