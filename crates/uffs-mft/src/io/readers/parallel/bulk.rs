@@ -133,8 +133,16 @@ impl ParallelMftReader {
                 SetFilePointerEx(handle, disk_offset as i64, Some(&raw mut new_pos), FILE_BEGIN)
             }?;
 
-            let target_slice =
-                &mut mft_buffer.as_mut_slice()[buffer_offset..buffer_offset + effective_bytes];
+            let Some(target_slice) = mft_buffer
+                .as_mut_slice()
+                .get_mut(buffer_offset..buffer_offset + effective_bytes)
+            else {
+                // Unreachable: mft_buffer was sized to the total record range upfront.
+                return Err(MftError::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "bulk buffer shorter than buffer_offset + effective_bytes",
+                )));
+            };
             let mut bytes_read: u32 = 0;
             // SAFETY: `handle` is live, `target_slice` is an in-bounds writable
             // slice of `effective_bytes` bytes, and `bytes_read` is a valid
@@ -198,7 +206,10 @@ impl ParallelMftReader {
                         }
 
                         let offset = i * record_size;
-                        let record_slice = &mut chunk[offset..offset + record_size];
+                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size)
+                        else {
+                            break;
+                        };
 
                         // Apply fixup in-place
                         if !apply_fixup(record_slice) {
@@ -268,7 +279,10 @@ impl ParallelMftReader {
                         }
 
                         let offset = i * record_size;
-                        let record_slice = &mut chunk[offset..offset + record_size];
+                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size)
+                        else {
+                            break;
+                        };
 
                         if !apply_fixup(record_slice) {
                             skipped += 1;

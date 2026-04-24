@@ -58,13 +58,20 @@ impl ParallelMftReader {
         }?;
 
         let mut bytes_read = 0_u32;
+        let Some(read_slice) = buffer.as_mut_slice().get_mut(..aligned_size) else {
+            // Unreachable: buffer was sized to ≥ aligned_size upstream.
+            return Err(MftError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "chunk buffer shorter than aligned_size",
+            )));
+        };
         // SAFETY: `handle` is live, the aligned buffer slice spans
         // `aligned_size` writable bytes, and `bytes_read` is a valid
         // out-parameter.
         unsafe {
             ReadFile(
                 handle,
-                Some(&mut buffer.as_mut_slice()[..aligned_size]),
+                Some(read_slice),
                 Some(&raw mut bytes_read),
                 None,
             )
@@ -72,7 +79,16 @@ impl ParallelMftReader {
 
         // Extract the actual data (accounting for alignment offset)
         let actual_size = (bytes_read as usize).saturating_sub(offset_adjustment);
-        let data = buffer.as_slice()[offset_adjustment..offset_adjustment + actual_size].to_vec();
+        let data = buffer
+            .as_slice()
+            .get(offset_adjustment..offset_adjustment + actual_size)
+            .ok_or_else(|| {
+                MftError::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "chunk read produced fewer bytes than expected",
+                ))
+            })?
+            .to_vec();
 
         Ok(data)
     }

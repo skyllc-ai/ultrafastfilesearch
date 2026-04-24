@@ -350,7 +350,10 @@ impl ParallelMftReader {
                         }
 
                         let offset = i * record_size;
-                        let record_slice = &mut chunk[offset..offset + record_size];
+                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size)
+                        else {
+                            break;
+                        };
 
                         if !apply_fixup(record_slice) {
                             skipped += 1;
@@ -408,7 +411,10 @@ impl ParallelMftReader {
                         }
 
                         let offset = i * record_size;
-                        let record_slice = &mut chunk[offset..offset + record_size];
+                        let Some(record_slice) = chunk.get_mut(offset..offset + record_size)
+                        else {
+                            break;
+                        };
 
                         if !apply_fixup(record_slice) {
                             skipped += 1;
