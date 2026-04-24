@@ -108,7 +108,7 @@ impl LifecycleHandle {
     /// finishes loading.  Updates the heartbeat timestamp so the idle
     /// timer knows the load phase is still making progress.
     #[cfg(windows)]
-    pub fn record_load_progress(&self) {
+    pub(crate) fn record_load_progress(&self) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |dur| dur.as_secs());

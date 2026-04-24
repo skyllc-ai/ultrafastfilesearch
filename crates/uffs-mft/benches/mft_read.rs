@@ -44,6 +44,13 @@ use uffs_mft as _;
 use uffs_polars as _;
 use uffs_security as _;
 use uffs_text as _;
+// `windows` is linked via the `[target.'cfg(windows)'.dependencies]` section
+// of `uffs-mft`'s Cargo.toml.  The benchmark's Windows body only reaches the
+// crate transitively (through `uffs_mft::AlignedBuffer` / `ParsedColumns`),
+// so we acknowledge it here to keep `unused-crate-dependencies` quiet on
+// Windows without forcing a direct dependency on a platform-only crate.
+#[cfg(windows)]
+use windows as _;
 use zerocopy as _;
 
 #[cfg(feature = "zstd")]

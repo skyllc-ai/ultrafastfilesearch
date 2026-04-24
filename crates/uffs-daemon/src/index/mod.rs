@@ -417,7 +417,7 @@ impl IndexManager {
         clippy::use_debug,
         reason = "[diag] diagnostic tracing — remove after D: drive issue is resolved"
     )]
-    pub async fn load_live_drives(
+    pub(crate) async fn load_live_drives(
         &self,
         drives: &[char],
         no_cache: bool,
@@ -472,8 +472,15 @@ impl IndexManager {
                     // Abort the remaining stuck tasks (best-effort;
                     // kernel-mode I/O may not be interruptible, but
                     // process::exit at daemon shutdown will clean up).
+                    //
+                    // We intentionally do NOT update `loaded` here:
+                    // the surrounding loop is about to `break`, and
+                    // `set_ready()` (below the loop) transitions the
+                    // status out of `Loading` regardless — so any
+                    // write to `loaded` would be dead.  Stuck-drive
+                    // observability is carried by the `remaining`
+                    // count logged immediately above.
                     join_set.abort_all();
-                    loaded = total;
                     break;
                 }
             };

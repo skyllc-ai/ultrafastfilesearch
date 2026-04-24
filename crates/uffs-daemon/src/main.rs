@@ -15,9 +15,12 @@
 //! uffs-daemon --no-retire              # stay running indefinitely
 //! uffs-daemon --log-level debug        # verbose logging
 //! ```
-
-// Enable unstable Windows Unix domain socket support (Windows 10 1803+).
-#![cfg_attr(windows, feature(windows_unix_domain_sockets))]
+// Note: the `windows_unix_domain_sockets` nightly feature is declared in
+// `lib.rs` (where `std::os::windows::net::UnixListener` is actually used
+// by the `ipc` module).  The thin binary here only calls
+// `uffs_daemon::run_daemon()` and does not directly name any
+// feature-gated item, so declaring the feature here produces a
+// `unused_features` warning.
 
 use std::path::PathBuf;
 

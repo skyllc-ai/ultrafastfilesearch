@@ -581,7 +581,7 @@ fn create_pipe_server(
 /// Mirrors the Unix version: secure dir (icacls owner-only ACL), socket
 /// file permissions, max connections, peer verification via ACL.
 #[cfg(windows)]
-pub async fn run_ipc_server(
+pub(crate) async fn run_ipc_server(
     index: Arc<IndexManager>,
     lifecycle: LifecycleHandle,
 ) -> anyhow::Result<()> {

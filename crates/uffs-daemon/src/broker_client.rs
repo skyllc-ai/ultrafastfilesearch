@@ -14,12 +14,17 @@
 //! 5. Use the handle for MFT reading
 
 /// The broker pipe name (must match `uffs-broker/src/broker.rs`).
+///
+/// File-local: only consumed by `broker_available` and
+/// `request_volume_handle` below.  Kept private (not `pub(crate)`) to
+/// match the Windows-only scope of its consumers and avoid polluting
+/// the crate's internal namespace with a constant no other module uses.
 #[cfg(windows)]
-pub const BROKER_PIPE_NAME: &str = r"\\.\pipe\uffs-broker";
+const BROKER_PIPE_NAME: &str = r"\\.\pipe\uffs-broker";
 
 /// Check if the Access Broker is available (pipe exists).
 #[cfg(windows)]
-pub fn broker_available() -> bool {
+pub(crate) fn broker_available() -> bool {
     use std::os::windows::ffi::OsStrExt;
 
     use windows::Win32::Storage::FileSystem::GetFileAttributesW;
@@ -42,7 +47,7 @@ pub fn broker_available() -> bool {
 /// Returns the raw handle value (as a `u64`) that can be used for MFT reading.
 /// The handle is already duplicated into our process by the broker.
 #[cfg(windows)]
-pub fn request_volume_handle(drive_letter: char) -> anyhow::Result<u64> {
+pub(crate) fn request_volume_handle(drive_letter: char) -> anyhow::Result<u64> {
     use std::io::{Read, Write};
 
     // Connect to broker pipe
