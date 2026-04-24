@@ -170,9 +170,8 @@ impl IocpMftReader {
                 // Calculate read size
                 let read_size = op.chunk.record_count * u64::from(record_size);
                 let offset_adjustment = (op.chunk.disk_offset - aligned_offset) as usize;
-                let aligned_size = ((read_size as usize + offset_adjustment + SECTOR_SIZE - 1)
-                    / SECTOR_SIZE)
-                    * SECTOR_SIZE;
+                let aligned_size =
+                    (read_size as usize + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
 
                 // Issue overlapped read
                 // SAFETY: We need get_unchecked_mut to get a mutable reference to the
@@ -288,10 +287,9 @@ impl IocpMftReader {
                             (next_chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
                         let next_offset_adjustment =
                             (next_chunk.disk_offset - next_aligned_offset) as usize;
-                        let next_aligned_size =
-                            ((next_read_size as usize + next_offset_adjustment + SECTOR_SIZE - 1)
-                                / SECTOR_SIZE)
-                                * SECTOR_SIZE;
+                        let next_aligned_size = (next_read_size as usize + next_offset_adjustment)
+                            .div_ceil(SECTOR_SIZE)
+                            * SECTOR_SIZE;
 
                         if buffer.len() < next_aligned_size {
                             buffer = AlignedBuffer::new(next_aligned_size);

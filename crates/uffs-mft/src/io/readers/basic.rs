@@ -41,7 +41,7 @@ impl MftRecordReader {
         );
 
         // Allocate buffer for one record (rounded up to sector boundary)
-        let buffer_size = ((record_size as usize + SECTOR_SIZE - 1) / SECTOR_SIZE) * SECTOR_SIZE;
+        let buffer_size = (record_size as usize).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
         let buffer = AlignedBuffer::new(buffer_size);
 
         Self {
@@ -63,7 +63,7 @@ impl MftRecordReader {
         let record_size = extent_map.bytes_per_record;
 
         // Allocate buffer for one record (rounded up to sector boundary)
-        let buffer_size = ((record_size as usize + SECTOR_SIZE - 1) / SECTOR_SIZE) * SECTOR_SIZE;
+        let buffer_size = (record_size as usize).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
         let buffer = AlignedBuffer::new(buffer_size);
 
         Self {
@@ -220,7 +220,7 @@ impl BatchMftReader {
 
         // Round block size to cluster boundary
         let cluster_size = bytes_per_cluster as usize;
-        let read_block_size = ((block_size + cluster_size - 1) / cluster_size) * cluster_size;
+        let read_block_size = block_size.div_ceil(cluster_size) * cluster_size;
 
         let buffer = AlignedBuffer::new(read_block_size);
 
