@@ -184,7 +184,7 @@ impl VolumeHandle {
             });
         }
 
-        let volume_path: Vec<u16> = format!("\\\\.\\{}:", volume)
+        let volume_path: Vec<u16> = format!("\\\\.\\{volume}:")
             .encode_utf16()
             .chain(core::iter::once(0))
             .collect();
@@ -192,7 +192,7 @@ impl VolumeHandle {
         // SAFETY: `volume_path` is UTF-16 and NUL-terminated for the duration of
         // the call, optional pointers are passed as `None`, and on success the
         // returned handle is owned by this function.
-        let handle = unsafe {
+        let create_result = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(volume_path.as_ptr()),
                 FILE_READ_DATA | FILE_READ_ATTRIBUTES.0 | SYNCHRONIZE.0,
@@ -204,15 +204,22 @@ impl VolumeHandle {
             )
         };
 
-        let handle = match handle {
-            Ok(h) => h,
+        let handle = match create_result {
+            Ok(handle) => handle,
             Err(err) => {
-                if err.code().0 as u32 == 0x8007_0005 {
+                // err.code().0 is an i32 holding an HRESULT; reinterpret as u32
+                // to compare against Win32 error codes (documented as u32).
+                #[expect(
+                    clippy::cast_sign_loss,
+                    reason = "HRESULT bit-pattern reinterpret for documented u32 error constants"
+                )]
+                let code_unsigned = err.code().0 as u32;
+                if code_unsigned == 0x8007_0005 {
                     return Err(MftError::InsufficientPrivileges);
                 }
                 return Err(MftError::VolumeOpen {
                     volume,
-                    source: std::io::Error::from_raw_os_error(err.code().0 as i32),
+                    source: std::io::Error::from_raw_os_error(err.code().0),
                 });
             }
         };
@@ -234,6 +241,10 @@ impl VolumeHandle {
         let mut buffer = NTFS_VOLUME_DATA_BUFFER::default();
         let mut bytes_returned: u32 = 0;
 
+        // `size_of::<NTFS_VOLUME_DATA_BUFFER>()` is ~96 bytes — always fits u32.
+        let ntfs_volume_data_buffer_size =
+            u32::try_from(size_of::<NTFS_VOLUME_DATA_BUFFER>()).unwrap_or(u32::MAX);
+
         // SAFETY: `handle` is an open volume handle, `buffer` points to valid
         // writable storage for `NTFS_VOLUME_DATA_BUFFER`, and
         // `bytes_returned` is a valid out-parameter for the duration of the
@@ -245,7 +256,7 @@ impl VolumeHandle {
                 None,
                 0,
                 Some(core::ptr::from_mut(&mut buffer).cast()),
-                size_of::<NTFS_VOLUME_DATA_BUFFER>() as u32,
+                ntfs_volume_data_buffer_size,
                 Some(&mut bytes_returned),
                 None,
             )
@@ -258,7 +269,17 @@ impl VolumeHandle {
         // Note: NTFS major/minor version requires NTFS_EXTENDED_VOLUME_DATA
         // (not available in NTFS_VOLUME_DATA_BUFFER).  Default to 0; callers
         // should use `query_ntfs_version()` if they need the actual version.
-        Ok(NtfsVolumeData {
+        //
+        // Every `i64 -> u64` cast below reinterprets an on-disk NTFS count
+        // (sector / cluster / LCN / length).  These fields are documented
+        // non-negative by the NTFS on-disk format and Microsoft's
+        // NTFS_VOLUME_DATA_BUFFER MSDN page, so the bit-level reinterpret is
+        // the correct and lossless conversion.
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "NTFS_VOLUME_DATA_BUFFER LARGE_INTEGER fields are non-negative by on-disk format spec"
+        )]
+        let volume_data = NtfsVolumeData {
             volume_serial_number: buffer.VolumeSerialNumber as u64,
             ntfs_major_version: 0,
             ntfs_minor_version: 0,
@@ -275,7 +296,8 @@ impl VolumeHandle {
             mft2_start_lcn: buffer.Mft2StartLcn as u64,
             mft_zone_start: buffer.MftZoneStart as u64,
             mft_zone_end: buffer.MftZoneEnd as u64,
-        })
+        };
+        Ok(volume_data)
     }
 
     /// Returns the volume letter.
@@ -297,9 +319,14 @@ impl VolumeHandle {
     }
 
     /// Opens a new handle to the same volume with `FILE_FLAG_OVERLAPPED`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MftError::VolumeOpen` if `CreateFileW` fails.
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
     pub fn open_overlapped_handle(&self) -> Result<HANDLE> {
-        let volume_path: Vec<u16> = format!("\\\\.\\{}:", self.volume)
+        let volume = self.volume;
+        let volume_path: Vec<u16> = format!("\\\\.\\{volume}:")
             .encode_utf16()
             .chain(core::iter::once(0))
             .collect();
@@ -320,10 +347,10 @@ impl VolumeHandle {
         };
 
         match handle {
-            Ok(h) => Ok(h),
+            Ok(handle) => Ok(handle),
             Err(err) => Err(MftError::VolumeOpen {
-                volume: self.volume,
-                source: std::io::Error::from_raw_os_error(err.code().0 as i32),
+                volume,
+                source: std::io::Error::from_raw_os_error(err.code().0),
             }),
         }
     }
@@ -337,12 +364,17 @@ impl VolumeHandle {
     ///
     /// Automatically enables `SeBackupPrivilege` in the process token before
     /// opening — required for `FILE_FLAG_BACKUP_SEMANTICS` on NTFS metafiles.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MftError::VolumeOpen` if `CreateFileW` fails.
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
     pub fn open_mft_read_handle(&self) -> Result<HANDLE> {
         // Enable SeBackupPrivilege — required for $MFT access even as admin
         enable_backup_privilege();
 
-        let mft_path: Vec<u16> = format!("{}:\\$MFT", self.volume)
+        let volume = self.volume;
+        let mft_path: Vec<u16> = format!("{volume}:\\$MFT")
             .encode_utf16()
             .chain(core::iter::once(0))
             .collect();
@@ -363,10 +395,10 @@ impl VolumeHandle {
         };
 
         match handle {
-            Ok(h) => Ok(h),
+            Ok(handle) => Ok(handle),
             Err(err) => Err(MftError::VolumeOpen {
-                volume: self.volume,
-                source: std::io::Error::from_raw_os_error(err.code().0 as i32),
+                volume,
+                source: std::io::Error::from_raw_os_error(err.code().0),
             }),
         }
     }
@@ -381,9 +413,14 @@ impl VolumeHandle {
     /// [`AlignedBuffer`]).
     ///
     /// The caller is responsible for closing the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MftError::VolumeOpen` if `CreateFileW` fails.
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
     pub fn open_unbuffered_handle(&self) -> Result<HANDLE> {
-        let volume_path: Vec<u16> = format!("\\\\.\\{}:", self.volume)
+        let volume = self.volume;
+        let volume_path: Vec<u16> = format!("\\\\.\\{volume}:")
             .encode_utf16()
             .chain(core::iter::once(0))
             .collect();
@@ -404,10 +441,10 @@ impl VolumeHandle {
         };
 
         match handle {
-            Ok(h) => Ok(h),
+            Ok(handle) => Ok(handle),
             Err(err) => Err(MftError::VolumeOpen {
-                volume: self.volume,
-                source: std::io::Error::from_raw_os_error(err.code().0 as i32),
+                volume,
+                source: std::io::Error::from_raw_os_error(err.code().0),
             }),
         }
     }
