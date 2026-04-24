@@ -252,12 +252,11 @@ impl ParallelMftReader {
 
                         let offset = i * record_size;
                         let end = offset + record_size;
-                        if end > buffer.len() {
-                            break;
-                        }
 
                         // Apply fixup in-place (zero-copy - no per-record allocation!)
-                        let record_slice = &mut buffer[offset..end];
+                        let Some(record_slice) = buffer.get_mut(offset..end) else {
+                            break;
+                        };
                         if !apply_fixup(record_slice) {
                             continue;
                         }
@@ -337,13 +336,21 @@ impl ParallelMftReader {
 
                 let overlapped_ptr = &raw mut op_mut.overlapped;
                 let read_size = op_mut.op.size;
+                let Some(read_slice) = op_mut.buffer.as_mut_slice().get_mut(..read_size) else {
+                    // Unreachable: buffer was sized to ≥ read_size at allocation.
+                    drop(tx);
+                    return Err(MftError::Io(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "to-index-parallel buffer shorter than read_size",
+                    )));
+                };
                 // SAFETY: `overlapped_handle` is a live overlapped-capable handle,
                 // the buffer slice spans `read_size` writable bytes in the pinned op,
                 // and `overlapped_ptr` points into that same pinned operation.
                 let result = unsafe {
                     ReadFile(
                         overlapped_handle,
-                        Some(&mut op_mut.buffer.as_mut_slice()[..read_size]),
+                        Some(read_slice),
                         None,
                         Some(overlapped_ptr),
                     )
@@ -365,7 +372,9 @@ impl ParallelMftReader {
                     }
                 }
 
-                in_flight[slot_id] = Some(in_flight_op);
+                if let Some(slot) = in_flight.get_mut(slot_id) {
+                    *slot = Some(in_flight_op);
+                }
             }
         }
 
@@ -407,83 +416,105 @@ impl ParallelMftReader {
                 }
             }
 
-            if let Some(slot_idx) = completed_slot {
-                if let Some(mut completed_op) = in_flight[slot_idx].take() {
-                    // SAFETY: The `Pin<Box<_>>` is still pinned in this scope; we
-                    // only project a mutable reference without moving the allocation.
-                    let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
+            if let Some(slot_idx) = completed_slot
+                && let Some(op_slot) = in_flight.get_mut(slot_idx)
+                && let Some(mut completed_op) = op_slot.take()
+            {
+                // SAFETY: The `Pin<Box<_>>` is still pinned in this scope; we
+                // only project a mutable reference without moving the allocation.
+                let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
 
-                    // Send buffer to workers (copy the data)
-                    let buffer_data =
-                        op_mut.buffer.as_slice()[..bytes_transferred as usize].to_vec();
-                    let start_frs = op_mut.op.start_frs;
-                    let record_count = bytes_transferred as usize / record_size;
+                // Send buffer to workers (copy the data)
+                let Some(buffer_slice) =
+                    op_mut.buffer.as_slice().get(..bytes_transferred as usize)
+                else {
+                    // Unreachable: bytes_transferred ≤ allocated buffer size.
+                    drop(tx);
+                    return Err(MftError::Io(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "to-index-parallel completion reported more bytes than buffer size",
+                    )));
+                };
+                let buffer_data = buffer_slice.to_vec();
+                let start_frs = op_mut.op.start_frs;
+                let record_count = bytes_transferred as usize / record_size;
 
-                    if tx
-                        .send(Some((buffer_data, start_frs, record_count)))
-                        .is_err()
-                    {
-                        warn!("Failed to send buffer to workers - channel closed");
-                    }
+                if tx
+                    .send(Some((buffer_data, start_frs, record_count)))
+                    .is_err()
+                {
+                    warn!("Failed to send buffer to workers - channel closed");
+                }
 
-                    bytes_read_total += bytes_transferred as u64;
-                    completed_count += 1;
+                bytes_read_total += bytes_transferred as u64;
+                completed_count += 1;
 
-                    // Recycle buffer and queue next read
-                    let recycled_buffer =
-                        core::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
-                    buffer_pool.push(recycled_buffer);
+                // Recycle buffer and queue next read
+                let recycled_buffer =
+                    core::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
+                buffer_pool.push(recycled_buffer);
 
-                    if let Some(next_op) = io_ops.pop_front() {
-                        let Some(buffer) = buffer_pool.pop() else {
-                            drop(tx);
-                            return Err(MftError::InvalidData(
-                                "I/O buffer pool exhausted while recycling worker reads".to_owned(),
-                            ));
-                        };
-                        let mut new_in_flight = Box::pin(InFlightOp {
-                            // SAFETY: `OVERLAPPED` is a plain Windows FFI struct and an
-                            // all-zero value is the required initial state before offsets are set.
-                            overlapped: unsafe { core::mem::zeroed() },
-                            buffer,
-                            op: next_op,
-                        });
+                if let Some(next_op) = io_ops.pop_front() {
+                    let Some(buffer) = buffer_pool.pop() else {
+                        drop(tx);
+                        return Err(MftError::InvalidData(
+                            "I/O buffer pool exhausted while recycling worker reads".to_owned(),
+                        ));
+                    };
+                    let mut new_in_flight = Box::pin(InFlightOp {
+                        // SAFETY: `OVERLAPPED` is a plain Windows FFI struct and an
+                        // all-zero value is the required initial state before offsets are set.
+                        overlapped: unsafe { core::mem::zeroed() },
+                        buffer,
+                        op: next_op,
+                    });
 
-                        let offset = new_in_flight.op.disk_offset;
-                        // SAFETY: The pinned allocation remains in place while the I/O
-                        // is in flight; this only projects a mutable reference.
-                        let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
-                        new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                        new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
-                            (offset >> 32) as u32;
+                    let offset = new_in_flight.op.disk_offset;
+                    // SAFETY: The pinned allocation remains in place while the I/O
+                    // is in flight; this only projects a mutable reference.
+                    let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
+                    new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
+                    new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
+                        (offset >> 32) as u32;
 
-                        let overlapped_ptr = &raw mut new_op_mut.overlapped;
-                        let read_size = new_op_mut.op.size;
-                        // SAFETY: `overlapped_handle` is a live overlapped-capable
-                        // handle, the buffer slice spans `read_size` writable bytes in
-                        // the pinned op, and `overlapped_ptr` points into that op.
-                        let result = unsafe {
-                            ReadFile(
-                                overlapped_handle,
-                                Some(&mut new_op_mut.buffer.as_mut_slice()[..read_size]),
-                                None,
-                                Some(overlapped_ptr),
-                            )
-                        };
+                    let overlapped_ptr = &raw mut new_op_mut.overlapped;
+                    let read_size = new_op_mut.op.size;
+                    let Some(read_slice) =
+                        new_op_mut.buffer.as_mut_slice().get_mut(..read_size)
+                    else {
+                        // Unreachable: buffer was sized to ≥ read_size at allocation.
+                        drop(tx);
+                        return Err(MftError::Io(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "to-index-parallel recycled buffer shorter than read_size",
+                        )));
+                    };
+                    // SAFETY: `overlapped_handle` is a live overlapped-capable
+                    // handle, the buffer slice spans `read_size` writable bytes in
+                    // the pinned op, and `overlapped_ptr` points into that op.
+                    let result = unsafe {
+                        ReadFile(
+                            overlapped_handle,
+                            Some(read_slice),
+                            None,
+                            Some(overlapped_ptr),
+                        )
+                    };
 
-                        match result {
-                            Ok(_) => {}
-                            Err(_) => {
-                                // SAFETY: `GetLastError` reads the calling thread's
-                                // last-error slot and does not dereference Rust pointers.
-                                let last_error = unsafe { GetLastError() };
-                                if last_error != ERROR_IO_PENDING {
-                                    warn!(error = ?last_error, "Failed to queue next read");
-                                }
+                    match result {
+                        Ok(_) => {}
+                        Err(_) => {
+                            // SAFETY: `GetLastError` reads the calling thread's
+                            // last-error slot and does not dereference Rust pointers.
+                            let last_error = unsafe { GetLastError() };
+                            if last_error != ERROR_IO_PENDING {
+                                warn!(error = ?last_error, "Failed to queue next read");
                             }
                         }
+                    }
 
-                        in_flight[slot_idx] = Some(new_in_flight);
+                    if let Some(slot) = in_flight.get_mut(slot_idx) {
+                        *slot = Some(new_in_flight);
                     }
                 }
             }
