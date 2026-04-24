@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! DataFrame-backed multi-drive reader helpers.
+//! `DataFrame`-backed multi-drive reader helpers.
 
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ use crate::reader::{MftProgress, MftReader};
 impl MultiDriveMftReader {
     /// Read MFTs from all drives concurrently.
     ///
-    /// Returns a merged DataFrame with a `drive` column (e.g., "C:", "D:").
+    /// Returns a merged `DataFrame` with a `drive` column (e.g., "C:", "D:").
     /// If some drives fail, the successful ones are still returned.
     /// Only fails if ALL drives fail.
     ///

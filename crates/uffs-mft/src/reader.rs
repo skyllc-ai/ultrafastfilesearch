@@ -119,7 +119,7 @@ pub struct MftReader {
     /// Number of concurrent I/O operations (reads in flight).
     ///
     /// - Default: 2 for HDD (optimal for sequential reads)
-    /// - Higher values (8-32) may help on SSD/NVMe
+    /// - Higher values (8-32) may help on SSD/`NVMe`
     ///
     /// For HDDs, more concurrency can cause seeks and hurt performance.
     /// For `NVMe`, high concurrency (16-32) is needed to saturate the device.
@@ -596,7 +596,7 @@ mod tests {
     // Tests for MftReader optimal defaults
     // =========================================================================
 
-    /// Test that MftReader stores None for concurrency/io_size by default,
+    /// Test that `MftReader` stores None for concurrency/io_size by default,
     /// allowing the I/O layer to use optimal settings based on drive type.
     #[test]
     #[cfg(windows)]
@@ -630,7 +630,7 @@ mod tests {
         );
     }
 
-    /// Test that MftReader builder methods correctly set values
+    /// Test that `MftReader` builder methods correctly set values
     #[test]
     #[cfg(windows)]
     fn test_mft_reader_builder_overrides() {
@@ -654,7 +654,7 @@ mod tests {
         assert_eq!(reader.parse_workers, Some(4));
     }
 
-    /// Test that MftReadMode::Auto is the default
+    /// Test that `MftReadMode::Auto` is the default
     #[test]
     #[cfg(windows)]
     fn test_mft_reader_default_mode_is_auto() {

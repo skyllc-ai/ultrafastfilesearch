@@ -282,9 +282,9 @@ impl MftReader {
 
     /// Internal implementation for building lean `MftIndex`.
     ///
-    /// This is the fast path that avoids DataFrame building overhead.
+    /// This is the fast path that avoids `DataFrame` building overhead.
     /// Uses the same I/O and parsing as `read_mft_internal`, but builds
-    /// a compact `MftIndex` instead of a Polars DataFrame.
+    /// a compact `MftIndex` instead of a Polars `DataFrame`.
     #[cfg(windows)]
     #[expect(
         clippy::too_many_lines,

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Shared chunk reader helper for ParallelMftReader.
+//! Shared chunk reader helper for `ParallelMftReader`.
 //!
 //! Windows-only: requires HANDLE.
 

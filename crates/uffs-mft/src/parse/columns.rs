@@ -18,7 +18,7 @@ use crate::ntfs::{NameInfo, StreamInfo};
 ///
 /// # Performance
 ///
-/// Using `SoA` layout eliminates the AoS→SoA transpose that was previously
+/// Using `SoA` layout eliminates the `AoS`→`SoA` transpose that was previously
 /// done in `build_dataframe_from_records`, reducing `df_build` time by ~20%.
 ///
 /// # Cross-Platform

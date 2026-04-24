@@ -68,7 +68,7 @@ pub struct MultiVolumeIoOp {
 /// - Single event loop for all volumes
 /// - OS can optimize I/O scheduling across all drives
 /// - Reduced thread overhead
-/// - NVMe drives get high concurrency while HDDs get low concurrency
+/// - `NVMe` drives get high concurrency while HDDs get low concurrency
 #[cfg(windows)]
 pub struct MultiVolumeIocpReader {
     /// Per-volume state, indexed by completion key

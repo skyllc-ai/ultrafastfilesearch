@@ -25,7 +25,7 @@ use super::extents::{MftExtent, get_retrieval_pointers};
 use crate::error::{MftError, Result};
 use crate::ntfs::NtfsBootSector;
 
-/// FILE_READ_DATA access right (0x0001) - required to read data from a
+/// `FILE_READ_DATA` access right (0x0001) - required to read data from a
 /// file/volume.
 const FILE_READ_DATA: u32 = 0x0001;
 

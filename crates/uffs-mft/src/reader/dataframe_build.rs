@@ -5,7 +5,7 @@
 //!
 //! **Module-scoped cast justification:** the single `as` cast converts an
 //! NTFS-record count (`u64`) into a Polars Series length (`u32`).  Record
-//! counts that fit in a DataFrame are bounded by Polars internals, well within
+//! counts that fit in a `DataFrame` are bounded by Polars internals, well within
 //! u32.
 #![expect(
     clippy::cast_possible_truncation,
@@ -22,10 +22,10 @@ use crate::error::{MftError, Result};
 use crate::ntfs::StreamInfo;
 
 impl MftReader {
-    /// Helper to build DataFrame from parsed records (legacy AoS path).
+    /// Helper to build `DataFrame` from parsed records (legacy `AoS` path).
     ///
     /// NOTE: This function is superseded by `build_dataframe_from_columns`
-    /// which uses the SoA path and avoids the AoS→SoA transpose. Kept for
+    /// which uses the `SoA` path and avoids the `AoS`→`SoA` transpose. Kept for
     /// reference and potential fallback use.
     #[cfg(windows)]
     #[expect(
@@ -270,7 +270,7 @@ impl MftReader {
 
     /// Builds a `DataFrame` directly from `ParsedColumns` (`SoA` layout).
     ///
-    /// This is the optimized path that avoids the AoS→SoA transpose.
+    /// This is the optimized path that avoids the `AoS`→`SoA` transpose.
     /// The columns are already in the correct format, so we just wrap them
     /// in Polars Series.
     ///
@@ -581,10 +581,10 @@ impl MftReader {
         DataFrame::new_infer_height(schema_columns).map_err(MftError::from)
     }
 
-    /// Convert parsed records to DataFrame (legacy AoS path).
+    /// Convert parsed records to `DataFrame` (legacy `AoS` path).
     ///
     /// NOTE: This function is superseded by `build_dataframe_from_columns`
-    /// which uses the SoA path and avoids the AoS→SoA transpose. Kept for
+    /// which uses the `SoA` path and avoids the `AoS`→`SoA` transpose. Kept for
     /// reference.
     #[cfg(windows)]
     #[expect(

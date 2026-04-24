@@ -14,9 +14,9 @@
 use super::*;
 
 impl ParallelMftReader {
-    /// Reads all MFT records and returns them as `ParsedColumns` (SoA layout).
+    /// Reads all MFT records and returns them as `ParsedColumns` (`SoA` layout).
     ///
-    /// This is the optimized path that avoids the AoS→SoA transpose by:
+    /// This is the optimized path that avoids the `AoS`→`SoA` transpose by:
     /// 1. Parsing records into `ParseResult` (same as before)
     /// 2. Optionally merging extensions using `MftRecordMerger`
     /// 3. Converting directly to `ParsedColumns` (no intermediate
@@ -41,7 +41,7 @@ impl ParallelMftReader {
     ///
     /// # Returns
     ///
-    /// `ParsedColumns` ready for direct conversion to Polars DataFrame.
+    /// `ParsedColumns` ready for direct conversion to Polars `DataFrame`.
     pub fn read_all_parallel_to_columns<F>(
         &self,
         handle: HANDLE,

@@ -11,7 +11,7 @@ use crate::error::Result;
 #[cfg(not(windows))]
 use crate::reader::MftProgress;
 
-/// DataFrame-backed multi-drive read helpers.
+/// `DataFrame`-backed multi-drive read helpers.
 #[cfg(windows)]
 mod dataframe;
 /// Lean-index multi-drive read helpers.

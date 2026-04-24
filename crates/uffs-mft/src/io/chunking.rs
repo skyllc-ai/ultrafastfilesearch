@@ -212,13 +212,13 @@ fn log_chunk_summary(
     }
 }
 
-/// Generate precise read chunks for NVMe/SSD drives.
+/// Generate precise read chunks for `NVMe`/SSD drives.
 ///
 /// Unlike `generate_read_chunks` which creates large chunks and only skips at
 /// the beginning/end, this function generates smaller, more precise I/O
 /// operations that skip unused regions entirely.
 ///
-/// For NVMe/SSD drives, there's no seek penalty, so many small reads are
+/// For `NVMe`/SSD drives, there's no seek penalty, so many small reads are
 /// actually more efficient than fewer large reads that include unused data.
 ///
 /// # Arguments
@@ -231,7 +231,7 @@ fn log_chunk_summary(
 ///
 /// # Returns
 ///
-/// Vector of read chunks optimized for NVMe/SSD I/O.
+/// Vector of read chunks optimized for `NVMe`/SSD I/O.
 pub fn generate_precise_read_chunks(
     extent_map: &MftExtentMap,
     bitmap: &crate::platform::MftBitmap,
@@ -444,7 +444,7 @@ fn maybe_merge_chunks(
 
 /// Merge adjacent precise chunks with small gaps.
 ///
-/// For NVMe/SSD, if two chunks are very close together, it's more efficient
+/// For `NVMe`/SSD, if two chunks are very close together, it's more efficient
 /// to read them as one chunk than to issue two separate I/O operations.
 fn merge_precise_chunks(
     mut chunks: Vec<ReadChunk>,

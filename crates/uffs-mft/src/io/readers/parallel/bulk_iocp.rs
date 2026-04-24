@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Bulk IOCP reader path for ParallelMftReader.
+//! Bulk IOCP reader path for `ParallelMftReader`.
 //!
 //! **Module-scoped cast justification:** `as usize` / `as u32` casts convert
 //! NTFS disk offsets (`u64`) and record sizes (`u32`) into `usize` / `u32`
@@ -20,7 +20,7 @@ impl ParallelMftReader {
     /// operations simultaneously, then wait for completions.
     ///
     /// # Arguments
-    /// * `overlapped_handle` - Handle opened with FILE_FLAG_OVERLAPPED
+    /// * `overlapped_handle` - Handle opened with `FILE_FLAG_OVERLAPPED`
     /// * `merge_extensions` - Whether to merge extension records
     /// * `progress_callback` - Optional progress callback
     #[expect(

@@ -409,10 +409,10 @@ impl ParallelMftReader {
                                 let offset = i * record_size;
                                 let record_slice = &buffer_slice[offset..offset + record_size];
 
-                                /// Flags offset in FILE_RECORD_SEGMENT_HEADER.
+                                /// Flags offset in `FILE_RECORD_SEGMENT_HEADER`.
                                 const FLAGS_OFFSET: usize = 0x16;
                                 /// IN_USE flag bit in
-                                /// FILE_RECORD_SEGMENT_HEADER.flags.
+                                /// `FILE_RECORD_SEGMENT_HEADER`.flags.
                                 const IN_USE_FLAG: u16 = 0x0001;
 
                                 if record_slice.len() > FLAGS_OFFSET + 1 {

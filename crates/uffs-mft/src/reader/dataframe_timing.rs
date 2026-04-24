@@ -41,16 +41,16 @@ impl MftReader {
     /// - Read: Disk I/O (reading chunks)
     /// - Parse: Record parsing (parallel)
     /// - Merge: Extension record merging
-    /// - DataFrame build: Converting parsed records to DataFrame
+    /// - `DataFrame` build: Converting parsed records to `DataFrame`
     ///
     /// # Arguments
     ///
-    /// * `skip_df_build` - If true, skip DataFrame building (measure I/O +
+    /// * `skip_df_build` - If true, skip `DataFrame` building (measure I/O +
     ///   parse only)
     ///
     /// # Returns
     ///
-    /// A tuple of (optional DataFrame, BenchmarkResult).
+    /// A tuple of (optional `DataFrame`, `BenchmarkResult`).
     ///
     /// # Errors
     ///

@@ -38,7 +38,7 @@ impl MftReader {
     ///
     /// # Returns
     ///
-    /// A tuple of (MftIndex, BenchmarkResult) with the index and timing
+    /// A tuple of (MftIndex, `BenchmarkResult`) with the index and timing
     /// breakdown.
     ///
     /// # Errors
@@ -109,7 +109,7 @@ impl MftReader {
     ///
     /// # Returns
     ///
-    /// A tuple of (MftIndex, BenchmarkResult) with detailed timing breakdown.
+    /// A tuple of (MftIndex, `BenchmarkResult`) with detailed timing breakdown.
     #[cfg(windows)]
     #[expect(
         clippy::too_many_lines,

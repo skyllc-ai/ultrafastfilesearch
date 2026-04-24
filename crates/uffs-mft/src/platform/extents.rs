@@ -117,7 +117,7 @@ pub(super) fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
     Ok(extents)
 }
 
-/// Parses the RETRIEVAL_POINTERS_BUFFER structure.
+/// Parses the `RETRIEVAL_POINTERS_BUFFER` structure.
 #[cfg(windows)]
 fn parse_retrieval_pointers(buffer: &[u8], size: usize, extents: &mut Vec<MftExtent>) {
     if size < size_of::<u32>() + size_of::<i64>() {

@@ -341,7 +341,7 @@ impl DriveType {
     }
 }
 
-/// Detects whether a drive is NVMe, SSD, or HDD.
+/// Detects whether a drive is `NVMe`, SSD, or HDD.
 #[cfg(windows)]
 #[must_use]
 #[expect(

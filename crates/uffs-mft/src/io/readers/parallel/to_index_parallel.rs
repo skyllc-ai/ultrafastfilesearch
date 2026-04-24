@@ -34,7 +34,7 @@ impl ParallelMftReader {
     /// - After all I/O completes, results are merged via `MftRecordMerger` into
     ///   final index
     ///
-    /// This is beneficial for NVMe drives where I/O is faster than parsing.
+    /// This is beneficial for `NVMe` drives where I/O is faster than parsing.
     /// For HDD, use `read_all_sliding_window_iocp_to_index` (inline parsing).
     ///
     /// # Arguments

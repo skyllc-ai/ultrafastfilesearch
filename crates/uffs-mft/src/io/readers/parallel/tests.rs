@@ -3,7 +3,7 @@
 
 //! Tests for parallel reader configuration helpers.
 //!
-//! Windows-only: ParallelMftReader requires Windows types and methods.
+//! Windows-only: `ParallelMftReader` requires Windows types and methods.
 
 #![cfg(windows)]
 

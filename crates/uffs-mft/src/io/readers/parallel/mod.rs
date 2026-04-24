@@ -105,7 +105,7 @@ impl ReadParseTiming {
 /// - Bitmap-based cluster skipping
 /// - Parallel record processing using Rayon
 /// - Large batch I/O (4-8 MB chunks) for reduced syscall overhead
-/// - Drive-type aware tuning (SSD vs HDD vs NVMe)
+/// - Drive-type aware tuning (SSD vs HDD vs `NVMe`)
 /// - Buffer reuse to minimize allocations
 ///
 /// Windows-only: requires HANDLE for live MFT reading.
@@ -127,7 +127,7 @@ pub struct ParallelMftReader {
     /// Skipped records counter (not in use or invalid).
     skipped_records: Arc<AtomicU64>,
     /// M1 8.4: Reusable aligned buffer for sequential I/O.
-    /// Wrapped in RefCell for interior mutability since read_chunk needs &mut.
+    /// Wrapped in `RefCell` for interior mutability since read_chunk needs &mut.
     buffer: RefCell<AlignedBuffer>,
 }
 
