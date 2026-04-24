@@ -66,6 +66,10 @@ impl MftStats {
 
     /// Logs the aggregated statistics summary.
     #[cfg(windows)]
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "GiB/MiB display formatting requires byte-to-float division"
+    )]
     pub(super) fn log_summary(&self) {
         info!(
             directories = self.dir_count,

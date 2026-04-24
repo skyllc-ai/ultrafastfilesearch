@@ -115,6 +115,10 @@ impl MftReader {
         clippy::too_many_lines,
         reason = "sequential I/O pipeline with per-phase timing cannot be meaningfully split"
     )]
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "benchmark telemetry: phase ms/throughput conversions require float division"
+    )]
     fn read_mft_index_with_timing_internal(
         &self,
     ) -> Result<(crate::index::MftIndex, BenchmarkResult)> {

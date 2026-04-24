@@ -75,6 +75,10 @@ impl ParallelMftReader {
         unsafe_code,
         reason = "FFI: ReadFile, GetQueuedCompletionStatus for IOCP-to-index reads"
     )]
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "telemetry: I/O-vs-parse overlap percentage requires float division for human-readable logging"
+    )]
     /// # Errors
     ///
     /// Returns [`MftError::Io`] when an IOCP `ReadFile` or the completion

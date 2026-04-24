@@ -328,7 +328,7 @@ impl ParallelMftReader {
         // Estimate capacity
         let estimated_records = self.bitmap.as_ref().map_or_else(
             || self.extent_map.total_records() as usize,
-            |bitmap| bitmap.count_in_use(),
+            crate::platform::MftBitmap::count_in_use,
         );
         info!(estimated_records, "Estimated record count");
 

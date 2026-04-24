@@ -303,6 +303,10 @@ impl MftReader {
             progress_callback = callback.is_some()
         )
     )]
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "telemetry: bitmap skip-percentage and MB/s throughput require float division for human-readable logging"
+    )]
     fn read_mft_index_internal<F>(&self, callback: Option<F>) -> Result<crate::index::MftIndex>
     where
         F: Fn(MftProgress),

@@ -218,7 +218,7 @@ impl ParallelMftReader {
         let estimated_records = self
             .bitmap
             .as_ref()
-            .map_or(total_records, |bitmap| bitmap.count_in_use());
+            .map_or(total_records, crate::platform::MftBitmap::count_in_use);
 
         // Calculate total bytes to read and max I/O size for buffer allocation
         let total_bytes_to_read: u64 = io_ops.iter().map(|op| op.size as u64).sum();

@@ -97,9 +97,8 @@ impl MftReader {
                 let read_size = chunk.record_count * u64::from(record_size_copy);
                 let aligned_offset = (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
                 let offset_adjustment = (chunk.disk_offset - aligned_offset) as usize;
-                let aligned_size = ((read_size as usize + offset_adjustment + SECTOR_SIZE - 1)
-                    / SECTOR_SIZE)
-                    * SECTOR_SIZE;
+                let aligned_size =
+                    (read_size as usize + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
 
                 if buffer.len() < aligned_size {
                     buffer = AlignedBuffer::new(aligned_size);
@@ -283,9 +282,8 @@ impl MftReader {
 
                 let read_size = op.chunk.record_count * u64::from(record_size);
                 let offset_adjustment = (op.chunk.disk_offset - aligned_offset) as usize;
-                let aligned_size = ((read_size as usize + offset_adjustment + SECTOR_SIZE - 1)
-                    / SECTOR_SIZE)
-                    * SECTOR_SIZE;
+                let aligned_size =
+                    (read_size as usize + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
 
                 // SAFETY: `op` is a pinned Box — the one writer, and we do not
                 // move out of the pinned location.  Two sequential mutable
@@ -409,8 +407,8 @@ impl MftReader {
 
                     let read_size = new_op.chunk.record_count * u64::from(record_size);
                     let offset_adjustment = (new_op.chunk.disk_offset - aligned_offset) as usize;
-                    let aligned_size = ((read_size as usize + offset_adjustment + SECTOR_SIZE - 1)
-                        / SECTOR_SIZE)
+                    let aligned_size = (read_size as usize + offset_adjustment)
+                        .div_ceil(SECTOR_SIZE)
                         * SECTOR_SIZE;
 
                     // SAFETY: `new_op` is a pinned Box with us as the sole writer; the

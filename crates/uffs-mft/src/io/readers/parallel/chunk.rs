@@ -46,9 +46,8 @@ impl ParallelMftReader {
         // Align to sector boundary
         let aligned_offset = (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
         let offset_adjustment = (chunk.disk_offset - aligned_offset) as usize;
-        let aligned_size = ((read_size as usize + offset_adjustment + SECTOR_SIZE - 1)
-            / SECTOR_SIZE)
-            * SECTOR_SIZE;
+        let aligned_size =
+            (read_size as usize + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
 
         // M1 8.4: Reuse buffer, only reallocate if needed
         let mut buffer = self.buffer.borrow_mut();
