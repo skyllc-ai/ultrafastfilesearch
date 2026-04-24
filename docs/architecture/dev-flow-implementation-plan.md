@@ -1573,7 +1573,7 @@ Status legend: ⬜ not started · 🟡 in progress · 🔵 blocked (see notes)
 | 6 | Resumable-push fix in `ci-pipeline.rs` | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
 | 4 | Split `ci.yml` → `pr-fast.yml` + `preview-artifacts.yml` | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (parallel lane) + `6f99b86aa` (cutover) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) + [#48](https://github.com/skyllc-ai/UltraFastFileSearch/pull/48) |
 | 4b | Actions hardening retrofit across existing workflows | ✅ | 2026-04-23 | 2026-04-23 | `eef3359b2` (squash) | [#47](https://github.com/skyllc-ai/UltraFastFileSearch/pull/47) |
-| 5 | Preview lane fleshed out (smoke runner + manifest) | 🟡 | 2026-04-23 | — | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
+| 5 | Preview lane fleshed out (smoke runner + manifest) | ✅ | 2026-04-23 | 2026-04-24 | `780c1dbb1` (plumb-in) + `b9a67f2dc` (robustness) + `2d3a7f5b3` (windows-latest + RC_PATH) + `0e811d0bb` (test-vector fixes → full green bake) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) + [#51](https://github.com/skyllc-ai/UltraFastFileSearch/pull/51) + [#52](https://github.com/skyllc-ai/UltraFastFileSearch/pull/52) + [#55](https://github.com/skyllc-ai/UltraFastFileSearch/pull/55) |
 | 7 | `ci-pipeline.rs` promoted to workspace binary | ✅ | 2026-04-23 | 2026-04-23 | `780c1dbb1` (squash) | [#45](https://github.com/skyllc-ai/UltraFastFileSearch/pull/45) |
 | 8 | (stretch) `gates.toml` machine-readable manifest | ⬜ | | | | |
 
@@ -1588,6 +1588,39 @@ executed via PR #48 squash `6f99b86aa` at 14:13:41 PDT; ruleset
 from 7 entries (parallel) to 1 entry (`PR Fast CI / required`).
 `.github/workflows/ci.yml` deleted.  See §4.3 for the step-by-step
 sequence and rollback procedure.
+
+**Phase 5 sub-status (2026-04-24, end-of-day)**: fully baked green
+end-to-end.  Static implementation landed in `780c1dbb1` (PR #45)
+alongside the Phase 4 split.  Three follow-up PRs closed out the
+live validation:
+
+- **PR #51** (`b9a67f2dc`, 2026-04-23) — robustness fixes surfaced by
+  the first real full-matrix preview attempt: `awk 'NR==1'` guard
+  on the `cargo nextest --version` multi-line output (bug #1), and
+  `verify-pr-fast-green` polling budget bumped from 10 min to
+  30 min (bug #2, miscalibration for infra PRs that run the full
+  matrix).
+- **PR #52** (`2d3a7f5b3`, 2026-04-24) — preview-lane bugs #3 and #4:
+  moved `build-test-archive` from ubuntu+`cargo-xwin` to
+  `windows-latest` (native MSVC) because `cargo-xwin` does NOT
+  wrap `nextest archive`; and added an `RC_PATH` lookup pre-step
+  to `build-windows` because `winresource v0.1.31` hardcodes
+  `PathBuf::from("llvm-rc")` on `cfg(unix)` without PATH setup
+  from `cargo-xwin`.  Preview run 24873800282 on this PR ran to
+  completion for the first time; `smoke-windows` executed
+  1322 tests with 1320 passing.
+- **PR #55** (`0e811d0bb`, 2026-04-24) — fixed bugs #5 and #6 (the
+  two Windows-gated unit tests with stale hardcoded expected
+  values that had NEVER executed in CI before the preview lane
+  ran them; neither is actually platform-dependent — the original
+  issue theories are withdrawn).  Preview run 24889490616 on this
+  PR: **all 6 jobs green, 1322/1322 tests pass, real
+  `manifest.json` emitted** with integrity data for all 17
+  artifacts (16 release binaries + 73.9 MB nextest archive).
+
+See §10.5 for the full deviation log and §10.6 for Resolved
+blocker entries.  Items #2, #3, #5 in §10.3 ticked with real
+evidence on 2026-04-24.
 
 **Legend**: ✅ = complete and validated; 🟡 = static-complete (actionlint
 clean, ruby-yaml clean, pins/permissions correct, classify-aggregation
