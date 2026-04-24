@@ -82,7 +82,7 @@ impl ParallelMftReader {
         );
         let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
         let mut sorted_chunks: Vec<ReadChunk> = chunks;
-        sorted_chunks.sort_by_key(|c| c.disk_offset);
+        sorted_chunks.sort_by_key(|chunk| chunk.disk_offset);
 
         // Break chunks into 1MB I/O operations
         struct IoOp {
@@ -259,7 +259,7 @@ impl ParallelMftReader {
         }
 
         info!(
-            initial_queued = in_flight.iter().filter(|s| s.is_some()).count(),
+            initial_queued = in_flight.iter().filter(|slot| slot.is_some()).count(),
             "📤 Initial reads queued"
         );
 

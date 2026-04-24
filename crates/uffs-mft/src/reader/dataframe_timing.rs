@@ -103,8 +103,8 @@ impl MftReader {
         let chunk_size = drive_type.optimal_chunk_size();
 
         // Get MFT extents
-        let extents = self.require_handle().get_mft_extents().unwrap_or_else(|e| {
-            warn!(error = ?e, "Failed to get MFT extents, using fallback");
+        let extents = self.require_handle().get_mft_extents().unwrap_or_else(|err| {
+            warn!(error = ?err, "Failed to get MFT extents, using fallback");
             vec![crate::platform::MftExtent {
                 vcn: 0,
                 cluster_count: volume_data.mft_valid_data_length

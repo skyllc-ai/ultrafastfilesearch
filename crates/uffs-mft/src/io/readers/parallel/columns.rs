@@ -243,12 +243,12 @@ impl ParallelMftReader {
                 )
                 .reduce(
                     || FastStats::default(),
-                    |mut a, b| {
-                        a.columns.extend(b.columns);
-                        a.skipped += b.skipped;
-                        a.extensions_skipped += b.extensions_skipped;
-                        a.processed += b.processed;
-                        a
+                    |mut acc, other| {
+                        acc.columns.extend(other.columns);
+                        acc.skipped += other.skipped;
+                        acc.extensions_skipped += other.extensions_skipped;
+                        acc.processed += other.processed;
+                        acc
                     },
                 );
 

@@ -95,10 +95,10 @@ impl MftReader {
                 // Apply USN Journal updates to bring index up to date
                 let current_info = match query_usn_journal(drive) {
                     Ok(info) => info,
-                    Err(e) => {
+                    Err(err) => {
                         warn!(
                             drive = %drive,
-                            error = %e,
+                            error = %err,
                             "⚠️ USN Journal unavailable - using cached index as-is"
                         );
                         return Ok(index);
@@ -142,10 +142,10 @@ impl MftReader {
                 let (records, next_usn) =
                     match read_usn_journal(drive, current_info.journal_id, start_usn) {
                         Ok(result) => result,
-                        Err(e) => {
+                        Err(err) => {
                             warn!(
                                 drive = %drive,
-                                error = %e,
+                                error = %err,
                                 "⚠️ Failed to read USN Journal - using cached index as-is"
                             );
                             return Ok(index);
@@ -186,10 +186,10 @@ impl MftReader {
                                 "✅ Targeted MFT reads complete"
                             );
                         }
-                        Err(e) => {
+                        Err(err) => {
                             warn!(
                                 drive = %drive,
-                                error = %e,
+                                error = %err,
                                 "⚠️ Targeted MFT reads failed — records may have incomplete data"
                             );
                         }
@@ -216,14 +216,14 @@ impl MftReader {
 
                 // Save updated index back to cache (reuse handle from above)
                 let volume_serial = handle.volume_data().volume_serial_number;
-                if let Err(e) = save_to_cache(
+                if let Err(err) = save_to_cache(
                     &index,
                     drive,
                     volume_serial,
                     current_info.journal_id,
                     next_usn,
                 ) {
-                    warn!(drive = %drive, error = %e, "⚠️ Failed to update cache");
+                    warn!(drive = %drive, error = %err, "⚠️ Failed to update cache");
                 }
 
                 Ok(index)
@@ -281,7 +281,7 @@ impl MftReader {
 
         // Get volume info for caching (quick syscalls).
         let volume_serial = VolumeHandle::open(drive)
-            .map(|h| h.volume_data().volume_serial_number)
+            .map(|handle| handle.volume_data().volume_serial_number)
             .unwrap_or(0);
 
         let (usn_journal_id, next_usn) = match query_usn_journal(drive) {
@@ -296,10 +296,10 @@ impl MftReader {
         // This is the cold path (no cache exists) — serialize+compress is
         // CPU-bound (~1-2s) but we must complete it before returning so the
         // cache is guaranteed to exist for subsequent runs.
-        if let Err(e) =
+        if let Err(err) =
             crate::cache::save_to_cache(&index, drive, volume_serial, usn_journal_id, next_usn)
         {
-            tracing::warn!(drive = %drive, error = %e, "⚠️ Failed to save cache (non-fatal)");
+            tracing::warn!(drive = %drive, error = %err, "⚠️ Failed to save cache (non-fatal)");
         }
 
         tracing::debug!(drive = %drive, "[TRIP] reader::read_and_cache_index EXIT");

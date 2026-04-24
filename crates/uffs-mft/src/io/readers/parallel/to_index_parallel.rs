@@ -95,7 +95,9 @@ impl ParallelMftReader {
         });
         let io_chunk_size = io_chunk_size.unwrap_or_else(|| self.drive_type.optimal_io_size());
         let num_workers = num_workers
-            .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |p| p.get()));
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism().map_or(4, core::num::NonZero::get)
+            });
 
         info!(
             total_records,

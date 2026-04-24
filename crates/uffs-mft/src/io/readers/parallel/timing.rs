@@ -75,8 +75,8 @@ impl ParallelMftReader {
                 Ok(data) => {
                     chunk_data.push((chunk, data));
                 }
-                Err(e) => {
-                    warn!(error = ?e, "Failed to read chunk");
+                Err(err) => {
+                    warn!(error = ?err, "Failed to read chunk");
                 }
             }
         }
@@ -136,11 +136,11 @@ impl ParallelMftReader {
                     }
                     acc
                 })
-                .reduce(ChunkStats::default, |mut a, b| {
-                    a.results.extend(b.results);
-                    a.skipped += b.skipped;
-                    a.processed += b.processed;
-                    a
+                .reduce(ChunkStats::default, |mut acc, other| {
+                    acc.results.extend(other.results);
+                    acc.skipped += other.skipped;
+                    acc.processed += other.processed;
+                    acc
                 });
 
             records_processed.fetch_add(combined.processed, Ordering::Relaxed);
@@ -213,11 +213,11 @@ impl ParallelMftReader {
                     }
                     acc
                 })
-                .reduce(LegacyStats::default, |mut a, b| {
-                    a.records.extend(b.records);
-                    a.skipped += b.skipped;
-                    a.processed += b.processed;
-                    a
+                .reduce(LegacyStats::default, |mut acc, other| {
+                    acc.records.extend(other.records);
+                    acc.skipped += other.skipped;
+                    acc.processed += other.processed;
+                    acc
                 });
 
             records_processed.fetch_add(combined.processed, Ordering::Relaxed);

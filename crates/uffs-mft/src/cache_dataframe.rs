@@ -117,9 +117,10 @@ fn load_or_build_dataframe_cached_sync(
     };
 
     // Background save: serialize sync, compress/encrypt/write in bg thread.
-    if let Err(e) = save_to_cache_background(&index, drive, volume_serial, usn_journal_id, next_usn)
+    if let Err(err) =
+        save_to_cache_background(&index, drive, volume_serial, usn_journal_id, next_usn)
     {
-        tracing::warn!(drive = %drive, error = %e, "Failed to start cache save");
+        tracing::warn!(drive = %drive, error = %err, "Failed to start cache save");
     }
 
     // Convert to DataFrame

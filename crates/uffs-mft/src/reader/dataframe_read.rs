@@ -154,8 +154,8 @@ impl MftReader {
         );
 
         // Get MFT extents for fragmented MFT support
-        let extents = self.require_handle().get_mft_extents().unwrap_or_else(|e| {
-            warn!(error = ?e, "Failed to get MFT extents, using fallback");
+        let extents = self.require_handle().get_mft_extents().unwrap_or_else(|err| {
+            warn!(error = ?err, "Failed to get MFT extents, using fallback");
             // Fallback to single contiguous extent
             vec![crate::platform::MftExtent {
                 vcn: 0,
@@ -176,8 +176,8 @@ impl MftReader {
         // Try to get the MFT bitmap for optimization (if enabled)
         let bitmap = if self.use_bitmap {
             let bm = self.require_handle().get_mft_bitmap().ok();
-            if let Some(b) = &bm {
-                let in_use = b.count_in_use();
+            if let Some(bitmap) = &bm {
+                let in_use = bitmap.count_in_use();
                 info!(
                     in_use_records = in_use,
                     skip_percentage = 100.0 - (in_use as f64 / total_records as f64 * 100.0),

@@ -259,16 +259,16 @@ impl MftReader {
 
         // Create IOCP and associate overlapped handle
         let iocp = IoCompletionPort::new(0)?;
-        if let Err(e) = iocp.associate(handle, 0) {
+        if let Err(err) = iocp.associate(handle, 0) {
             // SAFETY: handle was successfully opened by open_overlapped_handle
             unsafe { CloseHandle(handle) }.ok();
-            return Err(e);
+            return Err(err);
         }
 
         // Pre-allocate buffer pool and in-flight operations
         let max_chunk_size = chunks
             .iter()
-            .map(|c| c.record_count * u64::from(record_size))
+            .map(|chunk| chunk.record_count * u64::from(record_size))
             .max()
             .unwrap_or(chunk_size as u64) as usize;
 

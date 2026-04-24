@@ -137,7 +137,7 @@ impl ParallelMftReader {
         let sorted_chunks: Vec<ReadChunk> = {
             let mut chunks =
                 generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
-            chunks.sort_by_key(|c| c.disk_offset);
+            chunks.sort_by_key(|chunk| chunk.disk_offset);
             chunks
         };
 

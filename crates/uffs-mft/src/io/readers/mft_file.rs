@@ -106,15 +106,15 @@ pub(crate) fn read_mft_from_file_handle(
             )
         };
 
-        if let Err(e) = read_result {
+        if let Err(err) = read_result {
             warn!(
                 file_offset,
                 frs,
-                error = %e,
+                error = %err,
                 "Failed to read $MFT chunk — aborting file-based read"
             );
             return Err(crate::error::MftError::Io(
-                std::io::Error::from_raw_os_error(e.code().0 as i32),
+                std::io::Error::from_raw_os_error(err.code().0 as i32),
             ));
         }
 
