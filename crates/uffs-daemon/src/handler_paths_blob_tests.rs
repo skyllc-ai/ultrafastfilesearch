@@ -171,8 +171,23 @@ fn try_pack_paths_blob_offloads_large_blob_to_shmem() {
     let SearchPayload::ShmemBlob(shmem_path_str) = &response.payload else {
         panic!(
             "large path-only projection must be offloaded to \
-             SearchPayload::ShmemBlob; got {:?} — regression of \
-             the binary transport branch in try_pack_paths_blob",
+             SearchPayload::ShmemBlob; got {:?}.\n\n\
+             If the variant you see is SearchPayload::InlineBlob(...), \
+             the daemon's `try_pack_paths_blob` correctly fell back \
+             from shmem to inline because `uffs_client::shmem::\
+             write_paths_blob` failed — check test stderr for a \
+             `tracing::warn!` line starting with `paths_blob shmem \
+             write failed; falling back to inline JSON`.  The single \
+             most common cause is `ENOSPC` / `ERROR_DISK_FULL` on \
+             the host's data-local dir (e.g. \
+             `$CARGO_TARGET_DIR/llvm-cov-target` has grown to 100+ GB \
+             or `%LOCALAPPDATA%\\uffs\\shmem` is out of space).  \
+             Run `just clean-cov` to prune the llvm-cov tree + \
+             orphan shmem files and re-run `just test` — see \
+             CONTRIBUTING.md §\"Target-dir hygiene\" for the full \
+             recovery procedure.  If the assertion still fails after \
+             `just clean-cov`, it is a genuine regression of the \
+             binary transport branch in `try_pack_paths_blob`.",
             response.payload
         );
     };
