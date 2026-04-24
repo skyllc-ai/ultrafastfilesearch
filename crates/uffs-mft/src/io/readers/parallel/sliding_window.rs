@@ -207,7 +207,7 @@ impl ParallelMftReader {
                 op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
 
                 // Issue read
-                let overlapped_ptr = &mut op_mut.overlapped as *mut _;
+                let overlapped_ptr = &raw mut op_mut.overlapped;
                 let read_size = op_mut.op.size;
                 // SAFETY: `overlapped_handle` is a live overlapped-capable handle,
                 // the buffer slice spans `read_size` writable bytes in the pinned op,
@@ -256,9 +256,9 @@ impl ParallelMftReader {
             let result = unsafe {
                 GetQueuedCompletionStatus(
                     iocp.raw_handle(),
-                    &mut bytes_transferred,
-                    &mut completion_key,
-                    &mut overlapped_ptr,
+                    &raw mut bytes_transferred,
+                    &raw mut completion_key,
+                    &raw mut overlapped_ptr,
                     u32::MAX, // INFINITE - wait for completion
                 )
             };
@@ -273,8 +273,8 @@ impl ParallelMftReader {
             let mut completed_slot = None;
             for (idx, slot) in in_flight.iter().enumerate() {
                 if let Some(op) = slot {
-                    let op_overlapped_ptr =
-                        &op.overlapped as *const _ as *mut windows::Win32::System::IO::OVERLAPPED;
+                    let op_overlapped_ptr = (&raw const op.overlapped)
+                        .cast_mut();
                     if op_overlapped_ptr == overlapped_ptr {
                         completed_slot = Some(idx);
                         break;
@@ -330,7 +330,7 @@ impl ParallelMftReader {
                         new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
                             (offset >> 32) as u32;
 
-                        let overlapped_ptr = &mut new_op_mut.overlapped as *mut _;
+                        let overlapped_ptr = &raw mut new_op_mut.overlapped;
                         let read_size = new_op_mut.op.size;
                         // SAFETY: `overlapped_handle` is a live overlapped-capable
                         // handle, the buffer slice spans `read_size` writable bytes in
