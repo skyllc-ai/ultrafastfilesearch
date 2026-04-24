@@ -1905,16 +1905,25 @@ Post-retrofit verification (2026-04-23):
       `preview-binaries` label to a green PR → workflow fires →
       artifacts appear in Actions UI.  ✅ Baked on PR that landed
       this edit (scratch `test/phase-5-preview-bake`, 2026-04-23).
-- [x] **Same-SHA integrity** real validation: `manifest.git_sha` ==
+- [ ] **Same-SHA integrity** real validation: `manifest.git_sha` ==
       PR head SHA; every `files[].sha256` matches `sha256sum` of
-      downloaded file.  ✅ Baked on same PR.
+      downloaded file.  **Blocked** on the polars-ops xcompile rlib-size
+      blocker (see `docs/xwin-msvc-rlib-size-root-cause-and-workarounds.md`
+      and §10.5).  `cargo nextest archive` defaults to debug profile
+      and the 5.5 GB `polars-ops` rlib trips the COFF archive format
+      limit during `lld-link` (cross-compile) and likely the native
+      `link.exe` limit too.  The concurrent branch fixing this with an
+      `xwin-dev` profile + polars package overrides must land first;
+      re-bake on the next preview run after that.
 - [ ] **Nextest archive round-trip** validation: Windows box with
       matching `nextest_version` from manifest, `git checkout <sha>`,
-      `cargo nextest run --archive-file`.  Partially satisfied by
-      preview's own `smoke-windows` job (which downloads the archive
-      on `windows-latest` and runs it end-to-end against the pinned
-      SHA).  Full external-box round-trip still deferred until a
-      Windows dev box with matching nextest is available.
+      `cargo nextest run --archive-file`.  Will be partially satisfied
+      by preview's own `smoke-windows` job (downloads the archive on
+      `windows-latest`, runs it against the pinned SHA) once the
+      polars-ops xcompile blocker is resolved and `build-test-archive`
+      can produce an archive in the first place.  Full external-box
+      round-trip still deferred until a Windows dev box with matching
+      nextest is available.
 - [x] **Pre-fast-gate enforcement** validation: deliberate
       `PR Fast CI` failure blocks preview build.  ✅ Baked on same
       PR via a temporary sabotage commit (`exit 1` in `fmt` job);
@@ -2028,6 +2037,7 @@ don't infer the wrong reason from commit messages.
 | 2026-04-23 | 4 | Plan §10.3 scheduled a 7-day parallel window (2026-04-23 → 2026-04-30).  Compressed to ~2h35m same-day on explicit maintainer direction. | Rationale: the confidence budget had already been exhausted by the same morning — broken-classify simulation executed and passed on PR #45, all four classification paths (mixed-code, docs-only, infra-only, broken-classify) validated with zero disagreements between lanes, and continuing the window would have burned ~5–7 min of runner time per PR for no additional signal.  Rollback path preserved: `git revert 6f99b86aa` restores `ci.yml` verbatim (no squash-merge loss), and `/tmp/ruleset-rollback.json` restores the 7-entry ruleset shape.  §4.3 updated with the two-step reverse sequence. |
 | 2026-04-23 | 4 | Plan v1 §4.3 instructed "do everything in a single commit" for the cutover.  This is a category error — the ruleset PUT is an API call, not a commit, so it cannot share atomicity with `.github/workflows/ci.yml` deletion.  Worse: with `ci.yml` deleted in a PR, the 6 `Tier 1 / *` required checks gate on a workflow that will never run on the PR's head SHA, producing `mergeStateStatus: BLOCKED` indefinitely. | Correct sequence (now in §4.3): (1) open the `ci.yml`-deletion PR and let it bake green on `PR Fast CI / required`; (2) PUT the ruleset BEFORE merge to drop the 6 `Tier 1 / *` checks; (3) squash-merge the PR; (4) verify.  Executed in a 16-second PUT→merge window on 2026-04-23 14:13:25 → 14:13:41 PDT with no PRs opened mid-window. |
 | 2026-04-23 | 5 | `preview-artifacts.yml`'s `build-test-archive` step captured the nextest version with `echo "version=$(cargo nextest --version \| awk '{print $2}')" >> "$GITHUB_OUTPUT"`.  `cargo nextest --version` on 0.9.132 emits multiple lines where `$2` evaluates to `0.9.132` on more than one of them; the command substitution preserves the inner newlines, and GitHub Actions rejects the resulting multi-line value with `Error: Unable to process file command 'output' successfully. Error: Invalid format '0.9.132'`.  Found by the live Phase 5 bake on the scratch PR that ticks items #1/#2/#4. | Constrained awk to `NR==1` so only the first output line is considered.  Minimal one-word edit; no change to the rest of the step.  Regression-guard comment added to the workflow explaining the failure mode so the fragility is not silently reintroduced.  Unblocks the bake; the same PR that fixes the bug also lands the resulting Phase 5 ticks in §10.3. |
+| 2026-04-23 | 5 | `build-test-archive` failed on `ubuntu-22.04` with `cc-rs: failed to find tool "lib.exe"` from `ring v0.17.14`'s build.rs.  Proximal cause: `cargo-xwin` wraps `build\|check\|test\|run\|clippy\|rustc` but NOT `nextest archive`, so the bare `cargo nextest archive --target x86_64-pc-windows-msvc` invocation ran without MSVC env.  Deeper cause surfaced while diagnosing the fix: `cargo nextest archive` defaults to debug profile, and debug xcompile for Windows is currently blocked at a separate layer by the `polars-ops` 5.5 GB rlib → COFF archive string-table-offset limit (see `docs/xwin-msvc-rlib-size-root-cause-and-workarounds.md`).  Even moving `build-test-archive` to `windows-latest` (native MSVC) would not resolve this because the COFF archive size ceiling is format-level and `link.exe` shares it.  Release-mode xcompile works (confirmed locally on mac), which is why the sibling `build-windows` job — `cargo xwin build --release --bins` — succeeds. | Deferred to the concurrent branch that fixes the polars-ops rlib size via an `xwin-dev` profile + per-package overrides (from §6 of the root-cause doc).  Rolled back my attempt to move `build-test-archive` to `windows-latest` — it would have shifted the failure mode without fixing anything, and it would have collided with the concurrent branch's xwin-centric approach.  Phase 5 checklist item #2 (same-SHA integrity) reverted to un-ticked with a cross-reference back to this entry; item #3's "partially satisfied by smoke-windows" note softened to "will be, once the polars blocker is resolved". |
 | 2026-04-23 | 5 | `verify-pr-fast-green`'s polling budget (60 × 10 s = 10 min, `timeout-minutes: 12`) was calibrated assuming the target PR would be docs-only / short-circuited.  On the first real full-matrix preview attempt (this same scratch PR, SHA `3ef74bd5f` — which counts as an *infra* change because it touches `.github/workflows/*.yml`), PR Fast CI's `tests` job was still running at minute 10 so the poller kept seeing `status=missing` (the `PR Fast CI / required` aggregator had not yet been registered as a check-run).  Preview failed at `verify-pr-fast-green` with `⏱  Timed out waiting for PR Fast CI / required on 3ef74bd`, which aborted `build-windows` / `build-test-archive` / `smoke-windows` — a **false-negative** gate: the PR would have gone green ~5 min later.  §10.3 Phase 5 notes (v2 wording) anticipated this with "if PR-fast is slower than 10 min, increase the cap in one commit", but nobody had exercised it against a real full-matrix PR before. | Bumped polling to 120 × 15 s = 30 min and `timeout-minutes: 32`.  Factored the magic numbers into named `MAX_RETRIES` / `RETRY_DELAY_MS` constants so the next calibration isn't a hunt.  Expanded the job's header comment with the rationale and an explicit "don't drop below p99 PR Fast CI wall-clock" guardrail.  Same PR as the nextest fix above. |
 
 ### 10.6 Open blockers
@@ -2037,6 +2047,21 @@ one-line outcome when cleared.
 
 **Active**:
 
+- **Polars-ops xcompile rlib-size blocker** — debug-profile cross-
+  compile to `x86_64-pc-windows-msvc` produces a ~5.5 GB `polars-ops`
+  `.rlib` that exceeds the COFF archive format's string-table offset
+  capacity, yielding `lld-link: truncated or malformed archive` at
+  final link.  Impact on this plan: Phase 5 preview lane's
+  `build-test-archive` + downstream `smoke-windows` + `manifest`
+  cannot complete on any PR until fixed (release-mode `build-windows`
+  is unaffected — that's why the preview lane ships release binaries
+  successfully but the test archive path dies).  Root cause + fix
+  recipe documented in `docs/xwin-msvc-rlib-size-root-cause-and-workarounds.md`
+  (dedicated `xwin-dev` profile + per-package polars overrides
+  reducing debuginfo / codegen-units / opt-level).  Being addressed
+  on a concurrent branch; once merged, re-bake Phase 5 item #2
+  (same-SHA integrity) and re-enable item #3's "partially satisfied
+  by `smoke-windows`" credit.
 - **Real-world bake gaps** — pure `Dep-only PR` and pure `Infra-only
   PR` classification paths still want a natural exercise post-cutover
   (on `pr-fast.yml` alone, now that `ci.yml` is gone).  PR #47 was
