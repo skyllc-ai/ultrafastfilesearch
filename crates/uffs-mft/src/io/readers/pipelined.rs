@@ -499,19 +499,28 @@ mod tests {
 
     #[test]
     fn test_pipelined_reader_creation() {
+        // Expected chunk sizes must track `DriveType::optimal_chunk_size`
+        // in `crates/uffs-mft/src/platform/system.rs`.  The previous
+        // hardcoded `64 * 1024` was stale from an early prototype; the
+        // test never caught the drift because `mod pipelined` is
+        // `#[cfg(windows)]`-gated in `readers/mod.rs` and had never run
+        // in CI before `preview-artifacts.yml`'s `smoke-windows` job
+        // (first ran 2026-04-24, PR #52 run 24873800282).  See tracking
+        // issue #54 and `docs/architecture/dev-flow-implementation-plan.md`
+        // §10.5 bug #6 for the full diagnostic.
+        use crate::platform::DriveType;
+
         let extent_map = MftExtentMap::contiguous(100, 1024 * 1024, 4096, 1024);
 
-        let reader =
-            PipelinedMftReader::new(extent_map.clone(), None, crate::platform::DriveType::Ssd);
-        assert_eq!(reader.chunk_size, 64 * 1024);
+        let reader = PipelinedMftReader::new(extent_map.clone(), None, DriveType::Ssd);
+        assert_eq!(reader.chunk_size, DriveType::Ssd.optimal_chunk_size());
         assert_eq!(reader.pipeline_depth, 3);
 
-        let reader =
-            PipelinedMftReader::new(extent_map.clone(), None, crate::platform::DriveType::Hdd);
-        assert_eq!(reader.chunk_size, 64 * 1024);
+        let reader = PipelinedMftReader::new(extent_map.clone(), None, DriveType::Hdd);
+        assert_eq!(reader.chunk_size, DriveType::Hdd.optimal_chunk_size());
         assert_eq!(reader.pipeline_depth, 3);
 
-        let reader = PipelinedMftReader::new(extent_map, None, crate::platform::DriveType::Unknown);
-        assert_eq!(reader.chunk_size, 64 * 1024);
+        let reader = PipelinedMftReader::new(extent_map, None, DriveType::Unknown);
+        assert_eq!(reader.chunk_size, DriveType::Unknown.optimal_chunk_size());
     }
 }

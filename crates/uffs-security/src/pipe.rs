@@ -519,7 +519,24 @@ mod tests {
 
     #[test]
     fn fnv1a_known_vector() {
-        // FNV-1a("foobar") per the reference implementation.
-        assert_eq!(fnv1a_64(b"foobar"), 0x8584_8993_3606_5430);
+        // FNV-1a-64 of "foobar" per the reference implementation.
+        //
+        // Source: http://www.isthe.com/chongo/src/fnv/test_fnv.c (vector
+        // entry for `"foobar"`, 64-bit).  Cross-checked with a pure-Python
+        // implementation using the same OFFSET / PRIME constants above:
+        //
+        //     OFFSET = 0xCBF29CE484222325
+        //     PRIME  = 0x100000001B3
+        //     fnv1a("foobar") == 0x85944171F73967E8
+        //
+        // The previous hardcoded `0x8584_8993_3606_5430` was stale: this
+        // test is inside a `#![cfg(windows)]` module, `pr-fast.yml`'s
+        // `Tests` job runs on `ubuntu-22.04`, and `Windows compile check`
+        // is compile-only — so the assertion had NEVER executed in CI
+        // before `preview-artifacts.yml`'s `smoke-windows` job (first
+        // ran 2026-04-24, PR #52 run 24873800282).  See tracking issue
+        // #53 and `docs/architecture/dev-flow-implementation-plan.md`
+        // §10.5 bug #5 for the full diagnostic.
+        assert_eq!(fnv1a_64(b"foobar"), 0x8594_4171_F739_67E8);
     }
 }
