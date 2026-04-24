@@ -226,7 +226,12 @@ jobs:
 
       - id: nxv
         name: Capture nextest version for the manifest
-        run: echo "version=$(cargo nextest --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+        # Restrict awk to the first line (NR==1) so any banner / upgrade-notice
+        # lines nextest emits on subsequent lines cannot pollute $GITHUB_OUTPUT
+        # — a multi-line capture would produce a bare second line like
+        # `0.9.132` with no `key=` prefix, failing the output-file parser with
+        # "Invalid format '0.9.132'".  Observed on nextest 0.9.132 (2026-04-23).
+        run: echo "version=$(cargo nextest --version | awk 'NR==1 {print $2}')" >> "$GITHUB_OUTPUT"
 
       - name: cargo nextest archive --target x86_64-pc-windows-msvc
         run: |
