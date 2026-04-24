@@ -30,11 +30,11 @@ pub(crate) async fn cmd_bench(
     let mode: MftReadMode = mode_str.parse().map_err(|e: String| anyhow::anyhow!(e))?;
 
     if !json {
-        println!("🔬 Benchmarking MFT read on drive {}:", drive_upper);
-        println!("   Runs: {}", runs);
-        println!("   Skip DataFrame: {}", no_df);
-        println!("   Mode: {}", mode);
-        println!("   Full (merge extensions): {}", full);
+        println!("🔬 Benchmarking MFT read on drive {drive_upper}:");
+        println!("   Runs: {runs}");
+        println!("   Skip DataFrame: {no_df}");
+        println!("   Mode: {mode}");
+        println!("   Full (merge extensions): {full}");
         println!();
     }
 
@@ -49,7 +49,7 @@ pub(crate) async fn cmd_bench(
 
     // Open the reader once (opening is fast, we don't need to re-open for each run)
     let reader = MftReader::open(drive)
-        .with_context(|| format!("Failed to open drive {}:", drive))?
+        .with_context(|| format!("Failed to open drive {drive}:"))?
         .with_mode(mode)
         .with_merge_extensions(full);
 
@@ -57,12 +57,12 @@ pub(crate) async fn cmd_bench(
 
     for run in 1..=runs {
         if !json && runs > 1 {
-            println!("  Run {}/{}...", run, runs);
+            println!("  Run {run}/{runs}...");
         }
 
         let (_, result) = reader
             .read_with_timing(no_df)
-            .with_context(|| format!("Benchmark run {} failed", run))?;
+            .with_context(|| format!("Benchmark run {run} failed"))?;
 
         info!(
             run,
@@ -169,7 +169,7 @@ fn print_benchmark_result(result: &uffs_mft::BenchmarkResult, runs: u32) {
         format_number_commas(c.total_records)
     );
     if let Some(in_use) = c.in_use_records {
-        let skip_pct = 100.0 - (in_use as f64 / c.total_records as f64 * 100.0);
+        let skip_pct = (in_use as f64 / c.total_records as f64).mul_add(-100.0, 100.0);
         println!(
             "   In-Use Records:   {} ({:.1}% skipped)",
             format_number_commas(in_use),
@@ -267,7 +267,7 @@ struct FullBenchmarkReport {
 #[cfg(windows)]
 impl FullBenchmarkReport {
     fn to_json(&self) -> String {
-        let drives_json: Vec<String> = self.drives.iter().map(|d| d.to_json()).collect();
+        let drives_json: Vec<String> = self.drives.iter().map(uffs_mft::BenchmarkResult::to_json).collect();
         format!(
             r#"{{
   "metadata": {{
@@ -331,14 +331,14 @@ pub(crate) async fn cmd_bench_all(
         drives.len(),
         drives
             .iter()
-            .map(|d| format!("{}:", d))
+            .map(|d| format!("{d}:"))
             .collect::<Vec<_>>()
             .join(", ")
     );
-    println!("📊 Runs per drive: {}", runs);
+    println!("📊 Runs per drive: {runs}");
     println!("📄 Output file: {}", output_path.display());
-    println!("⏳ Skip DataFrame: {}", no_df);
-    println!("🔗 Full (merge extensions): {}", full);
+    println!("⏳ Skip DataFrame: {no_df}");
+    println!("🔗 Full (merge extensions): {full}");
     println!();
 
     info!(
@@ -364,7 +364,7 @@ pub(crate) async fn cmd_bench_all(
         match benchmark_single_drive(*drive, no_df, runs, full).await {
             Ok(result) => {
                 // Print summary for this drive
-                println!("  ✅ Drive {}:", drive);
+                println!("  ✅ Drive {drive}:");
                 println!(
                     "     Records:     {}",
                     format_number_commas(result.records_parsed as u64)
@@ -376,7 +376,7 @@ pub(crate) async fn cmd_bench_all(
                 results.push(result);
             }
             Err(e) => {
-                println!("  ❌ Drive {}: Failed - {}", drive, e);
+                println!("  ❌ Drive {drive}: Failed - {e}");
                 println!();
                 warn!(drive = %drive, error = ?e, "Benchmark failed for drive");
             }
@@ -388,11 +388,9 @@ pub(crate) async fn cmd_bench_all(
     // Build full report
     let report = FullBenchmarkReport {
         timestamp: chrono::Local::now().to_rfc3339(),
-        hostname: hostname::get()
-            .map(|h| h.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "unknown".to_string()),
-        cpu_count: std::thread::available_parallelism().map_or(1, |p| p.get()),
-        uffs_version: env!("CARGO_PKG_VERSION").to_string(),
+        hostname: hostname::get().map_or_else(|_| "unknown".to_owned(), |h| h.to_string_lossy().to_string()),
+        cpu_count: std::thread::available_parallelism().map_or(1, core::num::NonZero::get),
+        uffs_version: env!("CARGO_PKG_VERSION").to_owned(),
         drives: results,
         total_benchmark_time_ms: total_time_ms,
     };
@@ -441,19 +439,19 @@ async fn benchmark_single_drive(
     use uffs_mft::MftReader;
 
     let reader = MftReader::open(drive)
-        .with_context(|| format!("Failed to open drive {}:", drive))?
+        .with_context(|| format!("Failed to open drive {drive}:"))?
         .with_merge_extensions(full);
 
     let mut results: Vec<uffs_mft::BenchmarkResult> = Vec::with_capacity(runs as usize);
 
     for run in 1..=runs {
         if runs > 1 {
-            println!("     Run {}/{}...", run, runs);
+            println!("     Run {run}/{runs}...");
         }
 
         let (_, result) = reader
             .read_with_timing(no_df)
-            .with_context(|| format!("Benchmark run {} failed", run))?;
+            .with_context(|| format!("Benchmark run {run} failed"))?;
 
         results.push(result);
 

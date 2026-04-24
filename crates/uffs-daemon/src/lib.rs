@@ -372,10 +372,10 @@ pub async fn run_daemon(config: DaemonConfig) -> anyhow::Result<()> {
                 for &drive_letter in &drives {
                     match broker_client::request_volume_handle(drive_letter) {
                         Ok(handle) => {
-                            tracing::info!(drive = %drive_letter, handle, "Got broker handle")
+                            tracing::info!(drive = %drive_letter, handle, "Got broker handle");
                         }
                         Err(broker_err) => {
-                            tracing::debug!(drive = %drive_letter, error = %broker_err, "Broker unavailable, using direct access")
+                            tracing::debug!(drive = %drive_letter, error = %broker_err, "Broker unavailable, using direct access");
                         }
                     }
                 }

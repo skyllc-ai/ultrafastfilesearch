@@ -3,10 +3,10 @@
 
 //! Shared helpers for split Windows command modules.
 
-use std::time::Duration;
+use core::time::Duration;
 
 /// Returns the display label for a detected drive type.
-pub(super) fn drive_type_label(
+pub(super) const fn drive_type_label(
     drive_type: uffs_mft::DriveType,
     unknown_label: &'static str,
 ) -> &'static str {

@@ -18,7 +18,7 @@ use crate::display::format_usn_reason;
 pub(crate) async fn cmd_usn_info(drive: char) -> Result<()> {
     use uffs_mft::usn::query_usn_journal;
 
-    println!("🔍 Querying USN Journal for {}:...", drive);
+    println!("🔍 Querying USN Journal for {drive}:...");
     println!();
 
     match query_usn_journal(drive) {
@@ -44,12 +44,11 @@ pub(crate) async fn cmd_usn_info(drive: char) -> Result<()> {
             ); // Rough estimate
         }
         Err(e) => {
-            eprintln!("❌ Failed to query USN Journal: {}", e);
+            eprintln!("❌ Failed to query USN Journal: {e}");
             eprintln!();
             eprintln!("Note: USN Journal may not be enabled on this volume.");
             eprintln!(
-                "Run as Administrator to enable: fsutil usn createjournal m=1000 a=100 {}:",
-                drive
+                "Run as Administrator to enable: fsutil usn createjournal m=1000 a=100 {drive}:"
             );
         }
     }
@@ -62,14 +61,14 @@ pub(crate) async fn cmd_usn_info(drive: char) -> Result<()> {
 pub(crate) async fn cmd_usn_read(drive: char, start_usn: Option<i64>, limit: usize) -> Result<()> {
     use uffs_mft::usn::{query_usn_journal, read_usn_journal};
 
-    println!("🔍 Reading USN Journal for {}:...", drive);
+    println!("🔍 Reading USN Journal for {drive}:...");
     println!();
 
     // First query the journal to get the ID
     let info = match query_usn_journal(drive) {
         Ok(i) => i,
         Err(e) => {
-            eprintln!("❌ Failed to query USN Journal: {}", e);
+            eprintln!("❌ Failed to query USN Journal: {e}");
             return Ok(());
         }
     };
@@ -109,10 +108,10 @@ pub(crate) async fn cmd_usn_read(drive: char, start_usn: Option<i64>, limit: usi
             }
 
             println!();
-            println!("Next USN: {}", next_usn);
+            println!("Next USN: {next_usn}");
         }
         Err(e) => {
-            eprintln!("❌ Failed to read USN Journal: {}", e);
+            eprintln!("❌ Failed to read USN Journal: {e}");
         }
     }
 

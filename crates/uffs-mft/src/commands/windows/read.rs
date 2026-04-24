@@ -57,7 +57,7 @@ pub(crate) async fn cmd_read(
     let open_start = Instant::now();
 
     let reader = MftReader::open(drive)
-        .with_context(|| format!("Failed to open drive {}:", drive))?
+        .with_context(|| format!("Failed to open drive {drive}:"))?
         .with_mode(mode)
         .with_merge_extensions(full)
         .with_expand_links(!unique); // unique=true means don't expand
@@ -97,7 +97,7 @@ pub(crate) async fn cmd_read(
     MftReader::save_parquet(&mut df, &output).with_context(|| "Failed to save Parquet")?;
 
     // Get file size for logging
-    let file_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+    let file_size = std::fs::metadata(&output).map_or(0, |m| m.len());
     let file_size_mb = file_size as f64 / (1024.0 * 1024.0);
 
     info!(

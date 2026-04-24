@@ -65,7 +65,7 @@ mod windows_benches {
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group};
     use uffs_mft::{AlignedBuffer, ParsedColumns};
 
-    /// Benchmark AlignedBuffer allocation at various sizes (4KB to 8MB).
+    /// Benchmark `AlignedBuffer` allocation at various sizes (4KB to 8MB).
     fn bench_aligned_buffer_alloc(c: &mut Criterion) {
         let mut group = c.benchmark_group("aligned_buffer/alloc");
 
@@ -79,7 +79,7 @@ mod windows_benches {
         group.finish();
     }
 
-    /// Benchmark AlignedBuffer write throughput.
+    /// Benchmark `AlignedBuffer` write throughput.
     fn bench_aligned_buffer_write(c: &mut Criterion) {
         let mut group = c.benchmark_group("aligned_buffer/write");
 
@@ -103,7 +103,7 @@ mod windows_benches {
         group.finish();
     }
 
-    /// Create a ParsedColumns with synthetic MFT-like data.
+    /// Create a `ParsedColumns` with synthetic MFT-like data.
     fn create_test_columns(count: usize) -> ParsedColumns {
         let mut cols = ParsedColumns::with_capacity(count);
 
@@ -114,7 +114,7 @@ mod windows_benches {
             cols.name.push(format!("file_{i}.txt"));
             cols.size.push((i * 1024) as u64);
             cols.allocated_size
-                .push(((i * 1024 + 4095) / 4096 * 4096) as u64);
+                .push(((i * 1024).div_ceil(4096) * 4096) as u64);
             cols.created.push(1_700_000_000_000_i64 + i as i64);
             cols.modified.push(1_700_000_000_000_i64 + i as i64);
             cols.accessed.push(1_700_000_000_000_i64 + i as i64);
@@ -143,7 +143,7 @@ mod windows_benches {
         cols
     }
 
-    /// Benchmark ParsedColumns allocation with pre-allocated capacity.
+    /// Benchmark `ParsedColumns` allocation with pre-allocated capacity.
     fn bench_parsed_columns_alloc(c: &mut Criterion) {
         let mut group = c.benchmark_group("parsed_columns/alloc");
 
@@ -157,7 +157,7 @@ mod windows_benches {
         group.finish();
     }
 
-    /// Benchmark ParsedColumns extend (simulates Rayon reduce phase).
+    /// Benchmark `ParsedColumns` extend (simulates Rayon reduce phase).
     fn bench_parsed_columns_extend(c: &mut Criterion) {
         let mut group = c.benchmark_group("parsed_columns/extend");
 

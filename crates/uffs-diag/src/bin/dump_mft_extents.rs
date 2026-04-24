@@ -50,7 +50,6 @@ fn main() {
             eprintln!("dump_mft_extents failed: {error:?}");
             std::process::exit(1);
         }
-        return;
     }
 
     #[cfg(not(windows))]
@@ -75,17 +74,17 @@ fn real_main() -> Result<()> {
         .context("Drive letter argument must not be empty")?;
 
     if !drive.is_ascii_alphabetic() {
-        anyhow::bail!("Drive letter must be A-Z, got: {}", drive);
+        anyhow::bail!("Drive letter must be A-Z, got: {drive}");
     }
 
     let drive = drive.to_ascii_uppercase();
 
     println!("===============================================");
-    println!("Dumping $MFT extents for volume {}:", drive);
+    println!("Dumping $MFT extents for volume {drive}:");
     println!("===============================================");
 
     let handle = VolumeHandle::open(drive)
-        .with_context(|| format!("Failed to open NTFS volume {}:", drive))?;
+        .with_context(|| format!("Failed to open NTFS volume {drive}:"))?;
 
     let volume_data = handle.volume_data();
     println!("Volume data:");
@@ -128,7 +127,7 @@ fn real_main() -> Result<()> {
 
     let extents = handle
         .get_mft_extents()
-        .with_context(|| format!("Failed to get $MFT extents for drive {}", drive))?;
+        .with_context(|| format!("Failed to get $MFT extents for drive {drive}"))?;
 
     if extents.is_empty() {
         println!("No extents returned (fallback to single-run extent may have occurred).");
@@ -156,11 +155,10 @@ fn real_main() -> Result<()> {
 
     println!("\nSummary:");
     println!("  extent_count      = {}", extents.len());
-    println!("  total_clusters    = {}", total_clusters);
-    println!("  total_bytes       = {}", total_bytes);
+    println!("  total_clusters    = {total_clusters}");
+    println!("  total_bytes       = {total_bytes}");
     println!(
-        "  approx_records    = {} (total_bytes / record_size)",
-        approx_records
+        "  approx_records    = {approx_records} (total_bytes / record_size)"
     );
 
     Ok(())

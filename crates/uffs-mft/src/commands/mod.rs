@@ -58,7 +58,7 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
             // Resolve defaults: --upcase defaults to boot drive + "upcase.bin";
             // MFT save requires both --drive and --output.
             let (drive, output) = if upcase {
-                let d = drive.unwrap_or_else(|| uffs_mft::platform::detect_boot_drive());
+                let d = drive.unwrap_or_else(uffs_mft::platform::detect_boot_drive);
                 let o = output.unwrap_or_else(|| std::path::PathBuf::from("upcase.bin"));
                 (d, o)
             } else {

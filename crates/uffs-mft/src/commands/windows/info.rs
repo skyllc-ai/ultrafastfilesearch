@@ -31,7 +31,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
     );
 
     debug!(drive = %drive_upper, "🔓 Opening volume handle");
-    let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {}:", drive))?;
+    let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {drive}:"))?;
 
     // Detect drive type for display
     let drive_type = detect_drive_type(drive_upper);
@@ -42,11 +42,11 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
 
     // Calculate derived metrics
     let record_count =
-        vol_data.mft_valid_data_length / vol_data.bytes_per_file_record_segment as u64;
+        vol_data.mft_valid_data_length / u64::from(vol_data.bytes_per_file_record_segment);
     let mft_size_mb = vol_data.mft_valid_data_length as f64 / (1024.0 * 1024.0);
-    let volume_size_bytes = vol_data.total_clusters * vol_data.bytes_per_cluster as u64;
+    let volume_size_bytes = vol_data.total_clusters * u64::from(vol_data.bytes_per_cluster);
     let volume_size_gb = volume_size_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-    let free_space_bytes = vol_data.free_clusters * vol_data.bytes_per_cluster as u64;
+    let free_space_bytes = vol_data.free_clusters * u64::from(vol_data.bytes_per_cluster);
     let used_space_bytes = volume_size_bytes.saturating_sub(free_space_bytes);
     let free_percentage = if volume_size_bytes > 0 {
         (free_space_bytes as f64 / volume_size_bytes as f64) * 100.0
@@ -117,9 +117,9 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
     }
 
     // Bitmap analysis
-    let mut in_use_records = 0u64;
-    let mut free_records = 0u64;
-    let mut utilization = 0.0f64;
+    let mut in_use_records = 0_u64;
+    let mut free_records = 0_u64;
+    let mut utilization = 0.0_f64;
     if let Ok(bitmap) = handle.get_mft_bitmap() {
         in_use_records = bitmap.count_in_use() as u64;
         free_records = record_count.saturating_sub(in_use_records);
@@ -138,14 +138,12 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
     let mut warnings = Vec::new();
     if is_fragmented && extent_count > 10 {
         warnings.push(format!(
-            "MFT is heavily fragmented ({} extents)",
-            extent_count
+            "MFT is heavily fragmented ({extent_count} extents)"
         ));
     }
     if utilization > 95.0 {
         warnings.push(format!(
-            "MFT utilization is very high ({:.1}%)",
-            utilization
+            "MFT utilization is very high ({utilization:.1}%)"
         ));
     }
 
@@ -159,13 +157,12 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
         println!("                    MFT INFO (Lightweight)");
     }
     println!(
-        "                    Drive: {}: ({})",
-        drive_upper, drive_type_str
+        "                    Drive: {drive_upper}: ({drive_type_str})"
     );
     println!("═══════════════════════════════════════════════════════════════");
     println!();
     println!("📐 VOLUME GEOMETRY");
-    println!("  Drive type:           {}", drive_type_str);
+    println!("  Drive type:           {drive_type_str}");
     println!(
         "  Bytes per sector:     {}",
         format_number_commas(vol_data.bytes_per_sector.into())
@@ -199,7 +196,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
         "  MFT size:            {}",
         format_bytes(vol_data.mft_valid_data_length)
     );
-    println!("  MFT % of volume:      {:.3}%", mft_percentage);
+    println!("  MFT % of volume:      {mft_percentage:.3}%");
     println!(
         "  Total records:        {}",
         format_number_commas(record_count)
@@ -212,7 +209,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
         "  Free records:         {}",
         format_number_commas(free_records)
     );
-    println!("  Utilization:          {:.1}%", utilization);
+    println!("  Utilization:          {utilization:.1}%");
     println!(
         "  Fragmentation:        {} extent(s) {}",
         extent_count,
@@ -220,14 +217,14 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
     );
     println!();
 
-    if !warnings.is_empty() {
-        println!("⚠️  HEALTH WARNINGS");
-        for warning in &warnings {
-            println!("  • {}", warning);
-        }
+    if warnings.is_empty() {
+        println!("✅ HEALTH STATUS: Good (based on metadata)");
         println!();
     } else {
-        println!("✅ HEALTH STATUS: Good (based on metadata)");
+        println!("⚠️  HEALTH WARNINGS");
+        for warning in &warnings {
+            println!("  • {warning}");
+        }
         println!();
     }
 
@@ -245,7 +242,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
         println!();
 
         let reader = MftReader::open(drive)
-            .with_context(|| format!("Failed to open drive {}:", drive))?
+            .with_context(|| format!("Failed to open drive {drive}:"))?
             .with_use_bitmap(!no_bitmap)
             .with_expand_links(!unique); // unique=true means don't expand
 
@@ -258,8 +255,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
             .column("is_directory")
             .ok()
             .and_then(|c| c.bool().ok())
-            .map(|b| b.sum().unwrap_or(0) as u64)
-            .unwrap_or(0);
+            .map_or(0, |b| u64::from(b.sum().unwrap_or(0)));
         let file_count = total_parsed as u64 - dir_count;
 
         // Helper closure to count bool columns
@@ -267,8 +263,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
             df.column(name)
                 .ok()
                 .and_then(|c| c.bool().ok())
-                .map(|b| b.sum().unwrap_or(0) as u64)
-                .unwrap_or(0)
+                .map_or(0, |b| u64::from(b.sum().unwrap_or(0)))
         };
 
         let hidden_count = count_bool("is_hidden");
@@ -285,34 +280,32 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
             .column("stream_count")
             .ok()
             .and_then(|c| c.u16().ok())
-            .map(|s| {
-                let mut multi = 0u64;
-                let mut total = 0u64;
+            .map_or((0, 0), |s| {
+                let mut multi = 0_u64;
+                let mut total = 0_u64;
                 for v in s.iter().flatten() {
-                    total += v as u64;
+                    total += u64::from(v);
                     if v > 1 {
                         multi += 1;
                     }
                 }
                 (multi, total)
-            })
-            .unwrap_or((0, 0));
+            });
         let (multi_name_count, total_name_count) = df
             .column("name_count")
             .ok()
             .and_then(|c| c.u16().ok())
-            .map(|s| {
-                let mut multi = 0u64;
-                let mut total = 0u64;
+            .map_or((0, 0), |s| {
+                let mut multi = 0_u64;
+                let mut total = 0_u64;
                 for v in s.iter().flatten() {
-                    total += v as u64;
+                    total += u64::from(v);
                     if v > 1 {
                         multi += 1;
                     }
                 }
                 (multi, total)
-            })
-            .unwrap_or((0, 0));
+            });
 
         // Calculate the expanded-row estimate (names × streams per record).
         // The reference output expands each record into one row per
@@ -330,7 +323,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
                             .iter()
                             .zip(streams.iter())
                             .filter_map(|(n, s)| match (n, s) {
-                                (Some(n), Some(s)) => Some(n as u64 * s as u64),
+                                (Some(n), Some(s)) => Some(u64::from(n) * u64::from(s)),
                                 _ => None,
                             })
                             .sum::<u64>()
@@ -343,14 +336,12 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
             .column("size")
             .ok()
             .and_then(|c| c.u64().ok())
-            .map(|s| s.iter().flatten().sum::<u64>())
-            .unwrap_or(0);
+            .map_or(0, |s| s.iter().flatten().sum::<u64>());
         let total_allocated_size: u64 = df
             .column("allocated_size")
             .ok()
             .and_then(|c| c.u64().ok())
-            .map(|s| s.iter().flatten().sum::<u64>())
-            .unwrap_or(0);
+            .map_or(0, |s| s.iter().flatten().sum::<u64>());
 
         let slack_space = total_allocated_size.saturating_sub(total_file_size);
         let slack_percentage = if total_allocated_size > 0 {
@@ -559,8 +550,8 @@ pub(crate) async fn cmd_drives() -> Result<()> {
             // Try to get volume info for each drive
             if let Ok(handle) = VolumeHandle::open(*drive) {
                 let vol_data = handle.volume_data();
-                let total_size = vol_data.total_clusters as u64 * vol_data.bytes_per_cluster as u64;
-                let free_space = vol_data.free_clusters as u64 * vol_data.bytes_per_cluster as u64;
+                let total_size = vol_data.total_clusters * u64::from(vol_data.bytes_per_cluster);
+                let free_space = vol_data.free_clusters * u64::from(vol_data.bytes_per_cluster);
                 let used_space = total_size.saturating_sub(free_space);
                 let used_pct = if total_size > 0 {
                     (used_space as f64 / total_size as f64) * 100.0
@@ -568,7 +559,7 @@ pub(crate) async fn cmd_drives() -> Result<()> {
                     0.0
                 };
                 let mft_size = vol_data.mft_valid_data_length;
-                let mft_records = mft_size / vol_data.bytes_per_file_record_segment as u64;
+                let mft_records = mft_size / u64::from(vol_data.bytes_per_file_record_segment);
 
                 debug!(
                     drive = %drive,
@@ -584,7 +575,7 @@ pub(crate) async fn cmd_drives() -> Result<()> {
                     letter: *drive,
                     is_boot: is_boot_drive(*drive),
                     label,
-                    drive_type: drive_type_str.to_string(),
+                    drive_type: drive_type_str.to_owned(),
                     total_size,
                     free_space,
                     used_space,
@@ -684,12 +675,12 @@ fn get_volume_label(drive: char) -> Option<String> {
     use windows::Win32::Storage::FileSystem::GetVolumeInformationW;
     use windows::core::PCWSTR;
 
-    let root_path: Vec<u16> = format!("{}:\\", drive)
+    let root_path: Vec<u16> = format!("{drive}:\\")
         .encode_utf16()
-        .chain(std::iter::once(0))
+        .chain(core::iter::once(0))
         .collect();
 
-    let mut volume_name_buf = [0u16; 261];
+    let mut volume_name_buf = [0_u16; 261];
 
     let result = unsafe {
         GetVolumeInformationW(
@@ -702,11 +693,9 @@ fn get_volume_label(drive: char) -> Option<String> {
         )
     };
 
-    if result.is_ok() {
+    result.is_ok().then(|| {
         let len = volume_name_buf.iter().position(|&c| c == 0).unwrap_or(0);
         let label = OsString::from_wide(&volume_name_buf[..len]);
-        Some(label.to_string_lossy().to_string())
-    } else {
-        None
-    }
+        label.to_string_lossy().to_string()
+    })
 }

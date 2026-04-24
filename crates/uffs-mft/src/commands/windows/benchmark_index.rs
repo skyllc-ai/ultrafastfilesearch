@@ -18,7 +18,7 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
     let drive_upper = drive.to_ascii_uppercase();
 
     println!("=== Index Build Benchmark Tool ===");
-    println!("Drive: {}:", drive_upper);
+    println!("Drive: {drive_upper}:");
     println!(
         "This measures the full UFFS indexing pipeline (async I/O + parsing + DataFrame building)"
     );
@@ -26,7 +26,7 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
 
     // Get volume info via VolumeHandle
     let handle = VolumeHandle::open(drive_upper)
-        .with_context(|| format!("Failed to open volume {}:", drive_upper))?;
+        .with_context(|| format!("Failed to open volume {drive_upper}:"))?;
     let vol_data = handle.volume_data();
     let mft_size = vol_data.mft_valid_data_length;
     let record_size = vol_data.bytes_per_file_record_segment;
@@ -38,12 +38,12 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
     // Print volume information using the historical layout
     // =========================================================================
     println!("=== Volume Information ===");
-    println!("MFT Capacity: {} records", mft_capacity);
-    println!("MFT Record Size: {} bytes", record_size);
-    println!("MFT Total Size: {} bytes ({} MB)", mft_size, mft_size_mb);
+    println!("MFT Capacity: {mft_capacity} records");
+    println!("MFT Record Size: {record_size} bytes");
+    println!("MFT Total Size: {mft_size} bytes ({mft_size_mb} MB)");
     println!();
 
-    println!("Creating index for {}:\\ ...", drive_upper);
+    println!("Creating index for {drive_upper}:\\ ...");
     println!("Indexing in progress...");
     println!();
 
@@ -54,12 +54,12 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
 
     // Open reader and read MFT
     let reader = MftReader::open(drive_upper)
-        .with_context(|| format!("Failed to open drive {}:", drive_upper))?
+        .with_context(|| format!("Failed to open drive {drive_upper}:"))?
         .with_mode(MftReadMode::Auto);
 
     let df = reader
         .read_all()
-        .with_context(|| format!("Failed to read MFT from {}:", drive_upper))?;
+        .with_context(|| format!("Failed to read MFT from {drive_upper}:"))?;
 
     let elapsed = start_time.elapsed();
     let elapsed_ms = elapsed.as_millis() as u64;
@@ -86,10 +86,10 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
     // Print index statistics using the historical layout
     // =========================================================================
     println!("=== Index Statistics ===");
-    println!("Records Processed: {}", mft_capacity);
-    println!("Files: {}", files_count);
-    println!("Directories: {}", dirs_count);
-    println!("Total Entries: {}", total_entries);
+    println!("Records Processed: {mft_capacity}");
+    println!("Files: {files_count}");
+    println!("Directories: {dirs_count}");
+    println!("Total Entries: {total_entries}");
     println!();
 
     // =========================================================================
@@ -115,12 +115,11 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
 
     println!("=== Benchmark Results ===");
     println!(
-        "Time Elapsed: {} ms ({:.3} seconds)",
-        elapsed_ms, elapsed_secs
+        "Time Elapsed: {elapsed_ms} ms ({elapsed_secs:.3} seconds)"
     );
-    println!("MFT Read Speed: {:.2} MB/s", mft_read_speed);
-    println!("Record Processing: {} records/sec", records_per_sec);
-    println!("File Indexing: {} files+dirs/sec", entries_per_sec);
+    println!("MFT Read Speed: {mft_read_speed:.2} MB/s");
+    println!("Record Processing: {records_per_sec} records/sec");
+    println!("File Indexing: {entries_per_sec} files+dirs/sec");
     println!();
 
     // =========================================================================
@@ -128,8 +127,7 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
     // =========================================================================
     println!("=== Summary ===");
     println!(
-        "Indexed {} items in {:.3} seconds",
-        total_entries, elapsed_secs
+        "Indexed {total_entries} items in {elapsed_secs:.3} seconds"
     );
 
     Ok(())
@@ -139,9 +137,9 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
 // Lean Index Build Benchmark Command (no DataFrame overhead)
 // ============================================================================
 
-/// Lean index build benchmark - uses `MftIndex` instead of DataFrame.
+/// Lean index build benchmark - uses `MftIndex` instead of `DataFrame`.
 ///
-/// This measures the UFFS indexing pipeline without DataFrame building
+/// This measures the UFFS indexing pipeline without `DataFrame` building
 /// overhead. Should be ~2x faster than `benchmark-index` on large drives.
 #[cfg(windows)]
 pub(crate) async fn cmd_benchmark_index_lean(
@@ -169,9 +167,9 @@ pub(crate) async fn cmd_benchmark_index_lean(
     let effective_io_size_kb = io_size_kb.unwrap_or_else(|| drive_type.optimal_io_size() / 1024);
 
     println!("=== Lean Index Build Benchmark Tool ===");
-    println!("Drive: {}:", drive_upper);
-    println!("Drive Type: {:?}", drive_type);
-    println!("Mode: {}", mode);
+    println!("Drive: {drive_upper}:");
+    println!("Drive Type: {drive_type:?}");
+    println!("Mode: {mode}");
     println!("Bitmap: {}", if no_bitmap { "disabled" } else { "enabled" });
     println!(
         "Placeholders: {}",
@@ -184,7 +182,7 @@ pub(crate) async fn cmd_benchmark_index_lean(
     // For HDD, concurrency is determined by extent count (fragmentation-aware)
     // so we can't show the exact value until after opening the volume
     if let Some(c) = concurrency {
-        println!("Concurrency: {} I/O ops in flight", c);
+        println!("Concurrency: {c} I/O ops in flight");
     } else if matches!(drive_type, uffs_mft::platform::DriveType::Hdd) {
         println!("Concurrency: auto (extent-aware, determined after MFT scan)");
     } else {
@@ -210,7 +208,7 @@ pub(crate) async fn cmd_benchmark_index_lean(
             } else {
                 "enabled (auto)"
             },
-            parse_workers.map_or_else(|| "auto".to_string(), |w| w.to_string())
+            parse_workers.map_or_else(|| "auto".to_owned(), |w| w.to_string())
         );
     } else {
         println!("Parallel Parse: disabled");
@@ -220,7 +218,7 @@ pub(crate) async fn cmd_benchmark_index_lean(
 
     // Get volume info via VolumeHandle
     let handle = VolumeHandle::open(drive_upper)
-        .with_context(|| format!("Failed to open volume {}:", drive_upper))?;
+        .with_context(|| format!("Failed to open volume {drive_upper}:"))?;
     let vol_data = handle.volume_data();
     let mft_size = vol_data.mft_valid_data_length;
     let record_size = vol_data.bytes_per_file_record_segment;
@@ -232,12 +230,12 @@ pub(crate) async fn cmd_benchmark_index_lean(
     // Print Volume Information
     // =========================================================================
     println!("=== Volume Information ===");
-    println!("MFT Capacity: {} records", mft_capacity);
-    println!("MFT Record Size: {} bytes", record_size);
-    println!("MFT Total Size: {} bytes ({} MB)", mft_size, mft_size_mb);
+    println!("MFT Capacity: {mft_capacity} records");
+    println!("MFT Record Size: {record_size} bytes");
+    println!("MFT Total Size: {mft_size} bytes ({mft_size_mb} MB)");
     println!();
 
-    println!("Creating lean index for {}:\\ ...", drive_upper);
+    println!("Creating lean index for {drive_upper}:\\ ...");
     println!("Indexing in progress...");
     println!();
 
@@ -254,7 +252,7 @@ pub(crate) async fn cmd_benchmark_index_lean(
     // - parallel_parse: enable M3 parallel parsing optimization
     // - parse_workers: number of parsing worker threads
     let mut reader = MftReader::open(drive_upper)
-        .with_context(|| format!("Failed to open drive {}:", drive_upper))?
+        .with_context(|| format!("Failed to open drive {drive_upper}:"))?
         .with_mode(mode)
         .with_use_bitmap(!no_bitmap)
         .with_add_placeholders(!no_placeholders);
@@ -279,7 +277,7 @@ pub(crate) async fn cmd_benchmark_index_lean(
     let (index, benchmark) = reader
         .read_all_index_with_timing()
         .await
-        .with_context(|| format!("Failed to read MFT from {}:", drive_upper))?;
+        .with_context(|| format!("Failed to read MFT from {drive_upper}:"))?;
 
     let elapsed = start_time.elapsed();
     let elapsed_ms = elapsed.as_millis() as u64;
@@ -298,10 +296,10 @@ pub(crate) async fn cmd_benchmark_index_lean(
     // Print Index Statistics
     // =========================================================================
     println!("=== Index Statistics ===");
-    println!("Records Processed: {}", mft_capacity);
-    println!("Files: {}", files_count);
-    println!("Directories: {}", dirs_count);
-    println!("Total Entries: {}", total_entries);
+    println!("Records Processed: {mft_capacity}");
+    println!("Files: {files_count}");
+    println!("Directories: {dirs_count}");
+    println!("Total Entries: {total_entries}");
     println!("Names Buffer: {} KB", index.names.len() / 1024);
     println!();
 
@@ -339,8 +337,7 @@ pub(crate) async fn cmd_benchmark_index_lean(
         benchmark.timings.read_ms + benchmark.timings.parse_ms + benchmark.timings.merge_ms;
     println!("=== Reference Benchmark Comparison ===");
     println!(
-        "I/O + Parse + Merge:  {:>6} ms  (compare to reference 'Read + Parse')",
-        io_parse_merge_ms
+        "I/O + Parse + Merge:  {io_parse_merge_ms:>6} ms  (compare to reference 'Read + Parse')"
     );
     println!(
         "Tree Metrics:         {:>6} ms  (compare to reference 'Preprocess')",
@@ -371,12 +368,11 @@ pub(crate) async fn cmd_benchmark_index_lean(
 
     println!("=== Benchmark Results ===");
     println!(
-        "Time Elapsed: {} ms ({:.3} seconds)",
-        elapsed_ms, elapsed_secs
+        "Time Elapsed: {elapsed_ms} ms ({elapsed_secs:.3} seconds)"
     );
-    println!("MFT Read Speed: {:.2} MB/s", mft_read_speed);
-    println!("Record Processing: {} records/sec", records_per_sec);
-    println!("File Indexing: {} files+dirs/sec", entries_per_sec);
+    println!("MFT Read Speed: {mft_read_speed:.2} MB/s");
+    println!("Record Processing: {records_per_sec} records/sec");
+    println!("File Indexing: {entries_per_sec} files+dirs/sec");
     println!();
 
     // =========================================================================
@@ -384,10 +380,9 @@ pub(crate) async fn cmd_benchmark_index_lean(
     // =========================================================================
     println!("=== Reference Benchmark Guide ===");
     println!("To compare with the reference uffs.com binary:");
-    println!("  uffs.com --benchmark-mft={}:   Raw I/O only", drive_upper);
+    println!("  uffs.com --benchmark-mft={drive_upper}:   Raw I/O only");
     println!(
-        "  uffs.com --benchmark-index={}: I/O + Parse + Preprocess",
-        drive_upper
+        "  uffs.com --benchmark-index={drive_upper}: I/O + Parse + Preprocess"
     );
     println!();
     println!("Rust equivalent phases:");
@@ -406,8 +401,7 @@ pub(crate) async fn cmd_benchmark_index_lean(
     // =========================================================================
     println!("=== Summary ===");
     println!(
-        "Indexed {} items in {:.3} seconds (lean index, mode: {})",
-        total_entries, elapsed_secs, mode
+        "Indexed {total_entries} items in {elapsed_secs:.3} seconds (lean index, mode: {mode})"
     );
 
     Ok(())
@@ -416,7 +410,7 @@ pub(crate) async fn cmd_benchmark_index_lean(
 /// Benchmark tree metrics computation in isolation.
 ///
 /// This measures ONLY the tree metrics phase (descendants, treesize,
-/// tree_allocated), which corresponds to the reference "preprocessing" phase.
+/// `tree_allocated`), which corresponds to the reference "preprocessing" phase.
 /// Use this for direct apples-to-apples comparison of tree algorithm
 /// performance.
 #[cfg(windows)]
@@ -432,8 +426,8 @@ pub(crate) async fn cmd_benchmark_tree(
     let drive_upper = drive.to_ascii_uppercase();
 
     println!("=== Tree Metrics Benchmark ===");
-    println!("Drive: {}:", drive_upper);
-    println!("Iterations: {}", iterations);
+    println!("Drive: {drive_upper}:");
+    println!("Iterations: {iterations}");
     println!("Cache: {}", if no_cache { "disabled" } else { "enabled" });
     println!();
     println!("This measures ONLY tree metrics computation (reference 'preprocessing' equivalent).");
@@ -444,28 +438,25 @@ pub(crate) async fn cmd_benchmark_tree(
     let mut index = if no_cache {
         println!("Building fresh index from disk...");
         let reader = MftReader::open(drive_upper)
-            .with_context(|| format!("Failed to open drive {}:", drive_upper))?;
+            .with_context(|| format!("Failed to open drive {drive_upper}:"))?;
         reader
             .read_all_index()
             .await
-            .with_context(|| format!("Failed to read MFT from {}:", drive_upper))?
+            .with_context(|| format!("Failed to read MFT from {drive_upper}:"))?
     } else {
         println!("Loading index from cache...");
-        match load_cached_index(drive_upper, INDEX_TTL_SECONDS) {
-            Some((cached, _header)) => cached,
-            None => {
-                println!("Cache miss - building fresh index...");
-                let reader = MftReader::open(drive_upper)
-                    .with_context(|| format!("Failed to open drive {}:", drive_upper))?;
-                reader
-                    .read_all_index()
-                    .await
-                    .with_context(|| format!("Failed to read MFT from {}:", drive_upper))?
-            }
+        if let Some((cached, _header)) = load_cached_index(drive_upper, INDEX_TTL_SECONDS) { cached } else {
+            println!("Cache miss - building fresh index...");
+            let reader = MftReader::open(drive_upper)
+                .with_context(|| format!("Failed to open drive {drive_upper}:"))?;
+            reader
+                .read_all_index()
+                .await
+                .with_context(|| format!("Failed to read MFT from {drive_upper}:"))?
         }
     };
     let load_ms = load_start.elapsed().as_millis() as u64;
-    println!("Index loaded in {} ms", load_ms);
+    println!("Index loaded in {load_ms} ms");
     println!();
 
     // Get index stats
@@ -474,13 +465,13 @@ pub(crate) async fn cmd_benchmark_tree(
     let files_count = total_entries.saturating_sub(dirs_count);
 
     println!("=== Index Statistics ===");
-    println!("Total Entries: {}", total_entries);
-    println!("Files: {}", files_count);
-    println!("Directories: {}", dirs_count);
+    println!("Total Entries: {total_entries}");
+    println!("Files: {files_count}");
+    println!("Directories: {dirs_count}");
     println!();
 
     // Run tree metrics computation multiple times
-    println!("=== Running {} iterations ===", iterations);
+    println!("=== Running {iterations} iterations ===");
     let mut times_ms: Vec<u64> = Vec::with_capacity(iterations);
 
     for i in 0..iterations {
@@ -514,8 +505,8 @@ pub(crate) async fn cmd_benchmark_tree(
     let mut sorted = times_ms.clone();
     sorted.sort_unstable();
     let median_ms = if iterations > 0 {
-        if iterations % 2 == 0 {
-            (sorted[iterations / 2 - 1] + sorted[iterations / 2]) / 2
+        if iterations.is_multiple_of(2) {
+            u64::midpoint(sorted[iterations / 2 - 1], sorted[iterations / 2])
         } else {
             sorted[iterations / 2]
         }
@@ -525,10 +516,10 @@ pub(crate) async fn cmd_benchmark_tree(
 
     println!();
     println!("=== Tree Metrics Timing Results ===");
-    println!("Min:    {:>6} ms", min_ms);
-    println!("Max:    {:>6} ms", max_ms);
-    println!("Avg:    {:>6} ms", avg_ms);
-    println!("Median: {:>6} ms", median_ms);
+    println!("Min:    {min_ms:>6} ms");
+    println!("Max:    {max_ms:>6} ms");
+    println!("Avg:    {avg_ms:>6} ms");
+    println!("Median: {median_ms:>6} ms");
     println!();
 
     // Calculate throughput
@@ -539,14 +530,14 @@ pub(crate) async fn cmd_benchmark_tree(
     };
 
     println!("=== Throughput ===");
-    println!("Entries processed: {}", total_entries);
-    println!("Throughput: {} entries/sec", entries_per_sec);
+    println!("Entries processed: {total_entries}");
+    println!("Throughput: {entries_per_sec} entries/sec");
     println!();
 
     // Reference benchmark guide
     println!("=== Reference Benchmark Guide ===");
     println!("To compare with the reference uffs.com binary:");
-    println!("  1. Run: uffs.com --benchmark-index={}:", drive_upper);
+    println!("  1. Run: uffs.com --benchmark-index={drive_upper}:");
     println!("  2. Look for the 'Preprocess' phase timing");
     println!("  3. Compare with Rust 'Tree Metrics' timing above");
     println!();
@@ -570,10 +561,10 @@ pub(crate) async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> 
         anyhow::bail!("No drives specified. Use --drives C,D,S");
     }
 
-    let drives: Vec<char> = drives.iter().map(|c| c.to_ascii_uppercase()).collect();
+    let drives: Vec<char> = drives.iter().map(char::to_ascii_uppercase).collect();
 
     println!("=== Multi-Volume IOCP Benchmark (M4 Optimization) ===");
-    println!("Drives: {:?}", drives);
+    println!("Drives: {drives:?}");
     println!();
 
     // Prepare volume states
@@ -581,13 +572,13 @@ pub(crate) async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> 
     let start_time = Instant::now();
 
     for &drive in &drives {
-        println!("📂 Preparing volume {}:...", drive);
+        println!("📂 Preparing volume {drive}:...");
 
         // Open volume handle
         let handle = match VolumeHandle::open(drive) {
             Ok(h) => h,
             Err(e) => {
-                eprintln!("  ❌ Failed to open {}: {}", drive, e);
+                eprintln!("  ❌ Failed to open {drive}: {e}");
                 continue;
             }
         };
@@ -618,7 +609,7 @@ pub(crate) async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> 
         let overlapped_handle = match handle.open_overlapped_handle() {
             Ok(h) => h,
             Err(e) => {
-                eprintln!("  ❌ Failed to open overlapped handle for {}: {}", drive, e);
+                eprintln!("  ❌ Failed to open overlapped handle for {drive}: {e}");
                 continue;
             }
         };
@@ -668,11 +659,11 @@ pub(crate) async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> 
     println!();
     println!("=== Results ===");
 
-    let mut total_records = 0u64;
-    let mut total_files = 0u64;
-    let mut total_dirs = 0u64;
+    let mut total_records = 0_u64;
+    let mut total_files = 0_u64;
+    let mut total_dirs = 0_u64;
 
-    for (_idx, index) in indices.iter().enumerate() {
+    for index in &indices {
         let files = index.records.iter().filter(|r| !r.is_directory()).count();
         let dirs = index.records.iter().filter(|r| r.is_directory()).count();
         total_records += index.len() as u64;

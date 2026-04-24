@@ -157,7 +157,7 @@ impl IpcServer {
 
     /// Windows: peer credential verification via ACL (handled at socket level).
     #[cfg(windows)]
-    fn verify_peer_credentials_win() -> bool {
+    const fn verify_peer_credentials_win() -> bool {
         true
     }
 
@@ -438,7 +438,7 @@ pub(crate) async fn run_ipc_server(
 /// Run the IPC server on a Windows named pipe.
 ///
 /// This is the **preferred** transport on Windows — replaces the earlier
-/// AF_UNIX path, which pulled in `ws2_32.dll` (13 imports, +54 ms launch
+/// `AF_UNIX` path, which pulled in `ws2_32.dll` (13 imports, +54 ms launch
 /// overhead per client invocation).
 ///
 /// The daemon is typically elevated (MFT read requires admin).  The pipe
@@ -450,7 +450,7 @@ pub(crate) async fn run_ipc_server(
 /// `FIRST_PIPE_INSTANCE` on the initial server instance protects against
 /// name-squatting attacks from other processes on the same machine.
 ///
-/// Returns when the accept loop errors terminally.  The AF_UNIX listener
+/// Returns when the accept loop errors terminally.  The `AF_UNIX` listener
 /// (below) continues running as a fallback during the transition.
 #[cfg(windows)]
 #[expect(

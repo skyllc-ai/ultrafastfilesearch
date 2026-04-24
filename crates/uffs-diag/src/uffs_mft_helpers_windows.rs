@@ -11,7 +11,7 @@
 
 #![cfg(windows)]
 
-use std::fmt::Write as _;
+use core::fmt::Write as _;
 
 use uffs_mft::RawMftData;
 use uffs_mft::io::{apply_fixup, parse_record_full};

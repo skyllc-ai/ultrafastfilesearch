@@ -54,14 +54,14 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     // Open volume and get metadata
     // =========================================================================
     let handle = VolumeHandle::open(drive_upper)
-        .with_context(|| format!("Failed to open volume {}:", drive_upper))?;
+        .with_context(|| format!("Failed to open volume {drive_upper}:"))?;
 
     let vol_data = handle.volume_data();
 
     // Get MFT extents
     let extents = handle
         .get_mft_extents()
-        .with_context(|| format!("Failed to get MFT extents for {}:", drive_upper))?;
+        .with_context(|| format!("Failed to get MFT extents for {drive_upper}:"))?;
 
     // Calculate MFT metrics
     let mft_size = vol_data.mft_valid_data_length;
@@ -73,7 +73,7 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     // Print Volume Information (matches the reference benchmark layout)
     // =========================================================================
     println!("=== MFT Read Benchmark Tool ===");
-    println!("Drive: {}:", drive_upper);
+    println!("Drive: {drive_upper}:");
     println!();
     println!("Volume Information:");
     println!("  BytesPerSector: {}", vol_data.bytes_per_sector);
@@ -91,10 +91,10 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     // =========================================================================
     println!("MFT Information:");
     println!("  Extents: {}", extents.len());
-    println!("  MFT Size: {} bytes ({} MB)", mft_size, mft_size_mb);
-    println!("  Record Size: {} bytes", record_size);
-    println!("  Record Count: {}", record_count);
-    println!("  Total Bytes to Read: {}", mft_size);
+    println!("  MFT Size: {mft_size} bytes ({mft_size_mb} MB)");
+    println!("  Record Size: {record_size} bytes");
+    println!("  Record Count: {record_count}");
+    println!("  Total Bytes to Read: {mft_size}");
     println!();
     println!("Starting MFT read benchmark...");
     println!();
@@ -155,7 +155,7 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
         while extent_offset < extent_bytes_to_read {
             let chunk_size = ((extent_bytes_to_read - extent_offset) as usize).min(BUFFER_SIZE);
             // Round up to sector boundary for FILE_FLAG_NO_BUFFERING
-            let aligned_chunk_size = ((chunk_size + sector_size - 1) / sector_size) * sector_size;
+            let aligned_chunk_size = chunk_size.div_ceil(sector_size) * sector_size;
 
             let buf_slice = buffer.as_mut_slice();
             let mut bytes_read: u32 = 0;
@@ -164,7 +164,7 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
                 ReadFile(
                     raw_handle,
                     Some(&mut buf_slice[..aligned_chunk_size]),
-                    Some(&mut bytes_read),
+                    Some(&raw mut bytes_read),
                     None,
                 )
             };
@@ -193,7 +193,7 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
             }
 
             total_bytes_read += actual_bytes as u64;
-            extent_offset += bytes_read as u64;
+            extent_offset += u64::from(bytes_read);
 
             // Stop if we've read enough
             if total_bytes_read >= mft_size {
@@ -224,13 +224,12 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     // Print benchmark results using the historical layout
     // =========================================================================
     println!("=== Benchmark Results ===");
-    println!("Total bytes read: {} ({} MB)", total_bytes_read, total_mb);
-    println!("Total records: {}", record_count);
+    println!("Total bytes read: {total_bytes_read} ({total_mb} MB)");
+    println!("Total records: {record_count}");
     println!(
-        "Time elapsed: {} ms ({:.3} seconds)",
-        elapsed_ms, elapsed_secs
+        "Time elapsed: {elapsed_ms} ms ({elapsed_secs:.3} seconds)"
     );
-    println!("Read speed: {:.2} MB/s", read_speed_mb_s);
+    println!("Read speed: {read_speed_mb_s:.2} MB/s");
     println!();
 
     // =========================================================================
@@ -251,8 +250,7 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
         char_or_dot(first_4_bytes[3])
     );
     println!(
-        "First 4 bytes (hex): {}  (ASCII: {})",
-        first_hex, first_ascii
+        "First 4 bytes (hex): {first_hex}  (ASCII: {first_ascii})"
     );
 
     // Format last 4 bytes
@@ -267,7 +265,7 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
         char_or_dot(last_4_bytes[2]),
         char_or_dot(last_4_bytes[3])
     );
-    println!("Last 4 bytes (hex):  {}  (ASCII: {})", last_hex, last_ascii);
+    println!("Last 4 bytes (hex):  {last_hex}  (ASCII: {last_ascii})");
     println!();
     println!("Note: First 4 bytes should be 'FILE' (46 49 4C 45) - the MFT record signature.");
 

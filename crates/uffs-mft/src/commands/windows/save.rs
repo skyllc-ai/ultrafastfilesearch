@@ -51,7 +51,7 @@ pub(crate) async fn cmd_save(
     info!(drive = %drive_upper, "Reading raw MFT from drive");
 
     // Get volume info for display
-    let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {}:", drive))?;
+    let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {drive}:"))?;
     let vol_data = handle.volume_data();
 
     let drive_type = detect_drive_type(drive_upper);
@@ -59,7 +59,7 @@ pub(crate) async fn cmd_save(
 
     // Calculate metrics
     let record_count =
-        vol_data.mft_valid_data_length / vol_data.bytes_per_file_record_segment as u64;
+        vol_data.mft_valid_data_length / u64::from(vol_data.bytes_per_file_record_segment);
 
     // Fragmentation analysis
     let mut extent_count = 1;
@@ -72,8 +72,8 @@ pub(crate) async fn cmd_save(
     }
 
     // Bitmap analysis
-    let mut in_use_records = 0u64;
-    let mut utilization = 0.0f64;
+    let mut in_use_records = 0_u64;
+    let mut utilization = 0.0_f64;
     if let Ok(bitmap) = handle.get_mft_bitmap() {
         in_use_records = bitmap.count_in_use() as u64;
         utilization = (in_use_records as f64 / record_count as f64) * 100.0;
@@ -106,8 +106,7 @@ pub(crate) async fn cmd_save(
     println!("═══════════════════════════════════════════════════════════════");
     println!("                         MFT SAVED");
     println!(
-        "                    Drive: {}: ({})",
-        drive_upper, drive_type_str
+        "                    Drive: {drive_upper}: ({drive_type_str})"
     );
     println!("═══════════════════════════════════════════════════════════════");
     println!();
@@ -124,7 +123,7 @@ pub(crate) async fn cmd_save(
         "  Free records:         {}",
         format_number_commas(free_records)
     );
-    println!("  Utilization:          {:.1}%", utilization);
+    println!("  Utilization:          {utilization:.1}%");
     println!(
         "  Fragmentation:        {} extent(s) {}",
         extent_count,
@@ -191,7 +190,7 @@ async fn cmd_save_iocp(
     info!(drive = %drive_upper, concurrency, "Reading MFT with IOCP capture mode");
 
     // Get volume info for display
-    let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {}:", drive))?;
+    let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {drive}:"))?;
     let vol_data = handle.volume_data();
 
     let drive_type = detect_drive_type(drive_upper);
@@ -199,13 +198,12 @@ async fn cmd_save_iocp(
 
     // Calculate metrics
     let record_count =
-        vol_data.mft_valid_data_length / vol_data.bytes_per_file_record_segment as u64;
+        vol_data.mft_valid_data_length / u64::from(vol_data.bytes_per_file_record_segment);
 
     println!("═══════════════════════════════════════════════════════════════");
     println!("                    MFT IOCP CAPTURE");
     println!(
-        "                    Drive: {}: ({})",
-        drive_upper, drive_type_str
+        "                    Drive: {drive_upper}: ({drive_type_str})"
     );
     println!("═══════════════════════════════════════════════════════════════");
     println!();
@@ -214,7 +212,7 @@ async fn cmd_save_iocp(
         "  Total records:        {}",
         format_number_commas(record_count)
     );
-    println!("  IOCP concurrency:     {}", concurrency);
+    println!("  IOCP concurrency:     {concurrency}");
     println!();
     println!("⏳ Reading with IOCP and capturing chunk order...");
 
@@ -259,7 +257,7 @@ async fn cmd_save_iocp(
         format_bytes(header.total_data_size)
     );
     if header.is_compressed() {
-        println!("  Compression:          zstd (level {})", compression_level);
+        println!("  Compression:          zstd (level {compression_level})");
     } else {
         println!("  Compression:          none");
     }

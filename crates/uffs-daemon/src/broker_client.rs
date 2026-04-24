@@ -64,7 +64,7 @@ pub(crate) fn request_volume_handle(drive_letter: char) -> anyhow::Result<u64> {
     pipe.flush()?;
 
     // Read response: 1 byte status + 8 bytes handle
-    let mut response = [0u8; 9];
+    let mut response = [0_u8; 9];
     pipe.read_exact(&mut response)?;
 
     let status = response[0];

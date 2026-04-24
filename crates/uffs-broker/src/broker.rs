@@ -75,7 +75,7 @@ fn run_foreground() -> anyhow::Result<()> {
 /// - S5.2: Client exe path + Authenticode verification
 /// - S5.3: Audit logging for every request
 /// - S5.4: Rate limiting (1 request per drive per 10s)
-/// - S5.5: Read-only handles only (enforced in handle_pipe_request)
+/// - S5.5: Read-only handles only (enforced in `handle_pipe_request`)
 #[cfg(windows)]
 fn serve_pipe_requests() -> anyhow::Result<()> {
     tracing::info!(pipe = BROKER_PIPE_NAME, "Listening for handle requests");
@@ -109,8 +109,8 @@ fn serve_pipe_requests() -> anyhow::Result<()> {
             }
 
             // S5.2: Authenticode signature check
-            if let Some(ref path) = exe_path {
-                if !verify_authenticode(path) {
+            if let Some(ref path) = exe_path
+                && !verify_authenticode(path) {
                     audit_log(
                         "REJECTED",
                         pid,
@@ -122,7 +122,6 @@ fn serve_pipe_requests() -> anyhow::Result<()> {
                     disconnect_and_close(&pipe);
                     continue;
                 }
-            }
 
             tracing::debug!(pid, "Broker client verified");
         } else {
@@ -171,23 +170,22 @@ fn handle_pipe_request_with_rate_limit(
     rate_limit: &mut std::collections::HashMap<char, std::time::Instant>,
 ) -> anyhow::Result<char> {
     // Peek at drive letter first for rate limiting
-    let mut drive_buf = [0u8; 1];
+    let mut drive_buf = [0_u8; 1];
     read_pipe(pipe, &mut drive_buf)?;
     let drive_letter = (drive_buf[0] as char).to_ascii_uppercase();
 
     if !drive_letter.is_ascii_alphabetic() {
-        write_pipe(pipe, &[1u8; 1])?;
+        write_pipe(pipe, &[1_u8; 1])?;
         anyhow::bail!("Invalid drive letter: {drive_letter}");
     }
 
     // S5.4: Rate limit — 1 request per drive per 10 seconds
     let now = std::time::Instant::now();
-    if let Some(last) = rate_limit.get(&drive_letter) {
-        if now.duration_since(*last).as_secs() < 10 {
-            write_pipe(pipe, &[1u8; 1])?;
+    if let Some(last) = rate_limit.get(&drive_letter)
+        && now.duration_since(*last).as_secs() < 10 {
+            write_pipe(pipe, &[1_u8; 1])?;
             anyhow::bail!("Rate limited: drive {drive_letter} requested too recently");
         }
-    }
     rate_limit.insert(drive_letter, now);
 
     // Delegate to actual handle brokering (drive letter already read)
@@ -235,13 +233,13 @@ fn get_client_exe_path(pid: u32) -> Option<String> {
     #[expect(unsafe_code, reason = "Win32 process query")]
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
-        let mut buf = vec![0u16; 4096];
+        let mut buf = vec![0_u16; 4096];
         let mut size = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         let result = QueryFullProcessImageNameW(
             handle,
             PROCESS_NAME_FORMAT(0),
             windows::core::PWSTR(buf.as_mut_ptr()),
-            &mut size,
+            &raw mut size,
         );
         let _ = CloseHandle(handle);
         if result.is_err() || size == 0 {
@@ -398,13 +396,9 @@ fn get_pipe_client_pid(pipe: &windows::Win32::Foundation::HANDLE) -> Option<u32>
         unsafe_code,
         reason = "GetNamedPipeClientProcessId requires unsafe FFI"
     )]
-    let result = unsafe { GetNamedPipeClientProcessId(*pipe, &mut pid) };
+    let result = unsafe { GetNamedPipeClientProcessId(*pipe, &raw mut pid) };
 
-    if result.is_ok() && pid != 0 {
-        Some(pid)
-    } else {
-        None
-    }
+    (result.is_ok() && pid != 0).then_some(pid)
 }
 
 /// Verify that a client process is a legitimate uffs-daemon.
@@ -422,13 +416,13 @@ fn verify_client(pid: u32) -> bool {
             return false;
         };
 
-        let mut buf = vec![0u16; 4096];
+        let mut buf = vec![0_u16; 4096];
         let mut size = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         let result = QueryFullProcessImageNameW(
             handle,
             PROCESS_NAME_FORMAT(0),
             windows::core::PWSTR(buf.as_mut_ptr()),
-            &mut size,
+            &raw mut size,
         );
         let _ = CloseHandle(handle);
 
@@ -473,7 +467,7 @@ fn handle_pipe_request_inner(
     tracing::info!(drive = %drive_letter, client_pid, "Opening volume for client");
 
     // 2. Open volume with backup semantics (requires SeBackupPrivilege)
-    let volume_path = format!("\\\\.\\{}:", drive_letter);
+    let volume_path = format!("\\\\.\\{drive_letter}:");
     let wide_path: Vec<u16> = volume_path.encode_utf16().chain(Some(0)).collect();
 
     #[expect(
@@ -494,7 +488,7 @@ fn handle_pipe_request_inner(
         let volume_handle = match volume_handle {
             Ok(h) => h,
             Err(e) => {
-                write_pipe(pipe, &[1u8; 1])?; // error
+                write_pipe(pipe, &[1_u8; 1])?; // error
                 anyhow::bail!("CreateFileW failed for {volume_path}: {e}");
             }
         };
@@ -504,7 +498,7 @@ fn handle_pipe_request_inner(
             Ok(h) => h,
             Err(e) => {
                 let _ = CloseHandle(volume_handle);
-                write_pipe(pipe, &[1u8; 1])?;
+                write_pipe(pipe, &[1_u8; 1])?;
                 anyhow::bail!("OpenProcess for client {client_pid} failed: {e}");
             }
         };
@@ -515,7 +509,7 @@ fn handle_pipe_request_inner(
             windows::Win32::System::Threading::GetCurrentProcess(),
             volume_handle,
             client_process,
-            &mut client_handle,
+            &raw mut client_handle,
             FILE_GENERIC_READ.0,
             false,
             windows::Win32::Foundation::DUPLICATE_HANDLE_OPTIONS(0),
@@ -525,13 +519,13 @@ fn handle_pipe_request_inner(
         let _ = CloseHandle(client_process);
 
         if dup_ok.is_err() {
-            write_pipe(pipe, &[1u8; 1])?;
+            write_pipe(pipe, &[1_u8; 1])?;
             anyhow::bail!("DuplicateHandle failed");
         }
 
         // 5. Send success (1 byte) + handle value (8 bytes LE)
         let handle_value = client_handle.0 as u64; // isize→u64: handle serialization for IPC
-        let mut response = [0u8; 9];
+        let mut response = [0_u8; 9];
         response[0] = 0; // success
         response[1..9].copy_from_slice(&handle_value.to_le_bytes());
         write_pipe(pipe, &response)?;
@@ -542,7 +536,7 @@ fn handle_pipe_request_inner(
             handle = handle_value,
             "Volume handle brokered successfully"
         );
-    }
+    };
 
     Ok(())
 }
@@ -552,10 +546,10 @@ fn handle_pipe_request_inner(
 fn read_pipe(pipe: &windows::Win32::Foundation::HANDLE, buf: &mut [u8]) -> anyhow::Result<()> {
     use windows::Win32::Storage::FileSystem::ReadFile;
 
-    let mut bytes_read = 0u32;
+    let mut bytes_read = 0_u32;
 
     #[expect(unsafe_code, reason = "ReadFile requires unsafe FFI")]
-    let result = unsafe { ReadFile(*pipe, Some(buf), Some(&mut bytes_read), None) };
+    let result = unsafe { ReadFile(*pipe, Some(buf), Some(&raw mut bytes_read), None) };
 
     if let Err(win_err) = result {
         anyhow::bail!("ReadFile failed: {win_err}");
@@ -572,10 +566,10 @@ fn read_pipe(pipe: &windows::Win32::Foundation::HANDLE, buf: &mut [u8]) -> anyho
 fn write_pipe(pipe: &windows::Win32::Foundation::HANDLE, buf: &[u8]) -> anyhow::Result<()> {
     use windows::Win32::Storage::FileSystem::WriteFile;
 
-    let mut bytes_written = 0u32;
+    let mut bytes_written = 0_u32;
 
     #[expect(unsafe_code, reason = "WriteFile requires unsafe FFI")]
-    let result = unsafe { WriteFile(*pipe, Some(buf), Some(&mut bytes_written), None) };
+    let result = unsafe { WriteFile(*pipe, Some(buf), Some(&raw mut bytes_written), None) };
 
     if let Err(win_err) = result {
         anyhow::bail!("WriteFile failed: {win_err}");
@@ -596,18 +590,18 @@ fn is_elevated() -> bool {
     #[expect(unsafe_code, reason = "Win32 token query requires unsafe FFI")]
     unsafe {
         let mut token = HANDLE::default();
-        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token).is_err() {
             return false;
         }
         let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
-        let mut size = 0u32;
+        let mut size = 0_u32;
         let result = GetTokenInformation(
             token,
             TokenElevation,
-            Some(&mut elevation as *mut TOKEN_ELEVATION as *mut _),
+            Some((&raw mut elevation).cast::<core::ffi::c_void>()),
             // size_of::<TOKEN_ELEVATION>() is 4 bytes — always fits u32.
             u32::try_from(size_of::<TOKEN_ELEVATION>()).unwrap_or(u32::MAX),
-            &mut size,
+            &raw mut size,
         );
         let _ = windows::Win32::Foundation::CloseHandle(token);
         result.is_ok() && elevation.TokenIsElevated != 0
