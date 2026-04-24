@@ -187,16 +187,23 @@ impl IocpMftReader {
                 // pinned data for the OVERLAPPED pointer and buffer. The pin is maintained
                 // throughout the operation lifetime.
                 let overlapped_ptr = unsafe { op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
+                // SAFETY: same justification as above — pinned Box, sole writer.
+                let op_mut = unsafe { op.as_mut().get_unchecked_mut() };
+                let Some(read_slice) = op_mut.buffer.as_mut_slice().get_mut(..aligned_size)
+                else {
+                    // Unreachable: buffer was sized to ≥ aligned_size at allocation.
+                    return Err(MftError::Io(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "iocp-reader buffer shorter than aligned_size",
+                    )));
+                };
                 // SAFETY: `handle` is a live overlapped-capable file handle, the
                 // buffer slice lives inside the pinned operation for the duration of
                 // the async I/O, and `overlapped_ptr` points into the same pinned op.
                 let read_result = unsafe {
                     ReadFile(
                         handle,
-                        Some(
-                            &mut op.as_mut().get_unchecked_mut().buffer.as_mut_slice()
-                                [..aligned_size],
-                        ),
+                        Some(read_slice),
                         None, // Don't need bytes read for overlapped
                         Some(overlapped_ptr),
                     )
@@ -258,91 +265,101 @@ impl IocpMftReader {
                 }
             }
 
-            if let Some(slot_idx) = completed_slot {
-                // Take the completed operation
-                if let Some(mut op) = in_flight[slot_idx].take() {
-                    // SAFETY: The `Pin<Box<_>>` is still pinned in this scope; we
-                    // only project a mutable reference without moving the allocation.
-                    let op_mut = unsafe { op.as_mut().get_unchecked_mut() };
-                    op_mut.bytes_read = bytes_transferred as usize;
+            if let Some(slot_idx) = completed_slot
+                && let Some(op_slot) = in_flight.get_mut(slot_idx)
+                && let Some(mut op) = op_slot.take()
+            {
+                // SAFETY: The `Pin<Box<_>>` is still pinned in this scope; we
+                // only project a mutable reference without moving the allocation.
+                let op_mut = unsafe { op.as_mut().get_unchecked_mut() };
+                op_mut.bytes_read = bytes_transferred as usize;
 
-                    // Parse the buffer using zero-copy in-place fixup
-                    let results = parse_buffer_zero_copy_inner(
-                        op_mut.buffer.as_mut_slice(),
-                        op_mut.bytes_read,
-                        &op_mut.chunk,
-                        op_mut.record_size,
-                        merge_extensions,
-                    );
-                    all_results.extend(results);
+                // Parse the buffer using zero-copy in-place fixup
+                let results = parse_buffer_zero_copy_inner(
+                    op_mut.buffer.as_mut_slice(),
+                    op_mut.bytes_read,
+                    &op_mut.chunk,
+                    op_mut.record_size,
+                    merge_extensions,
+                );
+                all_results.extend(results);
 
-                    bytes_read_total += bytes_transferred as u64;
-                    completed_count += 1;
+                bytes_read_total += bytes_transferred as u64;
+                completed_count += 1;
 
-                    // Report progress
-                    if let Some(ref mut cb) = progress_callback {
-                        cb(bytes_read_total, total_bytes);
+                // Report progress
+                if let Some(ref mut cb) = progress_callback {
+                    cb(bytes_read_total, total_bytes);
+                }
+
+                // Issue next read if there are more chunks
+                if let Some(next_chunk) = pending_chunks.pop_front() {
+                    // Reuse the buffer
+                    let mut buffer =
+                        core::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
+
+                    // Resize if needed
+                    let next_read_size = next_chunk.record_count * u64::from(record_size);
+                    let next_aligned_offset =
+                        (next_chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
+                    let next_offset_adjustment =
+                        (next_chunk.disk_offset - next_aligned_offset) as usize;
+                    let next_aligned_size = (next_read_size as usize + next_offset_adjustment)
+                        .div_ceil(SECTOR_SIZE)
+                        * SECTOR_SIZE;
+
+                    if buffer.len() < next_aligned_size {
+                        buffer = AlignedBuffer::new(next_aligned_size);
                     }
 
-                    // Issue next read if there are more chunks
-                    if let Some(next_chunk) = pending_chunks.pop_front() {
-                        // Reuse the buffer
-                        let mut buffer =
-                            core::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
+                    let mut new_op = Box::pin(OverlappedRead::new(
+                        buffer,
+                        next_chunk,
+                        record_size,
+                        slot_idx,
+                    ));
+                    new_op.set_offset(next_aligned_offset);
 
-                        // Resize if needed
-                        let next_read_size = next_chunk.record_count * u64::from(record_size);
-                        let next_aligned_offset =
-                            (next_chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
-                        let next_offset_adjustment =
-                            (next_chunk.disk_offset - next_aligned_offset) as usize;
-                        let next_aligned_size = (next_read_size as usize + next_offset_adjustment)
-                            .div_ceil(SECTOR_SIZE)
-                            * SECTOR_SIZE;
+                    // Issue overlapped read
+                    // SAFETY: We need get_unchecked_mut to get a mutable reference to the
+                    // pinned data for the OVERLAPPED pointer and buffer.
+                    let overlapped_ptr =
+                        unsafe { new_op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
+                    // SAFETY: same justification as above — pinned Box, sole writer.
+                    let new_op_mut = unsafe { new_op.as_mut().get_unchecked_mut() };
+                    let Some(read_slice) =
+                        new_op_mut.buffer.as_mut_slice().get_mut(..next_aligned_size)
+                    else {
+                        // Unreachable: buffer was (re)sized to ≥ next_aligned_size above.
+                        return Err(MftError::Io(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "iocp-reader recycled buffer shorter than next_aligned_size",
+                        )));
+                    };
+                    // SAFETY: `handle` is a live overlapped-capable file handle,
+                    // the buffer slice lives inside the pinned operation for the
+                    // duration of the async I/O, and `overlapped_ptr` points into it.
+                    let read_result = unsafe {
+                        ReadFile(
+                            handle,
+                            Some(read_slice),
+                            None,
+                            Some(overlapped_ptr),
+                        )
+                    };
 
-                        if buffer.len() < next_aligned_size {
-                            buffer = AlignedBuffer::new(next_aligned_size);
+                    if read_result.is_err() {
+                        // SAFETY: `GetLastError` reads the calling thread's last-error
+                        // slot and does not dereference any Rust pointers.
+                        let err = unsafe { GetLastError() };
+                        if err != ERROR_IO_PENDING {
+                            warn!(error = ?err, "Failed to issue next overlapped read");
+                            continue;
                         }
+                    }
 
-                        let mut new_op = Box::pin(OverlappedRead::new(
-                            buffer,
-                            next_chunk,
-                            record_size,
-                            slot_idx,
-                        ));
-                        new_op.set_offset(next_aligned_offset);
-
-                        // Issue overlapped read
-                        // SAFETY: We need get_unchecked_mut to get a mutable reference to the
-                        // pinned data for the OVERLAPPED pointer and buffer.
-                        let overlapped_ptr =
-                            unsafe { new_op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
-                        // SAFETY: `handle` is a live overlapped-capable file handle,
-                        // the buffer slice lives inside the pinned operation for the
-                        // duration of the async I/O, and `overlapped_ptr` points into it.
-                        let read_result = unsafe {
-                            ReadFile(
-                                handle,
-                                Some(
-                                    &mut new_op.as_mut().get_unchecked_mut().buffer.as_mut_slice()
-                                        [..next_aligned_size],
-                                ),
-                                None,
-                                Some(overlapped_ptr),
-                            )
-                        };
-
-                        if read_result.is_err() {
-                            // SAFETY: `GetLastError` reads the calling thread's last-error
-                            // slot and does not dereference any Rust pointers.
-                            let err = unsafe { GetLastError() };
-                            if err != ERROR_IO_PENDING {
-                                warn!(error = ?err, "Failed to issue next overlapped read");
-                                continue;
-                            }
-                        }
-
-                        in_flight[slot_idx] = Some(new_op);
+                    if let Some(slot) = in_flight.get_mut(slot_idx) {
+                        *slot = Some(new_op);
                     }
                 }
             }

@@ -110,11 +110,10 @@ impl MultiVolumeIocpReader {
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
-        let record_size = if self.volumes.is_empty() {
-            1024 // Default
-        } else {
-            self.volumes[0].extent_map.bytes_per_record as usize
-        };
+        let record_size = self
+            .volumes
+            .first()
+            .map_or(1024_usize, |vol| vol.extent_map.bytes_per_record as usize);
 
         // Create single IOCP for all volumes
         let iocp = IoCompletionPort::new(0)?;
@@ -165,8 +164,9 @@ impl MultiVolumeIocpReader {
 
             for slot_idx in 0..initial_count {
                 if let Some(op) = vol.io_queue.pop_front() {
-                    let buffer = buffer_pools[vol_idx]
-                        .pop()
+                    let buffer = buffer_pools
+                        .get_mut(vol_idx)
+                        .and_then(Vec::pop)
                         .unwrap_or_else(|| AlignedBuffer::new(vol.io_chunk_size));
 
                     let mut in_flight_op = Box::pin(InFlightOp {
@@ -214,7 +214,11 @@ impl MultiVolumeIocpReader {
                         }
                     }
 
-                    in_flight[vol_idx][slot_idx] = Some(in_flight_op);
+                    if let Some(vol_slots) = in_flight.get_mut(vol_idx)
+                        && let Some(slot) = vol_slots.get_mut(slot_idx)
+                    {
+                        *slot = Some(in_flight_op);
+                    }
                     vol.pending_ops += 1;
                     total_pending += 1;
                 }
@@ -262,8 +266,12 @@ impl MultiVolumeIocpReader {
             }
 
             // Find the completed operation
+            let Some(vol_slots) = in_flight.get_mut(vol_idx) else {
+                warn!(vol_idx, "Completion key out of range for in_flight table");
+                continue;
+            };
             let mut completed_slot = None;
-            for (slot_idx, slot) in in_flight[vol_idx].iter_mut().enumerate() {
+            for (slot_idx, slot) in vol_slots.iter_mut().enumerate() {
                 if let Some(op) = slot {
                     let op_ptr = core::ptr::addr_of!(op.overlapped);
                     if op_ptr as *const _ == overlapped_ptr as *const _ {
@@ -279,43 +287,58 @@ impl MultiVolumeIocpReader {
             };
 
             // Take the completed operation and unpin it to get ownership
-            let Some(completed_pinned) = in_flight[vol_idx][slot_idx].take() else {
+            let completed_pinned = vol_slots.get_mut(slot_idx).and_then(Option::take);
+            let Some(completed_pinned) = completed_pinned else {
                 return Err(MftError::InvalidData(
                     "completed IOCP operation missing from in-flight slot".to_owned(),
                 ));
             };
             let completed_op = Pin::into_inner(completed_pinned);
-            let vol = &mut self.volumes[vol_idx];
+            let Some(vol) = self.volumes.get_mut(vol_idx) else {
+                warn!(vol_idx, "Volume index out of range after completion");
+                continue;
+            };
             vol.pending_ops -= 1;
             vol.completed_io_ops += 1;
             total_pending -= 1;
             bytes_read_total += bytes_transferred as u64;
 
             // Parse the completed buffer using unified pipeline
-            let buffer_slice = &completed_op.buffer.as_slice()[..bytes_transferred as usize];
+            let Some(buffer_slice) = completed_op
+                .buffer
+                .as_slice()
+                .get(..bytes_transferred as usize)
+            else {
+                // Unreachable: bytes_transferred ≤ allocated buffer size.
+                return Err(MftError::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "multi-volume completion reported more bytes than buffer size",
+                )));
+            };
             let records_in_buffer = bytes_transferred as usize / record_size;
             let mut current_frs = completed_op.op.start_frs;
 
             for record_idx in 0..records_in_buffer {
                 let record_start = record_idx * record_size;
                 let record_end = record_start + record_size;
-                if record_end > buffer_slice.len() {
+                let Some(record_data) = buffer_slice.get(record_start..record_end) else {
                     break;
-                }
-
-                let record_data = &buffer_slice[record_start..record_end];
+                };
                 let result = parse_record_full(record_data, current_frs);
                 vol.merger.add_result(result);
                 current_frs += 1;
             }
 
             // Return buffer to pool
-            buffer_pools[vol_idx].push(completed_op.buffer);
+            if let Some(pool) = buffer_pools.get_mut(vol_idx) {
+                pool.push(completed_op.buffer);
+            }
 
             // Issue next read for this volume if available
             if let Some(next_op) = vol.io_queue.pop_front() {
-                let buffer = buffer_pools[vol_idx]
-                    .pop()
+                let buffer = buffer_pools
+                    .get_mut(vol_idx)
+                    .and_then(Vec::pop)
                     .unwrap_or_else(|| AlignedBuffer::new(vol.io_chunk_size));
 
                 let mut new_in_flight = Box::pin(InFlightOp {
@@ -361,12 +384,18 @@ impl MultiVolumeIocpReader {
                         );
                         // Unpin to recover the buffer
                         let failed_op = Pin::into_inner(new_in_flight);
-                        buffer_pools[vol_idx].push(failed_op.buffer);
+                        if let Some(pool) = buffer_pools.get_mut(vol_idx) {
+                            pool.push(failed_op.buffer);
+                        }
                         continue;
                     }
                 }
 
-                in_flight[vol_idx][slot_idx] = Some(new_in_flight);
+                if let Some(vol_slots) = in_flight.get_mut(vol_idx)
+                    && let Some(slot) = vol_slots.get_mut(slot_idx)
+                {
+                    *slot = Some(new_in_flight);
+                }
                 vol.pending_ops += 1;
                 total_pending += 1;
             }
