@@ -139,6 +139,6 @@ impl OverlappedRead {
     /// The returned pointer is valid as long as self is pinned and alive.
     /// Note: Creating raw pointers is safe; only dereferencing requires unsafe.
     pub fn as_overlapped_ptr(&mut self) -> *mut windows::Win32::System::IO::OVERLAPPED {
-        &mut self.overlapped as *mut _
+        &raw mut self.overlapped
     }
 }

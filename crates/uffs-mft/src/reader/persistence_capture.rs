@@ -99,7 +99,7 @@ impl MftReader {
                     SetFilePointerEx(
                         handle,
                         aligned_offset as i64,
-                        Some(&mut new_pos),
+                        Some(&raw mut new_pos),
                         FILE_BEGIN,
                     )
                 };
@@ -115,7 +115,7 @@ impl MftReader {
                     ReadFile(
                         handle,
                         Some(&mut buffer.as_mut_slice()[..aligned_size]),
-                        Some(&mut bytes_read),
+                        Some(&raw mut bytes_read),
                         None,
                     )
                 };
@@ -303,9 +303,9 @@ impl MftReader {
             let status = unsafe {
                 GetQueuedCompletionStatus(
                     iocp.raw_handle(),
-                    &mut bytes_transferred,
-                    &mut completion_key,
-                    &mut overlapped_ptr,
+                    &raw mut bytes_transferred,
+                    &raw mut completion_key,
+                    &raw mut overlapped_ptr,
                     u32::MAX,
                 )
             };

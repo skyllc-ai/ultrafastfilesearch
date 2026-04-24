@@ -224,9 +224,9 @@ impl IocpMftReader {
             let wait_result = unsafe {
                 GetQueuedCompletionStatus(
                     iocp.raw_handle(),
-                    &mut bytes_transferred,
-                    &mut completion_key,
-                    &mut overlapped_ptr,
+                    &raw mut bytes_transferred,
+                    &raw mut completion_key,
+                    &raw mut overlapped_ptr,
                     u32::MAX, // INFINITE
                 )
             };

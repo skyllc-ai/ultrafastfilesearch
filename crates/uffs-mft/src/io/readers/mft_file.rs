@@ -89,7 +89,7 @@ pub(crate) fn read_mft_from_file_handle(
             ReadFile(
                 mft_handle,
                 Some(&mut buffer.as_mut_slice()[..read_size]),
-                Some(&mut bytes_read),
+                Some(&raw mut bytes_read),
                 None,
             )
         };

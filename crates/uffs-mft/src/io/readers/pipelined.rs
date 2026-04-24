@@ -464,7 +464,7 @@ fn read_chunk_into_buffer_static(
         SetFilePointerEx(
             handle,
             aligned_offset as i64,
-            Some(&mut new_pos),
+            Some(&raw mut new_pos),
             FILE_BEGIN,
         )
     };
@@ -481,7 +481,7 @@ fn read_chunk_into_buffer_static(
         ReadFile(
             handle,
             Some(&mut buffer.as_mut_slice()[..aligned_size]),
-            Some(&mut bytes_read),
+            Some(&raw mut bytes_read),
             None,
         )
     };

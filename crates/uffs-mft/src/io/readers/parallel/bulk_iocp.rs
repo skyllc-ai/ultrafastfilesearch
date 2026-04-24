@@ -152,7 +152,7 @@ impl ParallelMftReader {
                         overlapped_handle,
                         Some(target_slice),
                         None, // Don't wait for completion
-                        Some(&mut op.overlapped as *mut _),
+                        Some(&raw mut op.overlapped),
                     )
                 };
 
@@ -250,9 +250,9 @@ impl ParallelMftReader {
                     let result = unsafe {
                         GetQueuedCompletionStatus(
                             iocp_handle,
-                            &mut bytes_transferred,
-                            &mut completion_key,
-                            &mut overlapped_ptr,
+                            &raw mut bytes_transferred,
+                            &raw mut completion_key,
+                            &raw mut overlapped_ptr,
                             100, // 100ms timeout
                         )
                     };

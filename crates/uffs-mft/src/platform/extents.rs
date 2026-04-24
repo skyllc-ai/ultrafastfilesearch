@@ -75,7 +75,7 @@ pub(super) fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
                 size_of::<STARTING_VCN_INPUT_BUFFER>() as u32,
                 Some(buffer.as_mut_ptr().cast()),
                 buffer_size as u32,
-                Some(&mut bytes_returned),
+                Some(&raw mut bytes_returned),
                 None,
             )
         };

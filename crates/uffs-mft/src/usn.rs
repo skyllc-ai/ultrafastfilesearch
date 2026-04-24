@@ -368,7 +368,7 @@ mod windows_impl {
                 0,                                             // Input buffer size
                 Some(ptr::from_mut(&mut journal_data).cast()), // Output buffer
                 USN_JOURNAL_DATA_V0_SIZE,                      // Output buffer size
-                Some(&mut bytes_returned),                     // Bytes returned
+                Some(&raw mut bytes_returned),                 // Bytes returned
                 None,                                          // Overlapped
             )
         };
@@ -426,7 +426,7 @@ mod windows_impl {
                     READ_USN_JOURNAL_DATA_V0_SIZE,
                     Some(buffer.as_mut_ptr().cast()),
                     buffer_size,
-                    Some(&mut bytes_returned),
+                    Some(&raw mut bytes_returned),
                     None,
                 )
             };
