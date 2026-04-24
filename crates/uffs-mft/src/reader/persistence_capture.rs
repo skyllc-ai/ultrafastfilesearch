@@ -121,13 +121,20 @@ impl MftReader {
                 }
 
                 let mut bytes_read: u32 = 0;
+                let Some(read_slice) = buffer.as_mut_slice().get_mut(..aligned_size) else {
+                    // Unreachable: buffer was sized to ≥ aligned_size upstream.
+                    return Err(MftError::Io(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "capture buffer shorter than aligned_size",
+                    )));
+                };
                 // SAFETY: `handle` is live, the aligned buffer slice covers
                 // `aligned_size` writable bytes, and `bytes_read` is a valid
                 // out-parameter for the call.
                 let read_result = unsafe {
                     ReadFile(
                         handle,
-                        Some(&mut buffer.as_mut_slice()[..aligned_size]),
+                        Some(read_slice),
                         Some(&raw mut bytes_read),
                         None,
                     )
@@ -137,8 +144,16 @@ impl MftReader {
                 }
 
                 let actual_size = read_size as usize;
-                let data =
-                    buffer.as_slice()[offset_adjustment..offset_adjustment + actual_size].to_vec();
+                let data_slice = buffer
+                    .as_slice()
+                    .get(offset_adjustment..offset_adjustment + actual_size)
+                    .ok_or_else(|| {
+                        MftError::Io(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "capture read produced fewer bytes than expected",
+                        ))
+                    })?;
+                let data = data_slice.to_vec();
 
                 if tx.send(data).is_err() {
                     break;
@@ -278,17 +293,26 @@ impl MftReader {
                     / SECTOR_SIZE)
                     * SECTOR_SIZE;
 
+                // SAFETY: `op` is a pinned Box — the one writer, and we do not
+                // move out of the pinned location.  Two sequential mutable
+                // reborrows are fine because the first (overlapped_ptr) is
+                // consumed as a raw pointer before the second borrow.
                 let overlapped_ptr = unsafe { op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
+                // SAFETY: same justification as above — pinned Box, sole writer.
+                let op_mut = unsafe { op.as_mut().get_unchecked_mut() };
+                let Some(read_slice) = op_mut.buffer.as_mut_slice().get_mut(..aligned_size) else {
+                    // Unreachable: buffer sized to max_chunk_size + SECTOR_SIZE ≥ aligned_size.
+                    // SAFETY: handle was opened by open_overlapped_handle and is not used afterwards.
+                    unsafe { CloseHandle(handle) }.ok();
+                    return Err(MftError::Io(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "IOCP capture buffer shorter than aligned_size",
+                    )));
+                };
+                // SAFETY: `handle` is live, `read_slice` spans `aligned_size` writable bytes,
+                // `overlapped_ptr` points to `op`'s pinned OVERLAPPED struct.
                 let read_result = unsafe {
-                    ReadFile(
-                        handle,
-                        Some(
-                            &mut op.as_mut().get_unchecked_mut().buffer.as_mut_slice()
-                                [..aligned_size],
-                        ),
-                        None,
-                        Some(overlapped_ptr),
-                    )
+                    ReadFile(handle, Some(read_slice), None, Some(overlapped_ptr))
                 };
 
                 if read_result.is_err() {
@@ -341,78 +365,98 @@ impl MftReader {
                 }
             }
 
-            if let Some(slot_idx) = completed_slot_idx {
-                if let Some(op) = in_flight[slot_idx].take() {
-                    // Extract chunk data in completion order
-                    let chunk = &op.chunk;
-                    let read_size = chunk.record_count * u64::from(record_size);
+            if let Some(slot_idx) = completed_slot_idx
+                && let Some(op_slot) = in_flight.get_mut(slot_idx)
+                && let Some(op) = op_slot.take()
+            {
+                // Extract chunk data in completion order
+                let chunk = &op.chunk;
+                let read_size = chunk.record_count * u64::from(record_size);
+                let aligned_offset =
+                    (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
+                let offset_adjustment = (chunk.disk_offset - aligned_offset) as usize;
+
+                let data = op
+                    .buffer
+                    .as_slice()
+                    .get(offset_adjustment..offset_adjustment + read_size as usize)
+                    .ok_or_else(|| {
+                        MftError::Io(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "IOCP capture read produced fewer bytes than expected",
+                        ))
+                    })?
+                    .to_vec();
+
+                // Record in completion order
+                writer.record_chunk(chunk.start_frs, data);
+                completed_chunks += 1;
+
+                debug!(
+                    "Captured chunk {} of {} (FRS {}..{})",
+                    completed_chunks,
+                    num_chunks,
+                    chunk.start_frs,
+                    chunk.start_frs + chunk.record_count
+                );
+
+                // Issue next read if available
+                if let Some(next_chunk) = pending_chunks.pop_front() {
+                    let buffer = AlignedBuffer::new(max_chunk_size + SECTOR_SIZE);
+                    let mut new_op = Box::pin(OverlappedRead::new(
+                        buffer,
+                        next_chunk,
+                        record_size,
+                        slot_idx,
+                    ));
+
                     let aligned_offset =
-                        (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
-                    let offset_adjustment = (chunk.disk_offset - aligned_offset) as usize;
+                        (new_op.chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
+                    new_op.set_offset(aligned_offset);
 
-                    let data = op.buffer.as_slice()
-                        [offset_adjustment..offset_adjustment + read_size as usize]
-                        .to_vec();
+                    let read_size = new_op.chunk.record_count * u64::from(record_size);
+                    let offset_adjustment =
+                        (new_op.chunk.disk_offset - aligned_offset) as usize;
+                    let aligned_size = ((read_size as usize + offset_adjustment + SECTOR_SIZE
+                        - 1)
+                        / SECTOR_SIZE)
+                        * SECTOR_SIZE;
 
-                    // Record in completion order
-                    writer.record_chunk(chunk.start_frs, data);
-                    completed_chunks += 1;
+                    // SAFETY: `new_op` is a pinned Box with us as the sole writer; the
+                    // overlapped raw pointer is consumed before the second reborrow.
+                    let overlapped_ptr =
+                        unsafe { new_op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
+                    // SAFETY: same justification as above — pinned Box, sole writer.
+                    let new_op_mut = unsafe { new_op.as_mut().get_unchecked_mut() };
+                    let Some(read_slice) =
+                        new_op_mut.buffer.as_mut_slice().get_mut(..aligned_size)
+                    else {
+                        // Unreachable: buffer sized to max_chunk_size + SECTOR_SIZE ≥ aligned_size.
+                        // SAFETY: handle was opened by open_overlapped_handle and is not used afterwards.
+                        unsafe { CloseHandle(handle) }.ok();
+                        return Err(MftError::Io(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "IOCP capture buffer shorter than aligned_size",
+                        )));
+                    };
+                    // SAFETY: `handle` is live, `read_slice` spans `aligned_size` writable bytes,
+                    // `overlapped_ptr` points to `new_op`'s pinned OVERLAPPED struct.
+                    let read_result = unsafe {
+                        ReadFile(handle, Some(read_slice), None, Some(overlapped_ptr))
+                    };
 
-                    debug!(
-                        "Captured chunk {} of {} (FRS {}..{})",
-                        completed_chunks,
-                        num_chunks,
-                        chunk.start_frs,
-                        chunk.start_frs + chunk.record_count
-                    );
-
-                    // Issue next read if available
-                    if let Some(next_chunk) = pending_chunks.pop_front() {
-                        let buffer = AlignedBuffer::new(max_chunk_size + SECTOR_SIZE);
-                        let mut new_op = Box::pin(OverlappedRead::new(
-                            buffer,
-                            next_chunk,
-                            record_size,
-                            slot_idx,
-                        ));
-
-                        let aligned_offset =
-                            (new_op.chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
-                        new_op.set_offset(aligned_offset);
-
-                        let read_size = new_op.chunk.record_count * u64::from(record_size);
-                        let offset_adjustment =
-                            (new_op.chunk.disk_offset - aligned_offset) as usize;
-                        let aligned_size = ((read_size as usize + offset_adjustment + SECTOR_SIZE
-                            - 1)
-                            / SECTOR_SIZE)
-                            * SECTOR_SIZE;
-
-                        let overlapped_ptr =
-                            unsafe { new_op.as_mut().get_unchecked_mut().as_overlapped_ptr() };
-                        let read_result = unsafe {
-                            ReadFile(
-                                handle,
-                                Some(
-                                    &mut new_op.as_mut().get_unchecked_mut().buffer.as_mut_slice()
-                                        [..aligned_size],
-                                ),
-                                None,
-                                Some(overlapped_ptr),
-                            )
-                        };
-
-                        if read_result.is_err() {
-                            let err = unsafe { GetLastError() };
-                            if err != ERROR_IO_PENDING {
-                                // SAFETY: handle was opened by open_overlapped_handle
-                                unsafe { CloseHandle(handle) }.ok();
-                                return Err(MftError::Io(std::io::Error::from_raw_os_error(
-                                    err.0 as i32,
-                                )));
-                            }
+                    if read_result.is_err() {
+                        let err = unsafe { GetLastError() };
+                        if err != ERROR_IO_PENDING {
+                            // SAFETY: handle was opened by open_overlapped_handle
+                            unsafe { CloseHandle(handle) }.ok();
+                            return Err(MftError::Io(std::io::Error::from_raw_os_error(
+                                err.0 as i32,
+                            )));
                         }
-                        in_flight[slot_idx] = Some(new_op);
+                    }
+                    if let Some(slot) = in_flight.get_mut(slot_idx) {
+                        *slot = Some(new_op);
                     }
                 }
             }
