@@ -186,7 +186,7 @@ impl ParallelMftReader {
         }
 
         let total_io_ops = io_ops.len();
-        let estimated_records = if let Some(ref bm) = self.bitmap {
+        let estimated_records = if let Some(bm) = &self.bitmap {
             bm.count_in_use()
         } else {
             total_records
@@ -244,7 +244,7 @@ impl ParallelMftReader {
                         let frs = start_frs + i as u64;
 
                         // Check bitmap
-                        if let Some(ref bm) = bitmap {
+                        if let Some(bm) = &bitmap {
                             if !bm.is_record_in_use(frs) {
                                 continue;
                             }

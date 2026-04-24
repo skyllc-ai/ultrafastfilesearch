@@ -125,7 +125,7 @@ impl PipelinedMftReader {
             .sum();
 
         // Estimate capacity
-        let estimated_records = if let Some(ref bm) = self.bitmap {
+        let estimated_records = if let Some(bm) = &self.bitmap {
             bm.count_in_use()
         } else {
             self.extent_map.total_records() as usize
@@ -307,7 +307,7 @@ impl PipelinedMftReader {
             .sum();
 
         // Estimate capacity
-        let estimated_records = if let Some(ref bm) = self.bitmap {
+        let estimated_records = if let Some(bm) = &self.bitmap {
             bm.count_in_use()
         } else {
             self.extent_map.total_records() as usize

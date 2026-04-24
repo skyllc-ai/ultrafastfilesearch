@@ -302,7 +302,7 @@ impl ParallelMftReader {
         info!(num_chunks, "Generated read chunks");
 
         // Estimate capacity
-        let estimated_records = if let Some(ref bm) = self.bitmap {
+        let estimated_records = if let Some(bm) = &self.bitmap {
             bm.count_in_use()
         } else {
             self.extent_map.total_records() as usize
@@ -348,7 +348,7 @@ impl ParallelMftReader {
                     );
 
                     // Report progress after each chunk
-                    if let Some(ref cb) = progress_callback {
+                    if let Some(cb) = &progress_callback {
                         cb(total_bytes_read, total_bytes_to_read);
                     }
 

@@ -143,7 +143,7 @@ impl ParallelMftReader {
             bytes_read_total += bytes_read as u64;
 
             // Report progress
-            if let Some(ref cb) = progress_callback {
+            if let Some(cb) = &progress_callback {
                 cb(bytes_read_total, bytes_to_read);
             }
         }
@@ -162,7 +162,7 @@ impl ParallelMftReader {
         let bitmap_ref = self.bitmap.as_ref();
 
         // Estimate capacity
-        let estimated_records = if let Some(ref bm) = bitmap_ref {
+        let estimated_records = if let Some(bm) = &bitmap_ref {
             bm.count_in_use()
         } else {
             total_records

@@ -349,7 +349,7 @@ impl MftReader {
         // Try to get the MFT bitmap for optimization
         let bitmap = if self.use_bitmap {
             let bm = handle.get_mft_bitmap().ok();
-            if let Some(ref b) = bm {
+            if let Some(b) = &bm {
                 let in_use = b.count_in_use();
                 info!(
                     in_use_records = in_use,
@@ -364,7 +364,7 @@ impl MftReader {
         };
 
         // Report initial progress
-        if let Some(ref cb) = callback {
+        if let Some(cb) = &callback {
             cb(MftProgress {
                 records_read: 0,
                 total_records: Some(total_records),
@@ -402,7 +402,7 @@ impl MftReader {
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
-                if let Some(ref cb) = callback {
+                if let Some(cb) = &callback {
                     let cb_ref = cb;
                     let start = start_time;
                     parallel_reader.read_all_parallel_with_progress(
@@ -431,7 +431,7 @@ impl MftReader {
                 let pipelined_reader =
                     crate::io::PipelinedMftReader::new(extent_map, bitmap, drive_type);
 
-                if let Some(ref cb) = callback {
+                if let Some(cb) = &callback {
                     let cb_ref = cb;
                     let start = start_time;
                     pipelined_reader.read_all_pipelined(
@@ -459,7 +459,7 @@ impl MftReader {
                 let pipelined_reader =
                     crate::io::PipelinedMftReader::new(extent_map, bitmap, drive_type);
 
-                if let Some(ref cb) = callback {
+                if let Some(cb) = &callback {
                     let cb_ref = cb;
                     let start = start_time;
                     pipelined_reader.read_all_pipelined_parallel(
@@ -490,7 +490,7 @@ impl MftReader {
                 let overlapped_handle = self.require_handle().open_overlapped_handle()?;
                 let iocp_reader = crate::io::IocpMftReader::new(extent_map, bitmap, drive_type);
 
-                let result = if let Some(ref cb) = callback {
+                let result = if let Some(cb) = &callback {
                     let cb_ref = cb;
                     let start = start_time;
                     iocp_reader.read_all_iocp(
@@ -528,7 +528,7 @@ impl MftReader {
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
-                if let Some(ref cb) = callback {
+                if let Some(cb) = &callback {
                     let cb_ref = cb;
                     let start = start_time;
                     parallel_reader.read_all_bulk(
@@ -558,7 +558,7 @@ impl MftReader {
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
-                let result = if let Some(ref cb) = callback {
+                let result = if let Some(cb) = &callback {
                     let cb_ref = cb;
                     let start = start_time;
                     parallel_reader.read_all_bulk_iocp(
@@ -602,7 +602,7 @@ impl MftReader {
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
-                let result = if let Some(ref cb) = callback {
+                let result = if let Some(cb) = &callback {
                     let cb_ref = cb;
                     let start = start_time;
                     parallel_reader.read_all_sliding_window_iocp(
@@ -724,7 +724,7 @@ impl MftReader {
                         );
 
                         // Report final progress
-                        if let Some(ref cb) = callback {
+                        if let Some(cb) = &callback {
                             cb(MftProgress {
                                 records_read: total_records,
                                 total_records: Some(total_records),
@@ -815,7 +815,7 @@ impl MftReader {
         );
 
         // Report final progress
-        if let Some(ref cb) = callback {
+        if let Some(cb) = &callback {
             cb(MftProgress {
                 records_read: total_records,
                 total_records: Some(total_records),

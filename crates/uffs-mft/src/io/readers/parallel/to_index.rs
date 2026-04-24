@@ -191,7 +191,7 @@ impl ParallelMftReader {
         }
 
         let total_io_ops = io_ops.len();
-        let (estimated_records, max_frs) = if let Some(ref bm) = self.bitmap {
+        let (estimated_records, max_frs) = if let Some(bm) = &self.bitmap {
             (bm.count_in_use(), bm.max_frs_in_use())
         } else {
             // No bitmap: use total records as both count and max FRS

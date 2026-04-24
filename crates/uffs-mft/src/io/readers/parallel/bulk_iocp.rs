@@ -317,7 +317,7 @@ impl ParallelMftReader {
         let buffer_slice = mft_buffer.as_mut_slice();
         let bitmap_ref = self.bitmap.as_ref();
 
-        let estimated_records = if let Some(ref bm) = bitmap_ref {
+        let estimated_records = if let Some(bm) = &bitmap_ref {
             bm.count_in_use()
         } else {
             total_records
