@@ -4,7 +4,7 @@
 //! Reader implementations and async I/O orchestration for MFT ingestion.
 
 #[cfg(windows)]
-pub(super) use std::cell::RefCell;
+pub(super) use core::cell::RefCell;
 #[cfg(windows)]
 pub(super) use std::sync::Arc;
 #[cfg(windows)]

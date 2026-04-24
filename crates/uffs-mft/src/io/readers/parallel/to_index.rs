@@ -79,7 +79,7 @@ impl ParallelMftReader {
         F: Fn(u64, u64),
     {
         use std::collections::VecDeque;
-        use std::pin::Pin;
+        use core::pin::Pin;
         use std::time::Instant;
 
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};

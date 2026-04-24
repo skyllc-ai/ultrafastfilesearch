@@ -156,7 +156,7 @@ impl PipelinedMftReader {
         // Spawn reader thread
         let reader_handle = thread::spawn(move || {
             // Reconstruct HANDLE in reader thread
-            let handle = HANDLE(handle_raw as *mut std::ffi::c_void);
+            let handle = HANDLE(handle_raw as *mut core::ffi::c_void);
 
             // Create buffer pool
             let mut buffer_pool: Vec<AlignedBuffer> = Vec::new();
@@ -345,7 +345,7 @@ impl PipelinedMftReader {
         // Spawn reader thread
         let reader_handle = thread::spawn(move || {
             // Reconstruct HANDLE in reader thread
-            let handle = HANDLE(handle_raw as *mut std::ffi::c_void);
+            let handle = HANDLE(handle_raw as *mut core::ffi::c_void);
 
             // Create buffer pool
             let mut buffer_pool: Vec<AlignedBuffer> = Vec::new();

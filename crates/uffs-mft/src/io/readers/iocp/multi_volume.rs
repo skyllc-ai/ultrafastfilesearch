@@ -104,7 +104,7 @@ impl MultiVolumeIocpReader {
         reason = "multi-volume IOCP orchestration with per-volume state tracking"
     )]
     pub fn read_all_volumes(&mut self) -> Result<Vec<crate::index::MftIndex>> {
-        use std::pin::Pin;
+        use core::pin::Pin;
 
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError, HANDLE};
         use windows::Win32::Storage::FileSystem::ReadFile;
@@ -194,7 +194,7 @@ impl MultiVolumeIocpReader {
                     let read_result = unsafe {
                         ReadFile(
                             vol.handle,
-                            Some(std::slice::from_raw_parts_mut(buffer_ptr, op.size)),
+                            Some(core::slice::from_raw_parts_mut(buffer_ptr, op.size)),
                             None,
                             Some(overlapped_ptr),
                         )
@@ -343,7 +343,7 @@ impl MultiVolumeIocpReader {
                 let read_result = unsafe {
                     ReadFile(
                         vol.handle,
-                        Some(std::slice::from_raw_parts_mut(buffer_ptr, next_op.size)),
+                        Some(core::slice::from_raw_parts_mut(buffer_ptr, next_op.size)),
                         None,
                         Some(overlapped_ptr),
                     )

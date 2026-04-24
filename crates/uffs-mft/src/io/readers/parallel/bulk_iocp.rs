@@ -36,7 +36,7 @@ impl ParallelMftReader {
     where
         F: Fn(u64, u64),
     {
-        use std::pin::Pin;
+        use core::pin::Pin;
 
         use rayon::prelude::*;
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
@@ -147,7 +147,7 @@ impl ParallelMftReader {
                 // and `io_size` are computed to stay within that allocation, and the
                 // slice is only handed to Windows for the duration of the async read.
                 let target_slice = unsafe {
-                    std::slice::from_raw_parts_mut(
+                    core::slice::from_raw_parts_mut(
                         mft_buffer.as_mut_slice().as_mut_ptr().add(buffer_offset),
                         io_size,
                     )
@@ -235,7 +235,7 @@ impl ParallelMftReader {
 
             workers.push(std::thread::spawn(move || {
                 // Reconstruct HANDLE from raw isize
-                let iocp_handle = HANDLE(handle_raw.0 as *mut std::ffi::c_void);
+                let iocp_handle = HANDLE(handle_raw.0 as *mut core::ffi::c_void);
 
                 loop {
                     // Check if all completions are done

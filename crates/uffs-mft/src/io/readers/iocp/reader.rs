@@ -103,7 +103,7 @@ impl IocpMftReader {
         F: FnMut(u64, u64),
     {
         use std::collections::VecDeque;
-        use std::pin::Pin;
+        use core::pin::Pin;
 
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
         use windows::Win32::Storage::FileSystem::ReadFile;

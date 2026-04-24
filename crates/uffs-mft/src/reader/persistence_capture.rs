@@ -90,7 +90,7 @@ impl MftReader {
         let record_size_copy = record_size;
 
         let reader_handle = thread::spawn(move || -> Result<()> {
-            let handle = HANDLE(handle_ptr as *mut std::ffi::c_void);
+            let handle = HANDLE(handle_ptr as *mut core::ffi::c_void);
             let mut buffer = AlignedBuffer::new(chunk_size + SECTOR_SIZE);
 
             for chunk in chunks {
@@ -205,7 +205,7 @@ impl MftReader {
         options: &crate::raw_iocp::IocpCaptureOptions,
     ) -> Result<crate::raw_iocp::IocpCaptureHeader> {
         use std::collections::VecDeque;
-        use std::pin::Pin;
+        use core::pin::Pin;
 
         use windows::Win32::Foundation::{CloseHandle, ERROR_IO_PENDING, GetLastError, HANDLE};
         use windows::Win32::Storage::FileSystem::ReadFile;

@@ -68,7 +68,7 @@ impl ParallelMftReader {
         F: Fn(u64, u64),
     {
         use std::collections::VecDeque;
-        use std::pin::Pin;
+        use core::pin::Pin;
         use std::sync::Arc;
         use core::sync::atomic::{AtomicUsize, Ordering};
 
