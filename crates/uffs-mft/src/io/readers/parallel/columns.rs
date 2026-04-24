@@ -132,15 +132,15 @@ impl ParallelMftReader {
             let combined = chunk_data
                 .par_iter()
                 .fold(ChunkStats::default, |mut acc, (chunk, data)| {
-                    let record_size = record_size as usize;
+                    let record_size_bytes = record_size as usize;
                     let skip_begin = chunk.skip_begin as usize;
                     let effective_count = chunk.effective_record_count() as usize;
 
                     acc.results.reserve(effective_count);
 
                     for i in 0..effective_count {
-                        let offset = (skip_begin + i) * record_size;
-                        let Some(record_data) = data.get(offset..offset + record_size) else {
+                        let offset = (skip_begin + i) * record_size_bytes;
+                        let Some(record_data) = data.get(offset..offset + record_size_bytes) else {
                             break;
                         };
 
@@ -212,15 +212,15 @@ impl ParallelMftReader {
                         ..Default::default()
                     },
                     |mut acc, (chunk, data)| {
-                        let record_size = record_size as usize;
+                        let record_size_bytes = record_size as usize;
                         let skip_begin = chunk.skip_begin as usize;
                         let effective_count = chunk.effective_record_count() as usize;
 
                         acc.columns.reserve(effective_count);
 
                         for i in 0..effective_count {
-                            let offset = (skip_begin + i) * record_size;
-                            let Some(record_data) = data.get(offset..offset + record_size) else {
+                            let offset = (skip_begin + i) * record_size_bytes;
+                            let Some(record_data) = data.get(offset..offset + record_size_bytes) else {
                                 break;
                             };
 

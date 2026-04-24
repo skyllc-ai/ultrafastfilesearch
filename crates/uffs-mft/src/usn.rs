@@ -331,7 +331,7 @@ mod windows_impl {
             )
         };
         match handle {
-            Ok(handle) if handle != INVALID_HANDLE_VALUE => Ok(handle),
+            Ok(raw) if raw != INVALID_HANDLE_VALUE => Ok(raw),
             Ok(_) => Err(std::io::Error::last_os_error()),
             Err(err) => Err(std::io::Error::from_raw_os_error(err.code().0)),
         }

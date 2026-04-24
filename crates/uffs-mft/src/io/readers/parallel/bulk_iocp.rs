@@ -307,11 +307,11 @@ impl ParallelMftReader {
             )));
         }
 
-        let bytes_read_total = bytes_read_total.load(Ordering::Acquire);
+        let total_bytes_read = bytes_read_total.load(Ordering::Acquire);
 
         info!(
             read_ms = read_start.elapsed().as_millis(),
-            bytes_mb = bytes_read_total / (1024 * 1024),
+            bytes_mb = total_bytes_read / (1024 * 1024),
             workers = num_workers,
             "✅ IOCP bulk read complete (multi-threaded)"
         );

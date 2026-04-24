@@ -287,8 +287,7 @@ impl MultiVolumeIocpReader {
             };
 
             // Take the completed operation and unpin it to get ownership
-            let completed_pinned = vol_slots.get_mut(slot_idx).and_then(Option::take);
-            let Some(completed_pinned) = completed_pinned else {
+            let Some(completed_pinned) = vol_slots.get_mut(slot_idx).and_then(Option::take) else {
                 return Err(MftError::InvalidData(
                     "completed IOCP operation missing from in-flight slot".to_owned(),
                 ));

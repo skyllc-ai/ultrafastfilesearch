@@ -641,17 +641,17 @@ mod tests {
         };
 
         // Apply builder methods
-        let reader = reader
+        let configured = reader
             .with_concurrency(16)
             .with_io_size(2 * 1024 * 1024)
             .with_parallel_parse(true)
             .with_parse_workers(Some(4));
 
         // Verify values are set
-        assert_eq!(reader.concurrency, Some(16));
-        assert_eq!(reader.io_size, Some(2 * 1024 * 1024));
-        assert_eq!(reader.parallel_parse, Some(true));
-        assert_eq!(reader.parse_workers, Some(4));
+        assert_eq!(configured.concurrency, Some(16));
+        assert_eq!(configured.io_size, Some(2 * 1024 * 1024));
+        assert_eq!(configured.parallel_parse, Some(true));
+        assert_eq!(configured.parse_workers, Some(4));
     }
 
     /// Test that `MftReadMode::Auto` is the default

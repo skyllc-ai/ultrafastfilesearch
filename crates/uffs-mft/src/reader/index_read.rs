@@ -393,7 +393,7 @@ impl MftReader {
         );
         info!(mode = %effective_mode, "🚀 Using read mode (lean index)");
 
-        let handle = handle.raw_handle();
+        let raw_handle = handle.raw_handle();
         let total_bytes = total_records * u64::from(record_size);
 
         // Read using the selected mode (same as read_mft_internal)
@@ -406,7 +406,7 @@ impl MftReader {
                     let cb_ref = cb;
                     let start = start_time;
                     parallel_reader.read_all_parallel_with_progress(
-                        handle,
+                        raw_handle,
                         true,
                         Some(move |bytes_read: u64, total_bytes_expected: u64| {
                             let records_approx = if total_bytes_expected > 0 {
@@ -424,7 +424,7 @@ impl MftReader {
                     )?
                 } else {
                     parallel_reader
-                        .read_all_parallel_with_progress::<fn(u64, u64)>(handle, true, None)?
+                        .read_all_parallel_with_progress::<fn(u64, u64)>(raw_handle, true, None)?
                 }
             }
             MftReadMode::Pipelined => {
@@ -435,7 +435,7 @@ impl MftReader {
                     let cb_ref = cb;
                     let start = start_time;
                     pipelined_reader.read_all_pipelined(
-                        handle,
+                        raw_handle,
                         true,
                         Some(move |bytes_read: u64, total_bytes_expected: u64| {
                             let records_approx = if total_bytes_expected > 0 {
@@ -452,7 +452,7 @@ impl MftReader {
                         }),
                     )?
                 } else {
-                    pipelined_reader.read_all_pipelined::<fn(u64, u64)>(handle, true, None)?
+                    pipelined_reader.read_all_pipelined::<fn(u64, u64)>(raw_handle, true, None)?
                 }
             }
             MftReadMode::PipelinedParallel => {
@@ -463,7 +463,7 @@ impl MftReader {
                     let cb_ref = cb;
                     let start = start_time;
                     pipelined_reader.read_all_pipelined_parallel(
-                        handle,
+                        raw_handle,
                         true,
                         Some(move |bytes_read: u64, total_bytes_expected: u64| {
                             let records_approx = if total_bytes_expected > 0 {
@@ -481,12 +481,12 @@ impl MftReader {
                     )?
                 } else {
                     pipelined_reader
-                        .read_all_pipelined_parallel::<fn(u64, u64)>(handle, true, None)?
+                        .read_all_pipelined_parallel::<fn(u64, u64)>(raw_handle, true, None)?
                 }
             }
             MftReadMode::IocpParallel => {
                 // IOCP parallel mode: Multiple overlapped reads in flight
-                // IOCP requires FILE_FLAG_OVERLAPPED, so we open a separate handle
+                // IOCP requires FILE_FLAG_OVERLAPPED, so we open a separate raw_handle
                 let overlapped_handle = self.require_handle().open_overlapped_handle()?;
                 let iocp_reader = crate::io::IocpMftReader::new(extent_map, bitmap, drive_type);
 
@@ -514,9 +514,9 @@ impl MftReader {
                     iocp_reader.read_all_iocp::<fn(u64, u64)>(overlapped_handle, true, None)
                 };
 
-                // Close the overlapped handle
-                // SAFETY: overlapped_handle is a valid handle opened by open_overlapped_handle
-                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
+                // Close the overlapped raw_handle
+                // SAFETY: overlapped_handle is a valid raw_handle opened by open_overlapped_handle
+                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped raw_handle")]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
                 };
@@ -532,7 +532,7 @@ impl MftReader {
                     let cb_ref = cb;
                     let start = start_time;
                     parallel_reader.read_all_bulk(
-                        handle,
+                        raw_handle,
                         true,
                         Some(move |bytes_read: u64, total_bytes_expected: u64| {
                             let records_approx = if total_bytes_expected > 0 {
@@ -549,7 +549,7 @@ impl MftReader {
                         }),
                     )?
                 } else {
-                    parallel_reader.read_all_bulk::<fn(u64, u64)>(handle, true, None)?
+                    parallel_reader.read_all_bulk::<fn(u64, u64)>(raw_handle, true, None)?
                 }
             }
             MftReadMode::BulkIocp => {
@@ -586,10 +586,10 @@ impl MftReader {
                     )
                 };
 
-                // Close the overlapped handle
+                // Close the overlapped raw_handle
                 // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
                 // no longer used after the read completes, and is closed exactly once.
-                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
+                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped raw_handle")]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
                 };
@@ -630,10 +630,10 @@ impl MftReader {
                     )
                 };
 
-                // Close the overlapped handle
+                // Close the overlapped raw_handle
                 // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
                 // no longer used after the read completes, and is closed exactly once.
-                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
+                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped raw_handle")]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
                 };
@@ -657,10 +657,10 @@ impl MftReader {
                     None,
                 );
 
-                // Close the overlapped handle
+                // Close the overlapped raw_handle
                 // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
                 // no longer used after the read completes, and is closed exactly once.
-                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
+                #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped raw_handle")]
                 {
                     unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
                 };
@@ -758,7 +758,7 @@ impl MftReader {
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
                 parallel_reader
-                    .read_all_parallel_with_progress::<fn(u64, u64)>(handle, true, None)?
+                    .read_all_parallel_with_progress::<fn(u64, u64)>(raw_handle, true, None)?
             }
         };
 

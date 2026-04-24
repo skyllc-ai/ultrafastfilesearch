@@ -182,14 +182,14 @@ impl MultiDriveMftReader {
             return Err(MftError::InvalidInput("No drives specified".into()));
         }
 
-        let callback = callback.map(Arc::new);
+        let shared_callback = callback.map(Arc::new);
         let budget = drive_reader_budget(self.drives.len());
         let mut join_set = JoinSet::new();
         let mut pending_drives = self.drives.iter().copied();
 
         for _ in 0..budget {
             if let Some(drive) = pending_drives.next() {
-                let cb = callback.clone();
+                let cb = shared_callback.clone();
                 join_set.spawn(async move { Self::read_single_drive_index(drive, cb).await });
             }
         }
@@ -210,7 +210,7 @@ impl MultiDriveMftReader {
             }
 
             if let Some(drive) = pending_drives.next() {
-                let cb = callback.clone();
+                let cb = shared_callback.clone();
                 join_set.spawn(async move { Self::read_single_drive_index(drive, cb).await });
             }
         }

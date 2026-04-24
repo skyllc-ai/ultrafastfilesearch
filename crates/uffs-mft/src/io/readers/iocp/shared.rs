@@ -40,13 +40,15 @@ impl IoCompletionPort {
         // handle yet; the call takes no borrowed pointers.
         let handle = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, None, 0, concurrency) };
 
-        match handle {
-            Ok(handle) => Ok(Self { handle }),
-            Err(err) => Err(MftError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to create IOCP: {err}"),
-            ))),
-        }
+        handle.map_or_else(
+            |err| {
+                Err(MftError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to create IOCP: {err}"),
+                )))
+            },
+            |iocp_handle| Ok(Self { handle: iocp_handle }),
+        )
     }
 
     /// Associates a file handle with this IOCP.

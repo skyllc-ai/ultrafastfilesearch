@@ -88,6 +88,13 @@ impl ParallelMftReader {
 
         // Use provided values or adaptive defaults
         // For HDD, use extent-aware concurrency (fragmentation affects optimal value)
+        #[expect(
+            clippy::shadow_reuse,
+            reason = "idiomatic Option::unwrap_or_else override-resolution: the \
+                      post-unwrap usize logically replaces the Option parameter \
+                      for the remainder of this function; renaming would cascade \
+                      through many downstream uses without improving semantics."
+        )]
         let concurrency = concurrency.unwrap_or_else(|| {
             if matches!(self.drive_type, crate::platform::DriveType::Hdd) {
                 crate::platform::DriveType::optimal_concurrency_for_hdd(
@@ -97,11 +104,19 @@ impl ParallelMftReader {
                 self.drive_type.optimal_concurrency()
             }
         });
+        #[expect(
+            clippy::shadow_reuse,
+            reason = "same rationale as `concurrency` — Option default resolution."
+        )]
         let io_chunk_size = io_chunk_size.unwrap_or_else(|| self.drive_type.optimal_io_size());
-        let num_workers = num_workers
-            .unwrap_or_else(|| {
-                std::thread::available_parallelism().map_or(4, core::num::NonZero::get)
-            });
+        #[expect(
+            clippy::shadow_reuse,
+            reason = "same rationale as `concurrency` — Option default resolution \
+                      using `available_parallelism` with a fixed fallback of 4."
+        )]
+        let num_workers = num_workers.unwrap_or_else(|| {
+            std::thread::available_parallelism().map_or(4, core::num::NonZero::get)
+        });
 
         info!(
             total_records,
@@ -234,10 +249,10 @@ impl ParallelMftReader {
         let records_per_worker = (estimated_records / num_workers) + 1;
 
         for worker_id in 0..num_workers {
-            let rx = rx.clone();
-            let bitmap = bitmap_arc.clone();
-            let records_parsed = Arc::clone(&records_parsed);
-            let record_size = record_size;
+            let worker_rx = rx.clone();
+            let worker_bitmap = bitmap_arc.clone();
+            let worker_records_parsed = Arc::clone(&records_parsed);
+            let worker_record_size = record_size;
 
             let handle = std::thread::spawn(move || {
                 let mut results: Vec<ParseResult> = Vec::with_capacity(records_per_worker);
@@ -245,19 +260,19 @@ impl ParallelMftReader {
 
                 // Process buffers until channel closes
                 // Use `mut buffer` to apply fixup in-place (zero-copy optimization)
-                while let Ok(Some((mut buffer, start_frs, record_count))) = rx.recv() {
+                while let Ok(Some((mut buffer, start_frs, record_count))) = worker_rx.recv() {
                     for i in 0..record_count {
                         let frs = start_frs + i as u64;
 
                         // Check bitmap
-                        if let Some(bm) = &bitmap {
+                        if let Some(bm) = &worker_bitmap {
                             if !bm.is_record_in_use(frs) {
                                 continue;
                             }
                         }
 
-                        let offset = i * record_size;
-                        let end = offset + record_size;
+                        let offset = i * worker_record_size;
+                        let end = offset + worker_record_size;
 
                         // Apply fixup in-place (zero-copy - no per-record allocation!)
                         let Some(record_slice) = buffer.get_mut(offset..end) else {
@@ -276,7 +291,7 @@ impl ParallelMftReader {
                     }
                 }
 
-                records_parsed.fetch_add(local_parsed, Ordering::Relaxed);
+                worker_records_parsed.fetch_add(local_parsed, Ordering::Relaxed);
 
                 tracing::debug!(
                     worker_id,
@@ -483,7 +498,7 @@ impl ParallelMftReader {
                     new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
                         (offset >> 32_u32) as u32;
 
-                    let overlapped_ptr = &raw mut new_op_mut.overlapped;
+                    let new_overlapped_ptr = &raw mut new_op_mut.overlapped;
                     let read_size = new_op_mut.op.size;
                     let Some(read_slice) =
                         new_op_mut.buffer.as_mut_slice().get_mut(..read_size)
@@ -497,17 +512,17 @@ impl ParallelMftReader {
                     };
                     // SAFETY: `overlapped_handle` is a live overlapped-capable
                     // handle, the buffer slice spans `read_size` writable bytes in
-                    // the pinned op, and `overlapped_ptr` points into that op.
-                    let result = unsafe {
+                    // the pinned op, and `new_overlapped_ptr` points into that op.
+                    let submit_result = unsafe {
                         ReadFile(
                             overlapped_handle,
                             Some(read_slice),
                             None,
-                            Some(overlapped_ptr),
+                            Some(new_overlapped_ptr),
                         )
                     };
 
-                    match result {
+                    match submit_result {
                         Ok(_) => {}
                         Err(_) => {
                             // SAFETY: `GetLastError` reads the calling thread's

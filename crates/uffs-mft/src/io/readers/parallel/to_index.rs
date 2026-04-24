@@ -107,6 +107,14 @@ impl ParallelMftReader {
         // Use provided values or adaptive defaults based on drive type
         // M1: Adaptive concurrency and I/O size based on drive type
         // For HDD, use extent-aware concurrency (fragmentation affects optimal value)
+        #[expect(
+            clippy::shadow_reuse,
+            reason = "idiomatic Option::unwrap_or_else override-resolution: the \
+                      post-unwrap usize logically replaces the Option parameter \
+                      for the remainder of this function; renaming to \
+                      `effective_concurrency` would cascade through 9 downstream \
+                      uses without improving semantics."
+        )]
         let concurrency = concurrency.unwrap_or_else(|| {
             if matches!(self.drive_type, crate::platform::DriveType::Hdd) {
                 crate::platform::DriveType::optimal_concurrency_for_hdd(
@@ -116,6 +124,11 @@ impl ParallelMftReader {
                 self.drive_type.optimal_concurrency()
             }
         });
+        #[expect(
+            clippy::shadow_reuse,
+            reason = "same rationale as `concurrency` above — Option default \
+                      resolution for an optional config parameter."
+        )]
         let io_chunk_size = io_chunk_size.unwrap_or_else(|| self.drive_type.optimal_io_size());
 
         info!(
@@ -443,10 +456,10 @@ impl ParallelMftReader {
                         /// `FILE_RECORD_SEGMENT_HEADER`.flags.
                         const IN_USE_FLAG: u16 = 0x0001;
 
-                        let flag_bytes = record_slice
+                        let Some(flag_bytes) = record_slice
                             .get(FLAGS_OFFSET..FLAGS_OFFSET + 2)
-                            .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok());
-                        let Some(flag_bytes) = flag_bytes else {
+                            .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok())
+                        else {
                             continue;
                         };
                         let flags = u16::from_le_bytes(flag_bytes);
@@ -507,7 +520,7 @@ impl ParallelMftReader {
                     new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
                         (offset >> 32_u32) as u32;
 
-                    let overlapped_ptr = &raw mut new_op_mut.overlapped;
+                    let new_overlapped_ptr = &raw mut new_op_mut.overlapped;
                     let read_size = new_op_mut.op.size;
                     let Some(read_slice) =
                         new_op_mut.buffer.as_mut_slice().get_mut(..read_size)
@@ -520,17 +533,17 @@ impl ParallelMftReader {
                     };
                     // SAFETY: `overlapped_handle` is a live overlapped-capable
                     // handle, the buffer slice spans `read_size` writable bytes in
-                    // the pinned op, and `overlapped_ptr` points into that op.
-                    let result = unsafe {
+                    // the pinned op, and `new_overlapped_ptr` points into that op.
+                    let submit_result = unsafe {
                         ReadFile(
                             overlapped_handle,
                             Some(read_slice),
                             None,
-                            Some(overlapped_ptr),
+                            Some(new_overlapped_ptr),
                         )
                     };
 
-                    match result {
+                    match submit_result {
                         Ok(_) => {}
                         Err(_) => {
                             // SAFETY: `GetLastError` reads the calling thread's

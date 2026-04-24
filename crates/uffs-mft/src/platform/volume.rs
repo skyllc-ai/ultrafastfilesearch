@@ -48,16 +48,16 @@ pub(crate) fn classify_wait_error_code(
     error_code: u32,
     detail: impl Into<String>,
 ) -> MftError {
-    let detail = detail.into();
+    let detail_str: String = detail.into();
 
     match error_code {
         ERROR_OPERATION_ABORTED_CODE => MftError::Cancelled {
             operation,
-            reason: format!("{detail} (Win32 error {error_code})"),
+            reason: format!("{detail_str} (Win32 error {error_code})"),
         },
         _ => MftError::WaitFailed {
             operation,
-            reason: format!("{detail} (Win32 error {error_code})"),
+            reason: format!("{detail_str} (Win32 error {error_code})"),
         },
     }
 }
@@ -70,12 +70,12 @@ pub(crate) fn wait_deadline_exceeded(
     waited: Duration,
     detail: impl Into<String>,
 ) -> MftError {
-    let detail = detail.into();
+    let detail_str: String = detail.into();
 
     MftError::Timeout {
         operation,
         reason: format!(
-            "{detail} after {} ms without observing a completion",
+            "{detail_str} after {} ms without observing a completion",
             waited.as_millis()
         ),
     }
@@ -179,11 +179,11 @@ impl VolumeHandle {
     /// descriptor for the opened handle.
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
     pub fn open(volume: char) -> Result<Self> {
-        let volume = volume.to_ascii_uppercase();
+        let normalized_volume = volume.to_ascii_uppercase();
 
-        if !volume.is_ascii_alphabetic() {
+        if !normalized_volume.is_ascii_alphabetic() {
             return Err(MftError::VolumeOpen {
-                volume,
+                volume: normalized_volume,
                 source: std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "Invalid volume letter",
@@ -191,7 +191,7 @@ impl VolumeHandle {
             });
         }
 
-        let volume_path: Vec<u16> = format!("\\\\.\\{volume}:")
+        let volume_path: Vec<u16> = format!("\\\\.\\{normalized_volume}:")
             .encode_utf16()
             .chain(core::iter::once(0))
             .collect();
@@ -225,17 +225,17 @@ impl VolumeHandle {
                     return Err(MftError::InsufficientPrivileges);
                 }
                 return Err(MftError::VolumeOpen {
-                    volume,
+                    volume: normalized_volume,
                     source: std::io::Error::from_raw_os_error(err.code().0),
                 });
             }
         };
 
-        let volume_data = Self::get_ntfs_volume_data(handle, volume)?;
+        let volume_data = Self::get_ntfs_volume_data(handle, normalized_volume)?;
 
         Ok(Self {
             handle,
-            volume,
+            volume: normalized_volume,
             volume_data,
         })
     }
@@ -353,13 +353,10 @@ impl VolumeHandle {
             )
         };
 
-        match handle {
-            Ok(handle) => Ok(handle),
-            Err(err) => Err(MftError::VolumeOpen {
-                volume,
-                source: std::io::Error::from_raw_os_error(err.code().0),
-            }),
-        }
+        handle.map_err(|err| MftError::VolumeOpen {
+            volume,
+            source: std::io::Error::from_raw_os_error(err.code().0),
+        })
     }
 
     /// Opens a read handle to `X:\$MFT` for direct file-based MFT reading.
@@ -401,13 +398,10 @@ impl VolumeHandle {
             )
         };
 
-        match handle {
-            Ok(handle) => Ok(handle),
-            Err(err) => Err(MftError::VolumeOpen {
-                volume,
-                source: std::io::Error::from_raw_os_error(err.code().0),
-            }),
-        }
+        handle.map_err(|err| MftError::VolumeOpen {
+            volume,
+            source: std::io::Error::from_raw_os_error(err.code().0),
+        })
     }
 
     /// Opens an unbuffered volume handle for direct I/O.
@@ -447,13 +441,10 @@ impl VolumeHandle {
             )
         };
 
-        match handle {
-            Ok(handle) => Ok(handle),
-            Err(err) => Err(MftError::VolumeOpen {
-                volume,
-                source: std::io::Error::from_raw_os_error(err.code().0),
-            }),
-        }
+        handle.map_err(|err| MftError::VolumeOpen {
+            volume,
+            source: std::io::Error::from_raw_os_error(err.code().0),
+        })
     }
 
     /// Returns the byte offset of the MFT on the volume.
@@ -553,7 +544,7 @@ impl VolumeHandle {
         // SAFETY: `mft_path` is UTF-16 and NUL-terminated for the duration of
         // the call, optional pointers are `None`, and any returned handle is
         // wrapped in `HandleGuard` before use.
-        let mft_handle = unsafe {
+        let Ok(mft_handle) = (unsafe {
             CreateFileW(
                 PCWSTR::from_raw(mft_path.as_ptr()),
                 0,
@@ -563,18 +554,13 @@ impl VolumeHandle {
                 FILE_FLAGS_AND_ATTRIBUTES(0),
                 None,
             )
-        };
-
-        let mft_handle = match mft_handle {
-            Ok(handle) => handle,
-            Err(_err) => {
-                return Ok(vec![MftExtent {
-                    vcn: 0,
-                    cluster_count: self.volume_data.mft_valid_data_length
-                        / u64::from(self.volume_data.bytes_per_cluster),
-                    lcn: self.volume_data.mft_start_lcn as i64,
-                }]);
-            }
+        }) else {
+            return Ok(vec![MftExtent {
+                vcn: 0,
+                cluster_count: self.volume_data.mft_valid_data_length
+                    / u64::from(self.volume_data.bytes_per_cluster),
+                lcn: self.volume_data.mft_start_lcn as i64,
+            }]);
         };
 
         let _guard = HandleGuard(mft_handle);
@@ -624,7 +610,7 @@ impl VolumeHandle {
         // SAFETY: `bitmap_path` is UTF-16 and NUL-terminated for the duration of
         // the call, optional pointers are `None`, and any returned handle is
         // wrapped in `HandleGuard` before use.
-        let bitmap_handle = unsafe {
+        let bitmap_handle = match unsafe {
             CreateFileW(
                 PCWSTR::from_raw(bitmap_path.as_ptr()),
                 FILE_READ_ATTRIBUTES.0 | SYNCHRONIZE.0,
@@ -634,9 +620,7 @@ impl VolumeHandle {
                 FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_NO_BUFFERING,
                 None,
             )
-        };
-
-        let bitmap_handle = match bitmap_handle {
+        } {
             Ok(handle) => {
                 if verbose {
                     tracing::info!(volume = %self.volume, handle = ?handle, "CreateFileW for MFT bitmap succeeded");

@@ -397,9 +397,8 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
         )
     };
 
-    let handle = match handle {
-        Ok(handle) => handle,
-        Err(_) => return DriveType::Unknown,
+    let Ok(handle) = handle else {
+        return DriveType::Unknown;
     };
 
     let drive_classification = {
@@ -561,9 +560,8 @@ fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
         )
     };
 
-    let handle = match handle {
-        Ok(handle) => handle,
-        Err(_) => return DriveType::Unknown,
+    let Ok(handle) = handle else {
+        return DriveType::Unknown;
     };
 
     let _handle_guard = HandleGuard(handle);

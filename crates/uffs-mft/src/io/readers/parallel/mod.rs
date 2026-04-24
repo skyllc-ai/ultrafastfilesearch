@@ -410,7 +410,7 @@ impl ParallelMftReader {
             let combined = chunk_data
                 .par_iter_mut()
                 .fold(ChunkStats::default, |mut acc, (chunk, data)| {
-                    let record_size = record_size as usize;
+                    let record_size_bytes = record_size as usize;
                     let skip_begin = chunk.skip_begin as usize;
                     let effective_count = chunk.effective_record_count() as usize;
 
@@ -430,8 +430,8 @@ impl ParallelMftReader {
                     acc.results.reserve(effective_count);
 
                     for i in 0..effective_count {
-                        let offset = (skip_begin + i) * record_size;
-                        let Some(record_slice) = data.get_mut(offset..offset + record_size)
+                        let offset = (skip_begin + i) * record_size_bytes;
+                        let Some(record_slice) = data.get_mut(offset..offset + record_size_bytes)
                         else {
                             break;
                         };
@@ -508,15 +508,15 @@ impl ParallelMftReader {
             let combined = chunk_data
                 .par_iter_mut()
                 .fold(LegacyStats::default, |mut acc, (chunk, data)| {
-                    let record_size = record_size as usize;
+                    let record_size_bytes = record_size as usize;
                     let skip_begin = chunk.skip_begin as usize;
                     let effective_count = chunk.effective_record_count() as usize;
 
                     acc.records.reserve(effective_count);
 
                     for i in 0..effective_count {
-                        let offset = (skip_begin + i) * record_size;
-                        let Some(record_slice) = data.get_mut(offset..offset + record_size)
+                        let offset = (skip_begin + i) * record_size_bytes;
+                        let Some(record_slice) = data.get_mut(offset..offset + record_size_bytes)
                         else {
                             break;
                         };
