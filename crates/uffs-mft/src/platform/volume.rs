@@ -257,7 +257,7 @@ impl VolumeHandle {
                 0,
                 Some(core::ptr::from_mut(&mut buffer).cast()),
                 ntfs_volume_data_buffer_size,
-                Some(&mut bytes_returned),
+                Some(&raw mut bytes_returned),
                 None,
             )
         };
@@ -633,11 +633,11 @@ impl VolumeHandle {
         // SAFETY: `bitmap_handle` is a live file handle and `file_size` points
         // to writable stack storage for the duration of the call.
         unsafe {
-            if let Err(e) = GetFileSizeEx(bitmap_handle, &mut file_size) {
+            if let Err(err) = GetFileSizeEx(bitmap_handle, &raw mut file_size) {
                 if verbose {
                     tracing::warn!(
                         volume = %self.volume,
-                        error = ?e,
+                        error = ?err,
                         "GetFileSizeEx for MFT bitmap failed; falling back to all-valid bitmap"
                     );
                 }
@@ -738,10 +738,10 @@ impl VolumeHandle {
             // SAFETY: `self.handle` is a live volume handle and `new_position`
             // is valid writable storage for the duration of the seek call.
             unsafe {
-                if let Err(e) = SetFilePointerEx(
+                if let Err(err) = SetFilePointerEx(
                     self.handle,
                     byte_offset,
-                    Some(&mut new_position),
+                    Some(&raw mut new_position),
                     FILE_BEGIN,
                 ) {
                     if verbose {
@@ -749,7 +749,7 @@ impl VolumeHandle {
                             volume = %self.volume,
                             extent_index = i,
                             byte_offset,
-                            error = ?e,
+                            error = ?err,
                             "SetFilePointerEx for MFT bitmap extent failed; falling back to all-valid bitmap"
                         );
                     }
@@ -764,10 +764,10 @@ impl VolumeHandle {
             // a contiguous writable region of `extent_bytes`, and `bytes_read`
             // is a valid out-parameter for the duration of the read.
             unsafe {
-                if let Err(e) = ReadFile(
+                if let Err(err) = ReadFile(
                     self.handle,
                     Some(&mut buffer[buffer_offset..buffer_offset + extent_bytes]),
-                    Some(&mut bytes_read),
+                    Some(&raw mut bytes_read),
                     None,
                 ) {
                     if verbose {
@@ -775,7 +775,7 @@ impl VolumeHandle {
                             volume = %self.volume,
                             extent_index = i,
                             extent_bytes,
-                            error = ?e,
+                            error = ?err,
                             "ReadFile for MFT bitmap extent failed; falling back to all-valid bitmap"
                         );
                     }
@@ -914,7 +914,7 @@ fn enable_backup_privilege() {
     // SAFETY: `GetCurrentProcess()` returns the current pseudo-handle.
     // `OpenProcessToken` writes to `token`, which is valid stack storage.
     let mut token = HANDLE::default();
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &mut token) }
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &raw mut token) }
         .is_err()
     {
         tracing::debug!("Could not open process token for privilege adjustment");
@@ -924,7 +924,7 @@ fn enable_backup_privilege() {
     let mut luid = LUID::default();
     // SAFETY: `SE_BACKUP_NAME` is a static wide string and `luid` is valid
     // writable storage.
-    if unsafe { LookupPrivilegeValueW(None, SE_BACKUP_NAME, &mut luid) }.is_err() {
+    if unsafe { LookupPrivilegeValueW(None, SE_BACKUP_NAME, &raw mut luid) }.is_err() {
         // SAFETY: `token` was opened above and is closed exactly once.
         unsafe { CloseHandle(token) }.ok();
         tracing::debug!("Could not look up SeBackupPrivilege LUID");
@@ -942,7 +942,7 @@ fn enable_backup_privilege() {
     // SAFETY: `token` is a valid process token opened with
     // `TOKEN_ADJUST_PRIVILEGES`, `tp` is a valid `TOKEN_PRIVILEGES` struct,
     // and no previous-state buffer is requested.
-    let result = unsafe { AdjustTokenPrivileges(token, false, Some(&tp), 0, None, None) };
+    let result = unsafe { AdjustTokenPrivileges(token, false, Some(&raw const tp), 0, None, None) };
 
     // SAFETY: `token` was opened above and is closed exactly once.
     unsafe { CloseHandle(token) }.ok();

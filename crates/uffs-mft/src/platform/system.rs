@@ -36,7 +36,9 @@ pub fn is_elevated() -> bool {
     let mut token_handle = HANDLE::default();
     // SAFETY: `GetCurrentProcess()` returns the current pseudo-handle, and
     // `token_handle` points to writable storage for the returned token handle.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle) }.is_err() {
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token_handle) }
+        .is_err()
+    {
         return false;
     }
 
@@ -53,7 +55,7 @@ pub fn is_elevated() -> bool {
             TokenElevation,
             Some(core::ptr::from_mut(&mut elevation).cast()),
             size_of::<TOKEN_ELEVATION>() as u32,
-            &mut return_length,
+            &raw mut return_length,
         )
     };
 
@@ -218,7 +220,7 @@ pub fn is_volume_read_only(drive_letter: char) -> bool {
             None,
             None,
             None,
-            Some(&mut fs_flags),
+            Some(&raw mut fs_flags),
             None,
         )
     };
@@ -399,11 +401,11 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
                 DeviceIoControl(
                     handle,
                     IOCTL_STORAGE_QUERY_PROPERTY,
-                    Some(&query as *const _ as *const std::ffi::c_void),
+                    Some((&raw const query).cast::<std::ffi::c_void>()),
                     size_of::<StoragePropertyQuery>() as u32,
-                    Some(buffer.as_mut_ptr() as *mut std::ffi::c_void),
+                    Some(buffer.as_mut_ptr().cast::<std::ffi::c_void>()),
                     buffer.len() as u32,
-                    Some(&mut bytes_returned),
+                    Some(&raw mut bytes_returned),
                     None,
                 )
             };
@@ -447,11 +449,11 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
             DeviceIoControl(
                 handle,
                 IOCTL_STORAGE_QUERY_PROPERTY,
-                Some(&query as *const _ as *const std::ffi::c_void),
+                Some((&raw const query).cast::<std::ffi::c_void>()),
                 size_of::<StoragePropertyQuery>() as u32,
-                Some(&mut descriptor as *mut _ as *mut std::ffi::c_void),
+                Some((&raw mut descriptor).cast::<std::ffi::c_void>()),
                 size_of::<DeviceSeekPenaltyDescriptor>() as u32,
-                Some(&mut bytes_returned),
+                Some(&raw mut bytes_returned),
                 None,
             )
         };
@@ -555,11 +557,11 @@ fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
         DeviceIoControl(
             handle,
             IOCTL_STORAGE_QUERY_PROPERTY,
-            Some(&query as *const _ as *const std::ffi::c_void),
+            Some((&raw const query).cast::<std::ffi::c_void>()),
             size_of::<StoragePropertyQuery>() as u32,
-            Some(&mut descriptor as *mut _ as *mut std::ffi::c_void),
+            Some((&raw mut descriptor).cast::<std::ffi::c_void>()),
             size_of::<DeviceTrimDescriptor>() as u32,
-            Some(&mut bytes_returned),
+            Some(&raw mut bytes_returned),
             None,
         )
     };
