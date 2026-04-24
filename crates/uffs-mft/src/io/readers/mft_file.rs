@@ -86,13 +86,21 @@ pub(crate) fn read_mft_from_file_handle(
             buffer = AlignedBuffer::new(read_size);
         }
 
+        let Some(read_slice) = buffer.as_mut_slice().get_mut(..read_size) else {
+            // Unreachable: AlignedBuffer was sized to ≥ read_size above.
+            return Err(crate::error::MftError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "MFT read buffer shorter than requested read size",
+            )));
+        };
+
         let mut bytes_read = 0_u32;
         // SAFETY: `mft_handle` is live, the buffer slice spans `read_size`
         // writable bytes, and `bytes_read` is a valid out-parameter.
         let read_result = unsafe {
             ReadFile(
                 mft_handle,
-                Some(&mut buffer.as_mut_slice()[..read_size]),
+                Some(read_slice),
                 Some(&raw mut bytes_read),
                 None,
             )
@@ -113,9 +121,13 @@ pub(crate) fn read_mft_from_file_handle(
         let actual_bytes = bytes_read as usize;
         let actual_records = actual_bytes / record_size_usize;
 
+        let parse_slice = buffer.as_mut_slice();
         for i in 0..actual_records {
             let offset = i * record_size_usize;
-            let record_slice = &mut buffer.as_mut_slice()[offset..offset + record_size_usize];
+            let Some(record_slice) = parse_slice.get_mut(offset..offset + record_size_usize) else {
+                // Unreachable: bounded by `actual_records = bytes_read / record_size`.
+                break;
+            };
             if apply_fixup(record_slice) {
                 merger.add_result(parse_record_full(record_slice, frs + i as u64));
             }

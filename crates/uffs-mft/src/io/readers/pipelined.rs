@@ -216,6 +216,11 @@ impl PipelinedMftReader {
 
             for i in 0..effective_count {
                 let offset = (skip_begin + i) * record_size_usize;
+                let Some(record_slice) = buffer_slice.get_mut(offset..offset + record_size_usize)
+                else {
+                    // Short-read: buffer contained fewer bytes than expected.
+                    break;
+                };
                 if offset + record_size_usize > bytes_read {
                     break;
                 }
@@ -223,7 +228,6 @@ impl PipelinedMftReader {
                 let frs = chunk.start_frs + skip_begin as u64 + i as u64;
 
                 // Apply fixup in-place on the shared buffer (zero-copy)
-                let record_slice = &mut buffer_slice[offset..offset + record_size_usize];
                 if !apply_fixup(record_slice) {
                     continue;
                 }
@@ -484,12 +488,19 @@ fn read_chunk_into_buffer_static(
 
     // Read data
     let mut bytes_read: u32 = 0;
+    let Some(read_slice) = buffer.as_mut_slice().get_mut(..aligned_size) else {
+        // Unreachable: buffer was allocated to ≥ aligned_size by the caller.
+        return Err(MftError::Io(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "aligned buffer shorter than aligned_size",
+        )));
+    };
     // SAFETY: `handle` is live, the aligned buffer slice spans `aligned_size`
     // writable bytes, and `bytes_read` is a valid out-parameter.
     let read_result = unsafe {
         ReadFile(
             handle,
-            Some(&mut buffer.as_mut_slice()[..aligned_size]),
+            Some(read_slice),
             Some(&raw mut bytes_read),
             None,
         )
