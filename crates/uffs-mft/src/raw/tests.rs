@@ -93,7 +93,7 @@ fn test_save_load_compressed() -> TestResult {
 
     let record_size = 1024_usize;
     let record_count = 100_usize;
-    let mut data = vec![0xAB__u8; record_count * record_size];
+    let mut data = vec![0xAB_u8; record_count * record_size];
     for idx in 0..record_count {
         if let Some(byte) = data.get_mut(idx * record_size) {
             *byte = u8::try_from(idx % 256).unwrap_or(0);
