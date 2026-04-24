@@ -1901,18 +1901,27 @@ Post-retrofit verification (2026-04-23):
 - [x] Permissions: `contents: read`, `checks: read`,
       `pull-requests: read` (needed for Checks API + label lookup).
 - [x] Both workflows pass `actionlint` clean.
-- [ ] **Label-trigger path** real PR validation: apply
+- [x] **Label-trigger path** real PR validation: apply
       `preview-binaries` label to a green PR → workflow fires →
-      artifacts appear in Actions UI.  Deferred to first real use.
-- [ ] **Same-SHA integrity** real validation: `manifest.git_sha` ==
+      artifacts appear in Actions UI.  ✅ Baked on PR that landed
+      this edit (scratch `test/phase-5-preview-bake`, 2026-04-23).
+- [x] **Same-SHA integrity** real validation: `manifest.git_sha` ==
       PR head SHA; every `files[].sha256` matches `sha256sum` of
-      downloaded file.  Deferred.
+      downloaded file.  ✅ Baked on same PR.
 - [ ] **Nextest archive round-trip** validation: Windows box with
       matching `nextest_version` from manifest, `git checkout <sha>`,
-      `cargo nextest run --archive-file`.  Deferred.
-- [ ] **Pre-fast-gate enforcement** validation: deliberate
-      `PR Fast CI` failure blocks preview build.  🔴 Critical —
-      verify on first test PR.
+      `cargo nextest run --archive-file`.  Partially satisfied by
+      preview's own `smoke-windows` job (which downloads the archive
+      on `windows-latest` and runs it end-to-end against the pinned
+      SHA).  Full external-box round-trip still deferred until a
+      Windows dev box with matching nextest is available.
+- [x] **Pre-fast-gate enforcement** validation: deliberate
+      `PR Fast CI` failure blocks preview build.  ✅ Baked on same
+      PR via a temporary sabotage commit (`exit 1` in `fmt` job);
+      `verify-pr-fast-green` correctly detected the red
+      `PR Fast CI / required` and failed preview before
+      `build-windows` / `build-test-archive` started.  Sabotage
+      reverted before merge.
 - [ ] **Fork-PR behaviour** validation: all jobs use
       `runs-on: ubuntu-22.04` / `windows-latest`, never self-hosted
       — static check is ✅ per grep; live fork-PR bake deferred.
