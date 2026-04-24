@@ -477,8 +477,13 @@ impl VolumeHandle {
         // SAFETY: `self.handle` is a live volume handle and `new_position`
         // points to writable stack storage for the duration of the call.
         unsafe {
-            SetFilePointerEx(self.handle, 0, Some(&mut new_position), FILE_BEGIN)?;
-        }
+            SetFilePointerEx(
+                self.handle,
+                0,
+                Some(&raw mut new_position),
+                FILE_BEGIN,
+            )
+        }?;
 
         let mut buffer = [0_u8; 512];
         let mut bytes_read = 0_u32;
@@ -486,23 +491,24 @@ impl VolumeHandle {
         // SAFETY: `self.handle` is a live volume handle, `buffer` is a writable
         // 512-byte stack array, and `bytes_read` is a valid out-parameter.
         unsafe {
-            ReadFile(self.handle, Some(&mut buffer), Some(&mut bytes_read), None)?;
-        }
+            ReadFile(
+                self.handle,
+                Some(&mut buffer),
+                Some(&raw mut bytes_read),
+                None,
+            )
+        }?;
 
         if bytes_read != 512 {
             return Err(MftError::BootSectorRead(format!(
-                "Expected 512 bytes, got {}",
-                bytes_read
+                "Expected 512 bytes, got {bytes_read}"
             )));
         }
 
-        let boot_sector = match NtfsBootSector::read_from_prefix(&buffer) {
-            Ok((boot_sector, _)) => boot_sector,
-            Err(_) => {
-                return Err(MftError::InvalidBootSector(
-                    "Unable to decode NTFS boot sector layout".to_owned(),
-                ));
-            }
+        let Ok((boot_sector, _)) = NtfsBootSector::read_from_prefix(&buffer) else {
+            return Err(MftError::InvalidBootSector(
+                "Unable to decode NTFS boot sector layout".to_owned(),
+            ));
         };
 
         if !boot_sector.is_valid() {

@@ -652,9 +652,7 @@ fn query_memory_windows() -> Option<SystemMemory> {
     };
     // SAFETY: `status` is a properly sized, initialised MEMORYSTATUSEX with
     // `dwLength` set.  The pointer is valid for the duration of the call.
-    unsafe {
-        GlobalMemoryStatusEx(&mut status).ok()?;
-    }
+    unsafe { GlobalMemoryStatusEx(&raw mut status).ok() }?;
     Some(SystemMemory {
         total_bytes: status.ullTotalPhys,
         available_bytes: status.ullAvailPhys,

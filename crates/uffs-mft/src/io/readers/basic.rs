@@ -124,10 +124,10 @@ impl MftRecordReader {
             SetFilePointerEx(
                 handle,
                 aligned_offset as i64,
-                Some(&mut new_position),
+                Some(&raw mut new_position),
                 FILE_BEGIN,
-            )?;
-        }
+            )
+        }?;
 
         // Read the record
         let mut bytes_read = 0_u32;
@@ -137,10 +137,10 @@ impl MftRecordReader {
             ReadFile(
                 handle,
                 Some(self.buffer.as_mut_slice()),
-                Some(&mut bytes_read),
+                Some(&raw mut bytes_read),
                 None,
-            )?;
-        }
+            )
+        }?;
 
         if (bytes_read as usize) < self.record_size as usize + offset_within_sector {
             return Err(MftError::RecordRead {
@@ -290,10 +290,10 @@ impl BatchMftReader {
             SetFilePointerEx(
                 handle,
                 aligned_offset as i64,
-                Some(&mut new_position),
+                Some(&raw mut new_position),
                 FILE_BEGIN,
-            )?;
-        }
+            )
+        }?;
 
         // Read the batch
         let read_size = bytes_to_read.min(self.buffer.len());
@@ -304,10 +304,10 @@ impl BatchMftReader {
             ReadFile(
                 handle,
                 Some(&mut self.buffer.as_mut_slice()[..read_size]),
-                Some(&mut bytes_read),
+                Some(&raw mut bytes_read),
                 None,
-            )?;
-        }
+            )
+        }?;
 
         // Calculate offset within buffer for the first record
         let offset_in_buffer = (start_offset - aligned_offset) as usize;

@@ -518,8 +518,8 @@ impl MftReader {
                 // SAFETY: overlapped_handle is a valid handle opened by open_overlapped_handle
                 #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
-                }
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
+                };
 
                 result?
             }
@@ -591,8 +591,8 @@ impl MftReader {
                 // no longer used after the read completes, and is closed exactly once.
                 #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
-                }
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
+                };
 
                 result?
             }
@@ -635,8 +635,8 @@ impl MftReader {
                 // no longer used after the read completes, and is closed exactly once.
                 #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
-                }
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
+                };
 
                 result?
             }
@@ -662,8 +662,8 @@ impl MftReader {
                 // no longer used after the read completes, and is closed exactly once.
                 #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
-                }
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
+                };
 
                 match result {
                     Ok(mut index) => {
@@ -857,8 +857,8 @@ impl MftReader {
                 // exactly once after the read completes.
                 #[expect(unsafe_code, reason = "FFI: CloseHandle on $MFT file handle")]
                 {
-                    unsafe { windows::Win32::Foundation::CloseHandle(mft_handle) }.ok();
-                }
+                    unsafe { windows::Win32::Foundation::CloseHandle(mft_handle) }.ok()
+                };
                 return result;
             }
             Err(e) => {
@@ -887,8 +887,8 @@ impl MftReader {
         // exactly once after the read completes.
         #[expect(unsafe_code, reason = "FFI: CloseHandle on unbuffered volume handle")]
         {
-            unsafe { windows::Win32::Foundation::CloseHandle(unbuf_handle) }.ok();
-        }
+            unsafe { windows::Win32::Foundation::CloseHandle(unbuf_handle) }.ok()
+        };
         result
     }
 }

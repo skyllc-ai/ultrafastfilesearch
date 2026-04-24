@@ -48,10 +48,10 @@ impl ParallelMftReader {
             SetFilePointerEx(
                 handle,
                 aligned_offset as i64,
-                Some(&mut new_position),
+                Some(&raw mut new_position),
                 FILE_BEGIN,
-            )?;
-        }
+            )
+        }?;
 
         let mut bytes_read = 0_u32;
         // SAFETY: `handle` is live, the aligned buffer slice spans
@@ -61,10 +61,10 @@ impl ParallelMftReader {
             ReadFile(
                 handle,
                 Some(&mut buffer.as_mut_slice()[..aligned_size]),
-                Some(&mut bytes_read),
+                Some(&raw mut bytes_read),
                 None,
-            )?;
-        }
+            )
+        }?;
 
         // Extract the actual data (accounting for alignment offset)
         let actual_size = (bytes_read as usize).saturating_sub(offset_adjustment);

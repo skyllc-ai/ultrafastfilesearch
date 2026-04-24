@@ -67,9 +67,7 @@ pub(crate) fn read_mft_from_file_handle(
     let mut new_pos = 0_i64;
     // SAFETY: `mft_handle` is a live file handle; `new_pos` is valid writable
     // storage for the seek output.
-    unsafe {
-        SetFilePointerEx(mft_handle, 0, Some(&mut new_pos), FILE_BEGIN)?;
-    }
+    unsafe { SetFilePointerEx(mft_handle, 0, Some(&raw mut new_pos), FILE_BEGIN) }?;
 
     loop {
         if frs >= total_records {

@@ -123,18 +123,20 @@ impl ParallelMftReader {
 
             // Seek and read
             let mut new_pos: i64 = 0;
-            // SAFETY: `handle` is live, `new_pos` is valid writable storage for
-            // the seek, and `target_slice` is derived from `mft_buffer` as an
-            // in-bounds writable slice of `effective_bytes` bytes.
+            // SAFETY: `handle` is live and `new_pos` is valid writable storage
+            // for the seek result.
             unsafe {
-                SetFilePointerEx(handle, disk_offset as i64, Some(&mut new_pos), FILE_BEGIN)?;
+                SetFilePointerEx(handle, disk_offset as i64, Some(&raw mut new_pos), FILE_BEGIN)
+            }?;
 
-                let target_slice =
-                    &mut mft_buffer.as_mut_slice()[buffer_offset..buffer_offset + effective_bytes];
-                let mut bytes_read: u32 = 0;
-                ReadFile(handle, Some(target_slice), Some(&mut bytes_read), None)?;
-                bytes_read_total += bytes_read as u64;
-            }
+            let target_slice =
+                &mut mft_buffer.as_mut_slice()[buffer_offset..buffer_offset + effective_bytes];
+            let mut bytes_read: u32 = 0;
+            // SAFETY: `handle` is live, `target_slice` is an in-bounds writable
+            // slice of `effective_bytes` bytes, and `bytes_read` is a valid
+            // out-parameter.
+            unsafe { ReadFile(handle, Some(target_slice), Some(&raw mut bytes_read), None) }?;
+            bytes_read_total += bytes_read as u64;
 
             // Report progress
             if let Some(ref cb) = progress_callback {

@@ -388,19 +388,19 @@ fn volume_read_at(
     // SAFETY: SetFilePointerEx is a well-defined Win32 API.
     #[expect(unsafe_code, reason = "FFI: SetFilePointerEx")]
     unsafe {
-        SetFilePointerEx(handle, seek_pos, None, FILE_BEGIN).map_err(|e| {
-            MftError::InvalidData(format!("$UpCase: seek to offset {offset} failed: {e}"))
-        })?;
-    }
+        SetFilePointerEx(handle, seek_pos, None, FILE_BEGIN).map_err(|err| {
+            MftError::InvalidData(format!("$UpCase: seek to offset {offset} failed: {err}"))
+        })
+    }?;
 
     let mut bytes_read = 0_u32;
     // SAFETY: ReadFile writes into valid writable `buf`.
     #[expect(unsafe_code, reason = "FFI: ReadFile")]
     unsafe {
-        ReadFile(handle, Some(buf), Some(&mut bytes_read), None).map_err(|e| {
-            MftError::InvalidData(format!("$UpCase: read {} bytes failed: {e}", buf.len()))
-        })?;
-    }
+        ReadFile(handle, Some(buf), Some(&raw mut bytes_read), None).map_err(|err| {
+            MftError::InvalidData(format!("$UpCase: read {} bytes failed: {err}", buf.len()))
+        })
+    }?;
 
     if (bytes_read as usize) < buf.len() {
         return Err(MftError::InvalidData(format!(
