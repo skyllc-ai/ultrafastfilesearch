@@ -6,6 +6,15 @@
 //! Windows-only: requires IOCP and HANDLE.
 
 #![cfg(windows)]
+// Module-scoped cast justification: `as usize` / `as u32` casts convert
+// NTFS disk offsets (u64) and record sizes (u32) into usize / u32 for buffer
+// slicing and Win32 OVERLAPPED high/low offset split.  usize ≥ 32 bits on
+// every supported target; NTFS disk offsets are physically bounded by the
+// volume size (≤ 2⁶⁴ bytes).
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "NTFS disk-offset / record-size / OVERLAPPED offset-split casts are lossless"
+)]
 
 use super::*;
 

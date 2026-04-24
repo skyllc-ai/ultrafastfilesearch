@@ -2,6 +2,14 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Shared IOCP primitives.
+//!
+//! **Module-scoped cast justification:** `as u32` cast here converts the
+//! u64 overlapped offset low bits to u32 per Win32 OVERLAPPED struct layout;
+//! the high 32 bits are stored separately in `OffsetHigh`.
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "Win32 OVERLAPPED low-32 / high-32 offset split is the documented struct layout"
+)]
 
 use super::*;
 

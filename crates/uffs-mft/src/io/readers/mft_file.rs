@@ -7,6 +7,10 @@
 //! byte `record_size` → FRS 1, etc.
 
 #![cfg(windows)]
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "NTFS record-size / byte-offset casts are lossless on supported 32/64-bit targets"
+)]
 
 use tracing::{debug, info, warn};
 use windows::Win32::Foundation::HANDLE;

@@ -2,6 +2,18 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Parallel reader implementations and strategy entrypoints.
+//!
+//! **Module-scoped cast justification:** `as usize` / `as u32` casts convert
+//! NTFS disk offsets (`u64`) and record sizes (`u32`) into `usize` / `u32`
+//! for buffer slicing.  `usize` ≥ 32 bits on every supported target; NTFS
+//! disk offsets are physically bounded by the volume size (≤ 2⁶⁴ bytes).
+#![cfg_attr(
+    windows,
+    expect(
+        clippy::cast_possible_truncation,
+        reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
+    )
+)]
 
 #[cfg(windows)]
 pub(super) use super::iocp::IoCompletionPort;

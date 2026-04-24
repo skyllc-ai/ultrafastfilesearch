@@ -2,6 +2,15 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Prefetch reader implementation.
+//!
+//! **Module-scoped cast justification:** `as usize` casts here convert NTFS
+//! disk offsets / read sizes (`u64`) and record sizes (`u32`) into `usize` for
+//! buffer slicing.  `usize` is ≥ 32 bits on every supported target; the u64
+//! values are physically bounded by the volume size (≤ 2⁶⁴ bytes).
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
+)]
 
 use super::*;
 

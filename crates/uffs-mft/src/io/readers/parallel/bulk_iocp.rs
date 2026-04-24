@@ -2,6 +2,15 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Bulk IOCP reader path for ParallelMftReader.
+//!
+//! **Module-scoped cast justification:** `as usize` / `as u32` casts convert
+//! NTFS disk offsets (`u64`) and record sizes (`u32`) into `usize` / `u32`
+//! respectively.  `usize` ≥ 32 bits on every supported target; NTFS disk offsets
+//! are physically bounded by the volume size (≤ 2⁶⁴ bytes).
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
+)]
 
 use super::*;
 

@@ -6,6 +6,10 @@
 //! Windows-only: requires HANDLE.
 
 #![cfg(windows)]
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
+)]
 
 use super::*;
 

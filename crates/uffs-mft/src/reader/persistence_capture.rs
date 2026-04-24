@@ -6,6 +6,19 @@
 //! Extracted from `persistence.rs` to keep it under the 800 LOC threshold.
 //! Both functions are `impl MftReader` methods that require a live volume
 //! handle.
+//!
+//! **Module-scoped cast justification:** All `as usize` casts in this file
+//! convert NTFS disk offsets / read sizes (`u64`) into `usize` indices for
+//! buffer slicing.  On every supported target `usize ≥ 64 bits`, so these
+//! conversions are lossless.  The underlying values are also physically bounded
+//! by the volume size (`u64`) which is the only addressable range.
+#![cfg_attr(
+    windows,
+    expect(
+        clippy::cast_possible_truncation,
+        reason = "NTFS disk-offset / read-size (u64 -> usize) casts are lossless on supported 64-bit targets"
+    )
+)]
 
 #[cfg(windows)]
 use std::path::Path;

@@ -5,6 +5,15 @@
 //!
 //! Windows-specific capture implementations (streaming save and IOCP capture)
 //! live in `persistence_capture.rs`.
+//!
+//! **Module-scoped cast justification:** `as usize` / `as u64` casts convert
+//! NTFS on-disk record counts and byte offsets (`u64`) into `usize` / `u64`
+//! for buffer operations.  `usize` is ≥ 32 bits on every supported target;
+//! NTFS on-disk sizes are physically bounded by the volume size (≤ 2⁶⁴ bytes).
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "NTFS on-disk count / size casts are lossless on supported 32/64-bit targets"
+)]
 
 use std::path::Path;
 

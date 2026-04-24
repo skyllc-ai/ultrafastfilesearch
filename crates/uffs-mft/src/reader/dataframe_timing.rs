@@ -2,6 +2,18 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Benchmark-oriented `DataFrame` timing entrypoints.
+//!
+//! **Module-scoped cast justification:** `as u64` casts convert
+//! `Duration::as_nanos()` (u128) to u64 for benchmark timing reporting.  u64
+//! nanoseconds covers ~584 years; benchmark durations measured here are
+//! sub-hour in practice.
+#![cfg_attr(
+    windows,
+    expect(
+        clippy::cast_possible_truncation,
+        reason = "benchmark timing (u128 ns -> u64) is lossless for sub-hour durations"
+    )
+)]
 
 #[cfg(windows)]
 use std::time::Instant;

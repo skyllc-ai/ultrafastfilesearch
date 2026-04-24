@@ -2,6 +2,15 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! `DataFrame` construction helpers for parsed MFT output.
+//!
+//! **Module-scoped cast justification:** the single `as` cast converts an
+//! NTFS-record count (`u64`) into a Polars Series length (`u32`).  Record
+//! counts that fit in a DataFrame are bounded by Polars internals, well within
+//! u32.
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "NTFS record count -> Polars Series length cast is bounded by Polars row limit"
+)]
 
 use uffs_polars::DataFrame;
 

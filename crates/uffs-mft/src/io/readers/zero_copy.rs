@@ -2,6 +2,14 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Shared zero-copy buffer parsing helpers.
+//!
+//! **Module-scoped cast justification:** `as usize` casts here convert NTFS
+//! on-disk record sizes (`u32`) into `usize` for buffer slicing.  `usize` is
+//! ≥ 32 bits on every supported target.
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "NTFS record-size (u32 -> usize) casts are lossless on supported 32/64-bit targets"
+)]
 
 use super::*;
 
