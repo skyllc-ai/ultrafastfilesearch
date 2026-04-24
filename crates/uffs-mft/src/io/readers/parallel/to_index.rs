@@ -269,13 +269,20 @@ impl ParallelMftReader {
 
                 let overlapped_ptr = &raw mut op_mut.overlapped;
                 let read_size = op_mut.op.size;
+                let Some(read_slice) = op_mut.buffer.as_mut_slice().get_mut(..read_size) else {
+                    // Unreachable: op.buffer was sized to ≥ read_size at allocation.
+                    return Err(MftError::Io(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "to-index buffer shorter than read_size",
+                    )));
+                };
                 // SAFETY: `overlapped_handle` is a live overlapped-capable handle,
                 // the buffer slice spans `read_size` writable bytes in the pinned op,
                 // and `overlapped_ptr` points into that same pinned operation.
                 let result = unsafe {
                     ReadFile(
                         overlapped_handle,
-                        Some(&mut op_mut.buffer.as_mut_slice()[..read_size]),
+                        Some(read_slice),
                         None,
                         Some(overlapped_ptr),
                     )
@@ -295,7 +302,9 @@ impl ParallelMftReader {
                     }
                 }
 
-                in_flight[slot_id] = Some(in_flight_op);
+                if let Some(slot) = in_flight.get_mut(slot_id) {
+                    *slot = Some(in_flight_op);
+                }
             }
         }
 
@@ -382,130 +391,155 @@ impl ParallelMftReader {
                 }
             }
 
-            if let Some(slot_idx) = completed_slot {
-                if let Some(mut completed_op) = in_flight[slot_idx].take() {
-                    // SAFETY: The `Pin<Box<_>>` is still pinned in this scope; we
-                    // only project a mutable reference without moving the allocation.
-                    let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
+            if let Some(slot_idx) = completed_slot
+                && let Some(op_slot) = in_flight.get_mut(slot_idx)
+                && let Some(mut completed_op) = op_slot.take()
+            {
+                // SAFETY: The `Pin<Box<_>>` is still pinned in this scope; we
+                // only project a mutable reference without moving the allocation.
+                let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
 
-                    // Time parse phase (fixup + process_record)
-                    let parse_start = Instant::now();
+                // Time parse phase (fixup + process_record)
+                let parse_start = Instant::now();
 
-                    // DIRECT-TO-INDEX: parse records directly into MftIndex
-                    let buffer_slice =
-                        &mut op_mut.buffer.as_mut_slice()[..bytes_transferred as usize];
-                    let records_in_buffer = bytes_transferred as usize / record_size;
+                // DIRECT-TO-INDEX: parse records directly into MftIndex
+                let Some(buffer_slice) = op_mut
+                    .buffer
+                    .as_mut_slice()
+                    .get_mut(..bytes_transferred as usize)
+                else {
+                    // Unreachable: completion bytes_transferred ≤ allocated buffer size.
+                    return Err(MftError::Io(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "to-index completion reported more bytes than buffer size",
+                    )));
+                };
+                let records_in_buffer = bytes_transferred as usize / record_size;
 
-                    for i in 0..records_in_buffer {
-                        let frs = op_mut.op.start_frs + i as u64;
+                for i in 0..records_in_buffer {
+                    let frs = op_mut.op.start_frs + i as u64;
+                    let offset = i * record_size;
 
-                        // Check bitmap
-                        if let Some(bm) = bitmap_ref {
-                            if !bm.is_record_in_use(frs) {
-                                // Bitmap says unused, but extension records have IN_USE
-                                // set in their header while NOT being marked in $Bitmap.
-                                // Peek at the FILE record header flags (offset 0x16, 2 bytes LE)
-                                // before skipping.
-                                let offset = i * record_size;
-                                let record_slice = &buffer_slice[offset..offset + record_size];
+                    // Check bitmap
+                    if let Some(bm) = bitmap_ref
+                        && !bm.is_record_in_use(frs)
+                    {
+                        // Bitmap says unused, but extension records have IN_USE
+                        // set in their header while NOT being marked in $Bitmap.
+                        // Peek at the FILE record header flags (offset 0x16, 2 bytes LE)
+                        // before skipping.
+                        let Some(record_slice) = buffer_slice.get(offset..offset + record_size)
+                        else {
+                            break;
+                        };
 
-                                /// Flags offset in `FILE_RECORD_SEGMENT_HEADER`.
-                                const FLAGS_OFFSET: usize = 0x16;
-                                /// IN_USE flag bit in
-                                /// `FILE_RECORD_SEGMENT_HEADER`.flags.
-                                const IN_USE_FLAG: u16 = 0x0001;
+                        /// Flags offset in `FILE_RECORD_SEGMENT_HEADER`.
+                        const FLAGS_OFFSET: usize = 0x16;
+                        /// IN_USE flag bit in
+                        /// `FILE_RECORD_SEGMENT_HEADER`.flags.
+                        const IN_USE_FLAG: u16 = 0x0001;
 
-                                if record_slice.len() > FLAGS_OFFSET + 1 {
-                                    let flags = u16::from_le_bytes([
-                                        record_slice[FLAGS_OFFSET],
-                                        record_slice[FLAGS_OFFSET + 1],
-                                    ]);
-                                    if flags & IN_USE_FLAG == 0 {
-                                        // Record header also says not in use — safe to skip
-                                        continue;
-                                    }
-                                    // Header says IN_USE — this is an extension
-                                    // record, process it
-                                } else {
-                                    continue;
-                                }
-                            }
-                        }
-
-                        let offset = i * record_size;
-                        let record_slice = &mut buffer_slice[offset..offset + record_size];
-
-                        // Apply fixup
-                        if !apply_fixup(record_slice) {
+                        let flag_bytes = record_slice
+                            .get(FLAGS_OFFSET..FLAGS_OFFSET + 2)
+                            .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok());
+                        let Some(flag_bytes) = flag_bytes else {
+                            continue;
+                        };
+                        let flags = u16::from_le_bytes(flag_bytes);
+                        if flags & IN_USE_FLAG == 0 {
+                            // Record header also says not in use — safe to skip
                             continue;
                         }
+                        // Header says IN_USE — this is an extension record, process it
+                    }
 
-                        // Parse directly into index using unified parser
-                        if process_record(record_slice, frs, &mut index, &mut name_buf) {
-                            records_parsed += 1;
+                    let Some(record_slice) =
+                        buffer_slice.get_mut(offset..offset + record_size)
+                    else {
+                        break;
+                    };
+
+                    // Apply fixup
+                    if !apply_fixup(record_slice) {
+                        continue;
+                    }
+
+                    // Parse directly into index using unified parser
+                    if process_record(record_slice, frs, &mut index, &mut name_buf) {
+                        records_parsed += 1;
+                    }
+                }
+
+                total_parse_time_ns += parse_start.elapsed().as_nanos() as u64;
+
+                bytes_read_total += bytes_transferred as u64;
+                completed_count += 1;
+
+                // Recycle buffer and queue next read
+                let recycled_buffer =
+                    core::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
+                buffer_pool.push(recycled_buffer);
+
+                if let Some(next_op) = io_ops.pop_front() {
+                    let Some(buffer) = buffer_pool.pop() else {
+                        return Err(MftError::InvalidData(
+                            "I/O buffer pool exhausted while recycling inline-parse reads"
+                                .to_owned(),
+                        ));
+                    };
+                    let mut new_in_flight = Box::pin(InFlightOp {
+                        // SAFETY: `OVERLAPPED` is a plain Windows FFI struct and an
+                        // all-zero value is the required initial state before offsets are set.
+                        overlapped: unsafe { core::mem::zeroed() },
+                        buffer,
+                        op: next_op,
+                    });
+
+                    let offset = new_in_flight.op.disk_offset;
+                    // SAFETY: The pinned allocation remains in place while the I/O
+                    // is in flight; this only projects a mutable reference.
+                    let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
+                    new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
+                    new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
+                        (offset >> 32) as u32;
+
+                    let overlapped_ptr = &raw mut new_op_mut.overlapped;
+                    let read_size = new_op_mut.op.size;
+                    let Some(read_slice) =
+                        new_op_mut.buffer.as_mut_slice().get_mut(..read_size)
+                    else {
+                        // Unreachable: buffer was sized to ≥ read_size at allocation.
+                        return Err(MftError::Io(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "to-index recycled buffer shorter than read_size",
+                        )));
+                    };
+                    // SAFETY: `overlapped_handle` is a live overlapped-capable
+                    // handle, the buffer slice spans `read_size` writable bytes in
+                    // the pinned op, and `overlapped_ptr` points into that op.
+                    let result = unsafe {
+                        ReadFile(
+                            overlapped_handle,
+                            Some(read_slice),
+                            None,
+                            Some(overlapped_ptr),
+                        )
+                    };
+
+                    match result {
+                        Ok(_) => {}
+                        Err(_) => {
+                            // SAFETY: `GetLastError` reads the calling thread's
+                            // last-error slot and does not dereference Rust pointers.
+                            let last_error = unsafe { GetLastError() };
+                            if last_error != ERROR_IO_PENDING {
+                                warn!(error = ?last_error, "Failed to queue next read");
+                            }
                         }
                     }
 
-                    total_parse_time_ns += parse_start.elapsed().as_nanos() as u64;
-
-                    bytes_read_total += bytes_transferred as u64;
-                    completed_count += 1;
-
-                    // Recycle buffer and queue next read
-                    let recycled_buffer =
-                        core::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
-                    buffer_pool.push(recycled_buffer);
-
-                    if let Some(next_op) = io_ops.pop_front() {
-                        let Some(buffer) = buffer_pool.pop() else {
-                            return Err(MftError::InvalidData(
-                                "I/O buffer pool exhausted while recycling inline-parse reads"
-                                    .to_owned(),
-                            ));
-                        };
-                        let mut new_in_flight = Box::pin(InFlightOp {
-                            // SAFETY: `OVERLAPPED` is a plain Windows FFI struct and an
-                            // all-zero value is the required initial state before offsets are set.
-                            overlapped: unsafe { core::mem::zeroed() },
-                            buffer,
-                            op: next_op,
-                        });
-
-                        let offset = new_in_flight.op.disk_offset;
-                        // SAFETY: The pinned allocation remains in place while the I/O
-                        // is in flight; this only projects a mutable reference.
-                        let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
-                        new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                        new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
-                            (offset >> 32) as u32;
-
-                        let overlapped_ptr = &raw mut new_op_mut.overlapped;
-                        let read_size = new_op_mut.op.size;
-                        // SAFETY: `overlapped_handle` is a live overlapped-capable
-                        // handle, the buffer slice spans `read_size` writable bytes in
-                        // the pinned op, and `overlapped_ptr` points into that op.
-                        let result = unsafe {
-                            ReadFile(
-                                overlapped_handle,
-                                Some(&mut new_op_mut.buffer.as_mut_slice()[..read_size]),
-                                None,
-                                Some(overlapped_ptr),
-                            )
-                        };
-
-                        match result {
-                            Ok(_) => {}
-                            Err(_) => {
-                                // SAFETY: `GetLastError` reads the calling thread's
-                                // last-error slot and does not dereference Rust pointers.
-                                let last_error = unsafe { GetLastError() };
-                                if last_error != ERROR_IO_PENDING {
-                                    warn!(error = ?last_error, "Failed to queue next read");
-                                }
-                            }
-                        }
-
-                        in_flight[slot_idx] = Some(new_in_flight);
+                    if let Some(slot) = in_flight.get_mut(slot_idx) {
+                        *slot = Some(new_in_flight);
                     }
                 }
             }
