@@ -52,6 +52,10 @@
     clippy::module_name_repetitions,
     reason = "re-exports use crate-prefixed names for clarity"
 )]
+#![expect(
+    clippy::std_instead_of_core,
+    reason = "core::io::Error is not yet stable (feature `core_io`, tracking               issue rust-lang/rust#154046). Our IO-reader, bitmap, and volume               paths construct std::io::Error::new(ErrorKind::_, msg); swapping               to core::io::ErrorKind alone would force a split std/core import               at every site. Revisit once core::io::Error stabilizes."
+)]
 
 extern crate alloc;
 
