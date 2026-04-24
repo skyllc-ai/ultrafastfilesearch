@@ -189,10 +189,6 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
-      # TEMPORARY SABOTAGE for Phase 5 item #4 live bake (pre-fast-gate
-      # enforcement).  Must be reverted before PR merge.  See §10.3 Phase
-      # 5 checklist + §10.5 deviations log.  REMOVE-BEFORE-MERGE.
-      - run: exit 1
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
