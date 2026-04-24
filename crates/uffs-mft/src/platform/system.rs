@@ -5,6 +5,28 @@
 
 #[cfg(windows)]
 use core::mem::size_of;
+
+/// Narrow u32 size-of helper for Win32 FFI sizing parameters.
+///
+/// Every struct passed here is a small fixed-size Win32 type (`TOKEN_ELEVATION`,
+/// `MEMORYSTATUSEX`, `StoragePropertyQuery`, etc.) whose size is provably well
+/// under `u32::MAX`.  A saturating cast keeps the function total without
+/// introducing an `#[expect]` per call site.
+#[cfg(windows)]
+const fn u32_size_of<T>() -> u32 {
+    // Saturating truncation: Win32 structs are always < u32::MAX bytes, so this
+    // branch is unreachable in practice.
+    if size_of::<T>() > u32::MAX as usize {
+        u32::MAX
+    } else {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "size_of<T>() is bounded above by the branch guard; cast is lossless"
+        )]
+        let size = size_of::<T>() as u32;
+        size
+    }
+}
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
 
@@ -54,7 +76,7 @@ pub fn is_elevated() -> bool {
             token_handle,
             TokenElevation,
             Some(core::ptr::from_mut(&mut elevation).cast()),
-            size_of::<TOKEN_ELEVATION>() as u32,
+            u32_size_of::<TOKEN_ELEVATION>(),
             &raw mut return_length,
         )
     };
@@ -136,9 +158,9 @@ pub fn detect_ntfs_drives() -> Vec<char> {
         return ntfs_drives;
     }
 
-    for i in 0..26_u32 {
-        if (drive_mask & (1 << i)) != 0 {
-            let drive_letter = char::from(b'A' + i as u8);
+    for i in 0_u8..26 {
+        if (drive_mask & (1_u32 << i)) != 0 {
+            let drive_letter = char::from(b'A' + i);
 
             if is_ntfs_volume(drive_letter) {
                 ntfs_drives.push(drive_letter);
@@ -376,7 +398,7 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
     };
 
     let handle = match handle {
-        Ok(h) => h,
+        Ok(handle) => handle,
         Err(_) => return DriveType::Unknown,
     };
 
@@ -393,6 +415,10 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
             let mut buffer = [0_u8; 1024];
             let mut bytes_returned: u32 = 0;
 
+            // `buffer` is a fixed-size 1024-byte stack array; len is compile-time
+            // known and always fits in u32.
+            let buffer_len_u32 = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
+
             // SAFETY: `handle` is a live device handle, `query` contains the
             // exact input bytes Windows expects for this IOCTL, `buffer` is a
             // writable output buffer of the advertised length, and
@@ -402,15 +428,19 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
                     handle,
                     IOCTL_STORAGE_QUERY_PROPERTY,
                     Some((&raw const query).cast::<std::ffi::c_void>()),
-                    size_of::<StoragePropertyQuery>() as u32,
+                    u32_size_of::<StoragePropertyQuery>(),
                     Some(buffer.as_mut_ptr().cast::<std::ffi::c_void>()),
-                    buffer.len() as u32,
+                    buffer_len_u32,
                     Some(&raw mut bytes_returned),
                     None,
                 )
             };
 
-            if result.is_ok() && bytes_returned >= STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_END as u32 {
+            // Compare in usize space to avoid truncating the compile-time
+            // constant offset into u32.
+            if result.is_ok()
+                && (bytes_returned as usize) >= STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_END
+            {
                 buffer
                     .get(
                         STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_OFFSET
@@ -450,15 +480,17 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
                 handle,
                 IOCTL_STORAGE_QUERY_PROPERTY,
                 Some((&raw const query).cast::<std::ffi::c_void>()),
-                size_of::<StoragePropertyQuery>() as u32,
+                u32_size_of::<StoragePropertyQuery>(),
                 Some((&raw mut descriptor).cast::<std::ffi::c_void>()),
-                size_of::<DeviceSeekPenaltyDescriptor>() as u32,
+                u32_size_of::<DeviceSeekPenaltyDescriptor>(),
                 Some(&raw mut bytes_returned),
                 None,
             )
         };
 
-        if result.is_ok() && bytes_returned >= size_of::<DeviceSeekPenaltyDescriptor>() as u32 {
+        if result.is_ok()
+            && (bytes_returned as usize) >= size_of::<DeviceSeekPenaltyDescriptor>()
+        {
             Some(if descriptor.incurs_seek_penalty == 0 {
                 DriveType::Ssd
             } else {
@@ -530,7 +562,7 @@ fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
     };
 
     let handle = match handle {
-        Ok(h) => h,
+        Ok(handle) => handle,
         Err(_) => return DriveType::Unknown,
     };
 
@@ -558,15 +590,15 @@ fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
             handle,
             IOCTL_STORAGE_QUERY_PROPERTY,
             Some((&raw const query).cast::<std::ffi::c_void>()),
-            size_of::<StoragePropertyQuery>() as u32,
+            u32_size_of::<StoragePropertyQuery>(),
             Some((&raw mut descriptor).cast::<std::ffi::c_void>()),
-            size_of::<DeviceTrimDescriptor>() as u32,
+            u32_size_of::<DeviceTrimDescriptor>(),
             Some(&raw mut bytes_returned),
             None,
         )
     };
 
-    if result.is_ok() && bytes_returned >= size_of::<DeviceTrimDescriptor>() as u32 {
+    if result.is_ok() && (bytes_returned as usize) >= size_of::<DeviceTrimDescriptor>() {
         if descriptor.trim_enabled != 0 {
             DriveType::Ssd
         } else {
@@ -649,7 +681,7 @@ fn query_memory_windows() -> Option<SystemMemory> {
     use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 
     let mut status = MEMORYSTATUSEX {
-        dwLength: size_of::<MEMORYSTATUSEX>() as u32,
+        dwLength: u32_size_of::<MEMORYSTATUSEX>(),
         ..MEMORYSTATUSEX::default()
     };
     // SAFETY: `status` is a properly sized, initialised MEMORYSTATUSEX with
