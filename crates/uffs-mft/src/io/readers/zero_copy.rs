@@ -38,8 +38,12 @@ pub(super) fn parse_buffer_zero_copy_inner(
 
         let frs = start_frs + skip_begin as u64 + i as u64;
 
+        let Some(record_slice) = buffer_slice.get_mut(offset..offset + record_size_usize)
+        else {
+            break;
+        };
+
         // Apply fixup in-place on the shared buffer (zero-copy)
-        let record_slice = &mut buffer_slice[offset..offset + record_size_usize];
         if !apply_fixup(record_slice) {
             continue;
         }

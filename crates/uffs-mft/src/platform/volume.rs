@@ -760,13 +760,29 @@ impl VolumeHandle {
             }
 
             let mut bytes_read: u32 = 0;
+            let Some(extent_window) = buffer.get_mut(buffer_offset..buffer_offset + extent_bytes)
+            else {
+                if verbose {
+                    tracing::warn!(
+                        volume = %self.volume,
+                        extent_index = i,
+                        buffer_offset,
+                        extent_bytes,
+                        buffer_len = buffer.len(),
+                        "MFT bitmap extent exceeds buffer size; falling back to all-valid bitmap"
+                    );
+                }
+                return Ok(MftBitmap::new_all_valid(
+                    self.estimated_record_count() as usize,
+                ));
+            };
             // SAFETY: `self.handle` is a live volume handle, the slice points to
             // a contiguous writable region of `extent_bytes`, and `bytes_read`
             // is a valid out-parameter for the duration of the read.
             unsafe {
                 if let Err(err) = ReadFile(
                     self.handle,
-                    Some(&mut buffer[buffer_offset..buffer_offset + extent_bytes]),
+                    Some(extent_window),
                     Some(&raw mut bytes_read),
                     None,
                 ) {
@@ -788,8 +804,10 @@ impl VolumeHandle {
             if verbose && i < 3 {
                 tracing::info!(volume = %self.volume, extent_index = i, bytes_read, "Read MFT bitmap extent bytes");
                 if i == 0 && bytes_read > 0 {
+                    let sample_end = buffer_offset + 32.min(bytes_read as usize);
                     let sample: Vec<String> = buffer
-                        [buffer_offset..buffer_offset + 32.min(bytes_read as usize)]
+                        .get(buffer_offset..sample_end)
+                        .unwrap_or(&[])
                         .iter()
                         .map(|byte| format!("{byte:02X}"))
                         .collect();

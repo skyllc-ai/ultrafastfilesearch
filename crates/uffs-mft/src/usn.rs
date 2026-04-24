@@ -640,7 +640,10 @@ mod windows_impl {
             let max_offset = core::cmp::min(header.bytes_in_use as usize, data.len());
 
             while offset + size_of::<AttributeRecordHeader>() <= max_offset {
-                let attr = match AttributeRecordHeader::read_from_prefix(&data[offset..]) {
+                let Some(attr_bytes) = data.get(offset..) else {
+                    break;
+                };
+                let attr = match AttributeRecordHeader::read_from_prefix(attr_bytes) {
                     Ok((hdr, _)) => hdr,
                     Err(_) => break,
                 };
@@ -672,8 +675,10 @@ mod windows_impl {
 
                     let mut pos = list_start;
                     while pos + size_of::<AttributeListEntry>() <= list_end {
-                        let entry = match AttributeListEntry::read_from_prefix(&data[pos..list_end])
-                        {
+                        let Some(entry_bytes) = data.get(pos..list_end) else {
+                            break;
+                        };
+                        let entry = match AttributeListEntry::read_from_prefix(entry_bytes) {
                             Ok((entry, _)) => entry,
                             Err(_) => break,
                         };

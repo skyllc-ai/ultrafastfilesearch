@@ -128,7 +128,19 @@ impl MftReader {
             let data = parallel_reader.read_chunk(handle, &chunk, record_size)?;
             let output_offset = chunk.start_frs as usize * record_size as usize;
             let copy_size = data.len().min(total_size - output_offset);
-            output[output_offset..output_offset + copy_size].copy_from_slice(&data[..copy_size]);
+            let Some(dest) = output.get_mut(output_offset..output_offset + copy_size) else {
+                return Err(MftError::InvalidData(format!(
+                    "save_raw_mft: chunk at frs {} size {copy_size} exceeds buffer {total_size}",
+                    chunk.start_frs
+                )));
+            };
+            let Some(src) = data.get(..copy_size) else {
+                return Err(MftError::InvalidData(format!(
+                    "save_raw_mft: chunk at frs {} read-back shorter than expected {copy_size}",
+                    chunk.start_frs
+                )));
+            };
+            dest.copy_from_slice(src);
         }
 
         Ok((output, record_size))

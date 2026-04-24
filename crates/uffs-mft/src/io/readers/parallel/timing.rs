@@ -113,13 +113,13 @@ impl ParallelMftReader {
 
                     for i in 0..effective_count {
                         let offset = (skip_begin + i) * record_size;
-                        if offset + record_size > data.len() {
+                        let Some(record_slice) = data.get_mut(offset..offset + record_size)
+                        else {
                             break;
-                        }
+                        };
 
                         let frs = chunk.start_frs + skip_begin as u64 + i as u64;
 
-                        let record_slice = &mut data[offset..offset + record_size];
                         if !apply_fixup(record_slice) {
                             acc.skipped += 1;
                             acc.processed += 1;
@@ -192,13 +192,13 @@ impl ParallelMftReader {
 
                     for i in 0..effective_count {
                         let offset = (skip_begin + i) * record_size;
-                        if offset + record_size > data.len() {
+                        let Some(record_slice) = data.get_mut(offset..offset + record_size)
+                        else {
                             break;
-                        }
+                        };
 
                         let frs = chunk.start_frs + skip_begin as u64 + i as u64;
 
-                        let record_slice = &mut data[offset..offset + record_size];
                         if !apply_fixup(record_slice) {
                             acc.skipped += 1;
                             acc.processed += 1;

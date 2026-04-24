@@ -433,7 +433,13 @@ fn read_clusters(
         let read_len = run_bytes.min(UPCASE_SIZE_BYTES - offset);
 
         let disk_offset = crate::index::nonneg_to_u64(disk_byte);
-        volume_read_at(handle, disk_offset, &mut buf[offset..offset + read_len])?;
+        let Some(read_window) = buf.get_mut(offset..offset + read_len) else {
+            return Err(MftError::InvalidData(format!(
+                "$UpCase: run at offset {offset} length {read_len} exceeds buffer size \
+                 {UPCASE_SIZE_BYTES}"
+            )));
+        };
+        volume_read_at(handle, disk_offset, read_window)?;
         offset += read_len;
     }
 
