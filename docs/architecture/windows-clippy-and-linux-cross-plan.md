@@ -215,7 +215,7 @@ Full per-rule and per-file distribution is captured in `_trash/w0-baseline/` (gi
 - **W1.3** — Decide naming: either rename `check-windows` → `lint-windows` (canonical) with a deprecation redirect, or keep `check-windows` as the fast type-check entry-point and make `lint-ci-windows` the strict entry.  Default: keep both; `check-windows` stays as a cheap fallback.
 - **W1.4** — Measure warm xwin clippy duration for each pass; record in this doc's § 5 table below.
 
-**Acceptance**: `just lint-ci-windows` runs and reports exactly the baseline count from W0.3.  No semantic change yet.
+**Acceptance** (2026-04-24, ✅ met): `just lint-prod-windows` + `just lint-tests-windows` + `just lint-ci-windows` run and report lint counts matching the W0.3 baseline (93 / 1,342 / 1,346 ±1 — the ±1 offset is the `error: could not compile` summary line cargo wraps each aborted crate in).  No semantic change.  Raw outputs captured in `_trash/w1-measurements/` (gitignored).
 
 ### Phase W2 — Prod gate (3–5 days) **← starts immediately after W1**
 
@@ -228,7 +228,7 @@ The W0 baseline reveals prod is only 93 errors across ~15 rule families — an o
   - etc.
 - **W2.2** — T2 targeted (~15 of 93): `undocumented_unsafe_blocks` (10) needs prose `SAFETY:` comments justifying each `unsafe` block's invariants (FFI signature, buffer lifetime, alignment — usually all three).  `indexing_slicing` (2) and `cognitive_complexity` (2) per-site.
 - **W2.3** — T3 semantic (~5 of 93): `multiple_unsafe_ops_per_block` (5) splits `unsafe { read(); transmute(); }` into discrete `unsafe {}` blocks, each with its own SAFETY comment.  Touches FFI design surface; regression tests for each split.
-- **W2.4** — **Wire `lint-prod-windows` into pre-push and PR CI**.  This is the first concrete authoritative-gate upgrade: new Windows production code is now lint-clean from day one.  Pre-push bundle gains ~15 s (xwin clippy `--lib --bins` is much faster than `--all-targets` since fewer compilation units).
+- **W2.4** — **Wire `lint-prod-windows` into pre-push and PR CI**.  This is the first concrete authoritative-gate upgrade: new Windows production code is now lint-clean from day one.  W1.4 measurement shows prod pass is **2 s warm** — pre-push bundle gains negligible time (current 50 s bundle → ~52 s).  PR CI job adds a sub-minute step.
 
 **Acceptance after W2**: `just lint-prod-windows` exits 0.  PR Fast CI runs Windows clippy on `--lib --bins`.  Production Windows regressions are now authoritatively gated.  Test backlog (~1,249 remaining) is UNBLOCKED and parallelisable.
 
@@ -262,7 +262,7 @@ The W0 baseline reveals prod is only 93 errors across ~15 rule families — an o
 - **W5.3** — `ref_patterns` (83): `if let Some(ref x @ Foo(_)) = …` → explicit borrow destructure.  Pattern-semantics sensitive; each fix reviewed.
 - **W5.4** — `multiple_unsafe_ops_per_block` (30 in tests), `float_arithmetic` (32): per-site motivation.  Float arithmetic in perf benches is legitimate; add `#[expect]` with reason.
 - **W5.5** — **Upgrade `windows-check` in PR Fast CI** from `cargo check` → `cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D warnings`.  Rename job `windows-check` → `windows-lint` for clarity.  Keep `windows-latest` runner.
-- **W5.6** — Upgrade local `check-windows` in pre-push to `lint-ci-windows`.  **Budget gate**: if total pre-push bundle exceeds 90 s warm, keep pre-push on `lint-prod-windows` only (full-scope stays in CI).  Decision empirical, based on W1.4 measurements.
+- **W5.6** — Upgrade local `check-windows` in pre-push to `lint-ci-windows`.  W1.4 measurement shows CI pass is **6 s warm** — pre-push bundle lands well under the 60 s target (current 50 s → ~56 s).  The original "if > 90 s, back off" budget gate is no longer needed; proceed directly to full-scope pre-push.
 - **W5.7** — Final `#[expect(…, reason = …)]` audit.  Target: fewer than **20** total across the whole Windows surface (higher than the original 10 to accommodate cast-family FFI sites); each with prose `reason`.
 
 **Acceptance after W5**: `just lint-ci-windows` exits 0.  PR Fast CI `windows-lint` runs clippy and passes.  `required` aggregator gates on it.  **No code can merge without passing Windows clippy on all targets.**
@@ -307,25 +307,27 @@ The W0 baseline reveals prod is only 93 errors across ~15 rule families — an o
 |---|---|---|
 | **IDE save** | rust-analyzer check-on-save (native only) | Unchanged (cross-target too expensive for on-save) |
 | **pre-commit** (`lint-fast`, sub-2 s / ~25 s Rust) | fmt + native clippy trio + typos + reuse + file-size | **Unchanged** — xwin clippy too expensive here |
-| **pre-push** (`lint-pre-push`, ≤ 60 s target) | fmt + native trio + rustdoc + doc-tests + tests + smoke + `check-windows` (8 s `check`) | **Upgrade**: `check-windows` → `lint-ci-windows` (+ ⏳ TBD seconds, measured in W1.4).  Budget gate in W4.4: if it pushes the bundle over 90 s, rollback to CI-only. |
+| **pre-push** (`lint-pre-push`, ≤ 60 s target) | fmt + native trio + rustdoc + doc-tests + tests + smoke + `check-windows` (8 s `check`) | **Upgrade**: `check-windows` → `lint-ci-windows` (+ 6 s warm, measured W1.4).  Bundle goes 50 s → ≈56 s — well under target.  Original W4.4 "> 90 s back off" gate no longer needed. |
 | **PR CI** (`pr-fast.yml`) | Required: classify + file-size + fmt + sanity + clippy + docs + test-build + tests + security + `windows-check` (**`check`**) | **Upgrade** `windows-check` → `windows-lint` running `cargo clippy -- -D warnings`.  Linux clippy already covered by the existing `clippy` job on `ubuntu-22.04` (no change needed for Linux). |
 | **Tier 2 nightly** (`tier-2.yml`) | Weekly `windows-latest` `cargo check` + coverage + udeps + miri | **Drop** the now-redundant windows check (PR-time authoritative post-W4.3); keep coverage / udeps / miri single-target. |
 
 **Flag stack discipline**: all three targets (native host, Linux, Windows) use the exact same `common_flags` / `prod_flags` / `test_flags` from `@/Users/rnio/Private/Github/UltraFastFileSearch/just/shared.just:28-30`.  Zero target-specific allowlists.  Any rule that truly diverges per-target (e.g. `cast_possible_wrap` on 32-bit targets) goes in `[workspace.lints]` in the root `Cargo.toml` where it is visible and review-gated.
 
-**xwin clippy warm-runtime measurements** (⏳ TBD — filled by W1.4):
+**xwin clippy warm-runtime measurements** (filled by W1.4, 2026-04-24):
 
-| Pass | Command | Warm duration |
-|---|---|---|
-| prod | `cargo xwin clippy --lib --bins ... -- {{ prod_flags }}` | TBD s |
-| tests | `cargo xwin clippy --tests ... -- {{ test_flags }}` | TBD s |
-| CI | `cargo xwin clippy --all-targets ... -- -D warnings` | TBD s |
+| Pass | Command | Warm duration | Lint count (matches W0) |
+|---|---|---|---|
+| prod | `just lint-prod-windows` | **2 s** | 93 ±1 ✅ |
+| tests | `just lint-tests-windows` | **6 s** | 1,342 ±1 ✅ |
+| ci | `just lint-ci-windows` | **6 s** | 1,346 ±1 ✅ |
+
+**Pre-push budget implication**: all three passes fit well under the 60 s pre-push budget, even full-workspace (`lint-ci-windows` at 6 s warm).  The W5.6 "budget gate" conservatism can now be relaxed — there is room to run either `lint-prod-windows` (W2.4) or even `lint-ci-windows` (W5.6) in pre-push without exceeding 60 s.  **Decision now safe to make at W2.4 empirically, not at W5.6.**
 
 ## 6. Discipline enforcement (mapping to the four rules)
 
 | Rule | How this plan honours it |
 |---|---|
-| **1. No suppression hacks** | Zero blanket `#[allow]`.  Only `#[expect(lint::name, reason = "prose")]` on individual items, with a target count of **< 10** total after W4.  Every suppression reviewed in the PR that introduces it. |
+| **1. No suppression hacks** | Zero blanket `#[allow]`.  Only `#[expect(lint::name, reason = "prose")]` on individual items, with a target count of **< 20** total after W5 (revised up from 10 after W0 revealed the cast-family FFI site density).  Every suppression reviewed in the PR that introduces it. |
 | **2. Surgical, correct fixes** | Phased by lint rule, not by file.  Each PR touches one rule family at a time; mechanical T1 fixes are deterministic, T2 + T3 fixes are per-site reasoned.  No "refactor-while-I'm-here" smuggling. |
 | **3. Preserve behavior & contracts** | Public API unchanged except where a lint surfaces a real bug (typically `cast_*` truncations or `significant_drop_*` deadlocks).  Each API change gets a CHANGELOG entry + regression test. |
 | **4. Improve tests, don't dodge** | T3 semantic fixes ship with new regression tests (deadlock / ordering / cast-boundary).  T1 + T2 fixes rely on the existing Windows test suite remaining green; `@/Users/rnio/Private/Github/UltraFastFileSearch/crates/uffs-daemon/tests/ipc_integration.rs` + `uffs-mft` unit tests already exercise the heaviest Windows surface area. |

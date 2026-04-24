@@ -106,6 +106,14 @@ UFFS — Release Automation Implementation Plan
    workspaces and integrates with crates.io semantics.  Cross-ecosystem
    tools always miss Rust-specific concerns (workspace inheritance,
    `cargo publish` ordering, cross-crate dependency version updates).
+8. **Cross-target strict-lint convergence.**  Upgrading the Windows
+   lint gate from `cargo check` to `cargo clippy -- -D warnings`
+   (1,346-lint backlog) and adding a native macOS → Linux cross-check
+   path are the concern of
+   [`windows-clippy-and-linux-cross-plan.md`](windows-clippy-and-linux-cross-plan.md).
+   Release-automation honours that work by running the post-R5
+   release pipeline against a Windows-clippy-clean `main`; the two
+   plans share no workflows or tooling surface.
 
 ### 1.3 Success criteria
 

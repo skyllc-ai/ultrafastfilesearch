@@ -106,6 +106,41 @@ lint-ci-linux:
         bash -lc "rustup show >/dev/null && cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings"
     printf "\033[0;32m✅ Linux CI lint gate passed\033[0m\n"
 
+# Cross-platform strict lint gate for Windows (cargo-xwin clippy).
+#
+# The Windows counterpart of `lint-prod` / `lint-tests` / `lint-ci` — mirrors
+# the exact same flag stack so the strict clippy rules apply identically on
+# Windows-gated code.  Until Phase W5 of
+# `docs/architecture/windows-clippy-and-linux-cross-plan.md` lands, these
+# recipes emit hundreds of lints (W0 baseline: prod=93, tests=1342, ci=1346)
+# and are therefore not yet wired into `lint-all` or the pre-push hook.
+# They exist as the authoritative surface the Windows backlog is being
+# converged against phase by phase.  Requires `cargo-xwin` + target
+# `x86_64-pc-windows-msvc` (both from `just install-dev-tools`).
+#
+# Ultra-strict Windows production linting (workspace lints on --lib --bins).
+lint-prod-windows:
+    @printf "\033[0;34m🪟 Windows strict production lint (cargo xwin clippy)...\033[0m\n"
+    cargo xwin clippy --workspace --lib --bins --all-features --target x86_64-pc-windows-msvc --no-deps -- {{ prod_flags }}
+
+# Pragmatic Windows test linting (allows unwrap/expect in test code).
+lint-tests-windows:
+    @printf "\033[0;34m🪟 Windows strict test lint (cargo xwin clippy)...\033[0m\n"
+    cargo xwin clippy --workspace --tests --all-features --target x86_64-pc-windows-msvc --no-deps -- {{ test_flags }}
+
+# This is the gate the PR Fast CI `windows-check` job will adopt after Phase
+# W5 (see cross-target plan) completes.
+#
+# Windows CI lint gating (all-targets, deny warnings).
+lint-ci-windows:
+    @printf "\033[0;34m🚨 Windows CI lint gating (cargo xwin clippy)...\033[0m\n"
+    cargo xwin clippy --workspace --all-targets --all-features --target x86_64-pc-windows-msvc --no-deps -- -D warnings
+
+# Host-only on purpose — Windows (`lint-*-windows`) and Linux-in-Docker
+# (`lint-ci-linux`) are separate recipes.  They will be wired into this
+# sweep after their backlogs converge to zero (Phase W5 of the
+# cross-target plan: `docs/architecture/windows-clippy-and-linux-cross-plan.md`).
+#
 # Full lint sweep: production + tests + CI gate + formatting.
 lint-all:
     @printf "\033[0;34m🔍 Full lint sweep (prod + tests + CI + fmt)...\033[0m\n"

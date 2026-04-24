@@ -1519,6 +1519,14 @@ Measured against current `v0.5.71` baseline:
   they share only `release.yml` (unchanged by both) and the version-
   bump bits of `scripts/ci-pipeline/src/version.rs` (retired in
   release-automation R5).
+- **Does not own cross-target strict-lint convergence.**  Upgrading the
+  Windows lint gate from `cargo check` to `cargo clippy` (1,346-lint
+  backlog as of 2026-04-24) and adding a native macOS → Linux
+  cross-check path via `cargo-zigbuild` are the concern of
+  [`windows-clippy-and-linux-cross-plan.md`](windows-clippy-and-linux-cross-plan.md).
+  The dev-flow plan owns the 4-layer gate **model** (IDE / pre-commit
+  / pre-push / PR CI); the cross-target plan owns **which flag
+  stack runs on which target** at each of those layers.
 
 ---
 

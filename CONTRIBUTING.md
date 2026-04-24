@@ -192,6 +192,7 @@ UFFS is migrating to [Conventional Commits](https://www.conventionalcommits.org/
 - Preserve the crate layering: `uffs-polars` ← `uffs-mft` ← `uffs-core` ← `uffs-cli`.
 - Prefer fixture-, golden-, or saved-MFT/index-based tests for portable validation.
 - Update docs when contributor-facing workflow or user-visible behavior changes.
+- **New Windows-gated code must pass `just lint-ci-windows` before PR.**  Strict clippy on `#[cfg(windows)]` paths is advisory during the Phase W2–W5 backlog cleanup (see `docs/architecture/windows-clippy-and-linux-cross-plan.md`) and becomes a hard gate at PR CI after W5.  New lints introduced into the backlog trigger an immediate reviewer ask.
 
 ## Docs map
 
@@ -201,5 +202,6 @@ UFFS is migrating to [Conventional Commits](https://www.conventionalcommits.org/
 - Architecture docs: `docs/architecture/README.md`
 - **CI / gate architecture**: `docs/architecture/dev-flow-implementation-plan.md`
 - **Release / versioning architecture**: `docs/architecture/release-automation-plan.md`
+- **Cross-target strict-lint architecture**: `docs/architecture/windows-clippy-and-linux-cross-plan.md`
 
 If you are changing behavior that depends on raw NTFS access, call out the Windows/Admin requirement in the relevant docs and tests.
