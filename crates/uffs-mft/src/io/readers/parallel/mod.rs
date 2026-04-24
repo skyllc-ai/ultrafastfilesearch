@@ -541,7 +541,7 @@ impl ParallelMftReader {
                         // Parse from the fixed-up slice (no copy needed)
                         match parse_record_full(record_slice, frs) {
                             ParseResult::Base(parsed) => acc.records.push(parsed),
-                            _ => acc.skipped += 1,
+                            ParseResult::Extension(_) | ParseResult::Skip => acc.skipped += 1,
                         }
                         acc.processed += 1;
                     }

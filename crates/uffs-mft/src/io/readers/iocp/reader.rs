@@ -296,7 +296,7 @@ impl IocpMftReader {
                 );
                 all_results.extend(results);
 
-                bytes_read_total += bytes_transferred as u64;
+                bytes_read_total += u64::from(bytes_transferred);
                 completed_count += 1;
 
                 // Report progress

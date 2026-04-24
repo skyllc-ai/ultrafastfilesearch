@@ -250,17 +250,14 @@ impl ParallelMftReader {
                     )
                 };
 
-                match result {
-                    Ok(_) => {} // Completed synchronously
-                    Err(_) => {
-                        // SAFETY: `GetLastError` reads the calling thread's last-error
-                        // slot and does not dereference any Rust pointers.
-                        let last_error = unsafe { GetLastError() };
-                        if last_error != ERROR_IO_PENDING {
-                            return Err(MftError::Io(std::io::Error::from_raw_os_error(
-                                last_error.0 as i32,
-                            )));
-                        }
+                if result.is_err() {
+                    // SAFETY: `GetLastError` reads the calling thread's last-error
+                    // slot and does not dereference any Rust pointers.
+                    let last_error = unsafe { GetLastError() };
+                    if last_error != ERROR_IO_PENDING {
+                        return Err(MftError::Io(std::io::Error::from_raw_os_error(
+                            last_error.0 as i32,
+                        )));
                     }
                 }
 
@@ -340,7 +337,7 @@ impl ParallelMftReader {
                 };
                 dest_slice.copy_from_slice(src_slice);
 
-                bytes_read_total += bytes_transferred as u64;
+                bytes_read_total += u64::from(bytes_transferred);
                 completed_count += 1;
 
                 // Recycle buffer and queue next read
@@ -394,15 +391,12 @@ impl ParallelMftReader {
                         )
                     };
 
-                    match submit_result {
-                        Ok(_) => {}
-                        Err(_) => {
-                            // SAFETY: `GetLastError` reads the calling thread's
-                            // last-error slot and does not dereference Rust pointers.
-                            let last_error = unsafe { GetLastError() };
-                            if last_error != ERROR_IO_PENDING {
-                                warn!(error = ?last_error, "Failed to queue next read");
-                            }
+                    if submit_result.is_err() {
+                        // SAFETY: `GetLastError` reads the calling thread's
+                        // last-error slot and does not dereference Rust pointers.
+                        let last_error = unsafe { GetLastError() };
+                        if last_error != ERROR_IO_PENDING {
+                            warn!(error = ?last_error, "Failed to queue next read");
                         }
                     }
 
@@ -475,7 +469,9 @@ impl ParallelMftReader {
                         let parsed = parse_record_full(record_slice, frs as u64);
                         match &parsed {
                             ParseResult::Skip => skipped += 1,
-                            _ => results.push(parsed),
+                            ParseResult::Base(_) | ParseResult::Extension(_) => {
+                                results.push(parsed)
+                            }
                         }
                         processed += 1;
                     }

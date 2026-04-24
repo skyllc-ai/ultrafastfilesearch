@@ -146,23 +146,24 @@ impl ParallelMftReader {
         // For HDD: use standard io_chunk_size for predictable sequential reads
         const MAX_DIRECT_IO_SIZE: usize = 16 * 1024 * 1024; // 16MB max for direct I/O
 
-        let sorted_chunks: Vec<ReadChunk> = match (&self.drive_type, &self.bitmap) {
-            (crate::platform::DriveType::Nvme | crate::platform::DriveType::Ssd, Some(bitmap)) => {
-                // NVMe/SSD: Use precise chunks that skip unused regions
-                // min_gap_records=64 means gaps smaller than 64KB are read through
-                // Use MAX_DIRECT_IO_SIZE as the max chunk size for direct I/O
-                let mut chunks =
-                    generate_precise_read_chunks(&self.extent_map, bitmap, MAX_DIRECT_IO_SIZE, 64);
-                chunks.sort_by_key(|chunk| chunk.disk_offset);
-                chunks
-            }
-            _ => {
-                // HDD or no bitmap: Use standard chunk generation
-                let mut chunks =
-                    generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
-                chunks.sort_by_key(|chunk| chunk.disk_offset);
-                chunks
-            }
+        let sorted_chunks: Vec<ReadChunk> = if let (
+            crate::platform::DriveType::Nvme | crate::platform::DriveType::Ssd,
+            Some(bitmap),
+        ) = (&self.drive_type, &self.bitmap)
+        {
+            // NVMe/SSD: Use precise chunks that skip unused regions
+            // min_gap_records=64 means gaps smaller than 64KB are read through
+            // Use MAX_DIRECT_IO_SIZE as the max chunk size for direct I/O
+            let mut chunks =
+                generate_precise_read_chunks(&self.extent_map, bitmap, MAX_DIRECT_IO_SIZE, 64);
+            chunks.sort_by_key(|chunk| chunk.disk_offset);
+            chunks
+        } else {
+            // HDD or no bitmap: Use standard chunk generation
+            let mut chunks =
+                generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
+            chunks.sort_by_key(|chunk| chunk.disk_offset);
+            chunks
         };
 
         // Build I/O operations with FRS tracking
@@ -384,19 +385,16 @@ impl ParallelMftReader {
                     )
                 };
 
-                match result {
-                    Ok(_) => {}
-                    Err(_) => {
-                        // SAFETY: `GetLastError` reads the calling thread's last-error
-                        // slot and does not dereference any Rust pointers.
-                        let last_error = unsafe { GetLastError() };
-                        if last_error != ERROR_IO_PENDING {
-                            // Signal workers to stop
-                            drop(tx);
-                            return Err(MftError::Io(std::io::Error::from_raw_os_error(
-                                last_error.0 as i32,
-                            )));
-                        }
+                if result.is_err() {
+                    // SAFETY: `GetLastError` reads the calling thread's last-error
+                    // slot and does not dereference any Rust pointers.
+                    let last_error = unsafe { GetLastError() };
+                    if last_error != ERROR_IO_PENDING {
+                        // Signal workers to stop
+                        drop(tx);
+                        return Err(MftError::Io(std::io::Error::from_raw_os_error(
+                            last_error.0 as i32,
+                        )));
                     }
                 }
 
@@ -472,7 +470,7 @@ impl ParallelMftReader {
                     warn!("Failed to send buffer to workers - channel closed");
                 }
 
-                bytes_read_total += bytes_transferred as u64;
+                bytes_read_total += u64::from(bytes_transferred);
                 completed_count += 1;
 
                 // Recycle buffer and queue next read
@@ -525,15 +523,12 @@ impl ParallelMftReader {
                         )
                     };
 
-                    match submit_result {
-                        Ok(_) => {}
-                        Err(_) => {
-                            // SAFETY: `GetLastError` reads the calling thread's
-                            // last-error slot and does not dereference Rust pointers.
-                            let last_error = unsafe { GetLastError() };
-                            if last_error != ERROR_IO_PENDING {
-                                warn!(error = ?last_error, "Failed to queue next read");
-                            }
+                    if submit_result.is_err() {
+                        // SAFETY: `GetLastError` reads the calling thread's
+                        // last-error slot and does not dereference Rust pointers.
+                        let last_error = unsafe { GetLastError() };
+                        if last_error != ERROR_IO_PENDING {
+                            warn!(error = ?last_error, "Failed to queue next read");
                         }
                     }
 

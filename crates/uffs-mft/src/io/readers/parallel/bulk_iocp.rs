@@ -190,24 +190,21 @@ impl ParallelMftReader {
                     )
                 };
 
-                match result {
-                    Ok(_) => {
-                        // Completed synchronously
+                if result.is_err() {
+                    // SAFETY: `GetLastError` reads the calling thread's last-error
+                    // slot and does not dereference any Rust pointers.
+                    let last_error = unsafe { GetLastError() };
+                    if last_error == ERROR_IO_PENDING {
+                        // Queued successfully - this is expected for async I/O
                         pending_count += 1;
+                    } else {
+                        return Err(MftError::Io(std::io::Error::from_raw_os_error(
+                            last_error.0 as i32,
+                        )));
                     }
-                    Err(_) => {
-                        // SAFETY: `GetLastError` reads the calling thread's last-error
-                        // slot and does not dereference any Rust pointers.
-                        let last_error = unsafe { GetLastError() };
-                        if last_error == ERROR_IO_PENDING {
-                            // Queued successfully - this is expected for async I/O
-                            pending_count += 1;
-                        } else {
-                            return Err(MftError::Io(std::io::Error::from_raw_os_error(
-                                last_error.0 as i32,
-                            )));
-                        }
-                    }
+                } else {
+                    // Completed synchronously
+                    pending_count += 1;
                 }
 
                 operations.push(op);
@@ -278,7 +275,7 @@ impl ParallelMftReader {
                     };
 
                     if result.is_ok() {
-                        bytes_read.fetch_add(bytes_transferred as u64, Ordering::Relaxed);
+                        bytes_read.fetch_add(u64::from(bytes_transferred), Ordering::Relaxed);
                         let prev = completed_count.fetch_add(1, Ordering::AcqRel);
                         if prev + 1 >= pending {
                             // We completed the last one
@@ -374,7 +371,9 @@ impl ParallelMftReader {
                         let parsed = parse_record_full(record_slice, frs as u64);
                         match &parsed {
                             ParseResult::Skip => skipped += 1,
-                            _ => results.push(parsed),
+                            ParseResult::Base(_) | ParseResult::Extension(_) => {
+                                results.push(parsed)
+                            }
                         }
                         processed += 1;
                     }

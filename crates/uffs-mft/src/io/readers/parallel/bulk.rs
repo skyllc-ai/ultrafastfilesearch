@@ -166,7 +166,7 @@ impl ParallelMftReader {
             // slice of `effective_bytes` bytes, and `bytes_read` is a valid
             // out-parameter.
             unsafe { ReadFile(handle, Some(target_slice), Some(&raw mut bytes_read), None) }?;
-            bytes_read_total += bytes_read as u64;
+            bytes_read_total += u64::from(bytes_read);
 
             // Report progress
             if let Some(cb) = &progress_callback {

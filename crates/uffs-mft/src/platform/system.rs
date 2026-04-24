@@ -96,23 +96,17 @@ pub fn volume_root_path(volume: char) -> PathBuf {
 pub fn infer_drive_from_path(path: &Path) -> Option<char> {
     use std::path::{Component, Prefix};
 
-    if let Some(Component::Prefix(prefix)) = path.components().next() {
-        match prefix.kind() {
-            Prefix::Disk(drive_byte) | Prefix::VerbatimDisk(drive_byte) => {
-                return Some((drive_byte as char).to_ascii_uppercase());
-            }
-            _ => {}
-        }
+    if let Some(Component::Prefix(prefix)) = path.components().next()
+        && let Prefix::Disk(drive_byte) | Prefix::VerbatimDisk(drive_byte) = prefix.kind()
+    {
+        return Some((drive_byte as char).to_ascii_uppercase());
     }
 
     std::env::current_dir().ok().and_then(|cwd| {
-        if let Some(Component::Prefix(prefix)) = cwd.components().next() {
-            match prefix.kind() {
-                Prefix::Disk(drive_byte) | Prefix::VerbatimDisk(drive_byte) => {
-                    Some((drive_byte as char).to_ascii_uppercase())
-                }
-                _ => None,
-            }
+        if let Some(Component::Prefix(prefix)) = cwd.components().next()
+            && let Prefix::Disk(drive_byte) | Prefix::VerbatimDisk(drive_byte) = prefix.kind()
+        {
+            Some((drive_byte as char).to_ascii_uppercase())
         } else {
             None
         }

@@ -115,7 +115,16 @@ pub(super) const fn dataframe_effective_mode(
                 MftReadMode::SlidingIocp
             }
         },
-        other => other,
+        MftReadMode::Parallel
+        | MftReadMode::Streaming
+        | MftReadMode::Prefetch
+        | MftReadMode::Pipelined
+        | MftReadMode::PipelinedParallel
+        | MftReadMode::IocpParallel
+        | MftReadMode::Bulk
+        | MftReadMode::BulkIocp
+        | MftReadMode::SlidingIocp
+        | MftReadMode::SlidingIocpInline => mode,
     }
 }
 
@@ -129,6 +138,15 @@ pub(super) const fn index_effective_mode(mode: MftReadMode, drive_type: DriveTyp
                 MftReadMode::SlidingIocpInline
             }
         },
-        other => other,
+        MftReadMode::Parallel
+        | MftReadMode::Streaming
+        | MftReadMode::Prefetch
+        | MftReadMode::Pipelined
+        | MftReadMode::PipelinedParallel
+        | MftReadMode::IocpParallel
+        | MftReadMode::Bulk
+        | MftReadMode::BulkIocp
+        | MftReadMode::SlidingIocp
+        | MftReadMode::SlidingIocpInline => mode,
     }
 }

@@ -308,7 +308,7 @@ impl MultiVolumeIocpReader {
             vol.pending_ops -= 1;
             vol.completed_io_ops += 1;
             total_pending -= 1;
-            bytes_read_total += bytes_transferred as u64;
+            bytes_read_total += u64::from(bytes_transferred);
 
             // Parse the completed buffer using unified pipeline
             let Some(buffer_slice) = completed_op

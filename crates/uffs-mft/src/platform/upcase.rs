@@ -424,7 +424,7 @@ fn read_clusters(
     runs: &[DataRun],
     bytes_per_cluster: u32,
 ) -> Result<Vec<u8>> {
-    let bpc = bytes_per_cluster as u64;
+    let bpc = u64::from(bytes_per_cluster);
     let mut buf = vec![0_u8; UPCASE_SIZE_BYTES];
     let mut offset: usize = 0;
 
