@@ -1926,11 +1926,14 @@ Post-retrofit verification (2026-04-23):
       nextest is available.
 - [x] **Pre-fast-gate enforcement** validation: deliberate
       `PR Fast CI` failure blocks preview build.  ✅ Baked on same
-      PR via a temporary sabotage commit (`exit 1` in `fmt` job);
-      `verify-pr-fast-green` correctly detected the red
-      `PR Fast CI / required` and failed preview before
-      `build-windows` / `build-test-archive` started.  Sabotage
-      reverted before merge.
+      PR via a temporary sabotage commit (`exit 1` as the first
+      step of the `file-size` job — unconditional, fast-failing,
+      cheapest); `PR Fast CI / required` = FAILURE on SHA
+      `0600ce674`, and `verify-pr-fast-green` correctly detected
+      the red aggregator at poll retry 48/120 and set `core.setFailed`,
+      so `build-windows` / `build-test-archive` / `smoke-windows` /
+      `manifest` all stayed `skipped` — zero Windows runner minutes
+      spent.  Sabotage reverted before merge.
 - [ ] **Fork-PR behaviour** validation: all jobs use
       `runs-on: ubuntu-22.04` / `windows-latest`, never self-hosted
       — static check is ✅ per grep; live fork-PR bake deferred.
