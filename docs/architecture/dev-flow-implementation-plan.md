@@ -1928,10 +1928,14 @@ Post-retrofit verification (2026-04-23):
 
 **Notes**:
 - The `verify-pr-fast-green` job is the critical gate that prevents
-  wasting runner minutes on non-mergeable SHAs.  The polling loop is
-  10 minutes; if PR-fast is slower than that, increase the cap in
-  one commit — don't raise the preview trigger's retry budget
-  arbitrarily.
+  wasting runner minutes on non-mergeable SHAs.  Polling budget:
+  120 × 15 s = 30 min, `timeout-minutes: 32`.  Originally 10 min;
+  recalibrated 2026-04-23 after the first full-matrix preview attempt
+  timed out with `PR Fast CI / required` still at `status=missing`
+  (the aggregator hadn't been registered as a check-run yet — tests
+  job still running).  See §10.5 deviations log.  If a future change
+  pushes PR Fast CI beyond 30 min at p99, bump the cap — don't
+  lower the preview gate's retry budget.
 - `build-test-archive` and `build-windows` share a `preview-windows`
   `rust-cache` shared-key so the Windows std + xwin sysroot are
   compiled once per SHA, not twice.
@@ -2024,6 +2028,7 @@ don't infer the wrong reason from commit messages.
 | 2026-04-23 | 4 | Plan §10.3 scheduled a 7-day parallel window (2026-04-23 → 2026-04-30).  Compressed to ~2h35m same-day on explicit maintainer direction. | Rationale: the confidence budget had already been exhausted by the same morning — broken-classify simulation executed and passed on PR #45, all four classification paths (mixed-code, docs-only, infra-only, broken-classify) validated with zero disagreements between lanes, and continuing the window would have burned ~5–7 min of runner time per PR for no additional signal.  Rollback path preserved: `git revert 6f99b86aa` restores `ci.yml` verbatim (no squash-merge loss), and `/tmp/ruleset-rollback.json` restores the 7-entry ruleset shape.  §4.3 updated with the two-step reverse sequence. |
 | 2026-04-23 | 4 | Plan v1 §4.3 instructed "do everything in a single commit" for the cutover.  This is a category error — the ruleset PUT is an API call, not a commit, so it cannot share atomicity with `.github/workflows/ci.yml` deletion.  Worse: with `ci.yml` deleted in a PR, the 6 `Tier 1 / *` required checks gate on a workflow that will never run on the PR's head SHA, producing `mergeStateStatus: BLOCKED` indefinitely. | Correct sequence (now in §4.3): (1) open the `ci.yml`-deletion PR and let it bake green on `PR Fast CI / required`; (2) PUT the ruleset BEFORE merge to drop the 6 `Tier 1 / *` checks; (3) squash-merge the PR; (4) verify.  Executed in a 16-second PUT→merge window on 2026-04-23 14:13:25 → 14:13:41 PDT with no PRs opened mid-window. |
 | 2026-04-23 | 5 | `preview-artifacts.yml`'s `build-test-archive` step captured the nextest version with `echo "version=$(cargo nextest --version \| awk '{print $2}')" >> "$GITHUB_OUTPUT"`.  `cargo nextest --version` on 0.9.132 emits multiple lines where `$2` evaluates to `0.9.132` on more than one of them; the command substitution preserves the inner newlines, and GitHub Actions rejects the resulting multi-line value with `Error: Unable to process file command 'output' successfully. Error: Invalid format '0.9.132'`.  Found by the live Phase 5 bake on the scratch PR that ticks items #1/#2/#4. | Constrained awk to `NR==1` so only the first output line is considered.  Minimal one-word edit; no change to the rest of the step.  Regression-guard comment added to the workflow explaining the failure mode so the fragility is not silently reintroduced.  Unblocks the bake; the same PR that fixes the bug also lands the resulting Phase 5 ticks in §10.3. |
+| 2026-04-23 | 5 | `verify-pr-fast-green`'s polling budget (60 × 10 s = 10 min, `timeout-minutes: 12`) was calibrated assuming the target PR would be docs-only / short-circuited.  On the first real full-matrix preview attempt (this same scratch PR, SHA `3ef74bd5f` — which counts as an *infra* change because it touches `.github/workflows/*.yml`), PR Fast CI's `tests` job was still running at minute 10 so the poller kept seeing `status=missing` (the `PR Fast CI / required` aggregator had not yet been registered as a check-run).  Preview failed at `verify-pr-fast-green` with `⏱  Timed out waiting for PR Fast CI / required on 3ef74bd`, which aborted `build-windows` / `build-test-archive` / `smoke-windows` — a **false-negative** gate: the PR would have gone green ~5 min later.  §10.3 Phase 5 notes (v2 wording) anticipated this with "if PR-fast is slower than 10 min, increase the cap in one commit", but nobody had exercised it against a real full-matrix PR before. | Bumped polling to 120 × 15 s = 30 min and `timeout-minutes: 32`.  Factored the magic numbers into named `MAX_RETRIES` / `RETRY_DELAY_MS` constants so the next calibration isn't a hunt.  Expanded the job's header comment with the rationale and an explicit "don't drop below p99 PR Fast CI wall-clock" guardrail.  Same PR as the nextest fix above. |
 
 ### 10.6 Open blockers
 

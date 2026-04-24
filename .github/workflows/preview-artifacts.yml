@@ -92,14 +92,24 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   # verify-pr-fast-green — refuse to waste runner minutes on a SHA that
   # isn't already merge-confidence-green.  Polls the GitHub Checks API
-  # for up to 10 minutes so a preview requested while PR-fast is still
-  # running just waits rather than failing.
+  # so a preview requested while PR-fast is still running waits rather
+  # than failing.
+  #
+  # Budget: 120 × 15 s = 30 min.  PR Fast CI on a full-matrix run
+  # (infra-change or rust-change) can take 20–25 min cold (test-build
+  # → tests sequential + windows-check in parallel).  The original
+  # 10-min cap was calibrated for docs-only short-circuit PRs and
+  # timed out on the first real infra-change preview attempt
+  # (2026-04-23; see §10.5 of the plan doc).  Don't drop this below
+  # the p99 PR Fast CI wall-clock without also adding explicit queue-
+  # awareness (the `in_progress` check is the easy part; `queued` /
+  # `waiting` require treating missing check-runs as "still coming").
   # ─────────────────────────────────────────────────────────────────────
   verify-pr-fast-green:
     name: Verify PR Fast CI is green
     needs: gate
     runs-on: ubuntu-22.04
-    timeout-minutes: 12
+    timeout-minutes: 32
     steps:
       - name: Poll check-runs for PR Fast CI / required
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
@@ -107,9 +117,12 @@ jobs:
           script: |
             const sha = '${{ needs.gate.outputs.sha }}';
             const want = 'PR Fast CI / required';
-            // Retry for up to ~10 min (60 × 10 s) to absorb the case
-            // where PR-fast is still running when the label lands.
-            for (let i = 0; i < 60; i++) {
+            // 120 × 15 s = 30 min — covers a cold full-matrix PR Fast
+            // CI run (test-build → tests sequential; observed ~20 min
+            // on infra-change PRs).  See comment block above this job.
+            const MAX_RETRIES   = 120;
+            const RETRY_DELAY_MS = 15_000;
+            for (let i = 0; i < MAX_RETRIES; i++) {
               const { data } = await github.rest.checks.listForRef({
                 owner: context.repo.owner,
                 repo:  context.repo.repo,
@@ -125,8 +138,8 @@ jobs:
                 core.setFailed(`❌ ${want} on ${sha.slice(0,7)}: ${run.conclusion}`);
                 return;
               }
-              core.info(`⏳ ${want} not complete yet (status=${run?.status ?? 'missing'}); retry ${i+1}/60`);
-              await new Promise(r => setTimeout(r, 10_000));
+              core.info(`⏳ ${want} not complete yet (status=${run?.status ?? 'missing'}); retry ${i+1}/${MAX_RETRIES}`);
+              await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
             }
             core.setFailed(`⏱  Timed out waiting for ${want} on ${sha.slice(0,7)}`);
 
