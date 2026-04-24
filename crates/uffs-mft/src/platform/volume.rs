@@ -6,8 +6,8 @@
 //! Exception: Volume handle + write-protect fallback handles; splitting would
 //! fragment the handle lifecycle.
 
-use std::mem::size_of;
-use std::time::Duration;
+use core::mem::size_of;
+use core::time::Duration;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{

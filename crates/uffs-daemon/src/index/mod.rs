@@ -1159,6 +1159,10 @@ impl IndexManager {
     }
 
     /// Determine the [`MftSource`] for a drive letter.
+    //
+    // Note: cannot be `const fn` — the non-Windows branch uses `?` on `Result`
+    // and calls non-const helpers (`find_best_mft_file`).  `cargo xwin clippy`
+    // only sees the Windows branch and incorrectly suggests `const`.
     fn resolve_drive_source(&self, letter: char) -> anyhow::Result<uffs_core::compact::MftSource> {
         #[cfg(windows)]
         {

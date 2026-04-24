@@ -149,10 +149,10 @@ impl MultiVolumeIocpReader {
             .collect();
 
         // Issue initial reads for all volumes
-        let mut total_pending = 0usize;
+        let mut total_pending = 0_usize;
 
         for (vol_idx, vol) in self.volumes.iter_mut().enumerate() {
-            let initial_count = std::cmp::min(vol.max_concurrency, vol.io_queue.len());
+            let initial_count = core::cmp::min(vol.max_concurrency, vol.io_queue.len());
 
             for slot_idx in 0..initial_count {
                 if let Some(op) = vol.io_queue.pop_front() {
@@ -176,7 +176,7 @@ impl MultiVolumeIocpReader {
                         op: op.clone(),
                     });
 
-                    let overlapped_ptr = std::ptr::addr_of_mut!(in_flight_op.overlapped);
+                    let overlapped_ptr = core::ptr::addr_of_mut!(in_flight_op.overlapped);
                     let buffer_ptr = in_flight_op.buffer.as_mut_slice().as_mut_ptr();
 
                     // SAFETY: `buffer_ptr` comes from the owned aligned buffer inside
@@ -218,13 +218,13 @@ impl MultiVolumeIocpReader {
         );
 
         // Process completions
-        let mut bytes_read_total = 0u64;
+        let mut bytes_read_total = 0_u64;
 
         while total_pending > 0 {
             let mut bytes_transferred: u32 = 0;
             let mut completion_key: usize = 0;
             let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
-                std::ptr::null_mut();
+                core::ptr::null_mut();
 
             // SAFETY: `iocp.raw_handle()` is live and all out-pointers reference
             // writable stack storage for the duration of the wait.
@@ -256,7 +256,7 @@ impl MultiVolumeIocpReader {
             let mut completed_slot = None;
             for (slot_idx, slot) in in_flight[vol_idx].iter_mut().enumerate() {
                 if let Some(op) = slot {
-                    let op_ptr = std::ptr::addr_of!(op.overlapped);
+                    let op_ptr = core::ptr::addr_of!(op.overlapped);
                     if op_ptr as *const _ == overlapped_ptr as *const _ {
                         completed_slot = Some(slot_idx);
                         break;
@@ -325,7 +325,7 @@ impl MultiVolumeIocpReader {
                     op: next_op.clone(),
                 });
 
-                let overlapped_ptr = std::ptr::addr_of_mut!(new_in_flight.overlapped);
+                let overlapped_ptr = core::ptr::addr_of_mut!(new_in_flight.overlapped);
                 let buffer_ptr = new_in_flight.buffer.as_mut_slice().as_mut_ptr();
 
                 // SAFETY: `buffer_ptr` comes from the owned aligned buffer inside
@@ -427,11 +427,11 @@ pub fn prepare_volume_state(
         }
 
         let chunk_bytes = effective_records as usize * record_size;
-        let mut offset_within_chunk = 0usize;
-        let mut frs_offset = 0u64;
+        let mut offset_within_chunk = 0_usize;
+        let mut frs_offset = 0_u64;
 
         while offset_within_chunk < chunk_bytes {
-            let io_size = std::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
+            let io_size = core::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
             let disk_offset =
                 chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
 

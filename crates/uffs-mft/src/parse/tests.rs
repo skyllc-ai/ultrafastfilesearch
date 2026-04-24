@@ -31,7 +31,7 @@ fn create_test_record(frs: u64, in_use: bool, is_dir: bool) -> Vec<u8> {
     data[0..4].copy_from_slice(&FILE_RECORD_MAGIC.to_le_bytes());
 
     // USA offset (0x30 is typical)
-    data[4..6].copy_from_slice(&0x30_u16.to_le_bytes());
+    data[4..6].copy_from_slice(&0x30__u16.to_le_bytes());
 
     // USA count (3 for 1024-byte record: check + 2 sectors)
     data[6..8].copy_from_slice(&3_u16.to_le_bytes());
@@ -46,17 +46,17 @@ fn create_test_record(frs: u64, in_use: bool, is_dir: bool) -> Vec<u8> {
     data[18..20].copy_from_slice(&1_u16.to_le_bytes());
 
     // First attribute offset (after header, 0x38 typical)
-    data[20..22].copy_from_slice(&0x38_u16.to_le_bytes());
+    data[20..22].copy_from_slice(&0x38__u16.to_le_bytes());
 
     // Flags: 0x01 = in use, 0x02 = directory
     let flags: u16 = u16::from(in_use) | (u16::from(is_dir) << 1);
     data[22..24].copy_from_slice(&flags.to_le_bytes());
 
     // Used size of record
-    data[24..28].copy_from_slice(&0x100_u32.to_le_bytes());
+    data[24..28].copy_from_slice(&0x100__u32.to_le_bytes());
 
     // Allocated size of record
-    data[28..32].copy_from_slice(&0x400_u32.to_le_bytes());
+    data[28..32].copy_from_slice(&0x400__u32.to_le_bytes());
 
     // Base record reference (0 for base records)
     data[32..40].copy_from_slice(&0_u64.to_le_bytes());
@@ -73,17 +73,17 @@ fn create_test_record(frs: u64, in_use: bool, is_dir: bool) -> Vec<u8> {
     data[0x30..0x32].copy_from_slice(&check_value.to_le_bytes());
 
     // USA entry 1 (original bytes from sector 1 end)
-    data[0x32..0x34].copy_from_slice(&0x1234_u16.to_le_bytes());
+    data[0x32..0x34].copy_from_slice(&0x1234__u16.to_le_bytes());
 
     // USA entry 2 (original bytes from sector 2 end)
-    data[0x34..0x36].copy_from_slice(&0x5678_u16.to_le_bytes());
+    data[0x34..0x36].copy_from_slice(&0x5678__u16.to_le_bytes());
 
     // Place check value at sector boundaries (will be replaced by fixup)
     data[510..512].copy_from_slice(&check_value.to_le_bytes());
     data[1022..1024].copy_from_slice(&check_value.to_le_bytes());
 
     // End marker attribute (type 0xFFFFFFFF)
-    data[0x38..0x3C].copy_from_slice(&0xFFFF_FFFF_u32.to_le_bytes());
+    data[0x38..0x3C].copy_from_slice(&0xFFFF_FFFF__u32.to_le_bytes());
 
     data
 }
@@ -144,7 +144,7 @@ fn create_test_record_with_attributes(
     let mut data = create_test_record(frs, in_use, is_dir);
     write_u64_le(&mut data, 32, base_file_record_segment);
 
-    let mut offset = 0x38_usize;
+    let mut offset = 0x38__usize;
     for attribute in attributes {
         assert!(offset + attribute.len() + 4 <= data.len());
         data[offset..offset + attribute.len()].copy_from_slice(attribute);
@@ -163,15 +163,15 @@ fn test_apply_fixup_valid_record() {
     let mut data = create_test_record(5, true, false);
 
     // Before fixup, sector ends have check value
-    assert_eq!(&data[510..512], &0xABCD_u16.to_le_bytes());
-    assert_eq!(&data[1022..1024], &0xABCD_u16.to_le_bytes());
+    assert_eq!(&data[510..512], &0xABCD__u16.to_le_bytes());
+    assert_eq!(&data[1022..1024], &0xABCD__u16.to_le_bytes());
 
     let result = apply_fixup(&mut data);
     assert!(result, "Fixup should succeed for valid record");
 
     // After fixup, sector ends have original values from USA
-    assert_eq!(&data[510..512], &0x1234_u16.to_le_bytes());
-    assert_eq!(&data[1022..1024], &0x5678_u16.to_le_bytes());
+    assert_eq!(&data[510..512], &0x1234__u16.to_le_bytes());
+    assert_eq!(&data[1022..1024], &0x5678__u16.to_le_bytes());
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn test_apply_fixup_corrupted_check_value() {
     let mut data = create_test_record(5, true, false);
 
     // Corrupt the check value at first sector end
-    data[510..512].copy_from_slice(&0xDEAD_u16.to_le_bytes());
+    data[510..512].copy_from_slice(&0xDEAD__u16.to_le_bytes());
 
     let result = apply_fixup(&mut data);
     assert!(!result, "Fixup should fail for corrupted check value");
@@ -210,8 +210,8 @@ fn test_apply_fixup_valid_record_on_unaligned_slice() {
 
     let result = apply_fixup(&mut storage[1..]);
     assert!(result, "Fixup should succeed for an unaligned record slice");
-    assert_eq!(&storage[511..513], &0x1234_u16.to_le_bytes());
-    assert_eq!(&storage[1023..1025], &0x5678_u16.to_le_bytes());
+    assert_eq!(&storage[511..513], &0x1234__u16.to_le_bytes());
+    assert_eq!(&storage[1023..1025], &0x5678__u16.to_le_bytes());
 }
 
 #[test]
@@ -258,7 +258,7 @@ fn test_parse_file_name_full_reads_unaligned_payload() {
     let name = "abc.txt";
     let name_utf16: Vec<u16> = name.encode_utf16().collect();
     let mut data = vec![0_u8; fn_offset + 66 + name_utf16.len() * 2];
-    let parent_directory = (7_u64 << 48_u32) | 0x002A_u64;
+    let parent_directory = (7_u64 << 48_u32) | 0x002A__u64;
     let creation_time = 116_444_736_000_000_100_i64;
     let modification_time = 116_444_736_000_000_200_i64;
     let mft_change_time = 116_444_736_000_000_300_i64;

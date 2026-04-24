@@ -67,7 +67,7 @@ pub(crate) enum MftSource {
 /// ```rust,ignore
 /// use uffs_mft::MftReader;
 ///
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// fn main() -> Result<(), Box<dyn core::error::Error>> {
 ///     let reader = MftReader::open('C')?;
 ///     let df = reader.read_all()?;
 ///     println!("Found {} files", df.height());

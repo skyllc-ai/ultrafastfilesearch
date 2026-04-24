@@ -160,11 +160,11 @@ impl ParallelMftReader {
                 });
             } else {
                 // HDD: Split into io_chunk_size pieces for predictable sequential reads
-                let mut offset_within_chunk = 0usize;
-                let mut frs_offset = 0u64;
+                let mut offset_within_chunk = 0_usize;
+                let mut frs_offset = 0_u64;
 
                 while offset_within_chunk < chunk_bytes {
-                    let io_size = std::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
+                    let io_size = core::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
                     let records_in_io = io_size / record_size;
                     let disk_offset =
                         chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
@@ -231,9 +231,9 @@ impl ParallelMftReader {
         let mut in_flight: Vec<Option<Pin<Box<InFlightOp>>>> =
             (0..concurrency).map(|_| None).collect();
 
-        let mut completed_count = 0usize;
-        let mut bytes_read_total = 0u64;
-        let mut records_parsed = 0usize;
+        let mut completed_count = 0_usize;
+        let mut bytes_read_total = 0_u64;
+        let mut records_parsed = 0_usize;
 
         // Queue initial reads
         for slot_id in 0..concurrency {
@@ -246,7 +246,7 @@ impl ParallelMftReader {
                 let mut in_flight_op = Box::pin(InFlightOp {
                     // SAFETY: `OVERLAPPED` is a plain Windows FFI struct and an
                     // all-zero value is the required initial state before offsets are set.
-                    overlapped: unsafe { std::mem::zeroed() },
+                    overlapped: unsafe { core::mem::zeroed() },
                     buffer,
                     op,
                 });
@@ -296,8 +296,8 @@ impl ParallelMftReader {
         let mut name_buf = String::with_capacity(256);
 
         // Timing instrumentation for I/O overlap analysis
-        let mut total_wait_time_ns = 0u64;
-        let mut total_parse_time_ns = 0u64;
+        let mut total_wait_time_ns = 0_u64;
+        let mut total_parse_time_ns = 0_u64;
 
         const WAIT_OPERATION: &str = "read_all_sliding_window_iocp_to_index";
 
@@ -305,7 +305,7 @@ impl ParallelMftReader {
             let mut bytes_transferred: u32 = 0;
             let mut completion_key: usize = 0;
             let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
-                std::ptr::null_mut();
+                core::ptr::null_mut();
 
             // Time I/O wait (GetQueuedCompletionStatus)
             let wait_start = Instant::now();
@@ -444,7 +444,7 @@ impl ParallelMftReader {
 
                     // Recycle buffer and queue next read
                     let recycled_buffer =
-                        std::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
+                        core::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
                     buffer_pool.push(recycled_buffer);
 
                     if let Some(next_op) = io_ops.pop_front() {
@@ -457,7 +457,7 @@ impl ParallelMftReader {
                         let mut new_in_flight = Box::pin(InFlightOp {
                             // SAFETY: `OVERLAPPED` is a plain Windows FFI struct and an
                             // all-zero value is the required initial state before offsets are set.
-                            overlapped: unsafe { std::mem::zeroed() },
+                            overlapped: unsafe { core::mem::zeroed() },
                             buffer,
                             op: next_op,
                         });
@@ -532,9 +532,9 @@ impl ParallelMftReader {
 
         // Parity debug: count files with size=0 vs size>0
         if std::env::var("UFFS_PARITY_DEBUG").is_ok() {
-            let mut files_with_size = 0usize;
-            let mut files_with_zero_size = 0usize;
-            let mut dirs = 0usize;
+            let mut files_with_size = 0_usize;
+            let mut files_with_zero_size = 0_usize;
+            let mut dirs = 0_usize;
             for record in &index.records {
                 if record.stdinfo.is_directory() {
                     dirs += 1;

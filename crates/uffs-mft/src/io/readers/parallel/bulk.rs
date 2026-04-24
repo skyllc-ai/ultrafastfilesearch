@@ -163,7 +163,7 @@ impl ParallelMftReader {
         };
 
         // Use par_chunks_mut to give each thread its own mutable slice
-        let records_per_chunk = 4096usize;
+        let records_per_chunk = 4096_usize;
         let bytes_per_chunk = records_per_chunk * record_size;
 
         if merge_extensions {
@@ -173,8 +173,8 @@ impl ParallelMftReader {
                 .enumerate()
                 .map(|(chunk_idx, chunk)| {
                     let mut results = Vec::new();
-                    let mut skipped = 0u64;
-                    let mut processed = 0u64;
+                    let mut skipped = 0_u64;
+                    let mut processed = 0_u64;
 
                     let start_frs = chunk_idx * records_per_chunk;
                     let records_in_chunk = chunk.len() / record_size;
@@ -215,8 +215,8 @@ impl ParallelMftReader {
                 .collect();
 
             // Combine results
-            let mut total_skipped = 0u64;
-            let mut total_processed = 0u64;
+            let mut total_skipped = 0_u64;
+            let mut total_processed = 0_u64;
             let mut all_results = Vec::with_capacity(estimated_records);
             for (chunk_results, skipped, processed) in results {
                 all_results.extend(chunk_results);
@@ -244,8 +244,8 @@ impl ParallelMftReader {
                 .enumerate()
                 .map(|(chunk_idx, chunk)| {
                     let mut records = Vec::new();
-                    let mut skipped = 0u64;
-                    let mut processed = 0u64;
+                    let mut skipped = 0_u64;
+                    let mut processed = 0_u64;
 
                     let start_frs = chunk_idx * records_per_chunk;
                     let records_in_chunk = chunk.len() / record_size;
@@ -282,7 +282,7 @@ impl ParallelMftReader {
                 .collect();
 
             // Combine results
-            let mut total_skipped = 0u64;
+            let mut total_skipped = 0_u64;
             let mut all_records = Vec::with_capacity(estimated_records);
             for (chunk_records, skipped, _processed) in results {
                 all_records.extend(chunk_records);

@@ -274,7 +274,7 @@ mod windows_impl {
         let path = format!("\\\\.\\{}:", volume);
         let wide: Vec<u16> = OsStr::new(&path)
             .encode_wide()
-            .chain(std::iter::once(0))
+            .chain(core::iter::once(0))
             .collect();
         // USN Journal operations require GENERIC_READ access
         // SAFETY: `wide` is a NUL-terminated UTF-16 path buffer that lives for the
@@ -346,7 +346,7 @@ mod windows_impl {
         start_usn: i64,
     ) -> Result<(Vec<UsnRecord>, i64), std::io::Error> {
         let handle = open_volume_handle(volume)?;
-        let mut buffer = vec![0u8; 64 * 1024];
+        let mut buffer = vec![0_u8; 64 * 1024];
         let mut all_records = Vec::new();
         let mut current_usn = start_usn;
 

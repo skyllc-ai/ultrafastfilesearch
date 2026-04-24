@@ -4,7 +4,7 @@
 //! Retrieval-pointer helpers for locating MFT extents on disk.
 
 #[cfg(windows)]
-use std::mem::size_of;
+use core::mem::size_of;
 
 #[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;
@@ -56,7 +56,7 @@ pub(super) fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
     let mut extents = Vec::new();
     // SAFETY: `STARTING_VCN_INPUT_BUFFER` is a plain FFI struct whose all-zero
     // bit pattern represents `StartingVcn == 0`, the initial query window.
-    let starting_vcn: STARTING_VCN_INPUT_BUFFER = unsafe { std::mem::zeroed() };
+    let starting_vcn: STARTING_VCN_INPUT_BUFFER = unsafe { core::mem::zeroed() };
 
     let mut buffer_size = 64 * 1024;
     let mut buffer: Vec<u8> = vec![0; buffer_size];

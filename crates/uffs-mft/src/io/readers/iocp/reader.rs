@@ -218,7 +218,7 @@ impl IocpMftReader {
             let mut bytes_transferred: u32 = 0;
             let mut completion_key: usize = 0;
             let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
-                std::ptr::null_mut();
+                core::ptr::null_mut();
 
             // SAFETY: `iocp.raw_handle()` is a live completion port and all
             // out-pointers reference writable stack storage for the duration of the wait.
@@ -280,7 +280,7 @@ impl IocpMftReader {
                     if let Some(next_chunk) = pending_chunks.pop_front() {
                         // Reuse the buffer
                         let mut buffer =
-                            std::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
+                            core::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
 
                         // Resize if needed
                         let next_read_size = next_chunk.record_count * u64::from(record_size);

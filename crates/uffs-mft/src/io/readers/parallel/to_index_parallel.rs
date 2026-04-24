@@ -60,7 +60,7 @@ impl ParallelMftReader {
         use std::collections::VecDeque;
         use std::pin::Pin;
         use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use core::sync::atomic::{AtomicUsize, Ordering};
 
         use crossbeam_channel::{Sender, bounded};
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
@@ -154,11 +154,11 @@ impl ParallelMftReader {
                 });
             } else {
                 // HDD: Split into io_chunk_size pieces for predictable sequential reads
-                let mut offset_within_chunk = 0usize;
-                let mut frs_offset = 0u64;
+                let mut offset_within_chunk = 0_usize;
+                let mut frs_offset = 0_u64;
 
                 while offset_within_chunk < chunk_bytes {
-                    let io_size = std::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
+                    let io_size = core::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
                     let records_in_io = io_size / record_size;
                     let disk_offset =
                         chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
@@ -225,7 +225,7 @@ impl ParallelMftReader {
 
             let handle = std::thread::spawn(move || {
                 let mut results: Vec<ParseResult> = Vec::with_capacity(records_per_worker);
-                let mut local_parsed = 0usize;
+                let mut local_parsed = 0_usize;
 
                 // Process buffers until channel closes
                 // Use `mut buffer` to apply fixup in-place (zero-copy optimization)
@@ -298,8 +298,8 @@ impl ParallelMftReader {
         let mut in_flight: Vec<Option<Pin<Box<InFlightOp>>>> =
             (0..concurrency).map(|_| None).collect();
 
-        let mut completed_count = 0usize;
-        let mut bytes_read_total = 0u64;
+        let mut completed_count = 0_usize;
+        let mut bytes_read_total = 0_u64;
 
         // Queue initial reads
         for slot_id in 0..concurrency {
@@ -313,7 +313,7 @@ impl ParallelMftReader {
                 let mut in_flight_op = Box::pin(InFlightOp {
                     // SAFETY: `OVERLAPPED` is a plain Windows FFI struct and an
                     // all-zero value is the required initial state before offsets are set.
-                    overlapped: unsafe { std::mem::zeroed() },
+                    overlapped: unsafe { core::mem::zeroed() },
                     buffer,
                     op,
                 });
@@ -364,7 +364,7 @@ impl ParallelMftReader {
             let mut bytes_transferred: u32 = 0;
             let mut completion_key: usize = 0;
             let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
-                std::ptr::null_mut();
+                core::ptr::null_mut();
 
             // SAFETY: `iocp.raw_handle()` is a live completion port and all out-pointers
             // reference writable stack storage for the duration of the wait.
@@ -421,7 +421,7 @@ impl ParallelMftReader {
 
                     // Recycle buffer and queue next read
                     let recycled_buffer =
-                        std::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
+                        core::mem::replace(&mut op_mut.buffer, AlignedBuffer::new(0));
                     buffer_pool.push(recycled_buffer);
 
                     if let Some(next_op) = io_ops.pop_front() {
@@ -434,7 +434,7 @@ impl ParallelMftReader {
                         let mut new_in_flight = Box::pin(InFlightOp {
                             // SAFETY: `OVERLAPPED` is a plain Windows FFI struct and an
                             // all-zero value is the required initial state before offsets are set.
-                            overlapped: unsafe { std::mem::zeroed() },
+                            overlapped: unsafe { core::mem::zeroed() },
                             buffer,
                             op: next_op,
                         });

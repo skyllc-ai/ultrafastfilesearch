@@ -119,7 +119,7 @@ impl FileFlags {
 ///
 /// // Filter for directories only
 /// df.lazy()
-///     .filter(col("flags").bitand(lit(raw_flags::DIRECTORY)).neq(lit(0u16)))
+///     .filter(col("flags").bitand(lit(raw_flags::DIRECTORY)).neq(lit(0_u16)))
 ///     .collect()?;
 /// ```
 pub mod raw_flags {

@@ -99,7 +99,7 @@ impl ParallelMftReader {
 
         // Pin all overlapped structs for pointer stability
         let mut operations: Vec<Pin<Box<BulkOverlappedRead>>> = Vec::with_capacity(estimated_ops);
-        let mut pending_count = 0usize;
+        let mut pending_count = 0_usize;
 
         // Queue ALL reads at once, breaking large chunks into 1MB I/O operations
         for chunk in sorted_chunks.iter() {
@@ -115,7 +115,7 @@ impl ParallelMftReader {
             let chunk_buffer_offset = chunk.start_frs as usize * record_size + skip_begin_bytes;
 
             // Break this chunk into adaptive I/O operations
-            let mut offset_within_chunk = 0usize;
+            let mut offset_within_chunk = 0_usize;
             while offset_within_chunk < effective_bytes {
                 let remaining = effective_bytes - offset_within_chunk;
                 let io_size = remaining.min(io_chunk_size);
@@ -126,7 +126,7 @@ impl ParallelMftReader {
                 let mut op = Box::pin(BulkOverlappedRead {
                     // SAFETY: `OVERLAPPED` is a plain Windows FFI struct and an
                     // all-zero value is the required initial state before offsets are set.
-                    overlapped: unsafe { std::mem::zeroed() },
+                    overlapped: unsafe { core::mem::zeroed() },
                 });
 
                 // Set offset in OVERLAPPED
@@ -196,7 +196,7 @@ impl ParallelMftReader {
         // Wait for all completions using multiple worker threads
         // This keeps the I/O pipeline full by processing completions in parallel
         use std::sync::Arc;
-        use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+        use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
         let bytes_read_total = Arc::new(AtomicU64::new(0));
         let completed = Arc::new(AtomicUsize::new(0));
@@ -242,7 +242,7 @@ impl ParallelMftReader {
                     let mut bytes_transferred: u32 = 0;
                     let mut completion_key: usize = 0;
                     let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
-                        std::ptr::null_mut();
+                        core::ptr::null_mut();
 
                     // Use short timeout to allow checking completion count
                     // SAFETY: `iocp_handle` is live and all out-pointers reference
@@ -314,7 +314,7 @@ impl ParallelMftReader {
             total_records
         };
 
-        let records_per_chunk = 4096usize;
+        let records_per_chunk = 4096_usize;
         let bytes_per_chunk = records_per_chunk * record_size;
 
         if merge_extensions {
@@ -323,8 +323,8 @@ impl ParallelMftReader {
                 .enumerate()
                 .map(|(chunk_idx, chunk)| {
                     let mut results = Vec::new();
-                    let mut skipped = 0u64;
-                    let mut processed = 0u64;
+                    let mut skipped = 0_u64;
+                    let mut processed = 0_u64;
 
                     let start_frs = chunk_idx * records_per_chunk;
                     let records_in_chunk = chunk.len() / record_size;
@@ -381,8 +381,8 @@ impl ParallelMftReader {
                 .enumerate()
                 .map(|(chunk_idx, chunk)| {
                     let mut records = Vec::new();
-                    let mut skipped = 0u64;
-                    let mut processed = 0u64;
+                    let mut skipped = 0_u64;
+                    let mut processed = 0_u64;
 
                     let start_frs = chunk_idx * records_per_chunk;
                     let records_in_chunk = chunk.len() / record_size;

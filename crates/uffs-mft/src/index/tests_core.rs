@@ -91,7 +91,7 @@ fn test_names_buffer() {
 
 #[test]
 fn test_cmp_ascii_case_insensitive() {
-    use std::cmp::Ordering;
+    use core::cmp::Ordering;
 
     // Equal strings (different case)
     assert_eq!(

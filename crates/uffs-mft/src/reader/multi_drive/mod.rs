@@ -60,7 +60,7 @@ pub struct DriveReadResult {
 /// use uffs_mft::MultiDriveMftReader;
 ///
 /// #[tokio::main]
-/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// async fn main() -> Result<(), Box<dyn core::error::Error>> {
 ///     let reader = MultiDriveMftReader::new(vec!['C', 'D', 'E']);
 ///     let df = reader.read_all().await?;
 ///     println!("Found {} files across all drives", df.height());

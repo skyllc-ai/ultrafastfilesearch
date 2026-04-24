@@ -13,10 +13,6 @@
 // Performance-critical hot-path parser — lint suppressions match the style of
 // other NTFS parser modules in this crate.
 #![expect(
-    clippy::unseparated_literal_suffix,
-    reason = "literal suffixes like 0u32 are common in NTFS struct parsing"
-)]
-#![expect(
     clippy::doc_markdown,
     reason = "NTFS terminology like MftIndex does not need backticks in internal docs"
 )]
@@ -123,8 +119,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let mut primary_name: Option<(String, u64, u8, u16)> = None; // (name, parent_frs, namespace, parse_index)
     let mut additional_names: SmallVec<[(String, u64, u16); 4]> = SmallVec::new();
     let mut name_parse_counter: u16 = 0;
-    let mut default_size = 0u64;
-    let mut default_allocated = 0u64;
+    let mut default_size = 0_u64;
+    let mut default_allocated = 0_u64;
     // ADS: (stream_name, size, allocated)
     let mut additional_streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
     // Internal streams for tree-metrics (size, allocated)

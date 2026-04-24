@@ -181,7 +181,7 @@ impl MftBitmap {
             };
 
             let mask = if byte_idx == start_byte && !start.is_multiple_of(8) {
-                0xFF_u8 << (start % 8)
+                0xFF__u8 << (start % 8)
             } else if byte_idx == end_byte - 1 && !end.is_multiple_of(8) {
                 (1_u8 << (end % 8)) - 1
             } else {

@@ -82,9 +82,9 @@ impl ParallelMftReader {
         }
 
         let mut io_ops: VecDeque<IoOp> = VecDeque::new();
-        let mut buffer_offset = 0usize;
-        let mut chunks_with_skips = 0usize;
-        let mut total_skipped_records = 0u64;
+        let mut buffer_offset = 0_usize;
+        let mut chunks_with_skips = 0_usize;
+        let mut total_skipped_records = 0_u64;
 
         for chunk in sorted_chunks.iter() {
             let skip_begin_bytes = chunk.skip_begin as usize * record_size;
@@ -116,10 +116,10 @@ impl ParallelMftReader {
             }
 
             let chunk_bytes = effective_records as usize * record_size;
-            let mut offset_within_chunk = 0usize;
+            let mut offset_within_chunk = 0_usize;
 
             while offset_within_chunk < chunk_bytes {
-                let io_size = std::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
+                let io_size = core::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
                 let disk_offset =
                     chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
 
@@ -179,8 +179,8 @@ impl ParallelMftReader {
         let mut in_flight: Vec<Option<Pin<Box<InFlightOp>>>> =
             (0..concurrency).map(|_| None).collect();
 
-        let mut completed_count = 0usize;
-        let mut bytes_read_total = 0u64;
+        let mut completed_count = 0_usize;
+        let mut bytes_read_total = 0_u64;
 
         // Queue initial reads (adaptive concurrency)
         for slot_id in 0..concurrency {
@@ -193,7 +193,7 @@ impl ParallelMftReader {
                 let mut in_flight_op = Box::pin(InFlightOp {
                     // SAFETY: `OVERLAPPED` is a plain Windows FFI struct and an
                     // all-zero value is the required initial state before offsets are set.
-                    overlapped: unsafe { std::mem::zeroed() },
+                    overlapped: unsafe { core::mem::zeroed() },
                     buffer,
                     op,
                 });
@@ -249,7 +249,7 @@ impl ParallelMftReader {
             let mut bytes_transferred: u32 = 0;
             let mut completion_key: usize = 0;
             let mut overlapped_ptr: *mut windows::Win32::System::IO::OVERLAPPED =
-                std::ptr::null_mut();
+                core::ptr::null_mut();
 
             // SAFETY: `iocp.raw_handle()` is a live completion port and all out-pointers
             // reference writable stack storage for the duration of the wait.
@@ -300,7 +300,7 @@ impl ParallelMftReader {
                     completed_count += 1;
 
                     // Recycle buffer and queue next read
-                    let recycled_buffer = std::mem::replace(
+                    let recycled_buffer = core::mem::replace(
                         &mut op_mut.buffer,
                         AlignedBuffer::new(0), // Placeholder
                     );
@@ -317,7 +317,7 @@ impl ParallelMftReader {
                         let mut new_in_flight = Box::pin(InFlightOp {
                             // SAFETY: `OVERLAPPED` is a plain Windows FFI struct and an
                             // all-zero value is the required initial state before offsets are set.
-                            overlapped: unsafe { std::mem::zeroed() },
+                            overlapped: unsafe { core::mem::zeroed() },
                             buffer,
                             op: next_op,
                         });
@@ -387,8 +387,8 @@ impl ParallelMftReader {
                 .enumerate()
                 .map(|(chunk_idx, chunk)| {
                     let mut results = Vec::new();
-                    let mut skipped = 0u64;
-                    let mut processed = 0u64;
+                    let mut skipped = 0_u64;
+                    let mut processed = 0_u64;
 
                     let start_frs = chunk_idx * records_per_chunk;
                     let records_in_chunk = chunk.len() / record_size;
@@ -445,8 +445,8 @@ impl ParallelMftReader {
                 .enumerate()
                 .map(|(chunk_idx, chunk)| {
                     let mut records = Vec::new();
-                    let mut skipped = 0u64;
-                    let mut processed = 0u64;
+                    let mut skipped = 0_u64;
+                    let mut processed = 0_u64;
 
                     let start_frs = chunk_idx * records_per_chunk;
                     let records_in_chunk = chunk.len() / record_size;

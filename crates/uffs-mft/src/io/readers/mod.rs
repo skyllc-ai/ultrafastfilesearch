@@ -8,7 +8,7 @@ pub(super) use std::cell::RefCell;
 #[cfg(windows)]
 pub(super) use std::sync::Arc;
 #[cfg(windows)]
-pub(super) use std::sync::atomic::{AtomicU64, Ordering};
+pub(super) use core::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(windows)]
 pub(super) use rayon::prelude::*;

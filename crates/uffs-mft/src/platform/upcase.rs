@@ -337,7 +337,7 @@ pub fn read_upcase_table(drive: char) -> Result<Box<[u16; 65_536]>> {
     let frs10_offset = mft_offset + UPCASE_FRS * rs as u64;
 
     // Read FRS 10 from the MFT on disk.
-    let mut record = vec![0u8; rs];
+    let mut record = vec![0_u8; rs];
     volume_read_at(handle.raw_handle(), frs10_offset, &mut record)?;
     apply_fixup(&mut record);
 
@@ -361,7 +361,7 @@ pub fn read_upcase_table(drive: char) -> Result<Box<[u16; 65_536]>> {
 
     // Reinterpret as [u16; 65_536].
     let u16_slice: &[u16] = bytemuck::cast_slice(&buf);
-    let mut table = Box::new([0u16; 65_536]);
+    let mut table = Box::new([0_u16; 65_536]);
     table.copy_from_slice(u16_slice);
 
     tracing::info!(
@@ -393,7 +393,7 @@ fn volume_read_at(
         })?;
     }
 
-    let mut bytes_read = 0u32;
+    let mut bytes_read = 0_u32;
     // SAFETY: ReadFile writes into valid writable `buf`.
     #[expect(unsafe_code, reason = "FFI: ReadFile")]
     unsafe {
@@ -419,7 +419,7 @@ fn read_clusters(
     bytes_per_cluster: u32,
 ) -> Result<Vec<u8>> {
     let bpc = bytes_per_cluster as u64;
-    let mut buf = vec![0u8; UPCASE_SIZE_BYTES];
+    let mut buf = vec![0_u8; UPCASE_SIZE_BYTES];
     let mut offset: usize = 0;
 
     for run in runs {

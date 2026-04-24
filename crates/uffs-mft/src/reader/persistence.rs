@@ -107,7 +107,7 @@ impl MftReader {
         let extent_map = MftExtentMap::new(extents, volume_data.bytes_per_cluster, record_size);
         let total_records = extent_map.total_records();
         let total_size = total_records as usize * record_size as usize;
-        let mut output = vec![0u8; total_size];
+        let mut output = vec![0_u8; total_size];
 
         let drive_type = detect_drive_type(self.volume);
         let parallel_reader =

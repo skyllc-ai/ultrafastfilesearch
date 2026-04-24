@@ -45,9 +45,9 @@ fn decode_utf16le_into(bytes: &[u8], out: &mut String) {
                     let low = u16::from_le_bytes(low_pair);
                     if (0xDC00..=0xDFFF).contains(&low) {
                         i += 2;
-                        let cp = 0x1_0000_u32
-                            + ((u32::from(code) - 0xD800_u32) << 10_u32)
-                            + (u32::from(low) - 0xDC00_u32);
+                        let cp = 0x1_0000__u32
+                            + ((u32::from(code) - 0xD800__u32) << 10_u32)
+                            + (u32::from(low) - 0xDC00__u32);
                         if let Some(ch) = char::from_u32(cp) {
                             out.push(ch);
                         } else {

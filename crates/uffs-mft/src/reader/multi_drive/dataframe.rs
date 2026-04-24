@@ -132,7 +132,7 @@ impl MultiDriveMftReader {
             .filter(|name| name.as_str() != "drive")
             .map(|name| name.to_string())
             .collect();
-        let columns: Vec<_> = std::iter::once("drive".to_string())
+        let columns: Vec<_> = core::iter::once("drive".to_string())
             .chain(column_names)
             .map(|name| col(&name))
             .collect();

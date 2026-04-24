@@ -4,7 +4,7 @@
 //! Windows privilege, path, and drive-classification helpers.
 
 #[cfg(windows)]
-use std::mem::size_of;
+use core::mem::size_of;
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
 
@@ -158,7 +158,7 @@ fn is_ntfs_volume(drive_letter: char) -> bool {
 
     let root_path: Vec<u16> = format!("{}:\\", drive_letter.to_ascii_uppercase())
         .encode_utf16()
-        .chain(std::iter::once(0))
+        .chain(core::iter::once(0))
         .collect();
 
     // SAFETY: `root_path` is UTF-16 and NUL-terminated for the duration of the
@@ -205,7 +205,7 @@ pub fn is_volume_read_only(drive_letter: char) -> bool {
 
     let root_path: Vec<u16> = format!("{}:\\", drive_letter.to_ascii_uppercase())
         .encode_utf16()
-        .chain(std::iter::once(0))
+        .chain(core::iter::once(0))
         .collect();
 
     let mut fs_flags: u32 = 0;
@@ -355,7 +355,7 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
 
     let drive_path: Vec<u16> = format!("\\\\.\\{}:", drive_letter.to_ascii_uppercase())
         .encode_utf16()
-        .chain(std::iter::once(0))
+        .chain(core::iter::once(0))
         .collect();
 
     // SAFETY: `drive_path` is UTF-16 and NUL-terminated for the duration of the
@@ -509,7 +509,7 @@ fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
 
     let drive_path: Vec<u16> = format!("\\\\.\\{}:", drive_letter.to_ascii_uppercase())
         .encode_utf16()
-        .chain(std::iter::once(0))
+        .chain(core::iter::once(0))
         .collect();
 
     // SAFETY: `drive_path` is UTF-16 and NUL-terminated for the duration of the
