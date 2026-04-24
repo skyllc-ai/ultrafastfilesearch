@@ -123,10 +123,6 @@ pub enum MftError {
 impl MftError {
     /// Classifies a Tokio join error for a long-running MFT operation.
     #[cfg(any(windows, test))]
-    #[expect(
-        clippy::single_call_fn,
-        reason = "Windows async read entrypoints reuse this helper outside non-Windows test builds"
-    )]
     #[must_use]
     pub(crate) fn from_join_error(operation: &'static str, error: &tokio::task::JoinError) -> Self {
         if error.is_cancelled() {

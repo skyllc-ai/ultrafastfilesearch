@@ -396,6 +396,10 @@ impl IndexManager {
     /// daemon.  Raw NTFS volume reads can hang indefinitely when a
     /// drive is unresponsive (bad sectors, sleep, USB disconnect).
     #[cfg(windows)]
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "Duration::from_mins is unstable (rust-lang/rust#120301); cannot migrate yet"
+    )]
     const DRIVE_LOAD_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(300);
 
     /// Load live Windows drives — **all drives in parallel**.
@@ -1163,6 +1167,10 @@ impl IndexManager {
     // Note: cannot be `const fn` — the non-Windows branch uses `?` on `Result`
     // and calls non-const helpers (`find_best_mft_file`).  `cargo xwin clippy`
     // only sees the Windows branch and incorrectly suggests `const`.
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "non-Windows branch uses `?` on Result and calls non-const helpers; cannot be const"
+    )]
     fn resolve_drive_source(&self, letter: char) -> anyhow::Result<uffs_core::compact::MftSource> {
         #[cfg(windows)]
         {

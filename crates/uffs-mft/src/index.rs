@@ -75,7 +75,6 @@ pub use self::usn::UsnApplyStats;
     clippy::shadow_unrelated,
     reason = "test code — variable reuse for setup"
 )]
-#[expect(clippy::std_instead_of_core, reason = "test code uses std types")]
 #[expect(
     clippy::str_to_string,
     reason = "test code — String conversion is fine"
