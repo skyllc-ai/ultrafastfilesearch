@@ -351,7 +351,7 @@ impl MftReader {
     ) -> Result<DataFrame> {
         let base_capacity = parsed_records.len();
         let capacity = if expand_links {
-            (base_capacity as f64 * 1.2) as usize
+            (base_capacity as f64 * 1.2_f64) as usize
         } else {
             base_capacity
         };

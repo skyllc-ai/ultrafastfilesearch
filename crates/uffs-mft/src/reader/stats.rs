@@ -91,16 +91,21 @@ impl MftStats {
             );
         }
 
+        /// Bytes per gibibyte, in `f64`.
+        const BYTES_PER_GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+        /// Bytes per mebibyte, in `f64`.
+        const BYTES_PER_MIB: f64 = 1024.0 * 1024.0;
+
         debug!(
             total_file_size_gb = format!(
                 "{:.2}",
-                self.total_file_size as f64 / (1024.0 * 1024.0 * 1024.0)
+                self.total_file_size as f64 / BYTES_PER_GIB
             ),
             total_allocated_gb = format!(
                 "{:.2}",
-                self.total_allocated_size as f64 / (1024.0 * 1024.0 * 1024.0)
+                self.total_allocated_size as f64 / BYTES_PER_GIB
             ),
-            slack_space_mb = format!("{:.2}", self.slack_space() as f64 / (1024.0 * 1024.0)),
+            slack_space_mb = format!("{:.2}", self.slack_space() as f64 / BYTES_PER_MIB),
             slack_percentage = format!("{:.1}%", self.slack_percentage()),
             "💾 Storage analysis"
         );

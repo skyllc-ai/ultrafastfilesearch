@@ -138,7 +138,7 @@ impl OverlappedRead {
     /// Sets the file offset for the overlapped read.
     pub fn set_offset(&mut self, offset: u64) {
         self.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-        self.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
+        self.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32_u32) as u32;
     }
 
     /// Gets a mutable pointer to the OVERLAPPED structure.

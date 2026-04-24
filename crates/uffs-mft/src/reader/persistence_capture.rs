@@ -163,12 +163,12 @@ impl MftReader {
             Ok(())
         });
 
-        let mut chunks_written = 0;
+        let mut chunks_written: usize = 0;
         for data in rx {
             writer.write_chunk(&data)?;
             chunks_written += 1;
 
-            if chunks_written % 100 == 0 {
+            if chunks_written.is_multiple_of(100) {
                 debug!(
                     "Streaming save progress: {}/{} chunks",
                     chunks_written, total_chunks

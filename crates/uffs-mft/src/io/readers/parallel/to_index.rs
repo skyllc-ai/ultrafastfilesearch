@@ -265,7 +265,7 @@ impl ParallelMftReader {
                 // flight; this only projects a mutable reference without moving it.
                 let op_mut = unsafe { in_flight_op.as_mut().get_unchecked_mut() };
                 op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
+                op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32_u32) as u32;
 
                 let overlapped_ptr = &raw mut op_mut.overlapped;
                 let read_size = op_mut.op.size;
@@ -501,7 +501,7 @@ impl ParallelMftReader {
                     let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
                     new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
                     new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
-                        (offset >> 32) as u32;
+                        (offset >> 32_u32) as u32;
 
                     let overlapped_ptr = &raw mut new_op_mut.overlapped;
                     let read_size = new_op_mut.op.size;
@@ -552,9 +552,9 @@ impl ParallelMftReader {
         // Calculate overlap efficiency: if wait_ms + parse_ms > total_ms,
         // then we had effective overlap (parse happened while other I/O was in flight)
         let overlap_pct = if total_ms > 0 {
-            ((wait_ms + parse_ms).saturating_sub(total_ms) as f64 / total_ms as f64) * 100.0
+            ((wait_ms + parse_ms).saturating_sub(total_ms) as f64 / total_ms as f64) * 100.0_f64
         } else {
-            0.0
+            0.0_f64
         };
 
         debug!(

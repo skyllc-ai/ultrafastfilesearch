@@ -214,7 +214,7 @@ impl ParallelMftReader {
                 // flight; this only projects a mutable reference without moving it.
                 let op_mut = unsafe { in_flight_op.as_mut().get_unchecked_mut() };
                 op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
+                op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32_u32) as u32;
 
                 // Issue read
                 let overlapped_ptr = &raw mut op_mut.overlapped;
@@ -362,7 +362,7 @@ impl ParallelMftReader {
                     let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
                     new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
                     new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
-                        (offset >> 32) as u32;
+                        (offset >> 32_u32) as u32;
 
                     let overlapped_ptr = &raw mut new_op_mut.overlapped;
                     let read_size = new_op_mut.op.size;

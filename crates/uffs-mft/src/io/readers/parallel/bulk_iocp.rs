@@ -140,7 +140,7 @@ impl ParallelMftReader {
 
                 // Set offset in OVERLAPPED
                 op.overlapped.Anonymous.Anonymous.Offset = (disk_offset & 0xFFFF_FFFF) as u32;
-                op.overlapped.Anonymous.Anonymous.OffsetHigh = (disk_offset >> 32) as u32;
+                op.overlapped.Anonymous.Anonymous.OffsetHigh = (disk_offset >> 32_u32) as u32;
 
                 // Issue async read
                 // SAFETY: The pointer is derived from `mft_buffer`, `buffer_offset`

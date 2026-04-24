@@ -239,16 +239,16 @@ impl MftReader {
         let total_ms = total_start.elapsed().as_millis() as u64;
 
         // Calculate throughput
-        let total_secs = total_ms as f64 / 1000.0;
-        let throughput_mb_s = if total_secs > 0.0 {
-            (mft_size_bytes as f64 / (1024.0 * 1024.0)) / total_secs
+        let total_secs = total_ms as f64 / 1000.0_f64;
+        let throughput_mb_s = if total_secs > 0.0_f64 {
+            (mft_size_bytes as f64 / (1024.0_f64 * 1024.0_f64)) / total_secs
         } else {
-            0.0
+            0.0_f64
         };
-        let records_per_sec = if total_secs > 0.0 {
+        let records_per_sec = if total_secs > 0.0_f64 {
             records_parsed as f64 / total_secs
         } else {
-            0.0
+            0.0_f64
         };
 
         let timings = PhaseTimings {
