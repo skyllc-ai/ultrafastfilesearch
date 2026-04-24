@@ -280,16 +280,15 @@ struct UpcaseDataRuns {
 fn parse_data_runs(record_bytes: &[u8]) -> Result<UpcaseDataRuns> {
     use crate::ntfs::{AttributeIterator, AttributeType};
 
-    let attrs = AttributeIterator::new(record_bytes)
+    let mut attrs = AttributeIterator::new(record_bytes)
         .ok_or_else(|| MftError::InvalidData("FRS 10 ($UpCase): invalid record header".into()))?;
 
     let data_attr = attrs
-        .filter(|a| {
-            a.attribute_type() == Some(AttributeType::Data)
-                && a.is_non_resident()
-                && a.header.name_length == 0
+        .find(|attr| {
+            attr.attribute_type() == Some(AttributeType::Data)
+                && attr.is_non_resident()
+                && attr.header.name_length == 0
         })
-        .next()
         .ok_or_else(|| {
             MftError::InvalidData("FRS 10 ($UpCase): no non-resident unnamed DATA attribute".into())
         })?;

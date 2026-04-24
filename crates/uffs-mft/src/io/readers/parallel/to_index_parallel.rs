@@ -124,14 +124,14 @@ impl ParallelMftReader {
                 // Use MAX_DIRECT_IO_SIZE as the max chunk size for direct I/O
                 let mut chunks =
                     generate_precise_read_chunks(&self.extent_map, bitmap, MAX_DIRECT_IO_SIZE, 64);
-                chunks.sort_by_key(|c| c.disk_offset);
+                chunks.sort_by_key(|chunk| chunk.disk_offset);
                 chunks
             }
             _ => {
                 // HDD or no bitmap: Use standard chunk generation
                 let mut chunks =
                     generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
-                chunks.sort_by_key(|c| c.disk_offset);
+                chunks.sort_by_key(|chunk| chunk.disk_offset);
                 chunks
             }
         };
@@ -513,8 +513,8 @@ impl ParallelMftReader {
                         merger.add_result(result);
                     }
                 }
-                Err(e) => {
-                    warn!("Worker thread panicked: {:?}", e);
+                Err(err) => {
+                    warn!("Worker thread panicked: {:?}", err);
                 }
             }
         }

@@ -128,9 +128,9 @@ pub fn infer_drive_from_path(path: &Path) -> Option<char> {
 pub fn detect_boot_drive() -> char {
     std::env::var("SystemDrive")
         .ok()
-        .and_then(|s| s.chars().next())
+        .and_then(|drive| drive.chars().next())
         .map(|ch| ch.to_ascii_uppercase())
-        .filter(|ch| ch.is_ascii_uppercase())
+        .filter(char::is_ascii_uppercase)
         .unwrap_or('C')
 }
 

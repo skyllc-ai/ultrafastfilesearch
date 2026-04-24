@@ -582,10 +582,10 @@ mod windows_impl {
                         }
                     }
                 }
-                Err(e) => {
+                Err(err) => {
                     tracing::trace!(
                         frs,
-                        error = %e,
+                        error = %err,
                         "⚠️ Targeted MFT read failed for FRS (skipping)"
                     );
                 }
@@ -613,10 +613,10 @@ mod windows_impl {
                         success_count += 1;
                     }
                 }
-                Err(e) => {
+                Err(err) => {
                     tracing::trace!(
                         frs = *ext_frs,
-                        error = %e,
+                        error = %err,
                         "⚠️ Extension MFT record read failed (skipping)"
                     );
                 }
@@ -632,7 +632,7 @@ mod windows_impl {
                 return;
             }
             let header = match FileRecordSegmentHeader::read_from_prefix(data) {
-                Ok((h, _)) => h,
+                Ok((hdr, _)) => hdr,
                 Err(_) => return,
             };
 
@@ -641,7 +641,7 @@ mod windows_impl {
 
             while offset + size_of::<AttributeRecordHeader>() <= max_offset {
                 let attr = match AttributeRecordHeader::read_from_prefix(&data[offset..]) {
-                    Ok((a, _)) => a,
+                    Ok((hdr, _)) => hdr,
                     Err(_) => break,
                 };
                 if attr.type_code == AttributeType::End as u32 {
@@ -657,12 +657,12 @@ mod windows_impl {
                     // Resident $ATTRIBUTE_LIST — parse entries
                     let val_offset_raw = data
                         .get(offset + 20..offset + 22)
-                        .and_then(|b| <[u8; 2]>::try_from(b).ok())
+                        .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok())
                         .map(u16::from_le_bytes)
                         .unwrap_or(0) as usize;
                     let val_length = data
                         .get(offset + 16..offset + 20)
-                        .and_then(|b| <[u8; 4]>::try_from(b).ok())
+                        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
                         .map(u32::from_le_bytes)
                         .unwrap_or(0) as usize;
 
@@ -674,7 +674,7 @@ mod windows_impl {
                     while pos + size_of::<AttributeListEntry>() <= list_end {
                         let entry = match AttributeListEntry::read_from_prefix(&data[pos..list_end])
                         {
-                            Ok((e, _)) => e,
+                            Ok((entry, _)) => entry,
                             Err(_) => break,
                         };
                         if entry.length < size_of::<AttributeListEntry>() as u16 {

@@ -547,7 +547,7 @@ impl VolumeHandle {
         };
 
         let mft_handle = match mft_handle {
-            Ok(h) => h,
+            Ok(handle) => handle,
             Err(_err) => {
                 return Ok(vec![MftExtent {
                     vcn: 0,
@@ -607,17 +607,17 @@ impl VolumeHandle {
         };
 
         let bitmap_handle = match bitmap_handle {
-            Ok(h) => {
+            Ok(handle) => {
                 if verbose {
-                    tracing::info!(volume = %self.volume, handle = ?h, "CreateFileW for MFT bitmap succeeded");
+                    tracing::info!(volume = %self.volume, handle = ?handle, "CreateFileW for MFT bitmap succeeded");
                 }
-                h
+                handle
             }
-            Err(e) => {
+            Err(err) => {
                 if verbose {
                     tracing::warn!(
                         volume = %self.volume,
-                        error = ?e,
+                        error = ?err,
                         "CreateFileW for MFT bitmap failed; falling back to all-valid bitmap"
                     );
                 }
@@ -652,10 +652,10 @@ impl VolumeHandle {
         }
 
         let extents = match get_retrieval_pointers(bitmap_handle) {
-            Ok(e) if !e.is_empty() => {
+            Ok(extents) if !extents.is_empty() => {
                 if verbose {
-                    tracing::info!(volume = %self.volume, extent_count = e.len(), "Retrieved MFT bitmap extents");
-                    for (i, ext) in e.iter().enumerate().take(5) {
+                    tracing::info!(volume = %self.volume, extent_count = extents.len(), "Retrieved MFT bitmap extents");
+                    for (i, ext) in extents.iter().enumerate().take(5) {
                         tracing::info!(
                             volume = %self.volume,
                             extent_index = i,
@@ -665,15 +665,15 @@ impl VolumeHandle {
                             "MFT bitmap extent sample"
                         );
                     }
-                    if e.len() > 5 {
+                    if extents.len() > 5 {
                         tracing::info!(
                             volume = %self.volume,
-                            additional_extent_count = e.len() - 5,
+                            additional_extent_count = extents.len() - 5,
                             "Additional MFT bitmap extents omitted from verbose sample"
                         );
                     }
                 }
-                e
+                extents
             }
             Ok(_) => {
                 if verbose {
@@ -686,11 +686,11 @@ impl VolumeHandle {
                     self.estimated_record_count() as usize
                 ));
             }
-            Err(e) => {
+            Err(err) => {
                 if verbose {
                     tracing::warn!(
                         volume = %self.volume,
-                        error = ?e,
+                        error = ?err,
                         "get_retrieval_pointers for MFT bitmap failed; falling back to all-valid bitmap"
                     );
                 }
@@ -701,7 +701,7 @@ impl VolumeHandle {
         };
 
         let bytes_per_cluster = self.volume_data.bytes_per_cluster;
-        let total_clusters: u64 = extents.iter().map(|e| e.cluster_count).sum();
+        let total_clusters: u64 = extents.iter().map(|ext| ext.cluster_count).sum();
         let aligned_size = (total_clusters * u64::from(bytes_per_cluster)) as usize;
         let mut buffer = vec![0_u8; aligned_size];
         let mut buffer_offset = 0_usize;
@@ -791,7 +791,7 @@ impl VolumeHandle {
                     let sample: Vec<String> = buffer
                         [buffer_offset..buffer_offset + 32.min(bytes_read as usize)]
                         .iter()
-                        .map(|b| format!("{:02X}", b))
+                        .map(|byte| format!("{byte:02X}"))
                         .collect();
                     tracing::info!(
                         volume = %self.volume,
@@ -812,8 +812,14 @@ impl VolumeHandle {
                 file_size,
                 "Completed MFT bitmap read; truncating to reported file size"
             );
-            let all_ff = buffer.iter().take(file_size as usize).all(|&b| b == 0xFF);
-            let all_00 = buffer.iter().take(file_size as usize).all(|&b| b == 0x00);
+            let all_ff = buffer
+                .iter()
+                .take(file_size as usize)
+                .all(|&byte| byte == 0xFF);
+            let all_00 = buffer
+                .iter()
+                .take(file_size as usize)
+                .all(|&byte| byte == 0x00);
             tracing::info!(volume = %self.volume, all_ff, all_00, "Computed MFT bitmap byte-pattern summary");
         }
 
@@ -949,6 +955,6 @@ fn enable_backup_privilege() {
 
     match result {
         Ok(()) => tracing::info!("✅ SeBackupPrivilege enabled"),
-        Err(e) => tracing::debug!(error = %e, "Could not enable SeBackupPrivilege"),
+        Err(err) => tracing::debug!(error = %err, "Could not enable SeBackupPrivilege"),
     }
 }

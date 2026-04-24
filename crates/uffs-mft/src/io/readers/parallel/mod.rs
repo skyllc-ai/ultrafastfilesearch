@@ -318,7 +318,7 @@ impl ParallelMftReader {
         // Calculate total bytes to read for progress reporting
         let total_bytes_to_read: u64 = chunks
             .iter()
-            .map(|c| c.record_count * u64::from(record_size))
+            .map(|chunk| chunk.record_count * u64::from(record_size))
             .sum();
 
         // Read all chunks (sequential I/O for handle safety)
@@ -354,9 +354,9 @@ impl ParallelMftReader {
 
                     chunk_data.push((chunk, data));
                 }
-                Err(e) => {
+                Err(err) => {
                     consecutive_failures += 1;
-                    warn!(chunk_idx = idx, error = ?e, "Failed to read chunk");
+                    warn!(chunk_idx = idx, error = ?err, "Failed to read chunk");
                     if consecutive_failures >= EARLY_ABORT_THRESHOLD {
                         warn!(
                             consecutive_failures,
@@ -441,11 +441,11 @@ impl ParallelMftReader {
                     }
                     acc
                 })
-                .reduce(ChunkStats::default, |mut a, b| {
-                    a.results.extend(b.results);
-                    a.skipped += b.skipped;
-                    a.processed += b.processed;
-                    a
+                .reduce(ChunkStats::default, |mut acc, other| {
+                    acc.results.extend(other.results);
+                    acc.skipped += other.skipped;
+                    acc.processed += other.processed;
+                    acc
                 });
 
             // Update atomics once at the end (not per-record!)
@@ -524,11 +524,11 @@ impl ParallelMftReader {
                     }
                     acc
                 })
-                .reduce(LegacyStats::default, |mut a, b| {
-                    a.records.extend(b.records);
-                    a.skipped += b.skipped;
-                    a.processed += b.processed;
-                    a
+                .reduce(LegacyStats::default, |mut acc, other| {
+                    acc.records.extend(other.records);
+                    acc.skipped += other.skipped;
+                    acc.processed += other.processed;
+                    acc
                 });
 
             // Update atomics once at the end
