@@ -16,18 +16,16 @@
     reason = "NTFS disk-offset / record-size / OVERLAPPED offset-split casts are lossless"
 )]
 
-#[expect(
-    clippy::wildcard_imports,
-    reason = "parent module's `pub(super) use` prelude \
-              (HANDLE, MftError, ReadFile, rayon::prelude::*, tracing \
-              macros, etc.) is designed to be consumed by submodules; \
-              re-enumerating ~15 items here would duplicate the prelude \
-              across every sibling reader file"
-)]
-use super::*;
+use super::prelude::*;
+
+/// Offset of the `Flags` field inside `FILE_RECORD_SEGMENT_HEADER`.
+const FRS_FLAGS_OFFSET: usize = 0x16;
+
+/// `IN_USE` bit inside `FILE_RECORD_SEGMENT_HEADER.flags`.
+const FRS_IN_USE_FLAG: u16 = 0x0001;
 
 impl ParallelMftReader {
-    /// Sliding window IOCP read with inline parsing directly to MftIndex.
+    /// Sliding window IOCP read with inline parsing directly to `MftIndex`.
     ///
     /// This is the legacy-output parity implementation that:
     /// - Parses each 1MB chunk as soon as it completes (no buffering)
@@ -79,6 +77,14 @@ impl ParallelMftReader {
         clippy::float_arithmetic,
         reason = "telemetry: I/O-vs-parse overlap percentage requires float division for human-readable logging"
     )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "sliding-window IOCP reader: completion dispatch, deadline tracking, inline parse, and replacement-read issuance must share one event loop to keep IOCP fairness; extracting helpers would either inline the same control flow or hide IO-completion invariants"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "sliding-window IOCP reader: completion dispatch, deadline tracking, inline parse-into-MftIndex, and replacement-read issuance must share OVERLAPPED slots, the buffer pool, and per-completion FRS / fixup state in a single event loop. Splitting into helpers would either inline the same control flow back or smear the shared mutable state across multiple call sites and obscure IOCP-fairness invariants"
+    )]
     /// # Errors
     ///
     /// Returns [`MftError::Io`] when an IOCP `ReadFile` or the completion
@@ -102,7 +108,7 @@ impl ParallelMftReader {
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
-        use crate::index::MftIndex;
+        use crate::index::{MftIndex, u64_to_f64};
         use crate::platform::{
             IOCP_WAIT_COMPLETION_DEADLINE, IOCP_WAIT_POLL_INTERVAL_MS, WAIT_TIMEOUT_ERROR_CODE,
             classify_wait_error_code, wait_deadline_exceeded,
@@ -188,7 +194,7 @@ impl ParallelMftReader {
 
         let mut io_ops: VecDeque<IoOp> = VecDeque::new();
 
-        for chunk in sorted_chunks.iter() {
+        for chunk in &sorted_chunks {
             let skip_begin_bytes = chunk.skip_begin as usize * record_size;
             let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
             if effective_records == 0 {
@@ -326,7 +332,7 @@ impl ParallelMftReader {
                     let last_error = unsafe { GetLastError() };
                     if last_error != ERROR_IO_PENDING {
                         return Err(MftError::Io(std::io::Error::from_raw_os_error(
-                            last_error.0 as i32,
+                            last_error.0.cast_signed(),
                         )));
                     }
                 }
@@ -370,6 +376,8 @@ impl ParallelMftReader {
             total_wait_time_ns += wait_start.elapsed().as_nanos() as u64;
 
             if result.is_err() {
+                // SAFETY: `GetLastError` reads the calling thread's last-error slot
+                // and does not dereference any Rust pointers.
                 let last_error = unsafe { GetLastError() };
                 if last_error.0 == WAIT_TIMEOUT_ERROR_CODE {
                     let stalled_for = last_completion_at.elapsed();
@@ -459,20 +467,14 @@ impl ParallelMftReader {
                             break;
                         };
 
-                        /// Flags offset in `FILE_RECORD_SEGMENT_HEADER`.
-                        const FLAGS_OFFSET: usize = 0x16;
-                        /// IN_USE flag bit in
-                        /// `FILE_RECORD_SEGMENT_HEADER`.flags.
-                        const IN_USE_FLAG: u16 = 0x0001;
-
                         let Some(flag_bytes) = record_slice
-                            .get(FLAGS_OFFSET..FLAGS_OFFSET + 2)
+                            .get(FRS_FLAGS_OFFSET..FRS_FLAGS_OFFSET + 2)
                             .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok())
                         else {
                             continue;
                         };
                         let flags = u16::from_le_bytes(flag_bytes);
-                        if flags & IN_USE_FLAG == 0 {
+                        if flags & FRS_IN_USE_FLAG == 0 {
                             // Record header also says not in use — safe to skip
                             continue;
                         }
@@ -573,7 +575,8 @@ impl ParallelMftReader {
         // Calculate overlap efficiency: if wait_ms + parse_ms > total_ms,
         // then we had effective overlap (parse happened while other I/O was in flight)
         let overlap_pct = if total_ms > 0 {
-            ((wait_ms + parse_ms).saturating_sub(total_ms) as f64 / total_ms as f64) * 100.0_f64
+            (u64_to_f64((wait_ms + parse_ms).saturating_sub(total_ms)) / u64_to_f64(total_ms))
+                * 100.0_f64
         } else {
             0.0_f64
         };

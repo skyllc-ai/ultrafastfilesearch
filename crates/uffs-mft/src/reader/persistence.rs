@@ -91,7 +91,7 @@ impl MftReader {
         use crate::io::{MftExtentMap, ParallelMftReader, generate_read_chunks};
         use crate::platform::detect_drive_type;
 
-        let vol_handle = self.require_handle();
+        let vol_handle = self.require_handle()?;
         let record_size = vol_handle.file_record_size();
         let volume_data = vol_handle.volume_data();
 
@@ -106,7 +106,12 @@ impl MftReader {
 
         let extent_map = MftExtentMap::new(extents, volume_data.bytes_per_cluster, record_size);
         let total_records = extent_map.total_records();
-        let total_size = total_records as usize * record_size as usize;
+        let total_records_usize = usize::try_from(total_records).map_err(|err| {
+            MftError::InvalidData(format!(
+                "save_raw_mft: MFT record count {total_records} exceeds usize::MAX ({err})"
+            ))
+        })?;
+        let total_size = total_records_usize * record_size as usize;
         let mut output = vec![0_u8; total_size];
 
         let drive_type = detect_drive_type(self.volume);
@@ -117,7 +122,12 @@ impl MftReader {
 
         for chunk in chunks {
             let data = parallel_reader.read_chunk(handle, &chunk, record_size)?;
-            let output_offset = chunk.start_frs as usize * record_size as usize;
+            let output_offset = usize::try_from(chunk.start_frs).map_err(|err| {
+                MftError::InvalidData(format!(
+                    "save_raw_mft: chunk start_frs {} exceeds usize::MAX ({err})",
+                    chunk.start_frs
+                ))
+            })? * record_size as usize;
             let copy_size = data.len().min(total_size - output_offset);
             let Some(dest) = output.get_mut(output_offset..output_offset + copy_size) else {
                 return Err(MftError::InvalidData(format!(

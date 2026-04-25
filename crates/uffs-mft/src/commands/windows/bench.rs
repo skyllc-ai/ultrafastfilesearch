@@ -2,6 +2,31 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Benchmark command handlers for live read benchmarking.
+//!
+//! These commands print human-readable benchmark output to stdout, build
+//! throughput rates from `u64` / `u128` counters into `f64`, and use `Debug`
+//! formatting for opaque diagnostic enums.  The lint exemptions below capture
+//! those CLI-specific patterns; library code never inherits them.
+#![expect(
+    clippy::print_stdout,
+    reason = "intentional user-facing CLI benchmark output"
+)]
+#![expect(
+    clippy::float_arithmetic,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::default_numeric_fallback,
+    reason = "throughput rates (MB/s, rec/s) are computed from integer counters into f64 for human-readable display"
+)]
+#![expect(
+    clippy::min_ident_chars,
+    reason = "short identifiers aid readability in CLI driver code"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "benchmark commands run a configure -> run -> format -> print pipeline that is most readable inline"
+)]
 
 use std::path::PathBuf;
 
@@ -17,14 +42,14 @@ pub(crate) async fn cmd_bench(
     drive: char,
     json: bool,
     no_df: bool,
-    runs: u32,
+    requested_runs: u32,
     mode_str: &str,
     full: bool,
 ) -> Result<()> {
     use uffs_mft::{BenchmarkResult, MftReadMode, MftReader};
 
     let drive_upper = drive.to_ascii_uppercase();
-    let runs = runs.max(1);
+    let runs = requested_runs.max(1);
 
     // Parse read mode
     let mode: MftReadMode = mode_str.parse().map_err(|e: String| anyhow::anyhow!(e))?;
@@ -95,6 +120,8 @@ pub(crate) async fn cmd_bench(
     Ok(())
 }
 
+/// Pop the first result of a single benchmark run, surfacing a helpful
+/// `context` in the error message if the result vector is empty.
 #[cfg(windows)]
 fn take_single_benchmark_result(
     results: Vec<uffs_mft::BenchmarkResult>,
@@ -106,6 +133,10 @@ fn take_single_benchmark_result(
         .ok_or_else(|| anyhow::anyhow!("{context}: no benchmark results were collected"))
 }
 
+/// Average a slice of benchmark results into a single `BenchmarkResult`.
+///
+/// The result inherits the first run's `DriveCharacteristics`; per-phase
+/// timings and throughputs are arithmetic means across all runs.
 #[cfg(windows)]
 fn average_results(results: &[uffs_mft::BenchmarkResult]) -> Result<uffs_mft::BenchmarkResult> {
     let Some(first) = results.first() else {
@@ -146,6 +177,8 @@ fn average_results(results: &[uffs_mft::BenchmarkResult]) -> Result<uffs_mft::Be
     })
 }
 
+/// Print a single (already averaged) benchmark result to stdout in the
+/// canonical CLI tabular format.  `runs` is shown verbatim in the header.
 #[cfg(windows)]
 fn print_benchmark_result(result: &uffs_mft::BenchmarkResult, runs: u32) {
     let c = &result.characteristics;
@@ -266,6 +299,8 @@ struct FullBenchmarkReport {
 
 #[cfg(windows)]
 impl FullBenchmarkReport {
+    /// Render this report as a UTF-8 JSON document with one entry per
+    /// benchmarked drive plus the system-level fields.
     fn to_json(&self) -> String {
         let drives_json: Vec<String> = self
             .drives
@@ -295,11 +330,14 @@ impl FullBenchmarkReport {
     }
 }
 
+/// `bench-all` CLI command — run the benchmark suite on every detected
+/// NTFS drive `requested_runs` times, optionally writing the resulting
+/// JSON report to `output`.
 #[cfg(windows)]
 pub(crate) async fn cmd_bench_all(
     output: Option<PathBuf>,
     no_df: bool,
-    runs: u32,
+    requested_runs: u32,
     full: bool,
 ) -> Result<()> {
     use std::time::Instant;
@@ -307,7 +345,7 @@ pub(crate) async fn cmd_bench_all(
     use uffs_mft::detect_ntfs_drives;
 
     let total_start = Instant::now();
-    let runs = runs.max(1);
+    let runs = requested_runs.max(1);
 
     // Generate default output filename with timestamp
     let output_path = output.unwrap_or_else(|| {
@@ -436,6 +474,8 @@ pub(crate) async fn cmd_bench_all(
     Ok(())
 }
 
+/// Run the benchmark suite against one drive `runs` times, optionally
+/// skipping the `DataFrame` build when `no_df` is set.
 #[cfg(windows)]
 async fn benchmark_single_drive(
     drive: char,

@@ -22,7 +22,6 @@
 //! Aggregation execution: convert wire specs to core specs and run them.
 
 use uffs_client::protocol::{DrilldownWire, SampleRowWire};
-use uffs_core::aggregate::TopHitsSpec;
 use uffs_core::aggregate::finalize::{DrilldownPredicate, DrilldownValue, SampleRow};
 use uffs_core::aggregate::spec::DuplicateVerify;
 use uffs_core::aggregate::verify::{DuplicateVerifier, FileReader, VerificationBudget};
@@ -178,40 +177,96 @@ fn drilldown_to_wire(dp: DrilldownPredicate) -> DrilldownWire {
     }
 }
 
+/// Cache lookup state shared between [`IndexManager::run_aggregations`]
+/// and its helpers.
+///
+/// Pairs the request-specific cache key with the (optional) cache
+/// instance so callers can pass a single bundle instead of two
+/// always-correlated parameters.  `key_hash == None` means caching
+/// was disabled for this call, regardless of whether `cache` is
+/// `Some`.
+#[derive(Clone, Copy)]
+struct AggregateCacheCtx<'a> {
+    /// Pre-computed `build_agg_cache_key` digest, or `None` when
+    /// caching is disabled (the caller passed `cache: None`).
+    key_hash: Option<u64>,
+    /// Shared cache instance, when one is configured.
+    cache: Option<&'a uffs_core::aggregate::AggregateCache>,
+}
+
+/// Bundled inputs for [`IndexManager::run_aggregations`].
+///
+/// Wraps the predicates, pagination knobs, and scope filters that
+/// would otherwise blow past clippy's `too_many_arguments` budget,
+/// and gives tests a clean builder-style call site:
+///
+/// ```ignore
+/// IndexManager::run_aggregations(
+///     &snapshot,
+///     None,
+///     &specs,
+///     AggregationRequest::default(),
+/// );
+/// ```
+///
+/// All fields are optional / default-friendly so callers only set the
+/// knobs they care about.  Production callers populate everything;
+/// most unit tests need only the defaults.
+#[derive(Default)]
+pub(crate) struct AggregationRequest<'a> {
+    /// Drill-down predicates from the search-scope `where` clause,
+    /// forwarded into `FinalizeOptions` so each bucket's drilldown
+    /// reflects the original query.
+    pub query_predicates: Vec<DrilldownPredicate>,
+    /// Opaque pagination cursor encoded as
+    /// `result_index:offset:page_size`.  `None` requests the first
+    /// page (or no pagination at all when `agg_page_size` is also
+    /// `None`).
+    pub agg_cursor: Option<&'a str>,
+    /// Page size for fresh paginated requests (`None` = no
+    /// pagination, return all buckets).
+    pub agg_page_size: Option<u16>,
+    /// Glob / regex name matcher applied during the scan.  `None`
+    /// disables name matching.
+    pub pattern: Option<&'a str>,
+    /// Subset of drive letters to include; empty = all drives.
+    pub drives_filter: &'a [char],
+    /// O(1)-per-record predicates: extension IDs, directory flag,
+    /// size bounds.  Defaults to "no filter" via
+    /// [`AggregateFilter::default`].
+    pub record_filter: uffs_core::aggregate::AggregateFilter,
+}
+
 impl IndexManager {
     /// Run aggregation specs from wire format against loaded drives.
     ///
-    /// `query_predicates` are the original search-scope filters (if any),
-    /// forwarded into `FinalizeOptions` so drill-down predicates on each
-    /// bucket include the full query context.
+    /// All scope inputs (predicates, pagination, pattern, drive
+    /// filter, record filter) are bundled into [`AggregationRequest`]
+    /// so the call site stays readable and the function signature
+    /// stays under clippy's `too_many_arguments` budget.
     ///
-    /// `pattern` applies glob/regex name matching; `record_filter` applies
-    /// O(1)-per-record constraints (extension IDs, directory flag, size
-    /// bounds).  Both are optional and compose: a record must pass *both*
-    /// to be fed to accumulators.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "aggregation engine needs snapshot, specs, predicates, pagination, pattern, drives, and filter"
-    )]
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "aggregation engine with multiple spec types"
-    )]
+    /// `request.pattern` applies glob/regex name matching;
+    /// `request.record_filter` applies O(1)-per-record constraints
+    /// (extension IDs, directory flag, size bounds).  Both are
+    /// optional and compose: a record must pass *both* to be fed to
+    /// accumulators.
     pub(crate) fn run_aggregations(
         snapshot: &DriveIndex,
         cache: Option<&uffs_core::aggregate::AggregateCache>,
         wire_specs: &[uffs_client::protocol::AggregateSpecWire],
-        query_predicates: Vec<DrilldownPredicate>,
-        agg_cursor: Option<&str>,
-        agg_page_size: Option<u16>,
-        pattern: Option<&str>,
-        drives_filter: &[char],
-        record_filter: &uffs_core::aggregate::AggregateFilter,
+        request: AggregationRequest<'_>,
     ) -> (Vec<uffs_client::protocol::AggregateResultWire>, u64) {
-        use uffs_client::protocol::{AggregateResultWire, BucketWire, StatsWire};
-        use uffs_core::aggregate::finalize::{AggregateResultData, FinalizeOptions};
-        use uffs_core::aggregate::pagination::{AggregateCursor, paginate_result};
+        use uffs_core::aggregate::finalize::FinalizeOptions;
         use uffs_core::aggregate::spec::AggregateSpec;
+
+        let AggregationRequest {
+            query_predicates,
+            agg_cursor,
+            agg_page_size,
+            pattern,
+            drives_filter,
+            record_filter,
+        } = request;
 
         // Convert wire specs to core specs.
         let mut specs: Vec<AggregateSpec> = Vec::new();
@@ -255,7 +310,7 @@ impl IndexManager {
                 &specs,
                 pattern,
                 drives_filter,
-                record_filter,
+                &record_filter,
                 &query_predicates,
             )
         });
@@ -265,12 +320,6 @@ impl IndexManager {
             ..FinalizeOptions::default()
         };
 
-        // Dispatch to the appropriate core aggregate function.
-        //
-        // `run_aggregate_with_filters` handles all three cases internally:
-        //   - pattern + record_filter → combined filtered scan
-        //   - pattern only → delegates to `run_aggregate_filtered`
-        //   - no filters → delegates to `run_aggregate` (unfiltered)
         tracing::info!(
             pattern = ?pattern,
             ext_count = record_filter.extensions.len(),
@@ -280,47 +329,20 @@ impl IndexManager {
             "running aggregation"
         );
 
-        // Try cache first.  A hit short-circuits the entire scan +
-        // duplicate-verification pipeline and simply returns the
-        // previously computed `AggregateOutput`.
-        let cached_hit = cache_key_hash.and_then(|k| cache.and_then(|c| c.get(k)));
-
-        let output = if let Some(hit) = cached_hit {
-            tracing::debug!(
-                scanned = hit.records_scanned,
-                matched = hit.records_matched,
-                "aggregation cache hit"
-            );
-            hit
-        } else {
-            match uffs_core::aggregate::run_aggregate_with_filters(
-                &drive_refs,
-                &specs,
-                &options,
-                pattern,
-                record_filter,
-            ) {
-                Ok(mut fresh) => {
-                    tracing::info!(
-                        scanned = fresh.records_scanned,
-                        matched = fresh.records_matched,
-                        "aggregation complete"
-                    );
-                    // Duplicate verification is part of the cacheable
-                    // result: its effect lives in `fresh.response`, so
-                    // run it *before* populating the cache so future
-                    // hits include verification state.
-                    Self::run_duplicate_verification(&specs, &mut fresh, &snapshot.drives);
-                    if let (Some(k), Some(c)) = (cache_key_hash, cache) {
-                        c.put(k, fresh.clone());
-                    }
-                    fresh
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "aggregation failed");
-                    return (vec![], 0);
-                }
-            }
+        let output = match Self::compute_aggregate_output(
+            AggregateCacheCtx {
+                key_hash: cache_key_hash,
+                cache,
+            },
+            &drive_refs,
+            &specs,
+            &options,
+            pattern,
+            &record_filter,
+            &snapshot.drives,
+        ) {
+            Some(out) => out,
+            None => return (vec![], 0),
         };
 
         // Note: duplicate verification already ran on the miss path
@@ -330,286 +352,68 @@ impl IndexManager {
         // (the verifier has no "already verified" short-circuit), so
         // we deliberately skip it.
         let records_matched = output.records_matched;
-
-        // ── Apply cursor-based pagination (if requested) ────────────
-        //
-        // When `agg_page_size` is set, paginate bucket/rollup results.
-        // When `agg_cursor` is set, it encodes `result_index:offset:page_size`.
-        let decoded_cursor = agg_cursor.and_then(AggregateCursor::decode);
-        let page_size = decoded_cursor
-            .as_ref()
-            .map(|c| c.page_size)
-            .or_else(|| agg_page_size.map(usize::from));
-
-        // Convert results to wire format.
-        let wire_results = output
-            .response
-            .results
-            .into_iter()
-            .enumerate()
-            .map(|(idx, result)| {
-                // If pagination is active, check if this result should be paginated.
-                let pagination = page_size.and_then(|ps| {
-                    let cursor = decoded_cursor
-                        .as_ref()
-                        .filter(|c| c.result_index == idx)
-                        .cloned()
-                        .unwrap_or_else(|| AggregateCursor::new(idx, ps));
-                    paginate_result(&result, &cursor)
-                });
-
-                let (
-                    kind,
-                    field,
-                    value,
-                    stats,
-                    buckets,
-                    other_count,
-                    total_groups,
-                    exact,
-                    values_complete,
-                ) = match result.data {
-                    AggregateResultData::Count { value } => (
-                        "count".to_owned(),
-                        None,
-                        Some(value),
-                        None,
-                        vec![],
-                        None,
-                        None,
-                        None,
-                        None,
-                    ),
-                    AggregateResultData::Stats { field, stats } => (
-                        "stats".to_owned(),
-                        Some(field),
-                        None,
-                        Some(StatsWire {
-                            count: stats.count,
-                            sum: stats.sum,
-                            min: stats.min,
-                            max: stats.max,
-                            avg: stats.avg,
-                            waste_bytes: stats.waste_bytes,
-                            waste_pct: stats.waste_pct,
-                        }),
-                        vec![],
-                        None,
-                        None,
-                        None,
-                        None,
-                    ),
-                    AggregateResultData::Buckets {
-                        field,
-                        rows,
-                        other_count,
-                        total_groups,
-                        exact,
-                    } => (
-                        "buckets".to_owned(),
-                        Some(field),
-                        None,
-                        None,
-                        rows.into_iter()
-                            .map(|r| {
-                                let samples =
-                                    r.sample_rows.into_iter().map(sample_row_to_wire).collect();
-                                let drills =
-                                    r.drilldown.into_iter().map(drilldown_to_wire).collect();
-                                BucketWire {
-                                    key: r.key,
-                                    count: r.count,
-                                    total_bytes: r.total_bytes,
-                                    total_allocated: Some(r.total_allocated),
-                                    avg_size: Some(r.avg_size),
-                                    share_count: Some(r.share_of_total_count),
-                                    share_bytes: Some(r.share_of_total_bytes),
-                                    sample_rows: samples,
-                                    drilldown: drills,
-                                    sub_buckets: Vec::new(),
-                                    verified: false,
-                                }
-                            })
-                            .collect(),
-                        Some(other_count),
-                        Some(total_groups),
-                        Some(exact),
-                        Some(other_count == 0),
-                    ),
-                    AggregateResultData::Missing { field, count } => (
-                        "missing".to_owned(),
-                        Some(field),
-                        Some(count),
-                        None,
-                        vec![],
-                        None,
-                        None,
-                        None,
-                        None,
-                    ),
-                    AggregateResultData::Distinct { field, count } => (
-                        "distinct".to_owned(),
-                        Some(field),
-                        Some(count),
-                        None,
-                        vec![],
-                        None,
-                        None,
-                        None,
-                        None,
-                    ),
-                    AggregateResultData::Rollup { mode, rows } => (
-                        "rollup".to_owned(),
-                        Some(mode),
-                        None,
-                        None,
-                        rows.into_iter()
-                            .map(|r| {
-                                let samples =
-                                    r.sample_rows.into_iter().map(sample_row_to_wire).collect();
-                                let drills =
-                                    r.drilldown.into_iter().map(drilldown_to_wire).collect();
-                                let subs = r
-                                    .sub_buckets
-                                    .into_iter()
-                                    .map(|sub| BucketWire {
-                                        key: sub.key,
-                                        count: sub.count,
-                                        total_bytes: sub.total_bytes,
-                                        total_allocated: Some(sub.total_allocated),
-                                        avg_size: Some(sub.avg_size),
-                                        share_count: Some(sub.share_of_total_count),
-                                        share_bytes: Some(sub.share_of_total_bytes),
-                                        sample_rows: Vec::new(),
-                                        drilldown: Vec::new(),
-                                        sub_buckets: Vec::new(),
-                                        verified: false,
-                                    })
-                                    .collect();
-                                BucketWire {
-                                    key: r.key,
-                                    count: r.count,
-                                    total_bytes: r.total_bytes,
-                                    total_allocated: Some(r.total_allocated),
-                                    avg_size: Some(r.avg_size),
-                                    share_count: Some(r.share_of_total_count),
-                                    share_bytes: Some(r.share_of_total_bytes),
-                                    sample_rows: samples,
-                                    drilldown: drills,
-                                    sub_buckets: subs,
-                                    verified: false,
-                                }
-                            })
-                            .collect(),
-                        None,
-                        None,
-                        Some(true),
-                        None,
-                    ),
-                    AggregateResultData::Duplicates { result } => {
-                        let total_groups = result.candidate_groups;
-                        let total_reclaimable = result.total_reclaimable_bytes;
-                        let dup_drive_refs: Vec<&uffs_core::compact::DriveCompactIndex> =
-                            snapshot.drives.iter().map(|d| d.as_ref()).collect();
-                        let buckets: Vec<BucketWire> = result
-                            .groups
-                            .into_iter()
-                            .map(|g| {
-                                // Materialize sample rows from member_indices.
-                                let samples: Vec<SampleRowWire> =
-                                    materialize_dup_members(&g.member_indices, &dup_drive_refs);
-                                // Derive human-readable key from first sample
-                                // row's name field, falling back to file size.
-                                let display_name = samples
-                                    .first()
-                                    .and_then(|s| s.fields.get("name").cloned())
-                                    .filter(|n| !n.is_empty())
-                                    .unwrap_or_else(|| format_size_compact(g.file_size));
-                                let key = format!(
-                                    "{} ({}, {} copies)",
-                                    display_name,
-                                    format_size_compact(g.file_size),
-                                    g.count,
-                                );
-                                BucketWire {
-                                    key,
-                                    count: g.count,
-                                    total_bytes: g.total_bytes,
-                                    total_allocated: Some(g.reclaimable_bytes),
-                                    avg_size: Some(uffs_mft::u64_to_f64(g.file_size)),
-                                    share_count: None,
-                                    share_bytes: None,
-                                    sample_rows: samples,
-                                    drilldown: Vec::new(),
-                                    sub_buckets: Vec::new(),
-                                    verified: g.verified,
-                                }
-                            })
-                            .collect();
-
-                        // Build stats with summary: total reclaimable in
-                        // waste_bytes, total candidate files in count.
-                        #[expect(
-                            clippy::float_arithmetic,
-                            reason = "percentage calculation for waste_pct"
-                        )]
-                        let summary = StatsWire {
-                            count: result.candidate_files,
-                            sum: result.total_duplicate_bytes,
-                            min: 0,
-                            max: 0,
-                            avg: 0.0,
-                            waste_bytes: total_reclaimable,
-                            waste_pct: if result.total_duplicate_bytes > 0 {
-                                (uffs_mft::u64_to_f64(total_reclaimable)
-                                    / uffs_mft::u64_to_f64(result.total_duplicate_bytes))
-                                    * 100.0
-                            } else {
-                                0.0
-                            },
-                        };
-
-                        (
-                            "duplicates".to_owned(),
-                            None,
-                            Some(result.candidate_files),
-                            Some(summary),
-                            buckets,
-                            None,
-                            Some(total_groups),
-                            None,
-                            None,
-                        )
-                    }
-                };
-
-                // Apply pagination: replace full bucket list with the
-                // current page and attach `next_cursor` for the caller.
-                let (buckets, next_cursor) = if let Some(pg) = &pagination {
-                    let start = pg.offset.min(buckets.len());
-                    let end = (start + pg.rows.len()).min(buckets.len());
-                    let page = buckets.get(start..end).map_or_else(Vec::new, <[_]>::to_vec);
-                    (page, pg.next_cursor.clone())
-                } else {
-                    (buckets, None)
-                };
-
-                AggregateResultWire {
-                    label: result.label,
-                    kind,
-                    field,
-                    value,
-                    stats,
-                    buckets,
-                    other_count,
-                    total_groups,
-                    next_cursor,
-                    exact,
-                    values_complete,
-                }
-            })
-            .collect();
+        let wire_results = convert_aggregate_results_to_wire(
+            output.response.results,
+            agg_cursor,
+            agg_page_size,
+            &snapshot.drives,
+        );
         (wire_results, records_matched)
+    }
+
+    /// Look up the cached `AggregateOutput` if present, otherwise run
+    /// the core aggregation with duplicate verification + cache fill.
+    ///
+    /// Returns `None` on a hard error from the core aggregation
+    /// engine; the orchestrator surfaces this to the caller as an
+    /// empty `(vec![], 0)` response.
+    fn compute_aggregate_output(
+        cache_ctx: AggregateCacheCtx<'_>,
+        drive_refs: &[&uffs_core::compact::DriveCompactIndex],
+        specs: &[uffs_core::aggregate::spec::AggregateSpec],
+        options: &uffs_core::aggregate::finalize::FinalizeOptions,
+        pattern: Option<&str>,
+        record_filter: &uffs_core::aggregate::AggregateFilter,
+        drives: &[alloc::sync::Arc<uffs_core::compact::DriveCompactIndex>],
+    ) -> Option<uffs_core::aggregate::AggregateOutput> {
+        let AggregateCacheCtx { key_hash, cache } = cache_ctx;
+        if let Some(hit) = key_hash.and_then(|k| cache.and_then(|c| c.get(k))) {
+            tracing::debug!(
+                scanned = hit.records_scanned,
+                matched = hit.records_matched,
+                "aggregation cache hit"
+            );
+            return Some(hit);
+        }
+
+        match uffs_core::aggregate::run_aggregate_with_filters(
+            drive_refs,
+            specs,
+            options,
+            pattern,
+            record_filter,
+        ) {
+            Ok(mut fresh) => {
+                tracing::info!(
+                    scanned = fresh.records_scanned,
+                    matched = fresh.records_matched,
+                    "aggregation complete"
+                );
+                // Duplicate verification is part of the cacheable
+                // result: its effect lives in `fresh.response`, so
+                // run it *before* populating the cache so future
+                // hits include verification state.
+                Self::run_duplicate_verification(specs, &mut fresh, drives);
+                if let (Some(k), Some(c)) = (key_hash, cache) {
+                    c.put(k, fresh.clone());
+                }
+                Some(fresh)
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "aggregation failed");
+                None
+            }
+        }
     }
 
     /// Build a deterministic `u64` cache key for an aggregate request.
@@ -737,226 +541,379 @@ impl IndexManager {
             }
         }
     }
+}
 
-    /// Presets expand to multiple specs; all other kinds produce exactly one.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "straightforward match arms — one per wire kind"
-    )]
-    pub(crate) fn convert_wire_spec(
-        ws: &uffs_client::protocol::AggregateSpecWire,
-    ) -> Result<Vec<uffs_core::aggregate::spec::AggregateSpec>, String> {
-        use uffs_core::aggregate::parser::parse_agg_spec;
-        use uffs_core::aggregate::presets::AggregatePreset;
-        use uffs_core::aggregate::spec::{
-            AggregateKind, AggregateSpec, CalendarInterval, DuplicateVerify, RollupMode,
-        };
-        use uffs_core::search::field::FieldId;
+// `IndexManager::convert_wire_spec` lives in `wire_spec.rs` so the
+// runtime aggregation path (`run_aggregations` + verifier glue above)
+// stays decoupled from the wire-protocol decoder.
 
-        /// Helper: parse optional wire field name to `FieldId`.
-        fn require_field(ws: &uffs_client::protocol::AggregateSpecWire) -> Result<FieldId, String> {
-            let name = ws
-                .field
-                .as_deref()
-                .ok_or_else(|| "missing 'field'".to_owned())?;
-            FieldId::parse(name).ok_or_else(|| format!("unknown field: `{name}`"))
-        }
+// ── Wire conversion ─────────────────────────────────────────────────
+//
+// Splits the per-`AggregateResult` mapping out of `run_aggregations`
+// so the orchestrator stays under clippy's cognitive-complexity bar.
+// Each `AggregateResultData` arm gets its own `wire_*` helper that
+// returns the 9-tuple consumed by `apply_pagination_and_finalize`.
 
-        /// Helper: parse wire metric strings to `BucketMetric`s, with defaults.
-        fn parse_bucket_metrics(wire: &[String]) -> Vec<uffs_core::aggregate::spec::BucketMetric> {
-            use uffs_core::aggregate::spec::BucketMetric;
-            if wire.is_empty() {
-                return vec![BucketMetric::Count, BucketMetric::TotalBytes];
-            }
-            wire.iter()
-                .filter_map(|m| match m.as_str() {
-                    "count" => Some(BucketMetric::Count),
-                    "total_bytes" | "bytes" | "size" => Some(BucketMetric::TotalBytes),
-                    "total_allocated" | "allocated" => Some(BucketMetric::TotalAllocated),
-                    "waste_bytes" | "waste" => Some(BucketMetric::WasteBytes),
-                    "waste_pct" | "waste_percent" => Some(BucketMetric::WastePct),
-                    "avg_size" | "avg" => Some(BucketMetric::AvgSize),
-                    "min_size" | "min" => Some(BucketMetric::MinSize),
-                    "max_size" | "max" => Some(BucketMetric::MaxSize),
-                    "share_count" | "share_of_count" => Some(BucketMetric::ShareOfTotalCount),
-                    "share_bytes" | "share_of_bytes" => Some(BucketMetric::ShareOfTotalBytes),
-                    _ => None,
-                })
-                .collect()
-        }
+/// Convert a fully-resolved [`AggregateOutput::response::results`]
+/// into the wire format expected by clients, applying cursor-based
+/// pagination per result-index.
+fn convert_aggregate_results_to_wire(
+    results: Vec<uffs_core::aggregate::finalize::AggregateResult>,
+    agg_cursor: Option<&str>,
+    agg_page_size: Option<u16>,
+    drives: &[alloc::sync::Arc<uffs_core::compact::DriveCompactIndex>],
+) -> Vec<uffs_client::protocol::AggregateResultWire> {
+    use uffs_core::aggregate::pagination::{AggregateCursor, paginate_result};
 
-        /// Helper: parse wire metric strings to `ScalarMetric`s, with defaults.
-        fn parse_scalar_metrics(wire: &[String]) -> Vec<uffs_core::aggregate::spec::ScalarMetric> {
-            use uffs_core::aggregate::spec::ScalarMetric;
-            if wire.is_empty() {
-                return vec![
-                    ScalarMetric::Sum,
-                    ScalarMetric::Min,
-                    ScalarMetric::Max,
-                    ScalarMetric::Avg,
-                ];
-            }
-            wire.iter()
-                .filter_map(|m| match m.as_str() {
-                    "sum" => Some(ScalarMetric::Sum),
-                    "min" => Some(ScalarMetric::Min),
-                    "max" => Some(ScalarMetric::Max),
-                    "avg" | "mean" => Some(ScalarMetric::Avg),
-                    "value_count" | "count" => Some(ScalarMetric::ValueCount),
-                    "missing_count" | "missing" => Some(ScalarMetric::MissingCount),
-                    _ => None,
-                })
-                .collect()
-        }
+    let decoded_cursor = agg_cursor.and_then(AggregateCursor::decode);
+    let page_size = decoded_cursor
+        .as_ref()
+        .map(|c| c.page_size)
+        .or_else(|| agg_page_size.map(usize::from));
 
-        /// Build `Option<TopHitsSpec>` from the wire spec's sample fields.
-        fn build_sample(ws: &uffs_client::protocol::AggregateSpecWire) -> Option<TopHitsSpec> {
-            ws.sample.map(|n| {
-                let mut th = TopHitsSpec::with_count(n);
-                if let Some(field) = &ws.sample_sort
-                    && let Some(fid) = FieldId::parse(field)
-                {
-                    th.sort_field = fid;
-                }
-                if let Some(desc) = ws.sample_desc {
-                    th.sort_desc = desc;
-                }
-                th
-            })
-        }
+    results
+        .into_iter()
+        .enumerate()
+        .map(|(idx, result)| {
+            let pagination = page_size.and_then(|ps| {
+                let cursor = decoded_cursor
+                    .as_ref()
+                    .filter(|c| c.result_index == idx)
+                    .cloned()
+                    .unwrap_or_else(|| AggregateCursor::new(idx, ps));
+                paginate_result(&result, &cursor)
+            });
+            build_aggregate_result_wire(result, pagination.as_ref(), drives)
+        })
+        .collect()
+}
 
-        let make = |kind: AggregateKind| -> Vec<AggregateSpec> {
-            let mut spec = AggregateSpec::new(kind);
-            spec.label = ws.label.clone();
-            vec![spec]
+/// Build the [`AggregateResultWire`] for a single result, dispatching
+/// to one of the per-kind `wire_*` helpers and applying pagination.
+fn build_aggregate_result_wire(
+    result: uffs_core::aggregate::finalize::AggregateResult,
+    pagination: Option<&uffs_core::aggregate::pagination::PaginatedBuckets>,
+    drives: &[alloc::sync::Arc<uffs_core::compact::DriveCompactIndex>],
+) -> uffs_client::protocol::AggregateResultWire {
+    use uffs_client::protocol::AggregateResultWire;
+    use uffs_core::aggregate::finalize::AggregateResultData;
+
+    let label = result.label.clone();
+    let (kind, field, value, stats, buckets, other_count, total_groups, exact, values_complete) =
+        match result.data {
+            AggregateResultData::Count { value } => wire_count(value),
+            AggregateResultData::Stats { field, stats } => wire_stats(field, &stats),
+            AggregateResultData::Buckets {
+                field,
+                rows,
+                other_count,
+                total_groups,
+                exact,
+            } => wire_buckets(field, rows, other_count, total_groups, exact),
+            AggregateResultData::Missing { field, count } => wire_missing(field, count),
+            AggregateResultData::Distinct { field, count } => wire_distinct(field, count),
+            AggregateResultData::Rollup { mode, rows } => wire_rollup(mode, rows),
+            AggregateResultData::Duplicates { result } => wire_duplicates(result, drives),
         };
 
-        match ws.kind.as_str() {
-            "preset" => {
-                let name = ws
-                    .preset
-                    .as_deref()
-                    .ok_or_else(|| "preset kind requires 'preset' field".to_owned())?;
-                let preset = AggregatePreset::parse(name)
-                    .ok_or_else(|| format!("unknown preset: `{name}`"))?;
-                Ok(preset.expand())
-            }
-            "count" => Ok(make(AggregateKind::Count)),
-            "stats" => {
-                let field = require_field(ws)?;
-                let metrics = parse_scalar_metrics(&ws.metrics);
-                Ok(make(AggregateKind::Stats { field, metrics }))
-            }
-            "terms" | "facet" => {
-                let field = require_field(ws)?;
-                let top = ws.top.unwrap_or(20);
-                let metrics = parse_bucket_metrics(&ws.metrics);
-                Ok(make(AggregateKind::Terms {
-                    field,
-                    top,
-                    metrics,
-                    sample: build_sample(ws),
-                }))
-            }
-            "histogram" | "hist" => {
-                let field = require_field(ws)?;
-                let interval = ws.interval.unwrap_or(1_048_576);
-                let metrics = parse_bucket_metrics(&ws.metrics);
-                Ok(make(AggregateKind::Histogram {
-                    field,
-                    interval,
-                    metrics,
-                }))
-            }
-            "date_histogram" | "datehist" => {
-                let field = require_field(ws)?;
-                let cal_str = ws.calendar.as_deref().unwrap_or("month");
-                let calendar = CalendarInterval::parse(cal_str)
-                    .ok_or_else(|| format!("unknown calendar interval: `{cal_str}`"))?;
-                let metrics = parse_bucket_metrics(&ws.metrics);
-                Ok(make(AggregateKind::DateHistogram {
-                    field,
-                    calendar,
-                    metrics,
-                }))
-            }
-            "range" => {
-                let field = require_field(ws)?;
-                let metrics = parse_bucket_metrics(&ws.metrics);
-                Ok(make(AggregateKind::Range {
-                    field,
-                    boundaries: ws.boundaries.clone(),
-                    metrics,
-                }))
-            }
-            "missing" => {
-                let field = require_field(ws)?;
-                Ok(make(AggregateKind::Missing { field }))
-            }
-            "distinct" => {
-                let field = require_field(ws)?;
-                Ok(make(AggregateKind::Distinct { field }))
-            }
-            "rollup" => {
-                let mode_str = ws.field.as_deref().unwrap_or("path");
-                let mode = match mode_str {
-                    "drive" => RollupMode::Drive,
-                    "ancestor" | "drilldown" => {
-                        // Use interval field as the record index.
-                        let record_idx = u32::try_from(ws.interval.unwrap_or(0)).unwrap_or(0);
-                        RollupMode::Ancestor { record_idx }
-                    }
-                    _ => {
-                        let depth = u32::try_from(ws.interval.unwrap_or(1)).unwrap_or(1);
-                        RollupMode::Path { depth }
-                    }
-                };
-                let top = ws.top.unwrap_or(30);
-                let metrics = parse_bucket_metrics(&ws.metrics);
-                Ok(make(AggregateKind::Rollup {
-                    mode,
-                    top,
-                    metrics,
-                    sample: build_sample(ws),
-                    sub: None, // TODO: wire sub-agg from wire type
-                }))
-            }
-            "duplicates" | "dups" => {
-                let keys: Vec<FieldId> = ws
-                    .metrics
-                    .iter()
-                    .filter_map(|m| FieldId::parse(m))
-                    .collect();
-                let keys = if keys.is_empty() {
-                    vec![FieldId::Size, FieldId::Name]
-                } else {
-                    keys
-                };
-                let top = ws.top.unwrap_or(100);
-                let verify = match ws.verify.as_deref() {
-                    Some("first_bytes") => DuplicateVerify::FirstBytes {
-                        count: ws.verify_bytes.unwrap_or(4096),
-                    },
-                    Some("sha256") => DuplicateVerify::Sha256,
-                    _ => DuplicateVerify::None,
-                };
-                Ok(make(AggregateKind::Duplicates {
-                    keys,
-                    verify,
-                    top,
-                    sample: Some(build_sample(ws).unwrap_or_else(|| TopHitsSpec::with_count(2))),
-                    max_groups: 500_000,
-                }))
-            }
-            "raw" => {
-                let syntax = ws
-                    .label
-                    .as_deref()
-                    .ok_or_else(|| "raw kind requires syntax in 'label' field".to_owned())?;
-                let spec = parse_agg_spec(syntax)?;
-                Ok(vec![spec])
-            }
-            other => Err(format!("unknown aggregate kind: `{other}`")),
-        }
+    // Apply pagination: replace full bucket list with the current page
+    // and attach `next_cursor` for the caller.
+    let (buckets, next_cursor) = if let Some(pg) = pagination {
+        let start = pg.offset.min(buckets.len());
+        let end = (start + pg.rows.len()).min(buckets.len());
+        let page = buckets.get(start..end).map_or_else(Vec::new, <[_]>::to_vec);
+        (page, pg.next_cursor.clone())
+    } else {
+        (buckets, None)
+    };
+
+    AggregateResultWire {
+        label,
+        kind,
+        field,
+        value,
+        stats,
+        buckets,
+        other_count,
+        total_groups,
+        next_cursor,
+        exact,
+        values_complete,
     }
+}
+
+/// Tuple type returned by every `wire_*` arm helper.
+///
+/// Order mirrors the destructured pattern in
+/// [`build_aggregate_result_wire`]: `kind`, `field`, `value`, `stats`,
+/// `buckets`, `other_count`, `total_groups`, `exact`,
+/// `values_complete`.
+type AggregateWireTuple = (
+    String,
+    Option<String>,
+    Option<u64>,
+    Option<uffs_client::protocol::StatsWire>,
+    Vec<uffs_client::protocol::BucketWire>,
+    Option<u64>,
+    Option<usize>,
+    Option<bool>,
+    Option<bool>,
+);
+
+/// Wire builder for [`AggregateResultData::Count`].
+fn wire_count(value: u64) -> AggregateWireTuple {
+    (
+        "count".to_owned(),
+        None,
+        Some(value),
+        None,
+        vec![],
+        None,
+        None,
+        None,
+        None,
+    )
+}
+
+/// Wire builder for [`AggregateResultData::Stats`].
+fn wire_stats(
+    field: String,
+    stats: &uffs_core::aggregate::finalize::StatsResult,
+) -> AggregateWireTuple {
+    use uffs_client::protocol::StatsWire;
+    (
+        "stats".to_owned(),
+        Some(field),
+        None,
+        Some(StatsWire {
+            count: stats.count,
+            sum: stats.sum,
+            min: stats.min,
+            max: stats.max,
+            avg: stats.avg,
+            waste_bytes: stats.waste_bytes,
+            waste_pct: stats.waste_pct,
+        }),
+        vec![],
+        None,
+        None,
+        None,
+        None,
+    )
+}
+
+/// Wire builder for [`AggregateResultData::Buckets`].
+fn wire_buckets(
+    field: String,
+    rows: Vec<uffs_core::aggregate::finalize::BucketRow>,
+    other_count: u64,
+    total_groups: usize,
+    exact: bool,
+) -> AggregateWireTuple {
+    use uffs_client::protocol::BucketWire;
+
+    let buckets = rows
+        .into_iter()
+        .map(|r| {
+            let samples = r.sample_rows.into_iter().map(sample_row_to_wire).collect();
+            let drills = r.drilldown.into_iter().map(drilldown_to_wire).collect();
+            BucketWire {
+                key: r.key,
+                count: r.count,
+                total_bytes: r.total_bytes,
+                total_allocated: Some(r.total_allocated),
+                avg_size: Some(r.avg_size),
+                share_count: Some(r.share_of_total_count),
+                share_bytes: Some(r.share_of_total_bytes),
+                sample_rows: samples,
+                drilldown: drills,
+                sub_buckets: Vec::new(),
+                verified: false,
+            }
+        })
+        .collect();
+    (
+        "buckets".to_owned(),
+        Some(field),
+        None,
+        None,
+        buckets,
+        Some(other_count),
+        Some(total_groups),
+        Some(exact),
+        Some(other_count == 0),
+    )
+}
+
+/// Wire builder for [`AggregateResultData::Missing`].
+fn wire_missing(field: String, count: u64) -> AggregateWireTuple {
+    (
+        "missing".to_owned(),
+        Some(field),
+        Some(count),
+        None,
+        vec![],
+        None,
+        None,
+        None,
+        None,
+    )
+}
+
+/// Wire builder for [`AggregateResultData::Distinct`].
+fn wire_distinct(field: String, count: u64) -> AggregateWireTuple {
+    (
+        "distinct".to_owned(),
+        Some(field),
+        Some(count),
+        None,
+        vec![],
+        None,
+        None,
+        None,
+        None,
+    )
+}
+
+/// Wire builder for [`AggregateResultData::Rollup`].
+fn wire_rollup(
+    mode: String,
+    rows: Vec<uffs_core::aggregate::finalize::BucketRow>,
+) -> AggregateWireTuple {
+    use uffs_client::protocol::BucketWire;
+
+    let buckets = rows
+        .into_iter()
+        .map(|r| {
+            let samples = r.sample_rows.into_iter().map(sample_row_to_wire).collect();
+            let drills = r.drilldown.into_iter().map(drilldown_to_wire).collect();
+            let subs = r
+                .sub_buckets
+                .into_iter()
+                .map(|sub| BucketWire {
+                    key: sub.key,
+                    count: sub.count,
+                    total_bytes: sub.total_bytes,
+                    total_allocated: Some(sub.total_allocated),
+                    avg_size: Some(sub.avg_size),
+                    share_count: Some(sub.share_of_total_count),
+                    share_bytes: Some(sub.share_of_total_bytes),
+                    sample_rows: Vec::new(),
+                    drilldown: Vec::new(),
+                    sub_buckets: Vec::new(),
+                    verified: false,
+                })
+                .collect();
+            BucketWire {
+                key: r.key,
+                count: r.count,
+                total_bytes: r.total_bytes,
+                total_allocated: Some(r.total_allocated),
+                avg_size: Some(r.avg_size),
+                share_count: Some(r.share_of_total_count),
+                share_bytes: Some(r.share_of_total_bytes),
+                sample_rows: samples,
+                drilldown: drills,
+                sub_buckets: subs,
+                verified: false,
+            }
+        })
+        .collect();
+    (
+        "rollup".to_owned(),
+        Some(mode),
+        None,
+        None,
+        buckets,
+        None,
+        None,
+        Some(true),
+        None,
+    )
+}
+
+/// Wire builder for [`AggregateResultData::Duplicates`].
+///
+/// Materialises sample rows from the daemon-side compact index, then
+/// builds a summary [`StatsWire`] mirroring the verifier's view of the
+/// duplicate set.
+#[expect(
+    clippy::float_arithmetic,
+    reason = "percentage calculation for waste_pct"
+)]
+fn wire_duplicates(
+    result: uffs_core::aggregate::DuplicateResult,
+    drives: &[alloc::sync::Arc<uffs_core::compact::DriveCompactIndex>],
+) -> AggregateWireTuple {
+    use uffs_client::protocol::{BucketWire, StatsWire};
+
+    let total_groups = result.candidate_groups;
+    let total_reclaimable = result.total_reclaimable_bytes;
+    let dup_drive_refs: Vec<&uffs_core::compact::DriveCompactIndex> =
+        drives.iter().map(|d| d.as_ref()).collect();
+    let buckets: Vec<BucketWire> = result
+        .groups
+        .into_iter()
+        .map(|g| {
+            // Materialize sample rows from member_indices.
+            let samples: Vec<SampleRowWire> =
+                materialize_dup_members(&g.member_indices, &dup_drive_refs);
+            // Derive human-readable key from first sample row's name field,
+            // falling back to file size.
+            let display_name = samples
+                .first()
+                .and_then(|s| s.fields.get("name").cloned())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| format_size_compact(g.file_size));
+            let key = format!(
+                "{} ({}, {} copies)",
+                display_name,
+                format_size_compact(g.file_size),
+                g.count,
+            );
+            BucketWire {
+                key,
+                count: g.count,
+                total_bytes: g.total_bytes,
+                total_allocated: Some(g.reclaimable_bytes),
+                avg_size: Some(uffs_mft::u64_to_f64(g.file_size)),
+                share_count: None,
+                share_bytes: None,
+                sample_rows: samples,
+                drilldown: Vec::new(),
+                sub_buckets: Vec::new(),
+                verified: g.verified,
+            }
+        })
+        .collect();
+
+    // Build stats with summary: total reclaimable in waste_bytes,
+    // total candidate files in count.
+    let summary = StatsWire {
+        count: result.candidate_files,
+        sum: result.total_duplicate_bytes,
+        min: 0,
+        max: 0,
+        avg: 0.0,
+        waste_bytes: total_reclaimable,
+        waste_pct: if result.total_duplicate_bytes > 0 {
+            (uffs_mft::u64_to_f64(total_reclaimable)
+                / uffs_mft::u64_to_f64(result.total_duplicate_bytes))
+                * 100.0
+        } else {
+            0.0
+        },
+    };
+
+    (
+        "duplicates".to_owned(),
+        None,
+        Some(result.candidate_files),
+        Some(summary),
+        buckets,
+        None,
+        Some(total_groups),
+        None,
+        None,
+    )
 }

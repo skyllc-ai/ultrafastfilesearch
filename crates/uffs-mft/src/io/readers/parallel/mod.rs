@@ -15,18 +15,20 @@
     )
 )]
 
+/// Re-exports the readers-wide prelude plus parallel-only items
+/// (`IoCompletionPort`, `ParallelMftReader`, `ReadParseTiming`) so that
+/// parallel's child reader paths can write `impl ParallelMftReader` and
+/// reference the timing struct directly. The module name `prelude` is
+/// exempt from `clippy::wildcard_imports`.
 #[cfg(windows)]
-pub(super) use super::iocp::IoCompletionPort;
+mod prelude {
+    pub(super) use super::super::iocp::IoCompletionPort;
+    pub(super) use super::super::prelude::*;
+    pub(super) use super::{ParallelMftReader, ReadParseTiming};
+}
+
 #[cfg(windows)]
-#[expect(
-    clippy::wildcard_imports,
-    reason = "parent module's `pub(super) use` prelude \
-              (HANDLE, MftError, ReadFile, rayon::prelude::*, tracing \
-              macros, etc.) is designed to be consumed by submodules; \
-              re-enumerating ~15 items here would duplicate the prelude \
-              across every sibling reader file"
-)]
-use super::*;
+use prelude::*;
 
 #[cfg(windows)]
 mod bulk;
@@ -55,7 +57,10 @@ pub use tests_chaos::{ChaosMftReader, ChaosStrategy};
 /// Timing breakdown for read and parse operations.
 #[expect(
     clippy::struct_field_names,
-    reason = "_ns suffix documents the unit — removing it loses critical information"
+    reason = "the `_ns` suffix on every field encodes the storage unit \
+              (nanoseconds) and disambiguates the raw `u64` fields from \
+              their `_ms` accessor counterparts (`io_ms`, `parse_ms`, ...); \
+              dropping the suffix would erase the unit at the field level"
 )]
 pub struct ReadParseTiming {
     /// Time spent in I/O operations (reading chunks from disk).
@@ -125,7 +130,7 @@ pub struct ParallelMftReader {
     /// Optional bitmap for skip optimization.
     bitmap: Option<crate::platform::MftBitmap>,
     /// Read chunk size in bytes.
-    pub chunk_size: usize,
+    pub(crate) chunk_size: usize,
     /// Drive type for adaptive I/O tuning.
     drive_type: crate::platform::DriveType,
     /// Progress counter (atomic for thread-safe updates).
@@ -135,9 +140,30 @@ pub struct ParallelMftReader {
     /// Skipped records counter (not in use or invalid).
     skipped_records: Arc<AtomicU64>,
     /// M1 8.4: Reusable aligned buffer for sequential I/O.
-    /// Wrapped in `RefCell` for interior mutability since read_chunk needs
-    /// &mut.
+    /// Wrapped in `RefCell` for interior mutability since `read_chunk`
+    /// needs `&mut`.
     buffer: RefCell<AlignedBuffer>,
+}
+
+/// Pre-computed inputs for
+/// [`ParallelMftReader::read_all_parallel_with_progress`].
+///
+/// Bundling the chunks, byte total, and capacity estimate into a single
+/// value lets the orchestrator hand them off to its sub-helpers without
+/// blowing past clippy's `too_many_arguments` threshold.
+#[cfg(windows)]
+struct ParallelReadPlan {
+    /// Bitmap-aware [`ReadChunk`] schedule handed to the sequential reader.
+    chunks: Vec<ReadChunk>,
+    /// `bytes_per_record` from the [`MftExtentMap`], cached for downstream
+    /// helpers that don't carry the map themselves.
+    record_size: u32,
+    /// Conservative record-count estimate used to pre-size
+    /// [`MftRecordMerger`] in the merging path.
+    estimated_records: usize,
+    /// Total bytes the reader will deliver — fed to the progress callback
+    /// as the denominator.
+    total_bytes_to_read: u64,
 }
 
 #[cfg(windows)]
@@ -281,15 +307,15 @@ impl ParallelMftReader {
     ///
     /// This function handles extension records by merging their attributes
     /// into the base records, matching the legacy implementation behavior.
-    /// The progress callback is called during the I/O phase with (bytes_read,
-    /// total_bytes).
+    /// The progress callback is called during the I/O phase with
+    /// (`bytes_read`, `total_bytes`).
     ///
     /// # Arguments
     ///
     /// * `handle` - The raw volume handle
     /// * `merge_extensions` - If true, merge extension record attributes
-    /// * `progress_callback` - Optional callback called with (bytes_read,
-    ///   total_bytes)
+    /// * `progress_callback` - Optional callback called with (`bytes_read`,
+    ///   `total_bytes`)
     ///
     /// # Returns
     ///
@@ -299,6 +325,13 @@ impl ParallelMftReader {
     ///
     /// Returns [`MftError::Io`] if any chunk read fails; progress callback
     /// invocations do not short-circuit the read pipeline.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the by-value `Option<F>` signature lets callers pass capturing \
+                  closures (`Some(move |..| {..})`) without manually managing \
+                  the closure's lifetime; switching to `Option<&dyn Fn(..)>` \
+                  would force every call site to introduce a separate let-binding"
+    )]
     pub fn read_all_parallel_with_progress<F>(
         &self,
         handle: HANDLE,
@@ -320,78 +353,16 @@ impl ParallelMftReader {
             }
         );
 
-        // Generate optimized read chunks
-        let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
-        let num_chunks = chunks.len();
-        info!(num_chunks, "Generated read chunks");
+        let plan = self.plan_parallel_read();
 
-        // Estimate capacity
-        let estimated_records = self.bitmap.as_ref().map_or_else(
-            || self.extent_map.total_records() as usize,
-            crate::platform::MftBitmap::count_in_use,
-        );
-        info!(estimated_records, "Estimated record count");
-
-        // Process chunks in parallel
-        // Note: We read sequentially but parse in parallel for thread safety with
-        // HANDLE
-        let record_size = self.extent_map.bytes_per_record;
-        let records_processed = Arc::clone(&self.records_processed);
-
-        // Calculate total bytes to read for progress reporting
-        let total_bytes_to_read: u64 = chunks
-            .iter()
-            .map(|chunk| chunk.record_count * u64::from(record_size))
-            .sum();
-
-        // Read all chunks (sequential I/O for handle safety)
         debug!("Reading all chunks into memory...");
-        let mut total_bytes_read: u64 = 0;
-        let mut chunk_data: Vec<(ReadChunk, Vec<u8>)> = Vec::with_capacity(chunks.len());
-        let mut consecutive_failures: u32 = 0;
-        /// Abort threshold: if this many consecutive chunks fail, the volume
-        /// is likely write-protected or otherwise inaccessible.
-        const EARLY_ABORT_THRESHOLD: u32 = 10;
-
-        for (idx, chunk) in chunks.into_iter().enumerate() {
-            trace!(
-                chunk_idx = idx,
-                start_frs = chunk.start_frs,
-                "Reading chunk"
-            );
-            match self.read_chunk(handle, &chunk, record_size) {
-                Ok(data) => {
-                    consecutive_failures = 0;
-                    total_bytes_read += data.len() as u64;
-                    trace!(
-                        chunk_idx = idx,
-                        bytes = data.len(),
-                        total_bytes = total_bytes_read,
-                        "Chunk read successfully"
-                    );
-
-                    // Report progress after each chunk
-                    if let Some(cb) = &progress_callback {
-                        cb(total_bytes_read, total_bytes_to_read);
-                    }
-
-                    chunk_data.push((chunk, data));
-                }
-                Err(err) => {
-                    consecutive_failures += 1;
-                    warn!(chunk_idx = idx, error = ?err, "Failed to read chunk");
-                    if consecutive_failures >= EARLY_ABORT_THRESHOLD {
-                        warn!(
-                            consecutive_failures,
-                            remaining_chunks = num_chunks - idx - 1,
-                            "🛑 Aborting: {} consecutive chunk read failures",
-                            consecutive_failures
-                        );
-                        break;
-                    }
-                }
-            }
-        }
+        let (mut chunk_data, total_bytes_read) = self.read_chunks_with_progress(
+            handle,
+            plan.chunks,
+            plan.record_size,
+            plan.total_bytes_to_read,
+            progress_callback.as_ref(),
+        )?;
 
         info!(
             chunks_read = chunk_data.len(),
@@ -400,183 +371,204 @@ impl ParallelMftReader {
             "All chunks read into memory"
         );
 
-        // M1 8.1 OPTIMIZATION: Use fold/reduce pattern instead of per-record atomics
-        // This eliminates cache-line ping-pong across threads by accumulating
-        // per-thread stats, then reducing at the end.
-
+        // M1 8.1 OPTIMIZATION: Use fold/reduce pattern instead of per-record
+        // atomics. This eliminates cache-line ping-pong across threads by
+        // accumulating per-thread stats, then reducing at the end.
         if merge_extensions {
-            // Per-thread accumulator for fold/reduce pattern
-            #[derive(Default)]
-            struct ChunkStats {
-                results: Vec<ParseResult>,
-                skipped: u64,
-                processed: u64,
-            }
-
-            // Full parsing with extension merging using fold/reduce
-            // Use par_iter_mut for zero-copy in-place fixup
-            let combined = chunk_data
-                .par_iter_mut()
-                .fold(ChunkStats::default, |mut acc, (chunk, data)| {
-                    let record_size_bytes = record_size as usize;
-                    let skip_begin = chunk.skip_begin as usize;
-                    let effective_count = chunk.effective_record_count() as usize;
-
-                    // Log chunks with non-zero skips
-                    if chunk.skip_begin > 0 || chunk.skip_end > 0 {
-                        debug!(
-                            chunk_start_frs = chunk.start_frs,
-                            chunk_record_count = chunk.record_count,
-                            skip_begin = chunk.skip_begin,
-                            skip_end = chunk.skip_end,
-                            effective_count,
-                            "⚠️  Chunk has skip_begin or skip_end > 0 (parallel mode)"
-                        );
-                    }
-
-                    // Pre-allocate for this chunk's results
-                    acc.results.reserve(effective_count);
-
-                    for i in 0..effective_count {
-                        let offset = (skip_begin + i) * record_size_bytes;
-                        let Some(record_slice) = data.get_mut(offset..offset + record_size_bytes)
-                        else {
-                            break;
-                        };
-
-                        let frs = chunk.start_frs + skip_begin as u64 + i as u64;
-
-                        // Zero-copy: apply fixup in-place on the shared buffer
-                        if !apply_fixup(record_slice) {
-                            acc.skipped += 1;
-                            acc.processed += 1;
-                            continue;
-                        }
-
-                        // Parse from the fixed-up slice (no copy needed)
-                        let result = parse_record_full(record_slice, frs);
-                        if matches!(result, ParseResult::Skip) {
-                            acc.skipped += 1;
-                        } else {
-                            acc.results.push(result);
-                        }
-                        acc.processed += 1;
-                    }
-                    acc
-                })
-                .reduce(ChunkStats::default, |mut acc, other| {
-                    acc.results.extend(other.results);
-                    acc.skipped += other.skipped;
-                    acc.processed += other.processed;
-                    acc
-                });
-
-            // Update atomics once at the end (not per-record!)
-            records_processed.fetch_add(combined.processed, Ordering::Relaxed);
-            self.skipped_records
-                .fetch_add(combined.skipped, Ordering::Relaxed);
-
-            let parse_results = combined.results;
-            let skipped_count = combined.skipped;
-
-            // Log statistics
-            let fixup_fail_count = self.fixup_failures.load(Ordering::Relaxed);
-
-            if fixup_fail_count > 0 {
-                warn!(
-                    fixup_failures = fixup_fail_count,
-                    "⚠️  MFT records with fixup failures detected (possible corruption)"
-                );
-            }
-
-            if skipped_count > 0 {
-                debug!(
-                    skipped_records = skipped_count,
-                    "📋 Records skipped (not in use or invalid)"
-                );
-            }
-
-            // Merge extensions into base records
-            let mut merger = MftRecordMerger::with_capacity(estimated_records);
-            for result in parse_results {
-                merger.add_result(result);
-            }
-
-            Ok(merger.merge())
+            Ok(self.parse_chunks_with_merge(
+                &mut chunk_data,
+                plan.record_size,
+                plan.estimated_records,
+            ))
         } else {
-            // Legacy parsing (skips extension records) - also uses fold/reduce
-            // Use par_iter_mut for zero-copy in-place fixup
-            #[derive(Default)]
-            struct LegacyStats {
-                records: Vec<ParsedRecord>,
-                skipped: u64,
-                processed: u64,
-            }
+            Ok(self.parse_chunks_legacy(&mut chunk_data, plan.record_size))
+        }
+    }
 
-            let combined = chunk_data
-                .par_iter_mut()
-                .fold(LegacyStats::default, |mut acc, (chunk, data)| {
-                    let record_size_bytes = record_size as usize;
-                    let skip_begin = chunk.skip_begin as usize;
-                    let effective_count = chunk.effective_record_count() as usize;
+    /// Build the chunk schedule and the precomputed estimates / total
+    /// bytes used by [`Self::read_all_parallel_with_progress`].
+    fn plan_parallel_read(&self) -> ParallelReadPlan {
+        let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
+        info!(num_chunks = chunks.len(), "Generated read chunks");
 
-                    acc.records.reserve(effective_count);
+        let estimated_records = self.bitmap.as_ref().map_or_else(
+            || self.extent_map.total_records() as usize,
+            crate::platform::MftBitmap::count_in_use,
+        );
+        info!(estimated_records, "Estimated record count");
 
-                    for i in 0..effective_count {
-                        let offset = (skip_begin + i) * record_size_bytes;
-                        let Some(record_slice) = data.get_mut(offset..offset + record_size_bytes)
-                        else {
-                            break;
-                        };
+        let record_size = self.extent_map.bytes_per_record;
+        let total_bytes_to_read: u64 = chunks
+            .iter()
+            .map(|chunk| chunk.record_count * u64::from(record_size))
+            .sum();
 
-                        let frs = chunk.start_frs + skip_begin as u64 + i as u64;
+        ParallelReadPlan {
+            chunks,
+            record_size,
+            estimated_records,
+            total_bytes_to_read,
+        }
+    }
 
-                        // Zero-copy: apply fixup in-place on the shared buffer
-                        if !apply_fixup(record_slice) {
-                            acc.skipped += 1;
-                            acc.processed += 1;
-                            continue;
-                        }
+    /// Parses every chunk through `parse_record_full` and merges extension
+    /// records via [`MftRecordMerger`].  This is the full-fidelity legacy path.
+    fn parse_chunks_with_merge(
+        &self,
+        chunk_data: &mut [(ReadChunk, Vec<u8>)],
+        record_size: u32,
+        estimated_records: usize,
+    ) -> Vec<ParsedRecord> {
+        #[derive(Default)]
+        struct ChunkStats {
+            results: Vec<ParseResult>,
+            skipped: u64,
+            processed: u64,
+        }
 
-                        // Parse from the fixed-up slice (no copy needed)
-                        match parse_record_full(record_slice, frs) {
-                            ParseResult::Base(parsed) => acc.records.push(parsed),
-                            ParseResult::Extension(_) | ParseResult::Skip => acc.skipped += 1,
-                        }
+        let combined = chunk_data
+            .par_iter_mut()
+            .fold(ChunkStats::default, |mut acc, (chunk, data)| {
+                let record_size_bytes = record_size as usize;
+                let skip_begin = chunk.skip_begin as usize;
+                let effective_count = chunk.effective_record_count() as usize;
+
+                if chunk.skip_begin > 0 || chunk.skip_end > 0 {
+                    debug!(
+                        chunk_start_frs = chunk.start_frs,
+                        chunk_record_count = chunk.record_count,
+                        skip_begin = chunk.skip_begin,
+                        skip_end = chunk.skip_end,
+                        effective_count,
+                        "⚠️  Chunk has skip_begin or skip_end > 0 (parallel mode)"
+                    );
+                }
+
+                acc.results.reserve(effective_count);
+
+                for i in 0..effective_count {
+                    let offset = (skip_begin + i) * record_size_bytes;
+                    let Some(record_slice) = data.get_mut(offset..offset + record_size_bytes)
+                    else {
+                        break;
+                    };
+
+                    let frs = chunk.start_frs + skip_begin as u64 + i as u64;
+
+                    if !apply_fixup(record_slice) {
+                        acc.skipped += 1;
                         acc.processed += 1;
+                        continue;
                     }
-                    acc
-                })
-                .reduce(LegacyStats::default, |mut acc, other| {
-                    acc.records.extend(other.records);
-                    acc.skipped += other.skipped;
-                    acc.processed += other.processed;
-                    acc
-                });
 
-            // Update atomics once at the end
-            records_processed.fetch_add(combined.processed, Ordering::Relaxed);
-            self.skipped_records
-                .fetch_add(combined.skipped, Ordering::Relaxed);
+                    let result = parse_record_full(record_slice, frs);
+                    if matches!(result, ParseResult::Skip) {
+                        acc.skipped += 1;
+                    } else {
+                        acc.results.push(result);
+                    }
+                    acc.processed += 1;
+                }
+                acc
+            })
+            .reduce(ChunkStats::default, |mut acc, other| {
+                acc.results.extend(other.results);
+                acc.skipped += other.skipped;
+                acc.processed += other.processed;
+                acc
+            });
 
-            // Log statistics
-            let fixup_fail_count = self.fixup_failures.load(Ordering::Relaxed);
+        self.records_processed
+            .fetch_add(combined.processed, Ordering::Relaxed);
+        self.skipped_records
+            .fetch_add(combined.skipped, Ordering::Relaxed);
+        self.log_parse_stats(combined.skipped);
 
-            if fixup_fail_count > 0 {
-                warn!(
-                    fixup_failures = fixup_fail_count,
-                    "⚠️  MFT records with fixup failures detected (possible corruption)"
-                );
-            }
+        let mut merger = MftRecordMerger::with_capacity(estimated_records);
+        for result in combined.results {
+            merger.add_result(result);
+        }
+        merger.merge()
+    }
 
-            if combined.skipped > 0 {
-                debug!(
-                    skipped_records = combined.skipped,
-                    "📋 Records skipped (not in use or invalid)"
-                );
-            }
+    /// Parses every chunk through `parse_record_full` and returns only the
+    /// base records — extension and skip results are counted as skipped.
+    fn parse_chunks_legacy(
+        &self,
+        chunk_data: &mut [(ReadChunk, Vec<u8>)],
+        record_size: u32,
+    ) -> Vec<ParsedRecord> {
+        #[derive(Default)]
+        struct LegacyStats {
+            records: Vec<ParsedRecord>,
+            skipped: u64,
+            processed: u64,
+        }
 
-            Ok(combined.records)
+        let combined = chunk_data
+            .par_iter_mut()
+            .fold(LegacyStats::default, |mut acc, (chunk, data)| {
+                let record_size_bytes = record_size as usize;
+                let skip_begin = chunk.skip_begin as usize;
+                let effective_count = chunk.effective_record_count() as usize;
+
+                acc.records.reserve(effective_count);
+
+                for i in 0..effective_count {
+                    let offset = (skip_begin + i) * record_size_bytes;
+                    let Some(record_slice) = data.get_mut(offset..offset + record_size_bytes)
+                    else {
+                        break;
+                    };
+
+                    let frs = chunk.start_frs + skip_begin as u64 + i as u64;
+
+                    if !apply_fixup(record_slice) {
+                        acc.skipped += 1;
+                        acc.processed += 1;
+                        continue;
+                    }
+
+                    match parse_record_full(record_slice, frs) {
+                        ParseResult::Base(parsed) => acc.records.push(parsed),
+                        ParseResult::Extension(_) | ParseResult::Skip => acc.skipped += 1,
+                    }
+                    acc.processed += 1;
+                }
+                acc
+            })
+            .reduce(LegacyStats::default, |mut acc, other| {
+                acc.records.extend(other.records);
+                acc.skipped += other.skipped;
+                acc.processed += other.processed;
+                acc
+            });
+
+        self.records_processed
+            .fetch_add(combined.processed, Ordering::Relaxed);
+        self.skipped_records
+            .fetch_add(combined.skipped, Ordering::Relaxed);
+        self.log_parse_stats(combined.skipped);
+
+        combined.records
+    }
+
+    /// Logs fixup-failure and skipped-record statistics shared by both
+    /// parsing paths.
+    fn log_parse_stats(&self, skipped_count: u64) {
+        let fixup_fail_count = self.fixup_failures.load(Ordering::Relaxed);
+        if fixup_fail_count > 0 {
+            warn!(
+                fixup_failures = fixup_fail_count,
+                "⚠️  MFT records with fixup failures detected (possible corruption)"
+            );
+        }
+
+        if skipped_count > 0 {
+            debug!(
+                skipped_records = skipped_count,
+                "📋 Records skipped (not in use or invalid)"
+            );
         }
     }
 }

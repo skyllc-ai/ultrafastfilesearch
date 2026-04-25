@@ -2,6 +2,40 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Raw MFT benchmark command handlers.
+//!
+//! These commands print human-readable benchmark output to stdout, perform
+//! Win32 raw I/O against `\\.\X:` volume handles, and convert byte counters
+//! into `f64` for MB/s display.  The lint exemptions below capture those
+//! CLI-specific patterns; library code never inherits them.
+#![expect(
+    clippy::print_stdout,
+    reason = "intentional user-facing CLI raw-MFT benchmark output"
+)]
+#![expect(
+    clippy::float_arithmetic,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::default_numeric_fallback,
+    reason = "byte / rate calculations convert integer counters into f64 for human-readable display; LCN/byte-offset casts are bounded by NTFS volume size"
+)]
+#![expect(
+    clippy::redundant_type_annotations,
+    reason = "explicit types make the raw Win32 ABI plumbing self-documenting in this CLI tool"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "benchmark commands run a configure -> read -> compute -> print pipeline that is most readable inline"
+)]
+#![expect(
+    clippy::items_after_statements,
+    reason = "local `const BUFFER_SIZE` keeps the buffer size adjacent to its sole use site"
+)]
+#![expect(
+    clippy::indexing_slicing,
+    reason = "slices into the local 1\u{a0}MiB buffer; sizes are clamped via `min(BUFFER_SIZE)` and `min(chunk_size)` above"
+)]
 
 use anyhow::{Context, Result};
 
@@ -12,29 +46,8 @@ use crate::display::char_or_dot;
 /// Works on all platforms - parses NTFS structures from saved file.
 /// Supports both UFFS-MFT format and raw NTFS format.
 #[expect(
-    clippy::too_many_lines,
-    reason = "cli output function with complex display logic"
-)]
-#[expect(clippy::print_stdout, reason = "intentional user-facing cli output")]
-#[expect(
-    clippy::shadow_reuse,
-    reason = "shadow reuse improves readability in sequential processing"
-)]
-#[expect(
-    clippy::min_ident_chars,
-    reason = "short identifiers used for concise loop variables"
-)]
-#[expect(
-    clippy::expect_used,
-    reason = "expect used for file operations that should not fail after validation"
-)]
-#[expect(
     clippy::single_call_fn,
     reason = "logical separation of load command implementation"
-)]
-#[expect(
-    clippy::fn_params_excessive_bools,
-    reason = "bool params map directly to cli flags"
 )]
 #[expect(
     unsafe_code,
@@ -140,6 +153,10 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
         }
 
         // Seek to extent start
+        // SAFETY: `raw_handle` is a live volume handle owned by `vol_data`'s
+        // `VolumeHandle` and `extent_byte_offset` is bounded by the MFT extent
+        // returned by Windows; the cast to `i64` is safe because volume sizes
+        // never exceed `i64::MAX`.
         let seek_result =
             unsafe { SetFilePointerEx(raw_handle, extent_byte_offset as i64, None, FILE_BEGIN) };
         if seek_result.is_err() {
@@ -160,6 +177,9 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
             let buf_slice = buffer.as_mut_slice();
             let mut bytes_read: u32 = 0;
 
+            // SAFETY: `raw_handle` is a live volume handle, `buf_slice` is a
+            // sector-aligned writable region of the owned `AlignedBuffer`, and
+            // `bytes_read` is a valid out-parameter for the call duration.
             let read_result = unsafe {
                 ReadFile(
                     raw_handle,

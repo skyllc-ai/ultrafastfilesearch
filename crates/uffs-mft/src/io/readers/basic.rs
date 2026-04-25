@@ -12,15 +12,7 @@
     reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
 )]
 
-#[expect(
-    clippy::wildcard_imports,
-    reason = "parent module's `pub(super) use` prelude \
-              (HANDLE, MftError, ReadFile, rayon::prelude::*, tracing \
-              macros, etc.) is designed to be consumed by submodules; \
-              re-enumerating ~15 items here would duplicate the prelude \
-              across every sibling reader file"
-)]
-use super::*;
+use super::prelude::*;
 
 /// Reads MFT records from a volume, handling fragmented MFTs.
 #[derive(Debug)]
@@ -92,13 +84,13 @@ impl MftRecordReader {
 
     /// Returns the extent map.
     #[must_use]
-    pub fn extent_map(&self) -> &MftExtentMap {
+    pub const fn extent_map(&self) -> &MftExtentMap {
         &self.extent_map
     }
 
     /// Returns true if the MFT is fragmented.
     #[must_use]
-    pub fn is_fragmented(&self) -> bool {
+    pub const fn is_fragmented(&self) -> bool {
         self.extent_map.is_fragmented()
     }
 
@@ -262,13 +254,13 @@ impl BatchMftReader {
 
     /// Returns the number of records that fit in one read block.
     #[must_use]
-    pub fn records_per_block(&self) -> usize {
+    pub const fn records_per_block(&self) -> usize {
         self.read_block_size / self.record_size as usize
     }
 
     /// Returns the extent map.
     #[must_use]
-    pub fn extent_map(&self) -> &MftExtentMap {
+    pub const fn extent_map(&self) -> &MftExtentMap {
         &self.extent_map
     }
 

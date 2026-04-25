@@ -13,15 +13,42 @@
     reason = "NTFS disk-offset / record-size / OVERLAPPED offset-split casts are lossless"
 )]
 
-#[expect(
-    clippy::wildcard_imports,
-    reason = "parent module's `pub(super) use` prelude \
-              (HANDLE, MftError, ReadFile, rayon::prelude::*, tracing \
-              macros, etc.) is designed to be consumed by submodules; \
-              re-enumerating ~15 items here would duplicate the prelude \
-              across every sibling reader file"
-)]
-use super::*;
+use super::prelude::*;
+
+/// Maximum I/O size for direct chunk-to-I/O mapping (NVMe/SSD path).
+const MAX_DIRECT_IO_SIZE: usize = 16 * 1024 * 1024;
+
+/// Single I/O operation queued for the IOCP producer thread.
+struct IoOp {
+    /// Absolute byte offset on the volume where the read should start.
+    disk_offset: u64,
+    /// Number of bytes to read for this operation.
+    size: usize,
+    /// FRS of the first MFT record covered by this read.
+    start_frs: u64,
+}
+
+/// In-flight IOCP slot owning the OVERLAPPED struct, the read buffer, and
+/// the originating I/O op.
+struct InFlightOp {
+    /// Win32 OVERLAPPED struct used by `ReadFile` for async I/O completion.
+    overlapped: windows::Win32::System::IO::OVERLAPPED,
+    /// Sector-aligned buffer holding the bytes returned by the kernel.
+    buffer: AlignedBuffer,
+    /// Original `IoOp` this completion corresponds to (FRS / disk-offset).
+    op: IoOp,
+}
+
+/// Message sent from the IOCP producer to the parsing workers: the buffer
+/// holding a fixed-size batch of FRS records, the FRS of the first record,
+/// and the record count in the buffer.
+type WorkerMessage = (Vec<u8>, u64, usize);
+
+/// Bounded channel used between the IOCP producer and parsing workers.
+type WorkerChannel = (
+    crossbeam_channel::Sender<Option<WorkerMessage>>,
+    crossbeam_channel::Receiver<Option<WorkerMessage>>,
+);
 
 impl ParallelMftReader {
     /// Reads all MFT records using the legacy port parsing algorithm.
@@ -53,7 +80,7 @@ impl ParallelMftReader {
     ///   drive)
     /// * `io_chunk_size` - Size of each I/O in bytes (None = auto based on
     ///   drive)
-    /// * `num_workers` - Number of parsing worker threads (None = num_cpus)
+    /// * `num_workers` - Number of parsing worker threads (None = `num_cpus`)
     /// * `_progress_callback` - Optional progress callback
     #[expect(
         unsafe_code,
@@ -62,6 +89,10 @@ impl ParallelMftReader {
     #[expect(
         clippy::too_many_lines,
         reason = "parallel I/O orchestration with worker threads requires sequential setup"
+    )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "parallel sliding-window IOCP-to-index reader: per-completion dispatch, parse-worker fan-out, deadline tracking, and replacement-read issuance must share one event loop to keep IOCP fairness; extracting helpers would either inline the same control flow or hide IO-completion invariants"
     )]
     /// # Errors
     ///
@@ -84,7 +115,7 @@ impl ParallelMftReader {
         use core::pin::Pin;
         use core::sync::atomic::{AtomicUsize, Ordering};
 
-        use crossbeam_channel::{Sender, bounded};
+        use crossbeam_channel::bounded;
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
@@ -144,8 +175,6 @@ impl ParallelMftReader {
 
         // For NVMe/SSD: use larger max to allow direct chunk-to-I/O mapping
         // For HDD: use standard io_chunk_size for predictable sequential reads
-        const MAX_DIRECT_IO_SIZE: usize = 16 * 1024 * 1024; // 16MB max for direct I/O
-
         let sorted_chunks: Vec<ReadChunk> = if let (
             crate::platform::DriveType::Nvme | crate::platform::DriveType::Ssd,
             Some(bitmap),
@@ -167,15 +196,9 @@ impl ParallelMftReader {
         };
 
         // Build I/O operations with FRS tracking
-        struct IoOp {
-            disk_offset: u64,
-            size: usize,
-            start_frs: u64,
-        }
-
         let mut io_ops: VecDeque<IoOp> = VecDeque::new();
 
-        for chunk in sorted_chunks.iter() {
+        for chunk in &sorted_chunks {
             let skip_begin_bytes = chunk.skip_begin as usize * record_size;
             let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
             if effective_records == 0 {
@@ -241,10 +264,7 @@ impl ParallelMftReader {
         // Create channel for buffer handoff (bounded to prevent memory explosion)
         // Each message contains: (buffer_data, start_frs, record_count)
         let channel_capacity = num_workers * 2;
-        let (tx, rx): (
-            Sender<Option<(Vec<u8>, u64, usize)>>,
-            crossbeam_channel::Receiver<Option<(Vec<u8>, u64, usize)>>,
-        ) = bounded(channel_capacity);
+        let (tx, rx): WorkerChannel = bounded(channel_capacity);
 
         // Shared counter for parsed records
         let records_parsed = Arc::new(AtomicUsize::new(0));
@@ -273,10 +293,10 @@ impl ParallelMftReader {
                         let frs = start_frs + i as u64;
 
                         // Check bitmap
-                        if let Some(bm) = &worker_bitmap {
-                            if !bm.is_record_in_use(frs) {
-                                continue;
-                            }
+                        if let Some(bm) = &worker_bitmap
+                            && !bm.is_record_in_use(frs)
+                        {
+                            continue;
                         }
 
                         let offset = i * worker_record_size;
@@ -321,12 +341,6 @@ impl ParallelMftReader {
         let read_start = std::time::Instant::now();
         let iocp = IoCompletionPort::new(0)?;
         iocp.associate(overlapped_handle, 0)?;
-
-        struct InFlightOp {
-            overlapped: windows::Win32::System::IO::OVERLAPPED,
-            buffer: AlignedBuffer,
-            op: IoOp,
-        }
 
         // Allocate buffers sized for the max I/O operation
         let mut buffer_pool: Vec<AlignedBuffer> = (0..concurrency)
@@ -393,7 +407,7 @@ impl ParallelMftReader {
                         // Signal workers to stop
                         drop(tx);
                         return Err(MftError::Io(std::io::Error::from_raw_os_error(
-                            last_error.0 as i32,
+                            last_error.0.cast_signed(),
                         )));
                     }
                 }
@@ -546,9 +560,10 @@ impl ParallelMftReader {
             "✅ IOCP read complete, waiting for workers"
         );
 
-        // Signal workers to stop (send None to each)
+        // Signal workers to stop (send None to each); drop the must-use
+        // `Result` since worker shutdown is best-effort.
         for _ in 0..num_workers {
-            let _ = tx.send(None);
+            drop(tx.send(None));
         }
         drop(tx);
 

@@ -2,6 +2,13 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Daemon lifecycle: PID file, idle timeout, auto-retire, shutdown.
+//!
+//! Exception: `file_size_policy` allows this file to exceed 800 LOC.
+//! Rationale: `LifecycleManager` + `LifecycleHandle` plus the
+//! `run_idle_timer` state machine (active-connection guard,
+//! load-stall heartbeat, session-tier deadline extension) form a
+//! single cohesive unit; splitting the helpers across files would
+//! fragment the shutdown semantics.
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -332,10 +339,6 @@ impl LifecycleManager {
     ///
     /// If connections are open when the deadline fires, the deadline is pushed
     /// one full window into the future and the loop continues.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "daemon lifecycle with signal handling and graceful shutdown"
-    )]
     pub(crate) async fn run_idle_timer(&mut self) {
         let Some(base_timeout) = self.idle_timeout else {
             // --no-retire: wait for an explicit shutdown signal only.
@@ -365,82 +368,108 @@ impl LifecycleManager {
                 }
 
                 // ── Activity: extend the sliding-window deadline ─────────
-                //
-                // Re-reads the session tier so an MCP / TUI upgrade takes
-                // effect immediately on the next request.
                 () = handle.activity_notify.notified() => {
-                    let tier = handle.max_session_tier.load(Ordering::Relaxed);
-                    let eff = Self::effective_timeout_from_tier(base_timeout, tier);
+                    let eff = Self::extended_timeout_for_activity(&handle, base_timeout);
                     idle_sleep.as_mut().reset(tokio::time::Instant::now() + eff);
-                    tracing::trace!(
-                        effective_secs = eff.as_secs(),
-                        session_tier = tier,
-                        "Idle deadline extended by activity"
-                    );
                 }
 
                 // ── Idle deadline fired ──────────────────────────────────
                 () = &mut idle_sleep => {
-                    // ── Load-stall guard ─────────────────────────────────
-                    // Must be checked BEFORE the active-connection guard so
-                    // that a stuck NTFS read is caught even when clients are
-                    // polling `status` (those polls extend the idle deadline
-                    // but don't update the heartbeat).
-                    let last_hb = handle.load_heartbeat.load(Ordering::Relaxed);
-                    let now_epoch = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |dur| dur.as_secs());
-                    let hb_age = now_epoch.saturating_sub(last_hb);
-                    tracing::debug!(
-                        heartbeat_age_secs = hb_age,
-                        stall_threshold = LOAD_STALL_TIMEOUT_SECS,
-                        "Idle deadline fired — checking load heartbeat"
-                    );
-                    if last_hb > 0 && hb_age >= LOAD_STALL_TIMEOUT_SECS {
-                        tracing::error!(
-                            stall_secs = LOAD_STALL_TIMEOUT_SECS,
-                            heartbeat_age_secs = hb_age,
-                            "Load stalled — no drive progress, force-retiring"
-                        );
-                        handle.events.emit(DaemonEvent::ShuttingDown {
-                            reason: format!(
-                                "load stalled (no progress for {LOAD_STALL_TIMEOUT_SECS}s)"
-                            ),
-                        });
-                        return;
+                    match Self::idle_deadline_fired(&handle, base_timeout) {
+                        Some(reset_after) => {
+                            idle_sleep.as_mut().reset(
+                                tokio::time::Instant::now() + reset_after,
+                            );
+                        }
+                        None => return,
                     }
-
-                    // ── Active-connection guard (D2.6.7) ─────────────────
-                    let conns = handle.active_connections();
-                    if conns > 0 {
-                        tracing::debug!(
-                            connections = conns,
-                            "Idle deadline fired but active connections open — deferring"
-                        );
-                        let tier = handle.max_session_tier.load(Ordering::Relaxed);
-                        let eff = Self::effective_timeout_from_tier(base_timeout, tier);
-                        idle_sleep.as_mut().reset(tokio::time::Instant::now() + eff);
-                        continue;
-                    }
-
-                    // ── Retire ───────────────────────────────────────────
-                    let tier = handle.max_session_tier.load(Ordering::Relaxed);
-                    let eff = Self::effective_timeout_from_tier(base_timeout, tier);
-                    tracing::info!(
-                        timeout_secs = eff.as_secs(),
-                        session_tier = tier,
-                        "Idle timeout reached — auto-retiring"
-                    );
-                    handle.events.emit(DaemonEvent::ShuttingDown {
-                        reason: format!(
-                            "idle timeout ({}s, tier {tier})",
-                            eff.as_secs()
-                        ),
-                    });
-                    return;
                 }
             }
         }
+    }
+
+    /// Compute the new effective timeout for the activity-notify
+    /// branch and emit the matching trace.
+    ///
+    /// Re-reads the session tier so an MCP / TUI upgrade takes effect
+    /// immediately on the next request.
+    fn extended_timeout_for_activity(handle: &LifecycleHandle, base_timeout: Duration) -> Duration {
+        let tier = handle.max_session_tier.load(Ordering::Relaxed);
+        let eff = Self::effective_timeout_from_tier(base_timeout, tier);
+        tracing::trace!(
+            effective_secs = eff.as_secs(),
+            session_tier = tier,
+            "Idle deadline extended by activity"
+        );
+        eff
+    }
+
+    /// Decide what to do when the idle-deadline timer fires.
+    ///
+    /// Returns `Some(reset_after)` to push the deadline forward (the
+    /// load-stall guard already returned `None` if it tripped, so a
+    /// `Some` return always means defer because of active connections);
+    /// returns `None` to instruct the caller to retire.
+    ///
+    /// The load-stall guard runs **before** the active-connection
+    /// guard so a stuck NTFS read is caught even when clients are
+    /// polling `status` (those polls extend the idle deadline but
+    /// don't update the heartbeat).
+    fn idle_deadline_fired(handle: &LifecycleHandle, base_timeout: Duration) -> Option<Duration> {
+        if Self::load_stalled_force_retire(handle) {
+            return None;
+        }
+
+        let conns = handle.active_connections();
+        if conns > 0 {
+            tracing::debug!(
+                connections = conns,
+                "Idle deadline fired but active connections open — deferring"
+            );
+            let tier = handle.max_session_tier.load(Ordering::Relaxed);
+            return Some(Self::effective_timeout_from_tier(base_timeout, tier));
+        }
+
+        // Retire path: trace the cause, emit ShuttingDown, signal the
+        // caller to break the loop.
+        let tier = handle.max_session_tier.load(Ordering::Relaxed);
+        let eff = Self::effective_timeout_from_tier(base_timeout, tier);
+        tracing::info!(
+            timeout_secs = eff.as_secs(),
+            session_tier = tier,
+            "Idle timeout reached — auto-retiring"
+        );
+        handle.events.emit(DaemonEvent::ShuttingDown {
+            reason: format!("idle timeout ({}s, tier {tier})", eff.as_secs()),
+        });
+        None
+    }
+
+    /// Returns `true` when the load heartbeat is older than the
+    /// stall threshold, in which case the caller must force-retire.
+    fn load_stalled_force_retire(handle: &LifecycleHandle) -> bool {
+        let last_hb = handle.load_heartbeat.load(Ordering::Relaxed);
+        let now_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |dur| dur.as_secs());
+        let hb_age = now_epoch.saturating_sub(last_hb);
+        tracing::debug!(
+            heartbeat_age_secs = hb_age,
+            stall_threshold = LOAD_STALL_TIMEOUT_SECS,
+            "Idle deadline fired — checking load heartbeat"
+        );
+        if last_hb > 0 && hb_age >= LOAD_STALL_TIMEOUT_SECS {
+            tracing::error!(
+                stall_secs = LOAD_STALL_TIMEOUT_SECS,
+                heartbeat_age_secs = hb_age,
+                "Load stalled — no drive progress, force-retiring"
+            );
+            handle.events.emit(DaemonEvent::ShuttingDown {
+                reason: format!("load stalled (no progress for {LOAD_STALL_TIMEOUT_SECS}s)"),
+            });
+            return true;
+        }
+        false
     }
 
     /// Compute the effective idle timeout from the base and the session tier.
@@ -491,17 +520,22 @@ impl LifecycleManager {
         use windows::Win32::Foundation::CloseHandle;
         use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
-        // SAFETY: `OpenProcess` is a well-defined Win32 API.
         #[expect(unsafe_code, reason = "OpenProcess requires unsafe FFI")]
-        unsafe {
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
-            if let Ok(proc_handle) = handle {
-                let _close = CloseHandle(proc_handle);
-                true
-            } else {
-                false
-            }
-        }
+        // SAFETY: `OpenProcess` is a well-defined Win32 API; we only pass
+        // a static access mask plus the caller-provided pid and inherit
+        // its raw handle out.
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) };
+
+        handle.is_ok_and(|proc_handle| {
+            #[expect(
+                unsafe_code,
+                reason = "CloseHandle balances the OpenProcess call above"
+            )]
+            // SAFETY: `proc_handle` was just returned by `OpenProcess` and
+            // is not aliased anywhere else, so closing it now is sound.
+            let _close = unsafe { CloseHandle(proc_handle) };
+            true
+        })
     }
 
     /// `FNV-1a` hash of the current executable path (S4.3.1).

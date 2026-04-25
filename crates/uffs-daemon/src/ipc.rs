@@ -175,10 +175,6 @@ impl IpcServer {
     /// Enforces:
     /// - S4.4.8: 5-minute idle connection timeout
     /// - S4.4.6: Per-connection rate limit (100 queries/sec)
-    #[expect(
-        clippy::single_call_fn,
-        reason = "extracted for readability; handles reader/writer/notif tasks for one connection"
-    )]
     async fn handle_connection(
         reader: impl tokio::io::AsyncRead + Unpin + Send + 'static,
         writer: impl tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -358,33 +354,11 @@ impl IpcServer {
 ///
 /// Returns when the lifecycle manager signals shutdown.
 #[cfg(unix)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "IPC message router with streaming and notifications"
-)]
 pub(crate) async fn run_ipc_server(
     index: Arc<IndexManager>,
     lifecycle: LifecycleHandle,
 ) -> anyhow::Result<()> {
-    let sock_path = IpcServer::socket_path();
-
-    // Ensure parent directory exists with secure permissions
-    if let Some(parent) = sock_path.parent() {
-        uffs_security::fs::create_secure_dir(parent)?;
-    }
-
-    // Remove stale socket file
-    if sock_path.exists() {
-        std::fs::remove_file(&sock_path)?;
-    }
-
-    let listener = tokio::net::UnixListener::bind(&sock_path)?;
-
-    // Set socket permissions to owner-only (0600)
-    uffs_security::fs::set_file_permissions_owner_only(&sock_path)?;
-
-    tracing::info!(path = %sock_path.display(), "IPC server listening");
-
+    let listener = bind_unix_listener()?;
     let events = index.event_sender().clone();
     let handler = Arc::new(RequestHandler {
         index,
@@ -393,46 +367,97 @@ pub(crate) async fn run_ipc_server(
 
     loop {
         let (stream, _addr) = listener.accept().await?;
-
-        // S4.2: Peer credential verification — reject connections from other UIDs
-        if !IpcServer::verify_peer_credentials(&stream) {
-            tracing::warn!("Rejected connection from different UID");
-            drop(stream);
+        if !accept_unix_connection_is_admitted(&stream, &lifecycle) {
             continue;
         }
-
-        let active = lifecycle.active_connections();
-        if active >= MAX_CONNECTIONS {
-            tracing::warn!(
-                active,
-                max = MAX_CONNECTIONS,
-                "Max connections reached, rejecting"
-            );
-            drop(stream);
-            continue;
-        }
-
-        lifecycle.connection_opened();
-        let handler_clone = Arc::clone(&handler);
-        let lc_clone = lifecycle.clone();
-        let event_rx = events.subscribe();
-
-        let (read_half, write_half) = stream.into_split();
-        tokio::spawn(async move {
-            let total_conns = lc_clone.active_connections();
-            tracing::debug!(connections = total_conns, "Client connected");
-
-            if let Err(conn_err) =
-                IpcServer::handle_connection(read_half, write_half, handler_clone, event_rx).await
-            {
-                tracing::debug!(error = %conn_err, "Connection ended");
-            }
-
-            lc_clone.connection_closed();
-            let remaining = lc_clone.active_connections();
-            tracing::debug!(connections = remaining, "Client disconnected");
-        });
+        spawn_unix_connection(stream, &handler, &lifecycle, &events);
     }
+}
+
+/// Create the UDS listener used by [`run_ipc_server`].
+///
+/// Folds together the secure-directory bootstrap, stale-socket
+/// cleanup, bind, and 0600-permission lockdown so the orchestrator
+/// can stay focused on the accept loop.
+#[cfg(unix)]
+fn bind_unix_listener() -> anyhow::Result<tokio::net::UnixListener> {
+    let sock_path = IpcServer::socket_path();
+
+    if let Some(parent) = sock_path.parent() {
+        uffs_security::fs::create_secure_dir(parent)?;
+    }
+
+    if sock_path.exists() {
+        std::fs::remove_file(&sock_path)?;
+    }
+
+    let listener = tokio::net::UnixListener::bind(&sock_path)?;
+
+    // Set socket permissions to owner-only (0600).
+    uffs_security::fs::set_file_permissions_owner_only(&sock_path)?;
+
+    tracing::info!(path = %sock_path.display(), "IPC server listening");
+    Ok(listener)
+}
+
+/// Run the per-accept gatekeeping and return whether the connection
+/// should be handed off to a worker task.
+///
+/// Two checks: S4.2 peer-credential verification (reject foreign UIDs)
+/// and the [`MAX_CONNECTIONS`] cap.  `false` means the stream has
+/// already been dropped and the caller's loop should `continue`.
+#[cfg(unix)]
+fn accept_unix_connection_is_admitted(
+    stream: &tokio::net::UnixStream,
+    lifecycle: &LifecycleHandle,
+) -> bool {
+    if !IpcServer::verify_peer_credentials(stream) {
+        tracing::warn!("Rejected connection from different UID");
+        return false;
+    }
+
+    let active = lifecycle.active_connections();
+    if active >= MAX_CONNECTIONS {
+        tracing::warn!(
+            active,
+            max = MAX_CONNECTIONS,
+            "Max connections reached, rejecting"
+        );
+        return false;
+    }
+
+    true
+}
+
+/// Hand off an admitted UDS connection to a dedicated worker task,
+/// keeping the connection counter and tracing in sync.
+#[cfg(unix)]
+fn spawn_unix_connection(
+    stream: tokio::net::UnixStream,
+    handler: &Arc<RequestHandler>,
+    lifecycle: &LifecycleHandle,
+    events: &crate::events::EventSender,
+) {
+    lifecycle.connection_opened();
+    let handler_clone = Arc::clone(handler);
+    let lc_clone = lifecycle.clone();
+    let event_rx = events.subscribe();
+    let (read_half, write_half) = stream.into_split();
+
+    tokio::spawn(async move {
+        let total_conns = lc_clone.active_connections();
+        tracing::debug!(connections = total_conns, "Client connected");
+
+        if let Err(conn_err) =
+            IpcServer::handle_connection(read_half, write_half, handler_clone, event_rx).await
+        {
+            tracing::debug!(error = %conn_err, "Connection ended");
+        }
+
+        lc_clone.connection_closed();
+        let remaining = lc_clone.active_connections();
+        tracing::debug!(connections = remaining, "Client disconnected");
+    });
 }
 
 /// Run the IPC server on a Windows named pipe.
@@ -453,10 +478,6 @@ pub(crate) async fn run_ipc_server(
 /// Returns when the accept loop errors terminally.  The `AF_UNIX` listener
 /// (below) continues running as a fallback during the transition.
 #[cfg(windows)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "pipe accept loop + per-connection handoff — mirrors the Unix version"
-)]
 pub(crate) async fn run_pipe_server(
     index: Arc<IndexManager>,
     lifecycle: LifecycleHandle,
@@ -576,187 +597,11 @@ fn create_pipe_server(
     Ok(server)
 }
 
-/// Windows IPC server — uses Unix domain sockets (Windows 10 1803+).
-///
-/// Mirrors the Unix version: secure dir (icacls owner-only ACL), socket
-/// file permissions, max connections, peer verification via ACL.
+/// Windows AF_UNIX accept loop + std-socket↔tokio-duplex bridge
+/// threads.  Lives in its own file so this module stays under the
+/// 800-LOC file-size policy.
 #[cfg(windows)]
-pub(crate) async fn run_ipc_server(
-    index: Arc<IndexManager>,
-    lifecycle: LifecycleHandle,
-) -> anyhow::Result<()> {
-    let sock_path = IpcServer::socket_path();
+mod windows_unix_bridge;
 
-    if let Some(parent) = sock_path.parent() {
-        uffs_security::fs::create_secure_dir(parent)?;
-    }
-
-    if sock_path.exists() {
-        std::fs::remove_file(&sock_path)?;
-    }
-
-    // Windows: use std blocking UnixListener in a spawn_blocking loop,
-    // bridge each connection via tokio::io::duplex.
-    use std::os::windows::net::UnixListener as StdUnixListener;
-    let std_listener = StdUnixListener::bind(&sock_path)?;
-
-    // Set socket permissions to owner-only AFTER bind creates the file
-    uffs_security::fs::set_file_permissions_owner_only(&sock_path)?;
-
-    tracing::info!(path = %sock_path.display(), "IPC server listening (Windows AF_UNIX)");
-
-    let events = index.event_sender().clone();
-    let handler = Arc::new(RequestHandler {
-        index,
-        lifecycle: lifecycle.clone(),
-    });
-
-    tracing::info!("[daemon-ipc] entering accept loop");
-    loop {
-        // Blocking accept in spawn_blocking
-        let accept_listener = std_listener.try_clone()?;
-        tracing::info!("[daemon-ipc] waiting for accept...");
-        let accept_result = tokio::task::spawn_blocking(move || accept_listener.accept()).await?;
-
-        match &accept_result {
-            Ok((_stream, _addr)) => {
-                tracing::info!("[daemon-ipc] accept() returned OK");
-            }
-            Err(accept_err) => {
-                tracing::info!(error = %accept_err, "[daemon-ipc] accept() returned Err");
-            }
-        }
-
-        let (std_stream, _addr) = accept_result?;
-        std_stream.set_read_timeout(Some(core::time::Duration::from_secs(IDLE_CONNECTION_SECS)))?;
-
-        if !IpcServer::verify_peer_credentials_win() {
-            tracing::warn!("[daemon-ipc] Rejected connection (peer verification failed)");
-            continue;
-        }
-
-        let active = lifecycle.active_connections();
-        if active >= MAX_CONNECTIONS {
-            tracing::warn!(
-                active,
-                max = MAX_CONNECTIONS,
-                "[daemon-ipc] Max connections reached"
-            );
-            continue;
-        }
-
-        // Bridge std blocking socket to async duplex channels.
-        // Each bridge thread gets its own dedicated tokio current-thread
-        // runtime.  Using Handle::block_on on the main runtime caused
-        // DuplexStream waker issues — premature EOF after ~10 RPCs.
-        let std_read = std_stream.try_clone()?;
-        let std_write = std_stream;
-
-        let (async_read, mut bridge_write) = tokio::io::duplex(65536);
-        let (mut bridge_read, async_write) = tokio::io::duplex(65536);
-
-        // Background thread: std socket → async bridge_write
-        std::thread::spawn(move || {
-            use std::io::Read;
-            tracing::info!("[daemon-bridge-read] thread started");
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(rt_err) => {
-                    tracing::info!(error = %rt_err, "[daemon-bridge-read] failed to create runtime");
-                    return;
-                }
-            };
-            rt.block_on(async move {
-                use tokio::io::AsyncWriteExt;
-                let mut reader = std::io::BufReader::new(std_read);
-                let mut buf = [0_u8; 8192];
-                loop {
-                    match reader.read(&mut buf) {
-                        Ok(0) => {
-                            tracing::info!("[daemon-bridge-read] EOF from client socket");
-                            break;
-                        }
-                        Err(read_err) => {
-                            tracing::info!(error = %read_err, "[daemon-bridge-read] read error");
-                            break;
-                        }
-                        Ok(n) => {
-                            if let Err(write_err) = bridge_write.write_all(&buf[..n]).await {
-                                tracing::info!(error = %write_err, "[daemon-bridge-read] bridge write failed");
-                                break;
-                            }
-                        }
-                    }
-                }
-            });
-            tracing::info!("[daemon-bridge-read] thread exiting");
-        });
-
-        // Background thread: async bridge_read → std socket
-        std::thread::spawn(move || {
-            use std::io::Write;
-            tracing::info!("[daemon-bridge-write] thread started");
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(rt_err) => {
-                    tracing::info!(error = %rt_err, "[daemon-bridge-write] failed to create runtime");
-                    return;
-                }
-            };
-            let mut writer = std_write;
-            rt.block_on(async {
-                use tokio::io::AsyncReadExt;
-                let mut buf = [0_u8; 8192];
-                loop {
-                    match bridge_read.read(&mut buf).await {
-                        Ok(0) => {
-                            tracing::info!("[daemon-bridge-write] EOF from bridge");
-                            break;
-                        }
-                        Err(read_err) => {
-                            tracing::info!(error = %read_err, "[daemon-bridge-write] bridge read error");
-                            break;
-                        }
-                        Ok(n) => {
-                            if writer.write_all(&buf[..n]).is_err() {
-                                tracing::info!("[daemon-bridge-write] socket write_all failed");
-                                break;
-                            }
-                            if writer.flush().is_err() {
-                                tracing::info!("[daemon-bridge-write] socket flush failed");
-                                break;
-                            }
-                        }
-                    }
-                }
-            });
-            tracing::info!("[daemon-bridge-write] thread exiting");
-        });
-
-        lifecycle.connection_opened();
-        let handler_clone = Arc::clone(&handler);
-        let lc_clone = lifecycle.clone();
-        let event_rx = events.subscribe();
-
-        tokio::spawn(async move {
-            let total_conns = lc_clone.active_connections();
-            tracing::debug!(connections = total_conns, "Client connected");
-
-            if let Err(conn_err) =
-                IpcServer::handle_connection(async_read, async_write, handler_clone, event_rx).await
-            {
-                tracing::debug!(error = %conn_err, "Connection ended");
-            }
-
-            lc_clone.connection_closed();
-            let remaining = lc_clone.active_connections();
-            tracing::debug!(connections = remaining, "Client disconnected");
-        });
-    }
-}
+#[cfg(windows)]
+pub(crate) use windows_unix_bridge::run_ipc_server;

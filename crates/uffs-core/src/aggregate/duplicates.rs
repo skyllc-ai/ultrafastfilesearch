@@ -755,8 +755,15 @@ mod tests {
 
         // Verify groups are sorted by reclaimable_bytes descending.
         for pair in result.groups.windows(2) {
+            // `windows(2)` always yields exactly two elements; the
+            // `else` arm is dead code but keeps clippy's
+            // missing_asserts_for_indexing lint quiet without
+            // resorting to `unreachable!()`.
+            let [prev, curr] = pair else {
+                continue;
+            };
             assert!(
-                pair[0].reclaimable_bytes >= pair[1].reclaimable_bytes,
+                prev.reclaimable_bytes >= curr.reclaimable_bytes,
                 "groups should be sorted by reclaimable_bytes desc"
             );
         }

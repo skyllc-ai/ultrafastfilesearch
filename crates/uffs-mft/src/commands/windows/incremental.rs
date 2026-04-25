@@ -7,6 +7,34 @@
 //! sibling `usn.rs` module in 2026-04-21.  This file now covers
 //! index save/load, cache management (status/get/clear), and the
 //! USN-checkpointed incremental update / all-drive index path.
+//!
+//! These commands print human-readable progress to stdout, build size/rate
+//! summaries from `u64` counters into `f64` for KB/MB conversion, and use
+//! `Debug` formatting for opaque diagnostic enums.  The lint exemptions
+//! below capture those CLI-specific patterns; library code never inherits
+//! them.
+#![expect(
+    clippy::print_stdout,
+    reason = "intentional user-facing CLI status / progress output"
+)]
+#![expect(
+    clippy::use_debug,
+    reason = "Debug formatting is the canonical display for opaque diagnostic enums in CLI tools"
+)]
+#![expect(
+    clippy::float_arithmetic,
+    clippy::cast_precision_loss,
+    clippy::default_numeric_fallback,
+    reason = "byte/rate calculations convert integer counters into f64 for human-readable display"
+)]
+#![expect(
+    clippy::min_ident_chars,
+    reason = "short identifiers (e, a) used for printf-style error / accessor bindings in CLI output"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "incremental index commands run a configure → execute → format → print pipeline that is most readable inline"
+)]
 
 use std::path::Path;
 
@@ -43,12 +71,13 @@ pub(crate) async fn cmd_index_save(drive: char, output: &Path) -> Result<()> {
     let volume_data = handle.volume_data();
     let volume_serial = volume_data.volume_serial_number;
 
-    let (usn_journal_id, next_usn) = if let Ok(info) = query_usn_journal(drive) {
-        (info.journal_id, info.next_usn)
-    } else {
-        println!("⚠️  USN Journal not available, saving without checkpoint");
-        (0, 0)
-    };
+    let (usn_journal_id, next_usn) = query_usn_journal(drive).map_or_else(
+        |_| {
+            println!("⚠️  USN Journal not available, saving without checkpoint");
+            (0, 0)
+        },
+        |info| (info.journal_id, info.next_usn),
+    );
 
     // Save to file
     let save_start = Instant::now();
@@ -221,7 +250,7 @@ pub(crate) async fn cmd_cache_get(drive: char, force: bool, ttl: Option<u64>) ->
             CacheStatus::Stale { age_seconds } => {
                 println!(
                     "⚠️  Cache STALE (age: {}s, TTL: {}s)",
-                    age_seconds.map_or("?".to_owned(), |a| a.to_string()),
+                    age_seconds.map_or_else(|| "?".to_owned(), |secs| secs.to_string()),
                     ttl_seconds
                 );
             }
@@ -250,12 +279,13 @@ pub(crate) async fn cmd_cache_get(drive: char, force: bool, ttl: Option<u64>) ->
     let volume_data = handle.volume_data();
     let volume_serial = volume_data.volume_serial_number;
 
-    let (usn_journal_id, next_usn) = if let Ok(info) = query_usn_journal(drive) {
-        (info.journal_id, info.next_usn)
-    } else {
-        println!("⚠️  USN Journal not available");
-        (0, 0)
-    };
+    let (usn_journal_id, next_usn) = query_usn_journal(drive).map_or_else(
+        |_| {
+            println!("⚠️  USN Journal not available");
+            (0, 0)
+        },
+        |info| (info.journal_id, info.next_usn),
+    );
 
     // Save to cache
     let cache_path = save_to_cache(&index, drive, volume_serial, usn_journal_id, next_usn)?;
@@ -500,7 +530,7 @@ pub(crate) async fn cmd_index_update(
         CacheStatus::Stale { age_seconds } => {
             println!(
                 "⚠️  Cache is stale (age: {}s, TTL: {}s)",
-                age_seconds.map_or("?".to_owned(), |a| a.to_string()),
+                age_seconds.map_or_else(|| "?".to_owned(), |secs| secs.to_string()),
                 ttl_seconds
             );
             println!("   Performing full scan...");
@@ -545,12 +575,13 @@ async fn do_full_index_build(drive: char) -> Result<()> {
     let volume_data = handle.volume_data();
     let volume_serial = volume_data.volume_serial_number;
 
-    let (usn_journal_id, next_usn) = if let Ok(info) = query_usn_journal(drive) {
-        (info.journal_id, info.next_usn)
-    } else {
-        println!("⚠️  USN Journal not available");
-        (0, 0)
-    };
+    let (usn_journal_id, next_usn) = query_usn_journal(drive).map_or_else(
+        |_| {
+            println!("⚠️  USN Journal not available");
+            (0, 0)
+        },
+        |info| (info.journal_id, info.next_usn),
+    );
 
     // Save to cache
     let cache_path = save_to_cache(&index, drive, volume_serial, usn_journal_id, next_usn)?;

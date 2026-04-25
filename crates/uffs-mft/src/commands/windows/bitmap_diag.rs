@@ -2,6 +2,33 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Bitmap diagnostic command handlers.
+//!
+//! These commands print human-readable bitmap statistics to stdout and convert
+//! `usize` populations into `f64` percentages for display.  The lint
+//! exemptions below capture those CLI-specific patterns; library code never
+//! inherits them.
+#![expect(
+    clippy::print_stdout,
+    reason = "intentional user-facing CLI bitmap diagnostic output"
+)]
+#![expect(
+    clippy::float_arithmetic,
+    clippy::cast_precision_loss,
+    clippy::default_numeric_fallback,
+    reason = "percent / fraction calculations convert integer counters into f64 for human-readable display"
+)]
+#![expect(
+    clippy::min_ident_chars,
+    reason = "short identifiers used for printf-style indices in CLI output"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "diagnostic command runs a configure -> sample -> count -> print pipeline; extracting helpers fragments the readable narrative"
+)]
+#![expect(
+    clippy::naive_bytecount,
+    reason = "small one-shot CLI bitmap summary; SIMD-accelerated `bytecount` would be overkill for an interactive diagnostic and would add a dependency"
+)]
 
 use anyhow::{Context, Result};
 

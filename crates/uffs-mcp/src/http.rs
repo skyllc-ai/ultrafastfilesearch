@@ -200,7 +200,10 @@ async fn shutdown_signal() {
 
     #[cfg(not(unix))]
     {
-        let _ = ctrl_c.await;
+        // ctrl_c() returns Result<(), io::Error>; we don't care which
+        // failure mode the OS reports — receiving any signal is enough
+        // to start shutting the HTTP server down.
+        let _ctrl_c_result: std::io::Result<()> = ctrl_c.await;
     }
 
     tracing::info!("Shutdown signal received");

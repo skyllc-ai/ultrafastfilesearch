@@ -12,15 +12,7 @@
     reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
 )]
 
-#[expect(
-    clippy::wildcard_imports,
-    reason = "parent module's `pub(super) use` prelude \
-              (HANDLE, MftError, ReadFile, rayon::prelude::*, tracing \
-              macros, etc.) is designed to be consumed by submodules; \
-              re-enumerating ~15 items here would duplicate the prelude \
-              across every sibling reader file"
-)]
-use super::*;
+use super::prelude::*;
 
 /// Per-volume state for multi-volume IOCP reading.
 #[cfg(windows)]
@@ -91,7 +83,7 @@ impl MultiVolumeIocpReader {
     ///
     /// * `volumes` - Vector of volume states to read from
     #[must_use]
-    pub fn new(volumes: Vec<VolumeState>) -> Self {
+    pub const fn new(volumes: Vec<VolumeState>) -> Self {
         Self { volumes }
     }
 
@@ -110,6 +102,10 @@ impl MultiVolumeIocpReader {
     #[expect(
         clippy::too_many_lines,
         reason = "multi-volume IOCP orchestration with per-volume state tracking"
+    )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "multi-volume IOCP orchestration: per-volume state machines, completion-key dispatch, and rebalancing in-flight slots have to share one event loop to keep IOCP fairness; extracting helpers would either inline the same control flow or hide IO-completion invariants"
     )]
     pub fn read_all_volumes(&mut self) -> Result<Vec<crate::index::MftIndex>> {
         use core::pin::Pin;
@@ -196,16 +192,15 @@ impl MultiVolumeIocpReader {
                     let overlapped_ptr = core::ptr::addr_of_mut!(in_flight_op.overlapped);
                     let buffer_ptr = in_flight_op.buffer.as_mut_slice().as_mut_ptr();
 
-                    // SAFETY: `buffer_ptr` comes from the owned aligned buffer inside
-                    // `in_flight_op`, `op.size` stays within that allocation, and the
-                    // `OVERLAPPED` pointer remains valid while the pinned op is in flight.
+                    // SAFETY: `buffer_ptr` is the start of the owned aligned buffer in
+                    // `in_flight_op`, valid for `op.size` writable bytes for the IOCP read.
+                    let read_slice =
+                        unsafe { core::slice::from_raw_parts_mut(buffer_ptr, op.size) };
+                    // SAFETY: `vol.handle` is a live overlapped handle, `read_slice` is a
+                    // valid mutable slice of `op.size` bytes, and the `OVERLAPPED` pointer
+                    // remains valid while the pinned op is in flight.
                     let read_result = unsafe {
-                        ReadFile(
-                            vol.handle,
-                            Some(core::slice::from_raw_parts_mut(buffer_ptr, op.size)),
-                            None,
-                            Some(overlapped_ptr),
-                        )
+                        ReadFile(vol.handle, Some(read_slice), None, Some(overlapped_ptr))
                     };
 
                     if read_result.is_err() {
@@ -282,7 +277,9 @@ impl MultiVolumeIocpReader {
             for (slot_idx, slot) in vol_slots.iter_mut().enumerate() {
                 if let Some(op) = slot {
                     let op_ptr = core::ptr::addr_of!(op.overlapped);
-                    if op_ptr as *const _ == overlapped_ptr as *const _ {
+                    if op_ptr.cast::<windows::Win32::System::IO::OVERLAPPED>()
+                        == overlapped_ptr.cast_const()
+                    {
                         completed_slot = Some(slot_idx);
                         break;
                     }
@@ -323,9 +320,9 @@ impl MultiVolumeIocpReader {
                 )));
             };
             let records_in_buffer = bytes_transferred as usize / record_size;
-            let mut current_frs = completed_op.op.start_frs;
+            let start_frs = completed_op.op.start_frs;
 
-            for record_idx in 0..records_in_buffer {
+            for (current_frs, record_idx) in (start_frs..).zip(0..records_in_buffer) {
                 let record_start = record_idx * record_size;
                 let record_end = record_start + record_size;
                 let Some(record_data) = buffer_slice.get(record_start..record_end) else {
@@ -333,7 +330,6 @@ impl MultiVolumeIocpReader {
                 };
                 let result = parse_record_full(record_data, current_frs);
                 vol.merger.add_result(result);
-                current_frs += 1;
             }
 
             // Return buffer to pool
@@ -364,18 +360,22 @@ impl MultiVolumeIocpReader {
                     op: next_op.clone(),
                 });
 
-                let overlapped_ptr = core::ptr::addr_of_mut!(new_in_flight.overlapped);
+                let next_overlapped_ptr = core::ptr::addr_of_mut!(new_in_flight.overlapped);
                 let buffer_ptr = new_in_flight.buffer.as_mut_slice().as_mut_ptr();
 
-                // SAFETY: `buffer_ptr` comes from the owned aligned buffer inside
-                // `new_in_flight`, `next_op.size` stays within that allocation, and the
-                // `OVERLAPPED` pointer remains valid while the pinned op is in flight.
+                // SAFETY: `buffer_ptr` is the start of the owned aligned buffer in
+                // `new_in_flight`, valid for `next_op.size` writable bytes for the IOCP read.
+                let read_slice =
+                    unsafe { core::slice::from_raw_parts_mut(buffer_ptr, next_op.size) };
+                // SAFETY: `vol.handle` is a live overlapped handle, `read_slice` is a
+                // valid mutable slice of `next_op.size` bytes, and the `OVERLAPPED` pointer
+                // remains valid while the pinned op is in flight.
                 let read_result = unsafe {
                     ReadFile(
                         vol.handle,
-                        Some(core::slice::from_raw_parts_mut(buffer_ptr, next_op.size)),
+                        Some(read_slice),
                         None,
-                        Some(overlapped_ptr),
+                        Some(next_overlapped_ptr),
                     )
                 };
 
@@ -398,8 +398,8 @@ impl MultiVolumeIocpReader {
                     }
                 }
 
-                if let Some(vol_slots) = in_flight.get_mut(vol_idx)
-                    && let Some(slot) = vol_slots.get_mut(slot_idx)
+                if let Some(next_vol_slots) = in_flight.get_mut(vol_idx)
+                    && let Some(slot) = next_vol_slots.get_mut(slot_idx)
                 {
                     *slot = Some(new_in_flight);
                 }
@@ -440,6 +440,7 @@ impl MultiVolumeIocpReader {
 
 /// Helper function to prepare volume state for multi-volume reading.
 #[cfg(windows)]
+#[must_use]
 pub fn prepare_volume_state(
     drive_letter: char,
     handle: HANDLE,
@@ -464,7 +465,7 @@ pub fn prepare_volume_state(
 
     let mut io_queue = alloc::collections::VecDeque::new();
 
-    for chunk in sorted_chunks.iter() {
+    for chunk in &sorted_chunks {
         let skip_begin_bytes = chunk.skip_begin as usize * record_size;
         let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
         if effective_records == 0 {
@@ -483,7 +484,7 @@ pub fn prepare_volume_state(
             io_queue.push_back(MultiVolumeIoOp {
                 disk_offset,
                 size: io_size,
-                start_frs: chunk.start_frs + chunk.skip_begin as u64 + frs_offset,
+                start_frs: chunk.start_frs + chunk.skip_begin + frs_offset,
             });
 
             offset_within_chunk += io_size;
@@ -494,7 +495,7 @@ pub fn prepare_volume_state(
     let total_io_ops = io_queue.len();
     let _estimated_records = bitmap
         .as_ref()
-        .map_or(total_records, |bm| bm.count_in_use());
+        .map_or(total_records, crate::platform::MftBitmap::count_in_use);
 
     VolumeState {
         drive_letter,

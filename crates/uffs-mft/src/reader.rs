@@ -26,6 +26,7 @@ mod persistence;
 mod persistence_capture;
 mod read_mode;
 mod stats;
+mod usn_apply;
 
 pub use self::benchmark::{BenchmarkResult, DriveCharacteristics, PhaseTimings};
 pub use self::multi_drive::{DriveReadResult, MultiDriveMftReader};
@@ -230,15 +231,23 @@ impl MftReader {
         }
     }
 
-    /// Returns the `VolumeHandle`, panicking if this is a file-based reader.
+    /// Returns the live-volume `VolumeHandle` for this reader.
     ///
-    /// Only called from `#[cfg(windows)]` IOCP code paths where a live volume
-    /// is guaranteed.
+    /// # Errors
+    ///
+    /// Returns [`MftError::InvalidInput`] if the reader was constructed via
+    /// [`MftReader::from_file`] rather than [`MftReader::new_for_volume`].  In
+    /// production this is a contract violation: the IOCP read pipelines that
+    /// call this method are dispatched only after construction guarantees a
+    /// live volume.  A typed error keeps the contract enforceable without
+    /// panicking.
     #[cfg(windows)]
-    pub(crate) fn require_handle(&self) -> &VolumeHandle {
+    pub(crate) fn require_handle(&self) -> Result<&VolumeHandle> {
         match &self.source {
-            MftSource::LiveVolume(handle) => handle,
-            MftSource::File(_) => unreachable!("require_handle called on file-based reader"),
+            MftSource::LiveVolume(handle) => Ok(handle),
+            MftSource::File(_) => Err(crate::error::MftError::InvalidInput(
+                "live-volume operation invoked on file-backed MftReader".into(),
+            )),
         }
     }
 
@@ -592,7 +601,7 @@ mod tests {
     // Tests for MftReader optimal defaults
     // =========================================================================
 
-    /// Test that `MftReader` stores None for concurrency/io_size by default,
+    /// Test that `MftReader` stores None for concurrency/`io_size` by default,
     /// allowing the I/O layer to use optimal settings based on drive type.
     #[test]
     #[cfg(windows)]
@@ -604,7 +613,7 @@ mod tests {
                 // Skip test if not running as admin
                 return;
             }
-            Err(err) => panic!("Unexpected error: {:?}", err),
+            Err(err) => panic!("Unexpected error: {err:?}"),
         };
 
         // Verify that concurrency and io_size are None (will use optimal defaults)
@@ -631,9 +640,9 @@ mod tests {
     #[cfg(windows)]
     fn test_mft_reader_builder_overrides() {
         let reader = match MftReader::open('C') {
-            Ok(r) => r,
+            Ok(opened) => opened,
             Err(MftError::InsufficientPrivileges) => return,
-            Err(e) => panic!("Unexpected error: {:?}", e),
+            Err(err) => panic!("Unexpected error: {err:?}"),
         };
 
         // Apply builder methods
@@ -655,9 +664,9 @@ mod tests {
     #[cfg(windows)]
     fn test_mft_reader_default_mode_is_auto() {
         let reader = match MftReader::open('C') {
-            Ok(r) => r,
+            Ok(opened) => opened,
             Err(MftError::InsufficientPrivileges) => return,
-            Err(e) => panic!("Unexpected error: {:?}", e),
+            Err(err) => panic!("Unexpected error: {err:?}"),
         };
 
         assert_eq!(
@@ -672,9 +681,9 @@ mod tests {
     #[cfg(windows)]
     fn test_mft_reader_boolean_defaults() {
         let reader = match MftReader::open('C') {
-            Ok(r) => r,
+            Ok(opened) => opened,
             Err(MftError::InsufficientPrivileges) => return,
-            Err(e) => panic!("Unexpected error: {:?}", e),
+            Err(err) => panic!("Unexpected error: {err:?}"),
         };
 
         // These defaults are set for optimal performance and baseline-compatible output

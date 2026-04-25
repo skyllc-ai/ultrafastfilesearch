@@ -2,33 +2,37 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Reader implementations and async I/O orchestration for MFT ingestion.
+//!
+//! The private `prelude` submodule consolidates the common imports every
+//! reader needs (rayon traits, Win32 FFI, tracing macros, and the I/O-layer
+//! types from `super::*`).  Children import it via `use super::prelude::*;`,
+//! which clippy's `wildcard_imports` lint exempts because the module is
+//! named `prelude`.
 
+/// Re-exports the imports every reader needs (rayon traits, Win32 FFI,
+/// tracing macros, and the I/O-layer types).  Children import via
+/// `use super::prelude::*;`, exempt from `clippy::wildcard_imports`
+/// because the module is named `prelude`.
 #[cfg(windows)]
-pub(super) use alloc::sync::Arc;
-#[cfg(windows)]
-pub(super) use core::cell::RefCell;
-#[cfg(windows)]
-pub(super) use core::sync::atomic::{AtomicU64, Ordering};
+mod prelude {
+    pub(super) use alloc::sync::Arc;
+    pub(super) use core::cell::RefCell;
+    pub(super) use core::sync::atomic::{AtomicU64, Ordering};
 
-#[cfg(windows)]
-pub(super) use rayon::prelude::*;
-#[cfg(windows)]
-pub(super) use tracing::{debug, info, trace, warn};
-#[cfg(windows)]
-pub(super) use windows::Win32::Foundation::HANDLE;
-#[cfg(windows)]
-pub(super) use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
+    pub(super) use rayon::prelude::*;
+    pub(super) use tracing::{debug, info, trace, warn};
+    pub(super) use windows::Win32::Foundation::HANDLE;
+    pub(super) use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
-#[cfg(windows)]
-#[expect(
-    clippy::wildcard_imports,
-    reason = "parent module's `pub(super) use` prelude \
-              (HANDLE, MftError, ReadFile, rayon::prelude::*, tracing \
-              macros, etc.) is designed to be consumed by submodules; \
-              re-enumerating ~15 items here would duplicate the prelude \
-              across every sibling reader file"
-)]
-use super::*;
+    pub(super) use super::zero_copy::parse_buffer_zero_copy_inner;
+    pub(super) use crate::io::{
+        AlignedBuffer, MftExtentMap, MftRecordMerger, ParseResult, ParsedColumns, ParsedRecord,
+        ReadChunk, SECTOR_SIZE, apply_fixup, generate_precise_read_chunks, generate_read_chunks,
+        parse_record, parse_record_full, parse_record_zero_alloc, process_record,
+    };
+    pub(super) use crate::platform::VolumeHandle;
+    pub(super) use crate::{MftError, Result};
+}
 
 // Windows-specific readers (require HANDLE and Windows APIs)
 #[cfg(windows)]

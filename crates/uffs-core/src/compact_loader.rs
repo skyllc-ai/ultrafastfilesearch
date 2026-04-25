@@ -377,10 +377,6 @@ pub fn load_live_drive(
 /// once at the end.  Typical cost: <5ms for record mutations + ~100ms for CSR
 /// rebuild on a 7M-record drive.
 #[cfg(windows)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "linear delete/create/rename dispatch"
-)]
 pub fn apply_usn_patch(
     drive: &mut DriveCompactIndex,
     changes: &[uffs_mft::usn::FileChange],
@@ -425,19 +421,19 @@ pub fn apply_usn_patch(
                     .unwrap_or(u32::MAX);
 
                 let new_rec = CompactRecord {
-                    name_offset: uffs_mft::len_to_u32(name_start),
-                    name_len: uffs_mft::len_to_u16(change.filename.len()),
-                    extension_id: 0,
-                    flags: 0,
-                    parent_idx: parent_compact,
                     size: 0,
                     allocated: 0,
+                    treesize: 0,
+                    tree_allocated: 0,
                     created: 0,
                     modified: 0,
                     accessed: 0,
+                    name_offset: uffs_mft::len_to_u32(name_start),
+                    flags: 0,
+                    parent_idx: parent_compact,
                     descendants: 0,
-                    treesize: 0,
-                    tree_allocated: 0,
+                    name_len: uffs_mft::len_to_u16(change.filename.len()),
+                    extension_id: 0,
                     // path_len is set to 0 here; the full-array
                     // `compute_path_lengths` call after the USN loop
                     // will populate the correct value for all records.

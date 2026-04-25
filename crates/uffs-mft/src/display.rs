@@ -116,7 +116,8 @@ pub(crate) fn truncate_string(text: &str, max_len: usize) -> String {
             .take_while(|(idx, _)| *idx < truncate_at)
             .last()
             .map_or(0, |(idx, ch)| idx + ch.len_utf8());
-        format!("{}...", &text[..safe_end])
+        let prefix = text.get(..safe_end).unwrap_or("");
+        format!("{prefix}...")
     }
 }
 
@@ -173,14 +174,14 @@ pub(crate) fn format_usn_reason(reason: u32) -> String {
 
 /// Format a number with thousands separators.
 #[cfg(windows)]
-pub(crate) fn format_number(n: u64) -> String {
-    let s = n.to_string();
+pub(crate) fn format_number(value: u64) -> String {
+    let digits = value.to_string();
     let mut result = String::new();
-    for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
+    for (idx, ch) in digits.chars().rev().enumerate() {
+        if idx > 0 && idx % 3 == 0 {
             result.push(',');
         }
-        result.push(c);
+        result.push(ch);
     }
     result.chars().rev().collect()
 }

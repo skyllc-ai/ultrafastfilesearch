@@ -12,15 +12,7 @@
     reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
 )]
 
-#[expect(
-    clippy::wildcard_imports,
-    reason = "parent module's `pub(super) use` prelude \
-              (HANDLE, MftError, ReadFile, rayon::prelude::*, tracing \
-              macros, etc.) is designed to be consumed by submodules; \
-              re-enumerating ~15 items here would duplicate the prelude \
-              across every sibling reader file"
-)]
-use super::*;
+use super::prelude::*;
 
 /// Ultra-fast MFT reader with streaming processing.
 ///
@@ -151,12 +143,11 @@ impl StreamingMftReader {
             }
         }
 
-        // Merge extensions and get final results
-        let all_results = if merge_extensions {
-            merger.merge()
-        } else {
-            merger.merge()
-        };
+        // Merge extensions and get final results.  The `merge_extensions`
+        // branching already happened per-record above (the legacy path skips
+        // extension records at parse time), so by here both modes collapse to
+        // the same `merge()` call.
+        let all_results = merger.merge();
 
         info!(
             records = all_results.len(),

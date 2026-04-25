@@ -2,6 +2,31 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Volume information and discovery command handlers.
+//!
+//! These commands print human-readable volume / drive metadata to stdout,
+//! convert byte counters into KB/MB/percent for display, and use `Debug`
+//! formatting for opaque diagnostic enums.  The lint exemptions below capture
+//! those CLI-specific patterns; library code never inherits them.
+#![expect(
+    clippy::print_stdout,
+    reason = "intentional user-facing CLI volume info output"
+)]
+#![expect(
+    clippy::float_arithmetic,
+    clippy::cast_precision_loss,
+    clippy::default_numeric_fallback,
+    reason = "byte/percent calculations convert integer counters into f64 for human-readable display"
+)]
+#![expect(
+    clippy::min_ident_chars,
+    clippy::shadow_unrelated,
+    reason = "short identifiers and sequential rebinding aid readability in CLI driver code"
+)]
+#![expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "info commands run a configure -> query -> format -> print pipeline that is most readable inline"
+)]
 
 use anyhow::{Context, Result};
 use tracing::info;
@@ -10,6 +35,11 @@ use uffs_mft::MftReader;
 use super::shared::drive_type_label;
 use crate::display::{format_bytes, format_duration, format_number_commas, truncate_string};
 
+/// `info` CLI command — print MFT and volume diagnostics for `drive`.
+///
+/// `deep` enables full-MFT scans (slower, more accurate counts), `no_bitmap`
+/// disables the `$Bitmap`-driven skip optimisation, and `unique` reports
+/// unique-FRS counts in addition to total parse counts.
 #[cfg(windows)]
 pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: bool) -> Result<()> {
     use std::time::Instant;
@@ -215,14 +245,13 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
 
     if warnings.is_empty() {
         println!("✅ HEALTH STATUS: Good (based on metadata)");
-        println!();
     } else {
         println!("⚠️  HEALTH WARNINGS");
         for warning in &warnings {
             println!("  • {warning}");
         }
-        println!();
     }
+    println!();
 
     // Deep scan: read all MFT records for detailed statistics
     if deep {
@@ -318,9 +347,13 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
                         names
                             .iter()
                             .zip(streams.iter())
-                            .filter_map(|(n, s)| match (n, s) {
-                                (Some(n), Some(s)) => Some(u64::from(n) * u64::from(s)),
-                                _ => None,
+                            .filter_map(|(name_count, stream_count)| {
+                                match (name_count, stream_count) {
+                                    (Some(names), Some(streams)) => {
+                                        Some(u64::from(names) * u64::from(streams))
+                                    }
+                                    _ => None,
+                                }
                             })
                             .sum::<u64>()
                     })
@@ -500,6 +533,33 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
     Ok(())
 }
 
+/// Per-drive summary used by [`cmd_drives`] to lay out the per-drive table.
+#[cfg(windows)]
+struct DriveInfo {
+    /// Drive letter (e.g. `C`, `D`).
+    letter: char,
+    /// `true` when this drive hosts the running OS.
+    is_boot: bool,
+    /// Volume label as reported by `GetVolumeInformationW`.
+    label: String,
+    /// Human-readable drive type (`SSD`, `HDD`, `NVMe`, ...).
+    drive_type: String,
+    /// Total volume capacity in bytes.
+    total_size: u64,
+    /// Free space in bytes (per Win32 disk-free-space query).
+    free_space: u64,
+    /// Used space in bytes (`total_size - free_space`).
+    used_space: u64,
+    /// Used capacity percentage in `[0.0, 100.0]`.
+    used_pct: f64,
+    /// Size of the `$MFT` file in bytes.
+    mft_size: u64,
+    /// Number of allocated MFT records on this volume.
+    mft_records: u64,
+}
+
+/// `drives` CLI command — list every NTFS drive on this system with its
+/// label, size, free space, and `$MFT` statistics.
 #[cfg(windows)]
 pub(crate) async fn cmd_drives() -> Result<()> {
     use tracing::debug;
@@ -518,20 +578,6 @@ pub(crate) async fn cmd_drives() -> Result<()> {
             "✅ Found {} NTFS drive(s)",
             drives.len()
         );
-
-        // Collect drive info
-        struct DriveInfo {
-            letter: char,
-            is_boot: bool,
-            label: String,
-            drive_type: String,
-            total_size: u64,
-            free_space: u64,
-            used_space: u64,
-            used_pct: f64,
-            mft_size: u64,
-            mft_records: u64,
-        }
 
         let mut drive_infos: Vec<DriveInfo> = Vec::new();
 
@@ -658,7 +704,9 @@ pub(crate) async fn cmd_drives() -> Result<()> {
     Ok(())
 }
 
-/// Gets the volume label for a drive letter.
+/// Look up the volume label for `drive` via `GetVolumeInformationW`.
+///
+/// Returns `None` if the call fails or the volume has no label set.
 #[cfg(windows)]
 #[expect(
     unsafe_code,
@@ -678,6 +726,10 @@ fn get_volume_label(drive: char) -> Option<String> {
 
     let mut volume_name_buf = [0_u16; 261];
 
+    // SAFETY: `root_path` is a NUL-terminated UTF-16 buffer kept alive for the
+    // call duration; `volume_name_buf` is a writable 261-element stack buffer
+    // matching the Win32 maximum volume-name length; the remaining four
+    // optional out-parameters are documented as accepting `None`.
     let result = unsafe {
         GetVolumeInformationW(
             PCWSTR::from_raw(root_path.as_ptr()),
@@ -691,7 +743,8 @@ fn get_volume_label(drive: char) -> Option<String> {
 
     result.is_ok().then(|| {
         let len = volume_name_buf.iter().position(|&c| c == 0).unwrap_or(0);
-        let label = OsString::from_wide(&volume_name_buf[..len]);
+        let name_slice = volume_name_buf.get(..len).unwrap_or(&[]);
+        let label = OsString::from_wide(name_slice);
         label.to_string_lossy().to_string()
     })
 }

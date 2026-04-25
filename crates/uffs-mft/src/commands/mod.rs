@@ -12,6 +12,10 @@ mod load;
 mod windows;
 
 /// Dispatches parsed CLI commands to their handlers.
+#[expect(
+    clippy::too_many_lines,
+    reason = "single match arm per CLI subcommand keeps the dispatch table flat and easy to audit; splitting fragments the routing surface"
+)]
 #[cfg(windows)]
 pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
     match command {
@@ -57,22 +61,22 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
         } => {
             // Resolve defaults: --upcase defaults to boot drive + "upcase.bin";
             // MFT save requires both --drive and --output.
-            let (drive, output) = if upcase {
-                let d = drive.unwrap_or_else(uffs_mft::platform::detect_boot_drive);
-                let o = output.unwrap_or_else(|| std::path::PathBuf::from("upcase.bin"));
-                (d, o)
+            let (resolved_drive, resolved_output) = if upcase {
+                let drive_letter = drive.unwrap_or_else(uffs_mft::platform::detect_boot_drive);
+                let output_path = output.unwrap_or_else(|| std::path::PathBuf::from("upcase.bin"));
+                (drive_letter, output_path)
             } else {
-                let d = drive.ok_or_else(|| {
+                let drive_letter = drive.ok_or_else(|| {
                     anyhow::anyhow!("--drive is required for MFT save (e.g. --drive C)")
                 })?;
-                let o = output.ok_or_else(|| {
+                let output_path = output.ok_or_else(|| {
                     anyhow::anyhow!("--output is required for MFT save (e.g. --output mft.bin)")
                 })?;
-                (d, o)
+                (drive_letter, output_path)
             };
             windows::cmd_save(
-                drive,
-                &output,
+                resolved_drive,
+                &resolved_output,
                 !no_compress,
                 compression_level,
                 raw,
@@ -111,16 +115,14 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
             parallel_parse,
             parse_workers,
         } => {
-            windows::cmd_benchmark_index_lean(
-                drive,
-                &mode,
+            windows::cmd_benchmark_index_lean(drive, &mode, windows::BenchmarkIndexLeanOptions {
                 no_bitmap,
                 no_placeholders,
                 concurrency,
                 io_size_kb,
                 parallel_parse,
                 parse_workers,
-            )
+            })
             .await
         }
         Commands::BenchmarkTree {

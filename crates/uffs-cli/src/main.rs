@@ -5,12 +5,8 @@
 //!
 //! All heavy lifting (including CLI arg parsing) happens in the daemon.
 //! This binary detects subcommands and forwards raw search args via
-//! `search_cli` RPC.
-//!
-//! Exception: `file_size_policy` allows this file to exceed 800 LOC.
-//! Rationale: CLI entry point cohesion — subcommand dispatch,
-//! client-side profile printing, and raw-arg forwarding form a
-//! single top-level flow that would be fragmented by splitting.
+//! `search_cli` RPC.  Argument transforms specific to the search
+//! subcommand live in [`commands::search::args`].
 
 // CLI main module uses single-call functions by design
 #![expect(
@@ -213,7 +209,7 @@ fn run_search(args: &[String]) -> Result<()> {
 
     // Extract daemon-spawn args (--data-dir, --mft-file, --no-cache)
     // from the raw args so we can auto-start the daemon if needed.
-    let spawn_args = extract_spawn_args(args);
+    let spawn_args = commands::search::args::extract_spawn_args(args);
 
     let t_connect = std::time::Instant::now();
     let mut client = uffs_client::connect_sync::UffsClientSync::connect_with_args(&spawn_args)
@@ -241,7 +237,9 @@ fn run_search(args: &[String]) -> Result<()> {
     // + IPC row transfer entirely.  Saves ~20-30 ms on medium result
     // sets that would otherwise push 3.5 MB through the pipe just to
     // discard the bytes client-side.
-    let args_owned: Vec<String> = inject_no_output_for_null_stdout(resolve_out_path(args));
+    let args_owned: Vec<String> = commands::search::args::inject_no_output_for_null_stdout(
+        commands::search::args::resolve_out_path(args),
+    );
     let raw_response = client
         .search_cli_raw(&args_owned)
         .with_context(|| "Daemon search_cli failed")?;
@@ -404,132 +402,6 @@ fn write_search_payload_to_stdout(
         }
     }
     Ok(())
-}
-
-/// Extract daemon-spawn-relevant flags from raw CLI args.
-///
-/// The daemon auto-start needs `--data-dir`, `--mft-file`, `--no-cache`,
-/// `--drive`, and log env vars. Everything else is irrelevant for spawn.
-fn extract_spawn_args(args: &[String]) -> Vec<String> {
-    let mut spawn = Vec::new();
-    let mut iter = args.iter().peekable();
-    while let Some(arg) = iter.next() {
-        let flag = arg.split('=').next().unwrap_or(arg.as_str());
-        match flag {
-            "--data-dir" | "--mft-file" | "--drive" | "--drives" | "--log-level" | "--log-file" => {
-                spawn.push(arg.clone());
-                // If not `--flag=val` form, consume the next token as value.
-                if !arg.contains('=')
-                    && iter.peek().is_some_and(|peeked| {
-                        !peeked.starts_with('-') || flag == "--drive" || flag == "--drives"
-                    })
-                {
-                    // peek() confirmed the value exists, so next() is safe.
-                    spawn.push(iter.next().map_or_else(String::new, String::clone));
-                }
-            }
-            "--no-cache" => spawn.push(arg.clone()),
-            _ => {}
-        }
-    }
-
-    // Forward log env vars.
-    if let Ok(ll) = std::env::var("UFFS_LOG") {
-        spawn.push("--log-level".to_owned());
-        spawn.push(ll);
-    }
-    if let Ok(lf) = std::env::var("UFFS_LOG_FILE") {
-        spawn.push("--log-file".to_owned());
-        spawn.push(lf);
-    }
-
-    spawn
-}
-
-/// Resolve a relative `--out` path to absolute using the CLI's working
-/// directory.
-///
-/// The daemon runs in a different working directory, so relative paths in
-/// `--out` or `--out=<path>` would resolve against the wrong directory if
-/// passed through as-is.
-fn resolve_out_path(args: &[String]) -> Vec<String> {
-    let mut result: Vec<String> = Vec::with_capacity(args.len());
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        if let Some(val) = arg.strip_prefix("--out=") {
-            // `--out=path` form — resolve inline value.
-            let resolved = resolve_to_absolute(val);
-            result.push(format!("--out={resolved}"));
-        } else if arg == "--out" {
-            result.push(arg.clone());
-            // Next token is the path value.
-            if let Some(val) = iter.next() {
-                result.push(resolve_to_absolute(val));
-            }
-        } else {
-            result.push(arg.clone());
-        }
-    }
-    result
-}
-
-/// Append `--no-output` to `args` when stdout is redirected to the
-/// null device, unless a disqualifying flag is already set.
-///
-/// Thin wrapper around [`maybe_inject_no_output`] that probes the real
-/// stdout via [`uffs_client::stdout_kind::StdoutKind::detect`].  The
-/// decision logic itself is in `maybe_inject_no_output` so it can be
-/// unit-tested without fighting the test harness's stdout wiring.
-fn inject_no_output_for_null_stdout(args: Vec<String>) -> Vec<String> {
-    let stdout_is_null = uffs_client::stdout_kind::StdoutKind::detect().is_null();
-    maybe_inject_no_output(args, stdout_is_null)
-}
-
-/// Pure decision logic for the NUL fast-path injection.
-///
-/// Returns `args` unchanged when `stdout_is_null == false` or when any
-/// disqualifying flag is already present:
-///
-/// - `--no-output` already set: nothing to add.
-/// - `--rows`: the user asked to force rows on even for aggregate queries —
-///   honour that intent regardless of where stdout goes.
-/// - `--out`: stdout is not the result destination; NUL on stdout is a benign
-///   quirk, not the output target.
-/// - `--agg` / `--facet` / `--stats` / `--histogram` / `--count`: any
-///   aggregation flag already controls `include_rows` via its own sugar; adding
-///   `--no-output` would be redundant at best.
-fn maybe_inject_no_output(mut args: Vec<String>, stdout_is_null: bool) -> Vec<String> {
-    if !stdout_is_null {
-        return args;
-    }
-    let is_aggregate_flag = |flag: &str| {
-        matches!(
-            flag,
-            "--agg" | "--facet" | "--stats" | "--histogram" | "--count"
-        )
-    };
-    let disqualified = args.iter().any(|raw| {
-        let flag = raw.split('=').next().unwrap_or(raw.as_str());
-        flag == "--no-output" || flag == "--rows" || flag == "--out" || is_aggregate_flag(flag)
-    });
-    if disqualified {
-        return args;
-    }
-    args.push("--no-output".to_owned());
-    args
-}
-
-/// Resolve a potentially relative path to absolute using `current_dir`.
-fn resolve_to_absolute(path_str: &str) -> String {
-    let path = std::path::Path::new(path_str);
-    if path.is_absolute() {
-        return path_str.to_owned();
-    }
-    std::env::current_dir()
-        .unwrap_or_default()
-        .join(path)
-        .to_string_lossy()
-        .into_owned()
 }
 
 /// Handle `uffs stats [path] [--top N] [--data-dir ...] [--mft-file ...]`.
@@ -724,105 +596,7 @@ mod tests {
     use uffs_client::protocol::SearchParams;
 
     use super::args::parse_drive_letter;
-    use super::{find_needs_elevation, format_elevation_help, maybe_inject_no_output};
-
-    // ── maybe_inject_no_output (Phase 3.1 NUL fast path) ─────────
-
-    /// Helper: run [`maybe_inject_no_output`] with `stdout_is_null = true`
-    /// and return the resulting args.
-    fn inject_null(args: &[&str]) -> Vec<String> {
-        let owned: Vec<String> = args.iter().copied().map(String::from).collect();
-        maybe_inject_no_output(owned, true)
-    }
-
-    /// Baseline: a plain search with NUL stdout gets `--no-output`
-    /// appended.  This is the hot path we want for benchmarks and
-    /// `uffs *.dll > NUL`-style invocations.
-    #[test]
-    fn maybe_inject_no_output_appends_on_null_stdout() {
-        let out = inject_null(&["*.dll", "--drive", "D"]);
-        assert_eq!(out, ["*.dll", "--drive", "D", "--no-output"]);
-    }
-
-    /// Non-null stdout (terminal, pipe, file) must leave args alone,
-    /// otherwise the user would see no output on their terminal.
-    #[test]
-    fn maybe_inject_no_output_unchanged_on_non_null_stdout() {
-        let owned: Vec<String> = ["*.dll", "--drive", "D"]
-            .into_iter()
-            .map(String::from)
-            .collect();
-        let out = maybe_inject_no_output(owned.clone(), false);
-        assert_eq!(out, owned);
-    }
-
-    /// Explicit `--no-output` already present: do not double up.
-    #[test]
-    fn maybe_inject_no_output_skips_when_already_present() {
-        let out = inject_null(&["*.dll", "--no-output"]);
-        // Exactly one occurrence — no double-injection.
-        let count = out
-            .iter()
-            .filter(|arg| arg.as_str() == "--no-output")
-            .count();
-        assert_eq!(count, 1, "must not double-inject --no-output, got: {out:?}");
-    }
-
-    /// `--rows` forces rows on — auto-injection must not fight it.
-    /// Covers the user who wants `uffs *.rs --rows > NUL` for timing
-    /// the full round-trip including IPC transport.
-    #[test]
-    fn maybe_inject_no_output_respects_rows_flag() {
-        let out = inject_null(&["*.rs", "--rows"]);
-        assert!(
-            !out.iter().any(|arg| arg == "--no-output"),
-            "--rows must prevent --no-output auto-injection, got: {out:?}"
-        );
-    }
-
-    /// `--out file` routes results daemon-direct to disk — NUL on
-    /// stdout is a benign quirk, not the output destination.
-    #[test]
-    fn maybe_inject_no_output_respects_out_flag() {
-        let out = inject_null(&["*.rs", "--out", "results.csv"]);
-        assert!(
-            !out.iter().any(|arg| arg == "--no-output"),
-            "--out must prevent --no-output auto-injection, got: {out:?}"
-        );
-    }
-
-    /// Aggregation flags already control row inclusion through their
-    /// own sugar; auto-injection would be redundant.  Covers `--count`,
-    /// `--agg`, `--facet`, `--stats`, `--histogram`.
-    #[test]
-    fn maybe_inject_no_output_respects_aggregation_flags() {
-        for flag in ["--count", "--agg", "--facet", "--stats", "--histogram"] {
-            // `--agg` and friends take a value; the parse-time check
-            // keys on the flag name only, so a bare `--agg count` suffix
-            // is sufficient to prove the disqualification.
-            let args: Vec<&str> = if flag == "--count" {
-                vec!["*", flag]
-            } else {
-                vec!["*", flag, "count"]
-            };
-            let out = inject_null(&args);
-            assert!(
-                !out.iter().any(|arg| arg == "--no-output"),
-                "{flag} must prevent --no-output auto-injection, got: {out:?}"
-            );
-        }
-    }
-
-    /// `--out=file.csv` (equals form) must also disqualify the
-    /// auto-injection.  The parser keys on the flag name before `=`.
-    #[test]
-    fn maybe_inject_no_output_respects_out_equals_form() {
-        let out = inject_null(&["*", "--out=results.csv"]);
-        assert!(
-            !out.iter().any(|arg| arg == "--no-output"),
-            "--out=<path> must prevent --no-output auto-injection, got: {out:?}"
-        );
-    }
+    use super::{find_needs_elevation, format_elevation_help};
 
     /// The elevation help must name every recovery path the user has,
     /// so a UAC-blocked invocation becomes actionable advice rather

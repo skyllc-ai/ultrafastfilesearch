@@ -13,15 +13,7 @@
     reason = "NTFS disk-offset / record-size / OVERLAPPED offset-split casts are lossless"
 )]
 
-#[expect(
-    clippy::wildcard_imports,
-    reason = "parent module's `pub(super) use` prelude \
-              (HANDLE, MftError, ReadFile, rayon::prelude::*, tracing \
-              macros, etc.) is designed to be consumed by submodules; \
-              re-enumerating ~15 items here would duplicate the prelude \
-              across every sibling reader file"
-)]
-use super::*;
+use super::prelude::*;
 
 impl ParallelMftReader {
     /// Sliding window IOCP read with 2-4 reads in flight.
@@ -37,6 +29,14 @@ impl ParallelMftReader {
     #[expect(
         unsafe_code,
         reason = "FFI: ReadFile, GetQueuedCompletionStatus for sliding window IOCP"
+    )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "sliding-window IOCP reader: completion dispatch, deadline tracking, and replacement-read issuance must share one event loop to keep IOCP fairness; extracting helpers would either inline the same control flow or hide IO-completion invariants"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "sliding-window IOCP reader: completion dispatch, deadline tracking, and replacement-read issuance must share OVERLAPPED slots, the buffer pool, and per-completion FRS / fixup state in a single event loop. Splitting into helpers would either inline the same control flow back or smear the shared mutable state across multiple call sites and obscure IOCP-fairness invariants"
     )]
     /// # Errors
     ///
@@ -115,7 +115,7 @@ impl ParallelMftReader {
         let mut chunks_with_skips = 0_usize;
         let mut total_skipped_records = 0_u64;
 
-        for chunk in sorted_chunks.iter() {
+        for chunk in &sorted_chunks {
             let skip_begin_bytes = chunk.skip_begin as usize * record_size;
             let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
 
@@ -256,7 +256,7 @@ impl ParallelMftReader {
                     let last_error = unsafe { GetLastError() };
                     if last_error != ERROR_IO_PENDING {
                         return Err(MftError::Io(std::io::Error::from_raw_os_error(
-                            last_error.0 as i32,
+                            last_error.0.cast_signed(),
                         )));
                     }
                 }
@@ -447,12 +447,12 @@ impl ParallelMftReader {
                     for i in 0..records_in_chunk {
                         let frs = start_frs + i;
 
-                        if let Some(bm) = bitmap_ref {
-                            if !bm.is_record_in_use(frs as u64) {
-                                skipped += 1;
-                                processed += 1;
-                                continue;
-                            }
+                        if let Some(bm) = bitmap_ref
+                            && !bm.is_record_in_use(frs as u64)
+                        {
+                            skipped += 1;
+                            processed += 1;
+                            continue;
                         }
 
                         let offset = i * record_size;
@@ -470,7 +470,7 @@ impl ParallelMftReader {
                         match &parsed {
                             ParseResult::Skip => skipped += 1,
                             ParseResult::Base(_) | ParseResult::Extension(_) => {
-                                results.push(parsed)
+                                results.push(parsed);
                             }
                         }
                         processed += 1;
@@ -509,12 +509,12 @@ impl ParallelMftReader {
                     for i in 0..records_in_chunk {
                         let frs = start_frs + i;
 
-                        if let Some(bm) = bitmap_ref {
-                            if !bm.is_record_in_use(frs as u64) {
-                                skipped += 1;
-                                processed += 1;
-                                continue;
-                            }
+                        if let Some(bm) = bitmap_ref
+                            && !bm.is_record_in_use(frs as u64)
+                        {
+                            skipped += 1;
+                            processed += 1;
+                            continue;
                         }
 
                         let offset = i * record_size;

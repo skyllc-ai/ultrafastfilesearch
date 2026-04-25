@@ -20,15 +20,33 @@
               provably lossless given the domain bounds; see module header"
 )]
 
-#[expect(
-    clippy::wildcard_imports,
-    reason = "parent module's `pub(super) use` prelude \
-              (HANDLE, MftError, ReadFile, rayon::prelude::*, tracing \
-              macros, etc.) is designed to be consumed by submodules; \
-              re-enumerating ~15 items here would duplicate the prelude \
-              across every sibling reader file"
-)]
-use super::*;
+use super::prelude::*;
+
+/// `(chunk, raw_bytes)` pair produced by phase 1 of
+/// [`ParallelMftReader::read_all_parallel_with_timing`] for downstream
+/// fold/merge passes.
+type TimedChunkData = Vec<(ReadChunk, Vec<u8>)>;
+
+/// Output of [`ParallelMftReader::read_all_chunks_timed`]: the populated
+/// chunk vector plus the elapsed I/O time in nanoseconds.
+type TimedChunkRead = (TimedChunkData, u64);
+
+/// Emit the final per-phase + wall-clock summary for a finished
+/// [`ParallelMftReader::read_all_parallel_with_timing`] run.
+///
+/// Hoisted out of the orchestrator so the cognitive complexity of the
+/// public method stays well below clippy's bar.  The tracing structure is
+/// unchanged from the original inline call.
+fn log_timing_summary(timing: &ReadParseTiming) {
+    info!(
+        io_ms = timing.io_ms(),
+        parse_ms = timing.parse_ms(),
+        merge_ms = timing.merge_ms(),
+        wall_ms = timing.wall_ms(),
+        overlap_ratio = format!("{:.2}", timing.overlap_ratio()),
+        "Timing breakdown complete"
+    );
+}
 
 impl ParallelMftReader {
     /// Reads and parses all MFT records with accurate timing breakdown.
@@ -61,33 +79,80 @@ impl ParallelMftReader {
             merge_extensions, "Starting parallel MFT read with timing"
         );
 
-        // Generate optimized read chunks
         let chunks = generate_read_chunks(&self.extent_map, self.bitmap.as_ref(), self.chunk_size);
-        let num_chunks = chunks.len();
-        info!(num_chunks, "Generated read chunks");
+        info!(num_chunks = chunks.len(), "Generated read chunks");
 
-        // Estimate capacity
         let estimated_records = self.bitmap.as_ref().map_or_else(
             || self.extent_map.total_records() as usize,
             crate::platform::MftBitmap::count_in_use,
         );
-
         let record_size = self.extent_map.bytes_per_record;
-        let records_processed = Arc::clone(&self.records_processed);
 
-        // =========================================================================
-        // Phase 1: I/O - Read all chunks (sequential I/O for handle safety)
-        // =========================================================================
+        // Phase 1: I/O - read every chunk (sequentially, handle is not Send).
+        let (mut chunk_data, io_ns) = self.read_all_chunks_timed(handle, chunks, record_size)?;
+
+        // Phase 2 + 3: Parse + (optionally) Merge.
+        let (records, parse_ns, merge_ns) = if merge_extensions {
+            self.parse_with_merge_timed(&mut chunk_data, record_size, estimated_records)
+        } else {
+            self.parse_legacy_timed(&mut chunk_data, record_size)
+        };
+
+        let wall_ns = wall_start.elapsed().as_nanos() as u64;
+        let timing = ReadParseTiming {
+            io_ns,
+            parse_ns,
+            merge_ns,
+            wall_ns,
+        };
+        log_timing_summary(&timing);
+
+        Ok((records, timing))
+    }
+
+    /// Phase 1 of [`Self::read_all_parallel_with_timing`].
+    ///
+    /// Sequentially reads every chunk via [`Self::read_chunk`] and surfaces
+    /// the latest [`MftError::Io`] when too many chunks fail in a row
+    /// (the volume is most likely write-protected at that point).
+    /// Returns the populated `chunk_data` plus the elapsed I/O time in
+    /// nanoseconds.
+    fn read_all_chunks_timed(
+        &self,
+        handle: HANDLE,
+        chunks: Vec<ReadChunk>,
+        record_size: u32,
+    ) -> Result<TimedChunkRead> {
+        /// Abort threshold: if this many consecutive chunks fail, the volume
+        /// is likely write-protected or otherwise inaccessible.
+        const EARLY_ABORT_THRESHOLD: u32 = 10;
+
+        use std::time::Instant;
+
+        let num_chunks = chunks.len();
         let io_start = Instant::now();
-        let mut chunk_data: Vec<(ReadChunk, Vec<u8>)> = Vec::with_capacity(chunks.len());
+        let mut chunk_data: Vec<(ReadChunk, Vec<u8>)> = Vec::with_capacity(num_chunks);
+        let mut consecutive_failures: u32 = 0;
 
-        for chunk in chunks {
+        for (idx, chunk) in chunks.into_iter().enumerate() {
             match self.read_chunk(handle, &chunk, record_size) {
                 Ok(data) => {
+                    consecutive_failures = 0;
                     chunk_data.push((chunk, data));
                 }
                 Err(err) => {
+                    consecutive_failures += 1;
                     warn!(error = ?err, "Failed to read chunk");
+                    if consecutive_failures >= EARLY_ABORT_THRESHOLD {
+                        warn!(
+                            consecutive_failures,
+                            remaining_chunks = num_chunks - idx - 1,
+                            "🛑 Aborting timing read: {consecutive_failures} consecutive chunk read failures"
+                        );
+                        // Surface the latest underlying I/O failure so callers
+                        // can distinguish complete from truncated runs.
+                        return Err(err);
+                    }
                 }
             }
         }
@@ -99,171 +164,165 @@ impl ParallelMftReader {
             "I/O phase complete"
         );
 
-        // =========================================================================
-        // Phase 2: Parse - Parallel parsing with Rayon
-        // =========================================================================
+        Ok((chunk_data, io_ns))
+    }
+
+    /// Parse + merge with timing breakdown.  Returns the final records along
+    /// with `parse_ns` and `merge_ns` measurements.
+    fn parse_with_merge_timed(
+        &self,
+        chunk_data: &mut [(ReadChunk, Vec<u8>)],
+        record_size: u32,
+        estimated_records: usize,
+    ) -> (Vec<ParsedRecord>, u64, u64) {
+        use std::time::Instant;
+
+        #[derive(Default)]
+        struct ChunkStats {
+            results: Vec<ParseResult>,
+            skipped: u64,
+            processed: u64,
+        }
+
         let parse_start = Instant::now();
+        let combined = chunk_data
+            .par_iter_mut()
+            .fold(ChunkStats::default, |mut acc, (chunk, data)| {
+                let record_size_bytes = record_size as usize;
+                let skip_begin = chunk.skip_begin as usize;
+                let effective_count = chunk.effective_record_count() as usize;
 
-        let (parse_results, merge_ns, records) = if merge_extensions {
-            // Per-thread accumulator for fold/reduce pattern
-            #[derive(Default)]
-            struct ChunkStats {
-                results: Vec<ParseResult>,
-                skipped: u64,
-                processed: u64,
-            }
+                acc.results.reserve(effective_count);
 
-            let combined = chunk_data
-                .par_iter_mut()
-                .fold(ChunkStats::default, |mut acc, (chunk, data)| {
-                    let record_size_bytes = record_size as usize;
-                    let skip_begin = chunk.skip_begin as usize;
-                    let effective_count = chunk.effective_record_count() as usize;
+                for i in 0..effective_count {
+                    let offset = (skip_begin + i) * record_size_bytes;
+                    let Some(record_slice) = data.get_mut(offset..offset + record_size_bytes)
+                    else {
+                        break;
+                    };
 
-                    acc.results.reserve(effective_count);
+                    let frs = chunk.start_frs + skip_begin as u64 + i as u64;
 
-                    for i in 0..effective_count {
-                        let offset = (skip_begin + i) * record_size_bytes;
-                        let Some(record_slice) = data.get_mut(offset..offset + record_size_bytes)
-                        else {
-                            break;
-                        };
-
-                        let frs = chunk.start_frs + skip_begin as u64 + i as u64;
-
-                        if !apply_fixup(record_slice) {
-                            acc.skipped += 1;
-                            acc.processed += 1;
-                            continue;
-                        }
-
-                        let result = parse_record_full(record_slice, frs);
-                        if matches!(result, ParseResult::Skip) {
-                            acc.skipped += 1;
-                        } else {
-                            acc.results.push(result);
-                        }
+                    if !apply_fixup(record_slice) {
+                        acc.skipped += 1;
                         acc.processed += 1;
+                        continue;
                     }
-                    acc
-                })
-                .reduce(ChunkStats::default, |mut acc, other| {
-                    acc.results.extend(other.results);
-                    acc.skipped += other.skipped;
-                    acc.processed += other.processed;
-                    acc
-                });
 
-            records_processed.fetch_add(combined.processed, Ordering::Relaxed);
-            self.skipped_records
-                .fetch_add(combined.skipped, Ordering::Relaxed);
-
-            let parse_results = combined.results;
-            let parse_ns = parse_start.elapsed().as_nanos() as u64;
-
-            info!(
-                parse_results = parse_results.len(),
-                parse_ms = parse_ns / 1_000_000,
-                "Parse phase complete"
-            );
-
-            // Phase 3: Merge extension records
-            let merge_start = Instant::now();
-            let mut merger = MftRecordMerger::with_capacity(estimated_records);
-            for result in parse_results {
-                merger.add_result(result);
-            }
-            let records = merger.merge();
-            let merge_ns = merge_start.elapsed().as_nanos() as u64;
-
-            info!(
-                records = records.len(),
-                merge_ms = merge_ns / 1_000_000,
-                "Merge phase complete"
-            );
-
-            (parse_ns, merge_ns, records)
-        } else {
-            // Legacy parsing (skips extension records)
-            #[derive(Default)]
-            struct LegacyStats {
-                records: Vec<ParsedRecord>,
-                skipped: u64,
-                processed: u64,
-            }
-
-            let combined = chunk_data
-                .par_iter_mut()
-                .fold(LegacyStats::default, |mut acc, (chunk, data)| {
-                    let record_size_bytes = record_size as usize;
-                    let skip_begin = chunk.skip_begin as usize;
-                    let effective_count = chunk.effective_record_count() as usize;
-
-                    acc.records.reserve(effective_count);
-
-                    for i in 0..effective_count {
-                        let offset = (skip_begin + i) * record_size_bytes;
-                        let Some(record_slice) = data.get_mut(offset..offset + record_size_bytes)
-                        else {
-                            break;
-                        };
-
-                        let frs = chunk.start_frs + skip_begin as u64 + i as u64;
-
-                        if !apply_fixup(record_slice) {
-                            acc.skipped += 1;
-                            acc.processed += 1;
-                            continue;
-                        }
-
-                        match parse_record_full(record_slice, frs) {
-                            ParseResult::Base(parsed) => acc.records.push(parsed),
-                            ParseResult::Extension(_) | ParseResult::Skip => acc.skipped += 1,
-                        }
-                        acc.processed += 1;
+                    let result = parse_record_full(record_slice, frs);
+                    if matches!(result, ParseResult::Skip) {
+                        acc.skipped += 1;
+                    } else {
+                        acc.results.push(result);
                     }
-                    acc
-                })
-                .reduce(LegacyStats::default, |mut acc, other| {
-                    acc.records.extend(other.records);
-                    acc.skipped += other.skipped;
-                    acc.processed += other.processed;
-                    acc
-                });
+                    acc.processed += 1;
+                }
+                acc
+            })
+            .reduce(ChunkStats::default, |mut acc, other| {
+                acc.results.extend(other.results);
+                acc.skipped += other.skipped;
+                acc.processed += other.processed;
+                acc
+            });
 
-            records_processed.fetch_add(combined.processed, Ordering::Relaxed);
-            self.skipped_records
-                .fetch_add(combined.skipped, Ordering::Relaxed);
+        self.records_processed
+            .fetch_add(combined.processed, Ordering::Relaxed);
+        self.skipped_records
+            .fetch_add(combined.skipped, Ordering::Relaxed);
 
-            let parse_ns = parse_start.elapsed().as_nanos() as u64;
-
-            info!(
-                records = combined.records.len(),
-                parse_ms = parse_ns / 1_000_000,
-                "Parse phase complete (no merge needed)"
-            );
-
-            (parse_ns, 0, combined.records)
-        };
-
-        let wall_ns = wall_start.elapsed().as_nanos() as u64;
-
-        let timing = ReadParseTiming {
-            io_ns,
-            parse_ns: parse_results,
-            merge_ns,
-            wall_ns,
-        };
-
+        let parse_ns = parse_start.elapsed().as_nanos() as u64;
         info!(
-            io_ms = timing.io_ms(),
-            parse_ms = timing.parse_ms(),
-            merge_ms = timing.merge_ms(),
-            wall_ms = timing.wall_ms(),
-            overlap_ratio = format!("{:.2}", timing.overlap_ratio()),
-            "Timing breakdown complete"
+            parse_results = combined.results.len(),
+            parse_ms = parse_ns / 1_000_000,
+            "Parse phase complete"
         );
 
-        Ok((records, timing))
+        let merge_start = Instant::now();
+        let mut merger = MftRecordMerger::with_capacity(estimated_records);
+        for result in combined.results {
+            merger.add_result(result);
+        }
+        let records = merger.merge();
+        let merge_ns = merge_start.elapsed().as_nanos() as u64;
+
+        info!(
+            records = records.len(),
+            merge_ms = merge_ns / 1_000_000,
+            "Merge phase complete"
+        );
+
+        (records, parse_ns, merge_ns)
+    }
+
+    /// Parse without extension merging, with timing breakdown.  Returns the
+    /// records along with `parse_ns`; `merge_ns` is always 0.
+    fn parse_legacy_timed(
+        &self,
+        chunk_data: &mut [(ReadChunk, Vec<u8>)],
+        record_size: u32,
+    ) -> (Vec<ParsedRecord>, u64, u64) {
+        use std::time::Instant;
+
+        #[derive(Default)]
+        struct LegacyStats {
+            records: Vec<ParsedRecord>,
+            skipped: u64,
+            processed: u64,
+        }
+
+        let parse_start = Instant::now();
+        let combined = chunk_data
+            .par_iter_mut()
+            .fold(LegacyStats::default, |mut acc, (chunk, data)| {
+                let record_size_bytes = record_size as usize;
+                let skip_begin = chunk.skip_begin as usize;
+                let effective_count = chunk.effective_record_count() as usize;
+
+                acc.records.reserve(effective_count);
+
+                for i in 0..effective_count {
+                    let offset = (skip_begin + i) * record_size_bytes;
+                    let Some(record_slice) = data.get_mut(offset..offset + record_size_bytes)
+                    else {
+                        break;
+                    };
+
+                    let frs = chunk.start_frs + skip_begin as u64 + i as u64;
+
+                    if !apply_fixup(record_slice) {
+                        acc.skipped += 1;
+                        acc.processed += 1;
+                        continue;
+                    }
+
+                    match parse_record_full(record_slice, frs) {
+                        ParseResult::Base(parsed) => acc.records.push(parsed),
+                        ParseResult::Extension(_) | ParseResult::Skip => acc.skipped += 1,
+                    }
+                    acc.processed += 1;
+                }
+                acc
+            })
+            .reduce(LegacyStats::default, |mut acc, other| {
+                acc.records.extend(other.records);
+                acc.skipped += other.skipped;
+                acc.processed += other.processed;
+                acc
+            });
+
+        self.records_processed
+            .fetch_add(combined.processed, Ordering::Relaxed);
+        self.skipped_records
+            .fetch_add(combined.skipped, Ordering::Relaxed);
+
+        let parse_ns = parse_start.elapsed().as_nanos() as u64;
+        info!(
+            records = combined.records.len(),
+            parse_ms = parse_ns / 1_000_000,
+            "Parse phase complete (no merge needed)"
+        );
+
+        (combined.records, parse_ns, 0)
     }
 }

@@ -104,13 +104,14 @@ impl StdoutKind {
 /// Returns any I/O error surfaced by the underlying `write_all` call or
 /// by the Windows `GetStdHandle` / `WriteConsoleW` FFI.
 pub fn write_stdout_buffer(buf: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+
     #[cfg(windows)]
     {
         if matches!(StdoutKind::detect(), StdoutKind::Terminal) {
             return platform_windows::write_to_console_w(buf);
         }
     }
-    use std::io::Write as _;
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     handle.write_all(buf)
@@ -334,6 +335,11 @@ mod platform_windows {
     /// a pipe/file/NUL stdout would fail at `WriteConsoleW` with
     /// `ERROR_INVALID_HANDLE`.
     #[expect(unsafe_code, reason = "FFI to GetStdHandle + WriteConsoleW")]
+    #[expect(
+        clippy::std_instead_of_core,
+        reason = "core::io::Error is not yet stable — see rust-lang/rust#103765. \
+                  Remove this expect once `error_in_core` stabilises."
+    )]
     pub(super) fn write_to_console_w(buf: &[u8]) -> std::io::Result<()> {
         let utf16 = super::utf8_to_utf16(buf)?;
         if utf16.is_empty() {

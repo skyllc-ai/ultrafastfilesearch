@@ -13,11 +13,7 @@
 //! Available on all platforms for offline MFT processing (chaos mode, testing).
 //! Live MFT access via HANDLE is Windows-only and gated per-function.
 
-#[cfg(windows)]
-use crate::error::{MftError, Result};
 pub use crate::ntfs::SECTOR_SIZE;
-#[cfg(windows)]
-use crate::platform::VolumeHandle;
 
 mod aligned_buffer;
 mod chunking;

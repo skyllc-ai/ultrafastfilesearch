@@ -106,14 +106,13 @@ pub(crate) fn kill_process_on_port(port: u16, skip_pid: u32) {
                 continue;
             }
             let fields: Vec<&str> = trimmed.split_whitespace().collect();
-            if fields.len() < 5 {
+            let (Some(local_addr), Some(pid_field)) = (fields.get(1), fields.get(4)) else {
                 continue;
-            }
-            let local_addr = fields[1];
+            };
             if !local_addr.ends_with(&port_suffix) {
                 continue;
             }
-            let Some(pid) = fields[4].parse::<u32>().ok() else {
+            let Ok(pid) = pid_field.parse::<u32>() else {
                 continue;
             };
             if pid != skip_pid && pid != std::process::id() && pid != 0 {

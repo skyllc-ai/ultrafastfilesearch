@@ -62,6 +62,33 @@ extern crate zstd as _;
 
 #[cfg(windows)]
 mod windows_benches {
+    //! Windows-only criterion benchmark suite for `AlignedBuffer` and
+    //! `ParsedColumns`.
+    //!
+    //! `AlignedBuffer` and `ParsedColumns` only build on Windows because
+    //! they pull in Win32 / IOCP types via `uffs-mft`'s platform module;
+    //! this inner module gates them so the macOS/Linux build of the
+    //! benchmark binary still links cleanly with no benches registered.
+    //!
+    //! The `c: &mut Criterion` and `|b, &param|` closure signatures are
+    //! the canonical criterion API.  The expects below capture the
+    //! conventions (`min_ident_chars`, deliberate shadowing of `&size`
+    //! / `&count` from the outer iterator, and synthetic-timestamp
+    //! `usize -> i64` casts in `create_test_columns`); they keep the
+    //! benches readable instead of introducing per-line allows.
+    #![expect(
+        clippy::min_ident_chars,
+        reason = "criterion's API uses single-char `c: &mut Criterion` and `|b, &input|` closure params; renaming would diverge from upstream examples"
+    )]
+    #![expect(
+        clippy::shadow_reuse,
+        reason = "criterion `bench_with_input(... |b, &input| ...)` deliberately re-binds the input ref inside the closure; the shadow is part of the closure's destructuring contract"
+    )]
+    #![expect(
+        clippy::cast_possible_wrap,
+        reason = "synthetic test data: `i as i64` produces deterministic counter columns; bench inputs are bounded (<= 1_000_000) so wrap cannot occur"
+    )]
+
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group};
     use uffs_mft::{AlignedBuffer, ParsedColumns};
 

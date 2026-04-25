@@ -16,7 +16,8 @@ mod usn;
 
 pub(crate) use self::bench::{cmd_bench, cmd_bench_all};
 pub(crate) use self::benchmark_index::{
-    cmd_benchmark_index, cmd_benchmark_index_lean, cmd_benchmark_multi_volume, cmd_benchmark_tree,
+    BenchmarkIndexLeanOptions, cmd_benchmark_index, cmd_benchmark_index_lean,
+    cmd_benchmark_multi_volume, cmd_benchmark_tree,
 };
 pub(crate) use self::benchmark_mft::cmd_benchmark_mft;
 pub(crate) use self::bitmap_diag::cmd_bitmap_diag;

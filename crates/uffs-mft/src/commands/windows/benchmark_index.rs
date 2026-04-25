@@ -2,6 +2,41 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Index benchmark command handlers.
+//!
+//! These commands print human-readable benchmark output to stdout, build
+//! throughput rates from `u64` counters into `f64` for MB/s and rec/s, and
+//! occasionally use `Debug` formatting for opaque enum values like
+//! [`MftReadMode`].  The lint exemptions below capture those domain-specific
+//! patterns rather than disabling the lints globally.
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "intentional user-facing CLI benchmark output: stdout for primary results, stderr for per-volume failure diagnostics"
+)]
+#![expect(
+    clippy::use_debug,
+    reason = "Debug formatting is the canonical display for opaque diagnostic enums (DriveType, MftReadMode) in CLI tools"
+)]
+#![expect(
+    clippy::float_arithmetic,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::default_numeric_fallback,
+    reason = "throughput rates (MB/s, rec/s) are computed from integer counters into f64 for human-readable display"
+)]
+#![expect(
+    clippy::min_ident_chars,
+    reason = "short identifiers (c, w, e) used for printf-style column-width and error bindings in CLI output"
+)]
+#![expect(
+    clippy::indexing_slicing,
+    reason = "CLI prints index into known-shape benchmark snapshots; bounds are guaranteed by upstream invariants"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "benchmark commands are inherently linear: configure → run → format → print, kept in one place for readability"
+)]
 
 use anyhow::{Context, Result};
 use tracing::warn;
@@ -73,14 +108,11 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
     // Count files vs directories using the is_directory column
     let is_dir_col = df.column("is_directory").ok().and_then(|c| c.bool().ok());
 
-    let (files_count, dirs_count) = if let Some(col) = is_dir_col {
+    let (files_count, dirs_count) = is_dir_col.map_or((total_entries, 0), |col| {
         let dirs: u64 = col.into_iter().filter(|v| v.unwrap_or(false)).count() as u64;
         let files = total_entries.saturating_sub(dirs);
         (files, dirs)
-    } else {
-        // Fallback: assume all are files
-        (total_entries, 0)
-    };
+    });
 
     // =========================================================================
     // Print index statistics using the historical layout
@@ -133,6 +165,27 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
 // Lean Index Build Benchmark Command (no DataFrame overhead)
 // ============================================================================
 
+/// Tuning flags forwarded from the CLI into [`cmd_benchmark_index_lean`].
+///
+/// Grouping the six toggles into a struct keeps the public function under
+/// the seven-argument cap without losing the flag-per-CLI-arg mapping.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BenchmarkIndexLeanOptions {
+    /// `--no-bitmap` — disable bitmap-based skip optimisation.
+    pub no_bitmap: bool,
+    /// `--no-placeholders` — disable placeholder synthesis for skipped FRSes.
+    pub no_placeholders: bool,
+    /// `--concurrency N` — explicit IOCP concurrency override.
+    pub concurrency: Option<usize>,
+    /// `--io-size-kb N` — explicit per-read chunk size override (KB).
+    pub io_size_kb: Option<usize>,
+    /// `--parallel-parse` — enable Rayon-based parallel parsing.
+    pub parallel_parse: bool,
+    /// `--parse-workers N` — Rayon worker count when `parallel_parse` is on.
+    pub parse_workers: Option<usize>,
+}
+
 /// Lean index build benchmark - uses `MftIndex` instead of `DataFrame`.
 ///
 /// This measures the UFFS indexing pipeline without `DataFrame` building
@@ -141,17 +194,21 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
 pub(crate) async fn cmd_benchmark_index_lean(
     drive: char,
     mode_str: &str,
-    no_bitmap: bool,
-    no_placeholders: bool,
-    concurrency: Option<usize>,
-    io_size_kb: Option<usize>,
-    parallel_parse: bool,
-    parse_workers: Option<usize>,
+    opts: BenchmarkIndexLeanOptions,
 ) -> Result<()> {
     use std::time::Instant;
 
     use uffs_mft::platform::VolumeHandle;
     use uffs_mft::{MftReadMode, MftReader};
+
+    let BenchmarkIndexLeanOptions {
+        no_bitmap,
+        no_placeholders,
+        concurrency,
+        io_size_kb,
+        parallel_parse,
+        parse_workers,
+    } = opts;
 
     let drive_upper = drive.to_ascii_uppercase();
 
@@ -517,11 +574,9 @@ pub(crate) async fn cmd_benchmark_tree(
     println!();
 
     // Calculate throughput
-    let entries_per_sec = if avg_ms > 0 {
-        (total_entries as u64 * 1000) / avg_ms
-    } else {
-        0
-    };
+    let entries_per_sec = (total_entries as u64 * 1000)
+        .checked_div(avg_ms)
+        .unwrap_or(0);
 
     println!("=== Throughput ===");
     println!("Entries processed: {total_entries}");
@@ -555,17 +610,17 @@ pub(crate) async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> 
         anyhow::bail!("No drives specified. Use --drives C,D,S");
     }
 
-    let drives: Vec<char> = drives.iter().map(char::to_ascii_uppercase).collect();
+    let upper_drives: Vec<char> = drives.iter().map(char::to_ascii_uppercase).collect();
 
     println!("=== Multi-Volume IOCP Benchmark (M4 Optimization) ===");
-    println!("Drives: {drives:?}");
+    println!("Drives: {upper_drives:?}");
     println!();
 
     // Prepare volume states
     let mut volume_states = Vec::new();
     let start_time = Instant::now();
 
-    for &drive in &drives {
+    for &drive in &upper_drives {
         println!("📂 Preparing volume {drive}:...");
 
         // Open volume handle
@@ -642,6 +697,9 @@ pub(crate) async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> 
     // Close overlapped handles
     for handle in handles {
         #[expect(unsafe_code, reason = "required for windows ffi call to CloseHandle")]
+        // SAFETY: each `handle` was returned by `open_overlapped_handle` above
+        // and not used after this point; `CloseHandle` is the documented
+        // counterpart for `CreateFileW`-derived volume handles.
         unsafe {
             windows::Win32::Foundation::CloseHandle(handle).ok();
         }

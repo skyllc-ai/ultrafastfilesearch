@@ -95,25 +95,25 @@ pub struct VolumeHandle {
     volume_data: NtfsVolumeData,
 }
 
+#[expect(
+    unsafe_code,
+    reason = "windows file handles are thread-safe kernel objects"
+)]
 // SAFETY: `VolumeHandle` owns a Windows `HANDLE` to a kernel-managed file
 // object plus immutable metadata (`volume` and `volume_data`). It contains no
 // Rust references or unsynchronized interior mutability, so moving ownership
 // to another thread does not invalidate any aliasing assumptions. Handle
 // cleanup remains centralized in `Drop`.
+unsafe impl Send for VolumeHandle {}
+
 #[expect(
     unsafe_code,
     reason = "windows file handles are thread-safe kernel objects"
 )]
-unsafe impl Send for VolumeHandle {}
-
 // SAFETY: Shared references to `VolumeHandle` only expose immutable metadata or
 // copy the raw `HANDLE`. The wrapper itself performs no unsynchronized mutable
 // access, and Windows file handles are designed to be used from multiple
 // threads.
-#[expect(
-    unsafe_code,
-    reason = "windows file handles are thread-safe kernel objects"
-)]
 unsafe impl Sync for VolumeHandle {}
 
 /// NTFS volume data retrieved from `FSCTL_GET_NTFS_VOLUME_DATA`.
@@ -159,7 +159,7 @@ impl NtfsVolumeData {
     /// NTFS formula: `TotalReserved * BytesPerCluster`.
     ///
     /// The MFT zone contribution is suppressed by setting
-    /// `mft_zone_end = mft_zone_start` before computing reserved_clusters
+    /// `mft_zone_end = mft_zone_start` before computing `reserved_clusters`
     /// (see `mft_reader_init.hpp` lines 166-171).  So the effective formula
     /// is just `TotalReserved * BytesPerCluster`.
     #[must_use]
@@ -581,9 +581,35 @@ impl VolumeHandle {
         self.get_mft_bitmap_internal(true)
     }
 
+    /// Open `$MFT::$BITMAP` and read the entire bitmap stream into memory.
+    ///
+    /// `verbose` controls whether progress is logged at `info!` (caller-driven
+    /// telemetry) or `trace!` (silent path).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if `CreateFileW`, `GetFileSizeEx`, or
+    /// `ReadFile` fail, or if the bitmap is empty / mis-sized.
     #[expect(
         unsafe_code,
         reason = "FFI: windows API (CreateFileW, GetFileSizeEx, ReadFile)"
+    )]
+    #[expect(
+        clippy::cognitive_complexity,
+        clippy::too_many_lines,
+        reason = "open + size + retrieval-pointers + per-extent read + verbose-logging branches form a single bitmap-load operation; splitting them adds plumbing without simplifying control flow"
+    )]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "every failure branch returns `Ok(MftBitmap::new_all_valid(...))` (graceful fallback); the `Result<_>` signature documents the fallible Win32 call surface and aligns with `get_mft_bitmap` / `get_mft_bitmap_verbose` callers"
+    )]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "buffer / file-size arithmetic targets x86_64 Windows where `usize == u64`; bitmap is bounded by NTFS cluster_count * bytes_per_cluster which never exceeds `usize::MAX` on 64-bit pointers"
+    )]
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "`file_size` and `bytes_read` are returned by `GetFileSizeEx` / `ReadFile` and are never negative for the bitmap MFT record; the cast is documented at each use"
     )]
     fn get_mft_bitmap_internal(&self, verbose: bool) -> Result<MftBitmap> {
         use windows::Win32::Storage::FileSystem::{
@@ -859,9 +885,7 @@ impl Drop for VolumeHandle {
         if !self.handle.is_invalid() {
             // SAFETY: `VolumeHandle` owns this valid handle and closes it once
             // during drop after all safe borrows have ended.
-            unsafe {
-                let _ = CloseHandle(self.handle);
-            }
+            unsafe { CloseHandle(self.handle) }.ok();
         }
     }
 }
@@ -875,11 +899,117 @@ impl Drop for HandleGuard {
         if !self.0.is_invalid() {
             // SAFETY: `HandleGuard` exclusively owns this valid handle and drops
             // it exactly once when the guard is destroyed.
-            unsafe {
-                let _ = CloseHandle(self.0);
-            }
+            unsafe { CloseHandle(self.0) }.ok();
         }
     }
+}
+
+/// Enables `SeBackupPrivilege` in the current process token.
+///
+/// `FILE_FLAG_BACKUP_SEMANTICS` only bypasses NTFS security checks when the
+/// calling thread's token has `SeBackupPrivilege` **enabled** (not just
+/// present).  Administrator tokens include it but it's disabled by default.
+///
+/// This is required to open `$MFT` for reading on write-protected volumes.
+/// The privilege is process-wide and persists for the lifetime of the process,
+/// so calling this multiple times is harmless.
+fn enable_backup_privilege() {
+    let Some(token) = open_current_process_token() else {
+        return;
+    };
+    let Some(luid) = lookup_backup_privilege_luid() else {
+        unsafe_close_token(token);
+        return;
+    };
+
+    enable_privilege_with_token(token, luid);
+}
+
+/// Open the current process's token with `TOKEN_ADJUST_PRIVILEGES` rights.
+///
+/// Returns `None` (and logs a debug line) when the underlying Win32 call
+/// fails — the only legitimate cause is non-elevated callers, which is
+/// expected for the `MftReader::new` fast path.
+#[expect(unsafe_code, reason = "FFI: GetCurrentProcess + OpenProcessToken")]
+fn open_current_process_token() -> Option<HANDLE> {
+    use windows::Win32::Security::TOKEN_ADJUST_PRIVILEGES;
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut token = HANDLE::default();
+    // SAFETY: `GetCurrentProcess()` returns a constant pseudo-handle and has
+    // no preconditions.
+    let current_process = unsafe { GetCurrentProcess() };
+    // SAFETY: `current_process` is a valid pseudo-handle and `token` is
+    // valid writable stack storage for the call duration.
+    if unsafe { OpenProcessToken(current_process, TOKEN_ADJUST_PRIVILEGES, &raw mut token) }
+        .is_err()
+    {
+        tracing::debug!("Could not open process token for privilege adjustment");
+        return None;
+    }
+    Some(token)
+}
+
+/// Look up the LUID for `SeBackupPrivilege`.  Returns `None` when the call
+/// fails (extremely rare; would indicate a missing privilege constant).
+#[expect(
+    unsafe_code,
+    reason = "FFI: LookupPrivilegeValueW with caller-owned LUID storage"
+)]
+fn lookup_backup_privilege_luid() -> Option<windows::Win32::Foundation::LUID> {
+    use windows::Win32::Foundation::LUID;
+    use windows::Win32::Security::{LookupPrivilegeValueW, SE_BACKUP_NAME};
+
+    let mut luid = LUID::default();
+    // SAFETY: `SE_BACKUP_NAME` is a static wide string constant and `luid`
+    // is valid writable stack storage for the call duration.
+    if unsafe { LookupPrivilegeValueW(None, SE_BACKUP_NAME, &raw mut luid) }.is_err() {
+        tracing::debug!("Could not look up SeBackupPrivilege LUID");
+        return None;
+    }
+    Some(luid)
+}
+
+/// Adjust `token` so `luid` is enabled, then close `token`.  Logs the
+/// outcome at info / debug level — this function is best-effort and never
+/// returns an error to the caller.
+#[expect(unsafe_code, reason = "FFI: AdjustTokenPrivileges + CloseHandle")]
+fn enable_privilege_with_token(token: HANDLE, luid: windows::Win32::Foundation::LUID) {
+    use windows::Win32::Security::{
+        AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED, TOKEN_PRIVILEGES,
+    };
+
+    let tp = TOKEN_PRIVILEGES {
+        PrivilegeCount: 1,
+        Privileges: [LUID_AND_ATTRIBUTES {
+            Luid: luid,
+            Attributes: SE_PRIVILEGE_ENABLED,
+        }],
+    };
+
+    // SAFETY: `token` was opened with `TOKEN_ADJUST_PRIVILEGES`, `tp` is a
+    // valid `TOKEN_PRIVILEGES` struct, and no previous-state buffer is
+    // requested.
+    let result = unsafe { AdjustTokenPrivileges(token, false, Some(&raw const tp), 0, None, None) };
+
+    // SAFETY: `token` was opened by the caller and is closed exactly once.
+    unsafe { CloseHandle(token) }.ok();
+
+    match result {
+        Ok(()) => tracing::info!("✅ SeBackupPrivilege enabled"),
+        Err(err) => tracing::debug!(error = %err, "Could not enable SeBackupPrivilege"),
+    }
+}
+
+/// Close a privilege-helper token, logging but not propagating any failure.
+#[expect(
+    unsafe_code,
+    reason = "FFI: CloseHandle on a token opened by open_current_process_token"
+)]
+fn unsafe_close_token(token: HANDLE) {
+    // SAFETY: caller passes a token returned from
+    // `open_current_process_token` that has not yet been closed.
+    unsafe { CloseHandle(token) }.ok();
 }
 
 #[cfg(test)]
@@ -918,68 +1048,5 @@ mod tests {
             operation: "read_all_index",
             ..
         }));
-    }
-}
-
-/// Enables `SeBackupPrivilege` in the current process token.
-///
-/// `FILE_FLAG_BACKUP_SEMANTICS` only bypasses NTFS security checks when the
-/// calling thread's token has `SeBackupPrivilege` **enabled** (not just
-/// present).  Administrator tokens include it but it's disabled by default.
-///
-/// This is required to open `$MFT` for reading on write-protected volumes.
-/// The privilege is process-wide and persists for the lifetime of the process,
-/// so calling this multiple times is harmless.
-#[expect(
-    unsafe_code,
-    reason = "FFI: OpenProcessToken, LookupPrivilegeValueW, AdjustTokenPrivileges"
-)]
-fn enable_backup_privilege() {
-    use windows::Win32::Foundation::LUID;
-    use windows::Win32::Security::{
-        AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, SE_BACKUP_NAME,
-        SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES,
-    };
-    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-
-    // SAFETY: `GetCurrentProcess()` returns the current pseudo-handle.
-    // `OpenProcessToken` writes to `token`, which is valid stack storage.
-    let mut token = HANDLE::default();
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &raw mut token) }
-        .is_err()
-    {
-        tracing::debug!("Could not open process token for privilege adjustment");
-        return;
-    }
-
-    let mut luid = LUID::default();
-    // SAFETY: `SE_BACKUP_NAME` is a static wide string and `luid` is valid
-    // writable storage.
-    if unsafe { LookupPrivilegeValueW(None, SE_BACKUP_NAME, &raw mut luid) }.is_err() {
-        // SAFETY: `token` was opened above and is closed exactly once.
-        unsafe { CloseHandle(token) }.ok();
-        tracing::debug!("Could not look up SeBackupPrivilege LUID");
-        return;
-    }
-
-    let tp = TOKEN_PRIVILEGES {
-        PrivilegeCount: 1,
-        Privileges: [LUID_AND_ATTRIBUTES {
-            Luid: luid,
-            Attributes: SE_PRIVILEGE_ENABLED,
-        }],
-    };
-
-    // SAFETY: `token` is a valid process token opened with
-    // `TOKEN_ADJUST_PRIVILEGES`, `tp` is a valid `TOKEN_PRIVILEGES` struct,
-    // and no previous-state buffer is requested.
-    let result = unsafe { AdjustTokenPrivileges(token, false, Some(&raw const tp), 0, None, None) };
-
-    // SAFETY: `token` was opened above and is closed exactly once.
-    unsafe { CloseHandle(token) }.ok();
-
-    match result {
-        Ok(()) => tracing::info!("✅ SeBackupPrivilege enabled"),
-        Err(err) => tracing::debug!(error = %err, "Could not enable SeBackupPrivilege"),
     }
 }

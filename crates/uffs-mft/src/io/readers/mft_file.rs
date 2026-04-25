@@ -73,11 +73,7 @@ pub(crate) fn read_mft_from_file_handle(
     // storage for the seek output.
     unsafe { SetFilePointerEx(mft_handle, 0, Some(&raw mut new_pos), FILE_BEGIN) }?;
 
-    loop {
-        if frs >= total_records {
-            break;
-        }
-
+    while frs < total_records {
         let remaining = total_records - frs;
         let records_this_chunk = remaining.min(chunk_records as u64) as usize;
         let read_size = records_this_chunk * record_size_usize;
@@ -86,52 +82,20 @@ pub(crate) fn read_mft_from_file_handle(
             buffer = AlignedBuffer::new(read_size);
         }
 
-        let Some(read_slice) = buffer.as_mut_slice().get_mut(..read_size) else {
-            // Unreachable: AlignedBuffer was sized to ≥ read_size above.
-            return Err(crate::error::MftError::Io(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "MFT read buffer shorter than requested read size",
-            )));
-        };
+        // SAFETY: `mft_handle` is a live $MFT file handle (caller's
+        // contract).  `read_one_chunk` reborrows `buffer` exclusively for
+        // the duration of the call.
+        let actual_bytes =
+            unsafe { read_one_chunk(mft_handle, &mut buffer, read_size, file_offset, frs) }?;
 
-        let mut bytes_read = 0_u32;
-        // SAFETY: `mft_handle` is live, the buffer slice spans `read_size`
-        // writable bytes, and `bytes_read` is a valid out-parameter.
-        let read_result = unsafe {
-            ReadFile(
-                mft_handle,
-                Some(read_slice),
-                Some(&raw mut bytes_read),
-                None,
-            )
-        };
-
-        if let Err(err) = read_result {
-            warn!(
-                file_offset,
-                frs,
-                error = %err,
-                "Failed to read $MFT chunk — aborting file-based read"
-            );
-            return Err(crate::error::MftError::Io(
-                std::io::Error::from_raw_os_error(err.code().0 as i32),
-            ));
-        }
-
-        let actual_bytes = bytes_read as usize;
         let actual_records = actual_bytes / record_size_usize;
-
-        let parse_slice = buffer.as_mut_slice();
-        for i in 0..actual_records {
-            let offset = i * record_size_usize;
-            let Some(record_slice) = parse_slice.get_mut(offset..offset + record_size_usize) else {
-                // Unreachable: bounded by `actual_records = bytes_read / record_size`.
-                break;
-            };
-            if apply_fixup(record_slice) {
-                merger.add_result(parse_record_full(record_slice, frs + i as u64));
-            }
-        }
+        parse_chunk_records(
+            buffer.as_mut_slice(),
+            record_size_usize,
+            frs,
+            actual_records,
+            &mut merger,
+        );
 
         frs += actual_records as u64;
         file_offset += actual_bytes as u64;
@@ -157,4 +121,83 @@ pub(crate) fn read_mft_from_file_handle(
     );
 
     Ok(records)
+}
+
+/// Issue one `ReadFile` of `read_size` bytes against `mft_handle` into the
+/// front of `buffer` and return the number of bytes actually read.
+///
+/// `file_offset` and `frs` are passed only for diagnostic logging on
+/// failure.
+///
+/// # Safety
+///
+/// Caller must guarantee `mft_handle` is a live, readable file handle.
+#[expect(
+    unsafe_code,
+    reason = "FFI: ReadFile against the caller-supplied $MFT file handle"
+)]
+unsafe fn read_one_chunk(
+    mft_handle: HANDLE,
+    buffer: &mut AlignedBuffer,
+    read_size: usize,
+    file_offset: u64,
+    frs: u64,
+) -> Result<usize> {
+    let Some(read_slice) = buffer.as_mut_slice().get_mut(..read_size) else {
+        // Unreachable: caller resizes `buffer` to ≥ read_size before
+        // invoking this helper.
+        return Err(crate::error::MftError::Io(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "MFT read buffer shorter than requested read size",
+        )));
+    };
+
+    let mut bytes_read = 0_u32;
+    // SAFETY: caller guarantees `mft_handle` is live; `read_slice` covers
+    // `read_size` writable bytes; `bytes_read` is valid out-storage.
+    let read_result = unsafe {
+        ReadFile(
+            mft_handle,
+            Some(read_slice),
+            Some(&raw mut bytes_read),
+            None,
+        )
+    };
+
+    if let Err(err) = read_result {
+        warn!(
+            file_offset,
+            frs,
+            error = %err,
+            "Failed to read $MFT chunk — aborting file-based read"
+        );
+        return Err(crate::error::MftError::Io(
+            std::io::Error::from_raw_os_error(err.code().0),
+        ));
+    }
+
+    Ok(bytes_read as usize)
+}
+
+/// Apply NTFS fixup to each record slice in `buffer` and feed the parsed
+/// results into `merger`.  Records that fail fixup are silently skipped
+/// (matches the previous inline behaviour).
+fn parse_chunk_records(
+    buffer: &mut [u8],
+    record_size: usize,
+    base_frs: u64,
+    record_count: usize,
+    merger: &mut MftRecordMerger,
+) {
+    for i in 0..record_count {
+        let offset = i * record_size;
+        let Some(record_slice) = buffer.get_mut(offset..offset + record_size) else {
+            // Unreachable: caller bounds `record_count` to the buffer's
+            // record capacity.
+            break;
+        };
+        if apply_fixup(record_slice) {
+            merger.add_result(parse_record_full(record_slice, base_frs + i as u64));
+        }
+    }
 }

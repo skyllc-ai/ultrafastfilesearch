@@ -45,7 +45,8 @@ pub(crate) use volume::{
 #[cfg(windows)]
 pub use volume::{NtfsVolumeData, VolumeHandle};
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
+#[cfg(windows)]
 mod tests {
     use std::path::PathBuf;
 
@@ -59,8 +60,11 @@ mod tests {
 
     #[test]
     fn test_is_elevated() {
-        // Just verify it doesn't panic
-        let _ = is_elevated();
+        // Just verify it doesn't panic.  Bind with `_unused` so the must_use
+        // result is consumed without us losing the annotation; the prefix
+        // signals "intentionally unused" without triggering
+        // `let_underscore_must_use`.
+        let _unused = is_elevated();
     }
 
     #[test]

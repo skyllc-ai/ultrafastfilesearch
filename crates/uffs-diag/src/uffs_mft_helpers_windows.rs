@@ -10,6 +10,15 @@
 //! `parse_record_full` pipeline.
 
 #![cfg(windows)]
+#![expect(
+    clippy::print_stdout,
+    clippy::use_debug,
+    reason = "diagnostic helper — stdout / Debug formatting is intentional"
+)]
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "writeln! into a heap String never fails; ignoring its result is safe"
+)]
 
 use core::fmt::Write as _;
 

@@ -468,12 +468,14 @@ impl IndexManager {
                 &agg_snapshot,
                 Some(self.aggregate_cache()),
                 &effective_params.aggregations,
-                predicates,
-                effective_params.agg_cursor.as_deref(),
-                effective_params.agg_page_size,
-                agg_pattern,
-                &effective_params.drives,
-                &agg_record_filter,
+                crate::index::aggregation::AggregationRequest {
+                    query_predicates: predicates,
+                    agg_cursor: effective_params.agg_cursor.as_deref(),
+                    agg_page_size: effective_params.agg_page_size,
+                    pattern: agg_pattern,
+                    drives_filter: &effective_params.drives,
+                    record_filter: agg_record_filter,
+                },
             )
         } else {
             (vec![], 0)

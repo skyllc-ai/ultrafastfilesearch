@@ -8,6 +8,25 @@
 //! `uffs_mft::usn::*` (journal queries + record decode) and share no
 //! state with the index-save / cache-management verbs that live in
 //! their sibling modules.
+//!
+//! These commands print human-readable journal records to stdout and use
+//! `Debug` formatting for diagnostic enums; the lint exemptions below capture
+//! those CLI-specific patterns.
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "intentional user-facing CLI USN journal output: stdout for primary output, stderr for journal-unavailable diagnostics"
+)]
+#![expect(
+    clippy::float_arithmetic,
+    clippy::cast_precision_loss,
+    clippy::default_numeric_fallback,
+    reason = "byte/MB conversion of USN journal sizes uses f64 for human-readable display"
+)]
+#![expect(
+    clippy::min_ident_chars,
+    reason = "short identifiers used for printf-style indices in CLI output"
+)]
 
 use anyhow::Result;
 

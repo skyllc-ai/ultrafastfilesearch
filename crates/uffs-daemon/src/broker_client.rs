@@ -36,6 +36,9 @@ pub(crate) fn broker_available() -> bool {
         .collect();
 
     #[expect(unsafe_code, reason = "GetFileAttributesW to check pipe existence")]
+    // SAFETY: `wide` is a null-terminated UTF-16 buffer that lives for
+    // the duration of the call; `GetFileAttributesW` only reads from
+    // the pointer.
     let attrs = unsafe { GetFileAttributesW(PCWSTR(wide.as_ptr())) };
 
     // If not INVALID_FILE_ATTRIBUTES, the pipe exists
@@ -56,7 +59,7 @@ pub(crate) fn request_volume_handle(drive_letter: char) -> anyhow::Result<u64> {
         .read(true)
         .write(true)
         .open(pipe_path)
-        .map_err(|e| anyhow::anyhow!("Failed to connect to broker: {e}"))?;
+        .map_err(|err| anyhow::anyhow!("Failed to connect to broker: {err}"))?;
 
     // Send drive letter (1 byte)
     let drive_byte = drive_letter.to_ascii_uppercase() as u8;
@@ -72,7 +75,10 @@ pub(crate) fn request_volume_handle(drive_letter: char) -> anyhow::Result<u64> {
         anyhow::bail!("Broker returned error status {status} for drive {drive_letter}:");
     }
 
-    let handle_value = u64::from_le_bytes(response[1..9].try_into().unwrap());
+    let handle_bytes: [u8; 8] = response[1..9]
+        .try_into()
+        .map_err(|err| anyhow::anyhow!("broker response handle slice size mismatch: {err}"))?;
+    let handle_value = u64::from_le_bytes(handle_bytes);
 
     tracing::info!(
         drive = %drive_letter,

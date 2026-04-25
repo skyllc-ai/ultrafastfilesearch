@@ -43,41 +43,52 @@ use anyhow::{Context, Result};
 #[cfg(windows)]
 use uffs_mft::{MftExtent, VolumeHandle};
 
-fn main() {
+fn main() -> std::process::ExitCode {
     #[cfg(windows)]
     {
         if let Err(error) = real_main() {
-            eprintln!("dump_mft_extents failed: {error:?}");
-            std::process::exit(1);
+            eprintln!("dump_mft_extents failed: {error:#}");
+            return std::process::ExitCode::from(1);
         }
+        std::process::ExitCode::SUCCESS
     }
 
     #[cfg(not(windows))]
     {
         eprintln!("dump_mft_extents is only supported on Windows targets.");
+        std::process::ExitCode::from(1)
     }
 }
 
+/// Windows entry point — argument parsing, volume open, extent dump.
+///
+/// Returns `Err` whenever a usage / handle / Win32 step fails so the
+/// outer `main` can render the error and yield a non-zero exit code.
 #[cfg(windows)]
 fn real_main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
+    let drive_arg = args.get(1).cloned().ok_or_else(|| {
         eprintln!("Usage: dump_mft_extents <drive_letter>");
         eprintln!("Example: dump_mft_extents F");
-        std::process::exit(1);
+        anyhow::anyhow!("missing <drive_letter> argument")
+    })?;
+    if args.len() != 2 {
+        anyhow::bail!(
+            "expected exactly one <drive_letter> argument, got {}",
+            args.len() - 1
+        );
     }
 
-    let drive_arg = &args[1];
     let mut chars = drive_arg.chars();
-    let drive = chars
+    let drive_input = chars
         .next()
         .context("Drive letter argument must not be empty")?;
 
-    if !drive.is_ascii_alphabetic() {
-        anyhow::bail!("Drive letter must be A-Z, got: {drive}");
+    if !drive_input.is_ascii_alphabetic() {
+        anyhow::bail!("Drive letter must be A-Z, got: {drive_input}");
     }
 
-    let drive = drive.to_ascii_uppercase();
+    let drive = drive_input.to_ascii_uppercase();
 
     println!("===============================================");
     println!("Dumping $MFT extents for volume {drive}:");
@@ -147,11 +158,7 @@ fn real_main() -> Result<()> {
 
     let total_bytes = total_clusters.saturating_mul(u64::from(bytes_per_cluster));
     let record_size = u64::from(volume_data.bytes_per_file_record_segment);
-    let approx_records = if record_size > 0 {
-        total_bytes / record_size
-    } else {
-        0
-    };
+    let approx_records = total_bytes.checked_div(record_size).unwrap_or(0);
 
     println!("\nSummary:");
     println!("  extent_count      = {}", extents.len());
@@ -162,6 +169,8 @@ fn real_main() -> Result<()> {
     Ok(())
 }
 
+/// Pretty-print one [`MftExtent`] row including its derived byte
+/// offset / size, mirroring the table header printed by `real_main`.
 #[cfg(windows)]
 fn print_extent(idx: usize, extent: &MftExtent, bytes_per_cluster: u32) {
     let byte_offset = extent.byte_offset(bytes_per_cluster);

@@ -18,6 +18,8 @@ use super::{MftProgress, MftReader};
 #[cfg(not(windows))]
 use crate::error::MftError;
 use crate::error::Result;
+#[cfg(windows)]
+use crate::index::{u64_to_f64, usize_to_f64};
 
 impl MftReader {
     /// Read the entire MFT and return as a `DataFrame`.
@@ -128,6 +130,24 @@ impl MftReader {
         clippy::float_arithmetic,
         reason = "telemetry: bitmap skip-percentage and MB/s throughput require float division for human-readable logging"
     )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "per-mode read pipeline: each MftReadMode arm is a distinct IO strategy that must remain inline for accurate timing/telemetry; extracting helpers would either inline the same control flow or hide the per-mode safety/teardown invariants behind extra indirection"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "per-mode read pipeline: each MftReadMode arm carries its own \
+                  open-handle/CloseHandle pairing and per-strategy timing capture; \
+                  extracting helpers would either replicate the same control flow \
+                  or hide the close-handle invariants behind an extra indirection"
+    )]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the by-value `Option<F>` signature lets callers pass capturing \
+                  closures (`Some(move |progress| {..})`) without manually \
+                  managing the closure's lifetime; switching to `Option<&F>` \
+                  would force every call site to introduce a separate let-binding"
+    )]
     fn read_mft_internal<F>(&self, callback: Option<F>) -> Result<DataFrame>
     where
         F: Fn(MftProgress),
@@ -138,8 +158,8 @@ impl MftReader {
         info!(volume = %self.volume, "Starting MFT read");
 
         let start_time = Instant::now();
-        let record_size = self.require_handle().file_record_size();
-        let volume_data = self.require_handle().volume_data();
+        let record_size = self.require_handle()?.file_record_size();
+        let volume_data = self.require_handle()?.volume_data();
 
         // Detect drive type for optimal I/O tuning
         let drive_type = detect_drive_type(self.volume);
@@ -159,7 +179,7 @@ impl MftReader {
 
         // Get MFT extents for fragmented MFT support
         let extents = self
-            .require_handle()
+            .require_handle()?
             .get_mft_extents()
             .unwrap_or_else(|err| {
                 warn!(error = ?err, "Failed to get MFT extents, using fallback");
@@ -182,12 +202,13 @@ impl MftReader {
 
         // Try to get the MFT bitmap for optimization (if enabled)
         let bitmap = if self.use_bitmap {
-            let bm = self.require_handle().get_mft_bitmap().ok();
+            let bm = self.require_handle()?.get_mft_bitmap().ok();
             if let Some(bitmap) = &bm {
                 let in_use = bitmap.count_in_use();
                 info!(
                     in_use_records = in_use,
-                    skip_percentage = 100.0 - (in_use as f64 / total_records as f64 * 100.0),
+                    skip_percentage =
+                        (usize_to_f64(in_use) / u64_to_f64(total_records)).mul_add(-100.0, 100.0),
                     "MFT bitmap loaded - will skip unused records"
                 );
             } else {
@@ -222,11 +243,11 @@ impl MftReader {
             "🚀 Using read mode"
         );
 
-        let handle = self.require_handle().raw_handle();
+        let handle = self.require_handle()?.raw_handle();
         let total_bytes = total_records * u64::from(record_size);
 
         // Read using the selected mode
-        let parsed_records = match effective_mode {
+        let mut parsed_records = match effective_mode {
             MftReadMode::Parallel | MftReadMode::Auto => {
                 // Parallel mode: read all chunks then parse in parallel (best for SSD)
                 let parallel_reader =
@@ -372,7 +393,7 @@ impl MftReader {
             MftReadMode::IocpParallel => {
                 // IOCP parallel mode: Multiple overlapped reads in flight (best for HDD)
                 // IOCP requires FILE_FLAG_OVERLAPPED, so we open a separate handle
-                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle()?.open_overlapped_handle()?;
                 let iocp_reader = crate::io::IocpMftReader::new(extent_map, bitmap, drive_type);
 
                 let result = callback.as_ref().map_or_else(
@@ -400,10 +421,11 @@ impl MftReader {
                 );
 
                 // Close the overlapped handle
-                // SAFETY: overlapped_handle is a valid handle opened by open_overlapped_handle
                 #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
+                    // SAFETY: `overlapped_handle` came from `open_overlapped_handle` and is
+                    // closed exactly once here.
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 };
 
                 result?
@@ -438,7 +460,7 @@ impl MftReader {
             }
             MftReadMode::BulkIocp => {
                 // Bulk IOCP mode: queues ALL reads to IOCP at once
-                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle()?.open_overlapped_handle()?;
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
@@ -473,18 +495,18 @@ impl MftReader {
                 );
 
                 // Close the overlapped handle
-                // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
-                // no longer used after the read completes, and is closed exactly once.
                 #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
+                    // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
+                    // no longer used after the read completes, and is closed exactly once.
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 };
 
                 result?
             }
             MftReadMode::SlidingIocp => {
                 // Sliding window IOCP mode: adaptive concurrency with multiple reads in flight
-                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle()?.open_overlapped_handle()?;
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
@@ -519,11 +541,11 @@ impl MftReader {
                 );
 
                 // Close the overlapped handle
-                // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
-                // no longer used after the read completes, and is closed exactly once.
                 #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
+                    // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
+                    // no longer used after the read completes, and is closed exactly once.
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 };
 
                 result?
@@ -532,7 +554,7 @@ impl MftReader {
                 // SlidingIocpInline is designed for direct index building.
                 // For read_mft_internal (which returns Vec<ParsedRecord>), fall back to
                 // SlidingIocp.
-                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle()?.open_overlapped_handle()?;
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
@@ -567,11 +589,11 @@ impl MftReader {
                 );
 
                 // Close the overlapped handle
-                // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
-                // no longer used after the read completes, and is closed exactly once.
                 #[expect(unsafe_code, reason = "FFI: CloseHandle on valid overlapped handle")]
                 {
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
+                    // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
+                    // no longer used after the read completes, and is closed exactly once.
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 };
 
                 match result {
@@ -585,7 +607,7 @@ impl MftReader {
                             "⚠️  IOCP read failed — trying fallback strategies"
                         );
                         self.read_write_protect_fallback(
-                            self.require_handle().file_record_size(),
+                            self.require_handle()?.file_record_size(),
                             total_records,
                         )?
                     }
@@ -597,7 +619,6 @@ impl MftReader {
         // This matches the legacy output behavior where `at()` creates placeholder
         // records for any referenced FRS that hasn't been seen yet.
         // Can be disabled with `with_add_placeholders(false)` for ~15% speedup.
-        let mut parsed_records = parsed_records;
         if self.add_placeholders {
             let placeholders_added =
                 crate::io::add_missing_parent_placeholders_to_vec(&mut parsed_records);
@@ -612,12 +633,12 @@ impl MftReader {
         let read_elapsed = start_time.elapsed();
         let records_parsed_count = parsed_records.len();
         let throughput_mb_s = if read_elapsed.as_secs_f64() > 0.0 {
-            (total_bytes as f64 / (1024.0 * 1024.0)) / read_elapsed.as_secs_f64()
+            (u64_to_f64(total_bytes) / (1024.0 * 1024.0)) / read_elapsed.as_secs_f64()
         } else {
             0.0
         };
         let records_per_sec = if read_elapsed.as_secs_f64() > 0.0 {
-            records_parsed_count as f64 / read_elapsed.as_secs_f64()
+            usize_to_f64(records_parsed_count) / read_elapsed.as_secs_f64()
         } else {
             0.0
         };

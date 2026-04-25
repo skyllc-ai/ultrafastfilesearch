@@ -10,6 +10,14 @@ use tracing::{debug, info};
 
 use crate::index::u64_to_f64;
 
+/// Bytes per gibibyte, as `f64`.
+#[cfg(windows)]
+const BYTES_PER_GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+
+/// Bytes per mebibyte, as `f64`.
+#[cfg(windows)]
+const BYTES_PER_MIB: f64 = 1024.0 * 1024.0;
+
 /// Statistics computed during MFT parsing and `DataFrame` building.
 ///
 /// This struct is populated during the single-pass DF build loop,
@@ -66,17 +74,26 @@ impl MftStats {
 
     /// Logs the aggregated statistics summary.
     #[cfg(windows)]
-    #[expect(
-        clippy::float_arithmetic,
-        reason = "GiB/MiB display formatting requires byte-to-float division"
-    )]
     pub(super) fn log_summary(&self) {
+        self.log_record_breakdown();
+        self.log_attribute_flags();
+        self.log_extended_attributes();
+        self.log_storage_analysis();
+    }
+
+    /// Log the directory/file record-type counts.
+    #[cfg(windows)]
+    fn log_record_breakdown(&self) {
         info!(
             directories = self.dir_count,
             files = self.file_count,
             "📊 Record type breakdown"
         );
+    }
 
+    /// Log the per-attribute-flag counts (hidden / system / compressed / ...).
+    #[cfg(windows)]
+    fn log_attribute_flags(&self) {
         info!(
             hidden = self.hidden_count,
             system = self.system_count,
@@ -86,7 +103,11 @@ impl MftStats {
             reparse_points = self.reparse_count,
             "🏷️  Attribute flags summary"
         );
+    }
 
+    /// Log ADS / hardlink counts when at least one record has them.
+    #[cfg(windows)]
+    fn log_extended_attributes(&self) {
         if self.multi_stream_count > 0 || self.multi_name_count > 0 {
             info!(
                 files_with_ads = self.multi_stream_count,
@@ -94,17 +115,25 @@ impl MftStats {
                 "🔗 Extended attributes"
             );
         }
+    }
 
-        /// Bytes per gibibyte, in `f64`.
-        const BYTES_PER_GIB: f64 = 1024.0 * 1024.0 * 1024.0;
-        /// Bytes per mebibyte, in `f64`.
-        const BYTES_PER_MIB: f64 = 1024.0 * 1024.0;
+    /// Log the GiB/MiB-formatted storage totals and slack-space stats.
+    #[cfg(windows)]
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "GiB/MiB display formatting requires byte-to-float division"
+    )]
+    fn log_storage_analysis(&self) {
+        let total_gb = u64_to_f64(self.total_file_size) / BYTES_PER_GIB;
+        let allocated_gb = u64_to_f64(self.total_allocated_size) / BYTES_PER_GIB;
+        let slack_mb = u64_to_f64(self.slack_space()) / BYTES_PER_MIB;
+        let slack_pct = self.slack_percentage();
 
         debug!(
-            total_file_size_gb = format!("{:.2}", self.total_file_size as f64 / BYTES_PER_GIB),
-            total_allocated_gb = format!("{:.2}", self.total_allocated_size as f64 / BYTES_PER_GIB),
-            slack_space_mb = format!("{:.2}", self.slack_space() as f64 / BYTES_PER_MIB),
-            slack_percentage = format!("{:.1}%", self.slack_percentage()),
+            total_file_size_gb = format!("{total_gb:.2}"),
+            total_allocated_gb = format!("{allocated_gb:.2}"),
+            slack_space_mb = format!("{slack_mb:.2}"),
+            slack_percentage = format!("{slack_pct:.1}%"),
             "💾 Storage analysis"
         );
     }

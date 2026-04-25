@@ -151,28 +151,45 @@ impl BenchmarkResult {
     }
 }
 
+/// Per-MFT metrics passed to [`build_drive_characteristics`].
+///
+/// Bundling the five MFT-shape numbers into a struct keeps
+/// `build_drive_characteristics` under the 7-argument cap without splitting it
+/// into multiple helpers (the function itself is a trivial constructor and
+/// further extraction would obscure intent).
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy)]
+pub(super) struct MftMetrics {
+    /// Logical MFT size in bytes (`total_records * bytes_per_record`).
+    pub size_bytes: u64,
+    /// Total record count reported by the MFT extent map.
+    pub total_records: u64,
+    /// In-use record count from the bitmap, when available.
+    pub in_use_records: Option<u64>,
+    /// Number of extents in the MFT $DATA attribute.
+    pub extent_count: usize,
+    /// Bytes per MFT record (typically 1024).
+    pub bytes_per_record: u32,
+}
+
 /// Builds the drive characteristics payload for benchmark output.
 #[must_use]
 #[cfg(windows)]
 pub(super) fn build_drive_characteristics(
     drive_letter: char,
     drive_type: DriveType,
-    mft_size_bytes: u64,
-    total_records: u64,
-    in_use_records: Option<u64>,
-    extent_count: usize,
-    bytes_per_record: u32,
+    mft: MftMetrics,
     chunk_size_bytes: usize,
     chunk_count: usize,
 ) -> DriveCharacteristics {
     DriveCharacteristics {
         drive_letter,
         drive_type: format!("{drive_type:?}"),
-        mft_size_bytes,
-        total_records,
-        in_use_records,
-        extent_count,
-        bytes_per_record,
+        mft_size_bytes: mft.size_bytes,
+        total_records: mft.total_records,
+        in_use_records: mft.in_use_records,
+        extent_count: mft.extent_count,
+        bytes_per_record: mft.bytes_per_record,
         chunk_size_bytes,
         chunk_count,
     }

@@ -887,12 +887,12 @@ pub fn search_index(
 // this file.
 
 // ── Sorting & DataFrame conversion ─────────────────────────────────────
-// Extracted into `sorting.rs` for file-size policy compliance.
-// Re-exported from `search/mod.rs` → `backend::*` so callers see no change.
-pub use super::sorting::{
-    dataframe_to_display_rows, display_rows_to_dataframe, format_sort_spec, parse_sort_spec,
-    sort_rows, sort_rows_with_fold,
-};
+// Each concern lives in its own sibling module so callers can read
+// either contract without scrolling past the other.  Re-exported here
+// so existing `use uffs_core::search::backend::*;` call sites see no
+// change.
+pub use super::dataframe_convert::{dataframe_to_display_rows, display_rows_to_dataframe};
+pub use super::sorting::{format_sort_spec, parse_sort_spec, sort_rows, sort_rows_with_fold};
 
 #[cfg(test)]
 #[path = "backend_tests.rs"]

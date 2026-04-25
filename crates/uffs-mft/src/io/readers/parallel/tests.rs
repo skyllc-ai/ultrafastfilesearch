@@ -39,8 +39,7 @@ fn test_parallel_mft_reader_uses_optimal_chunk_size() {
     );
     assert_eq!(hdd_reader.drive_type, DriveType::Hdd);
 
-    let unknown_reader =
-        ParallelMftReader::new_optimized(extent_map.clone(), None, DriveType::Unknown);
+    let unknown_reader = ParallelMftReader::new_optimized(extent_map, None, DriveType::Unknown);
     assert_eq!(
         unknown_reader.chunk_size,
         1024 * 1024,

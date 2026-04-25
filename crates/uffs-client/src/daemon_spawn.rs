@@ -203,18 +203,7 @@ fn spawn_daemon_windows(
     }
 
     match policy {
-        ElevationPolicy::AllowUacPrompt => {
-            tracing::debug!("NOT elevated, using ShellExecuteW runas (policy allows UAC)");
-            tracing::info!("Not elevated — requesting elevation via UAC prompt");
-            shell_execute_elevated(exe, args)?;
-            tracing::debug!("ShellExecuteW returned OK");
-            // `ShellExecuteW("runas")` does not hand back a process
-            // handle — the OS shell owns the elevated child — so we
-            // cannot poll for early exit on this path.  Return an
-            // `opaque` handle; the retry loop falls back to the plain
-            // "could not connect after N attempts" error for UAC spawns.
-            Ok(DaemonChildHandle::opaque())
-        }
+        ElevationPolicy::AllowUacPrompt => spawn_via_uac_prompt(exe, args),
         ElevationPolicy::RequireExistingElevation => {
             tracing::info!("Not elevated and policy forbids UAC — returning DaemonNeedsElevation");
             Err(crate::error::ClientError::DaemonNeedsElevation {
@@ -222,6 +211,24 @@ fn spawn_daemon_windows(
             })
         }
     }
+}
+
+/// UAC-prompt arm of [`spawn_daemon_windows`].
+///
+/// `ShellExecuteW("runas")` does not hand back a process handle — the OS
+/// shell owns the elevated child — so we cannot poll for early exit on
+/// this path.  Return an `opaque` handle; the retry loop falls back to
+/// the plain "could not connect after N attempts" error for UAC spawns.
+#[cfg(windows)]
+fn spawn_via_uac_prompt(
+    exe: &std::path::Path,
+    args: &[&str],
+) -> Result<DaemonChildHandle, crate::error::ClientError> {
+    tracing::debug!("NOT elevated, using ShellExecuteW runas (policy allows UAC)");
+    tracing::info!("Not elevated — requesting elevation via UAC prompt");
+    shell_execute_elevated(exe, args)?;
+    tracing::debug!("ShellExecuteW returned OK");
+    Ok(DaemonChildHandle::opaque())
 }
 
 // ── CreateProcessW arg quoting (MSVCRT-compatible) ────────────────────────

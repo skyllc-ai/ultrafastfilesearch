@@ -2,6 +2,49 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Raw MFT save command handlers.
+//!
+//! These commands print human-readable progress to stdout, rebuild a few
+//! `abs_path` bindings as the path is canonicalised, index a fixed-size
+//! 65 536-entry `$UpCase` table, and intentionally keep `async` signatures so
+//! all `cmd_*` handlers share one shape across the CLI dispatch table.  The
+//! lint exemptions below capture those CLI-specific patterns; library code
+//! never inherits them.
+#![expect(
+    clippy::print_stdout,
+    reason = "intentional user-facing CLI save / upcase output"
+)]
+#![expect(
+    clippy::float_arithmetic,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::default_numeric_fallback,
+    reason = "byte / utilization calculations convert integer counters into f64 for human-readable display"
+)]
+#![expect(
+    clippy::min_ident_chars,
+    clippy::shadow_reuse,
+    reason = "short identifiers and sequential rebinding (e.g. `abs_path`) aid readability in CLI driver code"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "save commands run a configure -> read -> compute -> write -> print pipeline that is most readable inline"
+)]
+#![expect(
+    clippy::unused_async,
+    reason = "CLI dispatch (`commands/mod.rs`) awaits every `cmd_*` handler for uniform routing; the handler is sync but its signature must stay async"
+)]
+#![expect(
+    clippy::indexing_slicing,
+    reason = "indexes into the fixed 65 536-entry `$UpCase` table; bounds are 16-bit constants in the spec"
+)]
+#![expect(
+    clippy::items_after_statements,
+    reason = "local `mod` items keep typed Win32 IOCTL structs adjacent to their sole call site for readability"
+)]
+#![expect(
+    clippy::fn_params_excessive_bools,
+    reason = "save commands take `--no-bitmap`, `--no-placeholders`, `--full`, `--json` flag bools mirroring CLI args; bundling into a struct duplicates the clap-derive layout"
+)]
 
 use std::path::Path;
 
@@ -62,22 +105,21 @@ pub(crate) async fn cmd_save(
         vol_data.mft_valid_data_length / u64::from(vol_data.bytes_per_file_record_segment);
 
     // Fragmentation analysis
-    let mut extent_count = 1;
-    let is_fragmented;
-    if let Ok(extents) = handle.get_mft_extents() {
-        extent_count = extents.len();
-        is_fragmented = extent_count > 1;
-    } else {
-        is_fragmented = false;
-    }
+    let (extent_count, is_fragmented) =
+        handle
+            .get_mft_extents()
+            .map_or((1_usize, false), |extents| {
+                let count = extents.len();
+                (count, count > 1)
+            });
 
     // Bitmap analysis
-    let mut in_use_records = 0_u64;
-    let mut utilization = 0.0_f64;
-    if let Ok(bitmap) = handle.get_mft_bitmap() {
-        in_use_records = bitmap.count_in_use() as u64;
-        utilization = (in_use_records as f64 / record_count as f64) * 100.0;
-    }
+    let (in_use_records, utilization) =
+        handle.get_mft_bitmap().map_or((0_u64, 0.0_f64), |bitmap| {
+            let in_use = bitmap.count_in_use() as u64;
+            let pct = (in_use as f64 / record_count as f64) * 100.0;
+            (in_use, pct)
+        });
     let free_records = record_count.saturating_sub(in_use_records);
 
     // Open reader and save

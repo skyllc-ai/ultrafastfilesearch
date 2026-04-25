@@ -306,7 +306,7 @@ fn parse_data_runs(record_bytes: &[u8]) -> Result<UpcaseDataRuns> {
 
     Ok(UpcaseDataRuns {
         runs,
-        data_size: nr.data_size as u64,
+        data_size: nr.data_size.cast_unsigned(),
     })
 }
 
@@ -349,7 +349,10 @@ pub fn read_upcase_table(drive: char) -> Result<Box<[u16; 65_536]>> {
 
     // Parse data runs.
     let info = parse_data_runs(&record)?;
-    if info.data_size as usize != UPCASE_SIZE_BYTES {
+    if usize::try_from(info.data_size)
+        .map_err(|_err| MftError::InvalidData("$UpCase data_size exceeds usize::MAX".to_owned()))?
+        != UPCASE_SIZE_BYTES
+    {
         return Err(MftError::InvalidData(format!(
             "$UpCase data_size {} != expected {UPCASE_SIZE_BYTES}",
             info.data_size
@@ -365,9 +368,20 @@ pub fn read_upcase_table(drive: char) -> Result<Box<[u16; 65_536]>> {
     // Read clusters.
     let buf = read_clusters(handle.raw_handle(), &info.runs, vol.bytes_per_cluster)?;
 
-    // Reinterpret as [u16; 65_536].
+    // Reinterpret as [u16; 65_536].  Allocate directly on the heap via
+    // `vec! -> Box<[u16]> -> Box<[u16; N]>` to avoid the 128 KiB stack array
+    // that `Box::new([0_u16; 65_536])` would materialize before moving.
     let u16_slice: &[u16] = bytemuck::cast_slice(&buf);
-    let mut table = Box::new([0_u16; 65_536]);
+    let mut table: Box<[u16; 65_536]> =
+        vec![0_u16; 65_536]
+            .into_boxed_slice()
+            .try_into()
+            .map_err(|_boxed: Box<[u16]>| {
+                MftError::InvalidData(
+                    "internal: 65_536-element vec<u16> failed conversion to fixed-size array"
+                        .to_owned(),
+                )
+            })?;
     table.copy_from_slice(u16_slice);
 
     tracing::info!(
@@ -388,8 +402,9 @@ fn volume_read_at(
 ) -> Result<()> {
     use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
-    let seek_pos = i64::try_from(offset)
-        .map_err(|_| MftError::InvalidData(format!("$UpCase: offset {offset} exceeds i64::MAX")))?;
+    let seek_pos = i64::try_from(offset).map_err(|err| {
+        MftError::InvalidData(format!("$UpCase: offset {offset} exceeds i64::MAX ({err})"))
+    })?;
 
     // SAFETY: SetFilePointerEx is a well-defined Win32 API.
     #[expect(unsafe_code, reason = "FFI: SetFilePointerEx")]
@@ -429,14 +444,23 @@ fn read_clusters(
     let mut offset: usize = 0;
 
     for run in runs {
+        let run_byte_len = usize::try_from(run.cluster_count * bpc).map_err(|err| {
+            MftError::InvalidData(format!(
+                "$UpCase run byte count {} (cluster_count={}, bytes_per_cluster={bpc}) \
+                 exceeds usize::MAX ({err})",
+                run.cluster_count * bpc,
+                run.cluster_count,
+            ))
+        })?;
+
         if run.lcn == 0 {
             // Sparse — already zeroed.
-            offset += (run.cluster_count * bpc) as usize;
+            offset += run_byte_len;
             continue;
         }
 
-        let disk_byte = run.lcn * bpc as i64;
-        let run_bytes = (run.cluster_count * bpc) as usize;
+        let disk_byte = run.lcn * bpc.cast_signed();
+        let run_bytes = run_byte_len;
         let read_len = run_bytes.min(UPCASE_SIZE_BYTES - offset);
 
         let disk_offset = crate::index::nonneg_to_u64(disk_byte);

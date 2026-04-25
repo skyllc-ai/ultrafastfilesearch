@@ -207,6 +207,12 @@ pub fn aggregate_changes(records: &[UsnRecord]) -> HashMap<u64, FileChange> {
 #[cfg(windows)]
 pub use windows_impl::{query_usn_journal, read_targeted_frs_records, read_usn_journal};
 
+/// Windows-specific USN journal helpers backed by `FSCTL_QUERY_USN_JOURNAL`,
+/// `FSCTL_READ_USN_JOURNAL`, and targeted FRS reads via `CreateFileW` /
+/// `DeviceIoControl`.
+///
+/// All entries here are re-exported by the parent module under platform gating;
+/// non-Windows targets see the no-op fallbacks in `usn::*` instead.
 #[cfg(windows)]
 #[expect(
     unsafe_code,
@@ -228,15 +234,7 @@ mod windows_impl {
     use windows::core::PCWSTR;
     use zerocopy::{FromBytes, Immutable, KnownLayout};
 
-    #[expect(
-        clippy::wildcard_imports,
-        reason = "parent module's `pub(super) use` prelude \
-                  (HANDLE, MftError, ReadFile, rayon::prelude::*, tracing \
-                  macros, etc.) is designed to be consumed by submodules; \
-                  re-enumerating ~15 items here would duplicate the prelude \
-                  across every sibling reader file"
-    )]
-    use super::*;
+    use super::{UsnJournalInfo, UsnRecord};
 
     /// Mirror of the Win32 `USN_JOURNAL_DATA_V0` struct populated by
     /// `FSCTL_QUERY_USN_JOURNAL`.  Field order and layout match the
@@ -312,8 +310,16 @@ mod windows_impl {
     }
 
     /// Size of a `UsnJournalDataV0` in bytes — always fits in `u32`.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "`UsnJournalDataV0` is a fixed-layout C struct of 56 bytes; the cast is compile-time bounded and required for the Win32 ioctl size argument"
+    )]
     const USN_JOURNAL_DATA_V0_SIZE: u32 = size_of::<UsnJournalDataV0>() as u32;
     /// Size of a `ReadUsnJournalDataV0` in bytes — always fits in `u32`.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "`ReadUsnJournalDataV0` is a fixed-layout C struct of 40 bytes; the cast is compile-time bounded and required for the Win32 ioctl size argument"
+    )]
     const READ_USN_JOURNAL_DATA_V0_SIZE: u32 = size_of::<ReadUsnJournalDataV0>() as u32;
 
     /// Open a `\\.\X:` volume handle with read access for USN-journal ioctls.
@@ -330,7 +336,7 @@ mod windows_impl {
         let handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(wide.as_ptr()),
-                GENERIC_READ.0.into(),
+                GENERIC_READ.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 None,
                 OPEN_EXISTING,
@@ -456,8 +462,8 @@ mod windows_impl {
                 close_volume_handle(handle);
                 return Err(std::io::Error::last_os_error());
             }
-            // `size_of::<i64>()` is 8, always fits in u32.
-            if bytes_returned < size_of::<i64>() as u32 {
+            // `size_of::<i64>()` is 8, hard-coded as a `u32` literal here.
+            if bytes_returned < 8_u32 {
                 close_volume_handle(handle);
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
@@ -484,9 +490,8 @@ mod windows_impl {
                 let Some(record_slice) = buffer.get(offset..bytes_returned_usize) else {
                     break;
                 };
-                let header = match UsnRecordV2Header::read_from_prefix(record_slice) {
-                    Ok((header, _)) => header,
-                    Err(_) => break,
+                let Ok((header, _)) = UsnRecordV2Header::read_from_prefix(record_slice) else {
+                    break;
                 };
                 if header.record_length == 0 {
                     break;
@@ -555,13 +560,7 @@ mod windows_impl {
         index: &mut crate::index::MftIndex,
         frs_list: &[u64],
     ) -> Result<usize, crate::MftError> {
-        use core::mem::size_of;
-
-        use zerocopy::FromBytes;
-
         use crate::io::MftRecordReader;
-        use crate::ntfs::{AttributeListEntry, AttributeRecordHeader, AttributeType};
-        use crate::parse::{apply_fixup, parse_record_to_index};
 
         if frs_list.is_empty() {
             return Ok(0);
@@ -584,32 +583,8 @@ mod windows_impl {
         let mut extension_frs: Vec<u64> = Vec::new();
 
         for &frs in frs_list {
-            match reader.read_record(handle, frs) {
-                Ok(raw_data) => {
-                    let mut buf = vec![0_u8; raw_data.len()];
-                    buf.copy_from_slice(raw_data);
-
-                    if apply_fixup(&mut buf) {
-                        // Scan for $ATTRIBUTE_LIST to discover extension records
-                        extract_extension_frs(&buf, frs, &mut extension_frs);
-
-                        // Parse the base record into the index.
-                        // `parse_record_to_index` uses `ExtensionSnapshot`
-                        // to preserve existing extension-chain data while
-                        // overwriting base-record fields with fresh data.
-                        if parse_record_to_index(&buf, frs, index) {
-                            success_count += 1;
-                        }
-                    }
-                }
-                Err(err) => {
-                    tracing::trace!(
-                        frs,
-                        error = %err,
-                        "⚠️ Targeted MFT read failed for FRS (skipping)"
-                    );
-                }
-            }
+            success_count +=
+                read_one_targeted_record(&mut reader, handle, index, frs, Some(&mut extension_frs));
         }
 
         // Second pass: read extension records discovered from $ATTRIBUTE_LIST.
@@ -624,100 +599,127 @@ mod windows_impl {
             );
         }
         for ext_frs in &extension_frs {
-            match reader.read_record(handle, *ext_frs) {
-                Ok(raw_data) => {
-                    let mut buf = vec![0_u8; raw_data.len()];
-                    buf.copy_from_slice(raw_data);
-
-                    if apply_fixup(&mut buf) && parse_record_to_index(&buf, *ext_frs, index) {
-                        success_count += 1;
-                    }
-                }
-                Err(err) => {
-                    tracing::trace!(
-                        frs = *ext_frs,
-                        error = %err,
-                        "⚠️ Extension MFT record read failed (skipping)"
-                    );
-                }
-            }
-        }
-
-        /// Scans a base record's attributes for `$ATTRIBUTE_LIST` (type 0x20)
-        /// and extracts the FRS numbers of extension records.
-        fn extract_extension_frs(data: &[u8], base_frs: u64, out: &mut Vec<u64>) {
-            use crate::ntfs::FileRecordSegmentHeader;
-
-            if data.len() < size_of::<FileRecordSegmentHeader>() {
-                return;
-            }
-            let header = match FileRecordSegmentHeader::read_from_prefix(data) {
-                Ok((hdr, _)) => hdr,
-                Err(_) => return,
-            };
-
-            let mut offset = header.first_attribute_offset as usize;
-            let max_offset = core::cmp::min(header.bytes_in_use as usize, data.len());
-
-            while offset + size_of::<AttributeRecordHeader>() <= max_offset {
-                let Some(attr_bytes) = data.get(offset..) else {
-                    break;
-                };
-                let attr = match AttributeRecordHeader::read_from_prefix(attr_bytes) {
-                    Ok((hdr, _)) => hdr,
-                    Err(_) => break,
-                };
-                if attr.type_code == AttributeType::End as u32 {
-                    break;
-                }
-                if attr.length == 0 || offset + attr.length as usize > max_offset {
-                    break;
-                }
-
-                if attr.type_code == AttributeType::AttributeList as u32
-                    && attr.is_non_resident == 0
-                {
-                    // Resident $ATTRIBUTE_LIST — parse entries
-                    let val_offset_raw = data
-                        .get(offset + 20..offset + 22)
-                        .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok())
-                        .map(u16::from_le_bytes)
-                        .unwrap_or(0) as usize;
-                    let val_length = data
-                        .get(offset + 16..offset + 20)
-                        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
-                        .map(u32::from_le_bytes)
-                        .unwrap_or(0) as usize;
-
-                    let list_start = offset + val_offset_raw;
-                    let list_end =
-                        core::cmp::min(list_start.saturating_add(val_length), data.len());
-
-                    let mut pos = list_start;
-                    while pos + size_of::<AttributeListEntry>() <= list_end {
-                        let Some(entry_bytes) = data.get(pos..list_end) else {
-                            break;
-                        };
-                        let entry = match AttributeListEntry::read_from_prefix(entry_bytes) {
-                            Ok((entry, _)) => entry,
-                            Err(_) => break,
-                        };
-                        if entry.length < size_of::<AttributeListEntry>() as u16 {
-                            break;
-                        }
-                        let target = entry.target_frs();
-                        if target != base_frs && target != 0 {
-                            out.push(target);
-                        }
-                        pos += entry.length as usize;
-                    }
-                }
-
-                offset += attr.length as usize;
-            }
+            success_count += read_one_targeted_record(&mut reader, handle, index, *ext_frs, None);
         }
 
         Ok(success_count)
+    }
+
+    /// Read one MFT record by FRS, apply fixup, optionally scan
+    /// `$ATTRIBUTE_LIST` for extension FRSes, and parse the result into
+    /// `index`.
+    ///
+    /// `extension_frs_out` is `Some(_)` for the base-record pass (so
+    /// extensions are discovered) and `None` for the extension-record pass
+    /// (where extension scanning is unnecessary).
+    ///
+    /// Returns `1` on a successful parse, `0` on any read / fixup / parse
+    /// failure (failures are logged at trace level and skipped to keep the
+    /// caller's loop simple).
+    fn read_one_targeted_record(
+        reader: &mut crate::io::MftRecordReader,
+        handle: HANDLE,
+        index: &mut crate::index::MftIndex,
+        frs: u64,
+        extension_frs_out: Option<&mut Vec<u64>>,
+    ) -> usize {
+        use crate::parse::{apply_fixup, parse_record_to_index};
+
+        match reader.read_record(handle, frs) {
+            Ok(raw_data) => {
+                let mut buf = raw_data.to_vec();
+                if !apply_fixup(&mut buf) {
+                    return 0;
+                }
+                if let Some(out) = extension_frs_out {
+                    scan_attribute_list_extensions(&buf, frs, out);
+                }
+                usize::from(parse_record_to_index(&buf, frs, index))
+            }
+            Err(err) => {
+                tracing::trace!(
+                    frs,
+                    error = %err,
+                    "⚠️ Targeted MFT read failed for FRS (skipping)"
+                );
+                0
+            }
+        }
+    }
+
+    /// Scans a base MFT record's attributes for `$ATTRIBUTE_LIST` (type 0x20)
+    /// and extracts the FRS numbers of any extension records it references.
+    ///
+    /// Hoisted to module scope (instead of being nested inside
+    /// [`read_targeted_frs_records`]) so the function item is not declared
+    /// after statements in the caller — required by
+    /// `clippy::items_after_statements`.
+    fn scan_attribute_list_extensions(data: &[u8], base_frs: u64, out: &mut Vec<u64>) {
+        use zerocopy::FromBytes;
+
+        use crate::ntfs::{
+            AttributeListEntry, AttributeRecordHeader, AttributeType, FileRecordSegmentHeader,
+        };
+
+        if data.len() < size_of::<FileRecordSegmentHeader>() {
+            return;
+        }
+        let Ok((header, _)) = FileRecordSegmentHeader::read_from_prefix(data) else {
+            return;
+        };
+
+        let mut offset = header.first_attribute_offset as usize;
+        let max_offset = core::cmp::min(header.bytes_in_use as usize, data.len());
+
+        while offset + size_of::<AttributeRecordHeader>() <= max_offset {
+            let Some(attr_bytes) = data.get(offset..) else {
+                break;
+            };
+            let Ok((attr, _)) = AttributeRecordHeader::read_from_prefix(attr_bytes) else {
+                break;
+            };
+            if attr.type_code == AttributeType::End as u32 {
+                break;
+            }
+            if attr.length == 0 || offset + attr.length as usize > max_offset {
+                break;
+            }
+
+            if attr.type_code == AttributeType::AttributeList as u32 && attr.is_non_resident == 0 {
+                // Resident $ATTRIBUTE_LIST — parse entries
+                let val_offset_raw = data
+                    .get(offset + 20..offset + 22)
+                    .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok())
+                    .map_or(0, u16::from_le_bytes) as usize;
+                let val_length = data
+                    .get(offset + 16..offset + 20)
+                    .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+                    .map_or(0, u32::from_le_bytes) as usize;
+
+                let list_start = offset + val_offset_raw;
+                let list_end = core::cmp::min(list_start.saturating_add(val_length), data.len());
+
+                let mut pos = list_start;
+                while pos + size_of::<AttributeListEntry>() <= list_end {
+                    let Some(entry_bytes) = data.get(pos..list_end) else {
+                        break;
+                    };
+                    let Ok((entry, _)) = AttributeListEntry::read_from_prefix(entry_bytes) else {
+                        break;
+                    };
+                    if usize::from(entry.length) < size_of::<AttributeListEntry>() {
+                        break;
+                    }
+                    let target = entry.target_frs();
+                    if target != base_frs && target != 0 {
+                        out.push(target);
+                    }
+                    pos += entry.length as usize;
+                }
+            }
+
+            offset += attr.length as usize;
+        }
     }
 }
 

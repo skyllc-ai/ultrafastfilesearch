@@ -58,11 +58,24 @@ pub(super) fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
     // bit pattern represents `StartingVcn == 0`, the initial query window.
     let starting_vcn: STARTING_VCN_INPUT_BUFFER = unsafe { core::mem::zeroed() };
 
+    let input_buffer_size =
+        u32::try_from(size_of::<STARTING_VCN_INPUT_BUFFER>()).map_err(|err| {
+            MftError::RetrievalPointers(format!(
+                "STARTING_VCN_INPUT_BUFFER size {} exceeds u32::MAX ({err})",
+                size_of::<STARTING_VCN_INPUT_BUFFER>()
+            ))
+        })?;
+
     let mut buffer_size = 64 * 1024;
     let mut buffer: Vec<u8> = vec![0; buffer_size];
 
     loop {
         let mut bytes_returned: u32 = 0;
+        let output_buffer_size = u32::try_from(buffer_size).map_err(|err| {
+            MftError::RetrievalPointers(format!(
+                "FSCTL retrieval-pointer buffer size {buffer_size} exceeds u32::MAX ({err})"
+            ))
+        })?;
 
         // SAFETY: `handle` is an open file handle, `starting_vcn` and `buffer`
         // point to valid initialized storage for the provided lengths, and
@@ -72,9 +85,9 @@ pub(super) fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
                 handle,
                 FSCTL_GET_RETRIEVAL_POINTERS,
                 Some(core::ptr::from_ref(&starting_vcn).cast()),
-                size_of::<STARTING_VCN_INPUT_BUFFER>() as u32,
+                input_buffer_size,
                 Some(buffer.as_mut_ptr().cast()),
-                buffer_size as u32,
+                output_buffer_size,
                 Some(&raw mut bytes_returned),
                 None,
             )
@@ -86,8 +99,8 @@ pub(super) fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
                 break;
             }
             Err(err) => {
-                let hresult = err.code().0 as u32;
-                let win32_error = if (hresult & 0xFFFF0000) == 0x80070000 {
+                let hresult = err.code().0.cast_unsigned();
+                let win32_error = if (hresult & 0xFFFF_0000) == 0x8007_0000 {
                     hresult & 0xFFFF
                 } else {
                     hresult
@@ -105,8 +118,7 @@ pub(super) fn get_retrieval_pointers(handle: HANDLE) -> Result<Vec<MftExtent>> {
 
                 if extents.is_empty() {
                     return Err(MftError::RetrievalPointers(format!(
-                        "FSCTL_GET_RETRIEVAL_POINTERS failed: HRESULT=0x{:08X}, Win32={}",
-                        hresult, win32_error
+                        "FSCTL_GET_RETRIEVAL_POINTERS failed: HRESULT=0x{hresult:08X}, Win32={win32_error}"
                     )));
                 }
                 break;
@@ -124,26 +136,26 @@ fn parse_retrieval_pointers(buffer: &[u8], size: usize, extents: &mut Vec<MftExt
         return;
     }
 
-    let read_u32 = |offset: usize| -> Option<u32> {
+    let read_le_u32 = |offset: usize| -> Option<u32> {
         let bytes = buffer.get(offset..offset + size_of::<u32>())?;
         let mut raw = [0_u8; 4];
         raw.copy_from_slice(bytes);
         Some(u32::from_le_bytes(raw))
     };
-    let read_i64 = |offset: usize| -> Option<i64> {
+    let parse_signed64 = |offset: usize| -> Option<i64> {
         let bytes = buffer.get(offset..offset + size_of::<i64>())?;
         let mut raw = [0_u8; 8];
         raw.copy_from_slice(bytes);
         Some(i64::from_le_bytes(raw))
     };
 
-    let Some(extent_count) = read_u32(0).map(|count| count as usize) else {
+    let Some(extent_count) = read_le_u32(0).map(|count| count as usize) else {
         return;
     };
-    let Some(starting_vcn) = read_i64(8) else {
+    let Some(starting_vcn) = parse_signed64(8) else {
         return;
     };
-    let mut prev_vcn = starting_vcn as u64;
+    let mut prev_vcn = starting_vcn.cast_unsigned();
 
     let extent_size = 16;
     let extents_offset = 16;
@@ -154,10 +166,10 @@ fn parse_retrieval_pointers(buffer: &[u8], size: usize, extents: &mut Vec<MftExt
             break;
         }
 
-        let Some(next_vcn) = read_i64(offset).map(|value| value as u64) else {
+        let Some(next_vcn) = parse_signed64(offset).map(i64::cast_unsigned) else {
             break;
         };
-        let Some(lcn) = read_i64(offset + 8) else {
+        let Some(lcn) = parse_signed64(offset + 8) else {
             break;
         };
 

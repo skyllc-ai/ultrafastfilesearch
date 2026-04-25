@@ -71,73 +71,117 @@ fn load_or_build_dataframe_cached_sync(
     drive: char,
     ttl_seconds: u64,
 ) -> crate::Result<uffs_polars::DataFrame> {
-    use crate::VolumeHandle;
-    use crate::reader::MftReader;
-    use crate::usn::query_usn_journal;
-
     tracing::debug!(
         drive = %drive,
         ttl_seconds,
         "Entering synchronous cached DataFrame load/build"
     );
 
-    // Try to load from cache first
-    if let Some((index, _header)) = load_cached_index(drive, ttl_seconds) {
-        tracing::info!(drive = %drive, records = index.records.len(), "📦 Cache hit - converting to DataFrame");
-        let df = index.to_dataframe();
-        match &df {
-            Ok(dataframe) => tracing::debug!(
-                drive = %drive,
-                rows = dataframe.height(),
-                columns = dataframe.width(),
-                "Converted cached index to DataFrame"
-            ),
-            Err(error) => tracing::debug!(
-                drive = %drive,
-                error = %error,
-                "Cached index DataFrame conversion failed"
-            ),
-        }
+    if let Some(df) = load_cached_dataframe(drive, ttl_seconds) {
         return df;
     }
 
-    // Cache miss - read fresh
+    build_fresh_dataframe(drive)
+}
+
+/// Try to load and convert the cached index for `drive`.  Returns
+/// `Some(_)` whenever the cache lookup hit (the inner `Result` carries
+/// any conversion failure); returns `None` only on cache miss.
+#[cfg(windows)]
+fn load_cached_dataframe(
+    drive: char,
+    ttl_seconds: u64,
+) -> Option<crate::Result<uffs_polars::DataFrame>> {
+    let (index, _header) = load_cached_index(drive, ttl_seconds)?;
+    tracing::info!(
+        drive = %drive,
+        records = index.records.len(),
+        "📦 Cache hit - converting to DataFrame"
+    );
+    let df = index.to_dataframe();
+    log_conversion_result(drive, &df, "cached");
+    Some(df)
+}
+
+/// Read the MFT fresh, kick off a background cache save, and convert the
+/// resulting index into a [`DataFrame`].  Used after a cache miss.
+#[cfg(windows)]
+fn build_fresh_dataframe(drive: char) -> crate::Result<uffs_polars::DataFrame> {
+    let index = read_fresh_index(drive)?;
+    spawn_cache_save(drive, &index)?;
+
+    tracing::debug!(
+        drive = %drive,
+        records = index.len(),
+        "Converting fresh index to DataFrame"
+    );
+    let df = index.to_dataframe();
+    log_conversion_result(drive, &df, "fresh");
+    df
+}
+
+/// Open the MFT reader for `drive` and synchronously read every record
+/// into an [`MftIndex`].  Wraps the tracing pair around the slow read.
+#[cfg(windows)]
+fn read_fresh_index(drive: char) -> crate::Result<crate::index::MftIndex> {
+    use crate::reader::MftReader;
+
     tracing::info!(drive = %drive, "📖 Cache miss - reading MFT fresh");
     let reader = MftReader::open(drive)?;
     tracing::debug!(drive = %drive, "Opened MFT reader; reading fresh index");
     let index = reader.read_all_index_sync()?;
-    tracing::debug!(drive = %drive, records = index.len(), "Completed fresh index read");
+    tracing::debug!(
+        drive = %drive,
+        records = index.len(),
+        "Completed fresh index read"
+    );
+    Ok(index)
+}
 
-    // Save to cache for next time
+/// Pull volume / USN-journal metadata for `drive` and hand the index off
+/// to the background cache writer.  `VolumeHandle` failures propagate to
+/// the caller (matching pre-refactor semantics); cache-save failures are
+/// logged at warn so the surrounding [`build_fresh_dataframe`] flow can
+/// still hand the freshly-built [`DataFrame`] back to the user.
+#[cfg(windows)]
+fn spawn_cache_save(drive: char, index: &crate::index::MftIndex) -> crate::Result<()> {
+    use crate::VolumeHandle;
+    use crate::usn::query_usn_journal;
+
     let handle = VolumeHandle::open(drive)?;
     let volume_serial = handle.volume_data().volume_serial_number;
-    let (usn_journal_id, next_usn) = match query_usn_journal(drive) {
-        Ok(info) => (info.journal_id, info.next_usn),
-        Err(_) => (0, 0),
-    };
+    let (usn_journal_id, next_usn) =
+        query_usn_journal(drive).map_or((0, 0), |info| (info.journal_id, info.next_usn));
 
-    // Background save: serialize sync, compress/encrypt/write in bg thread.
     if let Err(err) =
-        save_to_cache_background(&index, drive, volume_serial, usn_journal_id, next_usn)
+        save_to_cache_background(index, drive, volume_serial, usn_journal_id, next_usn)
     {
         tracing::warn!(drive = %drive, error = %err, "Failed to start cache save");
     }
+    Ok(())
+}
 
-    // Convert to DataFrame
-    tracing::debug!(drive = %drive, records = index.len(), "Converting fresh index to DataFrame");
-    let df = index.to_dataframe();
-    match &df {
+/// Common tracing for `to_dataframe` outcomes, parameterised on whether
+/// the index came from the cache or a fresh MFT read.
+#[cfg(windows)]
+fn log_conversion_result(
+    drive: char,
+    df: &crate::Result<uffs_polars::DataFrame>,
+    source: &'static str,
+) {
+    match df {
         Ok(dataframe) => tracing::debug!(
             drive = %drive,
+            source,
             rows = dataframe.height(),
             columns = dataframe.width(),
-            "Converted fresh index to DataFrame"
+            "Converted index to DataFrame"
         ),
         Err(error) => tracing::debug!(
             drive = %drive,
+            source,
             error = %error,
-            "Fresh index DataFrame conversion failed"
+            "Index DataFrame conversion failed"
         ),
     }
-    df
 }

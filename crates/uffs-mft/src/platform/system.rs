@@ -56,10 +56,12 @@ pub fn is_elevated() -> bool {
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     let mut token_handle = HANDLE::default();
-    // SAFETY: `GetCurrentProcess()` returns the current pseudo-handle, and
-    // `token_handle` points to writable storage for the returned token handle.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token_handle) }.is_err()
-    {
+    // SAFETY: `GetCurrentProcess()` returns a constant pseudo-handle and has
+    // no preconditions.
+    let current_process = unsafe { GetCurrentProcess() };
+    // SAFETY: `current_process` is a valid pseudo-handle and `token_handle`
+    // points to writable storage for the returned token handle.
+    if unsafe { OpenProcessToken(current_process, TOKEN_QUERY, &raw mut token_handle) }.is_err() {
         return false;
     }
 
@@ -341,6 +343,10 @@ impl DriveType {
     unsafe_code,
     reason = "FFI: windows API (CreateFileW, DeviceIoControl) for drive classification"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "drive-type detection ladder: opens a single physical-drive handle then runs a fall-through sequence of IOCTL probes (storage descriptor for NVMe → seek-penalty for SSD/HDD → TRIM-support fallback). Splitting would either replicate the FFI handle/struct setup per-probe or hide the ordered fall-through behind helper indirection"
+)]
 pub fn detect_drive_type(drive_letter: char) -> DriveType {
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -378,7 +384,7 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
     // SAFETY: `drive_path` is UTF-16 and NUL-terminated for the duration of the
     // call, optional pointers are `None`, and any returned handle is wrapped in
     // `HandleGuard` before use.
-    let handle = unsafe {
+    let handle_result = unsafe {
         CreateFileW(
             PCWSTR(drive_path.as_ptr()),
             0,
@@ -390,12 +396,12 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
         )
     };
 
-    let Ok(handle) = handle else {
+    let Ok(drive_handle) = handle_result else {
         return DriveType::Unknown;
     };
 
     let drive_classification = {
-        let _handle_guard = HandleGuard(handle);
+        let _handle_guard = HandleGuard(drive_handle);
 
         let is_nvme = {
             let query = StoragePropertyQuery {
@@ -411,13 +417,13 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
             // known and always fits in u32.
             let buffer_len_u32 = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
 
-            // SAFETY: `handle` is a live device handle, `query` contains the
+            // SAFETY: `drive_handle` is a live device handle, `query` contains the
             // exact input bytes Windows expects for this IOCTL, `buffer` is a
             // writable output buffer of the advertised length, and
             // `bytes_returned` is a valid out-parameter.
             let result = unsafe {
                 DeviceIoControl(
-                    handle,
+                    drive_handle,
                     IOCTL_STORAGE_QUERY_PROPERTY,
                     Some((&raw const query).cast::<core::ffi::c_void>()),
                     u32_size_of::<StoragePropertyQuery>(),
@@ -463,12 +469,12 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
 
         let mut bytes_returned: u32 = 0;
 
-        // SAFETY: `handle` is a live device handle, `query` and `descriptor`
+        // SAFETY: `drive_handle` is a live device handle, `query` and `descriptor`
         // point to initialized storage matching the advertised sizes, and
         // `bytes_returned` is a valid out-parameter.
         let result = unsafe {
             DeviceIoControl(
-                handle,
+                drive_handle,
                 IOCTL_STORAGE_QUERY_PROPERTY,
                 Some((&raw const query).cast::<core::ffi::c_void>()),
                 u32_size_of::<StoragePropertyQuery>(),
@@ -479,15 +485,14 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
             )
         };
 
-        if result.is_ok() && (bytes_returned as usize) >= size_of::<DeviceSeekPenaltyDescriptor>() {
-            Some(if descriptor.incurs_seek_penalty == 0 {
-                DriveType::Ssd
-            } else {
-                DriveType::Hdd
-            })
+        let big_enough =
+            result.is_ok() && (bytes_returned as usize) >= size_of::<DeviceSeekPenaltyDescriptor>();
+        let drive_type = if descriptor.incurs_seek_penalty == 0 {
+            DriveType::Ssd
         } else {
-            None
-        }
+            DriveType::Hdd
+        };
+        big_enough.then_some(drive_type)
     };
 
     let result = drive_classification.unwrap_or_else(|| detect_drive_type_via_trim(drive_letter));
@@ -538,7 +543,7 @@ fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
     // SAFETY: `drive_path` is UTF-16 and NUL-terminated for the duration of the
     // call, optional pointers are `None`, and any returned handle is wrapped in
     // `HandleGuard` before use.
-    let handle = unsafe {
+    let handle_result = unsafe {
         CreateFileW(
             PCWSTR(drive_path.as_ptr()),
             0,
@@ -550,11 +555,11 @@ fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
         )
     };
 
-    let Ok(handle) = handle else {
+    let Ok(drive_handle) = handle_result else {
         return DriveType::Unknown;
     };
 
-    let _handle_guard = HandleGuard(handle);
+    let _handle_guard = HandleGuard(drive_handle);
 
     let query = StoragePropertyQuery {
         property_id: STORAGE_DEVICE_TRIM_PROPERTY,
@@ -570,12 +575,12 @@ fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
 
     let mut bytes_returned: u32 = 0;
 
-    // SAFETY: `handle` is a live device handle, `query` and `descriptor`
+    // SAFETY: `drive_handle` is a live device handle, `query` and `descriptor`
     // point to initialized storage matching the advertised sizes, and
     // `bytes_returned` is a valid out-parameter.
     let result = unsafe {
         DeviceIoControl(
-            handle,
+            drive_handle,
             IOCTL_STORAGE_QUERY_PROPERTY,
             Some((&raw const query).cast::<core::ffi::c_void>()),
             u32_size_of::<StoragePropertyQuery>(),

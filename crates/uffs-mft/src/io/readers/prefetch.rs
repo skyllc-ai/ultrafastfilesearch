@@ -12,15 +12,7 @@
     reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
 )]
 
-#[expect(
-    clippy::wildcard_imports,
-    reason = "parent module's `pub(super) use` prelude \
-              (HANDLE, MftError, ReadFile, rayon::prelude::*, tracing \
-              macros, etc.) is designed to be consumed by submodules; \
-              re-enumerating ~15 items here would duplicate the prelude \
-              across every sibling reader file"
-)]
-use super::*;
+use super::prelude::*;
 
 /// Double-buffered MFT reader with prefetching.
 ///
@@ -132,7 +124,7 @@ impl PrefetchMftReader {
                 &mut buffer_b
             };
 
-            let bytes_read = self.read_chunk_into_buffer(handle, &chunk, record_size, buffer)?;
+            let bytes_read = Self::read_chunk_into_buffer(handle, &chunk, record_size, buffer)?;
             bytes_read_total += bytes_read as u64;
 
             // Process records from buffer using zero-copy in-place fixup
@@ -194,7 +186,6 @@ impl PrefetchMftReader {
         reason = "FFI: SetFilePointerEx and ReadFile for prefetch chunk reads"
     )]
     fn read_chunk_into_buffer(
-        &self,
         handle: HANDLE,
         chunk: &ReadChunk,
         record_size: u32,

@@ -70,39 +70,11 @@ impl RequestHandler {
     }
 
     /// Handle `search` method.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "handler dispatch with JSON-RPC routing, error handling"
-    )]
     async fn handle_search(&self, id: u64, req: &RpcRequest) -> String {
-        let search_params: SearchParams = match req
-            .params
-            .as_ref()
-            .and_then(|val| serde_json::from_value(val.clone()).ok())
-        {
-            Some(parsed) => parsed,
-            None => {
-                return serde_json::to_string(&RpcErrorResponse::error(
-                    Some(id),
-                    ERR_INVALID_PARAMS,
-                    "Missing or invalid search params",
-                ))
-                .unwrap_or_default();
-            }
+        let search_params = match Self::parse_and_validate_search_params(id, req) {
+            Ok(params) => params,
+            Err(error_json) => return error_json,
         };
-
-        // S4.4.3: Reject overly long patterns (regex DoS prevention)
-        if search_params.pattern.len() > MAX_PATTERN_LENGTH {
-            return serde_json::to_string(&RpcErrorResponse::error(
-                Some(id),
-                ERR_INVALID_PARAMS,
-                &format!(
-                    "Pattern too long ({} chars, max {MAX_PATTERN_LENGTH})",
-                    search_params.pattern.len()
-                ),
-            ))
-            .unwrap_or_default();
-        }
 
         // Auto-load missing drives from data_dir before searching.
         if !search_params.drives.is_empty() {
@@ -138,51 +110,7 @@ impl RequestHandler {
 
         // D5.1: adaptive routing — use shmem rows for large multi-column
         // result sets that did NOT qualify for the blob fast path.
-        // Only fires when the payload is still `InlineRows` above the
-        // shmem threshold — blob variants already consumed the rows,
-        // so taking the `ShmemRows` branch there would write an empty
-        // row table and waste the file-creation syscall.
-        let mut shmem_ms: u128 = 0;
-        if let SearchPayload::InlineRows(rows) = &response.payload
-            && rows.len() > uffs_client::shmem::SHMEM_THRESHOLD
-        {
-            let t_shmem = std::time::Instant::now();
-            match uffs_client::shmem::write_search_results(
-                rows,
-                response.duration_ms,
-                response.records_scanned as u64,
-                response.truncated,
-            ) {
-                Ok(path) => {
-                    shmem_ms = t_shmem.elapsed().as_millis();
-                    let count = rows.len() as u64;
-                    let path_str = path.to_string_lossy().into_owned();
-                    tracing::info!(
-                        rows = row_count,
-                        shmem_write_ms = shmem_ms,
-                        path = %path_str,
-                        "🗂️ shmem: wrote bulk results"
-                    );
-                    // Swap the payload to `ShmemRows` — consumes the
-                    // inline `Vec<SearchRow>` so no double delivery.
-                    response.payload = SearchPayload::ShmemRows {
-                        path: path_str,
-                        count,
-                    };
-                }
-                Err(shmem_err) => {
-                    shmem_ms = t_shmem.elapsed().as_millis();
-                    tracing::warn!(
-                        error = %shmem_err,
-                        rows = row_count,
-                        shmem_write_ms = shmem_ms,
-                        "shmem write failed; falling back to inline JSON"
-                    );
-                    // Fall through — send inline (may be slow for very
-                    // large result sets, but at least it works).
-                }
-            }
-        }
+        let shmem_ms = Self::route_via_shmem_if_needed(&mut response, row_count);
 
         // Back-patch serialize_ms into the profile with shmem write time
         // (the dominant cost).  JSON serialization time is measured
@@ -207,6 +135,101 @@ impl RequestHandler {
         }
 
         json
+    }
+
+    /// Decode `req.params` into a [`SearchParams`] and enforce
+    /// [`MAX_PATTERN_LENGTH`].  Returns the parsed params on success
+    /// or a fully-formed JSON-RPC error response on failure so the
+    /// caller can return it directly.
+    fn parse_and_validate_search_params(id: u64, req: &RpcRequest) -> Result<SearchParams, String> {
+        let search_params: SearchParams = req
+            .params
+            .as_ref()
+            .and_then(|val| serde_json::from_value::<SearchParams>(val.clone()).ok())
+            .ok_or_else(|| {
+                serde_json::to_string(&RpcErrorResponse::error(
+                    Some(id),
+                    ERR_INVALID_PARAMS,
+                    "Missing or invalid search params",
+                ))
+                .unwrap_or_default()
+            })?;
+
+        // S4.4.3: Reject overly long patterns (regex DoS prevention).
+        if search_params.pattern.len() > MAX_PATTERN_LENGTH {
+            return Err(serde_json::to_string(&RpcErrorResponse::error(
+                Some(id),
+                ERR_INVALID_PARAMS,
+                &format!(
+                    "Pattern too long ({} chars, max {MAX_PATTERN_LENGTH})",
+                    search_params.pattern.len()
+                ),
+            ))
+            .unwrap_or_default());
+        }
+
+        Ok(search_params)
+    }
+
+    /// Adaptive shmem routing for large multi-column result sets.
+    ///
+    /// Only fires when the payload is still `InlineRows` above the
+    /// shmem threshold — blob variants already consumed the rows, so
+    /// taking the `ShmemRows` branch there would write an empty row
+    /// table and waste the file-creation syscall.
+    ///
+    /// Returns the shmem-write duration in milliseconds (or 0 when the
+    /// fast path was not entered) so the caller can patch
+    /// `SearchProfile::serialize_ms` accordingly.
+    fn route_via_shmem_if_needed(
+        response: &mut uffs_client::protocol::response::SearchResponse,
+        row_count: usize,
+    ) -> u128 {
+        let SearchPayload::InlineRows(rows) = &response.payload else {
+            return 0;
+        };
+        if rows.len() <= uffs_client::shmem::SHMEM_THRESHOLD {
+            return 0;
+        }
+
+        let t_shmem = std::time::Instant::now();
+        match uffs_client::shmem::write_search_results(
+            rows,
+            response.duration_ms,
+            response.records_scanned as u64,
+            response.truncated,
+        ) {
+            Ok(path) => {
+                let shmem_ms = t_shmem.elapsed().as_millis();
+                let count = rows.len() as u64;
+                let path_str = path.to_string_lossy().into_owned();
+                tracing::info!(
+                    rows = row_count,
+                    shmem_write_ms = shmem_ms,
+                    path = %path_str,
+                    "🗂️ shmem: wrote bulk results"
+                );
+                // Swap the payload to `ShmemRows` — consumes the
+                // inline `Vec<SearchRow>` so no double delivery.
+                response.payload = SearchPayload::ShmemRows {
+                    path: path_str,
+                    count,
+                };
+                shmem_ms
+            }
+            Err(shmem_err) => {
+                let shmem_ms = t_shmem.elapsed().as_millis();
+                tracing::warn!(
+                    error = %shmem_err,
+                    rows = row_count,
+                    shmem_write_ms = shmem_ms,
+                    "shmem write failed; falling back to inline JSON"
+                );
+                // Fall through — send inline (may be slow for very
+                // large result sets, but at least it works).
+                shmem_ms
+            }
+        }
     }
 
     /// Short human-readable name for the payload variant.

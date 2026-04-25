@@ -20,6 +20,8 @@ use super::read_mode::index_effective_mode;
 use super::{MftProgress, MftReader};
 use crate::error::{MftError, Result};
 #[cfg(windows)]
+use crate::index::{u64_to_f64, usize_to_f64};
+#[cfg(windows)]
 use crate::platform::VolumeHandle;
 
 impl MftReader {
@@ -103,7 +105,7 @@ impl MftReader {
         let result = tokio::task::spawn_blocking(move || {
             trace!(volume = %volume, "read_all_index: INSIDE spawn_blocking");
             let handle = VolumeHandle::open(volume)?;
-            let reader = MftReader {
+            let reader = Self {
                 volume,
                 source: super::MftSource::LiveVolume(handle),
                 mode,
@@ -245,7 +247,7 @@ impl MftReader {
         tokio::task::spawn_blocking(move || {
             // Create a new reader in the blocking thread
             let handle = VolumeHandle::open(volume)?;
-            let reader = MftReader {
+            let reader = Self {
                 volume,
                 source: super::MftSource::LiveVolume(handle),
                 mode,
@@ -307,6 +309,17 @@ impl MftReader {
         clippy::float_arithmetic,
         reason = "telemetry: bitmap skip-percentage and MB/s throughput require float division for human-readable logging"
     )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "per-mode read pipeline: each MftReadMode arm is a distinct IO strategy that must remain inline for accurate timing/telemetry; extracting helpers would either inline the same control flow or hide the per-mode safety/teardown invariants behind extra indirection"
+    )]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the by-value `Option<F>` signature lets callers pass capturing \
+                  closures (`Some(move |progress| {..})`) without manually \
+                  managing the closure's lifetime; switching to `Option<&F>` \
+                  would force every call site to introduce a separate let-binding"
+    )]
     fn read_mft_index_internal<F>(&self, callback: Option<F>) -> Result<crate::index::MftIndex>
     where
         F: Fn(MftProgress),
@@ -320,7 +333,7 @@ impl MftReader {
         info!(volume = %self.volume, "Starting MFT read (lean index)");
 
         let start_time = Instant::now();
-        let handle = self.require_handle();
+        let handle = self.require_handle()?;
         let record_size = handle.file_record_size();
         let volume_data = handle.volume_data();
 
@@ -357,7 +370,8 @@ impl MftReader {
                 let in_use = bitmap.count_in_use();
                 info!(
                     in_use_records = in_use,
-                    skip_percentage = 100.0 - (in_use as f64 / total_records as f64 * 100.0),
+                    skip_percentage =
+                        (usize_to_f64(in_use) / u64_to_f64(total_records)).mul_add(-100.0, 100.0),
                     "MFT bitmap loaded - will skip unused records"
                 );
             }
@@ -401,7 +415,7 @@ impl MftReader {
         let total_bytes = total_records * u64::from(record_size);
 
         // Read using the selected mode (same as read_mft_internal)
-        let parsed_records = match effective_mode {
+        let mut parsed_records = match effective_mode {
             MftReadMode::Parallel | MftReadMode::Auto => {
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
@@ -488,7 +502,7 @@ impl MftReader {
             MftReadMode::IocpParallel => {
                 // IOCP parallel mode: Multiple overlapped reads in flight
                 // IOCP requires FILE_FLAG_OVERLAPPED, so we open a separate raw_handle
-                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle()?.open_overlapped_handle()?;
                 let iocp_reader = crate::io::IocpMftReader::new(extent_map, bitmap, drive_type);
 
                 let result = callback.as_ref().map_or_else(
@@ -516,14 +530,14 @@ impl MftReader {
                 );
 
                 // Close the overlapped raw_handle
-                // SAFETY: overlapped_handle is a valid raw_handle opened by
-                // open_overlapped_handle
                 #[expect(
                     unsafe_code,
                     reason = "FFI: CloseHandle on valid overlapped raw_handle"
                 )]
                 {
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
+                    // SAFETY: `overlapped_handle` was opened by `open_overlapped_handle`
+                    // and is closed exactly once here.
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 };
 
                 result?
@@ -558,7 +572,7 @@ impl MftReader {
             }
             MftReadMode::BulkIocp => {
                 // Bulk IOCP mode: queues ALL reads to IOCP at once
-                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle()?.open_overlapped_handle()?;
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
@@ -593,21 +607,21 @@ impl MftReader {
                 );
 
                 // Close the overlapped raw_handle
-                // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
-                // no longer used after the read completes, and is closed exactly once.
                 #[expect(
                     unsafe_code,
                     reason = "FFI: CloseHandle on valid overlapped raw_handle"
                 )]
                 {
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
+                    // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
+                    // no longer used after the read completes, and is closed exactly once.
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 };
 
                 result?
             }
             MftReadMode::SlidingIocp => {
                 // Sliding window IOCP mode: adaptive concurrency with multiple reads in flight
-                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle()?.open_overlapped_handle()?;
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
@@ -642,14 +656,14 @@ impl MftReader {
                 );
 
                 // Close the overlapped raw_handle
-                // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
-                // no longer used after the read completes, and is closed exactly once.
                 #[expect(
                     unsafe_code,
                     reason = "FFI: CloseHandle on valid overlapped raw_handle"
                 )]
                 {
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
+                    // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
+                    // no longer used after the read completes, and is closed exactly once.
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 };
 
                 result?
@@ -659,7 +673,7 @@ impl MftReader {
                 // This mode returns MftIndex directly, skipping the intermediate
                 // Vec<ParsedRecord>
                 debug!("[PARITY_TRACE] ENTERING SlidingIocpInline branch (Windows LIVE path)");
-                let overlapped_handle = self.require_handle().open_overlapped_handle()?;
+                let overlapped_handle = self.require_handle()?.open_overlapped_handle()?;
                 let parallel_reader =
                     ParallelMftReader::new_optimized(extent_map, bitmap, drive_type);
 
@@ -672,14 +686,14 @@ impl MftReader {
                 );
 
                 // Close the overlapped raw_handle
-                // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
-                // no longer used after the read completes, and is closed exactly once.
                 #[expect(
                     unsafe_code,
                     reason = "FFI: CloseHandle on valid overlapped raw_handle"
                 )]
                 {
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok()
+                    // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
+                    // no longer used after the read completes, and is closed exactly once.
+                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
                 };
 
                 match result {
@@ -781,7 +795,6 @@ impl MftReader {
 
         // Add placeholder records for missing parent directories.
         // Can be disabled with `with_add_placeholders(false)` for ~15% speedup.
-        let mut parsed_records = parsed_records;
         if self.add_placeholders {
             let placeholders_added =
                 crate::io::add_missing_parent_placeholders_to_vec(&mut parsed_records);
@@ -796,7 +809,7 @@ impl MftReader {
         let read_elapsed = start_time.elapsed();
         let records_parsed_count = parsed_records.len();
         let throughput_mb_s = if read_elapsed.as_secs_f64() > 0.0 {
-            (total_bytes as f64 / (1024.0 * 1024.0)) / read_elapsed.as_secs_f64()
+            (u64_to_f64(total_bytes) / (1024.0 * 1024.0)) / read_elapsed.as_secs_f64()
         } else {
             0.0
         };
@@ -859,7 +872,7 @@ impl MftReader {
         record_size: u32,
         total_records: u64,
     ) -> Result<Vec<crate::io::ParsedRecord>> {
-        let vh = self.require_handle();
+        let vh = self.require_handle()?;
 
         // ── Strategy 1: read $MFT as a file ────────────────────────────
         match vh.open_mft_read_handle() {
@@ -870,11 +883,11 @@ impl MftReader {
                     record_size,
                     total_records,
                 );
-                // SAFETY: `mft_handle` from `open_mft_read_handle`, closed
-                // exactly once after the read completes.
                 #[expect(unsafe_code, reason = "FFI: CloseHandle on $MFT file handle")]
                 {
-                    unsafe { windows::Win32::Foundation::CloseHandle(mft_handle) }.ok()
+                    // SAFETY: `mft_handle` from `open_mft_read_handle`, closed
+                    // exactly once after the read completes.
+                    unsafe { windows::Win32::Foundation::CloseHandle(mft_handle) }.ok();
                 };
                 return result;
             }
@@ -900,11 +913,11 @@ impl MftReader {
         );
         let result =
             reader.read_all_parallel_with_progress::<fn(u64, u64)>(unbuf_handle, true, None);
-        // SAFETY: `unbuf_handle` from `open_unbuffered_handle`, closed
-        // exactly once after the read completes.
         #[expect(unsafe_code, reason = "FFI: CloseHandle on unbuffered volume handle")]
         {
-            unsafe { windows::Win32::Foundation::CloseHandle(unbuf_handle) }.ok()
+            // SAFETY: `unbuf_handle` from `open_unbuffered_handle`, closed
+            // exactly once after the read completes.
+            unsafe { windows::Win32::Foundation::CloseHandle(unbuf_handle) }.ok();
         };
         result
     }

@@ -103,22 +103,21 @@ impl MultiDriveMftReader {
                 let cb = shared_callback.clone();
 
                 join_set.spawn(async move {
-                    let result = Self::read_single_drive(drive, cb).await;
+                    let read_result = Self::read_single_drive(drive, cb).await;
                     DriveReadResult {
                         drive,
-                        dataframe: result.as_ref().ok().cloned(),
-                        error: result.err(),
+                        dataframe: read_result.as_ref().ok().cloned(),
+                        error: read_result.err(),
                     }
                 });
             }
         }
 
         if dataframes.is_empty() {
-            return Err(errors
-                .into_iter()
-                .next()
-                .map(|(_, error)| error)
-                .unwrap_or(MftError::InvalidInput("No drives could be read".into())));
+            return Err(errors.into_iter().next().map_or_else(
+                || MftError::InvalidInput("No drives could be read".into()),
+                |(_, error)| error,
+            ));
         }
 
         let mut result = dataframes.remove(0);
@@ -130,9 +129,9 @@ impl MultiDriveMftReader {
             .get_column_names()
             .into_iter()
             .filter(|name| name.as_str() != "drive")
-            .map(|name| name.to_string())
+            .map(uffs_polars::PlSmallStr::to_string)
             .collect();
-        let columns: Vec<_> = core::iter::once("drive".to_string())
+        let columns: Vec<_> = core::iter::once("drive".to_owned())
             .chain(column_names)
             .map(|name| col(&name))
             .collect();
@@ -190,12 +189,12 @@ impl MultiDriveMftReader {
         for _ in 0..budget {
             if let Some(drive) = pending_drives.next() {
                 join_set.spawn(async move {
-                    let result =
+                    let read_result =
                         Self::read_single_drive::<fn(char, MftProgress)>(drive, None).await;
                     DriveReadResult {
                         drive,
-                        dataframe: result.as_ref().ok().cloned(),
-                        error: result.err(),
+                        dataframe: read_result.as_ref().ok().cloned(),
+                        error: read_result.err(),
                     }
                 });
             }
@@ -216,12 +215,12 @@ impl MultiDriveMftReader {
 
             if let Some(drive) = pending_drives.next() {
                 join_set.spawn(async move {
-                    let result =
+                    let read_result =
                         Self::read_single_drive::<fn(char, MftProgress)>(drive, None).await;
                     DriveReadResult {
                         drive,
-                        dataframe: result.as_ref().ok().cloned(),
-                        error: result.err(),
+                        dataframe: read_result.as_ref().ok().cloned(),
+                        error: read_result.err(),
                     }
                 });
             }

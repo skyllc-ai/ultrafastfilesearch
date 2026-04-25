@@ -14,6 +14,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.72] - 2026-04-25
+
+### Changed
+- **W2–W5: Windows MSVC clippy strict-gate cleanup** (40 commits across
+  `uffs-mft`, `uffs-broker`, `uffs-daemon`, `uffs-cli`, `uffs-client`,
+  `uffs-core`, `uffs-mcp`, `uffs-diag`).  Brings the workspace to
+  clippy-clean on the Windows MSVC strict gate (`cargo xwin clippy
+  --workspace --target x86_64-pc-windows-msvc --all-targets -- -D
+  warnings`) without weakening any lints, while preserving the existing
+  macOS host clippy contract.  Highlights:
+  - **`uffs-mft`** — exhaustive `indexing_slicing` cleanup across all
+    IOCP / parallel / sliding-window readers, the `to_index` /
+    `to_index_parallel` pipelines, and `multi_volume.rs`; per-call-site
+    fixes only (no module-level allows).  Adopted `&raw mut`/`&raw
+    const` for FFI call sites (Win32 IOCP + USN), eliminated all
+    `borrow_as_ptr` lints, moved `?` outside `unsafe` blocks, and
+    converted `u32`↔`u64` LCN casts to explicit
+    `cast_signed`/`cast_unsigned`.  Replaced `default_numeric_fallback`
+    via explicit type annotations across reader / IO / stats paths.
+    Renamed all single-character bindings (closures, match arms,
+    pattern destructuring) to descriptive names.  Adopted
+    `Duration::div_ceil`, `u64::cast_signed()`, and `if let Some(x) =
+    &foo` over `if let Some(ref x) = foo`.  Added `# Errors` sections
+    to every public `Result`-returning MFT reader / volume / USN API.
+    Backticked common Win32/NTFS identifiers in doc comments.
+  - **`uffs-daemon`** — refactored nine functions over the
+    `cognitive_complexity` threshold without weakening the lint:
+    `ensure_drives_loaded`, `run_ipc_server` (unix), `handle_search`,
+    `refresh`, `load_single_mft_file`, `load_from_data_dir`,
+    `run_aggregations` (also dropped from 9-arg to 4-arg via new
+    `AggregationRequest` struct), `run_idle_timer`, and the
+    215-line `run_daemon` (97/25 → ≤25, split into thirteen named
+    helpers covering panic-hook install, lifecycle bootstrap, MFT
+    file gathering, drive-list resolution, IPC + stats spawn, load
+    task, zero-drive shutdown guard, and graceful shutdown).
+    Added unit tests pinning the contracts of `infer_drive_letter`,
+    `is_live_drive_marker`, and `drive_letter_matches`.
+    `resolve_refresh_mft_source` no longer needs an `anyhow::Result`
+    wrapper — non-Windows guard moved to the `spawn_blocking`
+    closure where `?` propagates a real error.
+  - **`uffs-broker`** — surgical clippy cleanup; `broker.rs` is now
+    0 lints under the Windows strict gate.
+  - **Eliminated all transient `#[expect]`s introduced by the
+    refactor**: the only suppressions remaining in the daemon crate
+    are pre-existing maintainer-approved ones (FFI safety, JSON-RPC
+    float arithmetic for stats, unstable-`error_in_core`,
+    unstable-`Duration::from_mins`, the `[diag]` block tagged for
+    removal after the D: drive issue is resolved).
+
+### Removed
+- **Stale file-size-policy exceptions** for `crates/uffs-cli/src/main.rs`
+  and `crates/uffs-core/src/search/sorting.rs` — both are back under
+  the 800-LOC cap after the args-extraction and dataframe-convert
+  splits respectively.
+
+### Added
+- **`crates/uffs-daemon/src/lifecycle.rs`** added to the file-size
+  exception list (827 LOC) with a documented rationale: the
+  `LifecycleManager` + `LifecycleHandle` + `run_idle_timer` state
+  machine forms a single cohesive unit (active-connection guard,
+  load-stall heartbeat, session-tier deadline extension); splitting
+  fragments shutdown semantics across files.
+
 ### Changed
 - **Close stale `ci-failure-tier-1` issue notifications**
   (2026-04-24 — GitHub issues #44 and #19).  Housekeeping

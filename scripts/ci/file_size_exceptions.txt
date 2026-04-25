@@ -24,6 +24,5 @@ crates/uffs-core/src/search/query_tests.rs|PERMANENT: Integration query test sui
 crates/uffs-daemon/src/index/tests.rs|PERMANENT: Aggregation integration test suite; shared drive fixture requires cohesion
 crates/uffs-core/src/aggregate/integration_tests.rs|PERMANENT: Aggregate engine integration test suite; shared synthetic drive fixture requires cohesion
 crates/uffs-mft/src/platform/volume.rs|PERMANENT: Volume handle + write-protect fallback handles; splitting would fragment the handle lifecycle
-crates/uffs-cli/src/main.rs|PERMANENT: CLI entry point with subcommand dispatch, client profile printing, and search-arg forwarding; tightly coupled top-level flow
 crates/uffs-core/src/search/backend.rs|PERMANENT: Search backend facade — DisplayRow, PhaseTimings, SearchResult, FilterMode, MultiDriveBackend orchestrator; cross-cutting types for the whole search pipeline
-crates/uffs-core/src/search/sorting.rs|PERMANENT: Two cohesive comparator pipelines (Schwartzian + zero-alloc numeric fast path) plus shared compare_by_column / compare_numeric_column / field_to_attr_bit lookups; splitting fragments a single sort semantic across modules, only ~22 LOC over limit
+crates/uffs-daemon/src/lifecycle.rs|PERMANENT: LifecycleManager + LifecycleHandle + idle-timer state machine; splitting the cohesive run_idle_timer + load_stalled_force_retire + extended_timeout_for_activity cluster fragments the active-connection / load-stall / shutdown semantics across files

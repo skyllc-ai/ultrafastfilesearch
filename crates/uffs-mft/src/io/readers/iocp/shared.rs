@@ -11,15 +11,7 @@
     reason = "Win32 OVERLAPPED low-32 / high-32 offset split is the documented struct layout"
 )]
 
-#[expect(
-    clippy::wildcard_imports,
-    reason = "parent module's `pub(super) use` prelude \
-              (HANDLE, MftError, ReadFile, rayon::prelude::*, tracing \
-              macros, etc.) is designed to be consumed by submodules; \
-              re-enumerating ~15 items here would duplicate the prelude \
-              across every sibling reader file"
-)]
-use super::*;
+use super::super::prelude::{AlignedBuffer, HANDLE, MftError, ReadChunk, Result};
 
 /// I/O Completion Port wrapper for Windows async I/O.
 ///
@@ -50,10 +42,9 @@ impl IoCompletionPort {
 
         handle.map_or_else(
             |err| {
-                Err(MftError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to create IOCP: {err}"),
-                )))
+                Err(MftError::Io(std::io::Error::other(format!(
+                    "Failed to create IOCP: {err}"
+                ))))
             },
             |iocp_handle| {
                 Ok(Self {
@@ -80,16 +71,15 @@ impl IoCompletionPort {
 
         match result {
             Ok(_) => Ok(()),
-            Err(err) => Err(MftError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to associate handle with IOCP: {err}"),
-            ))),
+            Err(err) => Err(MftError::Io(std::io::Error::other(format!(
+                "Failed to associate handle with IOCP: {err}"
+            )))),
         }
     }
 
     /// Gets the raw IOCP handle.
     #[must_use]
-    pub fn raw_handle(&self) -> HANDLE {
+    pub const fn raw_handle(&self) -> HANDLE {
         self.handle
     }
 }
@@ -102,9 +92,9 @@ impl Drop for IoCompletionPort {
     fn drop(&mut self) {
         use windows::Win32::Foundation::CloseHandle;
         if !self.handle.is_invalid() {
-            // SAFETY: CloseHandle is safe to call on a valid handle.
-            // We check is_invalid() first to ensure the handle is valid.
-            let _ = unsafe { CloseHandle(self.handle) };
+            // SAFETY: `self.handle` was created by `CreateIoCompletionPort` and is
+            // closed exactly once during drop after `is_invalid()` checked validity.
+            unsafe { CloseHandle(self.handle) }.ok();
         }
     }
 }
@@ -117,7 +107,7 @@ impl Drop for IoCompletionPort {
 pub struct OverlappedRead {
     /// The Windows OVERLAPPED structure (must be first field for pointer
     /// casting).
-    overlapped: windows::Win32::System::IO::OVERLAPPED,
+    pub overlapped: windows::Win32::System::IO::OVERLAPPED,
     /// The aligned buffer for read data.
     pub buffer: AlignedBuffer,
     /// The chunk being read.
@@ -150,17 +140,16 @@ impl OverlappedRead {
     }
 
     /// Sets the file offset for the overlapped read.
-    pub fn set_offset(&mut self, offset: u64) {
+    pub const fn set_offset(&mut self, offset: u64) {
         self.overlapped.Anonymous.Anonymous.Offset = offset as u32;
         self.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32_u32) as u32;
     }
 
     /// Gets a mutable pointer to the OVERLAPPED structure.
     ///
-    /// # Safety
-    /// The returned pointer is valid as long as self is pinned and alive.
-    /// Note: Creating raw pointers is safe; only dereferencing requires unsafe.
-    pub fn as_overlapped_ptr(&mut self) -> *mut windows::Win32::System::IO::OVERLAPPED {
+    /// The returned pointer is valid as long as `self` is pinned and alive.
+    /// Creating the raw pointer is safe; dereferencing it requires `unsafe`.
+    pub const fn as_overlapped_ptr(&mut self) -> *mut windows::Win32::System::IO::OVERLAPPED {
         &raw mut self.overlapped
     }
 }
