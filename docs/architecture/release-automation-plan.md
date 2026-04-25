@@ -1956,8 +1956,8 @@ Single source of truth for phase progress.  Mirror the format of
 
 | # | Phase | Status | Commit | Date | PR | Notes |
 |---|---|---|---|---|---|---|
-| R0 | Baseline & cleanup (remove dead cargo-dist + release-plz metadata, add lockfile-drift patch per decision 1, new baseline doc) | 🟡 | | 2026-04-25 | (open) | Includes: lockfile patch; **promotion of `build/update_all_versions.rs` into version control** via `.gitignore` carve-out (script was previously gitignored despite 4 callsites depending on it); drive-by deletion of stale `crates/uffs-mft/Cargo.toml.bak` (v0.4.106 auto-commit artifact); baseline metrics in `release-automation-baseline.md`. |
-| R1a | Conventional commits (advisory) | ⬜ | | | | PR title + commit messages scanned, comment-only |
+| R0 | Baseline & cleanup (remove dead cargo-dist + release-plz metadata, add lockfile-drift patch per decision 1, new baseline doc) | 🟢 | `873a668c4` | 2026-04-25 | [#64](https://github.com/skyllc-ai/UltraFastFileSearch/pull/64) | Final landed PR shape: 6 files, +1258 / −160 LOC. Includes: lockfile patch; **promotion of `build/update_all_versions.rs` into version control** via `.gitignore` carve-out (1073-line script was previously gitignored despite 4 callsites depending on it); drive-by deletion of stale `crates/uffs-mft/Cargo.toml.bak` (v0.4.106 auto-commit artifact); baseline metrics in `release-automation-baseline.md`. |
+| R1a | Conventional commits (advisory) | 🟡 | | 2026-04-25 | (open) | Adds `.github/workflows/commitlint.yml` (advisory mode, sticky comment via `gh pr comment` + `gh api PATCH/DELETE`); CONTRIBUTING.md "Commit message conventions" section already landed pre-R0 (lines 150-187). |
 | R1b | Conventional commits (mandatory gate) | ⬜ | | | | After ≥1 month of advisory observation |
 | R2 | `git-cliff` + `cliff.toml` (local validation) | ⬜ | | | | No workflow change; just the template |
 | R3 | release-plz shadow mode | ⬜ | | | | Observe 1-2 weeks / 3-5 merges |
