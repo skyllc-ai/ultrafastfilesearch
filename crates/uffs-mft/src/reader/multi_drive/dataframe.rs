@@ -3,7 +3,7 @@
 
 //! `DataFrame`-backed multi-drive reader helpers.
 
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 use tokio::task::JoinSet;
 use uffs_polars::{DataFrame, IntoLazy, col, lit};

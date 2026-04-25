@@ -79,10 +79,10 @@ impl ParallelMftReader {
     where
         F: Fn(u64, u64),
     {
+        use alloc::collections::VecDeque;
+        use alloc::sync::Arc;
         use core::pin::Pin;
         use core::sync::atomic::{AtomicUsize, Ordering};
-        use std::collections::VecDeque;
-        use std::sync::Arc;
 
         use crossbeam_channel::{Sender, bounded};
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};

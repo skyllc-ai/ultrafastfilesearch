@@ -62,7 +62,7 @@ impl ParallelMftReader {
         unsafe {
             SetFilePointerEx(
                 handle,
-                aligned_offset as i64,
+                aligned_offset.cast_signed(),
                 Some(&raw mut new_position),
                 FILE_BEGIN,
             )

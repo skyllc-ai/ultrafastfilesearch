@@ -45,7 +45,7 @@ pub struct VolumeState {
     /// Record merger accumulating parsed records (unified pipeline)
     pub merger: MftRecordMerger,
     /// Queue of pending I/O operations
-    pub io_queue: std::collections::VecDeque<MultiVolumeIoOp>,
+    pub io_queue: alloc::collections::VecDeque<MultiVolumeIoOp>,
     /// Next I/O operation index to issue
     pub next_io_idx: usize,
     /// Total I/O operations for this volume
@@ -462,7 +462,7 @@ pub fn prepare_volume_state(
     let mut sorted_chunks: Vec<ReadChunk> = chunks;
     sorted_chunks.sort_by_key(|chunk| chunk.disk_offset);
 
-    let mut io_queue = std::collections::VecDeque::new();
+    let mut io_queue = alloc::collections::VecDeque::new();
 
     for chunk in sorted_chunks.iter() {
         let skip_begin_bytes = chunk.skip_begin as usize * record_size;

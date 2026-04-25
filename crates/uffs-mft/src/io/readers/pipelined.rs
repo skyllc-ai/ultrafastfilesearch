@@ -494,7 +494,7 @@ fn read_chunk_into_buffer_static(
     let seek_result = unsafe {
         SetFilePointerEx(
             handle,
-            aligned_offset as i64,
+            aligned_offset.cast_signed(),
             Some(&raw mut new_pos),
             FILE_BEGIN,
         )

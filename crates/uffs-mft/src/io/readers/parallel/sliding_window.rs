@@ -51,8 +51,8 @@ impl ParallelMftReader {
     where
         F: Fn(u64, u64),
     {
+        use alloc::collections::VecDeque;
         use core::pin::Pin;
-        use std::collections::VecDeque;
 
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
         use windows::Win32::Storage::FileSystem::ReadFile;

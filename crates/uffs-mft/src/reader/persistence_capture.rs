@@ -110,7 +110,7 @@ impl MftReader {
                 let seek_result = unsafe {
                     SetFilePointerEx(
                         handle,
-                        aligned_offset as i64,
+                        aligned_offset.cast_signed(),
                         Some(&raw mut new_pos),
                         FILE_BEGIN,
                     )
@@ -197,8 +197,8 @@ impl MftReader {
         path: P,
         options: &crate::raw_iocp::IocpCaptureOptions,
     ) -> Result<crate::raw_iocp::IocpCaptureHeader> {
+        use alloc::collections::VecDeque;
         use core::pin::Pin;
-        use std::collections::VecDeque;
 
         use windows::Win32::Foundation::{CloseHandle, ERROR_IO_PENDING, GetLastError, HANDLE};
         use windows::Win32::Storage::FileSystem::ReadFile;

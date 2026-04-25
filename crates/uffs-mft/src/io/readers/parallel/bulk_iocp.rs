@@ -48,9 +48,9 @@ impl ParallelMftReader {
     where
         F: Fn(u64, u64),
     {
+        use alloc::sync::Arc;
         use core::pin::Pin;
         use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-        use std::sync::Arc;
 
         use rayon::prelude::*;
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};

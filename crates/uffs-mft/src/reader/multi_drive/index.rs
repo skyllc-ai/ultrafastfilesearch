@@ -3,7 +3,7 @@
 
 //! Lean-index multi-drive reader helpers.
 
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
