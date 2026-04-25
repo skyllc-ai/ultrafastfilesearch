@@ -1959,7 +1959,7 @@ Single source of truth for phase progress.  Mirror the format of
 | R0 | Baseline & cleanup (remove dead cargo-dist + release-plz metadata, add lockfile-drift patch per decision 1, new baseline doc) | 🟡 | | 2026-04-25 | (open) | Includes: lockfile patch; **promotion of `build/update_all_versions.rs` into version control** via `.gitignore` carve-out (script was previously gitignored despite 4 callsites depending on it); drive-by deletion of stale `crates/uffs-mft/Cargo.toml.bak` (v0.4.106 auto-commit artifact); baseline metrics in `release-automation-baseline.md`. |
 | R1a | Conventional commits (advisory) | ⬜ | | | | PR title + commit messages scanned, comment-only |
 | R1b | Conventional commits (mandatory gate) | ⬜ | | | | After ≥1 month of advisory observation |
-| R2 | `git-cliff` + `cliff.toml` (local validation) | ⬜ | | | | No workflow change; just the template |
+| R2 | `git-cliff` + `cliff.toml` (local validation) | 🟡 | | 2026-04-25 | (open) | Adds `cliff.toml` (~195 LOC) at workspace root; iterated against full history (`git-cliff --config cliff.toml -o /tmp/...`) until output matches Keep-a-Changelog spacing.  Type → section mapping mirrors `commitlint.yml` regex (11 types).  No `CHANGELOG.md` touch (per plan §R2 step 4).  Validation captured in `release-automation-baseline.md` §8. |
 | R3 | release-plz shadow mode | ⬜ | | | | Observe 1-2 weeks / 3-5 merges |
 | R4 | release-plz active (release PR mode) | ⬜ | | | | At least 1 full release cut through the new flow; same release satisfies dev-flow Phase 7 bake-in (decision 2) |
 | R5 | Retire bespoke tooling (incl. `scripts/ci/ci-pipeline.rs` thin wrapper per its `REMOVE-AFTER: v0.5.73` marker) | ⬜ | | | | ~1350 lines deleted; point of no return for easy rollback |

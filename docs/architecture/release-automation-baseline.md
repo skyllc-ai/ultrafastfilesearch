@@ -156,3 +156,63 @@ The two decisions recorded in `release-automation-plan.md` §8 (settled 2026-04-
 
 1. **Decision 1 (R0 step-5 lockfile patch: INCLUDE)** — vindicated.  Two real releases (v0.5.72 and v0.5.73) shipped between the decision date (2026-04-24) and the R0 PR landing.  Both used the OLD bumper without the lockfile-refresh step, meaning their `Cargo.lock` files may have drifted before the next `cargo` invocation self-healed.  The lockfile patch now ensures v0.5.74+ ships with a deterministic lockfile.
 2. **Decision 2 (Dev-flow Phase 7 sequencing)** — automatically satisfied.  Dev-flow Phase 7's only remaining `[ ]` item ("real-world bake-in on a live `just ship` run") was implicitly satisfied by v0.5.72 + v0.5.73 shipping cleanly via `uffs-ci-pipeline` (the workspace-binary form of the ship driver).  No coordination wait needed for R5.
+
+## 8. R2 addendum — git-cliff template validation (2026-04-25)
+
+Captured at the close of Phase R2 (PR forthcoming on `chore/release-auto-r2`).
+
+### What was validated
+
+`git-cliff 2.12.0` was installed via `cargo install git-cliff --locked` and run against the workspace history with the new `cliff.toml`:
+
+```bash
+git-cliff --config cliff.toml -o /tmp/uffs-cliff-full.md         # full history
+git-cliff --config cliff.toml --unreleased                        # next release preview
+```
+
+Both commands exit 0.  `--unreleased` correctly reports an empty placeholder section because every conforming commit since v0.5.73 has been a `chore:` (which the parsers intentionally suppress).
+
+### Output statistics
+
+| Metric | Value |
+|---|---|
+| `git-cliff` version | `2.12.0` |
+| `cliff.toml` line count | 196 |
+| Generated full-history changelog | 508 lines |
+| Hand-maintained `CHANGELOG.md` line count | 907 |
+| Versions captured by git-cliff | 18 (every tag from `v0.5.1` to `v0.5.73`) |
+| Versions in hand-maintained `CHANGELOG.md` | 9 (curated milestone subset) |
+| Footer comparison links generated | 18 (initial release `v0.5.1` correctly uses `releases/tag/`, all others use `compare/{prev}...{ver}`) |
+
+The line-count delta (508 vs. 907) is the intended divergence — the hand-maintained file uses **multi-paragraph mini-essays** for each entry (rationale, before/after, rollback, bake-in evidence) while git-cliff uses **single-line bullets from the squash subject**.  The expected loss of prose richness is a known trade-off of automation.  Phase R3+ release-plz will narrow this gap by ingesting PR descriptions into the changelog body, but the bullets-from-subjects baseline established here is the floor.
+
+### Type → section mapping verified
+
+Spot-checked against real commits in the generated output:
+
+| Source commit type | Example merge | Rendered section |
+|---|---|---|
+| `feat:` | `Shift-left dev-flow rollout (phases 1-7) (#45)` | `### Added` ✓ |
+| `fix:` | `Re-codesign macOS binaries after strip — v0.5.73 (#63)` | `### Fixed` ✓ |
+| `perf:` | `Parallelize drive scan + ext-index fast path for --sort path (#38)` | `### Performance` ✓ |
+| `chore(security):` | (none in current history) | (parser registered) |
+| `security:` non-standard | `Cargo-vet init...weekly refresh workflow (#34)`, `supply-chain hardening...(#33)` | `### Security` ✓ (caught via the `^security(...)?:` parser added for R1a observation tolerance) |
+| Suppressed types | `chore:`, `docs:`, `test:`, `build:`, `ci:`, `refactor:`, `style:`, `revert:` | omitted ✓ |
+| Malformed (space in scope) | `chore(dev + ci): pre-commit ultra-strict lints... (#41)` | dropped ✓ (via `filter_unconventional = true`) |
+
+### Whitespace + duplication issues caught and resolved during iteration
+
+1. **Spacing on first generation**: extra blank line after `## [version]` header, missing blank line between releases.  Fixed by tightening Tera whitespace controls (`{%- ... -%}`) on the loop wrappers.
+
+2. **Duplicate PR link**: first generation produced `Subject (#63) ([#63](URL))` because the squash subject already carries `(#63)` and the template was also adding an explicit markdown link.  Resolved by removing the explicit link block from the body template — GitHub-flavored markdown auto-links the trailing `(#NN)` natively.  `cliff.toml` now documents this decision in a leading comment block.
+
+### Forward-compatibility check
+
+The `tag_pattern = "v[0-9]+\\.[0-9]+\\.[0-9]+"` matches what `auto-tag-release.yml` currently emits AND what release-plz will emit in Phase R4.  No tag-format migration required for the R2 → R3 → R4 transition.
+
+The 11-type list in `commit_parsers` is identical (modulo regex syntax) to the one in `.github/workflows/commitlint.yml`'s PR-title check.  These three files (`cliff.toml`, `commitlint.yml`, `CONTRIBUTING.md`) are now a tightly-coupled trio; adding a new type means updating all three in the same PR.
+
+### What R2 deliberately does NOT do
+
+- **Does NOT touch `CHANGELOG.md`**.  The hand-maintained file stays exactly as-is.  Phase R3-R4's release-plz will write the **next** release section above the existing `## [0.5.73]` header, leaving all prior entries intact.
+- **Does NOT install git-cliff in CI**.  R2 is a per-developer tool right now (used to preview `--unreleased` before pushing).  R3+'s release-plz embeds git-cliff natively as a library, so no CI install step is added until then.
