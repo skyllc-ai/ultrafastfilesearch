@@ -14,6 +14,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.73] - 2026-04-25
+
+### Fixed
+- **macOS arm64 release binaries SIGKILLed at launch** under macOS 26+
+  (`SIGKILL (Code Signature Invalid)` / `namespace=CODESIGNING` /
+  `"Taskgated Invalid Signature"`).  `[profile.release].strip = "symbols"`
+  in `Cargo.toml` strips the Mach-O symbol table **after** the linker has
+  emitted an ad-hoc (linker-signed) `CodeDirectory`, leaving the embedded
+  hash inconsistent with the on-disk file.  macOS 26+'s hardened
+  taskgated then refuses to launch the binary.  In v0.5.72 this hit
+  `uffsmcp` and `uffsd` deterministically; `uffs` and `uffs_mft` survived
+  by binary-layout chance — a fragile guarantee that wouldn't hold on
+  the next rebuild.
+
+  Fix: add a `Re-codesign macOS binaries (post-strip)` step to
+  `release.yml` that re-stamps the ad-hoc signature with `codesign
+  --force --sign -` on every shipping `apple-darwin` binary after
+  `cargo build --release` finishes.  The step is gated on
+  `contains(matrix.target, 'apple-darwin')` so Windows / Linux artifact
+  paths are untouched.  Each re-signed binary is then verified with
+  `codesign --verify --verbose=2` so a regression here fails the
+  workflow loudly instead of shipping broken artifacts.
+
+  Workaround for users still on a v0.5.72 download:
+
+  ```bash
+  codesign --force --sign - ~/bin/uffsmcp ~/bin/uffsd
+  ```
+
+  Re-signs in place; macOS picks up the refreshed `CodeDirectory` on the
+  next exec and the binaries launch normally.
+
+  No code changes; release-only fix.  Recommended upgrade for every Mac
+  user on macOS 26+.
+
 ## [0.5.72] - 2026-04-25
 
 ### Changed

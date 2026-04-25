@@ -255,6 +255,37 @@ jobs:
 
           echo "✅ Build completed for ${{ matrix.target }}"
 
+      - name: Re-codesign macOS binaries (post-strip)
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        run: |
+          # `[profile.release].strip = "symbols"` in Cargo.toml strips the
+          # Mach-O symbol table AFTER the linker has emitted an ad-hoc
+          # (linker-signed) CodeDirectory.  Strip changes the on-disk hash
+          # the CodeDirectory was computed over, leaving the signature
+          # internally inconsistent.  macOS 26+'s taskgated then refuses
+          # to launch the binary with `SIGKILL (Code Signature Invalid)`
+          # / namespace=CODESIGNING / "Taskgated Invalid Signature".
+          #
+          # Re-stamping the ad-hoc signature with `codesign --force
+          # --sign -` recomputes the CodeDirectory over the post-strip
+          # bytes so the in-memory hash matches the on-disk file again.
+          # We deliberately stay ad-hoc: we don't have an Apple Developer
+          # ID; the resulting binaries are still unnotarized and users
+          # see the standard "open anyway" Gatekeeper prompt on first
+          # launch.  But they no longer get killed at exec time.
+          #
+          # Gated on `apple-darwin` so Windows / Linux artifact paths
+          # stay untouched.
+          set -euo pipefail
+          for bin in uffs uffsd uffsmcp uffs_mft; do
+            path="target/${{ matrix.target }}/release/$bin"
+            if [[ -f "$path" ]]; then
+              codesign --force --sign - "$path"
+              codesign --verify --verbose=2 "$path"
+            fi
+          done
+
       - name: Show binary sizes
         shell: bash
         run: |
