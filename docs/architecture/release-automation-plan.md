@@ -640,10 +640,18 @@ activated, and record baseline metrics.
   shows the internal-crate version bump alongside `Cargo.toml`.
   Skip this validation step if step 5 was skipped.
 
-**PR shape**: 1 file changed (`Cargo.toml`), ~25 lines deleted.
-1 new file (`docs/architecture/release-automation-baseline.md`),
-~50 lines.  If the interim lockfile patch is included, +1 file
-touched (`build/update_all_versions.rs`), ~8 lines added.
+**PR shape** (as executed on `chore/release-auto-r0`, 2026-04-25):
+
+- `Cargo.toml`: ~30 lines deleted (the two metadata blocks + section header).
+- `build/update_all_versions.rs`: **1073 lines newly tracked** + ~52 lines of in-file additions (lockfile patch).  R0 discovered the script was gitignored despite being invoked by 4 callsites — the .gitignore carve-out below brings it under version control.  Both the script and the carve-out are scheduled for deletion in R5.
+- `.gitignore`: replace blanket `build/` with `build/*` + `!build/update_all_versions.rs` + 7-line block comment explaining the R5 sunset.
+- `crates/uffs-mft/Cargo.toml.bak`: 123 lines deleted (drive-by — stale v0.4.106 auto-commit artifact, never used by any current code path).
+- `docs/architecture/release-automation-baseline.md`: ~150 lines, new file.
+- `docs/architecture/release-automation-plan.md`: dashboard row R0 → 🟡 in-progress; PR-shape addendum (this section).
+
+Net: ~1280 LOC tracked into git (mostly the previously-gitignored script), ~155 LOC deleted.
+
+The PR is larger than the plan's original ~85-LOC estimate because the `.gitignore` discovery was unforeseen.  None of the additional scope is gold-plating: every change is required either by Decision 1 (lockfile patch needs the script tracked to be visible) or by structural correctness (a script invoked from 4 callsites should not be untracked).
 
 **Rollback**: `git revert` the merge commit.  No runtime behavior
 changes.
@@ -981,7 +989,11 @@ replaces.
 
 **Steps**:
 
-1. Delete `build/update_all_versions.rs` (1028 lines).
+1. Delete `build/update_all_versions.rs` (1073+ lines, version-tracked
+   in R0).  Also remove the `.gitignore` carve-out (`build/*` +
+   `!build/update_all_versions.rs` block) added in R0; restore the
+   blanket `build/` ignore.  After deletion, `build/` returns to its
+   pre-R0 state: a fully gitignored directory of generated artifacts.
 2. Delete the thin wrapper `scripts/ci/ci-pipeline.rs` (49 lines)
    — dev-flow Phase 7 kept it as a deprecation shim with header
    marker `REMOVE-AFTER: v0.5.73`.  R5 retires it alongside the
@@ -1944,7 +1956,7 @@ Single source of truth for phase progress.  Mirror the format of
 
 | # | Phase | Status | Commit | Date | PR | Notes |
 |---|---|---|---|---|---|---|
-| R0 | Baseline & cleanup (remove dead cargo-dist + release-plz metadata, add lockfile-drift patch per decision 1, new baseline doc) | ⬜ | | | | Includes the interim lockfile patch |
+| R0 | Baseline & cleanup (remove dead cargo-dist + release-plz metadata, add lockfile-drift patch per decision 1, new baseline doc) | 🟡 | | 2026-04-25 | (open) | Includes: lockfile patch; **promotion of `build/update_all_versions.rs` into version control** via `.gitignore` carve-out (script was previously gitignored despite 4 callsites depending on it); drive-by deletion of stale `crates/uffs-mft/Cargo.toml.bak` (v0.4.106 auto-commit artifact); baseline metrics in `release-automation-baseline.md`. |
 | R1a | Conventional commits (advisory) | ⬜ | | | | PR title + commit messages scanned, comment-only |
 | R1b | Conventional commits (mandatory gate) | ⬜ | | | | After ≥1 month of advisory observation |
 | R2 | `git-cliff` + `cliff.toml` (local validation) | ⬜ | | | | No workflow change; just the template |

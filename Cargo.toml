@@ -632,33 +632,3 @@ codegen-units = 1
 [profile.xwin-dev.package."*"]
 debug = 1
 opt-level = 0
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Workspace Metadata
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Workspace-level release-plz configuration
-[workspace.metadata.release-plz]
-git_release_enable = true
-git_tag_enable = true
-changelog_update = true
-dependencies_update = true
-allow_dirty = false
-publish = true
-git_release_draft = false
-
-# Workspace-level cargo-dist configuration
-[workspace.metadata.dist]
-cargo-dist-version = "0.30.0"
-ci = ["github"]
-installers = ["shell", "powershell"]
-targets = [
-  "aarch64-apple-darwin",
-  "x86_64-apple-darwin",
-  "x86_64-unknown-linux-gnu",
-  "aarch64-unknown-linux-gnu",
-  "x86_64-pc-windows-msvc",
-]
-pr-run-mode = "plan"
-allow-dirty = ["ci"]

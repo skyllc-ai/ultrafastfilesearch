@@ -34,7 +34,15 @@ target/
 # =============================================================================
 # Build artifacts & generated binaries
 # =============================================================================
-build/
+# `build/` holds generated artifacts (workflow state, logs) that must stay
+# out of git, EXCEPT the bespoke version-bump rust-script which is invoked
+# by `just ship` (see `just/build.just`, `just/dev.just`,
+# `scripts/ci-pipeline/src/version.rs`).  That script is the single source of
+# truth for workspace version bumps until release-plz takes over in Phase R5
+# of `docs/architecture/release-automation-plan.md` — at which point the
+# script is deleted and this exception line goes with it.
+build/*
+!build/update_all_versions.rs
 *.rlib
 *.bin
 /test_scf
