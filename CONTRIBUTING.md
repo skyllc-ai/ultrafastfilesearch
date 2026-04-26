@@ -149,7 +149,7 @@ If `just clean-cov` finishes and `just test` still fails with the same shmem-off
 
 ## Commit message conventions
 
-UFFS is migrating to [Conventional Commits](https://www.conventionalcommits.org/) to drive automated versioning and changelog generation via `release-plz` + `git-cliff`.  The full migration plan lives in [`docs/architecture/release-automation-plan.md`](docs/architecture/release-automation-plan.md).
+UFFS is migrating to [Conventional Commits](https://www.conventionalcommits.org/) to drive automated versioning and changelog generation via `release-plz` + `git-cliff`.  For a one-page **"what to do this week"** cheatsheet (PR conventions, what's automatic, FAQs), see [`docs/architecture/release-automation-current-flow.md`](docs/architecture/release-automation-current-flow.md).  The full multi-phase migration plan lives in [`docs/architecture/release-automation-plan.md`](docs/architecture/release-automation-plan.md).
 
 **What matters for you today**:
 
