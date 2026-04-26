@@ -109,8 +109,15 @@ const CODE: &[&str] = &[
     "cs", "vb", "fs", "ml", "hs", "clj", "dart", "zig", "nim", "cr", "jl",
 ];
 
-/// Return the lowercase extension (no leading dot) of a filename.
-fn extension_from_name(name: &str) -> Option<&str> {
+/// Return the extension (no leading dot) of a filename.
+///
+/// Dot-gated: dotfiles (`.bash_history`), dotless names (`README`), and
+/// trailing-dot names (`foo.`) all return `None`.  Visible to the rest
+/// of the crate so [`writer::write_display_row_columns`] can format the
+/// `Extension` column with the same rule as the sort key (regression:
+/// T62 `--sort extension` MCP failure where `.bash_history`'s displayed
+/// `ext` disagreed with its sort position).
+pub(crate) fn extension_from_name(name: &str) -> Option<&str> {
     let dot = name.rfind('.')?;
     if dot == 0 || dot + 1 >= name.len() {
         return None;

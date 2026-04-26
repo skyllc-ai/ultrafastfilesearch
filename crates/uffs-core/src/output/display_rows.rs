@@ -25,6 +25,7 @@ use rayon::prelude::*;
 use super::{BASELINE_COLUMN_ORDER, OutputColumn, OutputConfig};
 use crate::error::Result;
 use crate::search::backend::DisplayRow;
+use crate::search::derived::extension_from_name;
 
 /// Row count above which [`write_display_rows`] parallelises row
 /// formatting via rayon chunks.
@@ -330,8 +331,13 @@ pub fn write_display_row_columns(
             }
             OutputColumn::Extension => {
                 buf.push_str(&cfg.quote);
-                if let Some(dot) = row.name().rfind('.') {
-                    buf.push_str(row.name().get(dot + 1..).unwrap_or(""));
+                // Dot-gated: dotfiles (`.bash_history`), dotless names
+                // (`README`), and trailing-dot names (`foo.`) emit an
+                // empty extension so the displayed value matches the
+                // sort engine's key (`search::sorting::build_row_sort_key`)
+                // and the indexer's `intern_extension` semantics.
+                if let Some(ext) = extension_from_name(row.name()) {
+                    buf.push_str(ext);
                 }
                 buf.push_str(&cfg.quote);
             }

@@ -214,11 +214,24 @@ fn default_filter() -> String {
 }
 
 /// Derive the file extension from a filename (lowercase, no leading dot).
+///
+/// Dot-gated to match the MFT indexer's `intern_extension` and the search
+/// engine's `extract_extension_after_dot`: dotless names (`README`),
+/// hidden dotfiles (`.bash_history`, `.gitignore`), and trailing-dot
+/// names (`foo.`) all return the empty string.  Keeping the displayed
+/// `ext` aligned with the sort key prevents `--sort extension` from
+/// emitting rows whose `ext` field disagrees with their position
+/// (regression: T62 on Windows where `.bash_history` placed at row 1
+/// reported `ext = "bash_history"` and broke the ascending invariant).
 fn extract_ext(name: &str) -> String {
-    match name.rsplit_once('.') {
-        Some((_, ext)) if !ext.is_empty() => ext.to_ascii_lowercase(),
-        _ => String::new(),
+    let Some(dot_pos) = name.rfind('.') else {
+        return String::new();
+    };
+    if dot_pos == 0 || dot_pos + 1 >= name.len() {
+        return String::new();
     }
+    name.get(dot_pos + 1..)
+        .map_or_else(String::new, str::to_ascii_lowercase)
 }
 
 /// Decode a cursor string into an offset.  Returns 0 for invalid cursors.
@@ -428,10 +441,7 @@ pub async fn run(
         rows: page_rows
             .iter()
             .map(|row| {
-                let ext = match row.name.rsplit_once('.') {
-                    Some((_, ext)) if !ext.is_empty() => ext.to_ascii_lowercase(),
-                    _ => String::new(),
-                };
+                let ext = extract_ext(&row.name);
                 let r#type = if row.is_directory { "dir" } else { "file" }.to_owned();
                 SearchRowOutput {
                     drive: row.drive,
@@ -629,4 +639,52 @@ pub fn percent_encode_path(path: &str) -> String {
         }
     }
     encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_ext;
+
+    /// Regression: dot-gated extraction so the MCP-emitted `ext` field
+    /// (in both the markdown table and `structuredContent.rows[*].ext`)
+    /// matches the daemon's sort key
+    /// (`uffs_core::search::sorting::build_row_sort_key` →
+    /// `extract_extension_after_dot`).  Pre-fix, naive `rsplit_once('.')`
+    /// produced `ext = "bash_history"` for `.bash_history`, but the sort
+    /// engine placed the row in the empty-extension bucket — the
+    /// resulting disagreement broke Windows MCP T62 `--sort extension`
+    /// (`scripts/tests/definitions/03-sort.toml`) because the validator
+    /// reads `ext` and finds it non-monotonic.
+    #[test]
+    fn extract_ext_returns_empty_for_dotfiles() {
+        assert_eq!(extract_ext(".bash_history"), "");
+        assert_eq!(extract_ext(".gitignore"), "");
+        assert_eq!(extract_ext(".env"), "");
+    }
+
+    #[test]
+    fn extract_ext_returns_empty_for_dotless_names() {
+        assert_eq!(extract_ext("README"), "");
+        assert_eq!(extract_ext("Makefile"), "");
+        assert_eq!(extract_ext(""), "");
+    }
+
+    #[test]
+    fn extract_ext_returns_empty_for_trailing_dot() {
+        assert_eq!(extract_ext("foo."), "");
+        assert_eq!(extract_ext("archive.tar."), "");
+    }
+
+    #[test]
+    fn extract_ext_returns_lowercase_segment_after_last_dot() {
+        assert_eq!(extract_ext("report.txt"), "txt");
+        assert_eq!(extract_ext("archive.tar.gz"), "gz");
+        assert_eq!(extract_ext("$RECYCLE.BIN"), "bin");
+        assert_eq!(
+            extract_ext(
+                "amd64_microsoft-windows-mdmappinstaller_31bf3856ad364e35_10.0.26100.8115_none_3591783d4bfd6e96"
+            ),
+            "8115_none_3591783d4bfd6e96"
+        );
+    }
 }

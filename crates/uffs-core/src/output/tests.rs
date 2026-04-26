@@ -699,3 +699,73 @@ fn test_write_datetime_column_zero_filetime_is_empty() {
         "FILETIME 0 must NOT render as 1601-01-01 (got: {csv})"
     );
 }
+
+/// Regression: the `Extension` column must use dot-gated extraction so the
+/// displayed value matches the sort engine's key
+/// (`crate::search::sorting::build_row_sort_key`, which calls
+/// `extract_extension_after_dot`) and the indexer's `intern_extension`
+/// semantics.  Pre-fix, naive `rfind('.')` extraction produced
+/// `ext = "bash_history"` for `.bash_history`, while the sort key was `""`,
+/// causing `--sort extension` ascending to place `.bash_history` at row 1
+/// with a displayed `ext` value that violated the asc invariant against
+/// every following row.  Caught by Windows MCP T62 (`scripts/tests/
+/// definitions/03-sort.toml`).
+#[test]
+fn extension_column_dot_gated_for_dotfiles_dotless_and_trailing_dot() {
+    use crate::search::backend::DisplayRow;
+
+    // Build one DisplayRow per case: dotfile, dotless, trailing-dot,
+    // multi-dot directory name, and a normal file (positive control).
+    fn row(path: &str) -> DisplayRow {
+        DisplayRow::new(0, 'C', path.to_owned(), 0, false, 0, 0, 0, 0, 0, 0, 0, 0)
+    }
+
+    let rows = [
+        row("F:\\Ch\\.bash_history"),
+        row("C:\\Users\\rnio\\.gitignore"),
+        row("C:\\tmp\\README"),
+        row("C:\\tmp\\foo."),
+        row(
+            "C:\\Windows\\WinSxS\\amd64_microsoft-windows-mdmappinstaller_31bf3856ad364e35_10.0.26100.8115_none_3591783d4bfd6e96",
+        ),
+        row("C:\\Projects\\report.txt"),
+    ];
+
+    let config = OutputConfig::new()
+        .with_columns("name,ext")
+        .with_header(false)
+        .with_quote("\"");
+
+    let mut out = Vec::new();
+    config
+        .write_display_rows(&rows, &mut out)
+        .expect("write should succeed");
+    let csv = String::from_utf8(out).expect("UTF-8");
+    assert_eq!(
+        csv.lines().count(),
+        rows.len(),
+        "one output line per row (no header), got: {csv}"
+    );
+
+    // Each expected line covers a distinct extension-extraction edge case.
+    let expected_lines = [
+        // Dotfiles → empty ext.
+        "\".bash_history\",\"\"",
+        "\".gitignore\",\"\"",
+        // Dotless name → empty ext.
+        "\"README\",\"\"",
+        // Trailing-dot name → empty ext.
+        "\"foo.\",\"\"",
+        // Multi-dot directory name → segment after the last dot
+        // (matches the sort key produced by `extract_extension_after_dot`).
+        "\"amd64_microsoft-windows-mdmappinstaller_31bf3856ad364e35_10.0.26100.8115_none_3591783d4bfd6e96\",\"8115_none_3591783d4bfd6e96\"",
+        // Normal file → ext after the last dot.
+        "\"report.txt\",\"txt\"",
+    ];
+    for expected in expected_lines {
+        assert!(
+            csv.contains(expected),
+            "Extension column output missing expected line {expected:?}; full CSV:\n{csv}"
+        );
+    }
+}

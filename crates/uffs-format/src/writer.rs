@@ -17,7 +17,7 @@ use crate::attr;
 use crate::column::{BASELINE_COLUMN_ORDER, OutputColumn};
 use crate::config::OutputConfig;
 use crate::datetime::append_datetime_native;
-use crate::derived::{bulkiness_for_row, semantic_type_for_row};
+use crate::derived::{bulkiness_for_row, extension_from_name, semantic_type_for_row};
 use crate::row::FormatRow;
 
 /// Row-count cutover between the sequential writer and the rayon
@@ -233,8 +233,14 @@ pub fn write_row<R: FormatRow>(
             }
             OutputColumn::Extension => {
                 buf.push_str(&cfg.quote);
-                if let Some(dot) = row.name().rfind('.') {
-                    buf.push_str(row.name().get(dot + 1..).unwrap_or(""));
+                // Dot-gated: dotfiles (`.bash_history`), dotless names
+                // (`README`), and trailing-dot names (`foo.`) emit an
+                // empty extension so the displayed value matches the
+                // sort engine's key
+                // (`uffs_core::search::sorting::build_row_sort_key`)
+                // and the indexer's `intern_extension` semantics.
+                if let Some(ext) = extension_from_name(row.name()) {
+                    buf.push_str(ext);
                 }
                 buf.push_str(&cfg.quote);
             }
@@ -395,5 +401,51 @@ mod tests {
         write_rows(&cfg, &rows, &mut out).expect("write");
         let text = String::from_utf8(out).expect("utf8");
         assert_eq!(text, "+,-\n");
+    }
+
+    /// Regression: the `Extension` column must use dot-gated extraction so
+    /// the displayed value matches the sort engine's key
+    /// (`uffs_core::search::sorting::build_row_sort_key` →
+    /// `extract_extension_after_dot`) and the indexer's `intern_extension`
+    /// semantics.  Pre-fix, naive `rfind('.')` produced
+    /// `ext = "bash_history"` for `.bash_history`, while the sort key was
+    /// `""`.  Caught by Windows MCP T62
+    /// (`scripts/tests/definitions/03-sort.toml`).
+    #[test]
+    fn extension_column_dot_gated_for_dotfiles_dotless_and_trailing_dot() {
+        let cfg = OutputConfig::new()
+            .with_columns("name,ext")
+            .with_header(false)
+            .with_quote("\"");
+
+        let cases = [
+            // (path,                                     name,             expected_ext)
+            ("F:\\Ch\\.bash_history", ".bash_history", ""),
+            ("C:\\Users\\rnio\\.gitignore", ".gitignore", ""),
+            ("C:\\tmp\\README", "README", ""),
+            ("C:\\tmp\\foo.", "foo.", ""),
+            (
+                "C:\\Win\\amd64_x_10.0.26100.8115_none_xyz",
+                "amd64_x_10.0.26100.8115_none_xyz",
+                "8115_none_xyz",
+            ),
+            ("C:\\Projects\\report.txt", "report.txt", "txt"),
+        ];
+
+        for (path, name, expected_ext) in cases {
+            let row = TestRow {
+                path: path.to_owned(),
+                name: name.to_owned(),
+                ..sample()
+            };
+            let mut out = Vec::new();
+            write_rows(&cfg, &[row], &mut out).expect("write");
+            let text = String::from_utf8(out).expect("utf8");
+            let expected = format!("\"{name}\",\"{expected_ext}\"\n");
+            assert_eq!(
+                text, expected,
+                "Extension column mismatch for name {name:?}: got {text:?}"
+            );
+        }
     }
 }
