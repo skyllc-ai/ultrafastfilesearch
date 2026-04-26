@@ -88,21 +88,37 @@ body = """
 # the existing file already maintains by hand.  The `unreleased`
 # anchor compares against the latest tag — same as the existing
 # `[Unreleased]: ...compare/v0.5.71...HEAD` pattern.
+#
+# Why the `default(value="...")` filter on `remote.github.*`:
+#
+#   The `[remote.github]` section at the bottom of this file populates
+#   these variables for STANDALONE `git cliff` invocations.  But when
+#   release-plz embeds git-cliff and renders this template (Phase R3
+#   shadow mode and beyond), it doesn't populate `remote.github` from
+#   our `[remote.github]` section — release-plz expects to derive the
+#   remote from `Cargo.toml`'s `repository` field instead, and only
+#   populates `remote.github` if a GitHub API token is available at
+#   render time.  The default-filter fallback makes the template work
+#   identically in both contexts: standalone iteration uses the literal
+#   values from `[remote.github]`, release-plz uses the same hardcoded
+#   defaults.  If the org or repo ever moves, both this file and
+#   `[remote.github]` below need updating — the duplication is the
+#   price of cross-tool template compatibility.
 footer = """
 
 {% for release in releases -%}
 {% if release.version -%}
 {% if release.previous.version -%}
 [{{ release.version | trim_start_matches(pat="v") }}]: \
-https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}\
+https://github.com/{{ remote.github.owner | default(value="skyllc-ai") }}/{{ remote.github.repo | default(value="UltraFastFileSearch") }}\
 /compare/{{ release.previous.version }}...{{ release.version }}
 {% else -%}
 [{{ release.version | trim_start_matches(pat="v") }}]: \
-https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}\
+https://github.com/{{ remote.github.owner | default(value="skyllc-ai") }}/{{ remote.github.repo | default(value="UltraFastFileSearch") }}\
 /releases/tag/{{ release.version }}
 {% endif -%}
 {% else -%}
-[unreleased]: https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}\
+[unreleased]: https://github.com/{{ remote.github.owner | default(value="skyllc-ai") }}/{{ remote.github.repo | default(value="UltraFastFileSearch") }}\
 /compare/{{ release.previous.version }}...HEAD
 {% endif -%}
 {% endfor %}

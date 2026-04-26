@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025-2026 SKY, LLC.
+#
+# release-plz workspace configuration for UFFS.
+#
+# Phase R3 of `docs/architecture/release-automation-plan.md`.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# What this file does
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# release-plz reads this file to learn (a) which crates to consider for
+# release, (b) how to compute version bumps, and (c) how to produce changelog
+# entries.  The git-cliff template that produces those entries lives in
+# `cliff.toml` at the workspace root (Phase R2), pointed at via
+# `changelog_config` below.
+#
+# In Phase R3 we run release-plz in SHADOW mode: the workflow at
+# `.github/workflows/release-plz.yml` invokes `release-plz update` (a
+# LOCAL-ONLY command — it edits the runner's checkout but never pushes,
+# opens PRs, creates tags, or publishes) and reports the resulting
+# `git diff` to the workflow summary.  No production state changes.
+#
+# In Phase R4 we'll keep this config IDENTICAL and only flip the workflow
+# command from `update` (shadow) to `release-pr` + `release` (active),
+# adding the necessary write-permission tokens.  The structural decisions
+# encoded here — `publish = false`, `git_*_enable = true`, the cliff.toml
+# pointer — survive the cutover unchanged.
+
+[workspace]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Changelog generation
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Point at the standalone `cliff.toml` established in Phase R2 (PR #66).  This
+# keeps a SINGLE source of truth for the changelog template that both the
+# standalone `git cliff --config cliff.toml` invocation (developer iteration)
+# and the embedded-in-release-plz git-cliff (CI changelog generation) read
+# from.  The alternative — duplicating the ~200-line Tera template into a
+# `[changelog]` section here — was rejected as the inevitable drift footgun
+# it would create.
+#
+# `changelog_config` is marked DEPRECATED in current release-plz docs in
+# favour of an inline `[changelog]` block, but the deprecation is forward-
+# looking only (no removal date announced as of release-plz 0.3.x).  When
+# the deprecation finally lands a removal warning, we'll migrate by either
+# (a) having release-plz auto-detect cliff.toml at workspace root if that
+# becomes a feature, or (b) inlining the template here and pointing
+# git-cliff at this file via `git cliff --config release-plz.toml` for
+# developer iteration.  Either way the migration is mechanical.
+#
+# This pattern is used in production by orhun/git-cliff's own release
+# pipeline (see https://blog.orhun.dev/automated-rust-releases/), so we
+# have direct evidence the deprecated path remains supported.
+changelog_config = "cliff.toml"
+
+# Keep this on (the default).  It is the entire point of the migration:
+# release-plz writes new entries into `CHANGELOG.md` from `cliff.toml`'s
+# template instead of leaving the file unchanged.
+changelog_update = true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Publishing dormancy (CRITICAL — see plan §6)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# BELT-AND-SUSPENDERS dormancy through Phase R8.  Even with this flipped to
+# `true`, the release-plz workflow in R3 doesn't have CARGO_REGISTRY_TOKEN,
+# so `cargo publish` would still fail.  This config field is the FIRST
+# layer; the workflow's missing-token state is the SECOND.  Both must be
+# changed independently to enable publishing — no single accidental flip
+# can ship a crate to crates.io.
+#
+# Phase R6 will revisit this with per-crate `[[package]]` overrides for
+# the 12 publishable workspace members, but the workspace-level default
+# remains `false` until R8 dress rehearsal.
+publish = false
+
+# Phase R3 leaves these on so when R4 flips active mode, release-plz
+# already knows to create the tag and the GitHub Release.  The existing
+# `release.yml` workflow watches for the tag push and uploads binaries /
+# signs them — no `release.yml` change at the R4 cutover.
+#
+# In SHADOW mode (R3) these are MOOT because we only invoke `release-plz
+# update`, which produces local file edits and never touches git refs or
+# the GitHub API.  Setting them now means R3 → R4 is a single workflow
+# diff, not a config-and-workflow combined diff.
+git_release_enable = true
+git_tag_enable = true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Behavior toggles
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Don't run `cargo update` automatically as part of release prep.
+# Dependency upgrades are a deliberate separate decision handled by
+# Dependabot + `dependabot-review.yml`.  Conflating them with releases
+# would muddy the changelog and produce noisy version bumps.
+dependencies_update = false
+
+# `cargo-semver-checks` integration disabled until Phase R6.  Enabling
+# it now would (a) require installing the tool in the shadow workflow
+# (cost) and (b) produce false positives on internal crates that
+# haven't yet been audited for public-API status.  R6 adds the tool
+# AND the `publish = true` flips together as a coherent unit.
+semver_check = false
+
+# Default branch prefix for release PRs.  Release-plz auto-detects PRs
+# starting with `release-plz-` as "the release PR" (so merging it
+# triggers the release step in active mode).  Including this field
+# explicitly here so the convention is auditable in one place — the
+# branch-protection ruleset and any future review-bot config can match
+# against it without spelunking through release-plz internals.
+pr_branch_prefix = "release-plz-"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-package overrides — DEFERRED to Phase R6
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# UFFS has 14 workspace members.  Some are publishable to crates.io
+# (`uffs-core`, `uffs-cli`, `uffs-mcp-server`, ...), some are internal
+# tools (`scripts/ci-pipeline`, `scripts/ci/version-orchestrator`).
+# Phase R6 will add `[[package]]` blocks here that:
+#
+#   - flip `publish = true` for the 12 publishable members
+#   - set `release = false` on the internal tools (so release-plz
+#     ignores them entirely — they don't get version bumps, they
+#     don't appear in the changelog, they don't get tagged)
+#   - set per-crate `changelog_path` for any crate whose changelog
+#     should NOT live in the workspace-root `CHANGELOG.md`
+#
+# For R3 (shadow mode) this granularity is unnecessary: we just want
+# release-plz to compute and report what it WOULD do at the workspace
+# level.  Per-package noise can wait for R6.

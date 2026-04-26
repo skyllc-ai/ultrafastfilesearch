@@ -216,3 +216,75 @@ The 11-type list in `commit_parsers` is identical (modulo regex syntax) to the o
 
 - **Does NOT touch `CHANGELOG.md`**.  The hand-maintained file stays exactly as-is.  Phase R3-R4's release-plz will write the **next** release section above the existing `## [0.5.73]` header, leaving all prior entries intact.
 - **Does NOT install git-cliff in CI**.  R2 is a per-developer tool right now (used to preview `--unreleased` before pushing).  R3+'s release-plz embeds git-cliff natively as a library, so no CI install step is added until then.
+
+## 9. R3 addendum — release-plz shadow mode validation (2026-04-25)
+
+Captured at the close of Phase R3 (PR forthcoming on `chore/release-auto-r3`).
+
+### What was validated
+
+`release-plz 0.3.157` was installed via `cargo install release-plz --locked` and run against the workspace with the new `release-plz.toml`:
+
+```bash
+release-plz update --config release-plz.toml
+```
+
+Exit code 0.  Output enumerates all 13 publishable workspace members at version `0.5.73` (matching the current tag) with no proposed bumps — correct, because every commit on `main` since the v0.5.73 tag has been a `chore:` (suppressed type).
+
+### Two structural issues surfaced and fixed (R0-pattern)
+
+Both are the same gitignore-mismatch class of bug R0 fixed for `build/update_all_versions.rs`: a file is intentionally tracked but `.gitignore` accidentally ignores it, causing release-plz to abort with `the working directory has uncommitted changes`.
+
+1. **Three committed-but-gitignored binary assets**: `crates/uffs-text/src/upcase_default.bin` (`include_bytes!` compile-time dependency), `crates/uffs-text/src/upcase_windows_c.bin` (Windows-captured upcase test fixture), and `tests/fixtures/drive_g/G_mft.bin` (20 MB MFT capture for `uffs-daemon` integration tests).  Resolved by adding `!crates/uffs-text/src/*.bin` and `!tests/fixtures/**/*.bin` carve-outs to `.gitignore`.
+
+2. **`cliff.toml` footer template variable unresolved under release-plz**: the footer references `{{ remote.github.owner }}` and `{{ remote.github.repo }}`.  Standalone `git-cliff` populates these from cliff.toml's `[remote.github]` section; release-plz's embedded git-cliff doesn't (it derives the remote from `Cargo.toml`'s `repository` field instead, and only populates the variables when a GitHub API token is available).  Resolved by adding the Tera `default(value="...")` filter so the template works in both contexts.
+
+### Output observation: per-crate changelogs by default
+
+A successful `release-plz update` invocation produced 13 per-crate `CHANGELOG.md` files (one in each `crates/uffs-*/` directory) populated with full history from `v0.5.1` onwards, NOT the existing single workspace-root `CHANGELOG.md`.  This is release-plz's default behaviour — `changelog_path` is a per-package field, not a workspace-level field, and each package writes to a `CHANGELOG.md` in its own directory unless overridden.
+
+This is **observation, not a defect**.  R3 deliberately ships with workspace defaults only — per-crate `[[package]]` configuration is R6 scope.  However, R4 active mode will surface this as a structural decision before the first real release PR opens:
+
+- **Option A — keep per-crate** (release-plz default).  Each `crates/uffs-*/Cargo.toml` accompanied by its own `CHANGELOG.md`.  Discoverable from crates.io detail pages.  Existing workspace-root `CHANGELOG.md` becomes a hand-maintained "release notes / migration guide" superset.
+- **Option B — flatten to workspace** (matches existing UFFS convention).  Add 13 `[[package]]` blocks to `release-plz.toml`, each with `changelog_path = "CHANGELOG.md"`.  Single source of truth.  Requires testing whether release-plz handles concurrent writes from 13 crates correctly (untested at R3 close).
+
+Decision deferred to R4 PR opening; will be made before flipping to active mode.
+
+### Output observation: per-crate tag scheme by default
+
+Per release-plz docs, multi-package workspaces produce per-crate tags (`uffs-cli-v0.5.74`, `uffs-core-v0.5.74`, ...) rather than the single workspace-level `vX.Y.Z` tags `auto-tag-release.yml` currently emits.  The existing `release.yml` triggers on tag pattern `v*` which would NOT match `uffs-cli-v*`.
+
+This is the second R4-blocking observation.  Resolution paths:
+- Configure release-plz to emit a single workspace-level tag (via `git_tag_name` template override at workspace level).
+- Or: update `release.yml`'s tag-trigger pattern to match the per-crate scheme.
+
+Decision deferred to R4 PR opening.
+
+### Three-layer dormancy verified
+
+The R3 workflow (`.github/workflows/release-plz.yml`) was authored with three independent layers of "no production state change":
+
+1. **Config**: `publish = false` workspace-wide in `release-plz.toml`.
+2. **Workflow command**: `release-plz update` (local-only) instead of `release-pr` / `release` (which open PRs / publish).
+3. **Workflow permissions**: `contents: read`, `pull-requests: read` (not `write`).
+
+Plus a belt-and-suspenders verification step at the end of the workflow that asserts `git rev-parse HEAD` is unchanged from `${{ github.sha }}`, surfacing any accidental mutation as a workflow failure.
+
+### Local validation summary
+
+| Check | Result |
+|---|---|
+| `release-plz update --config release-plz.toml` exit code | 0 |
+| All 13 workspace members enumerated | ✓ |
+| `cliff.toml` footer renders without template error | ✓ (after `default(value="...")` fix) |
+| Working tree clean check | ✓ (after `.gitignore` `.bin` carve-outs) |
+| `actionlint .github/workflows/release-plz.yml` | passes |
+| Standalone `git-cliff --config cliff.toml` still works post-fix | ✓ (footer URLs still correct) |
+
+### What R3 deliberately does NOT do
+
+- **Does NOT open a release PR**.  Shadow mode only.  R4 flips to active mode.
+- **Does NOT publish anything to crates.io**.  Triple-locked dormancy through R8.
+- **Does NOT add `[[package]]` per-crate config**.  Workspace defaults only.  R6 adds per-crate `publish = true` overrides for the 13 publishable members.
+- **Does NOT install `cargo-semver-checks`**.  Disabled via `semver_check = false`.  R6 enables it as part of the metadata audit.
+- **Does NOT add a schedule trigger**.  Push-to-main + workflow_dispatch is sufficient — scheduled re-runs of the same history would produce no new observations.
