@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="assets/brand/uffs-hero-1024.png" alt="UFFS — Ultra Fast File Search" width="480">
+  <img src="assets/brand/uffs-wordmark.png" alt="UFFS — Ultra Fast File Search">
 </p>
-
-<h1 align="center">UFFS — Ultra Fast File Search</h1>
 
 <p align="center">
   <b>Wire-speed search across your NTFS drives. No indexing. No waiting.</b><br>
@@ -10,11 +8,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/skyllc-ai/UltraFastFileSearch/actions/workflows/pr-fast.yml"><img src="https://github.com/skyllc-ai/UltraFastFileSearch/actions/workflows/pr-fast.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/skyllc-ai/UltraFastFileSearch/actions/workflows/pr-fast.yml"><img src="https://img.shields.io/github/actions/workflow/status/skyllc-ai/UltraFastFileSearch/pr-fast.yml?branch=main&label=CI" alt="CI"></a>
   <a href="https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest"><img src="https://img.shields.io/github/v/release/skyllc-ai/UltraFastFileSearch?label=release" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg" alt="License: MPL 2.0"></a>
   <a href="https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest"><img src="https://img.shields.io/badge/platform-Windows-blue.svg" alt="Platform: Windows"></a>
-  <a href="TRADEMARK.md"><img src="https://img.shields.io/badge/brand-TRADEMARK.md-ce422b.svg" alt="Brand policy"></a>
 </p>
 
 **A benchmark-driven NTFS search engine for Windows.** UFFS reads the Master File Table directly, builds a compact persisted index, and keeps large NTFS estates searchable through a background daemon.
