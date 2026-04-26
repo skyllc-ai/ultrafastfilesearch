@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.76] - 2026-04-25
+## [0.5.77] - 2026-04-25
 
 ### Fixed
 - **macOS arm64 release binaries SIGKILLed at launch** under macOS 26+
