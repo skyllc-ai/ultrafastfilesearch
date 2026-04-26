@@ -877,15 +877,41 @@ impl IndexManager {
         }
         drop(snap);
 
+        // Phase 0 of the memory-tiering work: surface the live
+        // allocator-committed bytes and the OS-reported RSS alongside
+        // the per-drive logical heap.  Cross-platform via mimalloc's
+        // `mi_process_info`; see `crate::telemetry::mem_snapshot`.
+        let (rss_bytes, mimalloc_committed_bytes) = crate::telemetry::mem_snapshot().map_or(
+            (None, None),
+            |mem| (Some(mem.rss_bytes), Some(mem.mimalloc_committed_bytes)),
+        );
+
         StatusResponse {
             status: status.clone(),
             uptime_secs: self.start_time.elapsed().as_secs(),
             connections,
             pid: std::process::id(),
-            rss_bytes: None,
+            rss_bytes,
             index_heap_bytes: Some(total_index_heap),
+            mimalloc_committed_bytes,
             drive_memory,
         }
+    }
+
+    /// Sum of `DriveCompactIndex::heap_size_bytes()` across every
+    /// loaded drive.
+    ///
+    /// Used by [`crate::telemetry::spawn_mem_snapshot_task`] to emit
+    /// the `mem.snapshot` tracing event without going through the full
+    /// [`Self::status`] path (which builds a per-drive `Vec` we don't
+    /// need for the heartbeat).
+    pub(crate) async fn total_index_heap_bytes(&self) -> u64 {
+        let snap = self.snapshot().await;
+        let mut total: u64 = 0;
+        for dr in &snap.drives {
+            total = total.saturating_add(dr.heap_size_bytes().total as u64);
+        }
+        total
     }
 
     /// Refresh specific drives (or all if empty).

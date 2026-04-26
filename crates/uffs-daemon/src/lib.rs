@@ -41,6 +41,8 @@ mod ipc;
 mod lifecycle;
 /// JSON-RPC protocol types.
 mod protocol;
+/// Process-level memory and runtime telemetry.
+pub(crate) mod telemetry;
 
 /// Default log file location: `<data-local-dir>/uffs/uffsd.log`.
 ///
@@ -240,6 +242,10 @@ pub async fn run_daemon(config: DaemonConfig) -> anyhow::Result<()> {
 
     let ipc_task = spawn_ipc_servers(&idx, &lifecycle_mgr);
     let _stats_task = spawn_stats_heartbeat(Arc::clone(&idx), lifecycle_mgr.handle());
+    let _mem_snapshot_task = telemetry::spawn_mem_snapshot_task(
+        Arc::clone(&idx),
+        telemetry::DEFAULT_MEM_SNAPSHOT_INTERVAL,
+    );
 
     // Run idle timer (blocks until shutdown or timeout) then tear
     // everything down.  Returns `!` so `force_exit_with_watchdog`

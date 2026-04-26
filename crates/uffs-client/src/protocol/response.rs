@@ -590,6 +590,16 @@ pub struct StatusResponse {
     /// Calculated heap footprint of all loaded indices (bytes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_heap_bytes: Option<u64>,
+    /// Mimalloc allocator committed bytes (bytes paged in from the OS).
+    ///
+    /// Reported by `mi_process_info`; equals or exceeds `index_heap_bytes`
+    /// because the allocator carries page-level overhead and free-but-
+    /// not-yet-decommitted segments.  Comparing this to `rss_bytes` shows
+    /// how much of the daemon's RSS is allocator-managed.  Phase 0 of the
+    /// memory-tiering work surfaces this so subsequent phases can be
+    /// measured against a stable allocator-committed baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mimalloc_committed_bytes: Option<u64>,
     /// Per-drive memory breakdown (drive letter → heap bytes).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drive_memory: Vec<DriveMemoryInfo>,

@@ -1137,3 +1137,70 @@ fn is_live_drive_marker_recognises_cached_volume_marker() {
         "./C_mft.iocp"
     )));
 }
+
+// ── Phase 0 telemetry: status() surfaces RSS + mimalloc committed ──
+
+/// `IndexManager::status` populates both `rss_bytes` and
+/// `mimalloc_committed_bytes` via [`crate::telemetry::mem_snapshot`]
+/// — the two new fields landed by Phase 0 of the memory-tiering
+/// work.  This pin guards against a future refactor accidentally
+/// dropping the wiring (which would silently zero the telemetry
+/// dataset the rest of the tiering work measures itself against).
+#[tokio::test]
+async fn status_populates_rss_and_mimalloc_committed() {
+    let mgr = test_manager_with_drive().await;
+    let status = mgr.status(0).await;
+
+    let rss = status
+        .rss_bytes
+        .expect("Phase 0: status must surface rss_bytes via mem_snapshot");
+    assert!(
+        rss > 0,
+        "rss_bytes must be positive in a live test process; got {rss}"
+    );
+
+    let committed = status
+        .mimalloc_committed_bytes
+        .expect("Phase 0: status must surface mimalloc_committed_bytes via mem_snapshot");
+    // Committed bytes can underflow into the high 64-bit range only
+    // through a sign-extension bug; this bound is a sanity guardrail.
+    assert!(
+        committed < u64::MAX / 2,
+        "mimalloc_committed_bytes looks like an underflow: {committed}"
+    );
+}
+
+/// `IndexManager::total_index_heap_bytes` returns 0 for a fresh
+/// manager (no drives loaded).  Pins the empty-state contract the
+/// `mem.snapshot` heartbeat relies on so the first event after
+/// startup carries a real number rather than a panic.
+#[tokio::test]
+async fn total_index_heap_bytes_zero_for_empty_manager() {
+    let (tx, _rx) = crate::events::event_channel();
+    let mgr = IndexManager::new(None, tx);
+    assert_eq!(mgr.total_index_heap_bytes().await, 0);
+}
+
+/// After [`IndexManager::add_drive`] the heap total is non-zero
+/// and matches the sum reported via the per-drive breakdown in
+/// `status().drive_memory`.  Pins the contract that the heartbeat
+/// path and the JSON-RPC `status` path agree on the same number.
+#[tokio::test]
+async fn total_index_heap_bytes_matches_status_breakdown() {
+    let mgr = test_manager_with_drive().await;
+    let total = mgr.total_index_heap_bytes().await;
+    assert!(total > 0, "loaded drive must report a positive heap; got {total}");
+
+    let status = mgr.status(0).await;
+    let summed: u64 = status.drive_memory.iter().map(|dm| dm.heap_bytes).sum();
+    assert_eq!(
+        total, summed,
+        "total_index_heap_bytes ({total}) must equal sum of \
+         drive_memory.heap_bytes ({summed})"
+    );
+    assert_eq!(
+        status.index_heap_bytes,
+        Some(total),
+        "status.index_heap_bytes must equal total_index_heap_bytes",
+    );
+}
