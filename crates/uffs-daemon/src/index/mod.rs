@@ -881,10 +881,10 @@ impl IndexManager {
         // allocator-committed bytes and the OS-reported RSS alongside
         // the per-drive logical heap.  Cross-platform via mimalloc's
         // `mi_process_info`; see `crate::telemetry::mem_snapshot`.
-        let (rss_bytes, mimalloc_committed_bytes) = crate::telemetry::mem_snapshot().map_or(
-            (None, None),
-            |mem| (Some(mem.rss_bytes), Some(mem.mimalloc_committed_bytes)),
-        );
+        let (rss_bytes, mimalloc_committed_bytes) = crate::telemetry::mem_snapshot()
+            .map_or((None, None), |mem| {
+                (Some(mem.rss_bytes), Some(mem.mimalloc_committed_bytes))
+            });
 
         StatusResponse {
             status: status.clone(),

@@ -1189,7 +1189,10 @@ async fn total_index_heap_bytes_zero_for_empty_manager() {
 async fn total_index_heap_bytes_matches_status_breakdown() {
     let mgr = test_manager_with_drive().await;
     let total = mgr.total_index_heap_bytes().await;
-    assert!(total > 0, "loaded drive must report a positive heap; got {total}");
+    assert!(
+        total > 0,
+        "loaded drive must report a positive heap; got {total}"
+    );
 
     let status = mgr.status(0).await;
     let summed: u64 = status.drive_memory.iter().map(|dm| dm.heap_bytes).sum();

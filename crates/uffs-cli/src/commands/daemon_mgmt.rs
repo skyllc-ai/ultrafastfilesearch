@@ -232,7 +232,10 @@ fn daemon_status() -> Result<()> {
         println!("Index heap:    {} MB", heap / (1024 * 1024));
     }
     if let Some(committed) = status.mimalloc_committed_bytes {
-        println!("Mimalloc:      {} MB (committed)", committed / (1024 * 1024));
+        println!(
+            "Mimalloc:      {} MB (committed)",
+            committed / (1024 * 1024)
+        );
     }
     if let Some(rss) = status.rss_bytes {
         println!("RSS:           {} MB", rss / (1024 * 1024));

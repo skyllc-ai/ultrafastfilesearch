@@ -8,12 +8,12 @@
 //!
 //! Provides:
 //!
-//! * [`mem_snapshot`] — a cross-platform helper that returns the
-//!   daemon's current resident-set size and mimalloc-committed bytes.
-//! * [`spawn_mem_snapshot_task`] — spawns a background tokio task that
-//!   logs that snapshot at a configurable interval as a `mem.snapshot`
-//!   tracing event so a long-running daemon produces the time-series
-//!   the tiering work needs to measure its impact.
+//! * [`mem_snapshot`] — a cross-platform helper that returns the daemon's
+//!   current resident-set size and mimalloc-committed bytes.
+//! * [`spawn_mem_snapshot_task`] — spawns a background tokio task that logs
+//!   that snapshot at a configurable interval as a `mem.snapshot` tracing event
+//!   so a long-running daemon produces the time-series the tiering work needs
+//!   to measure its impact.
 //!
 //! The numbers come from mimalloc's `mi_process_info`, which is
 //! implemented uniformly on Mac, Linux and Windows; this lets the
@@ -201,7 +201,10 @@ mod tests {
     /// thinking about ownership; locking that in regression-test form.
     #[test]
     fn mem_snapshot_is_copy() {
-        let original = MemSnapshot { rss_bytes: 1, mimalloc_committed_bytes: 2 };
+        let original = MemSnapshot {
+            rss_bytes: 1,
+            mimalloc_committed_bytes: 2,
+        };
         let copied = original;
         // Both reads are valid because of `Copy`.
         assert_eq!(original.rss_bytes, 1);
