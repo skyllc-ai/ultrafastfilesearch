@@ -974,6 +974,29 @@ fn csv_col_to_json(col: &str) -> &str {
     }
 }
 
+/// Dot-gated extension extraction matching the sort engine's key
+/// (`extract_extension_after_dot` in
+/// `crates/uffs-core/src/search/filters/ext_match.rs`) and the CLI/MCP
+/// display helpers (`extension_from_name` in `uffs-format`/`uffs-core`).
+///
+/// Returns an empty string for:
+///   * dotless names           (`README`           -> `""`)
+///   * leading-dot "hidden"    (`.bash_history`   -> `""`)
+///   * trailing-dot names      (`foo.`             -> `""`)
+///
+/// Without this guard, `".bash_history".rsplit('.').next()` returns
+/// `"bash_history"`, which (a) breaks T62 `--sort extension asc` because
+/// `"bash_history" > "2008"` lexically, and (b) misclassifies dotless
+/// rows in the `type_*` allowlist validator (their full name becomes the
+/// purported extension).
+fn extract_ext_dot_gated(name: &str) -> String {
+    let Some(dot) = name.rfind('.') else { return String::new(); };
+    if dot == 0 || dot + 1 >= name.len() {
+        return String::new();
+    }
+    name.get(dot + 1..).unwrap_or("").to_ascii_lowercase()
+}
+
 /// Compute derived column values that don't exist directly in the
 /// JSON-RPC response but can be calculated from existing fields.
 fn rpc_field_computed(row: &Value, json_key: &str) -> Option<String> {
@@ -999,8 +1022,7 @@ fn rpc_field_computed(row: &Value, json_key: &str) -> Option<String> {
         }
         "_ext" => {
             let name = field_str(row, "name");
-            let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
-            Some(ext)
+            Some(extract_ext_dot_gated(&name))
         }
         "_path_only" => {
             // Directory path only (strip filename from full path).
@@ -1999,7 +2021,7 @@ fn run_rpc_custom_validator(name: &str, result: &Value) -> Result<String> {
                     // System files are $-prefixed OR have system extensions
                     if name.starts_with('$') { continue; }
                 }
-                let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+                let ext = extract_ext_dot_gated(name);
                 if !allowed.contains(&ext.as_str()) {
                     bad.push(format!("row {i}: {name} (ext={ext})"));
                     if bad.len() >= 3 { break; }
