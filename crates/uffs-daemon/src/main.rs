@@ -59,7 +59,7 @@ use windows as _;
 
 /// UFFS background daemon — holds MFT index, serves queries via IPC.
 #[derive(Parser)]
-#[command(name = "uffs-daemon", about = "UFFS background search daemon")]
+#[command(name = "uffsd", version, about = "UFFS background search daemon")]
 struct Cli {
     /// MFT files to load (*.bin, *.raw, *.iocp, *.uffs).
     #[arg(long = "mft-file", value_name = "PATH")]

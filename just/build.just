@@ -347,6 +347,86 @@ use:
         }
     }
 
+# Reset local `main` to `origin/main`, discarding any uncommitted edits.
+#
+# Motivation: `cargo build` rewrites `Cargo.lock` whenever a transitive
+# dep resolves differently (mtime-driven re-resolution, polars git pin
+# updates, etc.).  After a `just ship` upstream the lockfile has moved,
+# so a plain `git pull` aborts with:
+#     "Your local changes to the following files would be overwritten
+#      by merge: Cargo.lock"
+# `just sync` is the explicit force-discard escape hatch.
+#
+# Safety: refuses to run on any branch other than `main`, so feature
+# branches with real WIP cannot be wiped by accident.  Use plain
+# `git pull --rebase` (or commit the WIP first) on those.
+[unix]
+sync:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    if [[ "$BRANCH" != "main" ]]; then
+        printf "\033[0;31m❌ just sync only runs on main (current: %s)\033[0m\n" "$BRANCH"
+        printf "   Use 'git pull --rebase' (or commit the WIP first) on feature branches.\n"
+        exit 1
+    fi
+    BEFORE=$(git rev-parse --short HEAD)
+    git fetch origin main
+    AFTER=$(git rev-parse --short FETCH_HEAD)
+    DIRTY=""
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        DIRTY="1"
+        printf "\033[1;33m⚠️  Discarding uncommitted edits to:\033[0m\n"
+        git diff --name-only HEAD | sed 's/^/   /'
+    fi
+    if [[ "$BEFORE" == "$AFTER" && -z "$DIRTY" ]]; then
+        printf "\033[0;32m✅ Already at origin/main (%s) — nothing to do\033[0m\n" "$BEFORE"
+    else
+        if [[ "$BEFORE" != "$AFTER" ]]; then
+            printf "\033[1;33m⚠️  Resetting %s -> %s\033[0m\n" "$BEFORE" "$AFTER"
+        fi
+        git reset --hard FETCH_HEAD
+        printf "\033[0;32m✅ Synced to %s\033[0m\n" "$(git rev-parse --short HEAD)"
+    fi
+
+# Reset local `main` to `origin/main`, discarding any uncommitted edits
+# (Windows / PowerShell variant — same semantics as the unix recipe).
+[windows]
+sync:
+    #!powershell
+    $ErrorActionPreference = 'Stop'
+    $branch = (git rev-parse --abbrev-ref HEAD).Trim()
+    if ($branch -ne 'main') {
+        Write-Host "❌ just sync only runs on main (current: $branch)" -ForegroundColor Red
+        Write-Host "   Use 'git pull --rebase' (or commit the WIP first) on feature branches."
+        exit 1
+    }
+    $before = (git rev-parse --short HEAD).Trim()
+    git fetch origin main
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $after = (git rev-parse --short FETCH_HEAD).Trim()
+    $dirty = (git status --porcelain)
+    if ($dirty) {
+        Write-Host "⚠️  Discarding uncommitted edits to:" -ForegroundColor Yellow
+        (git diff --name-only HEAD) -split "`n" | Where-Object { $_ } | ForEach-Object { Write-Host "   $_" }
+    }
+    if ($before -eq $after -and -not $dirty) {
+        Write-Host "✅ Already at origin/main ($before) — nothing to do" -ForegroundColor Green
+    } else {
+        if ($before -ne $after) {
+            Write-Host "⚠️  Resetting $before -> $after" -ForegroundColor Yellow
+        }
+        git reset --hard FETCH_HEAD
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $head = (git rev-parse --short HEAD).Trim()
+        Write-Host "✅ Synced to $head" -ForegroundColor Green
+    }
+
+# Force-pull main (discarding local edits) and reinstall release binaries
+# from `dist/` to `~/bin`.  Drop-in replacement for the `git pull; just use`
+# leg of the daily-driver oneliner — survives a dirty `Cargo.lock`.
+refresh: sync use
+
 # Git commit with auto-generated message.
 commit:
     @printf "\033[0;34m📝 Creating auto-generated commit...\033[0m\n"
