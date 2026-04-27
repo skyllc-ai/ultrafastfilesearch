@@ -69,6 +69,7 @@ use regex as _;
 use rustc_hash as _;
 use serde_json as _;
 use sha2 as _;
+use tempfile as _;
 use thiserror as _;
 use tokio as _;
 use tracing as _;
