@@ -1594,6 +1594,87 @@ fn promote_letter_already_warm_returns_none() {
     );
 }
 
+// ── Phase 3 Commit C — IndexManager::ensure_warm_for_dispatch ──────
+
+/// Fast-path contract: when every loaded shard is already
+/// `Warm`/`Hot`, `ensure_warm_for_dispatch` is a single
+/// read-lock acquisition with no state mutation and no
+/// `index_version` bump.
+#[tokio::test]
+async fn ensure_warm_for_dispatch_no_op_when_all_warm() {
+    use crate::cache::ShardState;
+
+    let (tx, _rx) = crate::events::event_channel();
+    let mgr = IndexManager::new(None, tx);
+    mgr.add_drive(build_test_drive()).await;
+    mgr.add_drive(build_test_drive_d()).await;
+
+    let states_before = mgr.shard_states_for_test().await;
+    assert_eq!(states_before, vec![
+        ('C', ShardState::Warm),
+        ('D', ShardState::Warm)
+    ]);
+
+    // Empty filter → all touched.  Non-empty filter → subset.
+    // Either way, no shard is Parked/Cold so this is a no-op.
+    mgr.ensure_warm_for_dispatch(&[]).await;
+    mgr.ensure_warm_for_dispatch(&['C']).await;
+    mgr.ensure_warm_for_dispatch(&['c']).await; // case-insensitive
+    mgr.ensure_warm_for_dispatch(&['Z']).await; // unknown letter
+
+    let states_after = mgr.shard_states_for_test().await;
+    assert_eq!(
+        states_after, states_before,
+        "all-Warm registry must survive ensure_warm_for_dispatch unchanged",
+    );
+}
+
+/// `ensure_warm_for_dispatch` honours the drive-letter filter:
+/// when the search targets only drive D and drive C is Parked,
+/// C must not be promoted.
+#[tokio::test]
+async fn ensure_warm_for_dispatch_skips_parked_shard_outside_filter() {
+    use crate::cache::ShardState;
+
+    let (tx, _rx) = crate::events::event_channel();
+    let mgr = IndexManager::new(None, tx);
+    mgr.add_drive(build_test_drive()).await;
+    mgr.add_drive(build_test_drive_d()).await;
+
+    // Demote C to Parked (test escape hatch).
+    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    let states_pre = mgr.shard_states_for_test().await;
+    assert!(states_pre.contains(&('C', ShardState::Parked)));
+
+    // Search targets only D — C must stay Parked.  The on-disk
+    // cache lookup for D would no-op because D is already Warm.
+    mgr.ensure_warm_for_dispatch(&['D']).await;
+
+    let states_post = mgr.shard_states_for_test().await;
+    assert_eq!(
+        states_post, states_pre,
+        "filter excluded C — Parked state must survive",
+    );
+}
+
+// NOTE: The third Commit C contract — "missing cache file is
+// graceful: shard stays Parked, no panic" — is deferred to Commit E
+// (virtual-time integration tests) so it can land alongside the
+// `BodyLoader` trait that gives `IndexManager` a deterministic
+// per-test body source.  The current production code reads from
+// the platform cache dir (`~/Library/Caches/com.uffs/<letter>_compact.uffs`
+// on Mac), so a unit test for the missing-cache path would either
+// need a process-global `UFFS_CACHE_DIR_OVERRIDE` (which races with
+// parallel tests) or the BodyLoader scaffolding.  Commit E lands
+// the latter and gets the round-trip + graceful-failure tests for
+// free off the same fixture.
+//
+// In the meantime, the production graceful-failure path is exercised
+// indirectly by `ensure_warm_for_dispatch_no_op_when_all_warm` (no
+// load attempted) and
+// `ensure_warm_for_dispatch_skips_parked_shard_outside_filter` (load attempt
+// only on Parked shards, and the filter precludes any).
+
 /// End-to-end: demote → promote → demote → promote preserves
 /// query stats across every rebuild.  Pins the
 /// `Arc<DriveStats>`-sharing contract under repeated transitions.

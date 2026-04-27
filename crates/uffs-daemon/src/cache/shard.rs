@@ -440,15 +440,6 @@ impl ShardEntry {
     /// the promote path: a `Parked` / `Cold` shard's `Arc<DriveStats>`
     /// is lifted into the new `Warm` `ShardEntry` so the per-drive
     /// query counters survive the round-trip through demote-and-back.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 3 Commit B consumer (`ShardRegistry::promote_letter`); \
-                      Commit A lands the constructor so the shape is reviewable \
-                      independently of the demote/promote logic."
-        )
-    )]
     #[must_use]
     pub(crate) const fn new_warm_with_stats(
         drive: char,

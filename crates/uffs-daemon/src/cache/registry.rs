@@ -309,15 +309,10 @@ impl ShardRegistry {
     /// The per-drive `Arc<DriveStats>` from the demoted shard is
     /// shared with the new `Warm` entry so the round-trip
     /// demote-and-back preserves query counters.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 3 Commit C consumer (search-hot-path promote); \
-                      Commit B lands the helper so the promote logic + tracing \
-                      contract is reviewable independently of the wiring."
-        )
-    )]
+    ///
+    /// Wired into the search hot path by
+    /// [`crate::index::IndexManager::ensure_warm_for_dispatch`]
+    /// (Phase 3 Commit C).
     #[must_use]
     pub(crate) fn promote_letter(
         &self,

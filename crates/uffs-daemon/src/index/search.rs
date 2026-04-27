@@ -84,6 +84,10 @@ impl IndexManager {
         let requires_post_filter =
             Self::predicates_require_post_filter(&effective_params.predicates);
 
+        // Phase 3 Commit C — see `ensure_warm_for_dispatch` doc.
+        self.ensure_warm_for_dispatch(&effective_params.drives)
+            .await;
+
         // ── Snapshot the index (< 1 μs) ────────────────────────────
         let t_lock = profiling.then(Instant::now);
         let snapshot = self.snapshot().await;

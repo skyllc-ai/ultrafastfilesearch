@@ -847,6 +847,116 @@ impl IndexManager {
         }
     }
 
+    /// Phase 3 Commit C — promote any Parked/Cold shards that this
+    /// search will dispatch to, before
+    /// [`Self::snapshot`] reads the active subset.
+    ///
+    /// Three-phase orchestrator (read-detect → spawn-blocking
+    /// load → write-swap) — see implementation comments below.
+    ///
+    /// `params_drives` is the search's drive-letter filter
+    /// ([`uffs_client::protocol::SearchParams::drives`]).  An empty
+    /// slice means "no filter" — the touched set is every loaded
+    /// shard.  When non-empty, only shards whose drive letter
+    /// case-insensitively matches a filter entry are considered.
+    ///
+    /// **Conservative on under-promote, lenient on over-promote.**
+    /// If the search pattern itself implies a drive prefix
+    /// (e.g. `"C:*.txt"`) but `params_drives` is empty, we'll
+    /// over-promote (touching shards the search backend will then
+    /// skip) — wasted I/O, no correctness issue.  The opposite
+    /// (under-promote → search misses a Parked shard) is what we
+    /// can't afford, hence the empty-filter == all-loaded fallback.
+    ///
+    /// No-op if every touched shard is already Warm/Hot — common
+    /// case, single read-lock acquisition only.
+    async fn ensure_warm_for_dispatch(&self, params_drives: &[char]) {
+        // ── Phase 1: read-lock detection (fast path) ───────────
+        // Identify Parked/Cold shards in the touched set.  Single
+        // read-lock acquisition; the registry's `iter()` is a Vec
+        // walk, no allocation beyond the `needs_promote` Vec.
+        let needs_promote: Vec<char> = {
+            let guard = self.index.read().await;
+            guard
+                .iter()
+                .filter(|shard| {
+                    params_drives.is_empty()
+                        || params_drives
+                            .iter()
+                            .any(|filter| filter.eq_ignore_ascii_case(&shard.drive))
+                })
+                .filter(|shard| {
+                    matches!(
+                        shard.state(),
+                        crate::cache::ShardState::Parked | crate::cache::ShardState::Cold
+                    )
+                })
+                .map(|shard| shard.drive)
+                .collect()
+        };
+        if needs_promote.is_empty() {
+            return;
+        }
+
+        // ── Phase 2: spawn-blocking body load ──────────────────
+        // For each Parked/Cold letter, hop onto the blocking pool
+        // for the I/O + decrypt + decompress + runtime-mmap
+        // materialisation.  `load_compact_cache` returns `None` on
+        // any non-fatal failure (missing cache file, stale, decrypt
+        // error); we trace and skip — the shard stays in its
+        // current tier and the search will dispatch against the
+        // unchanged active subset.
+        //
+        // Phases 2 + 3 are interleaved per letter so a slow
+        // disk-read on letter A doesn't block the swap for letter
+        // B that's already loaded.  Serialised on purpose:
+        // promoting N drives in a single hot-path query is rare
+        // (idle-timer demote is per-drive) and the write-lock
+        // contention from N parallel swaps would dwarf the
+        // serialisation cost.
+        for letter in needs_promote {
+            let load_result = tokio::task::spawn_blocking(move || {
+                uffs_core::compact_cache::load_compact_cache(letter, u64::MAX, 0, true)
+            })
+            .await;
+            let body = match load_result {
+                Ok(Some(loaded)) => Arc::new(loaded),
+                Ok(None) => {
+                    tracing::warn!(
+                        target: "shard.transition",
+                        drive = %letter,
+                        reason = "promote-on-search",
+                        "compact-cache load returned None; shard stays in current tier",
+                    );
+                    continue;
+                }
+                Err(join_err) => {
+                    tracing::error!(
+                        target: "shard.transition",
+                        drive = %letter,
+                        error = %join_err,
+                        reason = "promote-on-search",
+                        "blocking-task panic during cache load; shard stays in current tier",
+                    );
+                    continue;
+                }
+            };
+
+            // ── Phase 3: write-lock atomic swap ────────────────
+            // `promote_letter` is `Option`-returning so a benign
+            // race (another task promoted between our read-detect
+            // and write-swap, or a demote landed on top of the
+            // Parked state we observed) drops the freshly-loaded
+            // body Arc and leaves the canonical registry alone.
+            let mut guard = self.index.write().await;
+            if let Some(new_registry) = guard.promote_letter(letter, body) {
+                *guard = Arc::new(new_registry);
+                drop(guard);
+                self.bump_index_version();
+            }
+        }
+    }
+
     /// Per-shard `(drive_letter, queries_total)` snapshot for tests.
     ///
     /// Test-only escape hatch so integration tests in `crate::index::tests`
@@ -858,6 +968,48 @@ impl IndexManager {
         guard
             .iter()
             .map(|shard| (shard.drive, shard.stats.queries_total()))
+            .collect()
+    }
+
+    /// Demote a single shard to `target` for tests.
+    ///
+    /// Test-only escape hatch used by Commit C tests to seed a
+    /// `Parked`/`Cold` shard so [`Self::ensure_warm_for_dispatch`]
+    /// has something to promote.  Production code never calls this
+    /// directly — the demote-on-idle controller in Commit D uses
+    /// `ShardRegistry::demote_letter` from a `tokio::task` instead.
+    ///
+    /// Returns `true` if the registry was rebuilt (demote was
+    /// legal), `false` otherwise (unknown letter or illegal target).
+    #[cfg(test)]
+    pub(crate) async fn demote_letter_for_test(
+        &self,
+        letter: char,
+        target: crate::cache::ShardState,
+    ) -> bool {
+        let mut guard = self.index.write().await;
+        guard
+            .demote_letter(letter, target)
+            .is_some_and(|new_registry| {
+                *guard = Arc::new(new_registry);
+                drop(guard);
+                self.bump_index_version();
+                true
+            })
+    }
+
+    /// Per-shard `(drive_letter, ShardState)` snapshot for tests.
+    ///
+    /// Test-only — the production code path observes shard state
+    /// only through [`Self::snapshot`] (which filters Warm/Hot).
+    /// Commit C tests need to assert the *full* tier distribution
+    /// (Parked/Cold) before and after `ensure_warm_for_dispatch`.
+    #[cfg(test)]
+    pub(crate) async fn shard_states_for_test(&self) -> Vec<(char, crate::cache::ShardState)> {
+        let guard = self.index.read().await;
+        guard
+            .iter()
+            .map(|shard| (shard.drive, shard.state()))
             .collect()
     }
 
