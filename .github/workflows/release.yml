@@ -231,7 +231,18 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          # `shared-key:` (not `key:`) so the action's built-in fallback
+          # restores partial matches when `Cargo.lock` shifts between
+          # releases.  `just ship` runs `cargo update` on every release,
+          # which changes the `Cargo.lock` hash and would force an exact
+          # `key:` to miss every single time (issue #80).  `shared-key:`
+          # gives us the same cache-key prefix on every release-${target}
+          # invocation and lets the action recover ~80-90 % of the
+          # previous compile graph; only crates whose sources actually
+          # changed need recompilation.  `pr-fast.yml` uses the same
+          # pattern; the divergence here was unintentional.
+          shared-key: release-${{ matrix.target }}
+          cache-on-failure: 'true'
 
       - name: Build optimized release binaries
         shell: bash
