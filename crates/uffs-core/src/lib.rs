@@ -60,6 +60,7 @@ pub mod aggregate;
 pub mod bloom;
 pub mod compact;
 pub mod compact_cache;
+pub mod compact_filters;
 pub mod compact_loader;
 pub mod compact_mmap;
 pub mod compact_reader;
