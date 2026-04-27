@@ -36,10 +36,16 @@ env:
   # Disable sccache in CI - it's configured in .cargo/config.toml for local dev
   # but not installed on GitHub Actions runners
   RUSTC_WRAPPER: ""
-  # Limit parallel jobs to reduce memory pressure during Polars compilation
-  # GitHub Actions runners have limited RAM; too many parallel rustc processes
-  # can trigger OOM killer or runner preemption (exit code 143)
-  CARGO_BUILD_JOBS: 2
+  # Limit parallel jobs to reduce memory pressure during Polars compilation.
+  # GitHub Actions ubuntu-latest runners (16 GB / 4 vCPU) cannot host parallel
+  # link-stages of every workspace binary — each pulls polars + axum + rmcp +
+  # mimalloc + ring through its dep graph and consumes multiple GB during `ld`.
+  # The previous cap of 2 was still being pre-empted with exit 143 / SIGTERM
+  # mid-link of the workspace bins (issue #83, runs 24984887285 attempts 1+2),
+  # so this drops to 1 — fully serialised compile/link.  Wall time goes up
+  # modestly (≈10 → ≈14 min on warm cache) but stays well within the
+  # 60-min step budget; correctness > speed for a once-weekly cron.
+  CARGO_BUILD_JOBS: 1
 
 jobs:
   file-size-policy:
@@ -186,20 +192,18 @@ jobs:
         # the committed Cargo.lock, otherwise a broken lockfile wouldn't
         # surface here.
         #
-        # CARGO_BUILD_JOBS=2: ubuntu-latest's 16 GB RAM cannot host
-        # parallel linkers for every workspace binary — `uffs` +
-        # `uffsd` + `uffsmcp` + `uffs_mft` + diagnostic bins each pull
-        # in polars + axum + rmcp + mimalloc + ring during link, which
-        # adds up to multiple GB per `ld` invocation.  4–5 wide
-        # parallelism (the default for ubuntu-latest's 4 vCPU) breached
-        # the memory budget mid-link and the kernel pre-empted the
-        # runner agent (exit 143 / "runner has received a shutdown
-        # signal" — issue #83).  Capping at 2 keeps a useful amount of
-        # compile parallelism while never linking more than 2 bins at
-        # once.  Total wall time goes up modestly (≈10 → ≈12 min on
-        # warm cache) — well within the 60-min budget.
+        # CARGO_BUILD_JOBS=1: workflow-level env already sets this; the
+        # step-level override is kept in lockstep so a future split
+        # of the workflow-level cap doesn't silently re-introduce
+        # parallel linking.  GitHub Actions step-env > workflow-env,
+        # so divergence here would defeat the fix.  Background:
+        # ubuntu-latest's 16 GB / 4 vCPU pre-empted the runner mid-link
+        # of the workspace binaries even at parallelism 2 (issue #83,
+        # run 24984887285 attempts 1+2 — both died ~60 s after the
+        # last `Compiling …` line, mid-`ld`).  Serialised link is
+        # ~+2-4 min wall time on warm cache, well inside budget.
         env:
-          CARGO_BUILD_JOBS: '2'
+          CARGO_BUILD_JOBS: '1'
         run: cargo build --locked --workspace --all-features --bins
 
   udeps:
