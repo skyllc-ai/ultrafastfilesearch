@@ -4406,6 +4406,7 @@ dependencies = [
  "globset",
  "itoa",
  "memchr",
+ "memmap2",
  "rayon",
  "regex",
  "rustc-hash",

@@ -69,6 +69,12 @@ anyhow.workspace = true
 itoa.workspace = true
 bytemuck.workspace = true
 sha2 = { workspace = true, features = ["default"] }
+# Phase 2b memory-tiering — `compact_storage::ColumnStorage::Mmap`
+# variant + `compact_mmap` runtime-layout module require `memmap2`
+# at the same major version every other workspace consumer (uffs-client,
+# uffs-mft) already uses.  See `docs/refactor/memory-tiering-implementation-plan.md`
+# §3 Phase 2b.
+memmap2.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
@@ -87,4 +93,3 @@ harness = false
 # ─────────────────────────────────────────────────────────────────────────────
 [lints]
 workspace = true
-

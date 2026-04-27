@@ -63,6 +63,7 @@ use devicons as _;
 use globset as _;
 use itoa as _;
 use memchr as _;
+use memmap2 as _;
 use rayon as _;
 use regex as _;
 use rustc_hash as _;
