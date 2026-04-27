@@ -50,8 +50,8 @@
 //!    `align_of::<T>()`.
 //!
 //! Both checks are required for [`bytemuck::cast_slice`] to be sound on
-//! the slice we hand out from [`as_slice`].  Production callers obtain
-//! aligned regions from `crate::compact_mmap::RuntimeLayout` which
+//! the slice we hand out from [`ColumnStorage::as_slice`].  Production callers
+//! obtain aligned regions from `crate::compact_mmap::RuntimeLayout` which
 //! page-aligns every column header; the validation here is
 //! belt-and-braces against future callers.
 

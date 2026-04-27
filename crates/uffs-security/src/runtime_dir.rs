@@ -493,7 +493,7 @@ pub use windows_impl::WindowsRuntimeDir;
 
 /// Platform-default [`RuntimeDir`] type alias.
 ///
-/// Resolves to [`UnixRuntimeDir`] on Mac/Linux, [`WindowsRuntimeDir`]
+/// Resolves to `UnixRuntimeDir` on Mac/Linux, `WindowsRuntimeDir`
 /// on Windows.  Use this in production code so the platform split is
 /// invisible at the call site.
 #[cfg(unix)]
@@ -501,7 +501,7 @@ pub type DefaultRuntimeDir = UnixRuntimeDir;
 
 /// Platform-default [`RuntimeDir`] type alias.
 ///
-/// Resolves to [`UnixRuntimeDir`] on Mac/Linux, [`WindowsRuntimeDir`]
+/// Resolves to `UnixRuntimeDir` on Mac/Linux, `WindowsRuntimeDir`
 /// on Windows.  Use this in production code so the platform split is
 /// invisible at the call site.
 #[cfg(windows)]
