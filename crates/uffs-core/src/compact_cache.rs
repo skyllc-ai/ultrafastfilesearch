@@ -31,6 +31,7 @@ use std::time::Instant;
 use crate::compact::{
     ChildrenIndex, CompactRecord, DriveCompactIndex, ExtensionIndex, IndexSource,
 };
+use crate::compact_storage::ColumnStorage;
 use crate::trigram::TrigramIndex;
 
 /// Magic bytes for compact cache files.
@@ -277,8 +278,8 @@ pub fn deserialize_compact(
     Ok((
         DriveCompactIndex {
             letter: drive_letter,
-            records,
-            names,
+            records: ColumnStorage::from_vec(records),
+            names: ColumnStorage::from_vec(names),
             trigram,
             children,
             ext_index,
@@ -819,8 +820,8 @@ mod tests {
         let ext_index = ExtensionIndex::build(&records);
         DriveCompactIndex {
             letter: 'T',
-            records,
-            names,
+            records: ColumnStorage::from_vec(records),
+            names: ColumnStorage::from_vec(names),
             trigram,
             children,
             ext_index,
@@ -856,7 +857,7 @@ mod tests {
         // Verify other fields survived.
         assert_eq!(loaded.letter, 'T');
         assert_eq!(loaded.records.len(), 3);
-        assert_eq!(loaded.names, b"foobarbaz");
+        assert_eq!(loaded.names.as_slice(), b"foobarbaz");
         assert_eq!(loaded.source_epoch, 42);
     }
 

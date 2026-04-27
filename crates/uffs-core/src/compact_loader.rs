@@ -391,7 +391,7 @@ pub fn apply_usn_patch(
         if change.deleted {
             if compact_idx == u32::MAX {
                 stats.skipped += 1;
-            } else if let Some(rec) = drive.records.get_mut(compact_idx as usize) {
+            } else if let Some(rec) = drive.records.as_mut_slice().get_mut(compact_idx as usize) {
                 rec.name_len = 0;
                 // Clear parent so CSR rebuild excludes this record.
                 rec.parent_idx = u32::MAX;
@@ -400,19 +400,25 @@ pub fn apply_usn_patch(
         } else if change.created {
             if compact_idx != u32::MAX {
                 // Re-animate a previously deleted slot.
-                if let Some(rec) = drive.records.get_mut(compact_idx as usize)
+                if let Some(rec) = drive.records.as_mut_slice().get_mut(compact_idx as usize)
                     && rec.name_len == 0
                     && !change.filename.is_empty()
                 {
                     let name_start = drive.names.len();
-                    drive.names.extend_from_slice(change.filename.as_bytes());
+                    drive
+                        .names
+                        .as_mut_vec()
+                        .extend_from_slice(change.filename.as_bytes());
                     rec.name_offset = uffs_mft::len_to_u32(name_start);
                     rec.name_len = uffs_mft::len_to_u16(change.filename.len());
                 }
                 stats.skipped += 1;
             } else if !change.filename.is_empty() {
                 let name_start = drive.names.len();
-                drive.names.extend_from_slice(change.filename.as_bytes());
+                drive
+                    .names
+                    .as_mut_vec()
+                    .extend_from_slice(change.filename.as_bytes());
 
                 let parent_frs_usize = uffs_mft::frs_to_usize(change.parent_frs);
                 let parent_compact = frs_to_compact
@@ -442,7 +448,7 @@ pub fn apply_usn_patch(
                     _pad: [0; 1],
                 };
 
-                drive.records.push(new_rec);
+                drive.records.as_mut_vec().push(new_rec);
                 stats.created += 1;
             } else {
                 stats.skipped += 1;
@@ -450,10 +456,13 @@ pub fn apply_usn_patch(
         } else if change.renamed {
             if compact_idx == u32::MAX {
                 stats.skipped += 1;
-            } else if let Some(rec) = drive.records.get_mut(compact_idx as usize) {
+            } else if let Some(rec) = drive.records.as_mut_slice().get_mut(compact_idx as usize) {
                 if !change.filename.is_empty() {
                     let name_start = drive.names.len();
-                    drive.names.extend_from_slice(change.filename.as_bytes());
+                    drive
+                        .names
+                        .as_mut_vec()
+                        .extend_from_slice(change.filename.as_bytes());
                     rec.name_offset = uffs_mft::len_to_u32(name_start);
                     rec.name_len = uffs_mft::len_to_u16(change.filename.len());
                 }

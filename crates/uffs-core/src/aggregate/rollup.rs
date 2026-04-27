@@ -315,8 +315,8 @@ mod tests {
 
         DriveCompactIndex {
             letter: 'C',
-            records,
-            names: names_blob,
+            records: crate::compact_storage::ColumnStorage::from_vec(records),
+            names: crate::compact_storage::ColumnStorage::from_vec(names_blob),
             trigram: TrigramIndex::empty(),
             children,
             ext_index: ExtensionIndex::build(&[]),

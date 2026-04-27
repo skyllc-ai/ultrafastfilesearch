@@ -25,6 +25,7 @@ pub use crate::compact_loader::{
 #[cfg(windows)]
 #[expect(deprecated, reason = "re-export kept for backward compatibility")]
 pub use crate::compact_loader::{apply_usn_patch, load_live_drive};
+use crate::compact_storage::ColumnStorage;
 use crate::trigram::TrigramIndex;
 
 /// Compact per-record data for in-memory search, filter, and sort.
@@ -331,9 +332,18 @@ pub struct DriveCompactIndex {
     /// Drive letter (e.g., 'C').
     pub letter: char,
     /// Compact records — one per MFT file/directory.
-    pub records: Vec<CompactRecord>,
+    ///
+    /// Backed by [`ColumnStorage`] so Phase 2b can transparently
+    /// swap the heap-resident `Vec` for a memory-mapped runtime
+    /// tempfile.  Read-side call sites use [`Deref<[T]>`]; mutating
+    /// callers (Windows USN-patch path) go through
+    /// [`ColumnStorage::as_mut_vec`].
+    pub records: ColumnStorage<CompactRecord>,
     /// All filenames concatenated (UTF-8 bytes, original case).
-    pub names: Vec<u8>,
+    ///
+    /// Backed by [`ColumnStorage`]; see [`Self::records`] for the
+    /// rationale.
+    pub names: ColumnStorage<u8>,
     /// Trigram inverted index built from folded names (char-level, `$UpCase`).
     pub trigram: TrigramIndex,
     /// CSR children index: `children.get(i)` → child indices of record i.
@@ -358,9 +368,11 @@ pub struct DriveCompactIndex {
 /// Per-component heap footprint of a [`DriveCompactIndex`].
 #[derive(Debug, Clone)]
 pub struct HeapReport {
-    /// `records: Vec<CompactRecord>` capacity in bytes.
+    /// `records: ColumnStorage<CompactRecord>` capacity in bytes.
+    /// Mmap-backed columns (Phase 2b) report `len * sizeof(T)`
+    /// since the kernel-mapped pages have no extra slack.
     pub records: usize,
-    /// `names: Vec<u8>` capacity in bytes.
+    /// `names: ColumnStorage<u8>` capacity in bytes.
     pub names: usize,
     /// `TrigramIndex` total heap (keys + offsets + values).
     pub trigram: usize,
@@ -810,8 +822,8 @@ pub fn build_compact_index(
     (
         DriveCompactIndex {
             letter: drive_letter,
-            records,
-            names,
+            records: ColumnStorage::from_vec(records),
+            names: ColumnStorage::from_vec(names),
             trigram,
             children,
             ext_index,
