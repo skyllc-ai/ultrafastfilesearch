@@ -369,6 +369,30 @@ impl<T: bytemuck::Pod> ColumnStorage<T> {
         self.len() == 0
     }
 
+    /// `true` if the column is backed by [`ColumnStorage::Mmap`].
+    ///
+    /// Phase 2b memory-tiering regression-test hook
+    /// (`docs/refactor/memory-tiering-implementation-plan.md` §3
+    /// Phase 2b Commit F).  Letting tests assert the storage variant
+    /// directly avoids pattern-matching on the public enum, which
+    /// would couple test code to the variant order and break on a
+    /// future third variant.
+    #[must_use]
+    pub const fn is_mmap(&self) -> bool {
+        matches!(self, Self::Mmap { .. })
+    }
+
+    /// `true` if the column is backed by [`ColumnStorage::Vec`].
+    ///
+    /// Complement of [`Self::is_mmap`]; today the two are exhaustive
+    /// (`is_mmap() == !is_vec()`) but kept symmetric so adding a
+    /// future variant does not silently flip the meaning of either
+    /// accessor.
+    #[must_use]
+    pub const fn is_vec(&self) -> bool {
+        matches!(self, Self::Vec(_))
+    }
+
     // ─────────────────────────────────────────────────────────────────
     // Internal: promotion logic.
     // ─────────────────────────────────────────────────────────────────

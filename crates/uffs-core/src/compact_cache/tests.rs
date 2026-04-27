@@ -266,3 +266,68 @@ fn runtime_mmap_rejects_truncated_data() {
         .expect("truncated data must error via runtime path");
     assert_eq!(err.kind(), io::ErrorKind::Other);
 }
+
+// ─── Phase 2b Commit F: memory regression — storage-variant pinning ───
+//
+// The runtime mmap path (`deserialize_compact_into_runtime`) must serve
+// the two largest columns (`records`, `names`) from the kernel page
+// cache, not the heap.  The heap path (`deserialize_compact`) must
+// continue to allocate `Vec`s.  Asserting the [`ColumnStorage`] variant
+// directly is the deterministic, byte-precise version of the RSS check
+// the implementation plan (§3 Phase 2b Commit F) originally proposed —
+// the RSS approach is dominated by page granularity (4 KB / 16 KB) at
+// any feasible test scale and would be flaky in CI.
+
+#[test]
+fn runtime_path_yields_mmap_backed_columns() {
+    let index = make_test_index();
+    let serialized = serialize_compact(&index);
+
+    let (_tmp, runtime_path) = runtime_fixture("variant_mmap.live");
+    let runtime_dir = uffs_security::runtime_dir::DefaultRuntimeDir::default();
+    let (loaded, _tri_ms) =
+        deserialize_compact_into_runtime(&serialized, 'T', &runtime_dir, &runtime_path)
+            .expect("mmap deser");
+
+    assert!(
+        loaded.records.is_mmap(),
+        "records column must be Mmap-backed after deserialize_compact_into_runtime"
+    );
+    assert!(
+        loaded.names.is_mmap(),
+        "names column must be Mmap-backed after deserialize_compact_into_runtime"
+    );
+    assert!(
+        !loaded.records.is_vec(),
+        "records column must NOT be Vec-backed after deserialize_compact_into_runtime"
+    );
+    assert!(
+        !loaded.names.is_vec(),
+        "names column must NOT be Vec-backed after deserialize_compact_into_runtime"
+    );
+}
+
+#[test]
+fn heap_path_yields_vec_backed_columns() {
+    let index = make_test_index();
+    let serialized = serialize_compact(&index);
+
+    let (loaded, _tri_ms) = deserialize_compact(&serialized, 'T').expect("heap deser");
+
+    assert!(
+        loaded.records.is_vec(),
+        "records column must be Vec-backed after deserialize_compact (legacy heap path)"
+    );
+    assert!(
+        loaded.names.is_vec(),
+        "names column must be Vec-backed after deserialize_compact (legacy heap path)"
+    );
+    assert!(
+        !loaded.records.is_mmap(),
+        "records column must NOT be Mmap-backed after deserialize_compact"
+    );
+    assert!(
+        !loaded.names.is_mmap(),
+        "names column must NOT be Mmap-backed after deserialize_compact"
+    );
+}
