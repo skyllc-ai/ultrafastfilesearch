@@ -435,6 +435,34 @@ impl ShardEntry {
         }
     }
 
+    /// Construct a `Warm` shard wrapping `body` and sharing an
+    /// existing `Arc<DriveStats>`.  Mirror of [`Self::new_warm`] for
+    /// the promote path: a `Parked` / `Cold` shard's `Arc<DriveStats>`
+    /// is lifted into the new `Warm` `ShardEntry` so the per-drive
+    /// query counters survive the round-trip through demote-and-back.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Phase 3 Commit B consumer (`ShardRegistry::promote_letter`); \
+                      Commit A lands the constructor so the shape is reviewable \
+                      independently of the demote/promote logic."
+        )
+    )]
+    #[must_use]
+    pub(crate) const fn new_warm_with_stats(
+        drive: char,
+        body: Arc<DriveCompactIndex>,
+        stats: Arc<DriveStats>,
+    ) -> Self {
+        Self {
+            drive,
+            state: AtomicU8::new(ShardState::Warm as u8),
+            stats,
+            body: Some(body),
+        }
+    }
+
     /// Construct a `Parked` shard sharing an existing
     /// `Arc<DriveStats>` (typically lifted off the previous
     /// `Warm` / `Hot` `ShardEntry` for this drive during a tier
