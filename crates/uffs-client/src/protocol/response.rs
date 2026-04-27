@@ -2,9 +2,18 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Response types, RPC convenience methods, and command parameter types.
+//!
+//! Daemon-state responses (`DrivesResponse`, `StatusResponse`,
+//! `StatsResponse`, `DaemonStatus`, `DriveMemoryInfo`, `DriveInfo`)
+//! live in the sibling [`response_status`](super::response_status)
+//! module and are re-exported below for back-compat with the historical
+//! `crate::protocol::response::*` import surface.
 
 use serde::{Deserialize, Serialize};
 
+pub use super::response_status::{
+    DaemonStatus, DriveInfo, DriveMemoryInfo, DrivesResponse, StatsResponse, StatusResponse,
+};
 use super::{
     AggregateResultWire, BucketWire, RpcError, RpcErrorResponse, RpcRequest, RpcResponse,
     SearchResponseMode, SearchSortSpec,
@@ -553,131 +562,6 @@ impl uffs_format::FormatRow for SearchRow {
     fn tree_allocated(&self) -> u64 {
         self.tree_allocated
     }
-}
-
-/// Response for the `drives` method.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DrivesResponse {
-    /// Loaded drives with record counts.
-    pub drives: Vec<DriveInfo>,
-}
-
-/// Information about a loaded drive.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DriveInfo {
-    /// Drive letter.
-    pub letter: char,
-    /// Number of records in the compact index.
-    pub records: usize,
-    /// Source (e.g. `"cache"`, `"live"`, `"mft_file"`).
-    pub source: String,
-}
-
-/// Response for the `status` method.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct StatusResponse {
-    /// Current daemon status.
-    pub status: DaemonStatus,
-    /// Daemon uptime in seconds.
-    pub uptime_secs: u64,
-    /// Number of active connections.
-    pub connections: usize,
-    /// Daemon process ID.
-    pub pid: u32,
-    /// Process RSS (resident set size) in bytes, if available.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rss_bytes: Option<u64>,
-    /// Calculated heap footprint of all loaded indices (bytes).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub index_heap_bytes: Option<u64>,
-    /// Mimalloc allocator committed bytes (bytes paged in from the OS).
-    ///
-    /// Reported by `mi_process_info`; equals or exceeds `index_heap_bytes`
-    /// because the allocator carries page-level overhead and free-but-
-    /// not-yet-decommitted segments.  Comparing this to `rss_bytes` shows
-    /// how much of the daemon's RSS is allocator-managed.  Phase 0 of the
-    /// memory-tiering work surfaces this so subsequent phases can be
-    /// measured against a stable allocator-committed baseline.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mimalloc_committed_bytes: Option<u64>,
-    /// Per-drive memory breakdown (drive letter → heap bytes).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub drive_memory: Vec<DriveMemoryInfo>,
-}
-
-/// Per-drive memory breakdown for status reporting.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DriveMemoryInfo {
-    /// Drive letter.
-    pub drive: char,
-    /// Number of records in this drive's index.
-    pub records: usize,
-    /// Calculated heap footprint in bytes.
-    pub heap_bytes: u64,
-    /// Breakdown: records Vec.
-    pub records_bytes: u64,
-    /// Breakdown: names Vec.
-    pub names_bytes: u64,
-    /// Breakdown: trigram index.
-    pub trigram_bytes: u64,
-    /// Breakdown: children index.
-    pub children_bytes: u64,
-    /// Breakdown: extension index.
-    pub ext_index_bytes: u64,
-}
-
-/// Response for the `stats` method — daemon performance metrics.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct StatsResponse {
-    /// Total search queries served since startup.
-    pub total_queries: u64,
-    /// Cumulative search time in microseconds.
-    pub total_query_time_us: u64,
-    /// Average query time in microseconds.
-    pub avg_query_time_us: f64,
-    /// Time from daemon start to `Ready` in milliseconds.
-    pub startup_duration_ms: u64,
-    /// Daemon uptime in seconds.
-    pub uptime_secs: u64,
-    /// Total records across all loaded drives.
-    pub total_records: usize,
-    /// Queries per second (over daemon lifetime).
-    pub queries_per_second: f64,
-    /// Aggregate-cache hit count (lifetime, since daemon start).
-    ///
-    /// Defaults to `0` when the daemon is older than this field
-    /// (forward compatibility with pre-0.5.44 daemons).
-    #[serde(default)]
-    pub agg_cache_hits: u64,
-    /// Aggregate-cache miss count (lifetime, includes stale/expired).
-    #[serde(default)]
-    pub agg_cache_misses: u64,
-    /// Number of entries currently in the aggregate cache.
-    #[serde(default)]
-    pub agg_cache_entries: u64,
-}
-
-/// Daemon operational status.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "state")]
-pub enum DaemonStatus {
-    /// Daemon is loading indices.
-    #[serde(rename = "loading")]
-    Loading {
-        /// Drives loaded so far.
-        drives_loaded: usize,
-        /// Total drives to load.
-        drives_total: usize,
-    },
-    /// Daemon is ready to serve queries.
-    #[serde(rename = "ready")]
-    Ready,
-    /// Daemon is refreshing one or more drives.
-    #[serde(rename = "refreshing")]
-    Refreshing {
-        /// Drives being refreshed.
-        drives: Vec<char>,
-    },
 }
 
 /// Response for the `info` method (all 25 columns for a path).

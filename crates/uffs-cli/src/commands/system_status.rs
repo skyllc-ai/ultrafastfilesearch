@@ -62,6 +62,10 @@ fn print_daemon_status() {
     } else {
         ""
     };
+    println!(
+        "  Version:     {}",
+        crate::commands::version_summary(&status.version)
+    );
     println!("  Status:      running (PID {}){stale_tag}", status.pid);
     println!(
         "  Uptime:      {}",

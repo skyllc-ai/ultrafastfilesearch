@@ -22,6 +22,34 @@ pub mod stats;
 /// Combined `uffs status` command.
 pub mod system_status;
 
+/// Render a one-line version summary suitable for `daemon status`,
+/// `daemon stats`, and `uffs status` output.
+///
+/// `daemon_version` is the daemon-reported `env!("CARGO_PKG_VERSION")`
+/// from [`uffs_client::protocol::response::StatusResponse::version`]
+/// (or `StatsResponse::version`).  The CLI's own compile-time version
+/// is read locally; when the two differ we surface both with a
+/// `MISMATCH` flag so a stale long-running daemon paired with a
+/// freshly-upgraded CLI binary (or vice versa) is visible at a glance
+/// instead of being inferred from the existing mtime-based stale-binary
+/// heuristic in `system_status::print_daemon_status`.
+///
+/// Pre-0.5.79 daemons send no version; rendered as `<unknown>`.
+///
+/// The function returns the value portion only — callers prepend
+/// their own label/indentation (`Version:`, `  Version:`, etc.) so a
+/// single helper covers both indented and non-indented layouts.
+pub(crate) fn version_summary(daemon_version: &str) -> String {
+    let cli_version = env!("CARGO_PKG_VERSION");
+    if daemon_version.is_empty() {
+        format!("<unknown> (daemon) / {cli_version} (cli)")
+    } else if daemon_version == cli_version {
+        cli_version.to_owned()
+    } else {
+        format!("{daemon_version} (daemon) / {cli_version} (cli)  ⚠ MISMATCH")
+    }
+}
+
 /// Format a number with comma separators.
 fn format_number(num: u64) -> String {
     let num_str = num.to_string();

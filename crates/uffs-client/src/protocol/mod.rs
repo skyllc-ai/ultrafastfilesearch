@@ -9,6 +9,7 @@
 pub mod cli_args;
 mod cli_args_helpers;
 pub mod response;
+pub mod response_status;
 pub mod search_params;
 #[cfg(test)]
 mod tests;

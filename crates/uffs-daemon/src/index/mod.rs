@@ -880,6 +880,7 @@ impl IndexManager {
         let cache_stats = self.aggregate_cache.stats();
 
         StatsResponse {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
             total_queries,
             total_query_time_us: total_us,
             avg_query_time_us: avg_query_us,
@@ -941,6 +942,7 @@ impl IndexManager {
             uptime_secs: self.start_time.elapsed().as_secs(),
             connections,
             pid: std::process::id(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
             rss_bytes,
             index_heap_bytes: Some(total_index_heap),
             mimalloc_committed_bytes,

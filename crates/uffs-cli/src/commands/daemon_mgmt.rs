@@ -198,6 +198,10 @@ fn daemon_status() -> Result<()> {
     };
 
     let uptime = core::time::Duration::from_secs(status.uptime_secs);
+    println!(
+        "Version:       {}",
+        crate::commands::version_summary(&status.version)
+    );
     println!("Daemon PID:    {}", status.pid);
     println!(
         "Uptime:        {}",
@@ -303,6 +307,10 @@ fn daemon_stats() -> Result<()> {
         let total_query = core::time::Duration::from_micros(stats.total_query_time_us);
 
         println!("═══ Daemon Performance Stats ═══");
+        println!(
+            "Version:           {}",
+            crate::commands::version_summary(&stats.version)
+        );
         println!("Uptime:            {}", fmt(uptime));
         println!("Startup duration:  {}", fmt(startup));
         println!(
