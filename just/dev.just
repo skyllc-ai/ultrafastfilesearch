@@ -24,6 +24,19 @@ kill:
     @pkill -f "rustc" 2>/dev/null || true
     @printf "\033[0;32m✅ All cargo processes terminated\033[0m\n"
 
+# Find and kill orphan `uffs` processes left behind by aborted CLI runs,
+# crashed test harnesses, or Ctrl-C'd validation scripts.  The
+# legitimate long-running daemon is identified via `uffs daemon status`
+# and explicitly preserved.  Pass `--dry-run` to list orphans without
+# killing them, or `--bin <path>` to use a specific uffs binary for
+# the daemon-PID lookup.
+#
+# Pulled out of the validation suites
+# (`scripts/windows/{api,cli,mcp}-validation.rs`) so those scripts only
+# observe daemon state — they never mutate the host process table.
+orphan *ARGS:
+    @rust-script scripts/dev/orphan-cleanup.rs {{ ARGS }}
+
 # Install cross-compilation targets for GitHub Actions compatibility.
 setup-cross:
     @printf "\033[0;34m Installing cross-compilation targets...\033[0m\n"

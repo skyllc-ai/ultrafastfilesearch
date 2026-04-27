@@ -221,21 +221,7 @@ fn parse_script_args() -> ScriptArgs {
         }
     };
 
-    let bin = bin_override.unwrap_or_else(|| {
-        if cfg!(windows) {
-            let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string());
-            let candidates = [
-                format!("{home}\\bin\\uffs.exe"),
-                "target\\release\\uffs.exe".to_string(),
-            ];
-            for c in &candidates {
-                if std::path::Path::new(c).exists() { return c.clone(); }
-            }
-            "uffs".to_string()
-        } else {
-            ensure_fresh_release_build()
-        }
-    });
+    let bin = bin_override.unwrap_or_else(default_binary);
 
     ScriptArgs { bin, source_flag, source_path, test_filter }
 }
@@ -256,39 +242,61 @@ fn find_workspace_root() -> std::path::PathBuf {
     cwd
 }
 
-/// Build a fresh release binary and return the path to it (macOS/Linux).
-fn ensure_fresh_release_build() -> String {
-    let workspace = find_workspace_root();
-    let binary_path = workspace.join("target").join("release").join("uffs");
-
-    eprintln!("╔══════════════════════════════════════════════════════════════════╗");
-    eprintln!("║  Building fresh release binary...                                ║");
-    eprintln!("╚══════════════════════════════════════════════════════════════════╝");
-    eprintln!("  Workspace: {}", workspace.display());
-
-    let start = Instant::now();
-    let status = Command::new("cargo")
-        .args(["build", "--release", "-p", "uffs-cli"])
-        .current_dir(&workspace)
-        .status();
-
-    match status {
-        Ok(s) if s.success() => {
-            eprintln!("  ✅ Build completed in {:.1}s", start.elapsed().as_secs_f64());
-            eprintln!("  Binary: {}", binary_path.display());
-            eprintln!();
-        }
-        Ok(s) => {
-            eprintln!("  ❌ cargo build --release failed (exit {s})");
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("  ❌ Failed to run cargo: {e}");
-            std::process::exit(1);
+/// Locate an existing uffs binary; do **not** auto-build.
+///
+/// Validation scripts run against whatever artifact is on disk so the
+/// user can control which build is being exercised (release tag,
+/// local `cargo build --release`, or installed `just use` payload).
+/// Auto-rebuilding from inside the script masks the very mismatch
+/// these suites are meant to detect.
+///
+/// Search order (cross-platform):
+///   1. `$HOME/bin/uffs[.exe]`           — `just use` install location
+///   2. `target/release/uffs[.exe]`      — `cargo build --release` output
+///   3. Bare `uffs[.exe]`                — falls through to PATH lookup
+///
+/// If none exists, the first `Command::new(bin).output()` call surfaces
+/// the OS's "executable not found" error with the path-search
+/// diagnostic — clearer than a fabricated panic from this layer.
+fn default_binary() -> String {
+    let bin_name = if cfg!(windows) { "uffs.exe" } else { "uffs" };
+    let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    let home = std::env::var(home_var).unwrap_or_else(|_| ".".to_string());
+    let candidates = [
+        std::path::PathBuf::from(&home).join("bin").join(bin_name),
+        std::path::PathBuf::from("target").join("release").join(bin_name),
+    ];
+    for candidate in &candidates {
+        if candidate.exists() {
+            return candidate.to_string_lossy().into_owned();
         }
     }
+    bin_name.to_string()
+}
 
-    binary_path.to_string_lossy().into_owned()
+/// Run `<bin> daemon status` and extract the daemon's reported
+/// version string for inclusion in the validation-summary block.
+///
+/// Returns the trimmed value of the `Version:` line printed by
+/// `uffs daemon status` on uffs ≥ 0.5.79.  Pre-0.5.79 daemons emit
+/// `<unknown> (daemon) / X.Y.Z (cli)` via the CLI's back-compat
+/// renderer; pre-this-feature daemons (no `Version:` line at all)
+/// surface as `<line not found>`.  When the daemon is unreachable
+/// the helper reports `<not running>` instead of erroring — the
+/// version line is informational, not load-bearing.
+fn capture_daemon_version(bin: &str) -> String {
+    match Command::new(bin).args(["daemon", "status"]).output() {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("Version:") {
+                    return rest.trim().to_owned();
+                }
+            }
+            "<line not found>".to_owned()
+        }
+        _ => "<not running>".to_owned(),
+    }
 }
 
 // ── Validation Helpers ───────────────────────────────────────────────────────
@@ -2087,6 +2095,26 @@ fn ensure_daemon_ready(args: &ScriptArgs) -> u128 {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
+/// Find the longest common prefix of a set of strings.
+///
+/// Used by the failure-summary block to suggest a single `--tests <prefix>`
+/// re-run command when every failed test ID shares a common stem (e.g.
+/// all `T88a`, `T88b`, `T88c` failures collapse to `T88`).  Mirrors
+/// `mcp-validation.rs::common_prefix` byte-for-byte so the three
+/// validation suites behave identically on this output.
+fn common_prefix(strings: &[&str]) -> String {
+    if strings.is_empty() { return String::new(); }
+    let first = strings[0];
+    let mut len = first.len();
+    for s in &strings[1..] {
+        len = len.min(s.len());
+        for (i, (a, b)) in first.bytes().zip(s.bytes()).enumerate() {
+            if a != b { len = len.min(i); break; }
+        }
+    }
+    first[..len].to_string()
+}
+
 /// Extract the test ID (e.g. "T88H") from a test name like "T88h --in-path + pattern".
 fn test_id(name: &str) -> String {
     // Take everything up to the first space.
@@ -2110,7 +2138,6 @@ fn main() {
     let _lock = ValidationLock::acquire();
     let script_start = Instant::now();
     let args = parse_script_args();
-    let build_ms = script_start.elapsed().as_millis();
     eprintln!();
     eprintln!("╔═══════════════════════════════════════════════════════════════╗");
     eprintln!("║  UFFS CLI Flag Validation Suite                              ║");
@@ -2185,11 +2212,12 @@ fn main() {
     let slowest = results.iter().max_by_key(|r| r.duration_ms);
     let fastest = results.iter().filter(|r| r.duration_ms > 0).min_by_key(|r| r.duration_ms);
 
+    let daemon_version = capture_daemon_version(&args.bin);
     eprintln!();
     eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     eprintln!("  {} Timing Breakdown", "⏱".dimmed());
     eprintln!("  ─────────────────────────────────────────────────────");
-    eprintln!("  Build binary:         {:>7}ms", build_ms);
+    eprintln!("  Daemon version:       {daemon_version}");
     eprintln!("  Daemon ready:         {:>7}ms  (status check + start + drive load)", daemon_ms);
     eprintln!("  ─────────────────────────────────────────────────────");
     eprintln!("  Tests wall time:      {:>7}ms  ({test_count} tests, parallelism: {max_par})", test_wall_ms);
@@ -2205,164 +2233,72 @@ fn main() {
     eprintln!("  Script total:         {:>7}ms", script_total_ms);
     eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-    // ═══ Cleanup: find and kill orphan uffs processes ═══════════════════
-    cleanup_orphan_processes(&args.bin);
+    // ═══ Daemon STATUS + STATS — observe-only post-run snapshot ═════════
+    //
+    // The validation suite is a strict observer: it does not kill orphan
+    // processes or mutate the host in any way.  Those concerns live in
+    // `scripts/dev/orphan-cleanup.rs` (callable via `just orphan`).
+    print_uffs_command_block(&args.bin, &["daemon", "status"], "═══ Daemon STATUS ═══");
+    print_uffs_command_block(&args.bin, &["daemon", "stats"],  "═══ Daemon STATS ═══");
+
+    if failed > 0 {
+        // Build retest command with failed test IDs.  Same shape as
+        // `mcp-validation.rs` so the three validation suites give the
+        // operator a one-line copy-pasteable replay.
+        let failed_ids: Vec<String> = results.iter()
+            .filter(|r| !r.passed)
+            .map(|r| test_id(&r.name))
+            .collect();
+        eprintln!();
+        eprintln!("  Retest failed using:");
+        let joined = failed_ids.join(",");
+        eprintln!("    rust-script scripts/windows/cli-validation.rs --tests {joined}");
+        if failed_ids.len() > 1 {
+            // Suggest a prefix shortcut when every failed ID shares one
+            // (e.g. T88a / T88b / T88c → T88).
+            let id_refs: Vec<&str> = failed_ids.iter().map(String::as_str).collect();
+            let prefix = common_prefix(&id_refs);
+            if !prefix.is_empty() && prefix.len() >= 2 {
+                eprintln!();
+                eprintln!("  Or by prefix:");
+                eprintln!("    rust-script scripts/windows/cli-validation.rs --tests {prefix}");
+            }
+        }
+    }
 
     // Exit code: fail if any test failed.
     std::process::exit(if failed == 0 { 0 } else { 1 });
 }
 
-// ── Orphan Process Cleanup ──────────────────────────────────────────────────
+// ── Post-run STATUS / STATS rendering ───────────────────────────────────────
 
-/// Query the daemon for its PID (via PID file), find all running uffs
-/// processes, and kill only the orphans.  The legitimate daemon is left
-/// running so other clients (TUI, MCP, etc.) are not disrupted.
-fn cleanup_orphan_processes(bin: &str) {
-    eprintln!();
-    eprintln!("┌───────────────────────────────────────────────────────────────┐");
-    eprintln!("│  Cleanup: verifying daemon & checking for orphan processes   │");
-    eprintln!("└───────────────────────────────────────────────────────────────┘");
-
-    // 1. Read daemon PID from the PID file.
-    let daemon_pid = read_daemon_pid();
-    if let Some(pid) = daemon_pid {
-        eprintln!("  {} Daemon verified (PID {pid})", "✅".green());
-    } else {
-        eprintln!("  {} Could not read daemon PID file — daemon may not be running", "⚠️".yellow());
-    }
-
-    // 2. Find all uffs processes.
-    let bin_name = std::path::Path::new(bin)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("uffs");
-    let all_procs = find_uffs_processes(bin_name);
-
-    // 3. Separate daemon from orphans.
-    let my_pid = std::process::id();
-    let orphans: Vec<_> = all_procs
-        .iter()
-        .filter(|(pid, _)| {
-            *pid != my_pid && daemon_pid.map_or(true, |dp| *pid != dp)
-        })
-        .collect();
-
-    if orphans.is_empty() {
-        eprintln!("  {} No orphan uffs processes found.", "✅".green());
-        return;
-    }
-
-    eprintln!(
-        "  {} {} orphan uffs process(es) — killing:",
-        "⚠️".yellow(),
-        orphans.len()
-    );
-    let mut killed = 0;
-    for (pid, cmdline) in &orphans {
-        eprintln!("    PID {pid}: {cmdline}");
-        if kill_process(*pid) {
-            killed += 1;
-        }
-    }
-    eprintln!("  🔪 Killed {killed}/{} orphan process(es).", orphans.len());
-}
-
-/// Read the daemon PID from the standard PID file location.
+/// Run `<bin> <args...>` and render its stdout under a 2-space-indented
+/// `<header>` so the validation summary embeds the daemon's own
+/// `daemon status` / `daemon stats` output verbatim.
 ///
-/// PID file format: `{pid}\n{timestamp}\n{exe_hash}\n{nonce}\n`
-fn read_daemon_pid() -> Option<u32> {
-    let base = dirs_next::data_local_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    let pid_path = base.join("uffs").join("daemon.pid");
-    let content = std::fs::read_to_string(&pid_path).ok()?;
-    let pid: u32 = content.lines().next()?.parse().ok()?;
-    if pid == 0 { return None; }
-    Some(pid)
-}
-
-/// Returns Vec of (pid, command line) for running uffs processes.
-fn find_uffs_processes(bin_name: &str) -> Vec<(u32, String)> {
-    let my_pid = std::process::id();
-
-    #[cfg(unix)]
-    {
-        // `ps -eo pid,command` lists all processes.
-        let output = Command::new("ps")
-            .args(["-eo", "pid,command"])
-            .output()
-            .ok();
-        let stdout = output
-            .as_ref()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .unwrap_or_default();
-
-        stdout
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim();
-                // Match lines containing our binary name but skip ourselves.
-                if !line.contains(bin_name) {
-                    return None;
-                }
-                // Skip ps/grep/rust-script themselves.
-                if line.contains("ps -eo") || line.contains("grep") || line.contains("rust-script") {
-                    return None;
-                }
-                let mut parts = line.splitn(2, char::is_whitespace);
-                let pid: u32 = parts.next()?.trim().parse().ok()?;
-                let cmd = parts.next().unwrap_or("").trim().to_string();
-                if pid == my_pid {
-                    return None;
-                }
-                Some((pid, cmd))
-            })
-            .collect()
-    }
-
-    #[cfg(windows)]
-    {
-        // Use WMIC for process info (more reliable than tasklist for full command lines).
-        let output = Command::new("wmic")
-            .args(["process", "where", &format!("name like '%{bin_name}%'"),
-                   "get", "ProcessId,CommandLine", "/format:csv"])
-            .output()
-            .ok();
-        let stdout = output
-            .as_ref()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .unwrap_or_default();
-
-        stdout
-            .lines()
-            .skip(1) // header
-            .filter_map(|line| {
-                let fields: Vec<&str> = line.split(',').collect();
-                if fields.len() < 3 { return None; }
-                let cmd = fields[1].trim().to_string();
-                let pid: u32 = fields[2].trim().parse().ok()?;
-                if pid == my_pid || cmd.is_empty() { return None; }
-                Some((pid, cmd))
-            })
-            .collect()
-    }
-}
-
-/// Kill a process by PID.  Returns true if the kill signal was sent.
-fn kill_process(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
-    #[cfg(windows)]
-    {
-        Command::new("taskkill")
-            .args(["/F", "/PID", &pid.to_string()])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+/// The CLI already formats these views nicely (Index heap, RSS, mimalloc,
+/// per-drive breakdown, agg-cache hit-rate, etc.), so re-formatting here
+/// would just diverge them over time.  Failures are surfaced inline
+/// rather than aborting — the STATUS block is observability, not a gate.
+fn print_uffs_command_block(bin: &str, args: &[&str], header: &str) {
+    eprintln!();
+    eprintln!("  {header}");
+    match Command::new(bin).args(args).output() {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                eprintln!("    {line}");
+            }
+        }
+        Ok(out) => {
+            eprintln!("    (command failed: exit {})", out.status.code().unwrap_or(-1));
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            for line in stderr.lines() {
+                eprintln!("    {line}");
+            }
+        }
+        Err(e) => {
+            eprintln!("    (failed to run: {e})");
+        }
     }
 }
