@@ -28,6 +28,7 @@
 //! [`ShardRegistry::active_index`] begins to diverge from the full
 //! shard list.
 
+pub(crate) mod body_loader;
 pub(crate) mod policy;
 pub(crate) mod registry;
 pub(crate) mod shard;

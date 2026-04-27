@@ -128,10 +128,17 @@ pub(crate) struct IndexManager {
     startup_duration_us: AtomicU64,
     /// Per-drive load timing for `--profile` reporting.
     drive_timings: RwLock<std::collections::HashMap<char, StoredDriveTiming>>,
+    /// Source for `Parked` / `Cold` shard bodies during
+    /// promote-on-search.  Production paths use
+    /// [`crate::cache::body_loader::DiskBodyLoader`]; the
+    /// Commit-E integration tests inject fakes via
+    /// [`Self::with_body_loader_for_test`].
+    body_loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
 }
 
 impl IndexManager {
-    /// Create a new empty index manager.
+    /// Create a new empty index manager with the production
+    /// [`DiskBodyLoader`](crate::cache::body_loader::DiskBodyLoader).
     ///
     /// The search semaphore is initialised with `cpus` permits; this is
     /// retuned via [`Self::tune_concurrency`] (see
@@ -140,6 +147,25 @@ impl IndexManager {
     /// the initial value is not performance-critical.
     #[must_use]
     pub(crate) fn new(data_dir: Option<PathBuf>, events: EventSender) -> Self {
+        Self::new_with_body_loader(
+            data_dir,
+            events,
+            Arc::new(crate::cache::body_loader::DiskBodyLoader),
+        )
+    }
+
+    /// Inner constructor that also threads a custom body-loader.
+    ///
+    /// Production code calls [`Self::new`] which wires the
+    /// `DiskBodyLoader`; the Commit-E tests use this path through
+    /// [`Self::with_body_loader_for_test`] to inject fakes
+    /// (fixed body, missing body, panicking loader) without
+    /// touching the platform cache directory.
+    fn new_with_body_loader(
+        data_dir: Option<PathBuf>,
+        events: EventSender,
+        body_loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
+    ) -> Self {
         let cpus = std::thread::available_parallelism().map_or(4, core::num::NonZeroUsize::get);
         Self {
             index: RwLock::new(Arc::new(ShardRegistry::new())),
@@ -158,7 +184,22 @@ impl IndexManager {
             queries_total_us: AtomicU64::new(0),
             startup_duration_us: AtomicU64::new(0),
             drive_timings: RwLock::new(std::collections::HashMap::new()),
+            body_loader,
         }
+    }
+
+    /// Test-only constructor that swaps in a custom body-loader.
+    ///
+    /// Used by the Commit-E integration tests to inject deterministic
+    /// fakes — no platform cache directory touched, no
+    /// process-global env-var override, no `tempfile`-juggling.
+    #[cfg(test)]
+    pub(crate) fn with_body_loader_for_test(
+        data_dir: Option<PathBuf>,
+        events: EventSender,
+        body_loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
+    ) -> Self {
+        Self::new_with_body_loader(data_dir, events, body_loader)
     }
 
     /// Acquire an owned search-concurrency permit.
@@ -941,12 +982,10 @@ impl IndexManager {
         // contention from N parallel swaps would dwarf the
         // serialisation cost.
         for letter in needs_promote {
-            let load_result = tokio::task::spawn_blocking(move || {
-                uffs_core::compact_cache::load_compact_cache(letter, u64::MAX, 0, true)
-            })
-            .await;
+            let loader = Arc::clone(&self.body_loader);
+            let load_result = tokio::task::spawn_blocking(move || loader.load(letter)).await;
             let body = match load_result {
-                Ok(Some(loaded)) => Arc::new(loaded),
+                Ok(Some(body_arc)) => body_arc,
                 Ok(None) => {
                     tracing::warn!(
                         target: "shard.transition",
