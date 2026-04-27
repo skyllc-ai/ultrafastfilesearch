@@ -234,7 +234,7 @@ jobs:
           df -h /
 
       - run: rustup show
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: pr-fast-sanity
           cache-on-failure: 'true'
@@ -276,7 +276,7 @@ jobs:
           df -h /
 
       - run: rustup show
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: pr-fast-sanity
           save-if: 'false'
@@ -308,7 +308,7 @@ jobs:
           df -h /
 
       - run: rustup show
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: pr-fast-sanity
           save-if: 'false'
@@ -345,7 +345,7 @@ jobs:
           df -h /
 
       - run: rustup show
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: pr-fast-test-build
           cache-on-failure: 'true'
@@ -382,7 +382,7 @@ jobs:
           df -h /
 
       - run: rustup show
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: pr-fast-test-build
           save-if: 'false'
@@ -411,7 +411,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - run: rustup show
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: pr-fast-security
 
@@ -451,7 +451,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - run: rustup show
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: pr-fast-windows
 
