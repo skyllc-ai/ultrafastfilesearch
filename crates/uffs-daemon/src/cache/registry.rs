@@ -52,10 +52,18 @@ impl ShardRegistry {
     /// registry directly.
     #[must_use]
     pub(crate) fn from_shards(shards: Vec<Arc<ShardEntry>>) -> Self {
+        // Filter on tier first so the active subset matches the
+        // documented "Warm | Hot" contract; then filter_map on `body`
+        // because Phase-3 `ShardEntry::body()` returns `Option` —
+        // `Parked` / `Cold` shards lift the body and would yield
+        // `None` here.  The double filter is intentionally redundant
+        // (every `Warm` / `Hot` shard has `Some(body)` today) so a
+        // future "Warm with body in transit" state can't silently
+        // contribute an empty entry to the active index.
         let drives: Vec<Arc<DriveCompactIndex>> = shards
             .iter()
             .filter(|shard| matches!(shard.state(), ShardState::Warm | ShardState::Hot))
-            .map(|shard| shard.body())
+            .filter_map(|shard| shard.body())
             .collect();
         Self {
             shards,

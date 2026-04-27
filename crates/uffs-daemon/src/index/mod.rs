@@ -27,7 +27,7 @@ use uffs_client::protocol::response::{DaemonStatus, StatsResponse, StatusRespons
 use uffs_core::aggregate::AggregateCache;
 use uffs_core::search::backend::DriveIndex;
 
-use crate::cache::ShardRegistry;
+use crate::cache::{ShardRegistry, unix_now_ms};
 use crate::events::{DaemonEvent, EventSender};
 
 /// Per-drive load timing stored for profile reporting.
@@ -827,14 +827,22 @@ impl IndexManager {
     /// drive adaptive-TTL formulas.  Phase 4 will move the recording
     /// into the per-shard search-dispatch loop so bloom-skipped shards
     /// don't bump their counters.
+    ///
+    /// Phase 3 routes the increment through
+    /// [`crate::cache::shard::DriveStats::mark_query_at`] so the same
+    /// hot-path write also stores the dispatch timestamp in
+    /// `last_query_at_ms`; the demote controller in
+    /// `crate::cache::registry::ShardRegistry::demote_idle_shards`
+    /// reads that timestamp to compute `idle_secs`.
     async fn record_search_dispatch(&self) {
+        let now_ms = unix_now_ms();
         let guard = self.index.read().await;
         for shard in guard.iter() {
             if matches!(
                 shard.state(),
                 crate::cache::ShardState::Warm | crate::cache::ShardState::Hot
             ) {
-                shard.stats.record_query();
+                shard.stats.mark_query_at(now_ms);
             }
         }
     }
