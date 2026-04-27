@@ -42,6 +42,8 @@ fo = "fo"
 ba = "ba"
 
 # ── Acronyms / identifier fragments found in docs & code ────────────
+FPR = "FPR"               # false-positive rate (probabilistic-DS / bloom-filter standard term)
+fpr = "fpr"               # lower-case form for identifier names like `target_fpr`
 anc = "anc"               # ancestry / ancestor abbreviations in MFT docs
 Ded = "Ded"               # acronym / identifier fragment
 Pn = "Pn"                 # pin / pinning abbreviations in trait bounds
