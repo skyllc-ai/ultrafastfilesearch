@@ -153,14 +153,22 @@ use:
     # Read workspace version from Cargo.toml
     CARGO_VER=$(awk '/^\[workspace\.package\]/{flag=1; next} flag && /^version/{print "v"$3; exit}' Cargo.toml | tr -d '"')
 
-    # Find matching dist/ version (prefer workspace version)
+    # Find matching dist/ version (prefer workspace version).
+    # An empty `dist/$CARGO_VER` is treated as a cache miss — `just
+    # ship` (and prior failed `just use` runs) can leave the directory
+    # behind without any binaries, and accepting it here would skip
+    # the GH-release download fallback below.
     DIST_DIR=""
-    if [[ -n "$CARGO_VER" ]] && [[ -d "dist/$CARGO_VER" ]]; then
+    if [[ -n "$CARGO_VER" ]] \
+        && [[ -d "dist/$CARGO_VER" ]] \
+        && [[ -n "$(ls -A "dist/$CARGO_VER" 2>/dev/null)" ]]; then
         DIST_DIR="dist/$CARGO_VER"
         printf "\033[0;32m  Found dist/%s (matches workspace)\033[0m\n" "$CARGO_VER"
     elif [[ -d "dist" ]]; then
         LATEST=$(ls -d dist/v* 2>/dev/null | sort -V | tail -1 || true)
-        if [[ -n "$LATEST" ]] && [[ -d "$LATEST" ]]; then
+        if [[ -n "$LATEST" ]] \
+            && [[ -d "$LATEST" ]] \
+            && [[ -n "$(ls -A "$LATEST" 2>/dev/null)" ]]; then
             LATEST_VER=$(basename "$LATEST")
             if [[ -n "$CARGO_VER" ]] && [[ "$LATEST_VER" != "$CARGO_VER" ]]; then
                 printf "\033[1;33m⚠️  dist/ has %s but workspace is %s\033[0m\n" "$LATEST_VER" "$CARGO_VER"
@@ -257,14 +265,21 @@ use:
         if ($line -match '^\[' -and $inPkg) { break }
     }
 
-    # Try to find matching dist/ version (prefer workspace version)
+    # Try to find matching dist/ version (prefer workspace version).
+    # An empty `dist/$cargoVer` is treated as a cache miss — `just
+    # ship` (and prior failed `just use` runs) can leave the directory
+    # behind without any binaries, and accepting it here would skip
+    # the GH-release download fallback below.
     $distDir = $null
-    if ($cargoVer -and (Test-Path (Join-Path "dist" $cargoVer))) {
-        $distDir = (Join-Path "dist" $cargoVer)
+    $candidate = if ($cargoVer) { Join-Path "dist" $cargoVer } else { $null }
+    if ($candidate -and (Test-Path $candidate) -and `
+            (@(Get-ChildItem -Path $candidate -Force -ErrorAction SilentlyContinue)).Count -gt 0) {
+        $distDir = $candidate
         Write-Host "  Found dist/$cargoVer (matches workspace)" -ForegroundColor Green
     } elseif (Test-Path "dist") {
         $versions = Get-ChildItem -Path "dist" -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -match '^v\d+\.\d+\.\d+$' } |
+            Where-Object { (@(Get-ChildItem -Path $_.FullName -Force -ErrorAction SilentlyContinue)).Count -gt 0 } |
             Sort-Object { [version]($_.Name -replace '^v','') } -Descending
         if ($versions) {
             $distDir = $versions[0].FullName
