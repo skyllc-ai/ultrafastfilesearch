@@ -242,20 +242,35 @@ impl DriveStats {
         self.last_query_at_ms.store(now_ms, Ordering::Relaxed);
     }
 
-    /// Read the last `mark_query_at` timestamp (Unix millis).
+    /// Set [`Self::last_query_at_ms`] to `now_ms` **without** bumping
+    /// the query counter.
     ///
-    /// Returns `0` when the shard has never been queried; the demote
-    /// controller short-circuits that case to use the daemon's
-    /// startup time as an approximation of "as old as we can know".
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 3 consumer (`ShardRegistry::demote_idle_shards` reads \
-                      this to compute idle_secs); exercised by the Commit-A \
-                      `mark_query_at_updates_last_query_at_ms` test."
-        )
-    )]
+    /// Phase 3 Commit D — called by `IndexManager::add_drive` and
+    /// `IndexManager::replace_drive` once per shard the moment the
+    /// drive is mounted, so the demote-controller's idle clock
+    /// starts ticking from the load time rather than from epoch zero.
+    /// Without this seed, a freshly loaded shard's
+    /// `last_query_at_ms == 0` would compute `idle_secs ≈ now_ms /
+    /// 1000` and trigger an immediate demote on the first 30 s tick.
+    ///
+    /// Distinct from `mark_query_at` so the per-shard `queries_total`
+    /// metric stays a clean count of actual searches dispatched, not
+    /// "searches plus one extra at load".
+    pub(crate) fn mark_loaded_at(&self, now_ms: u64) {
+        self.last_query_at_ms.store(now_ms, Ordering::Relaxed);
+    }
+
+    /// Read the last activity timestamp (Unix millis).
+    ///
+    /// Updated by [`Self::mark_query_at`] (search dispatch) and
+    /// [`Self::mark_loaded_at`] (drive load).  Returns `0` only on
+    /// the snapshot-deserialisation / test paths that go through
+    /// the legacy [`Self::new`] constructor without ever calling a
+    /// setter.
+    ///
+    /// Read by [`crate::index::IndexManager::demote_idle_shards`]
+    /// (Phase 3 Commit D) to compute `idle_secs` against the
+    /// per-tier TTL ladder.
     #[must_use]
     pub(crate) fn last_query_at_ms(&self) -> u64 {
         self.last_query_at_ms.load(Ordering::Relaxed)
@@ -459,15 +474,11 @@ impl ShardEntry {
     /// `Warm` / `Hot` `ShardEntry` for this drive during a tier
     /// transition rebuild).  No body — the runtime mmap has been
     /// released.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 3 Commit B consumer (`ShardRegistry::demote_letter`); \
-                      Commit A lands the constructor so the shape is reviewable \
-                      independently of the demote/promote logic."
-        )
-    )]
+    ///
+    /// Reached from production via
+    /// [`crate::index::IndexManager::demote_idle_shards`] →
+    /// [`crate::cache::ShardRegistry::demote_letter`] (Phase 3
+    /// Commit D).
     #[must_use]
     pub(crate) const fn new_parked(drive: char, stats: Arc<DriveStats>) -> Self {
         Self {
@@ -482,15 +493,12 @@ impl ShardEntry {
     /// `Arc<DriveStats>`.  No body, no bloom, no trie — a `Cold`
     /// shard is recovered only by re-decrypting the encrypted compact
     /// cache.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 3 Commit B consumer (`ShardRegistry::demote_letter`); \
-                      Commit A lands the constructor so the shape is reviewable \
-                      independently of the demote/promote logic."
-        )
-    )]
+    ///
+    /// Reached from production via
+    /// [`crate::index::IndexManager::demote_idle_shards`] →
+    /// [`crate::cache::ShardRegistry::demote_letter`] (Phase 3
+    /// Commit D, when a `Parked` shard's idle time exceeds
+    /// `PARKED_TO_COLD_IDLE_SECS`).
     #[must_use]
     pub(crate) const fn new_cold(drive: char, stats: Arc<DriveStats>) -> Self {
         Self {

@@ -1675,6 +1675,209 @@ async fn ensure_warm_for_dispatch_skips_parked_shard_outside_filter() {
 // `ensure_warm_for_dispatch_skips_parked_shard_outside_filter` (load attempt
 // only on Parked shards, and the filter precludes any).
 
+// ── Phase 3 Commit D — IndexManager::demote_idle_shards ────────────
+
+/// `add_drive` calls `DriveStats::mark_loaded_at(now_ms)` on the
+/// freshly mounted shard so the demote-controller's idle clock
+/// starts ticking from load time, not from epoch zero.  Without
+/// this seed, every freshly loaded shard would demote on the
+/// first idle tick because `last_query_at_ms == 0` would compute
+/// `idle_secs ≈ now_ms / 1000` (≈ billions of seconds since
+/// 1970-01-01).
+#[tokio::test]
+async fn mark_loaded_at_seeds_freshly_added_drive() {
+    let (tx, _rx) = crate::events::event_channel();
+    let mgr = IndexManager::new(None, tx);
+    mgr.add_drive(build_test_drive()).await;
+
+    // Read the shard's last_query_at_ms via a search-ish path; we
+    // only have access from inside the manager, so drive a
+    // demote-controller call with `now_ms = load_ts + 0` and assert
+    // the shard didn't demote — that proves last_query_at_ms is
+    // recent (within `WARM_TO_PARKED_IDLE_SECS` of now).
+    //
+    // More directly: the timestamp must be non-zero.  We test that
+    // by attempting to demote at a now that's *exactly* the load
+    // time + 1 ms; an unseeded shard would have `idle_ms = now`
+    // (huge) and demote, but a seeded shard sees `idle_ms = 1` ms
+    // (basically 0 s) and stays Warm.
+    let states_before = mgr.shard_states_for_test().await;
+    assert_eq!(states_before, vec![('C', crate::cache::ShardState::Warm)]);
+
+    // Synthetic now_ms a billion ms in the future would catch
+    // unseeded `last_query_at_ms == 0`.  But a seeded shard has
+    // last_query_at_ms ≈ unix_now_ms() (when add_drive was just
+    // called), so calling demote_idle_shards with the same now
+    // gives idle_secs ≈ 0.
+    let now_ms = crate::cache::unix_now_ms();
+    mgr.demote_idle_shards(now_ms).await;
+
+    let states_after = mgr.shard_states_for_test().await;
+    assert_eq!(
+        states_after, states_before,
+        "freshly loaded shard must NOT demote on the first tick — \
+         mark_loaded_at must have seeded last_query_at_ms",
+    );
+}
+
+/// Fast-path contract: `demote_idle_shards` on a registry where
+/// every shard has been queried recently must complete with no
+/// state mutation and no `index_version` bump.
+#[tokio::test]
+async fn demote_idle_shards_no_op_when_all_fresh() {
+    use crate::cache::ShardState;
+
+    let (tx, _rx) = crate::events::event_channel();
+    let mgr = IndexManager::new(None, tx);
+    mgr.add_drive(build_test_drive()).await;
+    mgr.add_drive(build_test_drive_d()).await;
+
+    // Pretend every shard was queried at t=10_000_000_000 ms.
+    let load_ts = 10_000_000_000_u64;
+    assert!(mgr.backdate_last_query_at_ms_for_test('C', load_ts).await);
+    assert!(mgr.backdate_last_query_at_ms_for_test('D', load_ts).await);
+
+    // `now_ms` only 1 ms after load → idle_secs = 0 → no demote.
+    mgr.demote_idle_shards(load_ts + 1).await;
+
+    let states = mgr.shard_states_for_test().await;
+    assert_eq!(states, vec![
+        ('C', ShardState::Warm),
+        ('D', ShardState::Warm)
+    ]);
+}
+
+/// Warm shard idle past `WARM_TO_PARKED_IDLE_SECS` demotes to
+/// Parked on the next `demote_idle_shards` call.
+#[tokio::test]
+async fn demote_idle_shards_warm_to_parked_at_ttl() {
+    use crate::cache::policy::WARM_TO_PARKED_IDLE_SECS;
+
+    let (tx, _rx) = crate::events::event_channel();
+    let mgr = IndexManager::new(None, tx);
+    mgr.add_drive(build_test_drive()).await;
+
+    // Backdate C's last_query_at_ms to t=1_000_000_000 ms.
+    let last_query_ms = 1_000_000_000_u64;
+    assert!(
+        mgr.backdate_last_query_at_ms_for_test('C', last_query_ms)
+            .await
+    );
+
+    // now_ms = last_query + WARM_TO_PARKED_IDLE_SECS * 1000 (exact
+    // boundary; `next_state_for_idle` uses `>=`).
+    let now_ms = last_query_ms + WARM_TO_PARKED_IDLE_SECS * 1000;
+    mgr.demote_idle_shards(now_ms).await;
+
+    let states = mgr.shard_states_for_test().await;
+    assert_eq!(states, vec![('C', crate::cache::ShardState::Parked)]);
+}
+
+/// Warm shard idle just below `WARM_TO_PARKED_IDLE_SECS` stays
+/// Warm — pin the off-by-one that `>=` vs `>` would expose.
+#[tokio::test]
+async fn demote_idle_shards_below_ttl_keeps_warm() {
+    use crate::cache::policy::WARM_TO_PARKED_IDLE_SECS;
+
+    let (tx, _rx) = crate::events::event_channel();
+    let mgr = IndexManager::new(None, tx);
+    mgr.add_drive(build_test_drive()).await;
+
+    let last_query_ms = 1_000_000_000_u64;
+    assert!(
+        mgr.backdate_last_query_at_ms_for_test('C', last_query_ms)
+            .await
+    );
+
+    // 1 ms before the boundary — idle_secs computed by
+    // `(now - last) / 1000` is `WARM_TO_PARKED_IDLE_SECS - 1`,
+    // strictly below the threshold.
+    let now_ms = last_query_ms + WARM_TO_PARKED_IDLE_SECS * 1000 - 1;
+    mgr.demote_idle_shards(now_ms).await;
+
+    let states = mgr.shard_states_for_test().await;
+    assert_eq!(states, vec![('C', crate::cache::ShardState::Warm)]);
+}
+
+/// Parked shard idle past `PARKED_TO_COLD_IDLE_SECS` demotes to
+/// Cold on the next `demote_idle_shards` call.
+///
+/// Pins the multi-step ladder: a single tick can see both
+/// `Warm → Parked` and `Parked → Cold` transitions if a Parked
+/// shard's `last_query_at_ms` is old enough, but the policy only
+/// returns one demote target per call so each tick advances each
+/// shard at most one tier.  This test seeds a Parked shard
+/// directly to keep the assertion focused.
+#[tokio::test]
+async fn demote_idle_shards_parked_to_cold_at_ttl() {
+    use crate::cache::ShardState;
+    use crate::cache::policy::PARKED_TO_COLD_IDLE_SECS;
+
+    let (tx, _rx) = crate::events::event_channel();
+    let mgr = IndexManager::new(None, tx);
+    mgr.add_drive(build_test_drive()).await;
+
+    // Seed C as Parked via the test escape hatch.
+    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+
+    // Backdate so the Parked shard has been idle past its TTL.
+    let last_query_ms = 1_000_000_000_u64;
+    assert!(
+        mgr.backdate_last_query_at_ms_for_test('C', last_query_ms)
+            .await
+    );
+
+    let now_ms = last_query_ms + PARKED_TO_COLD_IDLE_SECS * 1000;
+    mgr.demote_idle_shards(now_ms).await;
+
+    let states = mgr.shard_states_for_test().await;
+    assert_eq!(states, vec![('C', ShardState::Cold)]);
+}
+
+/// `demote_idle_shards` batches multiple demotes inside a single
+/// write-lock window.  Pin the contract by demoting three shards
+/// in one call.
+#[tokio::test]
+async fn demote_idle_shards_batches_multiple_demotes() {
+    use crate::cache::ShardState;
+    use crate::cache::policy::WARM_TO_PARKED_IDLE_SECS;
+
+    let (tx, _rx) = crate::events::event_channel();
+    let mgr = IndexManager::new(None, tx);
+    mgr.add_drive(build_test_drive()).await;
+    mgr.add_drive(build_test_drive_d()).await;
+
+    let last_query_ms = 1_000_000_000_u64;
+    for letter in ['C', 'D'] {
+        assert!(
+            mgr.backdate_last_query_at_ms_for_test(letter, last_query_ms)
+                .await
+        );
+    }
+
+    let now_ms = last_query_ms + WARM_TO_PARKED_IDLE_SECS * 1000;
+    let version_before = mgr
+        .index_version
+        .load(core::sync::atomic::Ordering::Relaxed);
+    mgr.demote_idle_shards(now_ms).await;
+    let version_after = mgr
+        .index_version
+        .load(core::sync::atomic::Ordering::Relaxed);
+
+    let states = mgr.shard_states_for_test().await;
+    assert_eq!(
+        states,
+        vec![('C', ShardState::Parked), ('D', ShardState::Parked)],
+        "all backdated Warm shards must demote in a single batch call"
+    );
+    assert_eq!(
+        version_after - version_before,
+        1,
+        "batch must bump index_version exactly once for the whole batch, \
+         not once per demoted shard"
+    );
+}
+
 /// End-to-end: demote → promote → demote → promote preserves
 /// query stats across every rebuild.  Pins the
 /// `Arc<DriveStats>`-sharing contract under repeated transitions.

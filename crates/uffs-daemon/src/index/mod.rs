@@ -765,11 +765,24 @@ impl IndexManager {
     /// new one.
     async fn add_drive(&self, drive: uffs_core::compact::DriveCompactIndex) {
         let body = Arc::new(drive);
+        let letter = body.letter;
+        let now_ms = unix_now_ms();
         let mut guard = self.index.write().await;
         // ShardRegistry::add identifies the new shard by `body.letter`
         // (its canonical case from the index payload) — callers don't
         // thread the letter separately so it can't drift.
-        *guard = Arc::new(guard.add(body));
+        let new_registry = guard.add(body);
+        // Phase 3 Commit D — seed the load timestamp on the freshly
+        // mounted shard so the demote-controller's idle clock starts
+        // ticking from now, not from epoch zero.  See
+        // `DriveStats::mark_loaded_at` doc.
+        if let Some(shard) = new_registry
+            .iter()
+            .find(|shard| shard.drive.eq_ignore_ascii_case(&letter))
+        {
+            shard.stats.mark_loaded_at(now_ms);
+        }
+        *guard = Arc::new(new_registry);
         drop(guard);
         self.bump_index_version();
     }
@@ -782,10 +795,23 @@ impl IndexManager {
     /// computed against the pre-refresh snapshot.
     async fn replace_drive(&self, letter: char, new_drive: uffs_core::compact::DriveCompactIndex) {
         let body = Arc::new(new_drive);
+        let canonical = body.letter;
+        let now_ms = unix_now_ms();
         let mut guard = self.index.write().await;
         // `ShardRegistry::replace` matches case-insensitively, mirroring
         // the previous `eq_ignore_ascii_case` filter on `DriveIndex`.
-        *guard = Arc::new(guard.replace(letter, body));
+        let new_registry = guard.replace(letter, body);
+        // Phase 3 Commit D — same load-timestamp seeding as add_drive.
+        // The replaced shard gets a fresh `Arc<DriveStats>` (replace
+        // builds a new ShardEntry), so we don't need to preserve any
+        // older counters here.
+        if let Some(shard) = new_registry
+            .iter()
+            .find(|shard| shard.drive.eq_ignore_ascii_case(&canonical))
+        {
+            shard.stats.mark_loaded_at(now_ms);
+        }
+        *guard = Arc::new(new_registry);
         drop(guard);
         self.bump_index_version();
     }
@@ -957,6 +983,77 @@ impl IndexManager {
         }
     }
 
+    /// Demote any shards whose idle time exceeds the static-TTL
+    /// threshold for their current tier.
+    ///
+    /// Phase 3 Commit D — driven from a 30 s tick task in `lib.rs`
+    /// (see `spawn_idle_demote_controller`).  The tick cadence is
+    /// shorter than every TTL by design: a Hot shard idle for 5
+    /// minutes can race past the `HOT_TO_WARM_IDLE_SECS`
+    /// (300 s) boundary at most one tick (30 s) before the
+    /// controller observes it.  See `cache::policy` for the
+    /// per-tier thresholds.
+    ///
+    /// Three-phase orchestration:
+    ///
+    /// 1. **Read-lock detect.**  Single `self.index.read()` to enumerate
+    ///    `(letter, target)` pairs where the shard's `idle_secs = (now_ms -
+    ///    last_query_at_ms) / 1000` reaches its tier's TTL.  Common case (no
+    ///    shard past its TTL) exits with one read-lock acquisition.
+    /// 2. **Write-lock atomic batch.**  Apply every demote in a single
+    ///    write-lock window — N demotes → N registry rebuilds inside one lock
+    ///    acquisition, vs N separate write-lock acquisitions.  Each rebuild is
+    ///    O(shards) and sub-microsecond at the project's max ≤ 26 drives.
+    /// 3. **One `bump_index_version` for the batch.**  The aggregate cache only
+    ///    needs to invalidate once even when multiple shards moved.
+    ///
+    /// `now_ms` is threaded as a parameter so tests can pass
+    /// deterministic timestamps (no `tokio::time::pause`
+    /// dependency at this layer) and so the spawn task in
+    /// `lib.rs` controls when "now" is sampled (once per tick,
+    /// shared across every shard's idle computation).
+    ///
+    /// Race-resilient: if a search promoted the shard between our
+    /// detect and the corresponding swap, `demote_letter` returns
+    /// `None` for the now-Warm shard, that demote is skipped, the
+    /// rest of the batch proceeds, and the next idle-tick
+    /// re-evaluates.
+    pub(crate) async fn demote_idle_shards(&self, now_ms: u64) {
+        // ── Phase 1: read-lock detect ──────────────────────────────
+        let demotes: Vec<(char, crate::cache::ShardState)> = {
+            let guard = self.index.read().await;
+            guard
+                .iter()
+                .filter_map(|shard| {
+                    let last = shard.stats.last_query_at_ms();
+                    let idle_ms = now_ms.saturating_sub(last);
+                    let idle_secs = idle_ms / 1000;
+                    crate::cache::policy::next_state_for_idle(shard.state(), idle_secs)
+                        .map(|target| (shard.drive, target))
+                })
+                .collect()
+        };
+        if demotes.is_empty() {
+            return;
+        }
+
+        // ── Phase 2: write-lock atomic batch ───────────────────────
+        let mut guard = self.index.write().await;
+        let mut applied = 0_usize;
+        for (letter, target) in demotes {
+            if let Some(new_registry) = guard.demote_letter(letter, target) {
+                *guard = Arc::new(new_registry);
+                applied += 1;
+            }
+        }
+        drop(guard);
+
+        // ── Phase 3: single index-version bump for the batch ───────
+        if applied > 0 {
+            self.bump_index_version();
+        }
+    }
+
     /// Per-shard `(drive_letter, queries_total)` snapshot for tests.
     ///
     /// Test-only escape hatch so integration tests in `crate::index::tests`
@@ -994,6 +1091,35 @@ impl IndexManager {
                 *guard = Arc::new(new_registry);
                 drop(guard);
                 self.bump_index_version();
+                true
+            })
+    }
+
+    /// Backdate a shard's `last_query_at_ms` for tests.
+    ///
+    /// Sets the timestamp via [`crate::cache::DriveStats::mark_loaded_at`]
+    /// (no `queries_total` bump), so the per-shard query counter
+    /// stays a clean count of actual searches dispatched in tests
+    /// where that matters.  Returns `true` when the letter was
+    /// found, `false` otherwise.
+    ///
+    /// Used by the Commit-D virtual-time tests to simulate "shard
+    /// has been idle for N seconds" by writing a known-old
+    /// timestamp directly, then calling
+    /// [`Self::demote_idle_shards`] with `now_ms = old_ts + ttl +
+    /// epsilon` and asserting the demote happened.
+    #[cfg(test)]
+    pub(crate) async fn backdate_last_query_at_ms_for_test(
+        &self,
+        letter: char,
+        ts_ms: u64,
+    ) -> bool {
+        let guard = self.index.read().await;
+        guard
+            .iter()
+            .find(|shard| shard.drive.eq_ignore_ascii_case(&letter))
+            .is_some_and(|shard| {
+                shard.stats.mark_loaded_at(ts_ms);
                 true
             })
     }

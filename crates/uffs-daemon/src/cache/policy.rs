@@ -25,27 +25,14 @@ use super::shard::ShardState;
 /// `Warm`.  Phase 4+ extends "no query" to "no bloom-positive query"
 /// so cold drives don't re-warm just because their bloom got faulted
 /// in by a wildcard scan.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 3 Commit D consumer (`ShardRegistry::demote_idle_shards`); \
-                  Commit A lands the constant + the policy decision function \
-                  ahead of the controller that reads them."
-    )
-)]
+///
+/// Consumed by [`crate::index::IndexManager::demote_idle_shards`]
+/// (Phase 3 Commit D) via [`next_state_for_idle`].
 pub(crate) const HOT_TO_WARM_IDLE_SECS: u64 = 300;
 
 /// After this many seconds without a query a `Warm` shard demotes to
 /// `Parked`, dropping the runtime mmap (the records / names columns
 /// are released; bloom + trie persist in Phase 4+).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 3 Commit D consumer; see HOT_TO_WARM_IDLE_SECS."
-    )
-)]
 pub(crate) const WARM_TO_PARKED_IDLE_SECS: u64 = 1800;
 
 /// After this many seconds without a query a `Parked` shard demotes
@@ -54,13 +41,6 @@ pub(crate) const WARM_TO_PARKED_IDLE_SECS: u64 = 1800;
 /// the threshold is generous (24 h) — anything shorter risks
 /// thrashing under nightly batch processes that scan archives once
 /// per day.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 3 Commit D consumer; see HOT_TO_WARM_IDLE_SECS."
-    )
-)]
 pub(crate) const PARKED_TO_COLD_IDLE_SECS: u64 = 86_400;
 
 /// Decide whether a shard in `state` that has been idle for
@@ -77,15 +57,10 @@ pub(crate) const PARKED_TO_COLD_IDLE_SECS: u64 = 86_400;
 /// `Hot` skips straight to `Warm` rather than `Parked` so a brief
 /// idle window doesn't re-cost a runtime-mmap rebuild on the next
 /// query.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 3 Commit D consumer (`ShardRegistry::demote_idle_shards`); \
-                  Commit A lands the decision function ahead of the controller \
-                  that reads it."
-    )
-)]
+///
+/// Wired into the production demote path by
+/// [`crate::index::IndexManager::demote_idle_shards`] (Phase 3
+/// Commit D).
 #[must_use]
 pub(crate) const fn next_state_for_idle(state: ShardState, idle_secs: u64) -> Option<ShardState> {
     match state {

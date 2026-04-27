@@ -50,7 +50,7 @@ pub(crate) use shard::ShardState;
 /// * [`crate::index::IndexManager::record_search_dispatch`] — stamps every
 ///   Warm/Hot shard's `DriveStats::last_query_at_ms` on each dispatch.
 /// * The Phase-3 demote controller (Commit D, in
-///   [`registry::ShardRegistry::demote_idle_shards`]) — reads
+///   [`crate::index::IndexManager::demote_idle_shards`]) — reads
 ///   `last_query_at_ms` to compute `idle_secs`.
 ///
 /// Returns `0` when the system clock is set before 1970-01-01 so the

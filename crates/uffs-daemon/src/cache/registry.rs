@@ -26,15 +26,6 @@ use super::shard::{ShardEntry, ShardState};
 /// (`Parked → Parked`, `Cold → Cold`) are intentionally rejected so
 /// a buggy controller can't silently rebuild the registry on every
 /// idle tick for an already-demoted shard.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 3 Commit B helper for `ShardRegistry::demote_letter`; \
-                  the demote_letter consumer is itself dead_code until \
-                  Commit D wires the idle-timer controller."
-    )
-)]
 const fn is_legal_demote_target(from: ShardState, target: ShardState) -> bool {
     // Single match arm so clippy's `match_same_arms` is satisfied:
     //
@@ -227,15 +218,10 @@ impl ShardRegistry {
     /// caller's old `Arc` keeps reading the old state forever, the
     /// new `Arc` reads the new state forever, and the registry's
     /// `Vec` swap is the linearisation point.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 3 Commit D consumer (per-registry idle timer); \
-                      Commit B lands the helper so the demote logic + tracing \
-                      contract is reviewable independently of the controller."
-        )
-    )]
+    ///
+    /// Wired into the production demote path by
+    /// [`crate::index::IndexManager::demote_idle_shards`] (Phase 3
+    /// Commit D).
     #[must_use]
     pub(crate) fn demote_letter(&self, letter: char, target: ShardState) -> Option<Self> {
         // Locate the matching shard by enumerating once: returns
