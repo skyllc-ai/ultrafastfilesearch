@@ -73,6 +73,7 @@ pub mod glob;
 pub mod index_search;
 pub mod output;
 mod path_resolver;
+pub mod path_trie;
 pub mod pattern;
 mod query;
 pub mod search;
