@@ -4547,8 +4547,10 @@ dependencies = [
  "aes-gcm",
  "dirs-next",
  "libc",
+ "memmap2",
  "rand 0.10.1",
  "security-framework",
+ "tempfile",
  "tracing",
  "windows 0.62.2",
 ]

@@ -31,6 +31,13 @@ dirs-next.workspace = true
 aes-gcm.workspace = true
 rand.workspace = true
 
+# Memory-mapped file I/O (Phase 2b — runtime_dir::mmap_read_only)
+memmap2.workspace = true
+
+[dev-dependencies]
+# Per-test fixture directories for runtime_dir tests
+tempfile.workspace = true
+
 # File locking (flock on Unix)
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

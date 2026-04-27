@@ -13,6 +13,9 @@
 //!   Service (Phase S2)
 //! - [`fs`] — Secure file operations: atomic write, secure delete, permissions,
 //!   file locking
+//! - [`runtime_dir`] — Daemon-private runtime tempfile lifecycle (Phase 2b
+//!   memory tiering): owner-only file creation, orphan-pid sweep, read-only
+//!   mmap behind a typed soundness wrapper
 
 // Platform-gated deps: used by sub-modules behind #[cfg] gates.
 // Suppress unused-crate-dependencies lint for platforms where the
@@ -24,6 +27,7 @@ use security_framework as _;
 pub mod crypto;
 pub mod fs;
 pub mod keystore;
+pub mod runtime_dir;
 
 /// Windows named-pipe security helpers (DACL, SID resolution, pipe naming).
 ///
