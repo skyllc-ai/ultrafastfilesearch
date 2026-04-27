@@ -75,6 +75,9 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: tier-2-coverage
+          cache-on-failure: 'true'
 
       - name: Install tools
         uses: taiki-e/install-action@dfc84ffb7254b048a0a843316ff5a2714dcdc7bd # v2
@@ -142,6 +145,11 @@ jobs:
           # anyway, but be explicit so a future refactor does not cross the
           # streams.
           shared-key: tier-2-windows-check
+          # Persist a partial cache even if the job fails — runner
+          # pre-emption (SIGTERM) mid-compile is the most common Tier 2
+          # failure mode (issue #83), so the next attempt should resume
+          # from the partially-built compile graph.
+          cache-on-failure: 'true'
 
       - name: cargo check --workspace --all-features
         # --all-features to exercise every feature-gated path that only
@@ -169,6 +177,9 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: tier-2-build-validation
+          cache-on-failure: 'true'
 
       - name: Run build validation
         # --locked per §2.8 — validation builds must resolve through
@@ -194,6 +205,9 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: tier-2-udeps
+          cache-on-failure: 'true'
 
       - name: Install cargo-udeps
         uses: taiki-e/install-action@dfc84ffb7254b048a0a843316ff5a2714dcdc7bd # v2
@@ -223,6 +237,9 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: tier-2-miri
+          cache-on-failure: 'true'
 
       - name: Run focused Miri coverage
         env:
