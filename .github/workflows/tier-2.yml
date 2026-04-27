@@ -185,6 +185,21 @@ jobs:
         # --locked per §2.8 — validation builds must resolve through
         # the committed Cargo.lock, otherwise a broken lockfile wouldn't
         # surface here.
+        #
+        # CARGO_BUILD_JOBS=2: ubuntu-latest's 16 GB RAM cannot host
+        # parallel linkers for every workspace binary — `uffs` +
+        # `uffsd` + `uffsmcp` + `uffs_mft` + diagnostic bins each pull
+        # in polars + axum + rmcp + mimalloc + ring during link, which
+        # adds up to multiple GB per `ld` invocation.  4–5 wide
+        # parallelism (the default for ubuntu-latest's 4 vCPU) breached
+        # the memory budget mid-link and the kernel pre-empted the
+        # runner agent (exit 143 / "runner has received a shutdown
+        # signal" — issue #83).  Capping at 2 keeps a useful amount of
+        # compile parallelism while never linking more than 2 bins at
+        # once.  Total wall time goes up modestly (≈10 → ≈12 min on
+        # warm cache) — well within the 60-min budget.
+        env:
+          CARGO_BUILD_JOBS: '2'
         run: cargo build --locked --workspace --all-features --bins
 
   udeps:
