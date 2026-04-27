@@ -87,6 +87,12 @@ impl IndexManager {
         // ── Snapshot the index (< 1 μs) ────────────────────────────
         let t_lock = profiling.then(Instant::now);
         let snapshot = self.snapshot().await;
+        // Phase 1 of memory-tiering: record this dispatch on every
+        // active shard so `DriveStats::decay_ema` (consumed by Phase 6
+        // adaptive-TTL) accumulates a real signal.  See
+        // `crate::cache::DriveStats` and the `record_search_dispatch`
+        // doc comment.
+        self.record_search_dispatch().await;
         let lock_us = t_lock.map_or(0, |ts| ts.elapsed().as_micros());
 
         let (sort_column, sort_desc, extra_sort_tiers) =

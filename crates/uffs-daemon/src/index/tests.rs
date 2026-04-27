@@ -1207,3 +1207,193 @@ async fn total_index_heap_bytes_matches_status_breakdown() {
         "status.index_heap_bytes must equal total_index_heap_bytes",
     );
 }
+
+// ── Phase 1 — ShardRegistry / ShardEntry integration ────────────────
+
+/// Build a synthetic drive with letter `'D'` for multi-drive tests.
+///
+/// Same shape as [`build_test_drive`] but a different letter so a
+/// 2-drive registry is unambiguous.
+fn build_test_drive_d() -> uffs_core::compact::DriveCompactIndex {
+    let mut idx = MftIndex::new('D');
+    let root_off = idx.add_name(".");
+    let root = idx.get_or_create(ROOT_FRS);
+    root.stdinfo.set_directory(true);
+    root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
+    root.first_name.parent_frs = ROOT_FRS;
+
+    let file = "alpha.txt";
+    let off = idx.add_name(file);
+    let ext = idx.intern_extension(file);
+    let rec = idx.get_or_create(200);
+    rec.first_name.name = IndexNameRef::new(off, uffs_mft::len_to_u16(file.len()), true, ext);
+    rec.first_name.parent_frs = ROOT_FRS;
+    rec.first_stream.size = SizeInfo {
+        length: 42,
+        allocated: 512,
+    };
+    rec.stdinfo.flags = 0x20;
+    rec.stdinfo.modified = 1_000_000;
+
+    let (drive, _, _) = build_compact_index('D', &idx);
+    drive
+}
+
+/// `ShardRegistry::{add, replace, remove}` round-trip with real
+/// `DriveCompactIndex` bodies.  Pins the case-insensitive contract on
+/// `replace` / `remove` that mirrors the pre-Phase-1
+/// `IndexManager::replace_drive` filter.
+#[test]
+fn shard_registry_add_replace_remove_round_trip() {
+    use crate::cache::ShardRegistry;
+
+    let body_c = Arc::new(build_test_drive());
+    let body_d = Arc::new(build_test_drive_d());
+    let body_c_v2 = Arc::new(build_test_drive());
+
+    // Empty start → add C → add D → replace 'c' (case-insensitive) →
+    // remove 'd' (case-insensitive).  Single mutable binding so we
+    // don't trip clippy::shadow_reuse on each rebuild.
+    let mut reg = ShardRegistry::new();
+    assert!(reg.is_empty());
+    assert_eq!(reg.active_index().drives.len(), 0);
+
+    reg = reg.add(Arc::clone(&body_c));
+    reg = reg.add(Arc::clone(&body_d));
+    assert_eq!(reg.active_index().drives.len(), 2);
+    assert!(reg.contains('C'));
+    assert!(reg.contains('D'));
+
+    reg = reg.replace('c', Arc::clone(&body_c_v2));
+    assert_eq!(
+        reg.active_index().drives.len(),
+        2,
+        "replace must not duplicate",
+    );
+
+    reg = reg.remove('d');
+    assert!(!reg.contains('D'));
+    assert_eq!(reg.active_index().drives.len(), 1);
+    assert_eq!(reg.loaded_letters(), vec!['C']);
+}
+
+/// `ShardEntry::try_transition` enforces the legal-transition graph
+/// from [`ShardState::can_transition_to`] using a CAS loop.
+///
+/// Task 1.7 — covers both legal and illegal moves on a real shard
+/// with a `DriveCompactIndex` body, complementing the proptest in
+/// `crate::cache::shard::tests` which exercises the pure state graph.
+#[test]
+fn shard_entry_try_transition_legal_and_illegal() {
+    use crate::cache::ShardState;
+    use crate::cache::shard::ShardEntry;
+
+    let body = Arc::new(build_test_drive());
+    let shard = ShardEntry::new_warm('C', Arc::clone(&body));
+    assert_eq!(shard.state(), ShardState::Warm);
+
+    // Legal: Warm → Hot.
+    let prev = shard
+        .try_transition(ShardState::Hot)
+        .expect("warm->hot is legal");
+    assert_eq!(prev, ShardState::Warm);
+    assert_eq!(shard.state(), ShardState::Hot);
+
+    // Illegal: Hot → Cold (must go via Evicting → Cold/Parked).
+    let err = shard
+        .try_transition(ShardState::Cold)
+        .expect_err("hot->cold is illegal");
+    assert_eq!(err.from, ShardState::Hot);
+    assert_eq!(err.to, ShardState::Cold);
+    assert_eq!(
+        shard.state(),
+        ShardState::Hot,
+        "state must be unchanged on illegal transition"
+    );
+
+    // Recovery path: Hot → Warm → Evicting → Cold all legal.
+    shard
+        .try_transition(ShardState::Warm)
+        .expect("hot->warm legal");
+    shard
+        .try_transition(ShardState::Evicting)
+        .expect("warm->evicting legal");
+    shard
+        .try_transition(ShardState::Cold)
+        .expect("evicting->cold legal");
+    assert_eq!(shard.state(), ShardState::Cold);
+}
+
+/// Two-drive integration: searches dispatch correctly across both
+/// shards under the new `ShardRegistry` indirection.
+///
+/// Task 1.9 — `build_test_drive` + `build_test_drive_d` with
+/// `IndexManager::search`, asserting the results carry rows from both
+/// drives.  Pins the "zero observable change" contract for Phase 1.
+#[tokio::test]
+async fn shard_registry_search_two_drives_returns_rows_from_each() {
+    let (tx, _rx) = crate::events::event_channel();
+    let mgr = IndexManager::new(None, tx);
+    mgr.add_drive(build_test_drive()).await;
+    mgr.add_drive(build_test_drive_d()).await;
+
+    let params = uffs_client::protocol::SearchParams {
+        pattern: "*".to_owned(),
+        limit: Some(50),
+        ..Default::default()
+    };
+    let resp = mgr.search(&params).await;
+    assert!(
+        resp.total_count >= 2,
+        "two-drive '*' search must return at least 2 rows; got {}",
+        resp.total_count,
+    );
+
+    // Both drives must contribute records to the snapshot.
+    let snap = mgr.snapshot().await;
+    assert_eq!(snap.drives.len(), 2);
+    let letters: std::collections::HashSet<char> = snap.drives.iter().map(|d| d.letter).collect();
+    assert!(letters.contains(&'C'), "C drive must be in the snapshot");
+    assert!(letters.contains(&'D'), "D drive must be in the snapshot");
+}
+
+/// `IndexManager::search` records one query per dispatch on every
+/// active shard, via `record_search_dispatch` + `DriveStats::record_query`.
+///
+/// Task 1.5 — pins the wiring between the search hot path and the
+/// per-shard counter that Phase 6 reads for adaptive-TTL.
+#[tokio::test]
+async fn search_records_query_on_every_active_shard() {
+    let (tx, _rx) = crate::events::event_channel();
+    let mgr = IndexManager::new(None, tx);
+    mgr.add_drive(build_test_drive()).await;
+    mgr.add_drive(build_test_drive_d()).await;
+
+    // Baseline: no searches yet.
+    let before = mgr.shard_query_totals_for_test().await;
+    assert_eq!(before.len(), 2);
+    for (letter, count) in &before {
+        assert_eq!(*count, 0, "drive {letter} must start at 0 queries");
+    }
+
+    let params = uffs_client::protocol::SearchParams {
+        pattern: "*".to_owned(),
+        limit: Some(10),
+        ..Default::default()
+    };
+
+    // Three searches.  Suffix the loop bound to avoid the implicit i32
+    // fallback flagged by clippy::default_numeric_fallback.
+    for _ in 0_u32..3_u32 {
+        drop(mgr.search(&params).await);
+    }
+
+    let after = mgr.shard_query_totals_for_test().await;
+    assert_eq!(after.len(), 2);
+    for (letter, count) in after {
+        assert_eq!(
+            count, 3,
+            "drive {letter} must have recorded 3 queries; got {count}",
+        );
+    }
+}

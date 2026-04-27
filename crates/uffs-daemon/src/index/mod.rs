@@ -27,6 +27,7 @@ use uffs_client::protocol::response::{DaemonStatus, StatsResponse, StatusRespons
 use uffs_core::aggregate::AggregateCache;
 use uffs_core::search::backend::DriveIndex;
 
+use crate::cache::ShardRegistry;
 use crate::events::{DaemonEvent, EventSender};
 
 /// Per-drive load timing stored for profile reporting.
@@ -52,9 +53,20 @@ struct StoredDriveTiming {
 /// (< 1 μs).  In-flight queries keep the old snapshot alive until they
 /// finish.
 pub(crate) struct IndexManager {
-    /// Shared index snapshot: read lock to clone Arc (< 1 μs), write lock
-    /// only during load/refresh/remove (pointer swap, < 1 μs).
-    index: RwLock<Arc<DriveIndex>>,
+    /// Shared shard-registry snapshot.
+    ///
+    /// Read lock to clone the inner `Arc<ShardRegistry>` (< 1 μs);
+    /// write lock only during load / refresh / remove (pointer swap,
+    /// < 1 μs).  The registry caches an `Arc<DriveIndex>` over its
+    /// active (Warm/Hot) subset so the search hot path stays one
+    /// `Arc::clone` away from a usable backend — see
+    /// [`Self::snapshot`].
+    ///
+    /// Phase 1 of the memory-tiering work replaced the previous
+    /// `Arc<DriveIndex>` field with `Arc<ShardRegistry>`; every shard
+    /// is pinned to `Warm` so observable behavior is unchanged.  See
+    /// `crate::cache` for the type layer.
+    index: RwLock<Arc<ShardRegistry>>,
     /// Current daemon status.
     status: RwLock<DaemonStatus>,
     /// When the daemon started.
@@ -130,7 +142,7 @@ impl IndexManager {
     pub(crate) fn new(data_dir: Option<PathBuf>, events: EventSender) -> Self {
         let cpus = std::thread::available_parallelism().map_or(4, core::num::NonZeroUsize::get);
         Self {
-            index: RwLock::new(Arc::new(DriveIndex::new())),
+            index: RwLock::new(Arc::new(ShardRegistry::new())),
             status: RwLock::new(DaemonStatus::Loading {
                 drives_loaded: 0,
                 drives_total: 0,
@@ -752,10 +764,12 @@ impl IndexManager {
     /// cached results from the previous snapshot can't leak into the
     /// new one.
     async fn add_drive(&self, drive: uffs_core::compact::DriveCompactIndex) {
+        let body = Arc::new(drive);
         let mut guard = self.index.write().await;
-        let mut drives = guard.drives.clone();
-        drives.push(Arc::new(drive));
-        *guard = Arc::new(DriveIndex { drives });
+        // ShardRegistry::add identifies the new shard by `body.letter`
+        // (its canonical case from the index payload) — callers don't
+        // thread the letter separately so it can't drift.
+        *guard = Arc::new(guard.add(body));
         drop(guard);
         self.bump_index_version();
     }
@@ -767,15 +781,11 @@ impl IndexManager {
     /// Bumps `index_version` so the aggregate cache drops entries
     /// computed against the pre-refresh snapshot.
     async fn replace_drive(&self, letter: char, new_drive: uffs_core::compact::DriveCompactIndex) {
+        let body = Arc::new(new_drive);
         let mut guard = self.index.write().await;
-        let mut drives: Vec<Arc<uffs_core::compact::DriveCompactIndex>> = guard
-            .drives
-            .iter()
-            .filter(|drv| !drv.letter.eq_ignore_ascii_case(&letter))
-            .cloned()
-            .collect();
-        drives.push(Arc::new(new_drive));
-        *guard = Arc::new(DriveIndex { drives });
+        // `ShardRegistry::replace` matches case-insensitively, mirroring
+        // the previous `eq_ignore_ascii_case` filter on `DriveIndex`.
+        *guard = Arc::new(guard.replace(letter, body));
         drop(guard);
         self.bump_index_version();
     }
@@ -796,11 +806,51 @@ impl IndexManager {
         self.aggregate_cache.set_index_version(new_version);
     }
 
-    /// Snapshot the current index (< 1 μs).  Callers search the returned
-    /// `Arc` with no lock held.
+    /// Snapshot the current `DriveIndex` over the active (Warm/Hot)
+    /// shard subset.
+    ///
+    /// Two `Arc::clone`s under the read lock (registry, then its
+    /// pre-cached active index) — no per-search rebuild.  Callers run
+    /// the search against the returned `Arc` with no lock held.  Phase
+    /// 1 keeps every shard `Warm` so the active subset always equals
+    /// the full loaded set; Phase 3+ this return value shrinks below
+    /// the registry as shards demote.
     async fn snapshot(&self) -> Arc<DriveIndex> {
         let guard = self.index.read().await;
-        Arc::clone(&guard)
+        guard.active_index()
+    }
+
+    /// Record one search dispatch against every active shard.
+    ///
+    /// Phase 1 records on every Warm/Hot shard; the counter feeds
+    /// [`crate::cache::DriveStats::decay_ema`] which Phase 6 reads to
+    /// drive adaptive-TTL formulas.  Phase 4 will move the recording
+    /// into the per-shard search-dispatch loop so bloom-skipped shards
+    /// don't bump their counters.
+    async fn record_search_dispatch(&self) {
+        let guard = self.index.read().await;
+        for shard in guard.iter() {
+            if matches!(
+                shard.state(),
+                crate::cache::ShardState::Warm | crate::cache::ShardState::Hot
+            ) {
+                shard.stats.record_query();
+            }
+        }
+    }
+
+    /// Per-shard `(drive_letter, queries_total)` snapshot for tests.
+    ///
+    /// Test-only escape hatch so integration tests in `crate::index::tests`
+    /// can verify the [`Self::record_search_dispatch`] wiring without
+    /// exposing the registry to production callers.
+    #[cfg(test)]
+    pub(crate) async fn shard_query_totals_for_test(&self) -> Vec<(char, u64)> {
+        let guard = self.index.read().await;
+        guard
+            .iter()
+            .map(|shard| (shard.drive, shard.stats.queries_total()))
+            .collect()
     }
 
     /// Get daemon performance statistics.
@@ -1266,19 +1316,29 @@ impl IndexManager {
     /// Check if the daemon has any loaded drives.
     pub(crate) async fn has_drives(&self) -> bool {
         let guard = self.index.read().await;
-        !guard.drives.is_empty()
+        !guard.is_empty()
     }
 
-    /// Total records across all drives.
+    /// Total records across all active (Warm/Hot) drives.
+    ///
+    /// Phase 1 keeps every shard `Warm`, so this is identical to the
+    /// pre-Phase-1 "records across every loaded drive" count.  Phase
+    /// 3+ when shards demote, this returns only the records that are
+    /// actually searchable right now.
     pub(crate) async fn total_records(&self) -> usize {
         let guard = self.index.read().await;
-        guard.total_records()
+        guard.active_index().total_records()
     }
 
     /// Return the set of currently loaded drive letters.
+    ///
+    /// Includes every shard regardless of tier (Warm, Hot, Parked,
+    /// Cold).  Pre-Phase-3 this matched the active-index drive list
+    /// exactly; post-Phase-3 it can include shards whose body has been
+    /// dropped.
     pub(crate) async fn loaded_drive_letters(&self) -> Vec<char> {
-        let snap = self.snapshot().await;
-        snap.drives.iter().map(|dr| dr.letter).collect()
+        let guard = self.index.read().await;
+        guard.loaded_letters()
     }
 
     /// Hot-load a single MFT file if its drive letter is not already loaded.
@@ -1432,8 +1492,8 @@ impl IndexManager {
 
     /// Check whether a drive letter is already in the index.
     async fn is_drive_loaded(&self, letter: char) -> bool {
-        let snap = self.snapshot().await;
-        snap.drives.iter().any(|dr| dr.letter == letter)
+        let guard = self.index.read().await;
+        guard.contains(letter)
     }
 
     /// Determine the [`MftSource`] for a drive letter.

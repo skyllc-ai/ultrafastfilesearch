@@ -74,5 +74,11 @@ libc.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
 
+[dev-dependencies]
+# Phase 1 of memory-tiering: property-test the `ShardState` legal-transition
+# graph in `crates/uffs-daemon/src/cache/shard.rs`.  Workspace-pinned to
+# `proptest = "1.11.0"` (see top-level `Cargo.toml`).
+proptest.workspace = true
+
 [lints]
 workspace = true

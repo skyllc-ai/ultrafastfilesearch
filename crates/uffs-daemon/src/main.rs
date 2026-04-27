@@ -40,6 +40,8 @@ use dirs_next as _;
 #[cfg(unix)]
 use libc as _;
 use libmimalloc_sys as _;
+#[cfg(test)]
+use proptest as _;
 use rand as _;
 use serde as _;
 use serde_json as _;

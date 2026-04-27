@@ -29,6 +29,11 @@ use uffs_security as _;
 
 /// Broker client — volume handle requests (Windows) / stubs (other).
 mod broker_client;
+/// Shard-based index cache with per-drive lifecycle.
+///
+/// Phase 1 of the memory-tiering work — see
+/// `docs/refactor/memory-tiering-implementation-plan.md`.
+mod cache;
 /// Daemon event broadcasting — push notifications to connected clients.
 pub mod events;
 /// JSON-RPC request handler.

@@ -28,6 +28,7 @@ use dirs_next as _;
 use libc as _;
 use libmimalloc_sys as _;
 use mimalloc as _;
+use proptest as _;
 use rand as _;
 use serde as _;
 use serde_json as _;
