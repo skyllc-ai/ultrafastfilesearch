@@ -32,6 +32,7 @@ use proptest as _;
 use rand as _;
 use serde as _;
 use serde_json as _;
+use tempfile as _;
 use thiserror as _;
 use tokio as _;
 use tracing as _;

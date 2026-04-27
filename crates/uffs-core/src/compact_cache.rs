@@ -72,6 +72,24 @@ pub fn compact_cache_path(drive_letter: char) -> PathBuf {
 /// `FILE_FLAG_DELETE_ON_CLOSE` on Windows.
 static RUNTIME_TEMPFILE_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
+/// Returns the runtime-tempfile root directory shared by every UFFS
+/// daemon process: `<cache_dir>/runtime/`.
+///
+/// Each daemon owns a per-PID subdirectory under this root
+/// (`<runtime_root>/<pid>/`) and the next-startup orphan sweep
+/// ([`uffs_security::runtime_dir::RuntimeDir::cleanup_orphans`])
+/// reads this exact path to detect and wipe dead-PID leftovers.
+///
+/// # Notes
+///
+/// This function does **not** create the directory — that's the
+/// caller's responsibility, typically through
+/// [`uffs_mft::cache::create_secure_dir`].
+#[must_use]
+pub fn compact_runtime_root() -> PathBuf {
+    uffs_mft::cache::cache_dir().join("runtime")
+}
+
 /// Build a unique runtime-tempfile path for `drive_letter` and ensure
 /// its parent directory exists with owner-only permissions.
 ///
@@ -90,9 +108,7 @@ static RUNTIME_TEMPFILE_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic:
 fn compact_runtime_tempfile_path(drive_letter: char) -> io::Result<PathBuf> {
     let pid = std::process::id();
     let seq = RUNTIME_TEMPFILE_SEQ.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    let parent = uffs_mft::cache::cache_dir()
-        .join("runtime")
-        .join(pid.to_string());
+    let parent = compact_runtime_root().join(pid.to_string());
     uffs_mft::cache::create_secure_dir(&parent)?;
     Ok(parent.join(format!("{drive_letter}_compact_{seq}.live")))
 }

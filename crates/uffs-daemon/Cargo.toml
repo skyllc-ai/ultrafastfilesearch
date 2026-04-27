@@ -79,6 +79,9 @@ windows.workspace = true
 # graph in `crates/uffs-daemon/src/cache/shard.rs`.  Workspace-pinned to
 # `proptest = "1.11.0"` (see top-level `Cargo.toml`).
 proptest.workspace = true
+# Phase 2b of memory-tiering: scoped tempdirs for the runtime-orphan-sweep
+# test in `src/lib.rs::tests`.
+tempfile.workspace = true
 
 [lints]
 workspace = true

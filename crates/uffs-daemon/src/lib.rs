@@ -25,7 +25,6 @@ use thiserror as _;
 use tracing_appender as _;
 use tracing_subscriber as _;
 use uffs_mft as _;
-use uffs_security as _;
 
 /// Broker client — volume handle requests (Windows) / stubs (other).
 mod broker_client;
@@ -46,6 +45,8 @@ mod ipc;
 mod lifecycle;
 /// JSON-RPC protocol types.
 mod protocol;
+/// Phase 2b memory-tiering: runtime-tempfile orphan cleanup at boot.
+mod runtime_orphans;
 /// Process-level memory and runtime telemetry.
 pub(crate) mod telemetry;
 
@@ -223,6 +224,13 @@ pub async fn run_daemon(config: DaemonConfig) -> anyhow::Result<()> {
 
     // D5.0: clean up stale shmem files from previous daemon sessions.
     uffs_client::shmem::cleanup_stale_shmem_files();
+
+    // Phase 2b: wipe runtime-tempfile leftovers from dead daemon PIDs
+    // before our own PID-scoped subdir gets created by the first
+    // `load_compact_cache` call.  The cross-platform `cleanup_orphans`
+    // contract makes this safe even when other live daemons share the
+    // root directory.
+    runtime_orphans::sweep_runtime_tempfile_orphans();
 
     // Create index manager — uses the user-supplied --data-dir for offline MFT
     // discovery and hot-loading (not the lifecycle directory).
