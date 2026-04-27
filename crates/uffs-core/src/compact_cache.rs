@@ -25,12 +25,17 @@
 //! Exception: `file_size_policy` — serialize/deserialize pipeline, tight
 //! coupling.
 
-use std::path::PathBuf;
+use alloc::sync::Arc;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+use uffs_security::runtime_dir::{RuntimeDir, mmap_read_only};
 
 use crate::compact::{
     ChildrenIndex, CompactRecord, DriveCompactIndex, ExtensionIndex, IndexSource,
 };
+use crate::compact_mmap;
 use crate::compact_storage::ColumnStorage;
 use crate::trigram::TrigramIndex;
 
@@ -52,6 +57,44 @@ const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 #[must_use]
 pub fn compact_cache_path(drive_letter: char) -> PathBuf {
     uffs_mft::cache::cache_dir().join(format!("{drive_letter}_compact.uffs"))
+}
+
+/// Process-static counter used by [`compact_runtime_tempfile_path`] to
+/// disambiguate re-entrant calls into the same daemon process.
+///
+/// Without this, the second `load_compact_cache` invocation for a given
+/// drive (e.g. a USN-refresh-driven reload, or a Phase 3 demote/promote
+/// cycle) would race the previous mmap's `FILE_FLAG_DELETE_ON_CLOSE` /
+/// orphan-sweep cleanup and hit `ERROR_FILE_EXISTS` / `EEXIST` from
+/// `CreateFileW(CREATE_NEW)` / `OpenOptions::create_new`.  Bumping a
+/// monotonic counter sidesteps the race entirely; any leaked tempfiles
+/// are caught by the next-startup orphan sweep on Unix and by
+/// `FILE_FLAG_DELETE_ON_CLOSE` on Windows.
+static RUNTIME_TEMPFILE_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Build a unique runtime-tempfile path for `drive_letter` and ensure
+/// its parent directory exists with owner-only permissions.
+///
+/// Layout: `<cache_dir>/runtime/<pid>/<drive>_compact_<seq>.live`.  The
+/// per-pid subdir lets the next-startup orphan sweep
+/// ([`uffs_security::runtime_dir::RuntimeDir::cleanup_orphans`]) wipe
+/// dead-PID leftovers via the cross-platform liveness probe.  The
+/// `<seq>` suffix disambiguates re-entrant calls within the same
+/// daemon process.
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] if the parent directory cannot be created
+/// or if the owner-only permissions cannot be applied (Unix `0o700`,
+/// Windows owner-only DACL).
+fn compact_runtime_tempfile_path(drive_letter: char) -> io::Result<PathBuf> {
+    let pid = std::process::id();
+    let seq = RUNTIME_TEMPFILE_SEQ.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    let parent = uffs_mft::cache::cache_dir()
+        .join("runtime")
+        .join(pid.to_string());
+    uffs_mft::cache::create_secure_dir(&parent)?;
+    Ok(parent.join(format!("{drive_letter}_compact_{seq}.live")))
 }
 
 /// Serializes the compact index (records, names, children, char-trigram CSR).
@@ -137,10 +180,10 @@ pub fn serialize_compact(index: &DriveCompactIndex) -> Vec<u8> {
 /// # Errors
 ///
 /// Returns an error if any write fails.
-pub fn serialize_compact_to_writer<W: std::io::Write>(
+pub fn serialize_compact_to_writer<W: io::Write>(
     index: &DriveCompactIndex,
     writer: &mut W,
-) -> std::io::Result<()> {
+) -> io::Result<()> {
     let record_count = index.records.len();
     let names_len = index.names.len();
 
@@ -185,7 +228,7 @@ pub fn serialize_compact_to_writer<W: std::io::Write>(
 }
 
 /// Write a `usize` as little-endian `u32` to a writer.
-fn write_u32<W: std::io::Write>(writer: &mut W, val: usize) -> std::io::Result<()> {
+fn write_u32<W: io::Write>(writer: &mut W, val: usize) -> io::Result<()> {
     #[expect(
         clippy::cast_possible_truncation,
         reason = "record/name counts fit in u32 for any realistic MFT"
@@ -210,6 +253,104 @@ pub fn deserialize_compact(
     data: &[u8],
     drive_letter: char,
 ) -> Result<(DriveCompactIndex, u128), &'static str> {
+    let parsed = parse_compact_body(data, drive_letter)?;
+    assemble_compact_index(parsed, |records_bytes, names_bytes| {
+        Ok::<_, &'static str>((
+            ColumnStorage::from_vec(aligned_vec_from_bytes::<CompactRecord>(records_bytes)),
+            ColumnStorage::from_vec(names_bytes.to_vec()),
+        ))
+    })
+}
+
+/// Same as [`deserialize_compact`] but materialises the `records` and
+/// `names` columns through a daemon-private runtime tempfile and
+/// returns mmap-backed [`ColumnStorage`] views instead of heap copies.
+///
+/// Phase 2b memory-tiering hot path
+/// (`docs/refactor/memory-tiering-implementation-plan.md` §3 Phase 2b
+/// Commit D).  The kernel page-cache becomes the resident set for the
+/// two largest columns; cold pages are evicted under memory pressure
+/// and re-populated lazily on next access — RSS scales with access
+/// frequency, not with index size.
+///
+/// `runtime_dir` is the platform-specific [`RuntimeDir`] implementation
+/// (typically [`uffs_security::runtime_dir::DefaultRuntimeDir`]).
+/// `runtime_path` is the absolute path of the per-shard runtime
+/// tempfile.  The parent directory must exist with owner-only
+/// permissions (use [`uffs_mft::cache::create_secure_dir`]).
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] if:
+/// * the cache bytes are truncated, wrong magic, or use a stale/unsupported
+///   version (parse error lifted via [`io::Error::other`]);
+/// * `runtime_dir.create_owner_only` fails (path collision, permissions, parent
+///   missing);
+/// * writing the layout into the tempfile fails (I/O / disk-full);
+/// * mmap creation fails (the only safe entry: [`mmap_read_only`]);
+/// * the layout fails [`compact_mmap::load_from_runtime`]'s alignment or bounds
+///   checks (would indicate a `write_runtime_layout` bug).
+pub fn deserialize_compact_into_runtime(
+    data: &[u8],
+    drive_letter: char,
+    runtime_dir: &dyn RuntimeDir,
+    runtime_path: &Path,
+) -> io::Result<(DriveCompactIndex, u128)> {
+    let parsed = parse_compact_body(data, drive_letter).map_err(io::Error::other)?;
+    assemble_compact_index(parsed, |records_bytes, names_bytes| {
+        let mut runtime_file = runtime_dir.create_owner_only(runtime_path)?;
+        let layout = compact_mmap::write_runtime_layout(
+            records_bytes,
+            names_bytes,
+            runtime_file.as_file_mut(),
+        )?;
+        let mmap = Arc::new(mmap_read_only(&runtime_file)?);
+        compact_mmap::load_from_runtime(layout, mmap).map_err(io::Error::other)
+    })
+}
+
+/// Parsed-but-not-yet-stored view of a compact cache body.
+///
+/// Holds borrowed byte slices for records + names so the caller can
+/// either heap-copy them into a [`Vec`] (legacy heap path) or stream
+/// them into a runtime tempfile and mmap (Phase 2b mmap path).  All
+/// other columns (children CSR, trigram CSR, ext-names) are small
+/// enough to stay heap-resident.
+struct ParsedCompactBody<'data> {
+    /// Drive letter the cache was built for.
+    drive_letter: char,
+    /// Source epoch (u64) parsed from the header.
+    source_epoch: u64,
+    /// Records column as raw bytes — exact multiple of
+    /// `size_of::<CompactRecord>()`.
+    records_bytes: &'data [u8],
+    /// Names column as raw bytes.
+    names_bytes: &'data [u8],
+    /// Children CSR — already heap-allocated and aligned.
+    children: ChildrenIndex,
+    /// `Some` if a v6+ trigram CSR was loaded directly from the cache;
+    /// `None` if the cache predates v6 and the trigram must be rebuilt
+    /// from records + names on the fly.
+    trigram_loaded: Option<TrigramIndex>,
+    /// `Some` if a v7+ ext-names table was read from the cache; `None`
+    /// if the cache predates v7 and the table must be rebuilt.
+    ext_names_loaded: Option<Vec<Box<str>>>,
+    /// Resolved case-fold table for the drive.
+    fold: uffs_text::case_fold::CaseFold,
+}
+
+/// Pure parser: validates the header + body offsets, then hands back
+/// borrowed views into `data` plus the small heap-resident columns
+/// (children, optionally trigram + ext-names).  Records and names are
+/// returned as raw byte slices so the caller picks the storage variant.
+///
+/// Mirrors the original [`deserialize_compact`] body byte-for-byte —
+/// the only structural change is that records + names stay borrowed
+/// instead of being eagerly copied into [`Vec`]s.
+fn parse_compact_body(
+    data: &[u8],
+    drive_letter: char,
+) -> Result<ParsedCompactBody<'_>, &'static str> {
     let (source_epoch, body_offset, version) = parse_compact_header(data)?;
 
     let rc = read_u32(data, 10) as usize;
@@ -222,9 +363,8 @@ pub fn deserialize_compact(
         return Err("compact cache truncated");
     }
 
-    let records: Vec<CompactRecord> =
-        aligned_vec_from_bytes(data.get(body_offset..re).ok_or("truncated records")?);
-    let names = data.get(re..ne).ok_or("truncated names")?.to_vec();
+    let records_bytes = data.get(body_offset..re).ok_or("truncated records")?;
+    let names_bytes = data.get(re..ne).ok_or("truncated names")?;
     let csr_off = data.get(cs..ce).ok_or("truncated CSR")?;
     let cp = read_u32(csr_off, rc * 4);
     let pe = ce + cp as usize * 4;
@@ -235,12 +375,12 @@ pub fn deserialize_compact(
     let children =
         ChildrenIndex::from_csr(aligned_vec_from_bytes(csr_off), aligned_vec_from_bytes(cv));
     let fold = crate::compact::resolve_case_fold(drive_letter);
-    let tri_start = Instant::now();
+
     if data.len() < pe + 4 {
         return Err("truncated trigram header");
     }
     let tkc = read_u32(data, pe) as usize;
-    let (trigram, after_tri) = if version >= 6 && tkc > 0 {
+    let (trigram_loaded, after_tri) = if version >= 6 && tkc > 0 {
         let (ks, ke, oe) = (pe + 4, pe + 4 + tkc * 8, pe + 4 + tkc * 8 + (tkc + 1) * 4);
         if data.len() < oe + 4 {
             return Err("truncated trigram CSR");
@@ -253,23 +393,63 @@ pub fn deserialize_compact(
             return Err("truncated trigram values");
         }
         let tv: Vec<u32> = aligned_vec_from_bytes(data.get(oe + 4..ve).ok_or("trigram values")?);
-        (TrigramIndex::from_csr(tk, to, tv), ve)
+        (Some(TrigramIndex::from_csr(tk, to, tv)), ve)
     } else {
-        (TrigramIndex::build(&records, &names, fold), pe + 4)
+        (None, pe + 4)
     };
+
+    let ext_names_loaded = (version >= 7 && data.len() >= after_tri + 4)
+        .then(|| read_ext_names_table(data, after_tri));
+
+    Ok(ParsedCompactBody {
+        drive_letter,
+        source_epoch,
+        records_bytes,
+        names_bytes,
+        children,
+        trigram_loaded,
+        ext_names_loaded,
+        fold,
+    })
+}
+
+/// Generic assembler: materialises the records + names columns via the
+/// caller-provided `store_columns` closure, then builds the dependent
+/// per-record indices (trigram fallback, `ext_names` fallback,
+/// `ExtensionIndex`) using the freshly-aligned column slices.
+///
+/// The closure abstracts over the storage variant:
+/// * Heap path ([`deserialize_compact`]): copies bytes into aligned `Vec`s.
+/// * Runtime mmap path ([`deserialize_compact_into_runtime`]): writes the bytes
+///   into a runtime tempfile, mmaps the result, slices page-aligned regions out
+///   as `ColumnStorage::Mmap`.
+///
+/// `tri_ms` measures the time to materialise the trigram (zero for
+/// v6+ caches; rebuild cost for legacy caches).
+fn assemble_compact_index<F, E>(
+    parsed: ParsedCompactBody<'_>,
+    store_columns: F,
+) -> Result<(DriveCompactIndex, u128), E>
+where
+    F: FnOnce(&[u8], &[u8]) -> Result<(ColumnStorage<CompactRecord>, ColumnStorage<u8>), E>,
+{
+    let (records, names) = store_columns(parsed.records_bytes, parsed.names_bytes)?;
+
+    let tri_start = Instant::now();
+    let trigram = parsed
+        .trigram_loaded
+        .unwrap_or_else(|| TrigramIndex::build(records.as_slice(), names.as_slice(), parsed.fold));
     let tri_ms = tri_start.elapsed().as_millis();
 
-    let ext_names = if version >= 7 && data.len() >= after_tri + 4 {
-        read_ext_names_table(data, after_tri)
-    } else {
-        rebuild_ext_names(&records, &names, fold)
-    };
+    let ext_names = parsed
+        .ext_names_loaded
+        .unwrap_or_else(|| rebuild_ext_names(records.as_slice(), names.as_slice(), parsed.fold));
 
     let ext_t0 = Instant::now();
-    let ext_index = ExtensionIndex::build(&records);
+    let ext_index = ExtensionIndex::build(records.as_slice());
     let ext_build_ms = ext_t0.elapsed().as_millis();
     tracing::info!(
-        drive = %drive_letter,
+        drive = %parsed.drive_letter,
         entries = ext_index.total_entries(),
         build_ms = ext_build_ms,
         "ExtensionIndex built (cache load)"
@@ -277,16 +457,16 @@ pub fn deserialize_compact(
 
     Ok((
         DriveCompactIndex {
-            letter: drive_letter,
-            records: ColumnStorage::from_vec(records),
-            names: ColumnStorage::from_vec(names),
+            letter: parsed.drive_letter,
+            records,
+            names,
             trigram,
-            children,
+            children: parsed.children,
             ext_index,
-            fold,
+            fold: parsed.fold,
             ext_names,
-            source: IndexSource::MftFile(PathBuf::from(format!("{drive_letter}:"))),
-            source_epoch,
+            source: IndexSource::MftFile(PathBuf::from(format!("{}:", parsed.drive_letter))),
+            source_epoch: parsed.source_epoch,
         },
         tri_ms,
     ))
@@ -397,7 +577,7 @@ fn parse_compact_header(data: &[u8]) -> Result<(u64, usize, u16), &'static str> 
 ///
 /// # Errors
 /// Returns an error if compression, encryption, or file writing fails.
-pub fn save_compact_cache(index: &DriveCompactIndex) -> std::io::Result<()> {
+pub fn save_compact_cache(index: &DriveCompactIndex) -> io::Result<()> {
     let profile = std::env::var_os("UFFS_CACHE_PROFILE").is_some();
     let path = compact_cache_path(index.letter);
     if let Some(dir) = path.parent() {
@@ -424,7 +604,7 @@ pub fn save_compact_cache(index: &DriveCompactIndex) -> std::io::Result<()> {
 ///
 /// # Errors
 /// Returns an error only if compression or directory creation fails.
-pub fn save_compact_cache_background(index: &DriveCompactIndex) -> std::io::Result<()> {
+pub fn save_compact_cache_background(index: &DriveCompactIndex) -> io::Result<()> {
     let profile = std::env::var_os("UFFS_CACHE_PROFILE").is_some();
     let t_compress = Instant::now();
 
@@ -458,7 +638,7 @@ pub fn save_compact_cache_background(index: &DriveCompactIndex) -> std::io::Resu
                 tracing::warn!(drive = %drive, error = %err, "Background compact cache save failed");
             }
         })
-        .map_err(|err| std::io::Error::other(format!("spawn failed: {err}")))?;
+        .map_err(|err| io::Error::other(format!("spawn failed: {err}")))?;
     Ok(())
 }
 
@@ -469,12 +649,12 @@ pub fn save_compact_cache_background(index: &DriveCompactIndex) -> std::io::Resu
 fn encrypt_and_write(
     drive: char,
     compressed: Vec<u8>,
-    path: &std::path::Path,
+    path: &Path,
     profile: bool,
-) -> std::io::Result<()> {
+) -> io::Result<()> {
     let t_enc = Instant::now();
     let key = uffs_security::keystore::get_cache_key()
-        .map_err(|err| std::io::Error::other(format!("cache key unavailable: {err}")))?;
+        .map_err(|err| io::Error::other(format!("cache key unavailable: {err}")))?;
     let encrypted = uffs_security::crypto::encrypt_cache(&compressed, &key)?;
     // Drop compressed — only encrypted needed for write.
     drop(compressed);
@@ -502,7 +682,7 @@ fn encrypt_and_write(
 /// When `trust_ttl_only` is true the mtime comparison is skipped — the
 /// caller vouches that the TTL alone is sufficient freshness evidence.
 fn is_compact_cache_fresh(
-    path: &std::path::Path,
+    path: &Path,
     drive_letter: char,
     ttl_seconds: u64,
     trust_ttl_only: bool,
@@ -602,8 +782,19 @@ pub fn load_compact_cache(
         return None;
     }
 
+    // Phase 2b: materialise records + names through a daemon-private
+    // runtime tempfile so the kernel page-cache (not the heap) becomes
+    // the resident set for the two largest columns.  Path is unique
+    // per call (atomic sequence) so re-loading the same drive in the
+    // same process never hits an `O_EXCL` / `CREATE_NEW` collision.
+    // `.ok()?` mirrors the previous heap path: any failure
+    // (path-collision, mmap, parse) falls back to a cold rebuild.
+    let runtime_path = compact_runtime_tempfile_path(drive_letter).ok()?;
+    let runtime_dir = uffs_security::runtime_dir::DefaultRuntimeDir::default();
     let t_deser = Instant::now();
-    let (index, tri_ms) = deserialize_compact(&plaintext, drive_letter).ok()?;
+    let (index, tri_ms) =
+        deserialize_compact_into_runtime(&plaintext, drive_letter, &runtime_dir, &runtime_path)
+            .ok()?;
     let deser_ms = t_deser.elapsed().as_millis();
 
     if profile {
@@ -784,161 +975,4 @@ fn aligned_vec_from_bytes<T: bytemuck::Pod>(bytes: &[u8]) -> Vec<T> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Build a minimal `DriveCompactIndex` with 3 records for testing.
-    fn make_test_index() -> DriveCompactIndex {
-        let names = b"foobarbaz".to_vec(); // "foo" [0..3], "bar" [3..6], "baz" [6..9]
-        let records = vec![
-            CompactRecord {
-                name_offset: 0,
-                flags: 0x0010, // directory
-                parent_idx: u32::MAX,
-                name_len: 3,
-                name_first_byte: b'f',
-                ..CompactRecord::default()
-            },
-            CompactRecord {
-                name_offset: 3,
-                parent_idx: 0,
-                name_len: 3,
-                name_first_byte: b'b',
-                ..CompactRecord::default()
-            },
-            CompactRecord {
-                name_offset: 6,
-                parent_idx: 0,
-                name_len: 3,
-                name_first_byte: b'b',
-                ..CompactRecord::default()
-            },
-        ];
-        let fold = uffs_text::case_fold::CaseFold::default_table();
-        let trigram = TrigramIndex::build(&records, &names, fold);
-        let children = ChildrenIndex::build(&records);
-        let ext_index = ExtensionIndex::build(&records);
-        DriveCompactIndex {
-            letter: 'T',
-            records: ColumnStorage::from_vec(records),
-            names: ColumnStorage::from_vec(names),
-            trigram,
-            children,
-            ext_index,
-            fold,
-            ext_names: vec![Box::from("")],
-            source: IndexSource::MftFile(PathBuf::from("T:")),
-            source_epoch: 42,
-        }
-    }
-
-    #[test]
-    fn v6_round_trip_preserves_trigram() {
-        let index = make_test_index();
-        let (tri_keys, tri_offsets, tri_values) = index.trigram.as_csr();
-        let original_key_count = tri_keys.len();
-        assert!(original_key_count > 0, "test index should have trigrams");
-
-        let serialized = serialize_compact(&index);
-        let (loaded, tri_ms) = deserialize_compact(&serialized, 'T').unwrap();
-
-        // Trigram loaded from disk — should be fast (< 10ms on any hardware).
-        assert!(
-            tri_ms < 500,
-            "trigram took {tri_ms}ms — should be near-zero for cached CSR"
-        );
-
-        // Verify trigram CSR is identical.
-        let (loaded_keys, loaded_offsets, loaded_values) = loaded.trigram.as_csr();
-        assert_eq!(loaded_keys, tri_keys, "trigram keys mismatch");
-        assert_eq!(loaded_offsets, tri_offsets, "trigram offsets mismatch");
-        assert_eq!(loaded_values, tri_values, "trigram values mismatch");
-
-        // Verify other fields survived.
-        assert_eq!(loaded.letter, 'T');
-        assert_eq!(loaded.records.len(), 3);
-        assert_eq!(loaded.names.as_slice(), b"foobarbaz");
-        assert_eq!(loaded.source_epoch, 42);
-    }
-
-    #[test]
-    fn v5_backward_compat_rebuilds_trigram() {
-        // Serialize a v6 index, then patch the version to v5 and replace
-        // the trigram section with the v5 sentinel (trigram_count = 0).
-        let index = make_test_index();
-        let mut serialized = serialize_compact(&index);
-
-        // Patch version to 5.
-        serialized
-            .get_mut(8..10)
-            .expect("buffer too short for version")
-            .copy_from_slice(&5_u16.to_le_bytes());
-
-        // Find the trigram section: after children CSR.
-        // Children CSR starts after names, offsets are (records+1)*4, then values.
-        let record_count = index.records.len();
-        let names_len = index.names.len();
-        let records_end = 26 + record_count * RECORD_BYTES;
-        let names_end = records_end + names_len;
-        let csr_offsets_end = names_end + (record_count + 1) * 4;
-        let total_children = index.children.total_children();
-        let postings_end = csr_offsets_end + total_children * 4;
-
-        // Truncate at postings_end + 4 (v5 sentinel: trigram_count = 0).
-        serialized.truncate(postings_end + 4);
-        serialized
-            .get_mut(postings_end..postings_end + 4)
-            .expect("buffer too short for trigram sentinel")
-            .copy_from_slice(&0_u32.to_le_bytes());
-
-        let (loaded, _tri_ms) = deserialize_compact(&serialized, 'T').unwrap();
-
-        // Trigram was rebuilt — should match the original.
-        let (orig_keys, orig_offsets, orig_values) = index.trigram.as_csr();
-        let (loaded_keys, loaded_offsets, loaded_values) = loaded.trigram.as_csr();
-        assert_eq!(loaded_keys, orig_keys, "rebuilt trigram keys mismatch");
-        assert_eq!(
-            loaded_offsets, orig_offsets,
-            "rebuilt trigram offsets mismatch"
-        );
-        assert_eq!(
-            loaded_values, orig_values,
-            "rebuilt trigram values mismatch"
-        );
-    }
-
-    #[test]
-    fn v8_header_version() {
-        let index = make_test_index();
-        let serialized = serialize_compact(&index);
-        let b8 = *serialized.get(8).expect("missing byte 8");
-        let b9 = *serialized.get(9).expect("missing byte 9");
-        let version = u16::from_le_bytes([b8, b9]);
-        assert_eq!(version, COMPACT_VERSION);
-    }
-
-    #[test]
-    fn v1_rejected() {
-        let mut data = vec![0_u8; 64];
-        data.get_mut(..8)
-            .expect("buffer too short for magic")
-            .copy_from_slice(COMPACT_MAGIC);
-        data.get_mut(8..10)
-            .expect("buffer too short for version")
-            .copy_from_slice(&1_u16.to_le_bytes());
-        assert!(deserialize_compact(&data, 'X').is_err());
-    }
-
-    #[test]
-    fn truncated_data_rejected() {
-        assert!(deserialize_compact(b"short", 'X').is_err());
-    }
-
-    #[test]
-    fn ext_names_round_trips() {
-        let index = make_test_index();
-        let serialized = serialize_compact(&index);
-        let (deser, _) = deserialize_compact(&serialized, 'T').expect("deser");
-        assert_eq!(deser.ext_names, index.ext_names);
-    }
-}
+mod tests;

@@ -14,7 +14,7 @@ crates/uffs-mft/src/parse/direct_index_extension.rs|PERMANENT: Offline variant o
 crates/uffs-mft/src/reader/index_read.rs|PERMANENT: Single impl MftReader block with tightly coupled cfg-gated pipeline stages
 crates/uffs-diag/src/bin/compare_scan_parity.rs|PERMANENT: Standalone diagnostic binary; single-file readability outweighs LOC policy for tooling
 crates/uffs-mcp/src/cookbook.rs|PERMANENT: Declarative JSON data (curated agent cookbook examples); splitting by line count would fragment the cohesive narrative
-crates/uffs-core/src/compact_cache.rs|PERMANENT: Serialize/deserialize pipeline for compact index cache; tight coupling, only 26 over limit
+crates/uffs-core/src/compact_cache.rs|PERMANENT: Serialize/deserialize pipeline for compact index cache (heap path + Phase 2b runtime mmap path), tightly coupled with shared parse_compact_body + assemble_compact_index helpers; tests already extracted to compact_cache/tests.rs sibling module
 crates/uffs-core/src/compact.rs|PERMANENT: Core compact index data structures + builder; only 13 over limit
 crates/uffs-daemon/src/index/aggregation.rs|PERMANENT: Daemon-side aggregation dispatch; tightly coupled helpers, only 54 over limit
 crates/uffs-daemon/src/index/mod.rs|PERMANENT: Single IndexManager impl with 15 cohesive methods; splitting impl across files hurts readability
