@@ -1159,15 +1159,19 @@ async fn status_populates_rss_and_mimalloc_committed() {
         "rss_bytes must be positive in a live test process; got {rss}"
     );
 
-    let committed = status
-        .mimalloc_committed_bytes
-        .expect("Phase 0: status must surface mimalloc_committed_bytes via mem_snapshot");
-    // Committed bytes can underflow into the high 64-bit range only
-    // through a sign-extension bug; this bound is a sanity guardrail.
-    assert!(
-        committed < u64::MAX / 2,
-        "mimalloc_committed_bytes looks like an underflow: {committed}"
-    );
+    // Committed bytes is `Option<u64>` on the wire because mimalloc's
+    // `current_commit` can underflow on macOS under heavy allocation
+    // churn (observed during v0.5.77 baseline capture); the daemon's
+    // `sanity_clamp_committed` rejects those readings, surfacing
+    // `None` instead of a `~u64::MAX` value.  Test asserts the bound
+    // only when `Some` is present so it stays meaningful on every
+    // platform without forcing macOS to lie.
+    if let Some(committed) = status.mimalloc_committed_bytes {
+        assert!(
+            committed < u64::MAX / 2,
+            "mimalloc_committed_bytes looks like an underflow: {committed}"
+        );
+    }
 }
 
 /// `IndexManager::total_index_heap_bytes` returns 0 for a fresh
