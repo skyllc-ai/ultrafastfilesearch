@@ -40,6 +40,89 @@ use crate::compact_mmap;
 use crate::compact_storage::ColumnStorage;
 use crate::trigram::TrigramIndex;
 
+/// Structured error variants for [`load_compact_cache`].
+///
+/// Phase 5 (#96): each failure path that previously collapsed into
+/// `Option::None` now surfaces a typed variant.  Callers that only
+/// care about success vs failure can still pattern-match on `Ok(_)`
+/// vs `Err(_)`, but production logs and the daemon's stale-cache
+/// detection logic can now distinguish "cache file missing" from
+/// "decryption failed" from "stale by epoch" — the previous silent-
+/// `None` return collapsed all eight failure modes into one log line.
+#[derive(Debug, thiserror::Error)]
+pub enum LoadCacheError {
+    /// Cache file does not exist on disk yet (typical on first boot
+    /// or after a `cache clear`).  Caller should rebuild.
+    #[error("compact cache file missing")]
+    Missing,
+
+    /// Cache file age exceeds the supplied TTL.  Caller should
+    /// rebuild.
+    #[error("compact cache stale by TTL: age={age_secs}s, ttl={ttl_secs}s")]
+    StaleByTtl {
+        /// Cache file age in seconds (computed from mtime).
+        age_secs: u64,
+        /// Caller-supplied TTL ceiling in seconds.
+        ttl_secs: u64,
+    },
+
+    /// Cache file mtime is older than the underlying MFT cache
+    /// (`.uffs`).  The MFT cache was rebuilt between the compact
+    /// cache being saved and now, so the compact must be rebuilt.
+    #[error("compact cache older than MFT cache — rebuild required")]
+    StaleVsMft,
+
+    /// `source_epoch` in the cache header is older than the live
+    /// MFT `build_epoch`.  Caller should rebuild.
+    #[error("compact cache stale by epoch: cached={cached_epoch}, current={current_epoch}")]
+    StaleByEpoch {
+        /// `source_epoch` value embedded in the cache header.
+        cached_epoch: u64,
+        /// `build_epoch` of the live `MftIndex` the caller passed in.
+        current_epoch: u64,
+    },
+
+    /// Filesystem I/O error reading the cache file (disk gone, perms,
+    /// path traversal blocked, etc.).
+    #[error("compact cache I/O failed: {0}")]
+    Io(#[from] io::Error),
+
+    /// Cache encryption key unavailable (Keychain access denied,
+    /// dev-mode file missing or unreadable, etc.).
+    #[error("cache encryption key unavailable: {0}")]
+    KeyUnavailable(String),
+
+    /// AES-256-GCM decryption failed (wrong key, MAC mismatch,
+    /// truncated ciphertext, unsupported header version).
+    #[error("compact cache decryption failed: {0}")]
+    DecryptFailed(String),
+
+    /// zstd decompression failed (ciphertext was decrypted but the
+    /// inner frame is corrupt).
+    #[error("compact cache decompression failed: {0}")]
+    DecompressFailed(String),
+
+    /// Header / body parse error (bad magic, version mismatch,
+    /// truncated body).  See `parse_compact_header` /
+    /// `parse_compact_body` for the canonical messages.
+    #[error("compact cache parse error: {0}")]
+    ParseError(&'static str),
+
+    /// Runtime tempfile setup failed (path collision, perms, parent
+    /// directory missing).  See `compact_runtime_tempfile_path`.
+    #[error("runtime tempfile setup failed: {0}")]
+    RuntimeTempfile(String),
+
+    /// Final deserialise + mmap step failed (alignment, bounds,
+    /// `write_runtime_layout` invariant violation).
+    #[error("compact cache deserialise failed: {0}")]
+    Deserialize(String),
+}
+
+/// Convenience alias — [`LoadCacheError`] is the canonical failure
+/// type for compact-cache loads.
+pub type LoadCacheResult<T> = Result<T, LoadCacheError>;
+
 /// Magic bytes for compact cache files.
 const COMPACT_MAGIC: &[u8; 8] = b"UFFSCOM\0";
 /// Current compact cache format version.
@@ -772,32 +855,40 @@ fn encrypt_and_write(
 /// load, based on TTL and (optionally) mtime comparison against the
 /// `MftIndex` `.uffs` file.
 ///
-/// Returns `true` when the cache passes both checks and should be read.
-/// Returns `false` when the file is missing, older than `ttl_seconds`,
-/// or older than the `MftIndex` source (cross-process staleness — the
-/// daemon rebuilt the MFT after this compact cache was written).
-/// When `trust_ttl_only` is true the mtime comparison is skipped — the
-/// caller vouches that the TTL alone is sufficient freshness evidence.
-fn is_compact_cache_fresh(
+/// Returns `Ok(())` when the cache passes both checks and should be
+/// read.  Returns the matching [`LoadCacheError`] variant when the
+/// file is missing, older than `ttl_seconds`, or older than the
+/// `MftIndex` source.  When `trust_ttl_only` is true the mtime
+/// comparison is skipped — the caller vouches that the TTL alone is
+/// sufficient freshness evidence.
+///
+/// Phase 5 (#96): replaces the previous `bool` return so the caller
+/// can distinguish "file missing" from "stale by TTL" from
+/// "stale vs MFT" without re-reading the metadata.
+fn check_compact_cache_freshness(
     path: &Path,
     drive_letter: char,
     ttl_seconds: u64,
     trust_ttl_only: bool,
-) -> bool {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return false;
+) -> LoadCacheResult<()> {
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(LoadCacheError::Missing);
+        }
+        Err(err) => return Err(LoadCacheError::Io(err)),
     };
-    let Ok(compact_mtime) = meta.modified() else {
-        return false;
-    };
-    let Ok(age) = compact_mtime.elapsed() else {
-        return false;
-    };
-    if age.as_secs() > ttl_seconds {
-        return false;
+    let compact_mtime = meta.modified()?;
+    let age = compact_mtime.elapsed().unwrap_or_default();
+    let age_secs = age.as_secs();
+    if age_secs > ttl_seconds {
+        return Err(LoadCacheError::StaleByTtl {
+            age_secs,
+            ttl_secs: ttl_seconds,
+        });
     }
     if trust_ttl_only {
-        return true;
+        return Ok(());
     }
     let mft_path = uffs_mft::cache::cache_file_path(drive_letter);
     if let Ok(mft_meta) = std::fs::metadata(&mft_path)
@@ -808,51 +899,60 @@ fn is_compact_cache_fresh(
             drive = %drive_letter,
             "Compact cache older than MftIndex cache — rebuilding"
         );
-        return false;
+        return Err(LoadCacheError::StaleVsMft);
     }
-    true
+    Ok(())
 }
 
-/// Loads a compact index from its cache file if fresh. Returns `None` if
-/// cache is missing, stale, corrupt, or built from an older `MftIndex`.
+/// Loads a compact index from its cache file if fresh.
 ///
 /// `mft_build_epoch` is the `build_epoch` of the current `MftIndex`.
-/// If the compact cache was built from an older epoch it is considered stale
-/// and `None` is returned so the caller rebuilds.
+/// If the compact cache was built from an older epoch it is considered
+/// stale and the matching [`LoadCacheError::StaleByEpoch`] is returned
+/// so the caller rebuilds.
 ///
 /// When `trust_ttl_only` is `true`, the mtime comparison against the
 /// `MftIndex` `.uffs` file is skipped — only the TTL age check is used.
-/// This is useful for hot-path searches where the caller knows the compact
-/// cache was just built or the `MftIndex` hasn't changed.
-#[must_use]
+/// This is useful for hot-path searches where the caller knows the
+/// compact cache was just built or the `MftIndex` hasn't changed.
+///
+/// # Errors
+///
+/// Returns the matching [`LoadCacheError`] variant on any failure.
+/// Phase 5 (#96): the previous `Option<DriveCompactIndex>` API
+/// collapsed eight distinct failure modes into a single silent-`None`
+/// return; callers can now distinguish e.g. "cache file missing"
+/// (cold-boot rebuild) from "decryption failed" (key rotated;
+/// rebuild + alert) from "stale by epoch" (incremental refresh).
 pub fn load_compact_cache(
     drive_letter: char,
     ttl_seconds: u64,
     mft_build_epoch: u64,
     trust_ttl_only: bool,
-) -> Option<DriveCompactIndex> {
+) -> LoadCacheResult<DriveCompactIndex> {
     let path = compact_cache_path(drive_letter);
-    if !is_compact_cache_fresh(&path, drive_letter, ttl_seconds, trust_ttl_only) {
-        return None;
-    }
+    check_compact_cache_freshness(&path, drive_letter, ttl_seconds, trust_ttl_only)?;
 
     let profile = std::env::var_os("UFFS_CACHE_PROFILE").is_some();
     let t_total = Instant::now();
 
     let t_read = Instant::now();
-    let raw = std::fs::read(&path).ok()?;
+    let raw = std::fs::read(&path)?;
     let read_ms = t_read.elapsed().as_millis();
     let raw_len = raw.len();
 
-    let key = uffs_security::keystore::get_cache_key().ok()?;
+    let key = uffs_security::keystore::get_cache_key()
+        .map_err(|err| LoadCacheError::KeyUnavailable(err.to_string()))?;
     let t_decrypt = Instant::now();
-    let decrypted = uffs_security::crypto::decrypt_cache(&raw, &key).ok()?;
+    let decrypted = uffs_security::crypto::decrypt_cache(&raw, &key)
+        .map_err(|err| LoadCacheError::DecryptFailed(err.to_string()))?;
     let decrypt_ms = t_decrypt.elapsed().as_millis();
 
     let t_decompress = Instant::now();
     let is_compressed = decrypted.get(..4).is_some_and(|magic| magic == ZSTD_MAGIC);
     let plaintext = if is_compressed {
-        zstd::decode_all(decrypted.as_slice()).ok()?
+        zstd::decode_all(decrypted.as_slice())
+            .map_err(|err| LoadCacheError::DecompressFailed(err.to_string()))?
     } else {
         decrypted
     };
@@ -860,23 +960,21 @@ pub fn load_compact_cache(
     let plaintext_len = plaintext.len();
 
     // Early staleness check — inspect header before full deserialization.
-    if mft_build_epoch > 0
-        && let Ok((source_epoch, _, _)) = parse_compact_header(&plaintext)
-        && source_epoch < mft_build_epoch
-    {
-        tracing::debug!(
-            target: "cache_profile",
-            source_epoch,
-            mft_build_epoch,
-            "compact: STALE"
-        );
-        tracing::debug!(
-            drive = %drive_letter,
-            compact_epoch = source_epoch,
-            mft_epoch = mft_build_epoch,
-            "Compact cache stale (source_epoch < mft build_epoch) — rebuilding"
-        );
-        return None;
+    if mft_build_epoch > 0 {
+        let (source_epoch, _, _) =
+            parse_compact_header(&plaintext).map_err(LoadCacheError::ParseError)?;
+        if source_epoch < mft_build_epoch {
+            tracing::debug!(
+                target: "cache_profile",
+                source_epoch,
+                mft_build_epoch,
+                "compact: STALE"
+            );
+            return Err(LoadCacheError::StaleByEpoch {
+                cached_epoch: source_epoch,
+                current_epoch: mft_build_epoch,
+            });
+        }
     }
 
     // Phase 2b: materialise records + names through a daemon-private
@@ -884,14 +982,13 @@ pub fn load_compact_cache(
     // the resident set for the two largest columns.  Path is unique
     // per call (atomic sequence) so re-loading the same drive in the
     // same process never hits an `O_EXCL` / `CREATE_NEW` collision.
-    // `.ok()?` mirrors the previous heap path: any failure
-    // (path-collision, mmap, parse) falls back to a cold rebuild.
-    let runtime_path = compact_runtime_tempfile_path(drive_letter).ok()?;
+    let runtime_path = compact_runtime_tempfile_path(drive_letter)
+        .map_err(|err| LoadCacheError::RuntimeTempfile(err.to_string()))?;
     let runtime_dir = uffs_security::runtime_dir::DefaultRuntimeDir::default();
     let t_deser = Instant::now();
     let (index, tri_ms) =
         deserialize_compact_into_runtime(&plaintext, drive_letter, &runtime_dir, &runtime_path)
-            .ok()?;
+            .map_err(|err| LoadCacheError::Deserialize(err.to_string()))?;
     let deser_ms = t_deser.elapsed().as_millis();
 
     if profile {
@@ -907,7 +1004,7 @@ pub fn load_compact_cache(
             total_ms: t_total.elapsed().as_millis(),
         });
     }
-    Some(index)
+    Ok(index)
 }
 
 /// Timing profile for compact-cache loading stages.
@@ -961,6 +1058,38 @@ fn log_compact_load_profile(index: &DriveCompactIndex, profile: &CompactLoadProf
 
 // ─── Build-or-load + save ────────────────────────────────────────────────────
 
+/// `ensure_compact_cached` cache-load helper.
+///
+/// Extracted from [`ensure_compact_cached`] to keep that function's
+/// cognitive complexity below clippy's strict-gate ceiling (Phase 5
+/// added an extra match arm for #96 structured errors).
+fn try_load_for_ensure(drive_letter: char, build_epoch: u64) -> Option<DriveCompactIndex> {
+    match load_compact_cache(
+        drive_letter,
+        super::compact::INDEX_TTL_SECONDS,
+        build_epoch,
+        false,
+    ) {
+        Ok(cached) => {
+            tracing::debug!(
+                target: "cache_profile",
+                records = cached.records.len(),
+                "compact: loaded from cache"
+            );
+            Some(cached)
+        }
+        Err(err) => {
+            tracing::debug!(
+                target: "cache_profile",
+                drive = %drive_letter,
+                error = %err,
+                "compact: cache miss/stale; building from MftIndex",
+            );
+            None
+        }
+    }
+}
+
 /// Ensures the compact cache is up-to-date for a given drive.
 ///
 /// - If a fresh compact cache exists on disk → loads and returns it.
@@ -974,17 +1103,7 @@ pub fn ensure_compact_cached(
 ) -> DriveCompactIndex {
     // Try loading existing compact cache (epoch check catches stale caches).
     // Not TTL-only: we have the MftIndex, so mtime validation is cheap & correct.
-    if let Some(cached) = load_compact_cache(
-        drive_letter,
-        super::compact::INDEX_TTL_SECONDS,
-        mft_index.build_epoch,
-        false,
-    ) {
-        tracing::debug!(
-            target: "cache_profile",
-            records = cached.records.len(),
-            "compact: loaded from cache"
-        );
+    if let Some(cached) = try_load_for_ensure(drive_letter, mft_index.build_epoch) {
         return cached;
     }
 

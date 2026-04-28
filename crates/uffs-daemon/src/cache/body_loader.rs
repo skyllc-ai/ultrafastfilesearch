@@ -63,13 +63,61 @@ pub(crate) trait BodyLoader: Send + Sync + 'static {
 /// `ttl_seconds = u64::MAX` skips the freshness check — the
 /// demote / promote path doesn't care if the cache is "old", only
 /// that it is a valid serialisation of the drive that *was* loaded.
-/// Phase 4+ may add an explicit `mft_build_epoch` check to detect
-/// out-of-band MFT churn between demote and promote; for Phase 3
-/// the cache is trusted unconditionally.
+///
+/// Phase 5 (#94) wires this loader to `load_drive_with_usn_refresh`
+/// so re-promote on Windows applies USN deltas before the body
+/// reaches the search hot path.  This struct stays as the
+/// "trust-the-on-disk-cache" fallback: if MFT cache is missing or
+/// the USN journal is unavailable (e.g. drive G `error 1179`), the
+/// daemon logs the failure and serves the un-refreshed body so the
+/// shard still becomes usable.
+///
+/// Phase 5 (#96) updates the failure path to log the structured
+/// [`uffs_core::compact_cache::LoadCacheError`] variant so the
+/// daemon's tracing output distinguishes "cache file missing"
+/// (cold-boot first-touch) from "decryption failed" (key rotated;
+/// alert) from "stale by TTL" (idle-timer rebuild trigger).
 pub(crate) struct DiskBodyLoader;
 
 impl BodyLoader for DiskBodyLoader {
     fn load(&self, letter: char) -> Option<Arc<DriveCompactIndex>> {
-        uffs_core::compact_cache::load_compact_cache(letter, u64::MAX, 0, true).map(Arc::new)
+        // Phase 5 (#94): primary path — USN-refreshed re-promote.
+        // On Windows this applies USN deltas to the cached MftIndex
+        // and rebuilds the compact index, so the body served to the
+        // search hot path reflects the live filesystem state since
+        // the daemon's last MFT refresh.  On non-Windows the helper
+        // errors out by design and we fall through to the bare
+        // compact-cache load below.
+        match uffs_core::compact_loader::load_drive_with_usn_refresh(letter) {
+            Ok((body, _timing)) => return Some(Arc::new(body)),
+            Err(err) => {
+                tracing::warn!(
+                    target: "shard.transition",
+                    drive = %letter,
+                    error = %err,
+                    reason = "promote-on-search",
+                    "USN-refresh failed; falling back to bare compact-cache load",
+                );
+            }
+        }
+
+        // Phase 5 (#94) fallback: the USN-refresh path failed (cache
+        // missing, journal unavailable, drive G `error 1179`, etc.).
+        // Serve the un-refreshed compact cache so the shard is still
+        // usable, with a structured `LoadCacheError` (#96) surfaced
+        // on failure.
+        match uffs_core::compact_cache::load_compact_cache(letter, u64::MAX, 0, true) {
+            Ok(body) => Some(Arc::new(body)),
+            Err(err) => {
+                tracing::warn!(
+                    target: "shard.transition",
+                    drive = %letter,
+                    error = %err,
+                    reason = "promote-on-search",
+                    "compact-cache fallback also failed; shard stays in current tier",
+                );
+                None
+            }
+        }
     }
 }

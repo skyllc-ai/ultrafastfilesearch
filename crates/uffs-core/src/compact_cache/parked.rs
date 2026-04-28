@@ -47,8 +47,8 @@ use std::time::Instant;
 use uffs_text::case_fold::CaseFold;
 
 use super::{
-    COMPACT_VERSION, RECORD_BYTES, ZSTD_MAGIC, compact_cache_path, filters_io,
-    is_compact_cache_fresh, parse_compact_header, read_u32,
+    COMPACT_VERSION, RECORD_BYTES, ZSTD_MAGIC, check_compact_cache_freshness, compact_cache_path,
+    filters_io, parse_compact_header, read_u32,
 };
 use crate::bloom::Bloom;
 use crate::path_trie::PathTrie;
@@ -425,7 +425,17 @@ pub fn load_parked_body(
     trust_ttl_only: bool,
 ) -> Option<ParkedBody> {
     let path = compact_cache_path(drive_letter);
-    if !is_compact_cache_fresh(&path, drive_letter, ttl_seconds, trust_ttl_only) {
+    // `load_parked_body` keeps its `Option` return for now (#96 scope
+    // limited the Result conversion to `load_compact_cache`); fold any
+    // structured `LoadCacheError` into a debug-logged `None`.
+    if let Err(err) =
+        check_compact_cache_freshness(&path, drive_letter, ttl_seconds, trust_ttl_only)
+    {
+        tracing::debug!(
+            drive = %drive_letter,
+            error = %err,
+            "parked-body load: freshness check failed",
+        );
         return None;
     }
 

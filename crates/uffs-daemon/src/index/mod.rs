@@ -1182,6 +1182,169 @@ impl IndexManager {
         }
     }
 
+    /// Phase 5 (#95) — fold live USN journal deltas into every
+    /// `Warm` / `Hot` shard's in-memory body and persist a fresher
+    /// compact cache to disk.
+    ///
+    /// Driven from a periodic tick task in `lib.rs`
+    /// (`spawn_usn_refresh_controller`); the cadence defaults to
+    /// `cache::policy::USN_REFRESH_INTERVAL_SECS` (5 min) and is
+    /// overridable via `UFFS_USN_REFRESH_INTERVAL_SECS` for tests
+    /// and benchmarks.
+    ///
+    /// Three-phase like [`Self::ensure_warm_for_dispatch`] (Phase 4
+    /// re-promote in #93):
+    ///
+    /// 1. **Read-lock detect** — collect Warm/Hot drive letters.
+    /// 2. **Parallel USN refresh** — fan out into the blocking pool via
+    ///    [`tokio::task::JoinSet`] so one slow drive doesn't serialise the
+    ///    others (mirrors the #93 pattern).  Each closure is
+    ///    `catch_unwind`-wrapped so a panicking USN apply on one drive doesn't
+    ///    lose the letter identifier in the [`tokio::task::JoinSet`] error arm.
+    /// 3. **Per-letter write-lock swap** — drain results as they complete and
+    ///    `replace_warm_body` the registry; sub-µs Arc-swap per letter,
+    ///    cumulative contention < 10 µs even at N=7 drives.
+    ///
+    /// **Failure handling**: per-drive USN refresh failures (cache
+    /// missing, journal unavailable, drive G `error 1179`) are
+    /// warn-logged at `target: "shard.refresh"` and the shard's
+    /// previous body stays in place.  Aggregate counters are
+    /// emitted at info-level on completion so production telemetry
+    /// can monitor the refresh success rate.
+    ///
+    /// **Non-Windows behaviour**: the underlying
+    /// [`uffs_core::compact_loader::load_drive_with_usn_refresh`]
+    /// helper errors out by design (USN journals are NTFS-only),
+    /// so this loop becomes a no-op refresh tick that just walks
+    /// the registry and logs the per-drive errors.  The structure
+    /// is exercised on macOS / Linux for testing parity.
+    pub(crate) async fn refresh_usn_for_warm_shards(&self) {
+        use crate::cache::ShardState;
+
+        // ── Phase 1: read-lock detect Warm/Hot letters ─────────────
+        let letters: Vec<char> = {
+            let guard = self.index.read().await;
+            guard
+                .iter()
+                .filter(|shard| matches!(shard.state(), ShardState::Warm | ShardState::Hot))
+                .map(|shard| shard.drive)
+                .collect()
+        };
+        if letters.is_empty() {
+            return;
+        }
+
+        let total_start = Instant::now();
+        let total = letters.len();
+        tracing::info!(
+            target: "shard.refresh",
+            count = total,
+            interval_secs = crate::cache::policy::usn_refresh_interval_secs(),
+            "USN refresh tick starting",
+        );
+
+        // ── Phase 2: parallel USN refresh via JoinSet ──────────────
+        let mut load_set: tokio::task::JoinSet<(
+            char,
+            anyhow::Result<Arc<uffs_core::compact::DriveCompactIndex>>,
+        )> = tokio::task::JoinSet::new();
+        for letter in letters {
+            load_set.spawn_blocking(move || {
+                // `catch_unwind` mirrors the #93 pattern: convert a
+                // panicking refresh closure into a typed error so
+                // the JoinSet's error arm doesn't lose the letter.
+                let result = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
+                    uffs_core::compact_loader::load_drive_with_usn_refresh(letter)
+                        .map(|(body, _timing)| Arc::new(body))
+                }))
+                .unwrap_or_else(|_payload| {
+                    Err(anyhow::anyhow!(
+                        "panic in USN refresh blocking closure for drive {letter}"
+                    ))
+                });
+                (letter, result)
+            });
+        }
+
+        // ── Phase 3: drain + per-letter write-lock swap ────────────
+        let mut refreshed = 0_usize;
+        let mut failed = 0_usize;
+        while let Some(joined) = load_set.join_next().await {
+            if self.apply_one_refresh_result(joined).await {
+                refreshed += 1;
+            } else {
+                failed += 1;
+            }
+        }
+
+        tracing::info!(
+            target: "shard.refresh",
+            refreshed,
+            failed,
+            total,
+            total_ms = total_start.elapsed().as_millis(),
+            "USN refresh tick complete",
+        );
+    }
+
+    /// Apply a single drained [`tokio::task::JoinSet::join_next`]
+    /// result from the Phase 5 (#95) USN refresh fan-out.
+    ///
+    /// Returns `true` when the body was successfully Arc-swapped
+    /// into the registry; `false` on any failure (panicked closure,
+    /// USN refresh helper error, registry race where the shard
+    /// demoted between detect and swap).  The caller (
+    /// [`Self::refresh_usn_for_warm_shards`]) accumulates the
+    /// boolean into per-tick success/failure counters.
+    ///
+    /// Extracted from the parent so the parent stays under
+    /// clippy's strict-gate cognitive-complexity ceiling.
+    async fn apply_one_refresh_result(
+        &self,
+        joined: Result<
+            (
+                char,
+                anyhow::Result<Arc<uffs_core::compact::DriveCompactIndex>>,
+            ),
+            tokio::task::JoinError,
+        >,
+    ) -> bool {
+        let (letter, result) = match joined {
+            Ok(pair) => pair,
+            Err(join_err) => {
+                tracing::warn!(
+                    target: "shard.refresh",
+                    error = %join_err,
+                    "blocking-task aborted before completion; shard kept previous body",
+                );
+                return false;
+            }
+        };
+        let body = match result {
+            Ok(body) => body,
+            Err(err) => {
+                tracing::warn!(
+                    target: "shard.refresh",
+                    drive = %letter,
+                    error = %err,
+                    "USN refresh failed; shard kept previous body",
+                );
+                return false;
+            }
+        };
+        let mut guard = self.index.write().await;
+        let Some(new_registry) = guard.replace_warm_body(letter, body) else {
+            // Race: the shard demoted between Phase 1 detect and
+            // the swap.  No-op; the next promote will USN-refresh
+            // via DiskBodyLoader.
+            return false;
+        };
+        *guard = Arc::new(new_registry);
+        drop(guard);
+        self.bump_index_version();
+        true
+    }
+
     /// Per-shard `(drive_letter, queries_total)` snapshot for tests.
     ///
     /// Test-only escape hatch so integration tests in `crate::index::tests`

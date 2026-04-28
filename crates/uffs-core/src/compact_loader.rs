@@ -95,12 +95,25 @@ pub fn load_drive(
         MftSource::Live(ch) => *ch,
     };
 
-    // ── Fast path: compact cache hit ───────────────────────────────
-    if !no_cache && let Some(result) = try_compact_cache_hit(drive_letter, source) {
-        return Ok(result);
-    }
-
-    // ── Load MftIndex (cache or cold) ──────────────────────────────
+    // ── Load MftIndex (cache + USN replay, or cold) ────────────────
+    //
+    // Phase 5 (#94): the previous `try_compact_cache_hit` fast path
+    // returned the on-disk compact cache directly without applying
+    // USN deltas, so cold-boot WARM load served stale data for any
+    // drive whose compact cache was older than the live filesystem
+    // (5/7 drives at the v0.5.80 reference run).  We now always go
+    // through the MftIndex path: on Windows this triggers
+    // `read_index_cached` → `apply_usn_updates_to_fresh_index`, so
+    // the rebuilt compact reflects the live USN journal state.  On
+    // non-Windows / offline-file sources the MFT itself is the
+    // source of truth and USN replay is a no-op.
+    //
+    // Cost: ~1.5 s per drive for the compact rebuild + trigram
+    // step; at N=7 drives in parallel the cold-boot WARM total
+    // moves from ~5.7 s to ~7–10 s (one-time per daemon start).
+    // The Phase 4 re-promote path uses
+    // [`load_drive_with_usn_refresh`] for the same correctness
+    // guarantee.
     let mft_start = Instant::now();
     let mft_index = match source {
         MftSource::File(path, _) => load_mft_index_from_file(path, drive_letter, no_cache)?,
@@ -144,37 +157,113 @@ pub fn load_drive(
     }))
 }
 
-/// Attempt to load a compact index from cache (TTL-only, no mtime validation).
+/// Timing breakdown for [`load_drive_with_usn_refresh`].
 ///
-/// Returns `Some((index, timing))` on cache hit, `None` on miss.
-#[expect(
-    clippy::single_call_fn,
-    reason = "extracted for readability from load_drive"
-)]
-fn try_compact_cache_hit(
-    drive_letter: char,
-    source: &MftSource,
-) -> Option<(DriveCompactIndex, LoadTiming)> {
-    let cache_start = Instant::now();
-    let mut compact =
-        crate::compact_cache::load_compact_cache(drive_letter, INDEX_TTL_SECONDS, 0, true)?;
-    let cache_ms = cache_start.elapsed().as_millis();
+/// Mirrors [`LoadTiming`] but with names that match the USN-refresh
+/// flow (no "cache hit" arm — that path was removed in #94).  Field
+/// names follow [`LoadTiming`]'s `_ms`-free convention.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RefreshTiming {
+    /// `MftIndex` load wall-clock in milliseconds (cache hit + USN
+    /// replay).
+    pub mft: u128,
+    /// Compact rebuild from the refreshed `MftIndex` in
+    /// milliseconds.
+    pub compact: u128,
+    /// Trigram CSR rebuild in milliseconds.
+    pub trigram: u128,
+    /// Total wall-clock in milliseconds, including the
+    /// background-save submission.
+    pub total: u128,
+}
 
-    if let Some(path) = source.file_path() {
-        compact.source = IndexSource::MftFile(path.to_path_buf());
+/// Phase 5 (#94) re-promote helper: load the per-drive `MftIndex`
+/// from cache, apply USN journal deltas, rebuild the
+/// `DriveCompactIndex` from the refreshed MFT, and submit a
+/// background compact-cache save so the next call is faster.
+///
+/// Used by the daemon's `DiskBodyLoader::load` and (eventually) the
+/// background USN refresh timer (#95).  On Windows the call goes
+/// through `MftReader::read_index_cached` →
+/// `apply_usn_updates_to_fresh_index` which is the canonical USN
+/// replay path the cold-boot fall-through has been using all along.
+/// On non-Windows the live-volume reader is unavailable and the
+/// function returns an error so the caller can fall back to a bare
+/// [`crate::compact_cache::load_compact_cache`].
+///
+/// # Errors
+///
+/// Returns an error if the live MFT cannot be opened, the cached
+/// `MftIndex` cannot be loaded, or the USN journal apply step fails.
+/// The compact-cache save is best-effort (warn-logged on failure)
+/// and never propagates an error to the caller.
+#[cfg(windows)]
+pub fn load_drive_with_usn_refresh(
+    drive_letter: char,
+) -> anyhow::Result<(DriveCompactIndex, RefreshTiming)> {
+    let total_start = Instant::now();
+    let mft_start = Instant::now();
+    let mft_index = load_mft_index_live(drive_letter, /* no_cache = */ false)?;
+    let mft = mft_start.elapsed().as_millis();
+
+    let (mut compact, compact_ms_inner, trigram_ms_inner) =
+        build_compact_index(drive_letter, &mft_index);
+    drop(mft_index);
+
+    // Persist the USN-refreshed compact so the next promote on this
+    // letter (or the next cold-boot) starts from a fresher snapshot.
+    // Best-effort — warn on failure but don't fail the caller; the
+    // returned in-memory body is still correct.
+    if let Err(err) = crate::compact_cache::save_compact_cache_background(&compact) {
+        tracing::warn!(
+            drive = %drive_letter,
+            error = %err,
+            "Failed to start USN-refreshed compact cache save (best-effort)",
+        );
     }
+
+    let total = total_start.elapsed().as_millis();
     tracing::info!(
+        target: "shard.transition",
         drive = %drive_letter,
+        mft_ms = %mft,
+        compact_ms = %compact_ms_inner,
+        trigram_ms = %trigram_ms_inner,
+        total_ms = %total,
         records = compact.records.len(),
-        cache_ms,
-        "📦 Cache hit — loaded compact cache"
+        "♻️ USN-refreshed body ready (load_drive_with_usn_refresh)",
     );
-    Some((compact, LoadTiming {
-        cache: cache_ms,
-        mft: 0,
-        compact: 0,
-        trigram: 0,
+    compact.source = IndexSource::MftFile(PathBuf::from(format!("{drive_letter}:")));
+    Ok((compact, RefreshTiming {
+        mft,
+        compact: compact_ms_inner,
+        trigram: trigram_ms_inner,
+        total,
     }))
+}
+
+/// Non-Windows stub for [`load_drive_with_usn_refresh`].
+///
+/// USN journals are NTFS-only.  On macOS / Linux the daemon's only
+/// cache source is the offline-file path (`MftSource::File`), which
+/// does not need USN replay because the underlying `.iocp` /
+/// `.uffs` snapshot is the source of truth.  This stub returns an
+/// error so callers (notably `DiskBodyLoader::load`) fall back to
+/// [`crate::compact_cache::load_compact_cache`] without a Windows
+/// `cfg` gate at the call site.
+///
+/// # Errors
+///
+/// Always returns an `anyhow` error noting USN replay is unsupported
+/// on this platform.  The caller is expected to handle this by
+/// falling back to the bare compact-cache load.
+#[cfg(not(windows))]
+pub fn load_drive_with_usn_refresh(
+    drive_letter: char,
+) -> anyhow::Result<(DriveCompactIndex, RefreshTiming)> {
+    anyhow::bail!(
+        "USN refresh not supported on this platform (drive {drive_letter}); caller should fall back to load_compact_cache"
+    )
 }
 
 /// Parse a `.uffs` MFT file into `MftIndex`, choosing the parser that

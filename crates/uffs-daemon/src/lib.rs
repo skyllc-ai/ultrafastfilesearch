@@ -262,6 +262,13 @@ pub async fn run_daemon(config: DaemonConfig) -> anyhow::Result<()> {
     // Phase 3 Commit D — periodic shard idle-demote sweep.
     let _idle_demote_task = spawn_idle_demote_controller(Arc::clone(&idx));
 
+    // Phase 5 (#95) — periodic background USN refresh of Warm/Hot
+    // shards so search results reflect live filesystem state without
+    // waiting for the next idle-tier transition.  Cadence is the
+    // `UFFS_USN_REFRESH_INTERVAL_SECS`-overridable
+    // `cache::policy::USN_REFRESH_INTERVAL_SECS` (5 min default).
+    let _usn_refresh_task = spawn_usn_refresh_controller(Arc::clone(&idx));
+
     // Run idle timer (blocks until shutdown or timeout) then tear
     // everything down.  Returns `!` so `force_exit_with_watchdog`
     // covers the post-await tail.
@@ -647,6 +654,38 @@ fn spawn_idle_demote_controller(idx: Arc<index::IndexManager>) -> tokio::task::J
         loop {
             interval.tick().await;
             idx.demote_idle_shards(cache::unix_now_ms()).await;
+        }
+    })
+}
+
+/// Spawn the Phase 5 (#95) background USN refresh controller —
+/// every `UFFS_USN_REFRESH_INTERVAL_SECS` (default 5 min), ask
+/// `IndexManager::refresh_usn_for_warm_shards` to walk every Warm/Hot
+/// shard, fold live USN journal deltas into the in-memory body, and
+/// persist a fresher compact cache to disk.
+///
+/// The first tick is skipped so cold-boot's existing
+/// `load_drive_with_usn_refresh` path (the new #94 cold-boot WARM
+/// flow) handles the t=0 USN apply.  Subsequent ticks keep the
+/// in-memory state diverging by at most one interval from the live
+/// filesystem.
+///
+/// On non-Windows the underlying refresh helper errors out by
+/// design (USN journals are NTFS-only); the loop still runs and
+/// logs the per-drive `anyhow` errors so the timer mechanics are
+/// exercised on dev machines, but no body changes.
+fn spawn_usn_refresh_controller(idx: Arc<index::IndexManager>) -> tokio::task::JoinHandle<()> {
+    let interval_secs = cache::policy::usn_refresh_interval_secs();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(core::time::Duration::from_secs(interval_secs));
+        // Skip the first tick (fires immediately at task spawn).
+        // The cold-boot path through `load_drive` (#94) already
+        // applied USN deltas; the next refresh comes one interval
+        // later.
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            idx.refresh_usn_for_warm_shards().await;
         }
     })
 }

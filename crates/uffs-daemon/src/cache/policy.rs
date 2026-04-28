@@ -63,6 +63,21 @@ pub(crate) const WARM_TO_PARKED_IDLE_SECS: u64 = 1800;
 /// under nightly batch processes that scan archives once per day.
 pub(crate) const PARKED_TO_COLD_IDLE_SECS: u64 = 86_400;
 
+/// Default cadence for the Phase 5 (#95) background USN refresh
+/// controller.  Every `USN_REFRESH_INTERVAL_SECS` (default 5 min)
+/// the daemon walks all `Warm` / `Hot` shards and folds live USN
+/// journal deltas into their in-memory body so search results
+/// reflect the live filesystem state without waiting for the next
+/// idle-tier transition.
+///
+/// 5 min is a deliberate trade-off: short enough that `Warm` shards
+/// don't drift more than `WARM_TO_PARKED_IDLE_SECS / 6` between
+/// refreshes (so nothing demotes mid-refresh), long enough that the
+/// USN journal accumulates a meaningful batch (per-drive replay
+/// dominated by fixed setup, not by record count).  Override at
+/// daemon startup via [`USN_REFRESH_INTERVAL_ENV`].
+pub(crate) const USN_REFRESH_INTERVAL_SECS: u64 = 300;
+
 /// Env var that overrides [`HOT_TO_WARM_IDLE_SECS`].
 pub(crate) const HOT_TO_WARM_IDLE_ENV: &str = "UFFS_HOT_TO_WARM_IDLE_SECS";
 
@@ -71,6 +86,9 @@ pub(crate) const WARM_TO_PARKED_IDLE_ENV: &str = "UFFS_WARM_TO_PARKED_IDLE_SECS"
 
 /// Env var that overrides [`PARKED_TO_COLD_IDLE_SECS`].
 pub(crate) const PARKED_TO_COLD_IDLE_ENV: &str = "UFFS_PARKED_TO_COLD_IDLE_SECS";
+
+/// Env var that overrides [`USN_REFRESH_INTERVAL_SECS`].
+pub(crate) const USN_REFRESH_INTERVAL_ENV: &str = "UFFS_USN_REFRESH_INTERVAL_SECS";
 
 /// Read a positive `u64` seconds value from `env_name`, falling back
 /// to `default` on any parse error or non-positive value.  Logs a
@@ -121,6 +139,15 @@ pub(crate) fn warm_to_parked_idle_secs() -> u64 {
 pub(crate) fn parked_to_cold_idle_secs() -> u64 {
     static CACHED: OnceLock<u64> = OnceLock::new();
     *CACHED.get_or_init(|| read_env_secs(PARKED_TO_COLD_IDLE_ENV, PARKED_TO_COLD_IDLE_SECS))
+}
+
+/// Effective USN refresh interval (env override or default), in
+/// seconds.  Consumed by the Phase 5 (#95) background USN refresh
+/// controller spawned from `crate::lib::run_daemon`.
+#[must_use]
+pub(crate) fn usn_refresh_interval_secs() -> u64 {
+    static CACHED: OnceLock<u64> = OnceLock::new();
+    *CACHED.get_or_init(|| read_env_secs(USN_REFRESH_INTERVAL_ENV, USN_REFRESH_INTERVAL_SECS))
 }
 
 /// Decide whether a shard in `state` that has been idle for

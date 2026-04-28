@@ -363,6 +363,69 @@ impl ShardRegistry {
         Some(Self::from_shards(shards))
     }
 
+    /// Phase 5 (#95) — replace the body of a `Warm` / `Hot` shard
+    /// with a fresher one (typically the output of
+    /// [`uffs_core::compact_loader::load_drive_with_usn_refresh`]).
+    /// Returns the rebuilt registry on success, or `None` when:
+    ///
+    /// * `letter` is not registered;
+    /// * the existing shard's state is `Parked` / `Cold` / `Unknown` /
+    ///   `Evicting` — these tiers don't have an in-memory body to refresh.  A
+    ///   `Parked` shard gets a USN-refreshed body via the normal
+    ///   `promote_letter` path on its next search-hot-path touch.
+    ///
+    /// The per-drive [`Arc<DriveStats>`] is preserved so query
+    /// counters / `last_query_at_ms` survive the swap.  The new
+    /// shard always lands in `Warm`; if the previous state was
+    /// `Hot`, the next search query will re-promote it via the
+    /// natural state-machine — the brief Hot → Warm → Hot bounce is
+    /// invisible in production telemetry (sub-millisecond gap on
+    /// the next dispatch).
+    ///
+    /// Wired into the production refresh path by
+    /// [`crate::index::IndexManager::refresh_usn_for_warm_shards`].
+    #[must_use]
+    pub(crate) fn replace_warm_body(
+        &self,
+        letter: char,
+        body: Arc<DriveCompactIndex>,
+    ) -> Option<Self> {
+        let (pos, old_arc) = self
+            .shards
+            .iter()
+            .enumerate()
+            .find(|(_, shard)| shard.drive.eq_ignore_ascii_case(&letter))?;
+        let from_state = old_arc.state();
+        if !matches!(from_state, ShardState::Warm | ShardState::Hot) {
+            return None;
+        }
+        let refreshed_mb = (body.heap_size_bytes().total / 1_048_576) as u64;
+        let stats = Arc::clone(&old_arc.stats);
+        let drive = old_arc.drive;
+        let new_arc = Arc::new(ShardEntry::new_warm_with_stats(drive, body, stats));
+        let shards: Vec<Arc<ShardEntry>> = self
+            .shards
+            .iter()
+            .enumerate()
+            .map(|(i, existing)| {
+                if i == pos {
+                    Arc::clone(&new_arc)
+                } else {
+                    Arc::clone(existing)
+                }
+            })
+            .collect();
+        tracing::info!(
+            target: "shard.transition",
+            letter = %letter.to_ascii_uppercase(),
+            from = %from_state,
+            to = %ShardState::Warm,
+            refreshed_mb,
+            reason = "usn-refresh",
+        );
+        Some(Self::from_shards(shards))
+    }
+
     /// `true` iff the registry has no shards at all.
     #[must_use]
     pub(crate) const fn is_empty(&self) -> bool {
