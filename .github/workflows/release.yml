@@ -405,10 +405,17 @@ jobs:
           # `zip` on macOS/Linux.  The ZIP goes straight into
           # release-artifacts/ so the existing Upload step picks it up
           # alongside the raw binaries.
+          #
+          # Both branches `cd release-staging` first so the archive's
+          # root entry is `${{ matrix.artifact-name }}/`, not
+          # `release-staging/${{ matrix.artifact-name }}/` — fixes #92,
+          # where the Windows ZIP previously contained the staging
+          # directory as a wrapper folder.
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            7z a -tzip \
-              "release-artifacts/${{ matrix.artifact-name }}.zip" \
-              "$STAGE_DIR/*" > /dev/null
+            (cd release-staging && \
+             7z a -tzip \
+               "../release-artifacts/${{ matrix.artifact-name }}.zip" \
+               "${{ matrix.artifact-name }}" > /dev/null)
           else
             (cd release-staging && \
              zip -rq "../release-artifacts/${{ matrix.artifact-name }}.zip" \
