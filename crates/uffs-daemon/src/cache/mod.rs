@@ -30,8 +30,10 @@
 
 pub(crate) mod body_loader;
 pub(crate) mod policy;
+pub(crate) mod prefetch;
 pub(crate) mod registry;
 pub(crate) mod shard;
+pub(crate) mod working_set;
 
 // Phase 1 surface: only `ShardRegistry` and `ShardState` are referenced
 // from outside this module (in `crate::index`).  The other types

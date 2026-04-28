@@ -2859,3 +2859,150 @@ async fn drives_rpc_returns_empty_vec_when_registry_is_empty() {
         "no shards loaded → empty drives vec — CLI renders `(none loaded)`"
     );
 }
+
+/// Phase 5 task **5.8** — `demote_idle_shards` invokes the
+/// `WorkingSetTrim::trim()` hook **exactly once** per applied
+/// batch, not once per shard.  Pins the contract documented on
+/// the trait: process-level call, coalesced across the batch
+/// (Windows `EmptyWorkingSet` is process-wide so per-shard calls
+/// would be wasted syscalls).
+///
+/// Topology: 3 drives all backdated past `WARM_TO_PARKED_IDLE_SECS`
+/// so the controller demotes them in a single batch.  Inject a
+/// `CountingWorkingSetTrim` fake; assert `calls() == 1` after the
+/// tick.
+#[tokio::test]
+async fn demote_idle_shards_invokes_working_set_trim_once_per_batch() {
+    use crate::cache::policy::WARM_TO_PARKED_IDLE_SECS;
+    use crate::cache::prefetch::PlatformPrefetch;
+    use crate::cache::working_set::tests::CountingWorkingSetTrim;
+
+    let (tx, _rx) = crate::events::event_channel();
+    let counting_trim = Arc::new(CountingWorkingSetTrim::new());
+    let mgr = IndexManager::with_lifecycle_hooks_for_test(
+        None,
+        tx,
+        Arc::new(crate::cache::body_loader::DiskBodyLoader),
+        Arc::clone(&counting_trim) as Arc<dyn crate::cache::working_set::WorkingSetTrim>,
+        Arc::new(PlatformPrefetch),
+    );
+    mgr.add_drive(build_test_drive()).await;
+    mgr.add_drive(build_test_drive_d()).await;
+    mgr.add_drive(build_test_drive_e()).await;
+
+    // Backdate every shard's last_query_at_ms past the Warm→Parked
+    // threshold so the controller picks up all three in one batch.
+    let last_query_ms = 1_000_000_000_u64;
+    for letter in ['C', 'D', 'E'] {
+        assert!(
+            mgr.backdate_last_query_at_ms_for_test(letter, last_query_ms)
+                .await
+        );
+    }
+
+    // Pre-batch: hook never fired.
+    assert_eq!(counting_trim.calls(), 0, "no demote yet → no trim");
+
+    let now_ms = last_query_ms + WARM_TO_PARKED_IDLE_SECS * 1000;
+    mgr.demote_idle_shards(now_ms).await;
+
+    // Post-batch: every shard demoted, hook fired exactly once.
+    let states = mgr.shard_states_for_test().await;
+    assert_eq!(states, vec![
+        ('C', crate::cache::ShardState::Parked),
+        ('D', crate::cache::ShardState::Parked),
+        ('E', crate::cache::ShardState::Parked),
+    ]);
+    assert_eq!(
+        counting_trim.calls(),
+        1,
+        "WorkingSetTrim::trim() fires once per batch, not per shard"
+    );
+
+    // Idempotent on a second tick: nothing to demote → no trim.
+    mgr.demote_idle_shards(now_ms).await;
+    assert_eq!(
+        counting_trim.calls(),
+        1,
+        "no-op tick must not re-trim — coalescing depends on `applied > 0`",
+    );
+}
+
+/// Phase 5 task **5.9** — `ensure_warm_for_dispatch` invokes the
+/// `Prefetch::hint()` hook with the freshly-loaded body's
+/// records + names regions, in that order, before the registry
+/// write-lock swap.  Pins the contract that the kernel-prefetch
+/// runs while the orchestrator is still in the blocking task so
+/// the syscall overlaps with the lock acquisition.
+///
+/// Topology: 1 drive (C), demoted to Parked.  Inject a
+/// `FixedBodyLoader` so the body Arc handed to `Prefetch::hint`
+/// is byte-identical to the one we constructed pre-test;
+/// `RecordingPrefetch` captures every region as `(ptr-as-usize,
+/// len)` so the assertion can match on the body's
+/// `records.as_ptr()` and `names.as_ptr()` directly.
+#[tokio::test]
+async fn ensure_warm_for_dispatch_invokes_prefetch_with_records_and_names_regions() {
+    use crate::cache::ShardState;
+    use crate::cache::prefetch::tests::RecordingPrefetch;
+    use crate::cache::working_set::PlatformWorkingSetTrim;
+
+    let (tx, _rx) = crate::events::event_channel();
+
+    // Build the fixed body up front so we can compare regions
+    // against it after promote.
+    let body = Arc::new(build_test_drive());
+    let recording_prefetch = Arc::new(RecordingPrefetch::new());
+    let mgr = IndexManager::with_lifecycle_hooks_for_test(
+        None,
+        tx,
+        Arc::new(FixedBodyLoader {
+            body: Arc::clone(&body),
+        }),
+        Arc::new(PlatformWorkingSetTrim),
+        Arc::clone(&recording_prefetch) as Arc<dyn crate::cache::prefetch::Prefetch>,
+    );
+    mgr.add_drive(build_test_drive()).await;
+    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+
+    // Pre-promote: no prefetch calls.
+    assert!(recording_prefetch.calls().is_empty());
+
+    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
+
+    // Shard promoted (the Phase-3 contract this test depends on).
+    let states = mgr.shard_states_for_test().await;
+    assert_eq!(states, vec![('C', ShardState::Warm)]);
+
+    // Prefetch invoked exactly once, with two regions in a fixed
+    // order: records first (typed slice → byte length), names
+    // second (raw `u8` slice → length is element count == bytes).
+    let calls = recording_prefetch.calls();
+    assert_eq!(
+        calls.len(),
+        1,
+        "exactly one Prefetch::hint() call per promoted shard"
+    );
+    let regions = &calls[0];
+    assert_eq!(
+        regions.len(),
+        2,
+        "regions: [records, names] — fixed order, no extras"
+    );
+
+    let expected_records_ptr = body.records.as_slice().as_ptr() as usize;
+    let expected_records_len = size_of_val(body.records.as_slice());
+    let expected_names_ptr = body.names.as_slice().as_ptr() as usize;
+    let expected_names_len = body.names.as_slice().len();
+
+    assert_eq!(
+        regions[0],
+        (expected_records_ptr, expected_records_len),
+        "records region matches the body's records.as_slice()",
+    );
+    assert_eq!(
+        regions[1],
+        (expected_names_ptr, expected_names_len),
+        "names region matches the body's names.as_slice()",
+    );
+}

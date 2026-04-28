@@ -135,6 +135,27 @@ pub(crate) struct IndexManager {
     /// Commit-E integration tests inject fakes via
     /// [`Self::with_body_loader_for_test`].
     body_loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
+    /// Process-level working-set trim hook (Phase 5 task 5.1).
+    /// Called once at the end of every demote batch in
+    /// [`Self::demote_idle_shards`] (task 5.4).  Production wires
+    /// [`crate::cache::working_set::PlatformWorkingSetTrim`]
+    /// (Mac/Linux no-op, Windows `EmptyWorkingSet`); the Phase 5
+    /// tests inject
+    /// [`crate::cache::working_set::tests::CountingWorkingSetTrim`]
+    /// to assert exactly-once invocation per batch.
+    working_set_trim: Arc<dyn crate::cache::working_set::WorkingSetTrim>,
+    /// Region kernel-prefetch hook (Phase 5 task 5.2).  Called
+    /// inside the per-letter `spawn_blocking` task in
+    /// [`Self::ensure_warm_for_dispatch`] right after the body
+    /// loader returns the freshly-loaded body (task 5.5), so the
+    /// kernel can start paging in records + names while the
+    /// orchestrator acquires the registry write-lock.  Production
+    /// wires [`crate::cache::prefetch::PlatformPrefetch`] (Windows
+    /// `PrefetchVirtualMemory`, Mac/Linux `posix_madvise`); the
+    /// Phase 5 tests inject
+    /// [`crate::cache::prefetch::tests::RecordingPrefetch`] to assert the
+    /// records + names regions reach the kernel.
+    prefetch: Arc<dyn crate::cache::prefetch::Prefetch>,
 }
 
 impl IndexManager {
@@ -148,24 +169,29 @@ impl IndexManager {
     /// the initial value is not performance-critical.
     #[must_use]
     pub(crate) fn new(data_dir: Option<PathBuf>, events: EventSender) -> Self {
-        Self::new_with_body_loader(
+        Self::new_with_lifecycle_hooks(
             data_dir,
             events,
             Arc::new(crate::cache::body_loader::DiskBodyLoader),
+            Arc::new(crate::cache::working_set::PlatformWorkingSetTrim),
+            Arc::new(crate::cache::prefetch::PlatformPrefetch),
         )
     }
 
-    /// Inner constructor that also threads a custom body-loader.
+    /// Inner constructor that threads custom lifecycle hooks
+    /// (body loader + working-set trim + prefetch).
     ///
     /// Production code calls [`Self::new`] which wires the
-    /// `DiskBodyLoader`; the Commit-E tests use this path through
-    /// [`Self::with_body_loader_for_test`] to inject fakes
-    /// (fixed body, missing body, panicking loader) without
-    /// touching the platform cache directory.
-    fn new_with_body_loader(
+    /// platform impls; the Phase 5 unit tests use this path
+    /// through [`Self::with_lifecycle_hooks_for_test`] to inject
+    /// counting / recording fakes without touching the platform
+    /// cache directory or the process working set.
+    fn new_with_lifecycle_hooks(
         data_dir: Option<PathBuf>,
         events: EventSender,
         body_loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
+        working_set_trim: Arc<dyn crate::cache::working_set::WorkingSetTrim>,
+        prefetch: Arc<dyn crate::cache::prefetch::Prefetch>,
     ) -> Self {
         let cpus = std::thread::available_parallelism().map_or(4, core::num::NonZeroUsize::get);
         Self {
@@ -186,6 +212,8 @@ impl IndexManager {
             startup_duration_us: AtomicU64::new(0),
             drive_timings: RwLock::new(std::collections::HashMap::new()),
             body_loader,
+            working_set_trim,
+            prefetch,
         }
     }
 
@@ -194,13 +222,43 @@ impl IndexManager {
     /// Used by the Commit-E integration tests to inject deterministic
     /// fakes — no platform cache directory touched, no
     /// process-global env-var override, no `tempfile`-juggling.
+    /// Threads the production [`PlatformWorkingSetTrim`] (no-op on
+    /// Mac/Linux) and [`PlatformPrefetch`] for the lifecycle hooks
+    /// since pre-Phase-5 tests don't care about them.
+    ///
+    /// [`PlatformWorkingSetTrim`]: crate::cache::working_set::PlatformWorkingSetTrim
+    /// [`PlatformPrefetch`]: crate::cache::prefetch::PlatformPrefetch
     #[cfg(test)]
     pub(crate) fn with_body_loader_for_test(
         data_dir: Option<PathBuf>,
         events: EventSender,
         body_loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
     ) -> Self {
-        Self::new_with_body_loader(data_dir, events, body_loader)
+        Self::new_with_lifecycle_hooks(
+            data_dir,
+            events,
+            body_loader,
+            Arc::new(crate::cache::working_set::PlatformWorkingSetTrim),
+            Arc::new(crate::cache::prefetch::PlatformPrefetch),
+        )
+    }
+
+    /// Test-only constructor that swaps in custom hooks for the
+    /// full memory-tiering lifecycle (body loader + working-set
+    /// trim + prefetch).  Phase 5 tasks 5.8 + 5.9 inject counting
+    /// / recording fakes here so the demote-batch and promote-on-
+    /// search assertions can assert exactly-once invocation and
+    /// the right (records, names) regions without touching the
+    /// process's actual working set or kernel page cache.
+    #[cfg(test)]
+    pub(crate) fn with_lifecycle_hooks_for_test(
+        data_dir: Option<PathBuf>,
+        events: EventSender,
+        body_loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
+        working_set_trim: Arc<dyn crate::cache::working_set::WorkingSetTrim>,
+        prefetch: Arc<dyn crate::cache::prefetch::Prefetch>,
+    ) -> Self {
+        Self::new_with_lifecycle_hooks(data_dir, events, body_loader, working_set_trim, prefetch)
     }
 
     /// Acquire an owned search-concurrency permit.
@@ -1005,6 +1063,7 @@ impl IndexManager {
         )> = tokio::task::JoinSet::new();
         for letter in needs_promote {
             let loader = Arc::clone(&self.body_loader);
+            let prefetch = Arc::clone(&self.prefetch);
             load_set.spawn_blocking(move || {
                 // `catch_unwind` lives in `std` (needs unwinding
                 // runtime); `AssertUnwindSafe` lives in `core` (the
@@ -1022,6 +1081,40 @@ impl IndexManager {
                     );
                     None
                 });
+
+                // ── Phase 5 task 5.5 — prefetch hint ─────────────
+                // Best-effort kernel-prefetch on the records +
+                // names regions while we're still in the blocking
+                // task, before the orchestrator acquires the
+                // registry write-lock for the swap.  Mac/Linux:
+                // `posix_madvise(MADV_WILLNEED)` per region;
+                // Windows: single `PrefetchVirtualMemory` call.
+                // The body `Arc` keeps the underlying allocation
+                // / mmap alive across this call so the raw
+                // pointers stay valid (Send/Sync wrapper:
+                // `PrefetchRegion`).  Errors are logged and
+                // ignored — the shard still promotes.
+                if let Some(body_arc) = body.as_ref() {
+                    let regions = [
+                        crate::cache::prefetch::PrefetchRegion {
+                            ptr: body_arc.records.as_slice().as_ptr().cast::<u8>(),
+                            len: size_of_val(body_arc.records.as_slice()),
+                        },
+                        crate::cache::prefetch::PrefetchRegion {
+                            ptr: body_arc.names.as_slice().as_ptr(),
+                            len: body_arc.names.as_slice().len(),
+                        },
+                    ];
+                    if let Err(err) = prefetch.hint(&regions) {
+                        tracing::warn!(
+                            target: "shard.transition",
+                            drive = %letter,
+                            error = %err,
+                            reason = "promote-on-search",
+                            "Prefetch::hint failed; shard still promotes",
+                        );
+                    }
+                }
                 (letter, body)
             });
         }
@@ -1180,6 +1273,24 @@ impl IndexManager {
         // ── Phase 3: single index-version bump for the batch ───────
         if applied > 0 {
             self.bump_index_version();
+
+            // ── Phase 4: working-set trim (Phase 5 task 5.4) ─────
+            // Process-level hook called once per batch (not once
+            // per shard) — on Windows `EmptyWorkingSet` is process-
+            // wide so coalescing matters; on Mac/Linux the call is
+            // a no-op stub.  Best-effort: any I/O error is logged
+            // and the daemon continues.  Runs after the index-
+            // version bump so the demote is fully observable to
+            // searches before we ask the kernel to reclaim pages.
+            if let Err(err) = self.working_set_trim.trim() {
+                tracing::warn!(
+                    target: "shard.transition",
+                    error = %err,
+                    applied,
+                    reason = "demote-batch",
+                    "WorkingSetTrim::trim failed; daemon continues",
+                );
+            }
         }
     }
 
