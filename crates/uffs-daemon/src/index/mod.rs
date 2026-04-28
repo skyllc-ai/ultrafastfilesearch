@@ -10,6 +10,7 @@
 //! readability.
 
 mod aggregation;
+mod drives;
 mod predicates;
 mod projection;
 pub(crate) mod search;

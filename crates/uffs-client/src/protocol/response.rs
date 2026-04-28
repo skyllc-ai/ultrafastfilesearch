@@ -12,7 +12,8 @@
 use serde::{Deserialize, Serialize};
 
 pub use super::response_status::{
-    DaemonStatus, DriveInfo, DriveMemoryInfo, DrivesResponse, StatsResponse, StatusResponse,
+    DaemonStatus, DriveInfo, DriveMemoryInfo, DrivesResponse, ShardTier, StatsResponse,
+    StatusResponse,
 };
 use super::{
     AggregateResultWire, BucketWire, RpcError, RpcErrorResponse, RpcRequest, RpcResponse,

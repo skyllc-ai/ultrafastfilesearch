@@ -2762,3 +2762,100 @@ async fn ensure_warm_for_dispatch_promotes_parked_when_bloom_hits() {
         "bloom hit must promote the shard back to Warm via the loader"
     );
 }
+
+/// Plan task **5.11**: `IndexManager::drives()` must enumerate every
+/// shard in the registry — Warm, Parked, *and* Cold — tagged with its
+/// `ShardTier` so the CLI status formatter can render the tier marker
+/// instead of printing `Drives: (none loaded)` when the registry holds
+/// only demoted shards.
+///
+/// Surfaced by the 2026-04-28 dogfood: at t=44m the daemon correctly
+/// had all 7 drives Parked (their bloom + path-trie still resident,
+/// ready for re-promote on bloom hit), but `daemon status` rendered
+/// the empty-registry path because the old `drives()` filtered
+/// through `active_index()` (Warm/Hot only).  The fix walks the
+/// registry directly; this test pins the contract.
+///
+/// Topology: 3 drives.  C stays Warm.  D demotes to Parked.  E
+/// demotes to Cold.  Assertions cover:
+/// * every shard is in the response (no filtering),
+/// * tiers map 1:1 from `ShardState` → `ShardTier`,
+/// * Warm shards carry the body's `records.len()`,
+/// * Parked / Cold shards report `records: 0` and a synthetic `source` label,
+/// * load-order is preserved (C, D, E).
+#[tokio::test]
+async fn drives_rpc_enumerates_warm_parked_and_cold_shards_with_tier_markers() {
+    use uffs_client::protocol::response::ShardTier;
+
+    use crate::cache::ShardState;
+
+    let (tx, _rx) = crate::events::event_channel();
+    let mgr = IndexManager::new(None, tx);
+    mgr.add_drive(build_test_drive()).await;
+    mgr.add_drive(build_test_drive_d()).await;
+    mgr.add_drive(build_test_drive_e()).await;
+
+    // Demote D → Parked (body released; bloom + trie resident).
+    assert!(mgr.demote_letter_for_test('D', ShardState::Parked).await);
+    // Demote E → Cold (no body, no filters).
+    assert!(mgr.demote_letter_for_test('E', ShardState::Cold).await);
+
+    let response = mgr.drives().await;
+    assert_eq!(
+        response.drives.len(),
+        3,
+        "every loaded shard must appear, including Parked and Cold"
+    );
+
+    // Load-order preserved (matches ShardRegistry::iter()).
+    let letters: Vec<char> = response.drives.iter().map(|dr| dr.letter).collect();
+    assert_eq!(letters, vec!['C', 'D', 'E'], "load order preserved");
+
+    // C — Warm: body present, records nonzero, tier=Warm,
+    // source from the body's IndexSource (live MFT path "C:").
+    let c = &response.drives[0];
+    assert_eq!(c.letter, 'C');
+    assert_eq!(c.tier, Some(ShardTier::Warm), "C remains Warm");
+    assert!(c.records > 0, "Warm shard reports its body's records.len()");
+    assert_eq!(c.source, "live", "Warm shard's body source flows through");
+
+    // D — Parked: no body, records=0, tier=Parked,
+    // source synthesized as "parked".
+    let d = &response.drives[1];
+    assert_eq!(d.letter, 'D');
+    assert_eq!(d.tier, Some(ShardTier::Parked), "D demoted to Parked");
+    assert_eq!(d.records, 0, "Parked shard has no body in RAM");
+    assert_eq!(
+        d.source, "parked",
+        "Parked shard surfaces a synthetic source label"
+    );
+
+    // E — Cold: no body, no filters, records=0, tier=Cold,
+    // source synthesized as "cold".
+    let e = &response.drives[2];
+    assert_eq!(e.letter, 'E');
+    assert_eq!(e.tier, Some(ShardTier::Cold), "E demoted to Cold");
+    assert_eq!(e.records, 0, "Cold shard has nothing in RAM");
+    assert_eq!(
+        e.source, "cold",
+        "Cold shard surfaces a synthetic source label"
+    );
+}
+
+/// Counter-test to the enumeration above: empty registry must still
+/// render the legacy `(none loaded)` path so cold-boot detection in
+/// external scripts (`scripts/windows/api-validation.rs`,
+/// `cli-validation.rs`, `mcp-validation.rs`) continues to fire on a
+/// truly empty daemon.  Pins that the formatter doesn't accidentally
+/// emit a tier-marker line for a registry that holds zero shards.
+#[tokio::test]
+async fn drives_rpc_returns_empty_vec_when_registry_is_empty() {
+    let (tx, _rx) = crate::events::event_channel();
+    let mgr = IndexManager::new(None, tx);
+
+    let response = mgr.drives().await;
+    assert!(
+        response.drives.is_empty(),
+        "no shards loaded → empty drives vec — CLI renders `(none loaded)`"
+    );
+}

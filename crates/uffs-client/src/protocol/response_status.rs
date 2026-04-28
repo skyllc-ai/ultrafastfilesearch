@@ -25,15 +25,55 @@ pub struct DrivesResponse {
     pub drives: Vec<DriveInfo>,
 }
 
+/// Memory-tiering state of a single shard, as surfaced over the wire.
+///
+/// Mirrors the daemon-internal `ShardState` enum (`crates/uffs-daemon/
+/// src/cache/shard.rs`) so external observers — the CLI status
+/// formatter, MCP, third-party tooling — can render the tier marker
+/// without depending on daemon internals.  Wire format is the
+/// lowercase tier name (`"hot"`, `"warm"`, `"parked"`, `"cold"`,
+/// `"unknown"`, `"evicting"`).
+///
+/// Added in Phase 5 (memory-tiering implementation plan §3 task
+/// 5.11) to fix the dogfood-discovered display gap where the status
+/// RPC enumerated only Warm/Hot shards and printed `Drives: (none
+/// loaded)` when every shard was Parked.  Older daemons (pre-v0.5.82)
+/// did not populate this field; the CLI treats `None` as "not
+/// reported" and falls back to the legacy format.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ShardTier {
+    /// Just discovered; no body, no bloom, no stats. Pre-load.
+    Unknown,
+    /// Encrypted cache exists but nothing in RAM.
+    Cold,
+    /// Bloom + trie loaded; full body dropped.
+    Parked,
+    /// Body fully loaded and searchable.
+    Warm,
+    /// Body loaded + pre-faulted via `Prefetch::hint`. Recent activity.
+    Hot,
+    /// Demote in progress. Transient.
+    Evicting,
+}
+
 /// Information about a loaded drive.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DriveInfo {
     /// Drive letter.
     pub letter: char,
-    /// Number of records in the compact index.
+    /// Number of records in the compact index.  `0` for `Parked` /
+    /// `Cold` shards whose body has been released.
     pub records: usize,
-    /// Source (e.g. `"cache"`, `"live"`, `"mft_file"`).
+    /// Source (e.g. `"cache"`, `"live"`, `"mft_file"`, `"parked"`,
+    /// `"cold"` for tier-demoted shards).
     pub source: String,
+    /// Memory-tiering state of this shard, populated by the daemon
+    /// from the registry's authoritative `ShardEntry::state()`.  Older
+    /// daemons (pre-v0.5.82) did not set this; the CLI treats `None`
+    /// as "no tier marker available" and renders accordingly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<ShardTier>,
 }
 
 /// Response for the `status` method.

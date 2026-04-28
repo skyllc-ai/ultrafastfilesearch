@@ -16,8 +16,7 @@ use std::io::Write;
 use std::time::Instant;
 
 use uffs_client::protocol::response::{
-    DriveInfo, DriveProfile, DrivesResponse, SearchPayload, SearchProfile, SearchResponse,
-    SearchRow,
+    DriveProfile, SearchPayload, SearchProfile, SearchResponse, SearchRow,
 };
 use uffs_client::protocol::{SearchFilterMode, SearchParams, SearchResponseMode};
 use uffs_core::search::backend::{
@@ -639,30 +638,6 @@ impl IndexManager {
             path_resolve_fn_ns,
             path_build_row_ns,
             drives: drive_profiles,
-        }
-    }
-
-    /// Get loaded drives info.
-    pub(crate) async fn drives(&self) -> DrivesResponse {
-        let snap = self.snapshot().await;
-        DrivesResponse {
-            drives: snap
-                .drives
-                .iter()
-                .map(|dr| DriveInfo {
-                    letter: dr.letter,
-                    records: dr.records.len(),
-                    source: match &dr.source {
-                        uffs_core::compact::IndexSource::MftFile(mft_path) => {
-                            if mft_path.to_string_lossy().len() <= 2 {
-                                "live".to_owned()
-                            } else {
-                                format!("file:{}", mft_path.display())
-                            }
-                        }
-                    },
-                })
-                .collect(),
         }
     }
 

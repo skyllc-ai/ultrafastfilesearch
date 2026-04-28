@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use uffs_client::connect_sync::UffsClientSync;
 use uffs_client::daemon_ctl::{pid_file_path, socket_path};
-use uffs_client::protocol::response::DaemonStatus;
+use uffs_client::protocol::response::{DaemonStatus, DriveInfo, ShardTier};
 
 use crate::args::DaemonAction;
 
@@ -245,18 +245,46 @@ fn daemon_status() -> Result<()> {
         println!("RSS:           {} MB", rss / (1024 * 1024));
     }
 
-    // Also show loaded drives.
+    // Also show loaded drives.  The `drives` RPC returns every shard
+    // in the registry — Warm/Hot with their full memory breakdown,
+    // Parked/Cold with just the tier marker (no body in RAM).  Empty
+    // registry still renders `(none loaded)` so cold-boot detection in
+    // external scripts (api-validation, mcp-validation) keeps working.
     let drives = client.drives().with_context(|| "Failed to query drives")?;
     if drives.drives.is_empty() {
         println!("Drives:        (none loaded)");
     } else {
+        println!("Drives:");
         for dr in &drives.drives {
-            // Find memory info for this drive.
-            let mem = status.drive_memory.iter().find(|dm| dm.drive == dr.letter);
+            print_drive_line(dr, &status.drive_memory);
+        }
+    }
+    Ok(())
+}
+
+/// Render one row of the `Drives:` block in `daemon status`.
+///
+/// Format depends on the shard's tier (per Phase 5 task 5.11):
+/// * Warm/Hot — full breakdown (records count, source, memory rec= / names= /
+///   tri= / ch= / ext=).
+/// * Parked  — `[Parked]` marker + bloom + trie kept resident note.
+/// * Cold    — `[Cold]` marker only (no body, no filters).
+/// * Other   — fall back to the legacy single-line format so the formatter
+///   never panics on a state we haven't taught it about.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_drive_line(
+    dr: &DriveInfo,
+    drive_memory: &[uffs_client::protocol::response::DriveMemoryInfo],
+) {
+    let tier_marker = tier_marker(dr.tier);
+    match dr.tier {
+        Some(ShardTier::Warm | ShardTier::Hot) | None => {
+            let mem = drive_memory.iter().find(|dm| dm.drive == dr.letter);
             if let Some(dm) = mem {
                 let mb = |bytes: u64| bytes / (1024 * 1024);
                 println!(
-                    "  {}: — {:>10} records ({}) — {} MB  [rec={} names={} tri={} ch={} ext={}]",
+                    "  {} {}: — {:>10} records ({}) — {} MB  [rec={} names={} tri={} ch={} ext={}]",
+                    tier_marker,
                     dr.letter,
                     uffs_client::format::format_number_commas(dr.records as u64),
                     dr.source,
@@ -269,15 +297,45 @@ fn daemon_status() -> Result<()> {
                 );
             } else {
                 println!(
-                    "  {}: — {:>10} records ({})",
+                    "  {} {}: — {:>10} records ({})",
+                    tier_marker,
                     dr.letter,
                     uffs_client::format::format_number_commas(dr.records as u64),
                     dr.source
                 );
             }
         }
+        Some(ShardTier::Parked) => {
+            println!(
+                "  {} {}: — bloom + trie kept resident; body released",
+                tier_marker, dr.letter
+            );
+        }
+        Some(ShardTier::Cold) => {
+            println!(
+                "  {} {}: — encrypted cache only; nothing in RAM",
+                tier_marker, dr.letter
+            );
+        }
+        Some(ShardTier::Evicting | ShardTier::Unknown) => {
+            println!("  {} {}: — ({})", tier_marker, dr.letter, dr.source);
+        }
     }
-    Ok(())
+}
+
+/// Format the bracket-style tier marker for `daemon status`'s drive
+/// list.  An 8-character right-padded label so the per-drive lines
+/// align in the operator's terminal.
+const fn tier_marker(tier: Option<ShardTier>) -> &'static str {
+    match tier {
+        Some(ShardTier::Hot) => "[Hot]   ",
+        Some(ShardTier::Warm) => "[Warm]  ",
+        Some(ShardTier::Parked) => "[Parked]",
+        Some(ShardTier::Cold) => "[Cold]  ",
+        Some(ShardTier::Evicting) => "[Evict] ",
+        Some(ShardTier::Unknown) => "[?]     ",
+        None => "        ",
+    }
 }
 
 /// Print the "not running" message with optional stale-PID hint.

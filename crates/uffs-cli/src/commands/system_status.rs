@@ -11,7 +11,7 @@
 #[cfg(feature = "mcp-http-probe")]
 use anyhow::{Context, Result};
 use uffs_client::connect_sync::UffsClientSync;
-use uffs_client::protocol::response::DaemonStatus;
+use uffs_client::protocol::response::{DaemonStatus, ShardTier};
 
 /// `uffs status` — show combined system status.
 ///
@@ -93,25 +93,8 @@ fn print_daemon_status() {
     }
     println!("  Connections: {}", status.connections);
 
-    // Drive summary.
     if let Ok(drives) = client.drives() {
-        if drives.drives.is_empty() {
-            println!("  Drives:      (none loaded)");
-        } else {
-            let total_records: usize = drives.drives.iter().map(|dr| dr.records).sum();
-            println!(
-                "  Drives:      {} loaded ({} records)",
-                drives.drives.len(),
-                uffs_client::format::format_number_commas(total_records as u64),
-            );
-            for dr in &drives.drives {
-                println!(
-                    "    {}: {:>10} records",
-                    dr.letter,
-                    uffs_client::format::format_number_commas(dr.records as u64),
-                );
-            }
-        }
+        print_drive_summary(&drives.drives);
     }
 
     // Performance stats.
@@ -127,6 +110,79 @@ fn print_daemon_status() {
             println!("  Avg query:   {}", fmt(avg));
             println!("  Queries/s:   {:.2}", stats.queries_per_second);
         }
+    }
+}
+
+/// Render the `Drives:` block of `uffs status`.
+///
+/// Phase 5 task 5.11: enumerate every shard in the registry (Hot /
+/// Warm / Parked / Cold) and tag each row with its tier marker.
+/// `total_records` reflects only Warm/Hot bodies — Parked/Cold have
+/// no body in RAM, so their `records` field is 0 and excluded from
+/// the headline count.  Empty registry still renders `(none loaded)`
+/// so cold-boot detection in external scripts (`api-validation`,
+/// `cli-validation`, `mcp-validation`) keeps working.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_drive_summary(drives: &[uffs_client::protocol::response::DriveInfo]) {
+    if drives.is_empty() {
+        println!("  Drives:      (none loaded)");
+        return;
+    }
+
+    let total_records: usize = drives.iter().map(|dr| dr.records).sum();
+    let active = drives
+        .iter()
+        .filter(|dr| matches!(dr.tier, Some(ShardTier::Warm | ShardTier::Hot) | None))
+        .count();
+    let parked = drives
+        .iter()
+        .filter(|dr| matches!(dr.tier, Some(ShardTier::Parked)))
+        .count();
+    let cold = drives
+        .iter()
+        .filter(|dr| matches!(dr.tier, Some(ShardTier::Cold)))
+        .count();
+    println!(
+        "  Drives:      {} loaded ({} records, {active} active / {parked} parked / {cold} cold)",
+        drives.len(),
+        uffs_client::format::format_number_commas(total_records as u64),
+    );
+    for dr in drives {
+        let marker = compact_tier_marker(dr.tier);
+        match dr.tier {
+            Some(ShardTier::Parked) => {
+                println!("    {} {}: bloom + trie resident", marker, dr.letter);
+            }
+            Some(ShardTier::Cold) => {
+                println!("    {} {}: cache only (no RAM)", marker, dr.letter);
+            }
+            Some(ShardTier::Hot | ShardTier::Warm) | None => {
+                println!(
+                    "    {} {}: {:>10} records",
+                    marker,
+                    dr.letter,
+                    uffs_client::format::format_number_commas(dr.records as u64),
+                );
+            }
+            Some(ShardTier::Evicting | ShardTier::Unknown) => {
+                println!("    {} {}: ({})", marker, dr.letter, dr.source);
+            }
+        }
+    }
+}
+
+/// Compact tier marker for `uffs status`'s drive list — fixed-width
+/// bracket label per tier so the per-drive lines align in the
+/// combined system view.  Phase 5 task 5.11.
+const fn compact_tier_marker(tier: Option<ShardTier>) -> &'static str {
+    match tier {
+        Some(ShardTier::Hot) => "[H]",
+        Some(ShardTier::Warm) => "[W]",
+        Some(ShardTier::Parked) => "[P]",
+        Some(ShardTier::Cold) => "[C]",
+        Some(ShardTier::Evicting) => "[E]",
+        Some(ShardTier::Unknown) => "[?]",
+        None => "[ ]",
     }
 }
 
