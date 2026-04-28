@@ -1646,10 +1646,10 @@ async fn ensure_warm_for_dispatch_no_op_when_all_warm() {
 
     // Empty filter → all touched.  Non-empty filter → subset.
     // Either way, no shard is Parked/Cold so this is a no-op.
-    mgr.ensure_warm_for_dispatch(&[]).await;
-    mgr.ensure_warm_for_dispatch(&['C']).await;
-    mgr.ensure_warm_for_dispatch(&['c']).await; // case-insensitive
-    mgr.ensure_warm_for_dispatch(&['Z']).await; // unknown letter
+    mgr.ensure_warm_for_dispatch(&[], &[]).await;
+    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
+    mgr.ensure_warm_for_dispatch(&['c'], &[]).await; // case-insensitive
+    mgr.ensure_warm_for_dispatch(&['Z'], &[]).await; // unknown letter
 
     let states_after = mgr.shard_states_for_test().await;
     assert_eq!(
@@ -1677,7 +1677,7 @@ async fn ensure_warm_for_dispatch_skips_parked_shard_outside_filter() {
 
     // Search targets only D — C must stay Parked.  The on-disk
     // cache lookup for D would no-op because D is already Warm.
-    mgr.ensure_warm_for_dispatch(&['D']).await;
+    mgr.ensure_warm_for_dispatch(&['D'], &[]).await;
 
     let states_post = mgr.shard_states_for_test().await;
     assert_eq!(
@@ -1754,7 +1754,7 @@ async fn ensure_warm_for_dispatch_promotes_with_fixed_body_loader() {
     assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
 
     // Promote via ensure_warm_for_dispatch.
-    mgr.ensure_warm_for_dispatch(&['C']).await;
+    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
 
     // Shard is Warm again AND the heap-bytes metric is back to its
     // pre-demote value (the FixedBodyLoader handed back a body
@@ -1787,7 +1787,7 @@ async fn ensure_warm_for_dispatch_handles_missing_cache_gracefully() {
     assert_eq!(states_pre, vec![('C', ShardState::Parked)]);
 
     // Loader returns None → graceful failure path.
-    mgr.ensure_warm_for_dispatch(&['C']).await;
+    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
 
     let states_post = mgr.shard_states_for_test().await;
     assert_eq!(
@@ -1811,7 +1811,7 @@ async fn ensure_warm_for_dispatch_handles_panicking_body_loader_gracefully() {
     assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
 
     // Loader panics → JoinError arm runs → shard stays Parked.
-    mgr.ensure_warm_for_dispatch(&['C']).await;
+    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
 
     let states = mgr.shard_states_for_test().await;
     assert_eq!(
@@ -1822,7 +1822,7 @@ async fn ensure_warm_for_dispatch_handles_panicking_body_loader_gracefully() {
 
     // Subsequent ensure_warm_for_dispatch on the same manager
     // still works (no global daemon state corruption).
-    mgr.ensure_warm_for_dispatch(&['C']).await;
+    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
     let states_again = mgr.shard_states_for_test().await;
     assert_eq!(
         states_again,
@@ -2234,7 +2234,7 @@ async fn shard_transition_events_emitted_on_demote_and_promote() {
     // Demote → expect one demote event.
     assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
     // Promote via ensure_warm_for_dispatch → expect one promote event.
-    mgr.ensure_warm_for_dispatch(&['C']).await;
+    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
 
     let events = log.events();
     let transitions: Vec<&CapturedEvent> = events

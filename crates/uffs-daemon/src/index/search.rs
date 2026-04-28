@@ -84,28 +84,12 @@ impl IndexManager {
         let requires_post_filter =
             Self::predicates_require_post_filter(&effective_params.predicates);
 
-        // Phase 3 Commit C — promote any Parked/Cold shards in the
-        // touched set before we snapshot the active subset.  Fast
-        // path (single read-lock acquisition, no work) when every
-        // touched shard is already Warm/Hot, which is the common
-        // case in steady state.  See
-        // `IndexManager::ensure_warm_for_dispatch` doc for the
-        // three-phase orchestration and the
-        // conservative-on-under-promote contract.
-        self.ensure_warm_for_dispatch(&effective_params.drives)
-            .await;
-
-        // ── Snapshot the index (< 1 μs) ────────────────────────────
-        let t_lock = profiling.then(Instant::now);
-        let snapshot = self.snapshot().await;
-        // Phase 1 of memory-tiering: record this dispatch on every
-        // active shard so `DriveStats::decay_ema` (consumed by Phase 6
-        // adaptive-TTL) accumulates a real signal.  See
-        // `crate::cache::DriveStats` and the `record_search_dispatch`
-        // doc comment.
-        self.record_search_dispatch().await;
-        let lock_us = t_lock.map_or(0, |ts| ts.elapsed().as_micros());
-
+        // Resolve sort + filter mode + filters BEFORE the promote
+        // pass so Phase 4 Commit F can hand the resolved ext-term
+        // list to `ensure_warm_for_dispatch` for its bloom
+        // pre-check.  None of the work between here and the
+        // ensure-warm call depends on the registry's tier state, so
+        // the reordering is invariant-preserving.
         let (sort_column, sort_desc, extra_sort_tiers) =
             applied_sorts
                 .first()
@@ -164,6 +148,35 @@ impl IndexManager {
         // Overlay canonical predicates that can be compiled into the hot
         // path (size / descendant bounds).
         Self::compile_predicates_into_filters(&mut filters, &effective_params.predicates);
+
+        // Phase 3 Commit C — promote any Parked/Cold shards in the
+        // touched set before we snapshot the active subset.  Fast
+        // path (single read-lock acquisition, no work) when every
+        // touched shard is already Warm/Hot, which is the common
+        // case in steady state.  See
+        // `IndexManager::ensure_warm_for_dispatch` doc for the
+        // three-phase orchestration and the
+        // conservative-on-under-promote contract.
+        //
+        // Phase 4 Commit F — `ext_terms` enables the bloom-skip
+        // pre-check: if the user filtered by `--ext toml` and a
+        // Parked shard's bloom proves it has no `.toml` records,
+        // skip the promote (zero-RAM-touch contract).  Empty
+        // `ext_terms` short-circuits to the Phase-3 always-promote
+        // behaviour.
+        self.ensure_warm_for_dispatch(&effective_params.drives, &filters.extensions)
+            .await;
+
+        // ── Snapshot the index (< 1 μs) ────────────────────────────
+        let t_lock = profiling.then(Instant::now);
+        let snapshot = self.snapshot().await;
+        // Phase 1 of memory-tiering: record this dispatch on every
+        // active shard so `DriveStats::decay_ema` (consumed by Phase 6
+        // adaptive-TTL) accumulates a real signal.  See
+        // `crate::cache::DriveStats` and the `record_search_dispatch`
+        // doc comment.
+        self.record_search_dispatch().await;
+        let lock_us = t_lock.map_or(0, |ts| ts.elapsed().as_micros());
 
         // Snapshot per-drive info (only when profiling).
         let drive_info: Vec<(char, usize)> = if profiling {

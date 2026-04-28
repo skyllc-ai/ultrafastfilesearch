@@ -2282,3 +2282,260 @@ fn sort_rows_numeric_fast_parallel_branch_preserves_order() {
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Phase 4 Commit F — bloom pre-check integration in search_index
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Build a multi-drive `DriveIndex` for the bloom-skip integration
+/// tests with **deterministically separated** blooms on each drive.
+///
+/// The default `build_compact_index` sizes blooms at the production
+/// 1 % FPR (`SHARD_BLOOM_TARGET_FPR`), which on tiny test fixtures
+/// produces flaky outcomes for novel-term probes (a single 1 %
+/// false positive turns a "skip" into a "keep" and breaks the
+/// `records_scanned` assertion).
+///
+/// To pin the test contract without weakening the production
+/// constant, this fixture builds the drives normally, then
+/// **overwrites** each drive's bloom with a tighter (0.1 % FPR)
+/// re-build over the same source records + `ext_names`.  The bloom
+/// *contents* are unchanged (still folded basenames + extensions);
+/// only the FPR margin is tightened so novel-term probes reliably
+/// miss in tests.
+fn build_bloom_skip_fixture() -> DriveIndex {
+    use alloc::format;
+    use alloc::sync::Arc;
+
+    use uffs_mft::index::{IndexNameRef, MftIndex, ROOT_FRS, SizeInfo};
+
+    use crate::bloom::Bloom;
+    use crate::compact::build_compact_index;
+
+    const FILES_PER_DRIVE: u32 = 50;
+    /// Tighter than `SHARD_BLOOM_TARGET_FPR` (1 %) so the
+    /// 4 novel-term probes in this suite reliably miss.
+    const TEST_FPR: f64 = 0.001;
+
+    let mut drives = Vec::new();
+    for (letter, ext) in [('C', "txt"), ('D', "csv")] {
+        let mut idx = MftIndex::new(letter);
+        let root_off = idx.add_name(".");
+        let root = idx.get_or_create(ROOT_FRS);
+        root.stdinfo.set_directory(true);
+        root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
+        root.first_name.parent_frs = ROOT_FRS;
+
+        for i in 0_u32..FILES_PER_DRIVE {
+            let file_name = format!("file_{i:03}.{ext}");
+            let n_off = idx.add_name(&file_name);
+            let n_ext = idx.intern_extension(&file_name);
+            let frs = u64::from(200_u32.saturating_add(i));
+            let rec = idx.get_or_create(frs);
+            rec.first_name.name = IndexNameRef::new(
+                n_off,
+                u16::try_from(file_name.len()).expect("name too long"),
+                true,
+                n_ext,
+            );
+            rec.first_name.parent_frs = ROOT_FRS;
+            rec.first_stream.size = SizeInfo {
+                length: 100,
+                allocated: 512,
+            };
+            rec.stdinfo.flags = 0x20;
+        }
+
+        let (mut drive, _, _) = build_compact_index(letter, &idx);
+
+        // Overwrite the auto-built (1 %-FPR) bloom with a tighter
+        // (0.1 %-FPR) one over the same inputs so the test's novel-
+        // term probes don't suffer flaky FPR collisions.  The
+        // insertion contract mirrors `compact_filters::build_bloom`
+        // exactly — folded basenames + as-is extensions.
+        let n_items = drive
+            .records
+            .len()
+            .saturating_add(drive.ext_names.len())
+            .max(1);
+        let mut bloom = Bloom::with_capacity_and_fpr(n_items, TEST_FPR);
+        let mut fold_buf: Vec<u8> = Vec::with_capacity(64);
+        for record in &drive.records {
+            let start = record.name_offset as usize;
+            let end = start.saturating_add(record.name_len as usize);
+            if let Some(name_bytes) = drive.names.get(start..end)
+                && let Ok(name_str) = core::str::from_utf8(name_bytes)
+            {
+                let folded = drive.fold.fold_into(name_str, &mut fold_buf);
+                bloom.insert(folded.as_bytes());
+            }
+        }
+        for ext_name in &drive.ext_names {
+            let bytes = ext_name.as_bytes();
+            if !bytes.is_empty() {
+                bloom.insert(bytes);
+            }
+        }
+        drive.bloom = Some(bloom);
+
+        drives.push(Arc::new(drive));
+    }
+    DriveIndex { drives }
+}
+
+/// Sanity guard for the fixture: each drive's bloom must hit its
+/// own extension and miss the other drive's.  Without this contract
+/// the behavioural tests below are meaningless — pin it explicitly
+/// so a future fixture tweak surfaces an FPR regression cleanly.
+#[test]
+fn bloom_skip_fixture_has_well_separated_blooms() {
+    let index = build_bloom_skip_fixture();
+    let c_bloom = index
+        .drives
+        .first()
+        .expect("C")
+        .bloom
+        .as_ref()
+        .expect("C bloom populated");
+    let d_bloom = index
+        .drives
+        .get(1)
+        .expect("D")
+        .bloom
+        .as_ref()
+        .expect("D bloom populated");
+
+    assert!(c_bloom.contains(b"txt"), "C must contain its own ext");
+    assert!(d_bloom.contains(b"csv"), "D must contain its own ext");
+    assert!(
+        !c_bloom.contains(b"csv"),
+        "C must not have a false positive on `csv` (FPR regression)"
+    );
+    assert!(
+        !d_bloom.contains(b"txt"),
+        "D must not have a false positive on `txt` (FPR regression)"
+    );
+}
+
+/// `search_index` with `extensions = ["csv"]` must bloom-skip drive
+/// C (no `.csv` files).  Verified via `records_scanned`, which after
+/// `apply_bloom_pre_check` reflects only the surviving drives.
+#[test]
+fn search_index_bloom_skips_c_when_filter_is_csv_only() {
+    let index = build_bloom_skip_fixture();
+    let drive_d_records = index.drives.get(1).expect("D").records.len();
+
+    let mut filters_csv = super::super::filters::SearchFilters {
+        extensions: vec!["csv".to_owned()],
+        ..super::super::filters::SearchFilters::default()
+    };
+    let result = search_index(
+        &index,
+        SearchRequest::new("*", &mut filters_csv),
+        FieldId::Modified,
+        true,
+        &[],
+    );
+    assert_eq!(
+        result.records_scanned, drive_d_records,
+        "csv-only filter must bloom-skip C; only D scanned"
+    );
+}
+
+/// Mirror on the opposite drive: `extensions = ["txt"]` must
+/// bloom-skip D and scan only C.
+#[test]
+fn search_index_bloom_skips_d_when_filter_is_txt_only() {
+    let index = build_bloom_skip_fixture();
+    let drive_c_records = index.drives.first().expect("C").records.len();
+
+    let mut filters_txt = super::super::filters::SearchFilters {
+        extensions: vec!["txt".to_owned()],
+        ..super::super::filters::SearchFilters::default()
+    };
+    let result = search_index(
+        &index,
+        SearchRequest::new("*", &mut filters_txt),
+        FieldId::Modified,
+        true,
+        &[],
+    );
+    assert_eq!(
+        result.records_scanned, drive_c_records,
+        "txt-only filter must bloom-skip D; only C scanned"
+    );
+}
+
+/// Multi-term filter where every drive matches at least one term —
+/// the bloom pre-check must keep both drives.
+#[test]
+fn search_index_bloom_keeps_all_drives_when_any_ext_hits() {
+    let index = build_bloom_skip_fixture();
+    let total_records: usize = index.drives.iter().map(|dr| dr.records.len()).sum();
+
+    let mut filters_both = super::super::filters::SearchFilters {
+        extensions: vec!["txt".to_owned(), "csv".to_owned()],
+        ..super::super::filters::SearchFilters::default()
+    };
+    let result = search_index(
+        &index,
+        SearchRequest::new("*", &mut filters_both),
+        FieldId::Modified,
+        true,
+        &[],
+    );
+    assert_eq!(
+        result.records_scanned, total_records,
+        "any-hit filter must keep every drive in the active subset"
+    );
+}
+
+/// Empty `extensions` short-circuits the bloom pre-check entirely —
+/// the no-ext-filter path must scan every drive (substring queries
+/// can't bloom-skip; see `crate::search::bloom_skip` for the
+/// correctness contract).
+#[test]
+fn search_index_no_bloom_skip_when_extensions_empty() {
+    let index = build_bloom_skip_fixture();
+    let total_records: usize = index.drives.iter().map(|dr| dr.records.len()).sum();
+
+    let mut filters_empty = super::super::filters::SearchFilters::default();
+    let result = search_index(
+        &index,
+        SearchRequest::new("*", &mut filters_empty),
+        FieldId::Modified,
+        true,
+        &[],
+    );
+    assert_eq!(
+        result.records_scanned, total_records,
+        "empty-ext filter must keep every drive (no bloom-skip)"
+    );
+}
+
+/// Filter with a never-indexed extension: every drive's bloom
+/// misses, every drive is skipped.  Records-scanned drops to zero,
+/// pinning the "all-miss → empty active subset" edge case.
+#[test]
+fn search_index_bloom_skips_all_drives_when_no_ext_matches_any() {
+    let index = build_bloom_skip_fixture();
+    let mut filters_novel = super::super::filters::SearchFilters {
+        extensions: vec!["thisextisneverindexedanywhereonpurpose".to_owned()],
+        ..super::super::filters::SearchFilters::default()
+    };
+    let result = search_index(
+        &index,
+        SearchRequest::new("*", &mut filters_novel),
+        FieldId::Modified,
+        true,
+        &[],
+    );
+    assert_eq!(
+        result.records_scanned, 0,
+        "novel-ext filter must bloom-skip every drive — zero records scanned"
+    );
+    assert!(
+        result.rows.is_empty(),
+        "no drives scanned → no matching rows"
+    );
+}

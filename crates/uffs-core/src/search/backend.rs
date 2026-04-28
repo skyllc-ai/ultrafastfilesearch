@@ -768,7 +768,7 @@ pub fn search_index(
     };
 
     // Filter drives without mutation — just skip non-matching ones.
-    let active_drives: Vec<&DriveCompactIndex> = index
+    let mut active_drives: Vec<&DriveCompactIndex> = index
         .drives
         .iter()
         .filter(|dr| {
@@ -779,6 +779,15 @@ pub fn search_index(
         })
         .map(Arc::as_ref)
         .collect();
+
+    // Phase 4 Commit F — bloom pre-check.  Drop drives whose bloom
+    // proves no record can match the ext filter, emitting one
+    // `shard.bloom.decision` per drive so operators can audit the
+    // skip rate.  See `crate::search::bloom_skip` for the
+    // correctness contract: only ext filters drive the skip
+    // decision; substring queries never bloom-skip (no false
+    // negatives possible).
+    apply_bloom_pre_check(&mut active_drives, &search_filters.extensions);
 
     let is_match_all = pattern == "*";
     let is_regex = pattern.starts_with('>') && pattern.len() > 1;
@@ -885,6 +894,43 @@ pub fn search_index(
 // and the `pick_mode_label` tracing helper live in `dispatch.rs`,
 // extracted for the 800-LOC file-size policy.  Imported at the top of
 // this file.
+
+/// Phase 4 Commit F — drop drives whose bloom misses the ext
+/// filter from the active subset.
+///
+/// Mutates `active_drives` in place.  Emits one
+/// `shard.bloom.decision` tracing event per drive (skip or keep)
+/// so operators can audit the skip rate and false-positive rate.
+///
+/// `ext_terms` is the lowercase-no-dot extension list as held in
+/// [`crate::search::filters::SearchFilters::extensions`].  Empty
+/// `ext_terms` short-circuits to a no-op via
+/// [`crate::search::bloom_skip::decide_for_ext_filter`]'s
+/// `Keep`-on-empty contract.
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted from search_index for readability — the inline body \
+              would push the cognitive-complexity lint past its budget"
+)]
+fn apply_bloom_pre_check(active_drives: &mut Vec<&DriveCompactIndex>, ext_terms: &[String]) {
+    if ext_terms.is_empty() {
+        return;
+    }
+    active_drives.retain(|drive| {
+        let decision =
+            crate::search::bloom_skip::decide_for_ext_filter(drive.bloom.as_ref(), ext_terms);
+        let matched = decision.keep();
+        tracing::debug!(
+            target: "shard.bloom.decision",
+            drive = %drive.letter,
+            r#match = matched,
+            terms = ?ext_terms,
+            source = "search_dispatch",
+            "bloom pre-check"
+        );
+        matched
+    });
+}
 
 // ── Sorting & DataFrame conversion ─────────────────────────────────────
 // Each concern lives in its own sibling module so callers can read

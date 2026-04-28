@@ -7,6 +7,7 @@
 //! between the TUI, daemon, CLI, and any future surface.
 
 pub mod backend;
+pub mod bloom_skip;
 pub mod columns;
 mod dataframe_convert;
 pub mod derived;

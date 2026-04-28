@@ -937,11 +937,19 @@ impl IndexManager {
     ///
     /// No-op if every touched shard is already Warm/Hot — common
     /// case, single read-lock acquisition only.
-    async fn ensure_warm_for_dispatch(&self, params_drives: &[char]) {
+    async fn ensure_warm_for_dispatch(&self, params_drives: &[char], ext_terms: &[String]) {
         // ── Phase 1: read-lock detection (fast path) ───────────
         // Identify Parked/Cold shards in the touched set.  Single
         // read-lock acquisition; the registry's `iter()` is a Vec
         // walk, no allocation beyond the `needs_promote` Vec.
+        //
+        // Phase 4 Commit F — for Parked shards we additionally
+        // probe the bloom against `ext_terms`: a miss means the
+        // shard provably has no records matching the ext filter,
+        // so we skip the promote entirely (zero-RAM-touch
+        // contract).  Cold shards drop their bloom on demote, so
+        // they always promote.  Empty `ext_terms` short-circuits
+        // to the Phase-3 always-promote behaviour.
         let needs_promote: Vec<char> = {
             let guard = self.index.read().await;
             guard
@@ -958,6 +966,7 @@ impl IndexManager {
                         crate::cache::ShardState::Parked | crate::cache::ShardState::Cold
                     )
                 })
+                .filter(|shard| Self::bloom_pre_check_should_promote(shard, ext_terms))
                 .map(|shard| shard.drive)
                 .collect()
         };
@@ -1020,6 +1029,52 @@ impl IndexManager {
                 self.bump_index_version();
             }
         }
+    }
+
+    /// Phase 4 Commit F — bloom pre-check for Parked shards.
+    ///
+    /// Returns `true` when the shard must be promoted (the search
+    /// might match a record there); `false` when the shard is
+    /// provably empty for the supplied ext filter and can stay
+    /// Parked.
+    ///
+    /// Decision matrix:
+    ///
+    /// * `ext_terms` empty → always promote (the bloom-skip pre-check only
+    ///   applies to ext-filtered queries; substring queries never bloom-skip —
+    ///   see `crate::search::bloom_skip` for the correctness contract).
+    /// * Shard is Cold → always promote (bloom dropped on Parked → Cold
+    ///   transition; the only way to recover is the full body load).
+    /// * Shard is Parked + has `parked_body` → probe the bloom; emit
+    ///   `shard.bloom.decision` with the outcome and source `"ensure_warm"`.
+    /// * Shard is Parked + has no `parked_body` (defensive: torn tier
+    ///   transition) → promote (preserves correctness; the subsequent full-body
+    ///   load surfaces any real corruption).
+    fn bloom_pre_check_should_promote(
+        shard: &crate::cache::shard::ShardEntry,
+        ext_terms: &[String],
+    ) -> bool {
+        if ext_terms.is_empty() {
+            return true;
+        }
+        let Some(parked) = shard.parked_body() else {
+            // Cold shard, or Parked with no parked_body (legacy /
+            // defensive).  No bloom available to query → must
+            // promote so the full search runs against fresh data.
+            return true;
+        };
+        let decision =
+            uffs_core::search::bloom_skip::decide_for_ext_filter(Some(&parked.bloom), ext_terms);
+        let matched = decision.keep();
+        tracing::debug!(
+            target: "shard.bloom.decision",
+            drive = %shard.drive,
+            r#match = matched,
+            terms = ?ext_terms,
+            source = "ensure_warm",
+            "bloom pre-check"
+        );
+        matched
     }
 
     /// Demote any shards whose idle time exceeds the static-TTL
