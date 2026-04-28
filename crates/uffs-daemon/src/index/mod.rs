@@ -1116,9 +1116,9 @@ impl IndexManager {
     ///
     /// Phase 3 Commit D — driven from a 30 s tick task in `lib.rs`
     /// (see `spawn_idle_demote_controller`).  The tick cadence is
-    /// shorter than every TTL by design: a Hot shard idle for 5
-    /// minutes can race past the `HOT_TO_WARM_IDLE_SECS`
-    /// (300 s) boundary at most one tick (30 s) before the
+    /// shorter than every TTL by design: a Hot shard idle for 1
+    /// minute can race past the `HOT_TO_WARM_IDLE_SECS`
+    /// (60 s) boundary at most one tick (30 s) before the
     /// controller observes it.  See `cache::policy` for the
     /// per-tier thresholds.
     ///

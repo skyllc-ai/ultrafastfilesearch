@@ -10,15 +10,20 @@
 //! Adaptive TTL controllers live in Phase 6; for now every shard
 //! shares the same fixed thresholds:
 //!
-//! * **Hot → Warm** at [`HOT_TO_WARM_IDLE_SECS`] (5 min idle, default).
-//! * **Warm → Parked** at [`WARM_TO_PARKED_IDLE_SECS`] (30 min idle, default).
+//! * **Hot → Warm** at [`HOT_TO_WARM_IDLE_SECS`] (1 min idle, default).
+//! * **Warm → Parked** at [`WARM_TO_PARKED_IDLE_SECS`] (5 min idle, default).
 //! * **Parked → Cold** at [`PARKED_TO_COLD_IDLE_SECS`] (24 h idle, default).
 //!
-//! Each default is overridable at daemon startup via env var so
-//! Phase 5 testing flows can compress the 30 min Warm → Parked
-//! idle into a 6 min cycle (or any other duration) without
-//! shipping a non-default policy to end users.  The override is
-//! read once and cached; restart the daemon to pick up a change.
+//! These defaults give a fast Hot → Parked test cycle (~6 min) so
+//! the Phase 4 re-promote path is exercisable during normal dev
+//! iteration without dragging in `UFFS_*_IDLE_SECS` env-var
+//! overrides on every launch.  Production users who want longer
+//! retention windows can still set the overrides; the env-var
+//! pathway is unchanged.
+//!
+//! Each default is overridable at daemon startup via env var.
+//! The override is read once and cached; restart the daemon to
+//! pick up a change.
 //!
 //! ```text
 //! UFFS_HOT_TO_WARM_IDLE_SECS=60      \
@@ -43,16 +48,28 @@ use super::shard::ShardState;
 /// drives don't re-warm just because their bloom got faulted in by
 /// a wildcard scan.
 ///
+/// 60 s default makes the Hot → Warm transition observable in
+/// normal dev iteration; the runtime-mmap rebuild on the next
+/// query is sub-millisecond so the demotion is essentially free.
+///
 /// Consumed by [`crate::index::IndexManager::demote_idle_shards`]
 /// (Phase 3 Commit D) via [`next_state_for_idle`].
-pub(crate) const HOT_TO_WARM_IDLE_SECS: u64 = 300;
+pub(crate) const HOT_TO_WARM_IDLE_SECS: u64 = 60;
 
 /// Default for the `Warm` → `Parked` idle threshold.
 ///
 /// Overridable at daemon startup via [`WARM_TO_PARKED_IDLE_ENV`].
 /// `Parked` drops the runtime mmap (the records / names columns
 /// are released; bloom + trie persist for Phase 4+ search-skip).
-pub(crate) const WARM_TO_PARKED_IDLE_SECS: u64 = 1800;
+///
+/// 5 min default lets dev iteration exercise the Phase 4
+/// re-promote path (which #93 parallelised) without waiting the
+/// 30 min the original prototype used.  The bloom + trie pre-check
+/// from Commit F means a Parked re-promote only re-decrypts the
+/// compact body when the query actually hits the drive, so the
+/// extra demote/promote churn at this cadence is bounded by query
+/// pattern, not by the timer alone.
+pub(crate) const WARM_TO_PARKED_IDLE_SECS: u64 = 300;
 
 /// Default for the `Parked` → `Cold` idle threshold.
 ///
