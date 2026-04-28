@@ -2650,7 +2650,7 @@ fn build_test_drive_with_tight_bloom() -> uffs_core::compact::DriveCompactIndex 
         .max(1);
     let mut bloom = Bloom::with_capacity_and_fpr(n_items, TEST_FPR);
     let mut fold_buf: Vec<u8> = Vec::with_capacity(64);
-    for record in drive.records.iter() {
+    for record in &drive.records {
         let start = record.name_offset as usize;
         let end = start + record.name_len as usize;
         if let Some(name_bytes) = drive.names.get(start..end)
