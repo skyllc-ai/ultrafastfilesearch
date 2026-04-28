@@ -65,6 +65,8 @@ fn make_test_index() -> DriveCompactIndex {
         ext_names: vec![Box::from("")],
         source: IndexSource::MftFile(PathBuf::from("T:")),
         source_epoch: 42,
+        bloom: None,
+        path_trie: None,
     }
 }
 
@@ -144,13 +146,81 @@ fn v5_backward_compat_rebuilds_trigram() {
 }
 
 #[test]
-fn v8_header_version() {
+fn current_header_version() {
     let index = make_test_index();
     let serialized = serialize_compact(&index);
     let b8 = *serialized.get(8).expect("missing byte 8");
     let b9 = *serialized.get(9).expect("missing byte 9");
     let version = u16::from_le_bytes([b8, b9]);
     assert_eq!(version, COMPACT_VERSION);
+}
+
+/// Phase 4 Commit D — every folded record name in the source
+/// index must resolve to `contains() == true` after a v9
+/// round-trip.  `build_bloom` inserts case-folded basenames (see
+/// `compact_filters::build_bloom`), so the query side mirrors the
+/// fold contract.  Bloom false-negatives are impossible by
+/// construction; a failure here proves the cache-format wiring
+/// dropped or corrupted the section.
+#[test]
+fn v9_round_trip_preserves_bloom() {
+    let index = make_test_index();
+    let serialized = serialize_compact(&index);
+    let (loaded, _tri_ms) = deserialize_compact(&serialized, 'T').expect("deser v9");
+
+    let bloom = loaded.bloom.as_ref().expect("v9 cache must carry bloom");
+    let mut fold_buf: Vec<u8> = Vec::new();
+    for record in &index.records {
+        let start = record.name_offset as usize;
+        let end = start + usize::from(record.name_len);
+        let name_bytes = index
+            .names
+            .get(start..end)
+            .expect("record name slice in source index");
+        let name_str =
+            core::str::from_utf8(name_bytes).expect("test fixture names are valid UTF-8");
+        fold_buf.clear();
+        let folded = index.fold.fold_into(name_str, &mut fold_buf);
+        assert!(
+            bloom.contains(folded.as_bytes()),
+            "loaded bloom missed folded name {name_str:?} -> {folded:?}"
+        );
+    }
+}
+
+/// Phase 4 Commit D — the loaded path-trie must be byte-equivalent
+/// to one freshly built from the same records / names / fold.  A
+/// mismatch in node count, name buffer, or CSR arrays signals the
+/// trie section round-trip dropped data.
+#[test]
+fn v9_round_trip_preserves_path_trie() {
+    let index = make_test_index();
+    let expected = index.build_path_trie();
+
+    let serialized = serialize_compact(&index);
+    let (loaded, _tri_ms) = deserialize_compact(&serialized, 'T').expect("deser v9");
+    let actual = loaded.path_trie.as_ref().expect("v9 cache must carry trie");
+
+    assert_eq!(
+        actual.nodes().len(),
+        expected.nodes().len(),
+        "trie node count differs after round-trip"
+    );
+    assert_eq!(
+        actual.names(),
+        expected.names(),
+        "trie names buffer differs after round-trip"
+    );
+    assert_eq!(
+        actual.child_offsets(),
+        expected.child_offsets(),
+        "trie CSR offsets differ after round-trip"
+    );
+    assert_eq!(
+        actual.child_indices(),
+        expected.child_indices(),
+        "trie CSR indices differ after round-trip"
+    );
 }
 
 #[test]

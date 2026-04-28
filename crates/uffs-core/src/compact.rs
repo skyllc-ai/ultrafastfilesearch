@@ -17,6 +17,7 @@ use std::time::Instant;
 use rayon::prelude::*;
 use uffs_mft::index::MftIndex;
 
+use crate::bloom::Bloom;
 // Re-export loader types and functions so callers can still use `compact::*`.
 #[expect(deprecated, reason = "re-export kept for backward compatibility")]
 pub use crate::compact_loader::{
@@ -26,6 +27,7 @@ pub use crate::compact_loader::{
 #[expect(deprecated, reason = "re-export kept for backward compatibility")]
 pub use crate::compact_loader::{apply_usn_patch, load_live_drive};
 use crate::compact_storage::ColumnStorage;
+use crate::path_trie::PathTrie;
 use crate::trigram::TrigramIndex;
 
 /// Compact per-record data for in-memory search, filter, and sort.
@@ -363,6 +365,20 @@ pub struct DriveCompactIndex {
     /// `MftIndex.build_epoch` this compact index was built from.
     /// Used as a staleness check when loading from cache.
     pub source_epoch: u64,
+    /// Phase 4 bloom filter over folded basenames + extensions.
+    ///
+    /// `None` for indices built before bloom integration landed (e.g.
+    /// in-process unit-test fixtures that don't exercise the Phase 4
+    /// search-skip path) and for v ≤ 8 caches before the rebuild step
+    /// runs.  After [`build_compact_index`] or a v9+ cache load this
+    /// is always `Some(_)`; downstream callers
+    /// (`search_dispatch::bloom_pre_check`) treat `None` as "no
+    /// pre-check available; fall through to the full search" which
+    /// is the safe (correct-but-slower) default.
+    pub bloom: Option<Bloom>,
+    /// Phase 4 directory-only path trie.  Same `None`-handling
+    /// rationale as [`Self::bloom`].
+    pub path_trie: Option<PathTrie>,
 }
 
 /// Per-component heap footprint of a [`DriveCompactIndex`].
@@ -819,22 +835,30 @@ pub fn build_compact_index(
 
     shrink_compact_vecs(drive_letter, &mut records, &mut names, &mut ext_names);
 
-    (
-        DriveCompactIndex {
-            letter: drive_letter,
-            records: ColumnStorage::from_vec(records),
-            names: ColumnStorage::from_vec(names),
-            trigram,
-            children,
-            ext_index,
-            fold,
-            ext_names,
-            source: IndexSource::MftFile(std::path::PathBuf::from(format!("{drive_letter}:"))),
-            source_epoch: index.build_epoch,
-        },
-        compact_elapsed,
-        tri_elapsed,
-    )
+    let mut compact_index = DriveCompactIndex {
+        letter: drive_letter,
+        records: ColumnStorage::from_vec(records),
+        names: ColumnStorage::from_vec(names),
+        trigram,
+        children,
+        ext_index,
+        fold,
+        ext_names,
+        source: IndexSource::MftFile(std::path::PathBuf::from(format!("{drive_letter}:"))),
+        source_epoch: index.build_epoch,
+        bloom: None,
+        path_trie: None,
+    };
+
+    // Phase 4: populate bloom + path_trie from the freshly-built
+    // index.  These are needed for the search-skip pre-check
+    // (Commit F) and serialised into the v9+ cache (Commit D).
+    let bloom = compact_index.build_bloom();
+    let path_trie = compact_index.build_path_trie();
+    compact_index.bloom = Some(bloom);
+    compact_index.path_trie = Some(path_trie);
+
+    (compact_index, compact_elapsed, tri_elapsed)
 }
 
 /// Shrink all growable Vecs to exact fit after compact index build.

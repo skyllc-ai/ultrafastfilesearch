@@ -324,6 +324,8 @@ mod tests {
             ext_names: vec![],
             source: IndexSource::MftFile(PathBuf::from("C:")),
             source_epoch: 0,
+            bloom: None,
+            path_trie: None,
         }
     }
 

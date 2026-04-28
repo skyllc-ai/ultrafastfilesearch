@@ -390,6 +390,49 @@ impl PathTrie {
     pub fn child_indices(&self) -> &[u32] {
         &self.child_indices
     }
+
+    /// Reconstruct a `PathTrie` from raw `(nodes, names, child_offsets,
+    /// child_indices)` parts.
+    ///
+    /// Validates structural invariants:
+    ///
+    ///   - `child_offsets.len() == nodes.len() + 1`.
+    ///   - `child_indices.len() == *child_offsets.last().unwrap_or(&0) as
+    ///     usize`.
+    ///   - Every node's `(name_offset, name_len)` slice is within the bounds of
+    ///     `names`.
+    ///
+    /// Returns `None` on any violation so the cache-format
+    /// deserialiser can reject corrupted files instead of producing
+    /// an inconsistent trie that would later panic on lookup.
+    #[must_use]
+    pub fn from_raw_parts(
+        nodes: Vec<TrieNode>,
+        names: Vec<u8>,
+        child_offsets: Vec<u32>,
+        child_indices: Vec<u32>,
+    ) -> Option<Self> {
+        if child_offsets.len() != nodes.len() + 1 {
+            return None;
+        }
+        let expected_indices_len = *child_offsets.last().unwrap_or(&0) as usize;
+        if child_indices.len() != expected_indices_len {
+            return None;
+        }
+        for node in &nodes {
+            let start = node.name_offset as usize;
+            let end = start.checked_add(node.name_len as usize)?;
+            if end > names.len() {
+                return None;
+            }
+        }
+        Some(Self {
+            nodes,
+            names,
+            child_offsets,
+            child_indices,
+        })
+    }
 }
 
 /// Build the CSR children index from a slice of [`TrieNode`]s whose

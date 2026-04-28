@@ -25,6 +25,7 @@
 //! Exception: `file_size_policy` — serialize/deserialize pipeline, tight
 //! coupling.
 
+use alloc::borrow::Cow;
 use alloc::sync::Arc;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -45,7 +46,11 @@ const COMPACT_MAGIC: &[u8; 8] = b"UFFSCOM\0";
 /// - v7: `ext_names` table
 /// - v8: `path_len: u16` added to `CompactRecord` (uses 2 bytes of former
 ///   `_pad`)
-const COMPACT_VERSION: u16 = 8;
+/// - v9: Phase 4 bloom + path-trie sections appended after `ext_names` (see
+///   `compact_cache::filters_io`)
+const COMPACT_VERSION: u16 = 9;
+
+mod filters_io;
 /// Bytes per `CompactRecord`.
 const RECORD_BYTES: usize = size_of::<CompactRecord>();
 /// zstd compression level for compact cache.
@@ -183,6 +188,25 @@ pub fn serialize_compact(index: &DriveCompactIndex) -> Vec<u8> {
         buf.extend_from_slice(bytes.get(..usize::from(len)).unwrap_or(bytes));
     }
 
+    // v9: bloom + path-trie sections.  Use the index's pre-built
+    // filters when present (every production-built or freshly-loaded
+    // `DriveCompactIndex` has them); fall back to building inline so
+    // the on-disk v9 format is always self-consistent regardless of
+    // how the in-memory struct was constructed.  `Cow` keeps both
+    // arms in a single expression so clippy's `option_if_let_else`
+    // is satisfied, and avoids the borrow-vs-build duplication.
+    let bloom_section: Cow<'_, crate::bloom::Bloom> = index
+        .bloom
+        .as_ref()
+        .map_or_else(|| Cow::Owned(index.build_bloom()), Cow::Borrowed);
+    filters_io::push_bloom_section(&mut buf, bloom_section.as_ref());
+
+    let trie_section: Cow<'_, crate::path_trie::PathTrie> = index
+        .path_trie
+        .as_ref()
+        .map_or_else(|| Cow::Owned(index.build_path_trie()), Cow::Borrowed);
+    filters_io::push_trie_section(&mut buf, trie_section.as_ref());
+
     buf
 }
 
@@ -238,6 +262,20 @@ pub fn serialize_compact_to_writer<W: io::Write>(
         writer.write_all(&len.to_le_bytes())?;
         writer.write_all(bytes.get(..usize::from(len)).unwrap_or(bytes))?;
     }
+
+    // v9: bloom + path-trie sections.  See `serialize_compact` for
+    // the rationale on the `Cow`-based borrow-or-build fallback.
+    let bloom_section: Cow<'_, crate::bloom::Bloom> = index
+        .bloom
+        .as_ref()
+        .map_or_else(|| Cow::Owned(index.build_bloom()), Cow::Borrowed);
+    filters_io::write_bloom_section(writer, bloom_section.as_ref())?;
+
+    let trie_section: Cow<'_, crate::path_trie::PathTrie> = index
+        .path_trie
+        .as_ref()
+        .map_or_else(|| Cow::Owned(index.build_path_trie()), Cow::Borrowed);
+    filters_io::write_trie_section(writer, trie_section.as_ref())?;
 
     writer.flush()?;
     Ok(())
@@ -351,6 +389,14 @@ struct ParsedCompactBody<'data> {
     /// `Some` if a v7+ ext-names table was read from the cache; `None`
     /// if the cache predates v7 and the table must be rebuilt.
     ext_names_loaded: Option<Vec<Box<str>>>,
+    /// `Some` if a v9+ bloom section was loaded directly from the
+    /// cache; `None` if the cache predates v9 and the bloom must be
+    /// rebuilt via [`DriveCompactIndex::build_bloom`].
+    bloom_loaded: Option<crate::bloom::Bloom>,
+    /// `Some` if a v9+ path-trie section was loaded directly from
+    /// the cache; `None` if the cache predates v9 and the trie must
+    /// be rebuilt via [`DriveCompactIndex::build_path_trie`].
+    trie_loaded: Option<crate::path_trie::PathTrie>,
     /// Resolved case-fold table for the drive.
     fold: uffs_text::case_fold::CaseFold,
 }
@@ -414,8 +460,24 @@ fn parse_compact_body(
         (None, pe + 4)
     };
 
-    let ext_names_loaded = (version >= 7 && data.len() >= after_tri + 4)
-        .then(|| read_ext_names_table(data, after_tri));
+    let (ext_names_loaded, after_ext) = if version >= 7 && data.len() >= after_tri + 4 {
+        let (table, end) = read_ext_names_table(data, after_tri);
+        (Some(table), end)
+    } else {
+        (None, after_tri)
+    };
+
+    // v9: bloom + path-trie sections.  Both are mandatory in v9; a
+    // truncated section signals corruption rather than legacy
+    // format.  v < 9 caches simply skip this branch and the
+    // assembler rebuilds the filters from records / names.
+    let (bloom_loaded, trie_loaded) = if version >= 9 {
+        let (bloom, after_bloom) = filters_io::read_bloom_section(data, after_ext)?;
+        let (trie, _after_trie) = filters_io::read_trie_section(data, after_bloom)?;
+        (Some(bloom), Some(trie))
+    } else {
+        (None, None)
+    };
 
     Ok(ParsedCompactBody {
         drive_letter,
@@ -425,6 +487,8 @@ fn parse_compact_body(
         children,
         trigram_loaded,
         ext_names_loaded,
+        bloom_loaded,
+        trie_loaded,
         fold,
     })
 }
@@ -471,21 +535,36 @@ where
         "ExtensionIndex built (cache load)"
     );
 
-    Ok((
-        DriveCompactIndex {
-            letter: parsed.drive_letter,
-            records,
-            names,
-            trigram,
-            children: parsed.children,
-            ext_index,
-            fold: parsed.fold,
-            ext_names,
-            source: IndexSource::MftFile(PathBuf::from(format!("{}:", parsed.drive_letter))),
-            source_epoch: parsed.source_epoch,
-        },
-        tri_ms,
-    ))
+    let mut compact_index = DriveCompactIndex {
+        letter: parsed.drive_letter,
+        records,
+        names,
+        trigram,
+        children: parsed.children,
+        ext_index,
+        fold: parsed.fold,
+        ext_names,
+        source: IndexSource::MftFile(PathBuf::from(format!("{}:", parsed.drive_letter))),
+        source_epoch: parsed.source_epoch,
+        bloom: None,
+        path_trie: None,
+    };
+
+    // Phase 4 Commit D — v9+ caches embed the bloom + trie directly,
+    // so the loader skips the rebuild step.  v ≤ 8 caches were
+    // serialised before Phase 4 landed; rebuild from the freshly-
+    // loaded records / names / fold / ext_names so the in-memory
+    // index always carries valid filters.
+    let bloom = parsed
+        .bloom_loaded
+        .unwrap_or_else(|| compact_index.build_bloom());
+    let path_trie = parsed
+        .trie_loaded
+        .unwrap_or_else(|| compact_index.build_path_trie());
+    compact_index.bloom = Some(bloom);
+    compact_index.path_trie = Some(path_trie);
+
+    Ok((compact_index, tri_ms))
 }
 
 /// Read a length-prefixed `ext_names` table from v7+ compact cache bytes.
@@ -493,7 +572,7 @@ where
     clippy::single_call_fn,
     reason = "extracted from deserialize_compact for clarity"
 )]
-fn read_ext_names_table(data: &[u8], offset: usize) -> Vec<Box<str>> {
+fn read_ext_names_table(data: &[u8], offset: usize) -> (Vec<Box<str>>, usize) {
     let ext_count = read_u32(data, offset) as usize;
     let mut out = Vec::with_capacity(ext_count);
     let mut pos = offset + 4;
@@ -508,7 +587,7 @@ fn read_ext_names_table(data: &[u8], offset: usize) -> Vec<Box<str>> {
         out.push(Box::from(core::str::from_utf8(slice).unwrap_or("")));
         pos += slen;
     }
-    out
+    (out, pos)
 }
 
 /// Rebuild `ext_names` from compact records for pre-v7 caches.

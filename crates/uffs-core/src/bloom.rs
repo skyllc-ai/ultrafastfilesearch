@@ -259,6 +259,40 @@ impl Bloom {
         self.k_hashes
     }
 
+    /// Borrow the bit-packed storage as a slice of `u64` words.
+    ///
+    /// Used by the Phase 4 cache-format serialiser
+    /// (`compact_cache::filters_io::write_bloom_section`) to blit the
+    /// bloom contents in one `bytemuck::cast_slice` call.
+    #[must_use]
+    pub fn bits(&self) -> &[u64] {
+        &self.bits
+    }
+
+    /// Reconstruct a `Bloom` from raw `(nbits, k_hashes, bits)` parts.
+    ///
+    /// Validates that `bits.len() * 64 == nbits` and `nbits` is a
+    /// multiple of 64; returns `None` on either violation so the
+    /// cache-format deserialiser can reject corrupted files instead
+    /// of producing an inconsistent filter.  `k_hashes` is clamped
+    /// to `[1, 32]` (matching the [`Bloom::with_size_and_k`]
+    /// contract).
+    #[must_use]
+    pub fn from_raw_parts(nbits: u64, k_hashes: u8, bits: Vec<u64>) -> Option<Self> {
+        if nbits == 0 || !nbits.is_multiple_of(64) {
+            return None;
+        }
+        let expected_words = (nbits / 64) as usize;
+        if bits.len() != expected_words {
+            return None;
+        }
+        Some(Self {
+            bits,
+            nbits,
+            k_hashes: k_hashes.clamp(1, 32),
+        })
+    }
+
     /// Analytic false-positive rate estimate for `n_inserted` items.
     ///
     /// Formula: `(1 - exp(-k*n/m))^k`.  Useful for telemetry — the

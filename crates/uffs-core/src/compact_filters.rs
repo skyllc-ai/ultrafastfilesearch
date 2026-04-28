@@ -174,6 +174,8 @@ mod tests {
             ext_names: vec![Box::from(""), Box::from("toml")],
             source: IndexSource::MftFile(PathBuf::from("C:")),
             source_epoch: 1,
+            bloom: None,
+            path_trie: None,
         }
     }
 
@@ -290,6 +292,8 @@ mod tests {
             ext_names: vec![Box::from("")],
             source: IndexSource::MftFile(PathBuf::from("X:")),
             source_epoch: 0,
+            bloom: None,
+            path_trie: None,
         };
 
         let bloom = drive.build_bloom();
