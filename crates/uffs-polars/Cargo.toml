@@ -44,43 +44,43 @@ test = false
 [dependencies]
 # ONLY Polars — all other dependencies provided by consuming crates.
 # Pinned to a specific commit on main. Bump via: just polars
-polars = { git = "https://github.com/pola-rs/polars", rev = "344a0ea39753771f893144939f2b70c3144f8ebf", default-features = false, features = [
-    # ===== Core =====
-    "lazy",              # Lazy evaluation (query optimization)
-    "new_streaming",     # Streaming engine for large queries
-    "performant",        # Internal performance optimizations
-    "serde",             # Serialization (compact index wire format)
-    "nightly",           # Nightly Rust features
-    "simd",              # SIMD vectorization
+polars = { git = "https://github.com/pola-rs/polars", rev = "577933b7571e0be69602c2f41ed5f09ada5331f0", default-features = false, features = [
+  # ===== Core =====
+  "lazy",          # Lazy evaluation (query optimization)
+  "new_streaming", # Streaming engine for large queries
+  "performant",    # Internal performance optimizations
+  "serde",         # Serialization (compact index wire format)
+  "nightly",       # Nightly Rust features
+  "simd",          # SIMD vectorization
 
-    # ===== Data Types (replaces blanket "dtype-full") =====
-    "dtype-u8",          # UInt8  — flags column
-    "dtype-u16",         # UInt16 — flags column
-    "dtype-datetime",    # Datetime — timestamps
-    "dtype-array",       # Required by Polars internals (match exhaustiveness in polars-expr)
+  # ===== Data Types (replaces blanket "dtype-full") =====
+  "dtype-u8",       # UInt8  — flags column
+  "dtype-u16",      # UInt16 — flags column
+  "dtype-datetime", # Datetime — timestamps
+  "dtype-array",    # Required by Polars internals (match exhaustiveness in polars-expr)
 
-    # ===== String Operations =====
-    "strings",           # .str() accessor — used throughout
-    "regex",             # Regex pattern matching — core search
-    "find_many",         # .str().contains_any() — multi-literal pattern matching
+  # ===== String Operations =====
+  "strings",   # .str() accessor — used throughout
+  "regex",     # Regex pattern matching — core search
+  "find_many", # .str().contains_any() — multi-literal pattern matching
 
-    # ===== Temporal =====
-    "temporal",          # Date/time casting (timestamps → Datetime)
-    "timezones",         # Required by Polars internals when temporal is enabled
+  # ===== Temporal =====
+  "temporal",  # Date/time casting (timestamps → Datetime)
+  "timezones", # Required by Polars internals when temporal is enabled
 
-    # ===== I/O Formats =====
-    "parquet",           # Parquet read/write (primary persistence)
-    "json",              # JSON export (CLI + MCP)
-    "csv",               # CSV export (CLI)
+  # ===== I/O Formats =====
+  "parquet", # Parquet read/write (primary persistence)
+  "json",    # JSON export (CLI + MCP)
+  "csv",     # CSV export (CLI)
 
-    # ===== Query Operations =====
-    "is_in",             # col.is_in([...]) — compiled_pattern
-    "diff",              # .diff() — compact.rs
-    "bitwise",           # col("flags").bitand() — flags.rs
-    "abs",               # Required by Polars internals (match exhaustiveness in polars-expr)
+  # ===== Query Operations =====
+  "is_in",   # col.is_in([...]) — compiled_pattern
+  "diff",    # .diff() — compact.rs
+  "bitwise", # col("flags").bitand() — flags.rs
+  "abs",     # Required by Polars internals (match exhaustiveness in polars-expr)
 
-    # ===== Optimizer / Internal =====
-    "fmt",               # DataFrame Display formatting
+  # ===== Optimizer / Internal =====
+  "fmt", # DataFrame Display formatting
 ] }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -88,4 +88,3 @@ polars = { git = "https://github.com/pola-rs/polars", rev = "344a0ea39753771f893
 # ─────────────────────────────────────────────────────────────────────────────
 [lints]
 workspace = true
-

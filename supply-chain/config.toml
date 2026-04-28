@@ -747,11 +747,11 @@ version = "0.3.7"
 criteria = "safe-to-run"
 
 [[exemptions.polars]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-arrow]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-arrow-format]]
@@ -759,51 +759,51 @@ version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-buffer]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-compute]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-core]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-dtype]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-error]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-expr]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-io]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-json]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-lazy]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-mem-engine]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-ops]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-parquet]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-parquet-format]]
@@ -811,31 +811,31 @@ version = "0.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-plan]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-row]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-schema]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-sql]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-stream]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-time]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-utils]]
-version = "0.53.0@git:344a0ea39753771f893144939f2b70c3144f8ebf"
+version = "0.53.0@git:577933b7571e0be69602c2f41ed5f09ada5331f0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polyval]]

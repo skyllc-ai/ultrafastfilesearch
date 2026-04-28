@@ -604,22 +604,23 @@ mod tests {
         use alloc::format;
         use alloc::string::String;
         use alloc::vec::Vec;
-        use std::time::{Duration, Instant};
+        use core::time::Duration;
+        use std::time::Instant;
 
-        const N: usize = 1_000_000;
-        let keys: Vec<String> = (0..N).map(|i| format!("file_{i:08}.txt")).collect();
+        const ITEMS: usize = 1_000_000;
+        let keys: Vec<String> = (0..ITEMS).map(|i| format!("file_{i:08}.txt")).collect();
 
         let start = Instant::now();
-        let mut bloom = Bloom::with_capacity_and_fpr(N, 0.01_f64);
-        for k in &keys {
-            bloom.insert(k.as_bytes());
+        let mut bloom = Bloom::with_capacity_and_fpr(ITEMS, 0.01_f64);
+        for key in &keys {
+            bloom.insert(key.as_bytes());
         }
         let elapsed = start.elapsed();
 
         let budget = Duration::from_millis(200);
         assert!(
             elapsed <= budget,
-            "bloom build at {N} items took {elapsed:?} (budget {budget:?})"
+            "bloom build at {ITEMS} items took {elapsed:?} (budget {budget:?})"
         );
     }
 
@@ -634,33 +635,34 @@ mod tests {
         use alloc::format;
         use alloc::string::String;
         use alloc::vec::Vec;
-        use std::time::{Duration, Instant};
+        use core::time::Duration;
+        use std::time::Instant;
 
-        const N: usize = 1_000_000;
-        let keys: Vec<String> = (0..N).map(|i| format!("file_{i:08}.txt")).collect();
-        let mut bloom = Bloom::with_capacity_and_fpr(N, 0.01_f64);
-        for k in &keys {
-            bloom.insert(k.as_bytes());
+        const ITEMS: usize = 1_000_000;
+        let keys: Vec<String> = (0..ITEMS).map(|i| format!("file_{i:08}.txt")).collect();
+        let mut bloom = Bloom::with_capacity_and_fpr(ITEMS, 0.01_f64);
+        for key in &keys {
+            bloom.insert(key.as_bytes());
         }
 
         let start = Instant::now();
         let mut hits = 0_u64;
-        for k in &keys {
-            if bloom.contains(k.as_bytes()) {
+        for key in &keys {
+            if bloom.contains(key.as_bytes()) {
                 hits += 1;
             }
         }
         let elapsed = start.elapsed();
 
         // 1 µs / call * 1 M calls = 1 s wall budget.
-        let budget = Duration::from_micros(N as u64);
-        let avg = elapsed / u32::try_from(N).expect("N fits u32");
+        let budget = Duration::from_micros(ITEMS as u64);
+        let avg = elapsed / u32::try_from(ITEMS).expect("ITEMS fits u32");
         assert!(
             elapsed <= budget,
-            "bloom query at {N} items took {elapsed:?} (avg {avg:?}/call, budget 1µs/call)"
+            "bloom query at {ITEMS} items took {elapsed:?} (avg {avg:?}/call, budget 1µs/call)"
         );
         assert_eq!(
-            hits, N as u64,
+            hits, ITEMS as u64,
             "no false negatives — every inserted key must hit"
         );
     }
