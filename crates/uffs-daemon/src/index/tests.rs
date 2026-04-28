@@ -1831,6 +1831,146 @@ async fn ensure_warm_for_dispatch_handles_panicking_body_loader_gracefully() {
     );
 }
 
+// ── Phase 5 (#93) — parallel re-promote ────────────────────────────
+
+/// A `BodyLoader` that sleeps for `delay` before returning a clone
+/// of `body`, and records the peak number of concurrent calls
+/// in flight.  Used to verify that
+/// [`IndexManager::ensure_warm_for_dispatch`] fans out per-letter
+/// loads across the blocking pool instead of serialising them.
+struct SlowBodyLoader {
+    body: Arc<uffs_core::compact::DriveCompactIndex>,
+    delay: core::time::Duration,
+    in_flight: core::sync::atomic::AtomicUsize,
+    peak_in_flight: core::sync::atomic::AtomicUsize,
+}
+
+impl SlowBodyLoader {
+    fn new(body: Arc<uffs_core::compact::DriveCompactIndex>, delay: core::time::Duration) -> Self {
+        Self {
+            body,
+            delay,
+            in_flight: core::sync::atomic::AtomicUsize::new(0),
+            peak_in_flight: core::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn peak(&self) -> usize {
+        self.peak_in_flight
+            .load(core::sync::atomic::Ordering::Acquire)
+    }
+}
+
+impl crate::cache::body_loader::BodyLoader for SlowBodyLoader {
+    fn load(&self, _letter: char) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
+        use core::sync::atomic::Ordering;
+
+        let now = self.in_flight.fetch_add(1, Ordering::AcqRel) + 1;
+        // Bump peak via a CAS loop: read the current peak, write
+        // back `now` only if it's strictly larger.  Pure `fetch_max`
+        // would be one call but isn't stable on all targets we
+        // build; the loop is portable and the contention window is
+        // microscopic (only the first few in-flight loaders ever
+        // raise the peak).
+        let mut prev = self.peak_in_flight.load(Ordering::Acquire);
+        while now > prev {
+            match self.peak_in_flight.compare_exchange_weak(
+                prev,
+                now,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(actual) => prev = actual,
+            }
+        }
+        std::thread::sleep(self.delay);
+        self.in_flight.fetch_sub(1, Ordering::AcqRel);
+        Some(Arc::clone(&self.body))
+    }
+}
+
+/// Pin the parallelisation contract of `ensure_warm_for_dispatch`
+/// (#93): with N Parked drives and a `BodyLoader::load` that
+/// sleeps `delay`, total wall must be `~delay`, not `N × delay`.
+///
+/// The pre-fix serial loop took `sum(per-drive)`; the `JoinSet` fan-out
+/// completes in `~max(per-drive)` plus a few µs of write-lock
+/// contention.  We assert two things:
+///
+/// 1. `peak_in_flight >= 2` — the loader observed concurrent calls.
+/// 2. Wall < `1.5 × delay` — comfortably below the `3 × delay` a serial loop
+///    would take with N=3.  The 1.5× upper bound leaves headroom for
+///    blocking-pool ramp-up and CI variance.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ensure_warm_for_dispatch_promotes_in_parallel() {
+    use core::time::Duration;
+
+    use crate::cache::ShardState;
+
+    let (tx, _rx) = crate::events::event_channel();
+
+    // Per-letter delay: 100 ms is small enough to keep the test
+    // fast on CI and large enough that scheduling jitter (a few ms)
+    // doesn't dominate the timing assertion.
+    let delay = Duration::from_millis(100);
+    let body = Arc::new(build_test_drive());
+    let loader = Arc::new(SlowBodyLoader::new(Arc::clone(&body), delay));
+    // `with_body_loader_for_test` takes `Arc<dyn BodyLoader>`; clone
+    // a coerced handle for the manager so we keep `loader` typed
+    // as `Arc<SlowBodyLoader>` for the `.peak()` assertion below.
+    let loader_dyn: Arc<dyn crate::cache::body_loader::BodyLoader> =
+        Arc::clone(&loader) as Arc<dyn crate::cache::body_loader::BodyLoader>;
+
+    let mgr = IndexManager::with_body_loader_for_test(None, tx, loader_dyn);
+    mgr.add_drive(build_test_drive()).await;
+    mgr.add_drive(build_test_drive_d()).await;
+    mgr.add_drive(build_test_drive_e()).await;
+
+    // Demote all three to Parked so they all need the loader.
+    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    assert!(mgr.demote_letter_for_test('D', ShardState::Parked).await);
+    assert!(mgr.demote_letter_for_test('E', ShardState::Parked).await);
+
+    let start = std::time::Instant::now();
+    mgr.ensure_warm_for_dispatch(&['C', 'D', 'E'], &[]).await;
+    let elapsed = start.elapsed();
+
+    // All three shards promoted.
+    let states = mgr.shard_states_for_test().await;
+    assert_eq!(
+        states,
+        vec![
+            ('C', ShardState::Warm),
+            ('D', ShardState::Warm),
+            ('E', ShardState::Warm),
+        ],
+        "all three Parked shards must be Warm after ensure_warm_for_dispatch"
+    );
+
+    // Concurrent loaders observed.
+    assert!(
+        loader.peak() >= 2,
+        "expected ≥ 2 concurrent loader calls in flight; got peak = {} \
+         (parallelism regression — re-promote went serial again)",
+        loader.peak(),
+    );
+
+    // Wall ≈ delay, not N × delay.  The serial loop pre-#93 would
+    // have taken ≥ 300 ms for delay=100 ms × 3 drives; we accept
+    // up to 1.5× (150 ms) to keep the test robust against CI jitter
+    // and blocking-pool ramp-up.
+    let upper_bound = delay.mul_f32(1.5);
+    assert!(
+        elapsed < upper_bound,
+        "expected parallel re-promote (≤ {} ms), got {} ms — \
+         serial pre-#93 baseline would be ≥ {} ms",
+        upper_bound.as_millis(),
+        elapsed.as_millis(),
+        delay.as_millis() * 3,
+    );
+}
+
 // ── Phase 3 Commit D — IndexManager::demote_idle_shards ────────────
 
 /// `add_drive` calls `DriveStats::mark_loaded_at(now_ms)` on the

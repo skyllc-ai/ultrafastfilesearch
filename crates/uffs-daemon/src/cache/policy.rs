@@ -10,41 +10,127 @@
 //! Adaptive TTL controllers live in Phase 6; for now every shard
 //! shares the same fixed thresholds:
 //!
-//! * **Hot → Warm** at [`HOT_TO_WARM_IDLE_SECS`] (5 min idle).
-//! * **Warm → Parked** at [`WARM_TO_PARKED_IDLE_SECS`] (30 min idle).
-//! * **Parked → Cold** at [`PARKED_TO_COLD_IDLE_SECS`] (24 h idle).
+//! * **Hot → Warm** at [`HOT_TO_WARM_IDLE_SECS`] (5 min idle, default).
+//! * **Warm → Parked** at [`WARM_TO_PARKED_IDLE_SECS`] (30 min idle, default).
+//! * **Parked → Cold** at [`PARKED_TO_COLD_IDLE_SECS`] (24 h idle, default).
+//!
+//! Each default is overridable at daemon startup via env var so
+//! Phase 5 testing flows can compress the 30 min Warm → Parked
+//! idle into a 6 min cycle (or any other duration) without
+//! shipping a non-default policy to end users.  The override is
+//! read once and cached; restart the daemon to pick up a change.
+//!
+//! ```text
+//! UFFS_HOT_TO_WARM_IDLE_SECS=60      \
+//! UFFS_WARM_TO_PARKED_IDLE_SECS=360  \
+//! UFFS_PARKED_TO_COLD_IDLE_SECS=900  \
+//!     uffs daemon start --drive C,D,E,F,G,M,S
+//! ```
 //!
 //! [`next_state_for_idle`] is the single decision function consumed by
 //! `crate::cache::registry::ShardRegistry::demote_idle_shards`; it
 //! returns `None` when the shard is not yet idle past its current
 //! tier's TTL or when the tier is already at the bottom.
 
+use std::sync::OnceLock;
+
 use super::shard::ShardState;
 
-/// After this many seconds without a query a `Hot` shard demotes to
-/// `Warm`.  Phase 4+ extends "no query" to "no bloom-positive query"
-/// so cold drives don't re-warm just because their bloom got faulted
-/// in by a wildcard scan.
+/// Default for the `Hot` → `Warm` idle threshold.
+///
+/// Overridable at daemon startup via [`HOT_TO_WARM_IDLE_ENV`].
+/// Phase 4+ extends "no query" to "no bloom-positive query" so cold
+/// drives don't re-warm just because their bloom got faulted in by
+/// a wildcard scan.
 ///
 /// Consumed by [`crate::index::IndexManager::demote_idle_shards`]
 /// (Phase 3 Commit D) via [`next_state_for_idle`].
 pub(crate) const HOT_TO_WARM_IDLE_SECS: u64 = 300;
 
-/// After this many seconds without a query a `Warm` shard demotes to
-/// `Parked`, dropping the runtime mmap (the records / names columns
-/// are released; bloom + trie persist in Phase 4+).
+/// Default for the `Warm` → `Parked` idle threshold.
+///
+/// Overridable at daemon startup via [`WARM_TO_PARKED_IDLE_ENV`].
+/// `Parked` drops the runtime mmap (the records / names columns
+/// are released; bloom + trie persist for Phase 4+ search-skip).
 pub(crate) const WARM_TO_PARKED_IDLE_SECS: u64 = 1800;
 
-/// After this many seconds without a query a `Parked` shard demotes
-/// to `Cold`, dropping bloom + trie too.  A `Cold` shard requires a
-/// full re-decrypt of the encrypted compact cache to re-promote, so
-/// the threshold is generous (24 h) — anything shorter risks
-/// thrashing under nightly batch processes that scan archives once
-/// per day.
+/// Default for the `Parked` → `Cold` idle threshold.
+///
+/// Overridable at daemon startup via [`PARKED_TO_COLD_IDLE_ENV`].
+/// `Cold` drops bloom + trie too — re-promotion requires a full
+/// re-decrypt of the encrypted compact cache, so the threshold is
+/// generous (24 h) by default.  Anything shorter risks thrashing
+/// under nightly batch processes that scan archives once per day.
 pub(crate) const PARKED_TO_COLD_IDLE_SECS: u64 = 86_400;
+
+/// Env var that overrides [`HOT_TO_WARM_IDLE_SECS`].
+pub(crate) const HOT_TO_WARM_IDLE_ENV: &str = "UFFS_HOT_TO_WARM_IDLE_SECS";
+
+/// Env var that overrides [`WARM_TO_PARKED_IDLE_SECS`].
+pub(crate) const WARM_TO_PARKED_IDLE_ENV: &str = "UFFS_WARM_TO_PARKED_IDLE_SECS";
+
+/// Env var that overrides [`PARKED_TO_COLD_IDLE_SECS`].
+pub(crate) const PARKED_TO_COLD_IDLE_ENV: &str = "UFFS_PARKED_TO_COLD_IDLE_SECS";
+
+/// Read a positive `u64` seconds value from `env_name`, falling back
+/// to `default` on any parse error or non-positive value.  Logs a
+/// single startup line per override so the effective policy is
+/// observable in production.
+fn read_env_secs(env_name: &str, default: u64) -> u64 {
+    let Ok(raw) = std::env::var(env_name) else {
+        return default;
+    };
+    let parsed: Option<u64> = raw.trim().parse::<u64>().ok().filter(|&n| n > 0);
+    let effective = parsed.unwrap_or(default);
+    if parsed.is_some() {
+        tracing::info!(
+            target: "shard.policy",
+            env_var = env_name,
+            override_secs = effective,
+            default_secs = default,
+            "idle-threshold override active",
+        );
+    } else {
+        tracing::warn!(
+            target: "shard.policy",
+            env_var = env_name,
+            raw = %raw,
+            default_secs = default,
+            "idle-threshold env var unparseable; using default",
+        );
+    }
+    effective
+}
+
+/// Effective `Hot` → `Warm` idle threshold (env override or default).
+#[must_use]
+pub(crate) fn hot_to_warm_idle_secs() -> u64 {
+    static CACHED: OnceLock<u64> = OnceLock::new();
+    *CACHED.get_or_init(|| read_env_secs(HOT_TO_WARM_IDLE_ENV, HOT_TO_WARM_IDLE_SECS))
+}
+
+/// Effective `Warm` → `Parked` idle threshold (env override or default).
+#[must_use]
+pub(crate) fn warm_to_parked_idle_secs() -> u64 {
+    static CACHED: OnceLock<u64> = OnceLock::new();
+    *CACHED.get_or_init(|| read_env_secs(WARM_TO_PARKED_IDLE_ENV, WARM_TO_PARKED_IDLE_SECS))
+}
+
+/// Effective `Parked` → `Cold` idle threshold (env override or default).
+#[must_use]
+pub(crate) fn parked_to_cold_idle_secs() -> u64 {
+    static CACHED: OnceLock<u64> = OnceLock::new();
+    *CACHED.get_or_init(|| read_env_secs(PARKED_TO_COLD_IDLE_ENV, PARKED_TO_COLD_IDLE_SECS))
+}
 
 /// Decide whether a shard in `state` that has been idle for
 /// `idle_secs` seconds should demote to a colder tier.
+///
+/// Reads the effective tier thresholds via the
+/// [`hot_to_warm_idle_secs`] / [`warm_to_parked_idle_secs`] /
+/// [`parked_to_cold_idle_secs`] getters, so any
+/// `UFFS_*_IDLE_SECS` env-var override set before daemon startup is
+/// honoured here too.
 ///
 /// Returns the target state on demote, or `None` when:
 ///
@@ -62,11 +148,11 @@ pub(crate) const PARKED_TO_COLD_IDLE_SECS: u64 = 86_400;
 /// [`crate::index::IndexManager::demote_idle_shards`] (Phase 3
 /// Commit D).
 #[must_use]
-pub(crate) const fn next_state_for_idle(state: ShardState, idle_secs: u64) -> Option<ShardState> {
+pub(crate) fn next_state_for_idle(state: ShardState, idle_secs: u64) -> Option<ShardState> {
     match state {
-        ShardState::Hot if idle_secs >= HOT_TO_WARM_IDLE_SECS => Some(ShardState::Warm),
-        ShardState::Warm if idle_secs >= WARM_TO_PARKED_IDLE_SECS => Some(ShardState::Parked),
-        ShardState::Parked if idle_secs >= PARKED_TO_COLD_IDLE_SECS => Some(ShardState::Cold),
+        ShardState::Hot if idle_secs >= hot_to_warm_idle_secs() => Some(ShardState::Warm),
+        ShardState::Warm if idle_secs >= warm_to_parked_idle_secs() => Some(ShardState::Parked),
+        ShardState::Parked if idle_secs >= parked_to_cold_idle_secs() => Some(ShardState::Cold),
         // Two distinct cases collapsed into one arm because they
         // share the same outcome:
         //   * Hot / Warm / Parked: idle window not exceeded for the current tier (the guard above
@@ -177,4 +263,16 @@ mod tests {
     /// enforced at build time, not at test run.
     const _: () = assert!(HOT_TO_WARM_IDLE_SECS < WARM_TO_PARKED_IDLE_SECS);
     const _: () = assert!(WARM_TO_PARKED_IDLE_SECS < PARKED_TO_COLD_IDLE_SECS);
+
+    /// `read_env_secs` falls back to the supplied default when the
+    /// env var is unset.  Pins the contract that a non-overridden
+    /// daemon uses the in-source thresholds.  Uses a deliberately
+    /// unique env-var name (`UFFS_TEST_ENV_NEVER_SET`) so the test
+    /// is independent of any `UFFS_*_IDLE_SECS` value the developer
+    /// happens to have exported in their shell.
+    #[test]
+    fn read_env_secs_falls_back_when_env_unset() {
+        let val = read_env_secs("UFFS_TEST_ENV_NEVER_SET_12345", 42);
+        assert_eq!(val, 42, "unset env var → default");
+    }
 }

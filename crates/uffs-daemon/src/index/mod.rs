@@ -974,54 +974,88 @@ impl IndexManager {
             return;
         }
 
-        // ── Phase 2: spawn-blocking body load ──────────────────
-        // For each Parked/Cold letter, hop onto the blocking pool
-        // for the I/O + decrypt + decompress + runtime-mmap
-        // materialisation.  `load_compact_cache` returns `None` on
+        // ── Phase 2: parallel body load via JoinSet ────────────
+        // For each Parked/Cold letter, fan out one
+        // `tokio::task::spawn_blocking` task into the blocking
+        // pool for the I/O + decrypt + decompress + runtime-mmap
+        // materialisation.  `BodyLoader::load` returns `None` on
         // any non-fatal failure (missing cache file, stale, decrypt
         // error); we trace and skip — the shard stays in its
         // current tier and the search will dispatch against the
         // unchanged active subset.
         //
-        // Phases 2 + 3 are interleaved per letter so a slow
-        // disk-read on letter A doesn't block the swap for letter
-        // B that's already loaded.  Serialised on purpose:
-        // promoting N drives in a single hot-path query is rare
-        // (idle-timer demote is per-drive) and the write-lock
-        // contention from N parallel swaps would dwarf the
-        // serialisation cost.
+        // **Why parallel** (#93): the cold-boot WARM path loads N
+        // drives in parallel from the same on-disk caches and
+        // completes in ~max(per-drive); the original serial loop
+        // here did sum(per-drive) and was 2–3× slower on real
+        // workloads (15.1 s for 6 drives in v0.5.80, vs. 5.7 s
+        // for 7 drives at `daemon start`).  Each
+        // per-letter write-lock swap is a sub-µs pointer-swap;
+        // even at N=7 the cumulative contention is < 10 µs, well
+        // below the per-drive load cost (~1 s+).
+        //
+        // Each closure runs in its own blocking thread, so panics
+        // are caught here via `catch_unwind` to keep the letter
+        // identifier in the JoinSet result; without this the
+        // `JoinError` arm would lose the panicking letter.
+        let mut load_set: tokio::task::JoinSet<(
+            char,
+            Option<Arc<uffs_core::compact::DriveCompactIndex>>,
+        )> = tokio::task::JoinSet::new();
         for letter in needs_promote {
             let loader = Arc::clone(&self.body_loader);
-            let load_result = tokio::task::spawn_blocking(move || loader.load(letter)).await;
-            let body = match load_result {
-                Ok(Some(body_arc)) => body_arc,
-                Ok(None) => {
-                    tracing::warn!(
-                        target: "shard.transition",
-                        drive = %letter,
-                        reason = "promote-on-search",
-                        "compact-cache load returned None; shard stays in current tier",
-                    );
-                    continue;
-                }
-                Err(join_err) => {
+            load_set.spawn_blocking(move || {
+                // `catch_unwind` lives in `std` (needs unwinding
+                // runtime); `AssertUnwindSafe` lives in `core` (the
+                // production lint enforces `core` imports for items
+                // that are available there).
+                let body = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
+                    loader.load(letter)
+                }))
+                .unwrap_or_else(|_payload| {
                     tracing::error!(
                         target: "shard.transition",
                         drive = %letter,
-                        error = %join_err,
                         reason = "promote-on-search",
                         "blocking-task panic during cache load; shard stays in current tier",
+                    );
+                    None
+                });
+                (letter, body)
+            });
+        }
+
+        // ── Phase 3: drain results, per-letter write-lock swap ─
+        // `promote_letter` is `Option`-returning so a benign
+        // race (another task promoted between our read-detect
+        // and write-swap, or a demote landed on top of the
+        // Parked state we observed) drops the freshly-loaded
+        // body Arc and leaves the canonical registry alone.
+        while let Some(join_result) = load_set.join_next().await {
+            let (letter, body_opt) = match join_result {
+                Ok(pair) => pair,
+                Err(join_err) => {
+                    // Task aborted (shutdown / cancel) — letter
+                    // identity is lost but the daemon stays up
+                    // and the shard stays in its current tier.
+                    tracing::warn!(
+                        target: "shard.transition",
+                        error = %join_err,
+                        reason = "promote-on-search",
+                        "blocking-task aborted before completion; shard stays in current tier",
                     );
                     continue;
                 }
             };
-
-            // ── Phase 3: write-lock atomic swap ────────────────
-            // `promote_letter` is `Option`-returning so a benign
-            // race (another task promoted between our read-detect
-            // and write-swap, or a demote landed on top of the
-            // Parked state we observed) drops the freshly-loaded
-            // body Arc and leaves the canonical registry alone.
+            let Some(body) = body_opt else {
+                tracing::warn!(
+                    target: "shard.transition",
+                    drive = %letter,
+                    reason = "promote-on-search",
+                    "compact-cache load returned None; shard stays in current tier",
+                );
+                continue;
+            };
             let mut guard = self.index.write().await;
             if let Some(new_registry) = guard.promote_letter(letter, body) {
                 *guard = Arc::new(new_registry);
