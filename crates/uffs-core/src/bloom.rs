@@ -599,10 +599,7 @@ mod tests {
     /// `with_capacity_and_fpr(1_000_000, 0.01)` + 1 M `insert`
     /// calls.  Budget ≤ 200 ms in release mode.
     #[test]
-    #[cfg_attr(
-        debug_assertions,
-        ignore = "release-mode perf budget; run with --release"
-    )]
+    #[cfg_attr(debug_assertions, ignore = "release-only")]
     fn plan_4_12_bloom_build_under_two_hundred_ms_at_one_million_items() {
         use alloc::format;
         use alloc::string::String;
@@ -632,10 +629,7 @@ mod tests {
     /// 1 M `contains` calls.  Budget ≤ 1 µs avg per call (1 s
     /// total wall for 1 M calls).
     #[test]
-    #[cfg_attr(
-        debug_assertions,
-        ignore = "release-mode perf budget; run with --release"
-    )]
+    #[cfg_attr(debug_assertions, ignore = "release-only")]
     fn plan_4_12_bloom_query_under_one_microsecond_average_at_one_million_items() {
         use alloc::format;
         use alloc::string::String;
