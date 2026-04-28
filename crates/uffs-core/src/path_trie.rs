@@ -751,4 +751,66 @@ mod tests {
         // Two children of C.
         assert_eq!(trie.child_indices().len(), 2);
     }
+
+    // ── Phase 4 task 4.12 — path-trie build perf budget ───────────
+    //
+    // Pin the trie build budget from
+    // `docs/refactor/memory-tiering-implementation-plan.md` §3 Phase 4
+    // task 4.12: trie build ≤ 100 ms at 1 M directory records.  This
+    // is a **release-mode** contract; debug builds run 10–100× slower
+    // because of the lack of inlining + bounds-check elision on the
+    // FxHashMap parent-resolution pass.
+    //
+    // `cfg_attr(debug_assertions, ignore)` so a default `cargo test`
+    // skips it.  Run via:
+    //   cargo test --release -p uffs-core --lib path_trie::tests::plan_4_12
+    //
+    // Synthetic topology: root directory + 999_999 child directories
+    // all parented to root.  An unrealistic fan-out, but the trie
+    // build cost is dominated by O(N) record iteration + N hashmap
+    // inserts + N parent lookups; the topology is irrelevant for
+    // perf.  Names share a single 3-byte buffer ("dir") via
+    // `name_offset = 0, name_len = 3` on every record — keeps the
+    // fixture build fast and the names buffer tiny so the timed
+    // region measures only the trie code.
+
+    /// Plan task **4.12** — trie build budget at 1 M directories.
+    ///
+    /// Pre-build the records + names outside the timed region; time
+    /// only `PathTrie::build`.  Budget ≤ 100 ms in release mode.
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-mode perf budget; run with --release"
+    )]
+    fn plan_4_12_path_trie_build_under_one_hundred_ms_at_one_million_directories() {
+        use alloc::vec::Vec;
+        use std::time::{Duration, Instant};
+
+        const N: u32 = 1_000_000;
+        // Single shared 3-byte name buffer for every directory.
+        let names = b"dir".to_vec();
+        // Index 0 = root (parent = u32::MAX).  Indices 1..N = direct
+        // children of root.
+        let mut records: Vec<CompactRecord> = Vec::with_capacity(N as usize);
+        records.push(make_record(0, 3, u32::MAX, true));
+        for _ in 1..N {
+            records.push(make_record(0, 3, 0, true));
+        }
+
+        let start = Instant::now();
+        let trie = PathTrie::build(&records, &names);
+        let elapsed = start.elapsed();
+
+        let budget = Duration::from_millis(100);
+        assert!(
+            elapsed <= budget,
+            "path_trie build at {N} directories took {elapsed:?} (budget {budget:?})"
+        );
+        assert_eq!(
+            u32::try_from(trie.len()).expect("len fits u32"),
+            N,
+            "every directory record must land in the trie"
+        );
+    }
 }

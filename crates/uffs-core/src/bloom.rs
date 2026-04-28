@@ -572,4 +572,102 @@ mod tests {
         // out of 5 to cover the ~1 % FPR upper tail.
         assert!(hits <= 1, "got {hits} false positives in 5 novel queries");
     }
+
+    // ── Phase 4 task 4.12 — perf budgets ──────────────────────────
+    //
+    // Pin the bloom build + query budgets from
+    // `docs/refactor/memory-tiering-implementation-plan.md` §3 Phase 4
+    // task 4.12: bloom build ≤ 200 ms / bloom query ≤ 1 µs at 1 M
+    // items.  These budgets are **release-mode** contracts; debug
+    // builds run 10–100× slower because of the lack of inlining +
+    // bounds-check elision.  Both tests `cfg_attr(debug_assertions,
+    // ignore)` so a default `cargo test` skips them, and
+    // `cargo test --release` (or `nextest run --cargo-profile
+    // release`) runs them.
+    //
+    // Run on Mac:
+    //   cargo test --release -p uffs-core --lib bloom::tests::plan_4_12
+    //
+    // The 1 M item count matches the canonical fixture sizing in
+    // §6.2 of `docs/refactor/memory-tiering-plan.md` (the sibling
+    // doc); the 0.01 FPR target is the production
+    // `SHARD_BLOOM_TARGET_FPR`.
+
+    /// Plan task **4.12** — bloom build budget at 1 M items.
+    ///
+    /// Pre-build the keys outside the timed region; time only
+    /// `with_capacity_and_fpr(1_000_000, 0.01)` + 1 M `insert`
+    /// calls.  Budget ≤ 200 ms in release mode.
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-mode perf budget; run with --release"
+    )]
+    fn plan_4_12_bloom_build_under_two_hundred_ms_at_one_million_items() {
+        use alloc::format;
+        use alloc::string::String;
+        use alloc::vec::Vec;
+        use std::time::{Duration, Instant};
+
+        const N: usize = 1_000_000;
+        let keys: Vec<String> = (0..N).map(|i| format!("file_{i:08}.txt")).collect();
+
+        let start = Instant::now();
+        let mut bloom = Bloom::with_capacity_and_fpr(N, 0.01_f64);
+        for k in &keys {
+            bloom.insert(k.as_bytes());
+        }
+        let elapsed = start.elapsed();
+
+        let budget = Duration::from_millis(200);
+        assert!(
+            elapsed <= budget,
+            "bloom build at {N} items took {elapsed:?} (budget {budget:?})"
+        );
+    }
+
+    /// Plan task **4.12** — bloom query budget at 1 M items.
+    ///
+    /// Pre-build the bloom outside the timed region; time only
+    /// 1 M `contains` calls.  Budget ≤ 1 µs avg per call (1 s
+    /// total wall for 1 M calls).
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-mode perf budget; run with --release"
+    )]
+    fn plan_4_12_bloom_query_under_one_microsecond_average_at_one_million_items() {
+        use alloc::format;
+        use alloc::string::String;
+        use alloc::vec::Vec;
+        use std::time::{Duration, Instant};
+
+        const N: usize = 1_000_000;
+        let keys: Vec<String> = (0..N).map(|i| format!("file_{i:08}.txt")).collect();
+        let mut bloom = Bloom::with_capacity_and_fpr(N, 0.01_f64);
+        for k in &keys {
+            bloom.insert(k.as_bytes());
+        }
+
+        let start = Instant::now();
+        let mut hits = 0_u64;
+        for k in &keys {
+            if bloom.contains(k.as_bytes()) {
+                hits += 1;
+            }
+        }
+        let elapsed = start.elapsed();
+
+        // 1 µs / call * 1 M calls = 1 s wall budget.
+        let budget = Duration::from_micros(N as u64);
+        let avg = elapsed / u32::try_from(N).expect("N fits u32");
+        assert!(
+            elapsed <= budget,
+            "bloom query at {N} items took {elapsed:?} (avg {avg:?}/call, budget 1µs/call)"
+        );
+        assert_eq!(
+            hits, N as u64,
+            "no false negatives — every inserted key must hit"
+        );
+    }
 }
