@@ -28,6 +28,8 @@
 //! [`ShardRegistry::active_index`] begins to diverge from the full
 //! shard list.
 
+pub(crate) mod body_loader;
+pub(crate) mod policy;
 pub(crate) mod registry;
 pub(crate) mod shard;
 
@@ -41,3 +43,23 @@ pub(crate) mod shard;
 // re-export list as more callers join.
 pub(crate) use registry::ShardRegistry;
 pub(crate) use shard::ShardState;
+
+/// Current Unix-millis timestamp for the cache subsystem's clocks.
+///
+/// Single canonical clock function shared by:
+///
+/// * [`crate::index::IndexManager::record_search_dispatch`] — stamps every
+///   Warm/Hot shard's `DriveStats::last_query_at_ms` on each dispatch.
+/// * The Phase-3 demote controller (Commit D, in
+///   [`crate::index::IndexManager::demote_idle_shards`]) — reads
+///   `last_query_at_ms` to compute `idle_secs`.
+///
+/// Returns `0` when the system clock is set before 1970-01-01 so the
+/// fallback matches the "never queried" sentinel
+/// `DriveStats::last_query_at_ms == 0` used by the demote controller.
+#[must_use]
+pub(crate) fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |dur| u64::try_from(dur.as_millis()).unwrap_or(u64::MAX))
+}

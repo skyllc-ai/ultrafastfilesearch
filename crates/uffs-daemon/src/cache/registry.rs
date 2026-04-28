@@ -13,6 +13,37 @@ use uffs_core::search::backend::DriveIndex;
 
 use super::shard::{ShardEntry, ShardState};
 
+/// Predicate: can a shard in `from` legally demote to `target`?
+///
+/// Looser than [`ShardState::can_transition_to`] because the
+/// registry-level rebuild in
+/// [`ShardRegistry::demote_letter`] is the linearisation point — no
+/// stable `Arc<ShardEntry>` reader ever observes an in-place state
+/// mutation, so the strict per-`ShardEntry` graph used by the
+/// test-only `try_transition` CAS path doesn't apply.
+///
+/// Demote target must be `Parked` or `Cold`.  Self-demotes
+/// (`Parked → Parked`, `Cold → Cold`) are intentionally rejected so
+/// a buggy controller can't silently rebuild the registry on every
+/// idle tick for an already-demoted shard.
+const fn is_legal_demote_target(from: ShardState, target: ShardState) -> bool {
+    // Single match arm so clippy's `match_same_arms` is satisfied:
+    //
+    //   * Hot / Warm: demote to Parked OR Cold.
+    //   * Parked: demote to Cold only (the bloom/trie drop step in Phase 4+; no
+    //     body to drop here).
+    //
+    // Everything else (Cold/Cold, Unknown/*, Evicting/*, all
+    // self-demotes) falls through to `false`.
+    matches!(
+        (from, target),
+        (
+            ShardState::Hot | ShardState::Warm,
+            ShardState::Parked | ShardState::Cold
+        ) | (ShardState::Parked, ShardState::Cold)
+    )
+}
+
 /// Registry of per-drive shards plus a cached `Arc<DriveIndex>` over
 /// the active subset (Warm/Hot tiers).
 ///
@@ -52,10 +83,18 @@ impl ShardRegistry {
     /// registry directly.
     #[must_use]
     pub(crate) fn from_shards(shards: Vec<Arc<ShardEntry>>) -> Self {
+        // Filter on tier first so the active subset matches the
+        // documented "Warm | Hot" contract; then filter_map on `body`
+        // because Phase-3 `ShardEntry::body()` returns `Option` —
+        // `Parked` / `Cold` shards lift the body and would yield
+        // `None` here.  The double filter is intentionally redundant
+        // (every `Warm` / `Hot` shard has `Some(body)` today) so a
+        // future "Warm with body in transit" state can't silently
+        // contribute an empty entry to the active index.
         let drives: Vec<Arc<DriveCompactIndex>> = shards
             .iter()
             .filter(|shard| matches!(shard.state(), ShardState::Warm | ShardState::Hot))
-            .map(|shard| shard.body())
+            .filter_map(|shard| shard.body())
             .collect();
         Self {
             shards,
@@ -155,6 +194,151 @@ impl ShardRegistry {
     #[must_use]
     pub(crate) const fn len(&self) -> usize {
         self.shards.len()
+    }
+
+    /// Demote the shard for `letter` to `target` (`Parked` or
+    /// `Cold`), dropping the body and emitting a single
+    /// `shard.transition` tracing event.  Returns the rebuilt
+    /// registry, or `None` when:
+    ///
+    /// * `letter` is not registered;
+    /// * `target` is not a demote-legal tier (must be `Parked` or `Cold`);
+    /// * the existing shard's state is not a legal "from" for the requested
+    ///   demote (see [`is_legal_demote_target`]).
+    ///
+    /// The per-drive `Arc<DriveStats>` is shared with the
+    /// replacement shard so query counters survive the rebuild —
+    /// Commit C's idle-timer relies on `last_query_at_ms` staying
+    /// stable across demote/promote cycles.
+    ///
+    /// Registry-level rebuilds bypass the per-`ShardEntry`
+    /// `can_transition_to` graph (which guards the test-only
+    /// `try_transition` CAS path).  No stable `Arc<ShardEntry>`
+    /// reader ever observes an in-place state mutation here: the
+    /// caller's old `Arc` keeps reading the old state forever, the
+    /// new `Arc` reads the new state forever, and the registry's
+    /// `Vec` swap is the linearisation point.
+    ///
+    /// Wired into the production demote path by
+    /// [`crate::index::IndexManager::demote_idle_shards`] (Phase 3
+    /// Commit D).
+    #[must_use]
+    pub(crate) fn demote_letter(&self, letter: char, target: ShardState) -> Option<Self> {
+        // Locate the matching shard by enumerating once: returns
+        // `(pos, &Arc<ShardEntry>)` so we never index into
+        // `self.shards` (clippy::indexing_slicing).
+        let (pos, old_arc) = self
+            .shards
+            .iter()
+            .enumerate()
+            .find(|(_, shard)| shard.drive.eq_ignore_ascii_case(&letter))?;
+        let from_state = old_arc.state();
+        if !is_legal_demote_target(from_state, target) {
+            return None;
+        }
+        // Compute the body heap we're about to release, for the
+        // tracing event.  Done before constructing the new entry so
+        // the read happens against the still-mounted body.
+        let freed_mb = old_arc.body().map_or(0_u64, |body| {
+            (body.heap_size_bytes().total / 1_048_576) as u64
+        });
+        let stats = Arc::clone(&old_arc.stats);
+        let drive = old_arc.drive;
+        let new_entry = match target {
+            ShardState::Parked => ShardEntry::new_parked(drive, stats),
+            ShardState::Cold => ShardEntry::new_cold(drive, stats),
+            // Filtered out by `is_legal_demote_target` above; this
+            // arm is unreachable in practice, exists only so the
+            // match is exhaustive without an `unreachable!`.
+            ShardState::Unknown | ShardState::Warm | ShardState::Hot | ShardState::Evicting => {
+                return None;
+            }
+        };
+        // Build the rebuilt shards Vec via enumerate-and-replace so
+        // the indexing-into-Vec is hidden inside `iter().map()` (no
+        // raw `vec[pos] = ...` site for clippy to flag).  The old
+        // entry's Arc is dropped by the closure when its branch isn't
+        // taken; the body Arc inside it follows.
+        let new_arc = Arc::new(new_entry);
+        let shards: Vec<Arc<ShardEntry>> = self
+            .shards
+            .iter()
+            .enumerate()
+            .map(|(i, existing)| {
+                if i == pos {
+                    Arc::clone(&new_arc)
+                } else {
+                    Arc::clone(existing)
+                }
+            })
+            .collect();
+        tracing::info!(
+            target: "shard.transition",
+            letter = %letter.to_ascii_uppercase(),
+            from = %from_state,
+            to = %target,
+            freed_mb,
+            reason = "demote",
+        );
+        Some(Self::from_shards(shards))
+    }
+
+    /// Promote the shard for `letter` from `Parked` / `Cold` back
+    /// to `Warm`, attaching `body` and emitting a single
+    /// `shard.transition` tracing event.  Returns the rebuilt
+    /// registry, or `None` when:
+    ///
+    /// * `letter` is not registered;
+    /// * the existing shard's state is not `Parked` / `Cold` (a request to
+    ///   promote an already-warm shard is a caller bug).
+    ///
+    /// The per-drive `Arc<DriveStats>` from the demoted shard is
+    /// shared with the new `Warm` entry so the round-trip
+    /// demote-and-back preserves query counters.
+    ///
+    /// Wired into the search hot path by
+    /// [`crate::index::IndexManager::ensure_warm_for_dispatch`]
+    /// (Phase 3 Commit C).
+    #[must_use]
+    pub(crate) fn promote_letter(
+        &self,
+        letter: char,
+        body: Arc<DriveCompactIndex>,
+    ) -> Option<Self> {
+        let (pos, old_arc) = self
+            .shards
+            .iter()
+            .enumerate()
+            .find(|(_, shard)| shard.drive.eq_ignore_ascii_case(&letter))?;
+        let from_state = old_arc.state();
+        if !matches!(from_state, ShardState::Parked | ShardState::Cold) {
+            return None;
+        }
+        let restored_mb = (body.heap_size_bytes().total / 1_048_576) as u64;
+        let stats = Arc::clone(&old_arc.stats);
+        let drive = old_arc.drive;
+        let new_arc = Arc::new(ShardEntry::new_warm_with_stats(drive, body, stats));
+        let shards: Vec<Arc<ShardEntry>> = self
+            .shards
+            .iter()
+            .enumerate()
+            .map(|(i, existing)| {
+                if i == pos {
+                    Arc::clone(&new_arc)
+                } else {
+                    Arc::clone(existing)
+                }
+            })
+            .collect();
+        tracing::info!(
+            target: "shard.transition",
+            letter = %letter.to_ascii_uppercase(),
+            from = %from_state,
+            to = %ShardState::Warm,
+            restored_mb,
+            reason = "promote",
+        );
+        Some(Self::from_shards(shards))
     }
 
     /// `true` iff the registry has no shards at all.

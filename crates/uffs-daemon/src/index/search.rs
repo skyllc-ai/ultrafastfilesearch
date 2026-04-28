@@ -84,6 +84,17 @@ impl IndexManager {
         let requires_post_filter =
             Self::predicates_require_post_filter(&effective_params.predicates);
 
+        // Phase 3 Commit C — promote any Parked/Cold shards in the
+        // touched set before we snapshot the active subset.  Fast
+        // path (single read-lock acquisition, no work) when every
+        // touched shard is already Warm/Hot, which is the common
+        // case in steady state.  See
+        // `IndexManager::ensure_warm_for_dispatch` doc for the
+        // three-phase orchestration and the
+        // conservative-on-under-promote contract.
+        self.ensure_warm_for_dispatch(&effective_params.drives)
+            .await;
+
         // ── Snapshot the index (< 1 μs) ────────────────────────────
         let t_lock = profiling.then(Instant::now);
         let snapshot = self.snapshot().await;
@@ -460,7 +471,7 @@ impl IndexManager {
 
         // ── Aggregation (if requested) ─────────────────────────────
         let (agg_results, agg_matched) = if !effective_params.aggregations.is_empty() {
-            let predicates = Self::build_query_predicates(&effective_params);
+            let predicates = build_query_predicates(&effective_params);
 
             // Pass the pattern if it's non-trivial (not just `*`).
             let agg_pattern =
@@ -642,64 +653,6 @@ impl IndexManager {
         }
     }
 
-    /// Convert search-request filters into drill-down predicates.
-    ///
-    /// These are prepended to each bucket's drill-down list so that a
-    /// follow-up query reproduces the original scope plus the bucket key.
-    fn build_query_predicates(
-        params: &SearchParams,
-    ) -> Vec<uffs_core::aggregate::finalize::DrilldownPredicate> {
-        use uffs_core::aggregate::finalize::{DrilldownPredicate, DrilldownValue};
-        let mut preds = Vec::new();
-
-        // Pattern
-        if !params.pattern.is_empty() && params.pattern != "*" {
-            preds.push(DrilldownPredicate {
-                field: "name".to_owned(),
-                op: "glob".to_owned(),
-                value: DrilldownValue::String(params.pattern.clone()),
-            });
-        }
-
-        // Filter mode (files / dirs)
-        if let Some(filter) = &params.filter
-            && filter != "all"
-        {
-            preds.push(DrilldownPredicate {
-                field: "type".to_owned(),
-                op: "eq".to_owned(),
-                value: DrilldownValue::String(filter.clone()),
-            });
-        }
-
-        // Size range
-        if let Some(min) = params.min_size {
-            preds.push(DrilldownPredicate {
-                field: "size".to_owned(),
-                op: "gte".to_owned(),
-                value: DrilldownValue::U64(min),
-            });
-        }
-        if let Some(max) = params.max_size {
-            preds.push(DrilldownPredicate {
-                field: "size".to_owned(),
-                op: "lte".to_owned(),
-                value: DrilldownValue::U64(max),
-            });
-        }
-
-        // Drives
-        for &drive in &params.drives {
-            preds.push(DrilldownPredicate {
-                field: "drive".to_owned(),
-                op: "eq".to_owned(),
-                value: DrilldownValue::String(drive.to_string()),
-            });
-        }
-
-        preds
-    }
-
     // ── Direct file output (OPT-4) ──────────────────────────────────
 
     /// Write `DisplayRow`s directly to a file, bypassing `SearchRow` and IPC.
@@ -783,6 +736,14 @@ impl IndexManager {
 #[path = "search_output_config.rs"]
 mod output_config;
 pub(crate) use output_config::build_output_config;
+
+// `build_query_predicates` lives in a sibling file to keep `search.rs`
+// under the 800-line policy ceiling.  Single call site (the
+// aggregation block in `search()` above), so the function stays
+// `pub(super)` — not re-exported beyond the `search` module.
+#[path = "search_predicates.rs"]
+mod predicates;
+use predicates::build_query_predicates;
 
 // The inline `tests` module lives in a sibling file to keep `search.rs`
 // under the 800-line policy ceiling.  `#[path]` keeps the test module

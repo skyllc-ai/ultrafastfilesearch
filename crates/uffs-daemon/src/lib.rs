@@ -259,6 +259,8 @@ pub async fn run_daemon(config: DaemonConfig) -> anyhow::Result<()> {
         Arc::clone(&idx),
         telemetry::DEFAULT_MEM_SNAPSHOT_INTERVAL,
     );
+    // Phase 3 Commit D — periodic shard idle-demote sweep.
+    let _idle_demote_task = spawn_idle_demote_controller(Arc::clone(&idx));
 
     // Run idle timer (blocks until shutdown or timeout) then tear
     // everything down.  Returns `!` so `force_exit_with_watchdog`
@@ -617,6 +619,34 @@ fn spawn_stats_heartbeat(
                     total_records,
                     connections: stats_lifecycle.active_connections(),
                 });
+        }
+    })
+}
+
+/// Spawn the Phase 3 idle-demote controller — every 30 s, ask
+/// `IndexManager::demote_idle_shards` to walk the registry and
+/// demote any shard whose idle time exceeds its tier's TTL (see
+/// `cache::policy`).
+///
+/// The 30 s cadence is shorter than the shortest TTL (300 s
+/// Hot→Warm) by an order of magnitude, so a freshly idle Hot
+/// shard demotes within at most one tick of crossing its
+/// boundary.  Sampling `unix_now_ms()` once at the top of each
+/// tick (and threading it into the manager) keeps every shard's
+/// idle-secs computation referenced to the same baseline — a
+/// slow read-lock acquisition can't push later shards in the
+/// same batch over a TTL boundary mid-walk.
+fn spawn_idle_demote_controller(idx: Arc<index::IndexManager>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(core::time::Duration::from_secs(30));
+        // Skip the first tick (fires immediately at task spawn).
+        // We want the controller to take its first reading 30 s
+        // after startup, not at t=0 when no shard could possibly
+        // be idle yet.
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            idx.demote_idle_shards(cache::unix_now_ms()).await;
         }
     })
 }

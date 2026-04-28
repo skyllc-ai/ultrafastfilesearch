@@ -165,13 +165,21 @@ impl StdError for IllegalTransition {}
 
 /// Per-drive query rate stats.
 ///
-/// Counters use atomics so [`Self::record_query`] stays lock-free on
-/// the search hot path.  [`Self::decay_ema`] reads + writes are not
-/// strictly atomic together, but the EMA tolerates skew (it is a rate
-/// estimator, not a hard counter).
+/// Counters use atomics so [`Self::record_query`] and
+/// [`Self::mark_query_at`] stay lock-free on the search hot path.
+/// [`Self::decay_ema`] reads + writes are not strictly atomic
+/// together, but the EMA tolerates skew (it is a rate estimator, not
+/// a hard counter).
 ///
 /// Half-life of the EMA is fixed at 60 s in Phase 1; Phase 6 makes it
 /// configurable via `daemon.toml`.
+///
+/// Phase 3 wraps the live `DriveStats` in `Arc<DriveStats>` on the
+/// owning [`ShardEntry`] so the per-drive counters survive intact
+/// when the registry rebuilds a `ShardEntry` for a tier transition
+/// — the new entry shares the same `Arc<DriveStats>` and concurrent
+/// `mark_query_at` writes from in-flight searches still land on the
+/// canonical counters.
 #[derive(Debug, Default)]
 pub(crate) struct DriveStats {
     /// Total queries served against this shard.
@@ -183,6 +191,12 @@ pub(crate) struct DriveStats {
     /// Zero means "never decayed" — first call short-circuits the
     /// decay arithmetic to avoid a huge-elapsed spike from epoch 0.
     last_decay_ms: AtomicU64,
+    /// Unix-millis timestamp of the last [`Self::mark_query_at`] call.
+    /// Zero means "never queried" — the Phase-3 demote controller in
+    /// `crate::cache::registry::ShardRegistry::demote_idle_shards`
+    /// treats a zero value as "as old as the daemon" so freshly-loaded
+    /// shards aren't immediately demoted on the first 30 s tick.
+    last_query_at_ms: AtomicU64,
 }
 
 impl DriveStats {
@@ -193,12 +207,73 @@ impl DriveStats {
             queries_total: AtomicU64::new(0),
             rate_ema_micro_per_s: AtomicU64::new(0),
             last_decay_ms: AtomicU64::new(0),
+            last_query_at_ms: AtomicU64::new(0),
         }
     }
 
     /// Lock-free increment of the total query counter.
+    ///
+    /// Phase 3 prefer [`Self::mark_query_at`] which also bumps
+    /// `last_query_at_ms` so the demote controller has a fresh idle
+    /// timestamp.  This bare counter remains for callers that have no
+    /// clock available (e.g. legacy tests).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Phase 3 migrated production `record_search_dispatch` to \
+                      `mark_query_at(now_ms)`; this clock-free entry point is \
+                      retained for tests that don't need timestamp wiring."
+        )
+    )]
     pub(crate) fn record_query(&self) {
         self.queries_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Lock-free increment of the total query counter that **also**
+    /// stores `now_ms` in [`Self::last_query_at_ms`].
+    ///
+    /// Two relaxed atomics; not synchronised together — the demote
+    /// controller tolerates a one-tick (30 s) lag on a shard whose
+    /// `last_query_at_ms` write was reordered after the
+    /// `queries_total` increment.
+    pub(crate) fn mark_query_at(&self, now_ms: u64) {
+        self.queries_total.fetch_add(1, Ordering::Relaxed);
+        self.last_query_at_ms.store(now_ms, Ordering::Relaxed);
+    }
+
+    /// Set [`Self::last_query_at_ms`] to `now_ms` **without** bumping
+    /// the query counter.
+    ///
+    /// Phase 3 Commit D — called by `IndexManager::add_drive` and
+    /// `IndexManager::replace_drive` once per shard the moment the
+    /// drive is mounted, so the demote-controller's idle clock
+    /// starts ticking from the load time rather than from epoch zero.
+    /// Without this seed, a freshly loaded shard's
+    /// `last_query_at_ms == 0` would compute `idle_secs ≈ now_ms /
+    /// 1000` and trigger an immediate demote on the first 30 s tick.
+    ///
+    /// Distinct from `mark_query_at` so the per-shard `queries_total`
+    /// metric stays a clean count of actual searches dispatched, not
+    /// "searches plus one extra at load".
+    pub(crate) fn mark_loaded_at(&self, now_ms: u64) {
+        self.last_query_at_ms.store(now_ms, Ordering::Relaxed);
+    }
+
+    /// Read the last activity timestamp (Unix millis).
+    ///
+    /// Updated by [`Self::mark_query_at`] (search dispatch) and
+    /// [`Self::mark_loaded_at`] (drive load).  Returns `0` only on
+    /// the snapshot-deserialisation / test paths that go through
+    /// the legacy [`Self::new`] constructor without ever calling a
+    /// setter.
+    ///
+    /// Read by [`crate::index::IndexManager::demote_idle_shards`]
+    /// (Phase 3 Commit D) to compute `idle_secs` against the
+    /// per-tier TTL ladder.
+    #[must_use]
+    pub(crate) fn last_query_at_ms(&self) -> u64 {
+        self.last_query_at_ms.load(Ordering::Relaxed)
     }
 
     /// Total queries served against this shard since construction.
@@ -297,6 +372,11 @@ pub(crate) struct DriveStatsSnapshot {
     pub rate_ema_micro_per_s: u64,
     /// Last decay timestamp. See [`DriveStats::last_decay_ms`].
     pub last_decay_ms: u64,
+    /// Last query timestamp. See [`DriveStats::last_query_at_ms`].
+    /// Defaults to `0` so legacy snapshots without this field
+    /// deserialise as "never queried" rather than rejecting.
+    #[serde(default)]
+    pub last_query_at_ms: u64,
 }
 
 impl From<&DriveStats> for DriveStatsSnapshot {
@@ -305,6 +385,7 @@ impl From<&DriveStats> for DriveStatsSnapshot {
             queries_total: stats.queries_total.load(Ordering::Relaxed),
             rate_ema_micro_per_s: stats.rate_ema_micro_per_s.load(Ordering::Relaxed),
             last_decay_ms: stats.last_decay_ms.load(Ordering::Relaxed),
+            last_query_at_ms: stats.last_query_at_ms.load(Ordering::Relaxed),
         }
     }
 }
@@ -315,43 +396,116 @@ impl From<DriveStatsSnapshot> for DriveStats {
             queries_total: AtomicU64::new(snap.queries_total),
             rate_ema_micro_per_s: AtomicU64::new(snap.rate_ema_micro_per_s),
             last_decay_ms: AtomicU64::new(snap.last_decay_ms),
+            last_query_at_ms: AtomicU64::new(snap.last_query_at_ms),
         }
     }
 }
 
 /// One shard's runtime state + stats + body.
 ///
-/// Phase 1 holds the body unconditionally as `Arc<DriveCompactIndex>`.
-/// Phase 2 introduces an `Option`-wrapped variant for demoted shards;
-/// Phase-1 callers can rely on [`Self::body`] always returning the
-/// index.
+/// Phase 1 held the body unconditionally as `Arc<DriveCompactIndex>`.
+/// Phase 3 makes the body optional so demoted (`Parked` / `Cold`)
+/// shards can drop their runtime mmap and bloom/trie payload.
+///
+/// `stats` is wrapped in `Arc<DriveStats>` so a tier-transition rebuild
+/// (which replaces this `ShardEntry` with a fresh one inside the
+/// registry's `Vec<Arc<ShardEntry>>`) preserves the per-drive
+/// counters — the new entry shares the same `Arc<DriveStats>` so
+/// concurrent `mark_query_at` writes from in-flight searches still
+/// land on the canonical counters.
 pub(crate) struct ShardEntry {
     /// Drive letter (`'C'`, `'D'`, …). Capital ASCII per existing
     /// daemon convention.
     pub(crate) drive: char,
     /// Tier state. Read on every search via [`Self::state`]; mutated
-    /// only by tier-transition methods (`try_transition`).
+    /// only by [`Self::try_transition`] (test-only) or by the
+    /// registry's tier-transition rebuilds (production path).
     state: AtomicU8,
-    /// Per-drive query stats.
-    pub(crate) stats: DriveStats,
-    /// In-memory compact index. Cloned cheaply (Arc bump) into
-    /// [`crate::cache::ShardRegistry::active_index`] on rebuild.
-    body: Arc<DriveCompactIndex>,
+    /// Per-drive query stats.  Wrapped in `Arc` so tier transitions
+    /// preserve them across `ShardEntry` rebuilds.
+    pub(crate) stats: Arc<DriveStats>,
+    /// In-memory compact index, present only for `Warm` / `Hot`
+    /// tiers.  Cloned cheaply (Arc bump) into
+    /// [`crate::cache::ShardRegistry::active_index`] on rebuild for
+    /// shards in those states; absent (`None`) for `Parked` / `Cold`
+    /// where the runtime mmap has been released.
+    body: Option<Arc<DriveCompactIndex>>,
 }
 
 impl ShardEntry {
     /// Construct a shard wrapping `body` and pinning it in
-    /// [`ShardState::Warm`].
+    /// [`ShardState::Warm`] with a fresh, all-zero `DriveStats`.
     ///
-    /// Phase 1 only ever creates shards in this constructor; Phase 3
-    /// adds `new_cold` / `new_parked` for boot-time partial loads.
+    /// Used for the boot-time happy path — `IndexManager::add_drive`
+    /// and `IndexManager::replace_drive` both flow through this
+    /// constructor.  Phase 3 adds [`Self::new_parked`] /
+    /// [`Self::new_cold`] for tier-transition rebuilds.
     #[must_use]
-    pub(crate) const fn new_warm(drive: char, body: Arc<DriveCompactIndex>) -> Self {
+    pub(crate) fn new_warm(drive: char, body: Arc<DriveCompactIndex>) -> Self {
         Self {
             drive,
             state: AtomicU8::new(ShardState::Warm as u8),
-            stats: DriveStats::new(),
-            body,
+            stats: Arc::new(DriveStats::new()),
+            body: Some(body),
+        }
+    }
+
+    /// Construct a `Warm` shard wrapping `body` and sharing an
+    /// existing `Arc<DriveStats>`.  Mirror of [`Self::new_warm`] for
+    /// the promote path: a `Parked` / `Cold` shard's `Arc<DriveStats>`
+    /// is lifted into the new `Warm` `ShardEntry` so the per-drive
+    /// query counters survive the round-trip through demote-and-back.
+    #[must_use]
+    pub(crate) const fn new_warm_with_stats(
+        drive: char,
+        body: Arc<DriveCompactIndex>,
+        stats: Arc<DriveStats>,
+    ) -> Self {
+        Self {
+            drive,
+            state: AtomicU8::new(ShardState::Warm as u8),
+            stats,
+            body: Some(body),
+        }
+    }
+
+    /// Construct a `Parked` shard sharing an existing
+    /// `Arc<DriveStats>` (typically lifted off the previous
+    /// `Warm` / `Hot` `ShardEntry` for this drive during a tier
+    /// transition rebuild).  No body — the runtime mmap has been
+    /// released.
+    ///
+    /// Reached from production via
+    /// [`crate::index::IndexManager::demote_idle_shards`] →
+    /// [`crate::cache::ShardRegistry::demote_letter`] (Phase 3
+    /// Commit D).
+    #[must_use]
+    pub(crate) const fn new_parked(drive: char, stats: Arc<DriveStats>) -> Self {
+        Self {
+            drive,
+            state: AtomicU8::new(ShardState::Parked as u8),
+            stats,
+            body: None,
+        }
+    }
+
+    /// Construct a `Cold` shard sharing an existing
+    /// `Arc<DriveStats>`.  No body, no bloom, no trie — a `Cold`
+    /// shard is recovered only by re-decrypting the encrypted compact
+    /// cache.
+    ///
+    /// Reached from production via
+    /// [`crate::index::IndexManager::demote_idle_shards`] →
+    /// [`crate::cache::ShardRegistry::demote_letter`] (Phase 3
+    /// Commit D, when a `Parked` shard's idle time exceeds
+    /// `PARKED_TO_COLD_IDLE_SECS`).
+    #[must_use]
+    pub(crate) const fn new_cold(drive: char, stats: Arc<DriveStats>) -> Self {
+        Self {
+            drive,
+            state: AtomicU8::new(ShardState::Cold as u8),
+            stats,
+            body: None,
         }
     }
 
@@ -361,10 +515,12 @@ impl ShardEntry {
         ShardState::from_repr(self.state.load(Ordering::Acquire))
     }
 
-    /// Cheap clone of the in-memory body.
+    /// Cheap clone of the in-memory body, present only for
+    /// `Warm` / `Hot` shards.  Returns `None` for `Parked` / `Cold` /
+    /// `Unknown` / `Evicting`.
     #[must_use]
-    pub(crate) fn body(&self) -> Arc<DriveCompactIndex> {
-        Arc::clone(&self.body)
+    pub(crate) fn body(&self) -> Option<Arc<DriveCompactIndex>> {
+        self.body.as_ref().map(Arc::clone)
     }
 
     /// Attempt to transition the shard to `to`.
@@ -410,183 +566,9 @@ impl ShardEntry {
     }
 }
 
+// Test suite hosted in the sibling `shard/tests.rs` so this
+// production file stays under the workspace 800-LOC cap.  Module
+// path `crate::cache::shard::tests` is preserved for any downstream
+// consumer that imported individual helpers via that path.
 #[cfg(test)]
-mod tests {
-    #![expect(
-        clippy::min_ident_chars,
-        clippy::default_numeric_fallback,
-        clippy::doc_markdown,
-        reason = "test code — short loop counters and doc references like \
-                  `serde_json` are clearer without the pedantic ceremony."
-    )]
-
-    use proptest::prelude::*;
-
-    use super::*;
-
-    fn arb_state() -> impl Strategy<Value = ShardState> {
-        prop_oneof![
-            Just(ShardState::Unknown),
-            Just(ShardState::Cold),
-            Just(ShardState::Parked),
-            Just(ShardState::Warm),
-            Just(ShardState::Hot),
-            Just(ShardState::Evicting),
-        ]
-    }
-
-    proptest! {
-        /// Task 1.6: `decay_ema` is non-increasing between consecutive
-        /// calls without an intervening `record_query` (decay only
-        /// shrinks the EMA, never grows it).
-        #[test]
-        fn drivestats_decay_is_non_increasing(
-            seed_ema_micro in 0_u64..1_000_000_000_u64,
-            gap_ms in 1_u64..100_000_u64,
-        ) {
-            let stats = DriveStats::new();
-            stats.rate_ema_micro_per_s.store(seed_ema_micro, Ordering::Relaxed);
-            stats.last_decay_ms.store(1_000_000, Ordering::Relaxed);
-            let before = drive_stats_ema_value(&stats);
-            let after = stats.decay_ema(1_000_000_u64.saturating_add(gap_ms));
-            prop_assert!(
-                after <= before,
-                "after {} > before {}",
-                after,
-                before,
-            );
-            prop_assert!(after >= 0.0);
-        }
-
-        /// Task 1.7: every (from, to) pair outside the legal graph is
-        /// rejected by `can_transition_to`, and the inverse holds for
-        /// the listed legal pairs.
-        #[test]
-        fn shardstate_legal_graph_is_consistent(from in arb_state(), to in arb_state()) {
-            // The legal graph is hand-listed in `can_transition_to`;
-            // here we duplicate it as a set of pairs and check
-            // bidirectional agreement.
-            let legal: &[(ShardState, ShardState)] = &[
-                (ShardState::Unknown, ShardState::Cold),
-                (ShardState::Unknown, ShardState::Parked),
-                (ShardState::Unknown, ShardState::Warm),
-                (ShardState::Cold, ShardState::Parked),
-                (ShardState::Cold, ShardState::Warm),
-                (ShardState::Parked, ShardState::Cold),
-                (ShardState::Parked, ShardState::Warm),
-                (ShardState::Warm, ShardState::Hot),
-                (ShardState::Warm, ShardState::Evicting),
-                (ShardState::Hot, ShardState::Warm),
-                (ShardState::Hot, ShardState::Evicting),
-                (ShardState::Evicting, ShardState::Cold),
-                (ShardState::Evicting, ShardState::Parked),
-            ];
-            let in_graph = legal.iter().any(|&(a, b)| a == from && b == to);
-            let actual = from.can_transition_to(to);
-            prop_assert_eq!(
-                in_graph,
-                actual,
-                "{} -> {}: graph says {}, can_transition_to says {}",
-                from,
-                to,
-                in_graph,
-                actual,
-            );
-        }
-    }
-
-    /// Task 1.8: `DriveStatsSnapshot` round-trips through serde_json
-    /// and through the `From` conversions.
-    #[test]
-    fn drivestats_snapshot_round_trips() {
-        let stats = DriveStats::new();
-        for _ in 0..7 {
-            stats.record_query();
-        }
-        stats.rate_ema_micro_per_s.store(123_456, Ordering::Relaxed);
-        stats.last_decay_ms.store(987_654_321, Ordering::Relaxed);
-
-        let snap = DriveStatsSnapshot::from(&stats);
-        let json = serde_json::to_string(&snap).expect("serialize");
-        let restored: DriveStatsSnapshot = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(snap, restored);
-        assert_eq!(restored.queries_total, 7);
-        assert_eq!(restored.rate_ema_micro_per_s, 123_456);
-        assert_eq!(restored.last_decay_ms, 987_654_321);
-
-        let stats2 = DriveStats::from(restored);
-        assert_eq!(stats2.queries_total(), 7);
-    }
-
-    /// `record_query` is monotone — N increments yields total of N.
-    #[test]
-    fn record_query_is_monotone() {
-        let stats = DriveStats::new();
-        for _ in 0..10 {
-            stats.record_query();
-        }
-        assert_eq!(stats.queries_total(), 10);
-    }
-
-    /// First `decay_ema` call returns the stored value without decaying
-    /// (no elapsed signal yet).
-    #[test]
-    fn decay_ema_first_call_returns_stored_value() {
-        let stats = DriveStats::new();
-        stats
-            .rate_ema_micro_per_s
-            .store(5_000_000, Ordering::Relaxed);
-        // last_decay_ms == 0 means "never decayed".
-        let v = stats.decay_ema(1_000_000);
-        assert!((v - 5.0).abs() < 1e-9, "first call returned {v}");
-    }
-
-    /// `ShardState::FromStr` accepts every `Display` form and rejects
-    /// unknown input.
-    #[test]
-    fn shardstate_fromstr_round_trips() {
-        for state in [
-            ShardState::Unknown,
-            ShardState::Cold,
-            ShardState::Parked,
-            ShardState::Warm,
-            ShardState::Hot,
-            ShardState::Evicting,
-        ] {
-            let s = state.to_string();
-            let parsed: ShardState = s.parse().expect("parse round-trip");
-            assert_eq!(state, parsed, "{s} did not round-trip");
-        }
-        let err = "foobar".parse::<ShardState>().unwrap_err();
-        assert_eq!(err.0, "foobar");
-        assert!(format!("{err}").contains("unknown shard state"));
-    }
-
-    /// `ShardState` serializes through serde with lowercase names.
-    #[test]
-    fn shardstate_serde_lowercase() {
-        let json = serde_json::to_string(&ShardState::Warm).unwrap();
-        assert_eq!(json, r#""warm""#);
-        let back: ShardState = serde_json::from_str(r#""parked""#).unwrap();
-        assert_eq!(back, ShardState::Parked);
-    }
-
-    /// `ShardState::default()` is `Warm` (Phase-1 invariant).
-    #[test]
-    fn shardstate_default_is_warm() {
-        assert_eq!(ShardState::default(), ShardState::Warm);
-    }
-
-    /// `IllegalTransition` Display matches the documented format.
-    #[test]
-    fn illegal_transition_display() {
-        let err = IllegalTransition {
-            from: ShardState::Cold,
-            to: ShardState::Hot,
-        };
-        assert_eq!(
-            format!("{err}"),
-            "illegal shard state transition: cold -> hot"
-        );
-    }
-}
+mod tests;
