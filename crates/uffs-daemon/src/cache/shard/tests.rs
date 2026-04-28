@@ -22,11 +22,32 @@ use alloc::sync::Arc;
 use core::sync::atomic::Ordering;
 
 use proptest::prelude::*;
+use uffs_core::CaseFold;
+use uffs_core::bloom::Bloom;
+use uffs_core::compact_cache::ParkedBody;
+use uffs_core::path_trie::PathTrie;
 
 use super::{
     DriveStats, DriveStatsSnapshot, IllegalTransition, ShardEntry, ShardState,
     drive_stats_ema_value,
 };
+
+/// Build a minimal `ParkedBody` for shard-construction tests — a
+/// 64-bit bloom + an empty path trie + the default fold table.
+/// Sufficient to exercise `ShardEntry::new_parked` and the
+/// `parked_body()` accessor without pulling in fixture-builder
+/// machinery from `crate::index::tests`.
+fn make_test_parked_body(letter: char, source_epoch: u64) -> ParkedBody {
+    let bloom = Bloom::with_size_and_k(64, 7);
+    let path_trie = PathTrie::build(&[], &[]);
+    ParkedBody {
+        letter,
+        source_epoch,
+        bloom,
+        path_trie,
+        fold: CaseFold::default_table(),
+    }
+}
 
 fn arb_state() -> impl Strategy<Value = ShardState> {
     prop_oneof![
@@ -265,16 +286,18 @@ fn illegal_transition_display() {
     );
 }
 
-/// Phase 3: `ShardEntry::new_parked` produces a body-less shard
-/// in `ShardState::Parked` that shares the caller-provided
-/// `Arc<DriveStats>`.
+/// Phase 3 + Phase 4 Commit F: `ShardEntry::new_parked` produces a
+/// body-less shard in `ShardState::Parked` that shares the
+/// caller-provided `Arc<DriveStats>` and carries the bloom + trie
+/// payload in `parked_body`.
 #[test]
-fn new_parked_has_no_body_and_shares_stats() {
+fn new_parked_has_no_body_and_shares_stats_and_parked_body() {
     let stats = Arc::new(DriveStats::new());
     stats.record_query();
     stats.record_query();
 
-    let shard = ShardEntry::new_parked('C', Arc::clone(&stats));
+    let parked_body = Arc::new(make_test_parked_body('C', 99));
+    let shard = ShardEntry::new_parked('C', Arc::clone(&stats), Arc::clone(&parked_body));
     assert_eq!(shard.drive, 'C');
     assert_eq!(shard.state(), ShardState::Parked);
     assert!(shard.body().is_none());
@@ -285,6 +308,13 @@ fn new_parked_has_no_body_and_shares_stats() {
     assert_eq!(shard.stats.queries_total(), 2);
     stats.record_query();
     assert_eq!(shard.stats.queries_total(), 3);
+
+    // Phase 4 Commit F — `parked_body()` returns a clone of the
+    // same Arc, so the bloom / trie / epoch round-trip without copy.
+    let from_shard = shard.parked_body().expect("parked shard has body");
+    assert!(Arc::ptr_eq(&from_shard, &parked_body));
+    assert_eq!(from_shard.letter, 'C');
+    assert_eq!(from_shard.source_epoch, 99);
 }
 
 /// Phase 3: `ShardEntry::new_cold` produces the same body-less

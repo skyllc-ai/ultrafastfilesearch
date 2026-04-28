@@ -112,6 +112,42 @@ impl DriveCompactIndex {
     pub fn build_path_trie(&self) -> PathTrie {
         PathTrie::build(&self.records, &self.names)
     }
+
+    /// Extract a [`ParkedBody`](crate::compact_cache::parked::ParkedBody)
+    /// view of this drive — bloom + trie + epoch + fold — for the
+    /// Warm → Parked tier transition.
+    ///
+    /// Phase 4 Commit F.  Reuses the in-memory `bloom` / `path_trie`
+    /// fields when present (the common case after Phase 4 Commit C
+    /// landed); falls back to [`Self::build_bloom`] /
+    /// [`Self::build_path_trie`] for indices constructed before the
+    /// Phase 4 wiring (or for legacy v ≤ 8 caches whose loader
+    /// rebuilds the filters on the fly — see
+    /// [`crate::compact_cache::deserialize_compact`]).
+    ///
+    /// Clones the bloom and trie because `ParkedBody` must own its
+    /// data (the source `DriveCompactIndex` is dropped right after
+    /// the transition).  The clone is cheap relative to a rebuild —
+    /// `Bloom::clone` is a single `Vec<u64>::clone` (≈ 8.75 MB at
+    /// the 7 M-record / 1 % FPR sizing) and `PathTrie::clone` is
+    /// four `Vec<…>::clone` calls (≈ 5 MB total).  In exchange the
+    /// transition completes without scanning records or running the
+    /// fold table again.
+    #[must_use]
+    pub fn to_parked_body(&self) -> crate::compact_cache::ParkedBody {
+        let bloom = self.bloom.clone().unwrap_or_else(|| self.build_bloom());
+        let path_trie = self
+            .path_trie
+            .clone()
+            .unwrap_or_else(|| self.build_path_trie());
+        crate::compact_cache::ParkedBody {
+            letter: self.letter,
+            source_epoch: self.source_epoch,
+            bloom,
+            path_trie,
+            fold: self.fold,
+        }
+    }
 }
 
 #[cfg(test)]

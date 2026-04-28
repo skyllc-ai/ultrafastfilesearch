@@ -13,6 +13,7 @@ use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use uffs_core::compact::DriveCompactIndex;
+use uffs_core::compact_cache::ParkedBody;
 
 /// Lifecycle state of a single drive's shard inside the daemon's
 /// in-memory cache.
@@ -406,6 +407,9 @@ impl From<DriveStatsSnapshot> for DriveStats {
 /// Phase 1 held the body unconditionally as `Arc<DriveCompactIndex>`.
 /// Phase 3 makes the body optional so demoted (`Parked` / `Cold`)
 /// shards can drop their runtime mmap and bloom/trie payload.
+/// Phase 4 adds a separate `parked_body` slot so a `Parked` shard
+/// retains its bloom + trie (~10–15 MB / drive) without the ~1 GB
+/// records / names / trigram / children CSR a full body holds.
 ///
 /// `stats` is wrapped in `Arc<DriveStats>` so a tier-transition rebuild
 /// (which replaces this `ShardEntry` with a fresh one inside the
@@ -430,6 +434,15 @@ pub(crate) struct ShardEntry {
     /// shards in those states; absent (`None`) for `Parked` / `Cold`
     /// where the runtime mmap has been released.
     body: Option<Arc<DriveCompactIndex>>,
+    /// Bloom + trie, present only for `Parked` shards.  `None` for
+    /// `Warm` / `Hot` (the bloom + trie live inside `body.bloom` /
+    /// `body.path_trie`) and for `Cold` (filters dropped).
+    ///
+    /// The Phase-4 search-skip path probes this on every Parked
+    /// shard touched by a search; a bloom miss skips promotion
+    /// entirely (zero-RAM-touch contract).  See
+    /// [`crate::index::IndexManager::ensure_warm_for_dispatch`].
+    parked_body: Option<Arc<ParkedBody>>,
 }
 
 impl ShardEntry {
@@ -447,6 +460,7 @@ impl ShardEntry {
             state: AtomicU8::new(ShardState::Warm as u8),
             stats: Arc::new(DriveStats::new()),
             body: Some(body),
+            parked_body: None,
         }
     }
 
@@ -466,6 +480,7 @@ impl ShardEntry {
             state: AtomicU8::new(ShardState::Warm as u8),
             stats,
             body: Some(body),
+            parked_body: None,
         }
     }
 
@@ -473,19 +488,26 @@ impl ShardEntry {
     /// `Arc<DriveStats>` (typically lifted off the previous
     /// `Warm` / `Hot` `ShardEntry` for this drive during a tier
     /// transition rebuild).  No body — the runtime mmap has been
-    /// released.
+    /// released — but the `parked_body` carries the bloom + trie
+    /// (~10–15 MB) so the search-skip pre-check can answer
+    /// "definitely not on this drive" without re-promoting.
     ///
     /// Reached from production via
     /// [`crate::index::IndexManager::demote_idle_shards`] →
     /// [`crate::cache::ShardRegistry::demote_letter`] (Phase 3
-    /// Commit D).
+    /// Commit D, extended in Phase 4 Commit F).
     #[must_use]
-    pub(crate) const fn new_parked(drive: char, stats: Arc<DriveStats>) -> Self {
+    pub(crate) const fn new_parked(
+        drive: char,
+        stats: Arc<DriveStats>,
+        parked_body: Arc<ParkedBody>,
+    ) -> Self {
         Self {
             drive,
             state: AtomicU8::new(ShardState::Parked as u8),
             stats,
             body: None,
+            parked_body: Some(parked_body),
         }
     }
 
@@ -506,6 +528,7 @@ impl ShardEntry {
             state: AtomicU8::new(ShardState::Cold as u8),
             stats,
             body: None,
+            parked_body: None,
         }
     }
 
@@ -521,6 +544,17 @@ impl ShardEntry {
     #[must_use]
     pub(crate) fn body(&self) -> Option<Arc<DriveCompactIndex>> {
         self.body.as_ref().map(Arc::clone)
+    }
+
+    /// Cheap clone of the parked-tier body (bloom + trie), present
+    /// only for `Parked` shards.  Returns `None` for any other
+    /// state.  Phase 4 search-skip pre-check entry point: callers
+    /// probe `parked.bloom.contains(folded_query)` against the
+    /// returned `Arc<ParkedBody>` to decide whether a `Parked`
+    /// shard can possibly contain matching records.
+    #[must_use]
+    pub(crate) fn parked_body(&self) -> Option<Arc<ParkedBody>> {
+        self.parked_body.as_ref().map(Arc::clone)
     }
 
     /// Attempt to transition the shard to `to`.

@@ -113,3 +113,7 @@ pub use tree::{TreeColumn, add_tree_columns, apply_directory_treesize};
 // Re-export commonly used types
 pub use uffs_mft::FileFlags;
 pub use uffs_polars::{DataFrame, IntoLazy, LazyFrame, col, columns, lit};
+// `CaseFold` lives on `ParkedBody.fold` and `DriveCompactIndex.fold` —
+// re-exported here so downstream crates (uffs-daemon, uffs-cli, tests)
+// that touch those types don't need a direct `uffs-text` dependency.
+pub use uffs_text::case_fold::CaseFold;

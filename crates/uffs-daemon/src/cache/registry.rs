@@ -245,7 +245,29 @@ impl ShardRegistry {
         let stats = Arc::clone(&old_arc.stats);
         let drive = old_arc.drive;
         let new_entry = match target {
-            ShardState::Parked => ShardEntry::new_parked(drive, stats),
+            ShardState::Parked => {
+                // Phase 4 Commit F — extract the bloom + trie from the
+                // existing full body so the parked shard can answer the
+                // search-skip pre-check without re-loading from disk.
+                // The legality check (`is_legal_demote_target`) only
+                // permits `Hot | Warm` → `Parked`, both of which carry
+                // a body, so the `body()` Option is `Some`.  An absent
+                // body would indicate a torn registry; defend with a
+                // log and skip the demote rather than panic.
+                let Some(body) = old_arc.body() else {
+                    tracing::error!(
+                        target: "shard.transition",
+                        letter = %letter.to_ascii_uppercase(),
+                        from = %from_state,
+                        to = %target,
+                        reason = "demote",
+                        "Hot/Warm shard had no body during demote; skipping",
+                    );
+                    return None;
+                };
+                let parked_body = Arc::new(body.to_parked_body());
+                ShardEntry::new_parked(drive, stats, parked_body)
+            }
             ShardState::Cold => ShardEntry::new_cold(drive, stats),
             // Filtered out by `is_legal_demote_target` above; this
             // arm is unreachable in practice, exists only so the
