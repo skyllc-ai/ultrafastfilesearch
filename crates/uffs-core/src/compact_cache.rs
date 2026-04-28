@@ -51,6 +51,8 @@ const COMPACT_MAGIC: &[u8; 8] = b"UFFSCOM\0";
 const COMPACT_VERSION: u16 = 9;
 
 mod filters_io;
+pub mod parked;
+pub use parked::{ParkedBody, deserialize_parked_body, load_parked_body};
 /// Bytes per `CompactRecord`.
 const RECORD_BYTES: usize = size_of::<CompactRecord>();
 /// zstd compression level for compact cache.
