@@ -149,6 +149,80 @@ pub fn compact_cache_path(drive_letter: char) -> PathBuf {
     uffs_mft::cache::cache_dir().join(format!("{drive_letter}_compact.uffs"))
 }
 
+/// Remove a stale **directory** at the compact-cache target path, if any.
+///
+/// # Background — the v0.4.23 legacy layout
+///
+/// Commit `a88041a30` (v0.4.23, 2026-03-28) introduced
+/// [`save_compact_cache`] with the wrong call shape:
+///
+/// ```ignore
+/// uffs_mft::cache::create_secure_dir(&path)?;          // BUG: makes <DRIVE>_compact.uffs a DIRECTORY
+/// uffs_mft::cache::atomic_write(&path, &encrypted)?;   // rename(.tmp, dir) → EISDIR on Mac/Linux
+/// ```
+///
+/// `create_secure_dir(<file_path>)` `mkdir -p`'d the cache *file path* as
+/// a (always-empty) directory; the subsequent `atomic_write` rename then
+/// failed silently with `EISDIR` (`os error 21`) on every Unix host.
+/// The fix landed in commit `335028444` (v0.4.27) — the call now passes
+/// `path.parent()` — but the empty legacy directories remain on disk for
+/// any user who ran v0.4.23 → v0.4.26.  Without this helper every
+/// subsequent `save_compact_cache(_background)` continues to fail
+/// silently on those drives, the demote→promote cycle finds no on-disk
+/// body, and search returns zero results from Parked drives.
+///
+/// # Behaviour
+///
+/// * Path doesn't exist (cold-boot first save) → `Ok(())`, no-op.
+/// * Path is a regular file (or symlink) → `Ok(())`; [`atomic_write`] will
+///   replace it.
+/// * Path is an **empty** directory → `remove_dir`, warn-log the recovery,
+///   return `Ok(())`.
+/// * Path is a **non-empty** directory → return the underlying `ENOTEMPTY`
+///   error and error-log; we deliberately refuse to `remove_dir_all` so any
+///   future bug producing populated state at this path surfaces loudly instead
+///   of silently destroying user data.  The v0.4.23 layout is empirically empty
+///   (verified against dogfood Mac filesystem state on 2026-04-28).
+///
+/// Self-heal: after the first successful `save_compact_cache(_background)`
+/// the path is a regular file and this helper is a metadata-only no-op
+/// on every subsequent call.
+///
+/// [`atomic_write`]: uffs_mft::cache::atomic_write
+fn purge_legacy_compact_cache_dir(path: &Path, drive: char) -> io::Result<()> {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        // Path doesn't exist — nothing to purge.  `symlink_metadata`
+        // (not `metadata`) so we don't follow a symlink and accidentally
+        // probe the wrong inode.
+        return Ok(());
+    };
+    if !meta.is_dir() {
+        // Already a regular file (or symlink) — `atomic_write`'s rename
+        // will replace it.
+        return Ok(());
+    }
+    match std::fs::remove_dir(path) {
+        Ok(()) => {
+            tracing::warn!(
+                drive = %drive,
+                path = %path.display(),
+                "Removed legacy v0.4.23 compact-cache directory; saving file at this path now",
+            );
+            Ok(())
+        }
+        Err(err) => {
+            tracing::error!(
+                drive = %drive,
+                path = %path.display(),
+                error = %err,
+                "Compact-cache path is a non-empty directory — refusing to remove. \
+                 Manual intervention required: inspect and remove the directory at this path.",
+            );
+            Err(err)
+        }
+    }
+}
+
 /// Process-static counter used by [`compact_runtime_tempfile_path`] to
 /// disambiguate re-entrant calls into the same daemon process.
 ///
@@ -763,6 +837,11 @@ pub fn save_compact_cache(index: &DriveCompactIndex) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         uffs_mft::cache::create_secure_dir(dir)?;
     }
+    // Purge the v0.4.23 legacy directory at the cache file path before
+    // `atomic_write` (called inside `compress_encrypt_write_streaming`)
+    // hits an EISDIR rename failure.  No-op for cold-boot first saves
+    // and for every save after the first successful one.
+    purge_legacy_compact_cache_dir(&path, index.letter)?;
     uffs_mft::cache::compress_encrypt_write_streaming(
         |encoder| serialize_compact_to_writer(index, encoder),
         &path,
@@ -838,6 +917,10 @@ fn encrypt_and_write(
     let encrypted = uffs_security::crypto::encrypt_cache(&compressed, &key)?;
     // Drop compressed — only encrypted needed for write.
     drop(compressed);
+    // Purge the v0.4.23 legacy directory at the target path so the
+    // following `atomic_write` rename does not hit EISDIR.  Runs on the
+    // background thread so the (rare) error path keeps full context.
+    purge_legacy_compact_cache_dir(path, drive)?;
     uffs_mft::cache::atomic_write(path, &encrypted)?;
     if profile {
         let enc_write_ms = t_enc.elapsed().as_millis();

@@ -401,3 +401,97 @@ fn heap_path_yields_vec_backed_columns() {
         "names column must NOT be Mmap-backed after deserialize_compact"
     );
 }
+
+// ─── Mac wake-up regression: purge_legacy_compact_cache_dir contract ───
+//
+// Pin the four-arm behaviour of [`super::purge_legacy_compact_cache_dir`]
+// so the v0.4.23 legacy-directory recovery path can never silently
+// regress.  Each test sets up the on-disk state directly inside a
+// `tempfile::TempDir` (no dependence on the global `cache_dir()`), then
+// exercises the helper and asserts both the return value and the
+// resulting filesystem state.
+
+/// Path doesn't exist → `Ok(())`, filesystem unchanged.  Cold-boot
+/// first save hits this arm.
+#[test]
+fn purge_legacy_dir_missing_path_is_noop() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let path = tmp.path().join("Z_compact.uffs");
+    assert!(!path.exists(), "precondition: path absent");
+
+    purge_legacy_compact_cache_dir(&path, 'Z').expect("missing path must be Ok(())");
+
+    assert!(
+        !path.exists(),
+        "missing path must remain missing after purge"
+    );
+}
+
+/// Path is a regular file → `Ok(())`, file untouched.  Steady-state
+/// after the first successful save lands here on every subsequent call.
+#[test]
+fn purge_legacy_dir_regular_file_is_noop() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let path = tmp.path().join("Z_compact.uffs");
+    std::fs::write(&path, b"existing cache bytes").expect("seed regular file");
+
+    purge_legacy_compact_cache_dir(&path, 'Z').expect("regular file must be Ok(())");
+
+    let bytes = std::fs::read(&path).expect("regular file must still be readable");
+    assert_eq!(
+        bytes, b"existing cache bytes",
+        "regular file content must survive purge unchanged"
+    );
+}
+
+/// Path is an **empty** directory (the v0.4.23 layout) → directory
+/// removed, helper returns `Ok(())`.  This is the actual legacy state
+/// observed on dogfood Mac filesystems on 2026-04-28.
+#[test]
+fn purge_legacy_dir_empty_directory_is_removed() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let path = tmp.path().join("Z_compact.uffs");
+    std::fs::create_dir(&path).expect("seed empty directory");
+    assert!(path.is_dir(), "precondition: path is empty dir");
+
+    purge_legacy_compact_cache_dir(&path, 'Z').expect("empty dir must be Ok(())");
+
+    assert!(
+        !path.exists(),
+        "empty legacy directory must be removed by purge"
+    );
+}
+
+/// Path is a **non-empty** directory → helper returns `Err` (the
+/// underlying `ENOTEMPTY`) and the directory is left intact.  Defensive
+/// guard against a hypothetical future regression that populates the
+/// path: we want the daemon to surface the failure loudly rather than
+/// silently `remove_dir_all` user data.
+#[test]
+fn purge_legacy_dir_non_empty_directory_is_refused() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let path = tmp.path().join("Z_compact.uffs");
+    std::fs::create_dir(&path).expect("seed dir");
+    std::fs::write(path.join("unexpected.bin"), b"surprise").expect("seed dir contents");
+
+    let err = purge_legacy_compact_cache_dir(&path, 'Z')
+        .expect_err("non-empty dir must propagate the underlying io::Error");
+    assert!(
+        matches!(
+            err.kind(),
+            io::ErrorKind::DirectoryNotEmpty | io::ErrorKind::Other
+        ),
+        "non-empty dir must produce DirectoryNotEmpty (or fall back to Other on \
+         older platforms); got {kind:?}",
+        kind = err.kind(),
+    );
+
+    assert!(
+        path.is_dir(),
+        "non-empty dir must remain on disk after refused purge",
+    );
+    assert!(
+        path.join("unexpected.bin").is_file(),
+        "non-empty dir contents must be untouched after refused purge",
+    );
+}
