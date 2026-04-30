@@ -30,7 +30,7 @@
 # CI pipeline will auto-refresh on `ship --fresh` unless `--skip-toolchain-sync`
 # is passed — use that flag (or plain `just ship`) while the upstream regression
 # persists.
-channel = "nightly-2026-04-28"
+channel = "nightly-2026-04-30"
 
 # Specify components that should always be available
 components = [
