@@ -156,6 +156,33 @@ pub(crate) struct IndexManager {
     /// [`crate::cache::prefetch::tests::RecordingPrefetch`] to assert the
     /// records + names regions reach the kernel.
     prefetch: Arc<dyn crate::cache::prefetch::Prefetch>,
+    /// Memory-pressure signal source (Phase 5 task 5.3).  Held so
+    /// the daemon's `spawn_pressure_subscriber` (in `lib.rs`) can
+    /// call [`Self::subscribe_pressure`] to obtain a
+    /// [`tokio::sync::watch::Receiver`] and react to `Low` events
+    /// by cascade-demoting LRU Warm shards via
+    /// [`Self::cascade_demote_one_step`] (task 5.6).  Production
+    /// wires [`crate::cache::pressure::PlatformPressureSignal`]
+    /// (Mac/Linux never-fires, Windows future watcher thread); the
+    /// Phase 5 task 5.10 tests inject
+    /// [`crate::cache::pressure::tests::ControllablePressureSignal`]
+    /// to broadcast deterministic transitions and assert the LRU
+    /// cascade order.
+    pressure: Arc<dyn crate::cache::pressure::PressureSignal>,
+    /// Thread-level background-I/O priority hook (Phase 5 task 5.7).
+    /// Held so [`Self::refresh_usn_for_warm_shards`] can wrap each
+    /// per-letter `tokio::task::spawn_blocking` closure in a
+    /// [`crate::cache::background_io::BackgroundIoScope`] so the USN
+    /// catch-up + encrypted-cache write happen at Windows
+    /// `THREAD_MODE_BACKGROUND_BEGIN` priority — yielding to any
+    /// foreground RPC handler under disk contention.  Production
+    /// wires [`crate::cache::background_io::PlatformBackgroundIoPriority`]
+    /// (no-op on Mac/Linux, `SetThreadPriority` on Windows); the
+    /// Phase 5 unit test injects
+    /// [`crate::cache::background_io::tests::CountingBackgroundIoPriority`]
+    /// to assert the begin/end pair fires exactly once per refresh
+    /// closure.
+    background_io: Arc<dyn crate::cache::background_io::BackgroundIoPriority>,
 }
 
 impl IndexManager {
@@ -175,23 +202,28 @@ impl IndexManager {
             Arc::new(crate::cache::body_loader::DiskBodyLoader),
             Arc::new(crate::cache::working_set::PlatformWorkingSetTrim),
             Arc::new(crate::cache::prefetch::PlatformPrefetch),
+            Arc::new(crate::cache::pressure::PlatformPressureSignal::new()),
+            Arc::new(crate::cache::background_io::PlatformBackgroundIoPriority),
         )
     }
 
     /// Inner constructor that threads custom lifecycle hooks
-    /// (body loader + working-set trim + prefetch).
+    /// (body loader + working-set trim + prefetch + pressure signal).
     ///
     /// Production code calls [`Self::new`] which wires the
     /// platform impls; the Phase 5 unit tests use this path
     /// through [`Self::with_lifecycle_hooks_for_test`] to inject
-    /// counting / recording fakes without touching the platform
-    /// cache directory or the process working set.
+    /// counting / recording / controllable fakes without touching
+    /// the platform cache directory, the process working set, or
+    /// the OS pressure-notification API.
     fn new_with_lifecycle_hooks(
         data_dir: Option<PathBuf>,
         events: EventSender,
         body_loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
         working_set_trim: Arc<dyn crate::cache::working_set::WorkingSetTrim>,
         prefetch: Arc<dyn crate::cache::prefetch::Prefetch>,
+        pressure: Arc<dyn crate::cache::pressure::PressureSignal>,
+        background_io: Arc<dyn crate::cache::background_io::BackgroundIoPriority>,
     ) -> Self {
         let cpus = std::thread::available_parallelism().map_or(4, core::num::NonZeroUsize::get);
         Self {
@@ -214,6 +246,8 @@ impl IndexManager {
             body_loader,
             working_set_trim,
             prefetch,
+            pressure,
+            background_io,
         }
     }
 
@@ -223,11 +257,13 @@ impl IndexManager {
     /// fakes — no platform cache directory touched, no
     /// process-global env-var override, no `tempfile`-juggling.
     /// Threads the production [`PlatformWorkingSetTrim`] (no-op on
-    /// Mac/Linux) and [`PlatformPrefetch`] for the lifecycle hooks
-    /// since pre-Phase-5 tests don't care about them.
+    /// Mac/Linux), [`PlatformPrefetch`], and
+    /// [`PlatformPressureSignal`] (never-fires on Mac/Linux) for the
+    /// lifecycle hooks since pre-Phase-5 tests don't care about them.
     ///
     /// [`PlatformWorkingSetTrim`]: crate::cache::working_set::PlatformWorkingSetTrim
     /// [`PlatformPrefetch`]: crate::cache::prefetch::PlatformPrefetch
+    /// [`PlatformPressureSignal`]: crate::cache::pressure::PlatformPressureSignal
     #[cfg(test)]
     pub(crate) fn with_body_loader_for_test(
         data_dir: Option<PathBuf>,
@@ -240,16 +276,19 @@ impl IndexManager {
             body_loader,
             Arc::new(crate::cache::working_set::PlatformWorkingSetTrim),
             Arc::new(crate::cache::prefetch::PlatformPrefetch),
+            Arc::new(crate::cache::pressure::PlatformPressureSignal::new()),
+            Arc::new(crate::cache::background_io::PlatformBackgroundIoPriority),
         )
     }
 
     /// Test-only constructor that swaps in custom hooks for the
     /// full memory-tiering lifecycle (body loader + working-set
-    /// trim + prefetch).  Phase 5 tasks 5.8 + 5.9 inject counting
-    /// / recording fakes here so the demote-batch and promote-on-
-    /// search assertions can assert exactly-once invocation and
-    /// the right (records, names) regions without touching the
-    /// process's actual working set or kernel page cache.
+    /// trim + prefetch + pressure signal).  Phase 5 tasks 5.8, 5.9,
+    /// and 5.10 inject counting / recording / controllable fakes
+    /// here so the demote-batch, promote-on-search, and pressure-
+    /// cascade assertions can run deterministically without touching
+    /// the process's actual working set, kernel page cache, or OS
+    /// pressure-notification API.
     #[cfg(test)]
     pub(crate) fn with_lifecycle_hooks_for_test(
         data_dir: Option<PathBuf>,
@@ -257,8 +296,18 @@ impl IndexManager {
         body_loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
         working_set_trim: Arc<dyn crate::cache::working_set::WorkingSetTrim>,
         prefetch: Arc<dyn crate::cache::prefetch::Prefetch>,
+        pressure: Arc<dyn crate::cache::pressure::PressureSignal>,
+        background_io: Arc<dyn crate::cache::background_io::BackgroundIoPriority>,
     ) -> Self {
-        Self::new_with_lifecycle_hooks(data_dir, events, body_loader, working_set_trim, prefetch)
+        Self::new_with_lifecycle_hooks(
+            data_dir,
+            events,
+            body_loader,
+            working_set_trim,
+            prefetch,
+            pressure,
+            background_io,
+        )
     }
 
     /// Acquire an owned search-concurrency permit.
@@ -1294,6 +1343,102 @@ impl IndexManager {
         }
     }
 
+    /// Subscribe to memory-pressure transitions (Phase 5 task 5.6).
+    ///
+    /// Returns a [`tokio::sync::watch::Receiver`] carrying the
+    /// current [`PressureLevel`] and waking on every transition.
+    /// The daemon's `spawn_pressure_subscriber` (in `lib.rs`) is
+    /// the sole production consumer; the Phase 5 task 5.10 test
+    /// uses [`Self::cascade_demote_one_step`] directly without
+    /// going through the watch channel.
+    ///
+    /// [`PressureLevel`]: crate::cache::pressure::PressureLevel
+    pub(crate) fn subscribe_pressure(
+        &self,
+    ) -> tokio::sync::watch::Receiver<crate::cache::pressure::PressureLevel> {
+        self.pressure.subscribe()
+    }
+
+    /// Cascade-demote one LRU Warm shard to Parked (Phase 5 task 5.6).
+    ///
+    /// Picks the Warm shard with the **oldest**
+    /// `DriveStats::last_query_at_ms` and demotes it one tier
+    /// (Warm → Parked).  Returns `Some((letter, ShardState::Parked))`
+    /// when work was done, `None` when no Warm shards remain (the
+    /// caller stops the cascade).
+    ///
+    /// **LRU contract** (closes the deferred Phase 3 task 3.6).  The
+    /// per-shard `last_query_at_ms` already exists from Phase 3; the
+    /// "LRU bookkeeping" task 3.6 alluded to is just a sort at
+    /// demote-time — no separate ordering data structure is needed,
+    /// since the cascade fires rarely (only on Windows pressure
+    /// transitions) and the Warm subset is small (one shard per
+    /// loaded drive, capped at the indexed-drive count).
+    ///
+    /// **Working-set trim**.  Each cascade step calls
+    /// [`WorkingSetTrim::trim`] once.  Unlike the idle-demote
+    /// batch — where one trim per batch coalesces N shards — the
+    /// cascade is one shard per call by design (the subscriber
+    /// loop yields between calls so a `High` transition can stop
+    /// the cascade promptly), so there's no batch to coalesce.
+    ///
+    /// [`WorkingSetTrim::trim`]: crate::cache::working_set::WorkingSetTrim::trim
+    pub(crate) async fn cascade_demote_one_step(&self) -> Option<(char, crate::cache::ShardState)> {
+        // ── Phase 1: read-lock detect (LRU pick) ────────────────────
+        // Enumerate Warm shards and keep the one with the oldest
+        // `last_query_at_ms`.  `min_by_key` returns `None` when no
+        // Warm shards exist; the caller stops the cascade.
+        let pick: Option<(char, u64)> = {
+            let guard = self.index.read().await;
+            guard
+                .iter()
+                .filter(|shard| shard.state() == crate::cache::ShardState::Warm)
+                .map(|shard| (shard.drive, shard.stats.last_query_at_ms()))
+                .min_by_key(|&(_, ts)| ts)
+        };
+        let (letter, last_query_at_ms) = pick?;
+
+        // ── Phase 2: write-lock atomic single-shard demote ─────────
+        // Re-check inside the write lock — a concurrent promote
+        // could have moved the picked shard back to Hot/Warm
+        // between the read-lock and the write-lock acquisition.
+        // `demote_letter` returns `None` for an illegal transition,
+        // in which case we skip and the next cascade tick re-picks.
+        let target = crate::cache::ShardState::Parked;
+        let mut guard = self.index.write().await;
+        let new_registry = guard.demote_letter(letter, target)?;
+        *guard = Arc::new(new_registry);
+        drop(guard);
+        self.bump_index_version();
+
+        // ── Phase 3: working-set trim (Phase 5 task 5.4 reuse) ────
+        // One trim per cascade step (vs once per idle-demote batch)
+        // — see method-level docs for the rationale.  Best-effort:
+        // any I/O error is logged at `target: "shard.transition"`
+        // and the daemon continues.
+        if let Err(err) = self.working_set_trim.trim() {
+            tracing::warn!(
+                target: "shard.transition",
+                drive = %letter,
+                error = %err,
+                reason = "pressure-cascade",
+                "WorkingSetTrim::trim failed; daemon continues",
+            );
+        }
+
+        tracing::info!(
+            target: "shard.transition",
+            drive = %letter,
+            from = "Warm",
+            to = "Parked",
+            reason = "pressure-cascade",
+            last_query_at_ms,
+            "Pressure cascade demoted one LRU Warm shard",
+        );
+
+        Some((letter, target))
+    }
+
     /// Phase 5 (#95) — fold live USN journal deltas into every
     /// `Warm` / `Hot` shard's in-memory body and persist a fresher
     /// compact cache to disk.
@@ -1356,12 +1501,25 @@ impl IndexManager {
         );
 
         // ── Phase 2: parallel USN refresh via JoinSet ──────────────
+        // Each per-letter closure enters
+        // [`crate::cache::background_io::BackgroundIoScope`]
+        // (Phase 5 task 5.7) at the top so the USN-journal read +
+        // delta apply + `save_compact_cache_background` write all
+        // run at Windows `THREAD_MODE_BACKGROUND_BEGIN` priority,
+        // yielding to any foreground RPC handler under disk
+        // contention.  RAII via `_bg_scope` ensures the matching
+        // `_END` fires even if the inner closure panics — the
+        // blocking pool thread returns to normal priority before
+        // it gets reused for unrelated work.  No-op on Mac/Linux.
         let mut load_set: tokio::task::JoinSet<(
             char,
             anyhow::Result<Arc<uffs_core::compact::DriveCompactIndex>>,
         )> = tokio::task::JoinSet::new();
         for letter in letters {
+            let background_io = Arc::clone(&self.background_io);
             load_set.spawn_blocking(move || {
+                let _bg_scope =
+                    crate::cache::background_io::BackgroundIoScope::enter(background_io);
                 // `catch_unwind` mirrors the #93 pattern: convert a
                 // panicking refresh closure into a typed error so
                 // the JoinSet's error arm doesn't lose the letter.

@@ -21,8 +21,8 @@ crates/uffs-daemon/src/index/mod.rs|PERMANENT: Single IndexManager impl with 15 
 crates/uffs-client/src/protocol/tests.rs|PERMANENT: Wire format round-trip test suite; splitting fragments test cohesion
 crates/uffs-core/src/search/backend_tests.rs|PERMANENT: Backend sort/filter integration test suite; shared fixtures require cohesion
 crates/uffs-core/src/search/query_tests.rs|PERMANENT: Integration query test suite; shared synthetic index fixture requires cohesion
-crates/uffs-daemon/src/index/tests.rs|PERMANENT: Aggregation integration test suite; shared drive fixture requires cohesion
 crates/uffs-core/src/aggregate/integration_tests.rs|PERMANENT: Aggregate engine integration test suite; shared synthetic drive fixture requires cohesion
 crates/uffs-mft/src/platform/volume.rs|PERMANENT: Volume handle + write-protect fallback handles; splitting would fragment the handle lifecycle
 crates/uffs-core/src/search/backend.rs|PERMANENT: Search backend facade — DisplayRow, PhaseTimings, SearchResult, FilterMode, MultiDriveBackend orchestrator; cross-cutting types for the whole search pipeline
 crates/uffs-daemon/src/lifecycle.rs|PERMANENT: LifecycleManager + LifecycleHandle + idle-timer state machine; splitting the cohesive run_idle_timer + load_stalled_force_retire + extended_timeout_for_activity cluster fragments the active-connection / load-stall / shutdown semantics across files
+crates/uffs-daemon/src/lib.rs|PERMANENT: run_daemon orchestrator + the cohesive cluster of spawn_load_task / spawn_ipc_servers / spawn_stats_heartbeat / spawn_idle_demote_controller / spawn_usn_refresh_controller / spawn_pressure_subscriber background-task controllers; splitting the controllers across sibling modules fragments the daemon startup graph and the shared imports / DaemonConfig / EventSender wiring
