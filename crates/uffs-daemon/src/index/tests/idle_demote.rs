@@ -463,15 +463,40 @@ async fn shard_transition_events_emitted_on_demote_and_promote() {
     mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
 
     let events = log.events();
+    // Filter to the operator-facing observability contract: the
+    // INFO-level `shard.transition` events with a tier-transition
+    // `reason` (`demote`, `promote`, `usn-refresh`).  Other levels
+    // on this target are best-effort observability noise that may
+    // legitimately fire on a tier transition without violating the
+    // contract — e.g. the Phase 5 `Prefetch::hint failed` warn,
+    // which can fire on Linux for synthetic small heap regions
+    // even when the promote itself succeeds (and is documented at
+    // `crates/uffs-daemon/src/cache/prefetch.rs` to be best-effort
+    // with warn-level logging on failure).  Pinning by level +
+    // reason makes this test robust to the runtime-topology
+    // detail of *which thread* the prefetch hint runs on (the
+    // PR-e refactor moved the hint from a `spawn_blocking` closure
+    // into the surrounding async task — both paths are observably
+    // correct, but only the latter is captured by the
+    // `set_default` thread-local subscriber on a `current_thread`
+    // runtime).
     let transitions: Vec<&CapturedEvent> = events
         .iter()
-        .filter(|event| event.target == "shard.transition")
+        .filter(|event| {
+            event.target == "shard.transition"
+                && event.level == tracing::Level::INFO
+                && matches!(
+                    event.field("reason"),
+                    Some("demote" | "promote" | "usn-refresh")
+                )
+        })
         .collect();
 
     assert_eq!(
         transitions.len(),
         2,
-        "expected exactly two shard.transition events (one demote + one promote), got {}: {:#?}",
+        "expected exactly two INFO `shard.transition` events with reason in \
+         {{demote, promote, usn-refresh}} (one demote + one promote), got {}: {:#?}",
         transitions.len(),
         transitions
     );
