@@ -21,8 +21,11 @@ mod wire_spec;
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::path::PathBuf;
+use std::sync::Mutex as StdMutex;
 use std::time::Instant;
 
+use futures::future::{BoxFuture, Shared};
+use futures::{FutureExt, StreamExt};
 use tokio::sync::{RwLock, Semaphore};
 use uffs_client::protocol::response::{DaemonStatus, StatsResponse, StatusResponse};
 use uffs_core::aggregate::AggregateCache;
@@ -30,6 +33,38 @@ use uffs_core::search::backend::DriveIndex;
 
 use crate::cache::{ShardRegistry, unix_now_ms};
 use crate::events::{DaemonEvent, EventSender};
+
+/// Type alias for the shared, awaitable in-flight body-load future.
+///
+/// Each entry is a [`futures::future::Shared`] over a boxed future
+/// that loads + prefetches the body for a single drive letter.  N
+/// concurrent callers all clone the same `Shared` and await it,
+/// receiving the same `Option<Arc<DriveCompactIndex>>` outcome.
+///
+/// This is the core primitive for the per-letter single-flight
+/// dedup that prevents the thundering-herd promote stampede observed
+/// on Windows v0.5.83 (PR-e — see
+/// `docs/refactor/promote-thundering-herd-fix.md`).
+type InFlightLoad = Shared<BoxFuture<'static, Option<Arc<uffs_core::compact::DriveCompactIndex>>>>;
+
+/// Slot map for in-flight body loads — one entry per drive letter.
+///
+/// Wrapped in a `std::sync::Mutex` (not `tokio::sync::Mutex`) because:
+///
+/// 1. The critical section is microscopic — a `HashMap` get / insert / remove
+///    on a map bounded by the loaded-drive count (≤ 26 entries). No async work
+///    is performed under the lock.
+/// 2. The cleanup `Drop` path on a cancelled owner future needs to remove the
+///    slot without an async runtime — `std::sync::Mutex` can be locked
+///    synchronously where `tokio::sync::Mutex` would require `blocking_lock`
+///    (panics inside an async runtime, see Tokio docs) or runtime-aware glue.
+///
+/// Poison handling matches the rest of the daemon (see
+/// [`crate::lifecycle::DaemonHandle::verify_shutdown_nonce`]): the
+/// `HashMap` stores no invariants that need recovery, so we recover
+/// the inner state via [`std::sync::PoisonError::into_inner`] rather
+/// than panicking on poisoning.
+type InFlightPromotes = Arc<StdMutex<std::collections::HashMap<char, InFlightLoad>>>;
 
 /// Per-drive load timing stored for profile reporting.
 ///
@@ -183,6 +218,26 @@ pub(crate) struct IndexManager {
     /// to assert the begin/end pair fires exactly once per refresh
     /// closure.
     background_io: Arc<dyn crate::cache::background_io::BackgroundIoPriority>,
+    /// Per-letter single-flight dedup for body loads — PR-e fix
+    /// for the thundering-herd promote stampede observed on
+    /// Windows v0.5.83 MCP-validation soak (see
+    /// `docs/refactor/promote-thundering-herd-fix.md`).
+    ///
+    /// When N concurrent search dispatches all observe the same
+    /// drive as Parked, the first one installs a
+    /// [`futures::future::Shared`] over the body-load future; the
+    /// rest find the existing entry and clone-and-await the same
+    /// future, receiving the same outcome.  After the load
+    /// completes, a dedicated cleanup task — spawned at install
+    /// time and independent of any awaiter's lifetime — removes
+    /// the slot so the next Parked → Warm cycle starts a fresh
+    /// load (preserves USN-refresh freshness).
+    ///
+    /// Pre-fix RAM math (Windows v0.5.83 storm window): 8 × 1.3 GB
+    /// transient × 4 drives ≈ 32 GB peak.  Post-fix: 1 × 1.3 GB
+    /// per Parked drive in flight at any moment, ≈ 2 GB peak for
+    /// the same workload.  See [`Self::load_or_join_in_flight`].
+    in_flight_promotes: InFlightPromotes,
 }
 
 impl IndexManager {
@@ -248,6 +303,7 @@ impl IndexManager {
             prefetch,
             pressure,
             background_io,
+            in_flight_promotes: Arc::new(StdMutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -1082,88 +1138,46 @@ impl IndexManager {
             return;
         }
 
-        // ── Phase 2: parallel body load via JoinSet ────────────
-        // For each Parked/Cold letter, fan out one
-        // `tokio::task::spawn_blocking` task into the blocking
-        // pool for the I/O + decrypt + decompress + runtime-mmap
-        // materialisation.  `BodyLoader::load` returns `None` on
-        // any non-fatal failure (missing cache file, stale, decrypt
-        // error); we trace and skip — the shard stays in its
-        // current tier and the search will dispatch against the
-        // unchanged active subset.
+        // ── Phase 2: per-letter parallel body load with single-flight dedup ─
+        // For each Parked/Cold letter, drive one
+        // [`Self::load_or_join_in_flight`] call in parallel via a
+        // [`futures::stream::FuturesUnordered`].  The helper
+        // performs the I/O + decrypt + decompress + runtime-mmap
+        // materialisation inside its inner `tokio::task::spawn_blocking`
+        // and returns `None` on any non-fatal failure (missing cache
+        // file, stale, decrypt error, panic, abort).  The drain
+        // loop traces and skips — the shard stays in its current tier
+        // and the search will dispatch against the unchanged active
+        // subset.
         //
-        // **Why parallel** (#93): the cold-boot WARM path loads N
-        // drives in parallel from the same on-disk caches and
-        // completes in ~max(per-drive); the original serial loop
-        // here did sum(per-drive) and was 2–3× slower on real
-        // workloads (15.1 s for 6 drives in v0.5.80, vs. 5.7 s
-        // for 7 drives at `daemon start`).  Each
-        // per-letter write-lock swap is a sub-µs pointer-swap;
-        // even at N=7 the cumulative contention is < 10 µs, well
-        // below the per-drive load cost (~1 s+).
+        // **Why parallel across letters** (#93): the cold-boot WARM
+        // path loads N drives in parallel from the same on-disk
+        // caches and completes in ~max(per-drive); the original
+        // serial loop here did sum(per-drive) and was 2–3× slower on
+        // real workloads (15.1 s for 6 drives in v0.5.80, vs. 5.7 s
+        // for 7 drives at `daemon start`).  Each per-letter
+        // write-lock swap is a sub-µs pointer-swap; even at N=7 the
+        // cumulative contention is < 10 µs, well below the per-drive
+        // load cost (~1 s+).
         //
-        // Each closure runs in its own blocking thread, so panics
-        // are caught here via `catch_unwind` to keep the letter
-        // identifier in the JoinSet result; without this the
-        // `JoinError` arm would lose the panicking letter.
-        let mut load_set: tokio::task::JoinSet<(
-            char,
-            Option<Arc<uffs_core::compact::DriveCompactIndex>>,
-        )> = tokio::task::JoinSet::new();
+        // **Why deduped per letter** (PR-e — see
+        // `docs/refactor/promote-thundering-herd-fix.md`): the
+        // Windows v0.5.83 MCP-validation soak triggered up to 8
+        // concurrent body loads per Parked drive when 25 search
+        // dispatches simultaneously hit the same Parked subset,
+        // causing transient RSS spikes to ~36 GB (8 × 1.3 GB ×
+        // 4 drives).  The helper coalesces concurrent callers onto
+        // a single [`futures::future::Shared`] body-load future per
+        // letter, capping transient allocations at one per Parked
+        // drive in flight.
+        let mut load_set: futures::stream::FuturesUnordered<_> =
+            futures::stream::FuturesUnordered::new();
         for letter in needs_promote {
+            let in_flight = Arc::clone(&self.in_flight_promotes);
             let loader = Arc::clone(&self.body_loader);
             let prefetch = Arc::clone(&self.prefetch);
-            load_set.spawn_blocking(move || {
-                // `catch_unwind` lives in `std` (needs unwinding
-                // runtime); `AssertUnwindSafe` lives in `core` (the
-                // production lint enforces `core` imports for items
-                // that are available there).
-                let body = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
-                    loader.load(letter)
-                }))
-                .unwrap_or_else(|_payload| {
-                    tracing::error!(
-                        target: "shard.transition",
-                        drive = %letter,
-                        reason = "promote-on-search",
-                        "blocking-task panic during cache load; shard stays in current tier",
-                    );
-                    None
-                });
-
-                // ── Phase 5 task 5.5 — prefetch hint ─────────────
-                // Best-effort kernel-prefetch on the records +
-                // names regions while we're still in the blocking
-                // task, before the orchestrator acquires the
-                // registry write-lock for the swap.  Mac/Linux:
-                // `posix_madvise(MADV_WILLNEED)` per region;
-                // Windows: single `PrefetchVirtualMemory` call.
-                // The body `Arc` keeps the underlying allocation
-                // / mmap alive across this call so the raw
-                // pointers stay valid (Send/Sync wrapper:
-                // `PrefetchRegion`).  Errors are logged and
-                // ignored — the shard still promotes.
-                if let Some(body_arc) = body.as_ref() {
-                    let regions = [
-                        crate::cache::prefetch::PrefetchRegion {
-                            ptr: body_arc.records.as_slice().as_ptr().cast::<u8>(),
-                            len: size_of_val(body_arc.records.as_slice()),
-                        },
-                        crate::cache::prefetch::PrefetchRegion {
-                            ptr: body_arc.names.as_slice().as_ptr(),
-                            len: body_arc.names.as_slice().len(),
-                        },
-                    ];
-                    if let Err(err) = prefetch.hint(&regions) {
-                        tracing::warn!(
-                            target: "shard.transition",
-                            drive = %letter,
-                            error = %err,
-                            reason = "promote-on-search",
-                            "Prefetch::hint failed; shard still promotes",
-                        );
-                    }
-                }
+            load_set.push(async move {
+                let body = Self::load_or_join_in_flight(in_flight, loader, prefetch, letter).await;
                 (letter, body)
             });
         }
@@ -1174,22 +1188,13 @@ impl IndexManager {
         // and write-swap, or a demote landed on top of the
         // Parked state we observed) drops the freshly-loaded
         // body Arc and leaves the canonical registry alone.
-        while let Some(join_result) = load_set.join_next().await {
-            let (letter, body_opt) = match join_result {
-                Ok(pair) => pair,
-                Err(join_err) => {
-                    // Task aborted (shutdown / cancel) — letter
-                    // identity is lost but the daemon stays up
-                    // and the shard stays in its current tier.
-                    tracing::warn!(
-                        target: "shard.transition",
-                        error = %join_err,
-                        reason = "promote-on-search",
-                        "blocking-task aborted before completion; shard stays in current tier",
-                    );
-                    continue;
-                }
-            };
+        //
+        // The `JoinError` arm of the pre-PR-e implementation moved
+        // inside [`Self::load_or_join_in_flight`]'s inner
+        // spawn-blocking handling: aborts surface as `None` here
+        // with the same `shard.transition` warning.  No outcome is
+        // observably different.
+        while let Some((letter, body_opt)) = load_set.next().await {
             let Some(body) = body_opt else {
                 tracing::warn!(
                     target: "shard.transition",
@@ -1206,6 +1211,223 @@ impl IndexManager {
                 self.bump_index_version();
             }
         }
+    }
+
+    /// Per-letter single-flight body-load: at most one
+    /// [`crate::cache::body_loader::BodyLoader::load`] call per drive
+    /// at any moment, regardless of how many concurrent search
+    /// dispatches request the same Parked drive.
+    ///
+    /// **Contract:**
+    ///
+    /// * The first caller for `letter` builds and installs a
+    ///   [`futures::future::Shared`] over the load + prefetch future, then
+    ///   awaits it.
+    /// * Concurrent callers for the same `letter` find the existing slot, clone
+    ///   the same `Shared`, and await — receiving the same
+    ///   `Option<Arc<DriveCompactIndex>>` outcome the original load produced.
+    /// * A dedicated cleanup task (spawned at install time on the Tokio
+    ///   runtime, **independent of any awaiter's lifetime**) awaits the same
+    ///   `Shared` and removes the slot once it resolves.  This makes the slot
+    ///   lifecycle robust against cancellation: even if every caller's outer
+    ///   task is dropped mid-await, the cleanup task still runs and the slot is
+    ///   removed so the next Parked → Warm cycle starts a fresh load (preserves
+    ///   USN-refresh freshness).
+    /// * The `BodyLoader::load` call still happens inside
+    ///   [`tokio::task::spawn_blocking`] wrapped in
+    ///   [`std::panic::catch_unwind`], so panics surface as `None`.
+    /// * The kernel-prefetch hint runs **once** per load (inside the deduped
+    ///   future) so 25 awaiters don't fire 25 `posix_madvise` /
+    ///   `PrefetchVirtualMemory` calls.
+    ///
+    /// **Performance contract** (the PR-e headline): under N
+    /// concurrent calls for the same Parked letter, exactly one
+    /// `BodyLoader::load` call fires.  Pinned by the
+    /// `dedupes_concurrent_promotes_for_same_letter` test in
+    /// `index/tests/ensure_warm.rs`.
+    ///
+    /// Takes Arc fields explicitly (rather than `&self`) so the
+    /// helper can be called from a `FuturesUnordered`-driven
+    /// `async move` block in [`Self::ensure_warm_for_dispatch`]
+    /// without forcing the surrounding loop to hold a borrow of
+    /// `self` across the await.
+    async fn load_or_join_in_flight(
+        in_flight: InFlightPromotes,
+        loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
+        prefetch: Arc<dyn crate::cache::prefetch::Prefetch>,
+        letter: char,
+    ) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
+        // The synchronous slot lookup + install lives in its own
+        // helper so the `MutexGuard` it acquires is naturally scoped
+        // to a single sync call — no guard held across any await,
+        // and `clippy::significant_drop_tightening` is satisfied.
+        let fut = Self::install_or_join_in_flight_slot(&in_flight, &loader, &prefetch, letter);
+        fut.await
+    }
+
+    /// Synchronous slot manager for [`Self::load_or_join_in_flight`].
+    ///
+    /// Either returns a clone of the existing per-letter
+    /// [`InFlightLoad`] (the second-and-onwards concurrent caller
+    /// path) or builds a fresh one, installs it, and spawns the
+    /// cleanup task that removes the slot once the load resolves
+    /// (the first-caller path).
+    ///
+    /// The lock is held only for the [`std::collections::hash_map::Entry`]
+    /// lookup + install (a few ns); the cleanup task is spawned
+    /// **after** the `MutexGuard` is dropped, so no async work or
+    /// `tokio::spawn` overhead happens under the lock.  Callers
+    /// then `.await` the returned [`InFlightLoad`] with no lock
+    /// held — which keeps the dedup map non-blocking even when the
+    /// underlying body load takes seconds.
+    fn install_or_join_in_flight_slot(
+        in_flight: &InFlightPromotes,
+        loader: &Arc<dyn crate::cache::body_loader::BodyLoader>,
+        prefetch: &Arc<dyn crate::cache::prefetch::Prefetch>,
+        letter: char,
+    ) -> InFlightLoad {
+        use std::collections::hash_map::Entry;
+
+        // Acquire the lock, run the Entry lookup, drop the lock
+        // (via the inner block scope) before spawning the cleanup
+        // task.  Returning `(shared, was_inserted)` carries the
+        // first-caller signal out across the drop boundary.
+        let (shared, was_inserted) = {
+            let mut map = in_flight
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match map.entry(letter) {
+                Entry::Occupied(slot) => (slot.get().clone(), false),
+                Entry::Vacant(slot) => {
+                    let shared: InFlightLoad =
+                        Self::build_load_future(Arc::clone(loader), Arc::clone(prefetch), letter)
+                            .boxed()
+                            .shared();
+                    slot.insert(shared.clone());
+                    (shared, true)
+                }
+            }
+        };
+
+        if was_inserted {
+            // Cleanup task: awaits the same `Shared` independently
+            // of any caller.  Even if every caller is cancelled
+            // mid-await, the cleanup task keeps the inner future
+            // polled to completion (the spawn_blocking work runs
+            // on the blocking pool regardless) and removes the
+            // slot.  Spawned **outside** the locked block above so
+            // no lock is held across the `tokio::spawn` call.
+            let cleanup_in_flight = Arc::clone(in_flight);
+            let cleanup_fut = shared.clone();
+            tokio::spawn(async move {
+                // The `Shared` resolves to
+                // `Option<Arc<DriveCompactIndex>>`; we discard it
+                // (every awaiting caller already received their
+                // own clone).  `drop(...await)` is the codebase's
+                // idiom for this — see
+                // `crates/uffs-daemon/src/index/tests/registry.rs`
+                // for prior art.
+                drop(cleanup_fut.await);
+                cleanup_in_flight
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&letter);
+            });
+        }
+
+        shared
+    }
+
+    /// Build the single-flight body-load future for `letter`.
+    ///
+    /// This is the future that gets wrapped in
+    /// [`futures::future::Shared`] and stored in the in-flight
+    /// slot map by [`Self::load_or_join_in_flight`].  Factored out
+    /// for readability — the inner async block carries non-trivial
+    /// panic-recovery + prefetch-hint logic that would otherwise
+    /// drown the dedup machinery in noise.
+    ///
+    /// Returns `None` on any of:
+    ///
+    /// * The synchronous `BodyLoader::load` panics (caught by `catch_unwind`).
+    /// * The blocking task itself is aborted (caught by the outer
+    ///   `unwrap_or_else` on the `JoinHandle::await`).
+    /// * The loader returns `None` (missing / stale / corrupted cache file).
+    ///
+    /// On `Some(body)` the kernel-prefetch hint fires **once**
+    /// before the future resolves; failures to hint are logged at
+    /// `warn` and don't block the promotion.
+    async fn build_load_future(
+        loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
+        prefetch: Arc<dyn crate::cache::prefetch::Prefetch>,
+        letter: char,
+    ) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
+        // `catch_unwind` lives in `std` (needs the unwinding
+        // runtime); `AssertUnwindSafe` lives in `core` (the
+        // production lint enforces `core` imports for items
+        // that are available there).
+        let body = tokio::task::spawn_blocking(move || {
+            std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| loader.load(letter)))
+                .unwrap_or_else(|_payload| {
+                    tracing::error!(
+                        target: "shard.transition",
+                        drive = %letter,
+                        reason = "promote-on-search",
+                        "blocking-task panic during cache load; shard stays in current tier",
+                    );
+                    None
+                })
+        })
+        .await
+        .unwrap_or_else(|join_err| {
+            tracing::warn!(
+                target: "shard.transition",
+                drive = %letter,
+                error = %join_err,
+                reason = "promote-on-search",
+                "blocking-task aborted before completion; shard stays in current tier",
+            );
+            None
+        });
+
+        // ── Phase 5 task 5.5 — prefetch hint ─────────────
+        // Best-effort kernel-prefetch on the records + names
+        // regions before the future resolves and the
+        // orchestrator acquires the registry write-lock for
+        // the swap.  Mac/Linux: `posix_madvise(MADV_WILLNEED)`
+        // per region; Windows: single `PrefetchVirtualMemory`
+        // call.  The body `Arc` keeps the underlying
+        // allocation / mmap alive across this call so the raw
+        // pointers stay valid (Send/Sync wrapper:
+        // `PrefetchRegion`).  Errors are logged and ignored —
+        // the shard still promotes.
+        //
+        // Single-flight property: this fires **once** per
+        // load even when N awaiters share the future, since
+        // the hint runs inside the future before it resolves
+        // — once, in the cleanup task's scheduler turn.
+        if let Some(body_arc) = body.as_ref() {
+            let regions = [
+                crate::cache::prefetch::PrefetchRegion {
+                    ptr: body_arc.records.as_slice().as_ptr().cast::<u8>(),
+                    len: size_of_val(body_arc.records.as_slice()),
+                },
+                crate::cache::prefetch::PrefetchRegion {
+                    ptr: body_arc.names.as_slice().as_ptr(),
+                    len: body_arc.names.as_slice().len(),
+                },
+            ];
+            if let Err(err) = prefetch.hint(&regions) {
+                tracing::warn!(
+                    target: "shard.transition",
+                    drive = %letter,
+                    error = %err,
+                    reason = "promote-on-search",
+                    "Prefetch::hint failed; shard still promotes",
+                );
+            }
+        }
+        body
     }
 
     /// Phase 4 Commit F — bloom pre-check for Parked shards.
@@ -1698,6 +1920,20 @@ impl IndexManager {
             .iter()
             .map(|shard| (shard.drive, shard.state()))
             .collect()
+    }
+
+    /// Number of in-flight promote slots currently held in the
+    /// dedup map.  Used by the PR-e
+    /// `slot_clears_after_completion` test to wait deterministically
+    /// for the cleanup task spawned in
+    /// [`Self::load_or_join_in_flight`] without relying on real-time
+    /// sleeps — see the test for the polling helper.
+    #[cfg(test)]
+    pub(crate) fn in_flight_promotes_len_for_test(&self) -> usize {
+        self.in_flight_promotes
+            .lock()
+            .expect("in_flight_promotes lock poisoned — programmer bug")
+            .len()
     }
 
     /// Get daemon performance statistics.

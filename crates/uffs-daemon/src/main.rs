@@ -37,6 +37,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 use anyhow as _;
 use clap::Parser;
 use dirs_next as _;
+use futures as _;
 #[cfg(unix)]
 use libc as _;
 use libmimalloc_sys as _;

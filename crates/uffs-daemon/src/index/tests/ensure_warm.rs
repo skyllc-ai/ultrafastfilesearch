@@ -11,11 +11,24 @@
 //!   in-flight ≥ 2, wall ≈ delay not N×delay).
 //! * Phase 4 task 4.11 promote-side bloom pre-check (miss case keeps Parked,
 //!   hit case promotes).
+//! * PR-e — single-flight dedup contract via `CountingBodyLoader` (N=10
+//!   concurrent `ensure_warm` callers ⇒ exactly 1 `BodyLoader::load` call; slot
+//!   clears after the cleanup task drains so re-promote loads fresh; failures
+//!   propagate uniformly to all waiters).
 //!
 //! `FixedBodyLoader` is shared with `super::lifecycle_hooks` and
 //! lives in `super`; the other loader fakes
-//! (`MissingBodyLoader`, `PanickingBodyLoader`, `SlowBodyLoader`)
-//! are scoped to this submodule.
+//! (`MissingBodyLoader`, `PanickingBodyLoader`, `SlowBodyLoader`,
+//! `CountingBodyLoader`) are scoped to this submodule.
+//!
+//! Exception: file-size policy permanent exception (see
+//! `scripts/ci/file_size_exceptions.txt`).  This module is the
+//! single home for the 11-test
+//! `IndexManager::ensure_warm_for_dispatch` suite; the tests share
+//! 5 `BodyLoader` fakes, the `build_test_drive_with_tight_bloom`
+//! Phase 4 fixture, and the `wait_for_in_flight_clear` PR-e polling
+//! helper.  Splitting fragments the shared fakes + scenarios that
+//! must run against the same drive fixtures from `super`.
 
 #![expect(
     clippy::std_instead_of_alloc,
@@ -516,4 +529,306 @@ async fn ensure_warm_for_dispatch_promotes_parked_when_bloom_hits() {
         vec![('C', ShardState::Warm)],
         "bloom hit must promote the shard back to Warm via the loader"
     );
+}
+
+// ── PR-e — single-flight promote dedup (thundering-herd fix) ──────
+//
+// Pin the contract that
+// [`IndexManager::ensure_warm_for_dispatch`]'s
+// `load_or_join_in_flight` helper coalesces N concurrent callers
+// for the same Parked drive onto a SINGLE
+// `BodyLoader::load` invocation.  Backstory:
+//
+// On Windows v0.5.83, the MCP-validation soak with 25 concurrent
+// connections drove transient RSS to ~36 GB (stable working set
+// ~756 MB → ~36 148 MB peak → settle ~3 991 MB) because every
+// search dispatch independently observed the Parked drives and
+// each spawned its own decompress task — see `LOG/windos 0.5.83`
+// and `docs/refactor/promote-thundering-herd-fix.md`.
+//
+// The fix is a per-letter
+// [`futures::future::Shared`] over the body-load future, installed
+// in `IndexManager::in_flight_promotes` on first arrival.  These
+// three tests pin the contract:
+//
+// 1. `dedupes_concurrent_promotes_for_same_letter` — N=10 concurrent callers ⇒
+//    exactly 1 `BodyLoader::load` call.
+// 2. `slot_clears_after_completion` — re-demote + re-promote ⇒ a fresh load
+//    fires (no stale `Shared` reuse).
+// 3. `failure_propagates_to_all_waiters` — failed load ⇒ all 5 callers see the
+//    failure, slot cleared, exactly 1 load attempt.
+
+/// `BodyLoader` that records the total number of `load` calls
+/// across its lifetime and optionally sleeps `delay` per call.
+///
+/// `body == Some` returns a clone (success path); `body == None`
+/// simulates a missing-cache failure.  The `delay` is what makes
+/// the dedup race observable: with N concurrent callers and a
+/// delay long enough to outlast the slot-install scheduler turn,
+/// every caller after the first finds the existing
+/// `Shared` slot and joins the in-flight load instead of
+/// installing its own.
+struct CountingBodyLoader {
+    body: Option<Arc<uffs_core::compact::DriveCompactIndex>>,
+    calls: core::sync::atomic::AtomicUsize,
+    delay: core::time::Duration,
+}
+
+impl CountingBodyLoader {
+    fn succeeding(
+        body: Arc<uffs_core::compact::DriveCompactIndex>,
+        delay: core::time::Duration,
+    ) -> Self {
+        Self {
+            body: Some(body),
+            calls: core::sync::atomic::AtomicUsize::new(0),
+            delay,
+        }
+    }
+
+    fn failing(delay: core::time::Duration) -> Self {
+        Self {
+            body: None,
+            calls: core::sync::atomic::AtomicUsize::new(0),
+            delay,
+        }
+    }
+
+    fn call_count(&self) -> usize {
+        self.calls.load(core::sync::atomic::Ordering::Acquire)
+    }
+}
+
+impl crate::cache::body_loader::BodyLoader for CountingBodyLoader {
+    fn load(&self, _letter: char) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
+        self.calls
+            .fetch_add(1, core::sync::atomic::Ordering::AcqRel);
+        std::thread::sleep(self.delay);
+        self.body.clone()
+    }
+}
+
+/// Spin-wait for the `in_flight_promotes` map to drain — the
+/// cleanup task spawned by `load_or_join_in_flight` runs
+/// asynchronously, and the `slot_clears_after_completion` test
+/// needs to assert the slot is gone before it triggers the
+/// re-promote.  Polling via the test accessor (rather than a
+/// real-time sleep) keeps the test deterministic on slow CI
+/// runners.
+///
+/// Times out after ~100 ms; if the cleanup task hasn't run by
+/// then, the test fails loudly with a clear message.  100 ms is
+/// 1000× the expected cleanup latency (a single mutex acquire +
+/// a `HashMap` remove, ~µs), so the bound only fires on a real
+/// regression.
+async fn wait_for_in_flight_clear(mgr: &IndexManager) {
+    // Suffix the loop bound to dodge `clippy::default_numeric_fallback`
+    // (the codebase forbids implicit `i32` integer types).
+    for _ in 0_u32..100_u32 {
+        if mgr.in_flight_promotes_len_for_test() == 0 {
+            return;
+        }
+        tokio::time::sleep(core::time::Duration::from_millis(1)).await;
+    }
+    panic!(
+        "in-flight promote slot did not clear within ~100 ms — \
+         the cleanup task spawned by `load_or_join_in_flight` did \
+         not run (regression: `Shared` slot leak)"
+    );
+}
+
+/// Headline PR-e contract: with N=10 concurrent search
+/// dispatches all targeting the same Parked drive, the
+/// `BodyLoader::load` fires **exactly once**.  Pinned by the
+/// counter on [`CountingBodyLoader`].  Pre-fix, all N callers
+/// independently spawned their own decompress task and the
+/// counter would read 10.  Post-fix, the
+/// `futures::future::Shared` slot in `in_flight_promotes`
+/// coalesces them onto one load.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ensure_warm_for_dispatch_dedupes_concurrent_promotes_for_same_letter() {
+    use core::time::Duration;
+
+    use crate::cache::ShardState;
+
+    let (tx, _rx) = crate::events::event_channel();
+
+    // 100 ms per load: long enough that all 10 spawned tasks reach
+    // the slot-install path before any of them completes, so the
+    // race window for dedup is wide open.  Short enough to keep the
+    // test fast on CI.
+    let delay = Duration::from_millis(100);
+    let body = Arc::new(build_test_drive());
+    let loader = Arc::new(CountingBodyLoader::succeeding(Arc::clone(&body), delay));
+    let loader_dyn: Arc<dyn crate::cache::body_loader::BodyLoader> =
+        Arc::clone(&loader) as Arc<dyn crate::cache::body_loader::BodyLoader>;
+
+    let mgr = Arc::new(IndexManager::with_body_loader_for_test(
+        None, tx, loader_dyn,
+    ));
+    mgr.add_drive(build_test_drive()).await;
+
+    // Demote C → Parked; the body Arc is dropped from the registry.
+    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+
+    // Spawn 10 concurrent ensure_warm_for_dispatch calls — each
+    // independently observes C as Parked.  Without the dedup, each
+    // would spawn its own decompress; with dedup, exactly one load
+    // fires and all 10 await the same `Shared`.
+    let mut handles = Vec::with_capacity(10);
+    for _ in 0_u32..10_u32 {
+        let mgr_clone = Arc::clone(&mgr);
+        handles.push(tokio::spawn(async move {
+            mgr_clone.ensure_warm_for_dispatch(&['C'], &[]).await;
+        }));
+    }
+    for handle in handles {
+        handle
+            .await
+            .expect("ensure_warm_for_dispatch caller task panicked");
+    }
+
+    // All 10 callers saw C transition to Warm.
+    let states = mgr.shard_states_for_test().await;
+    assert_eq!(
+        states,
+        vec![('C', ShardState::Warm)],
+        "all 10 concurrent ensure_warm_for_dispatch callers must observe C as Warm",
+    );
+
+    // The PR-e single-flight contract: exactly one load.
+    let calls = loader.call_count();
+    assert_eq!(
+        calls, 1,
+        "single-flight promote dedup violated: 10 concurrent ensure_warm callers \
+         caused {calls} body loads (expected 1) — the thundering-herd promote \
+         stampede has regressed (see `docs/refactor/promote-thundering-herd-fix.md`)",
+    );
+}
+
+/// PR-e slot-lifecycle contract: after the `Shared` slot's load
+/// resolves, the cleanup task must remove the slot so a future
+/// Parked → Warm cycle starts a **fresh** load (preserves
+/// USN-refresh freshness).  Pinned by `loader.call_count() == 2`
+/// after a demote / re-promote cycle on the same drive.
+///
+/// If the cleanup task were skipped (slot leaked), the second
+/// `ensure_warm_for_dispatch` would find the stale `Shared` and
+/// reuse its cached body — load count would stay at 1.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ensure_warm_for_dispatch_slot_clears_so_re_promote_after_demote_loads_fresh() {
+    use core::time::Duration;
+
+    use crate::cache::ShardState;
+
+    let (tx, _rx) = crate::events::event_channel();
+
+    // Zero-delay loader: we don't need the dedup race in this
+    // test — we need the install + cleanup cycle to complete fully
+    // between calls.
+    let body = Arc::new(build_test_drive());
+    let loader = Arc::new(CountingBodyLoader::succeeding(
+        Arc::clone(&body),
+        Duration::ZERO,
+    ));
+    let loader_dyn: Arc<dyn crate::cache::body_loader::BodyLoader> =
+        Arc::clone(&loader) as Arc<dyn crate::cache::body_loader::BodyLoader>;
+
+    let mgr = IndexManager::with_body_loader_for_test(None, tx, loader_dyn);
+    mgr.add_drive(build_test_drive()).await;
+
+    // ── First Parked → Warm cycle ──────────────────────────────
+    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
+    assert_eq!(
+        loader.call_count(),
+        1,
+        "first promote must trigger exactly one load",
+    );
+    let states_after_first = mgr.shard_states_for_test().await;
+    assert_eq!(states_after_first, vec![('C', ShardState::Warm)]);
+
+    // Wait for the cleanup task to drain the slot.  Polling via
+    // the accessor avoids real-time-sleep flakiness on slow CI.
+    wait_for_in_flight_clear(&mgr).await;
+
+    // ── Second Parked → Warm cycle ─────────────────────────────
+    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
+
+    // The fresh load contract: re-promote after the cleanup task
+    // ran must call `BodyLoader::load` again — not reuse the
+    // first cycle's cached `Shared`.
+    let calls = loader.call_count();
+    assert_eq!(
+        calls, 2,
+        "slot leak detected: re-promote after re-demote did not start a fresh load — \
+         saw {calls} loads total (expected 2).  The cleanup task in \
+         `load_or_join_in_flight` is not removing the slot after the `Shared` resolves.",
+    );
+
+    // After the second cleanup also runs, the slot is empty again.
+    wait_for_in_flight_clear(&mgr).await;
+}
+
+/// PR-e failure-propagation contract: when the deduped load
+/// resolves to `None` (cache missing / corrupted / decrypt
+/// failure), all N concurrent waiters observe the failure
+/// uniformly — and the load attempt itself fired exactly once.
+///
+/// Sister to the previous tests: the dedup must work for *both*
+/// success and failure outcomes, otherwise a transient cache
+/// corruption could thunder N decompress panics simultaneously.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ensure_warm_for_dispatch_dedupes_concurrent_failures_for_same_letter() {
+    use core::time::Duration;
+
+    use crate::cache::ShardState;
+
+    let (tx, _rx) = crate::events::event_channel();
+
+    let delay = Duration::from_millis(50);
+    let loader = Arc::new(CountingBodyLoader::failing(delay));
+    let loader_dyn: Arc<dyn crate::cache::body_loader::BodyLoader> =
+        Arc::clone(&loader) as Arc<dyn crate::cache::body_loader::BodyLoader>;
+
+    let mgr = Arc::new(IndexManager::with_body_loader_for_test(
+        None, tx, loader_dyn,
+    ));
+    mgr.add_drive(build_test_drive()).await;
+    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+
+    // 5 concurrent callers, all of which will see the loader return None.
+    let mut handles = Vec::with_capacity(5);
+    for _ in 0_u32..5_u32 {
+        let mgr_clone = Arc::clone(&mgr);
+        handles.push(tokio::spawn(async move {
+            mgr_clone.ensure_warm_for_dispatch(&['C'], &[]).await;
+        }));
+    }
+    for handle in handles {
+        handle
+            .await
+            .expect("ensure_warm_for_dispatch caller task panicked");
+    }
+
+    // All 5 saw the failure; C stayed Parked.
+    let states = mgr.shard_states_for_test().await;
+    assert_eq!(
+        states,
+        vec![('C', ShardState::Parked)],
+        "5 concurrent failed promotes must all leave C Parked (no half-promoted state)",
+    );
+
+    // Single-flight under failure: exactly one load attempt.
+    let calls = loader.call_count();
+    assert_eq!(
+        calls, 1,
+        "single-flight failure dedup violated: 5 concurrent failed promotes \
+         triggered {calls} load attempts (expected 1) — the failure path \
+         is not deduped",
+    );
+
+    // Cleanup also runs after the failed load resolves.
+    wait_for_in_flight_clear(&mgr).await;
 }

@@ -41,6 +41,12 @@ uffs-format.workspace = true
 # Async — `net` re-enabled here because the daemon's IPC server uses
 # `tokio::net::UnixListener` (unix) / `NamedPipeServer` (windows).
 tokio = { workspace = true, features = ["net"] }
+# `futures::future::Shared` + `BoxFuture` + `FuturesUnordered` for the
+# per-letter single-flight dedup in
+# `IndexManager::ensure_warm_for_dispatch`'s
+# `load_or_join_in_flight` helper (PR-e: thundering-herd promote
+# fix — see `docs/refactor/promote-thundering-herd-fix.md`).
+futures = { workspace = true }
 
 # Serialization (JSON-RPC)
 serde.workspace = true
