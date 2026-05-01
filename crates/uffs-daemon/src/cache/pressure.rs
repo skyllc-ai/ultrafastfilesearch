@@ -12,6 +12,18 @@
 //! (see [`crate::index::IndexManager::cascade_demote_one_step`])
 //! until either the registry has no Warm shards left or `High` arrives.
 //!
+//! On Windows, [`PlatformPressureSignal::new`] spawns a dedicated
+//! kernel thread (`uffs-pressure`) that owns the two notification
+//! handles plus a manual-reset shutdown event.  Its main loop calls
+//! `WaitForMultipleObjects` with `INFINITE` and translates the
+//! signaled handle into a `PressureLevel::Low` / `PressureLevel::High`
+//! send on the inner [`watch::Sender`].  On `Drop`, the struct
+//! signals the shutdown event, joins the watcher, and closes the
+//! handles.  Handle-creation failure (very old or stripped Windows
+//! editions, or handle exhaustion at startup) is logged at warn-level
+//! and the signal degrades to "never-fires" — the daemon falls back
+//! to TTL-driven demotion alone.
+//!
 //! Mac/Linux ship a never-fires stub — there is no portable
 //! process-wide notification API on those targets and the kernel
 //! handles reclaim itself; demotions are TTL-driven via
@@ -41,20 +53,25 @@ use tokio::sync::watch;
 
 /// Memory-pressure level reported by [`PressureSignal::subscribe`].
 ///
-/// Production translates Windows's
+/// `Normal` is always present — it's the initial value before any
+/// notification arrives and the steady state on every platform.
+/// `Low` and `High` are **platform-conditional** — they only exist
+/// on Windows (where the kernel's
 /// `LowMemoryResourceNotification` / `HighMemoryResourceNotification`
-/// into [`Self::Low`] / [`Self::High`]; [`Self::Normal`] is the
-/// initial value before any notification arrives and the steady
-/// state on Mac/Linux.
+/// surface them via [`windows_handles::watcher_loop`]) and under
+/// `cfg(test)` (so [`tests::ControllablePressureSignal`] can drive
+/// deterministic transitions on every host).  Mac/Linux production
+/// builds expose only `Normal`: there is no portable process-wide
+/// memory-resource-notification API on those targets, and the
+/// kernel handles reclaim itself — demotion is TTL-driven via
+/// [`crate::index::IndexManager::demote_idle_shards`] alone.
 ///
-/// `Low` and `High` are *pattern-matched* in production
-/// (`lib.rs::spawn_pressure_subscriber`) but only *constructed* by
-/// the `tests::ControllablePressureSignal` fake until the Win32
-/// watcher thread lands in a follow-up commit on this Phase 5
-/// branch.  The targeted `#[expect(dead_code, …)]` attributes on
-/// `Low` / `High` will *fail to compile* once the watcher thread
-/// starts constructing them — exactly the right tripwire to ensure
-/// the suppressions get removed when they're no longer needed.
+/// Consumers that want to react to `Low` should use
+/// [`Self::requires_cascade_demote`] rather than pattern-matching
+/// the variant directly — the method has platform-specific
+/// implementations that compile cleanly on Mac/Linux production
+/// builds (where `Low` does not exist) and short-circuit to the
+/// correct answer (`false`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PressureLevel {
     /// No pressure signal yet, or steady state.  Subscriber takes no
@@ -62,34 +79,44 @@ pub(crate) enum PressureLevel {
     Normal,
     /// Free RAM has fallen below the kernel's low-memory threshold.
     /// Subscriber cascade-demotes LRU Warm shards.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Constructed by the Win32 watcher thread (Phase 5 follow-up commit \
-                      on this branch) and by tests::ControllablePressureSignal; \
-                      production pattern-matches in lib.rs::spawn_pressure_subscriber \
-                      but never constructs in non-test code paths until the watcher \
-                      lands — at which point this attribute will fail to compile and \
-                      force its own removal."
-        )
-    )]
+    ///
+    /// Only present on Windows production builds (constructed by
+    /// [`windows_handles::watcher_loop`]) and under `cfg(test)`
+    /// (constructed by [`tests::ControllablePressureSignal`]).
+    #[cfg(any(target_os = "windows", test))]
     Low,
     /// Free RAM has risen back above the kernel's high-memory
     /// threshold; pressure cleared.  Subscriber stops the cascade.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Constructed by the Win32 watcher thread (Phase 5 follow-up commit \
-                      on this branch) and by tests::ControllablePressureSignal; \
-                      production pattern-matches in lib.rs::spawn_pressure_subscriber \
-                      but never constructs in non-test code paths until the watcher \
-                      lands — at which point this attribute will fail to compile and \
-                      force its own removal."
-        )
-    )]
+    ///
+    /// Only present on Windows production builds (constructed by
+    /// [`windows_handles::watcher_loop`]) and under `cfg(test)`
+    /// (constructed by [`tests::ControllablePressureSignal`]).
+    #[cfg(any(target_os = "windows", test))]
     High,
+}
+
+impl PressureLevel {
+    /// Returns `true` when this level should drive the daemon's
+    /// cascade-demote loop.
+    ///
+    /// On Windows production / under `cfg(test)`: returns `true`
+    /// for `Self::Low` and `false` otherwise.  On Mac/Linux
+    /// production builds the only constructible variant is
+    /// [`Self::Normal`], so this method always returns `false`
+    /// — the platform-gated `match` arm below evaluates only
+    /// when `Self::Low` exists.
+    ///
+    /// Used by `lib.rs::spawn_pressure_subscriber` so the
+    /// subscriber loop body stays portable across every target
+    /// without spreading `#[cfg]` gates through the daemon's main
+    /// runtime path.
+    pub(crate) const fn requires_cascade_demote(self) -> bool {
+        match self {
+            #[cfg(any(target_os = "windows", test))]
+            Self::Low => true,
+            _ => false,
+        }
+    }
 }
 
 /// Process-level memory-pressure subscriber.
@@ -113,46 +140,122 @@ pub(crate) trait PressureSignal: Send + Sync + 'static {
 
 /// Production pressure-signal implementation.
 ///
-/// On Windows: future commit (Phase 5 task 5.6 wire-up) will spawn
-/// a thread that calls `WaitForMultipleObjects(low_event, high_event)`
-/// on handles from `CreateMemoryResourceNotification` and translates
-/// the OS notifications into [`PressureLevel::Low`] /
-/// [`PressureLevel::High`] sends on the inner [`watch::Sender`].
-/// On Mac/Linux: never-fires sender held internally — receivers
-/// always see [`PressureLevel::Normal`] and `changed()` never returns.
+/// On Windows: [`Self::new`] creates handles for the kernel's
+/// `LowMemoryResourceNotification` and `HighMemoryResourceNotification`
+/// notifications plus a manual-reset shutdown event, then spawns a
+/// dedicated kernel thread that translates kernel notifications into
+/// `PressureLevel::Low` / `PressureLevel::High` sends on the inner
+/// [`watch::Sender`].  On Mac/Linux: never-fires sender held
+/// internally — receivers always see [`PressureLevel::Normal`] and
+/// `changed()` never returns.
 ///
 /// Phase 5 task 5.3 — paired with the Phase 5 dogfood gate
 /// "stress test … daemon log shows `cache.pressure { level: \"Low\" }`
 /// and demotion cascade".
 pub(crate) struct PlatformPressureSignal {
-    /// The watch sender held internally.  Mac/Linux never `send`s on
-    /// this; Windows's future watcher thread will.  Holding the
-    /// sender keeps the channel open for as long as the
+    /// The watch sender held internally.  On Mac/Linux nothing ever
+    /// `send`s on this; on Windows the watcher thread does.
+    /// Holding the sender keeps the channel open for as long as the
     /// `IndexManager` lives, even when no subscriber is currently
     /// attached (e.g. during the brief startup window before
     /// `spawn_pressure_subscriber` runs).
     sender: watch::Sender<PressureLevel>,
+    /// Manual-reset event signaled by [`Drop::drop`] to break the
+    /// watcher thread out of `WaitForMultipleObjects`.  `None` when
+    /// handle creation failed at startup and we degraded to dormant
+    /// mode (the daemon falls back to TTL-driven demotion alone).
+    #[cfg(target_os = "windows")]
+    shutdown_event: Option<windows_handles::OwnedHandle>,
+    /// Watcher thread join handle; consumed in [`Drop::drop`] after
+    /// signaling shutdown.  `None` when handle creation failed at
+    /// startup or we are running on a non-Windows platform.
+    #[cfg(target_os = "windows")]
+    watcher_thread: Option<std::thread::JoinHandle<()>>,
 }
 
+#[cfg(not(target_os = "windows"))]
 impl PlatformPressureSignal {
-    /// Create a new platform pressure signal.
+    /// Create a never-fires pressure signal for Mac/Linux.
     ///
-    /// Initialises the watch channel at [`PressureLevel::Normal`] —
-    /// the steady state.  Mac/Linux daemons never observe a
-    /// transition; Windows daemons will see Low/High once the
-    /// future Win32 watcher thread is wired in (currently unwired
-    /// — landing in this same Phase 5 PR's follow-up commit so
-    /// the pipeline can be tested end-to-end on Mac first).
+    /// The watch channel is initialised at [`PressureLevel::Normal`]
+    /// and stays there forever — there is no portable process-wide
+    /// notification API on these targets.  The daemon's
+    /// `spawn_pressure_subscriber` will simply park on
+    /// `changed().await` and never wake; demotion happens via
+    /// [`crate::index::IndexManager::demote_idle_shards`] alone.
     #[must_use]
     pub(crate) fn new() -> Self {
         let (sender, _initial_rx) = watch::channel(PressureLevel::Normal);
-        // Drop the initial receiver immediately — subscribers attach
-        // via [`Self::subscribe`].  `watch::Sender::send` returns
-        // `Err` if no receivers exist; that's fine on Mac where we
-        // never call `send`.  On Windows the watcher thread will
-        // ignore that error during the (vanishingly small) startup
-        // window before `spawn_pressure_subscriber` runs.
         Self { sender }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl PlatformPressureSignal {
+    /// Create a Windows pressure signal and spawn the Win32 watcher
+    /// thread.
+    ///
+    /// Best-effort: if any kernel handle creation fails or the
+    /// `std::thread::spawn` fails, the signal degrades to
+    /// "never-fires" (equivalent to the Mac/Linux stub) and a
+    /// warn-level log line is emitted.  This keeps the daemon
+    /// resilient against stripped Windows editions or transient
+    /// resource exhaustion at startup — the cascade demote is a
+    /// *best-effort optimisation* on top of the always-available
+    /// TTL-driven demotion path.
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        let (sender, _initial_rx) = watch::channel(PressureLevel::Normal);
+        match windows_handles::spawn_watcher(sender.clone()) {
+            Ok((shutdown_event, watcher_thread)) => Self {
+                sender,
+                shutdown_event: Some(shutdown_event),
+                watcher_thread: Some(watcher_thread),
+            },
+            Err(err) => {
+                tracing::warn!(
+                    target: "cache.pressure",
+                    error = %err,
+                    "Win32 memory-resource-notification setup failed; \
+                     pressure pipeline degraded to never-fires — daemon \
+                     falls back to TTL-driven demotion alone",
+                );
+                Self {
+                    sender,
+                    shutdown_event: None,
+                    watcher_thread: None,
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for PlatformPressureSignal {
+    /// Signal the watcher thread to exit and join it.
+    ///
+    /// Order is critical: we **must** signal the shutdown event
+    /// **before** joining, otherwise the watcher's
+    /// `WaitForMultipleObjects` never returns and `join()` hangs.
+    /// We **must** join **before** the `shutdown_event` field's
+    /// own `Drop` (which closes the kernel handle) runs, otherwise
+    /// the watcher would race against a closed handle value.  Rust
+    /// runs this manual `Drop::drop` first, then field `Drop`s in
+    /// declaration order — so the sequence is guaranteed.
+    fn drop(&mut self) {
+        if let Some(shutdown) = &self.shutdown_event {
+            windows_handles::signal_shutdown(shutdown);
+        }
+        if let Some(handle) = self.watcher_thread.take() {
+            if let Err(payload) = handle.join() {
+                tracing::warn!(
+                    target: "cache.pressure",
+                    "Pressure watcher thread panicked: {payload:?}",
+                );
+            }
+        }
+        // shutdown_event drops automatically here, closing the
+        // kernel handle exactly once via OwnedHandle's Drop.
     }
 }
 
@@ -165,6 +268,264 @@ impl Default for PlatformPressureSignal {
 impl PressureSignal for PlatformPressureSignal {
     fn subscribe(&self) -> watch::Receiver<PressureLevel> {
         self.sender.subscribe()
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows_handles {
+    //! Win32 watcher thread + kernel-handle ownership for
+    //! [`super::PlatformPressureSignal`].
+    //!
+    //! Encapsulates every `unsafe` FFI call so the surrounding module
+    //! stays free of `unsafe { \u2026 }` blocks.  Each call site has a
+    //! tightly-scoped `#[expect(unsafe_code, reason = "\u2026")]` plus a
+    //! SAFETY comment explaining why the kernel contract is upheld.
+
+    use std::io;
+
+    use tokio::sync::watch;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::Memory::{
+        CreateMemoryResourceNotification, HighMemoryResourceNotification,
+        LowMemoryResourceNotification, MEMORY_RESOURCE_NOTIFICATION_TYPE,
+    };
+    use windows::Win32::System::Threading::{
+        CreateEventW, INFINITE, SetEvent, WaitForMultipleObjects,
+    };
+    use windows::core::PCWSTR;
+
+    use super::PressureLevel;
+
+    /// Owns a Win32 kernel handle; closes it on `Drop`.
+    ///
+    /// Single-ownership wrapper that ensures `CloseHandle` is called
+    /// exactly once even if the owner panics.
+    pub(super) struct OwnedHandle(HANDLE);
+
+    // SAFETY: HANDLE is an opaque kernel-object reference (an
+    // `isize`-sized identifier); the kernel arbitrates concurrent
+    // access to the underlying object and Win32 APIs that take
+    // handles are documented as thread-safe.  We only ever pass
+    // the value across threads, never share Rust-level mutability
+    // — the only mutation site is `Drop::drop` which takes
+    // `&mut self`, so `&OwnedHandle` shared between threads is
+    // race-free.
+    #[expect(
+        unsafe_code,
+        reason = "HANDLE is a thread-safe kernel-object reference"
+    )]
+    unsafe impl Send for OwnedHandle {}
+    #[expect(
+        unsafe_code,
+        reason = "HANDLE is a thread-safe kernel-object reference"
+    )]
+    unsafe impl Sync for OwnedHandle {}
+
+    impl OwnedHandle {
+        fn raw(&self) -> HANDLE {
+            self.0
+        }
+    }
+
+    impl Drop for OwnedHandle {
+        fn drop(&mut self) {
+            if !self.0.is_invalid() {
+                // SAFETY: self.0 is a valid handle returned by a
+                // Win32 Create*-family API and not yet closed
+                // (single-ownership invariant).  CloseHandle is
+                // sync and the documented Win32 idiom for releasing
+                // handles.  Errors are silently ignored — we are
+                // already in Drop and have no useful recovery.
+                #[expect(unsafe_code, reason = "Win32 CloseHandle FFI for handle cleanup")]
+                unsafe {
+                    let _ = CloseHandle(self.0);
+                }
+            }
+        }
+    }
+
+    /// Value-copy of a `HANDLE` that is safe to send across threads.
+    ///
+    /// Used by [`watcher_loop`] to receive a borrowed reference to
+    /// the shutdown event whose [`OwnedHandle`] lives in
+    /// [`super::PlatformPressureSignal`].  The watcher must **not**
+    /// close this handle — the owner does so in its `Drop` after
+    /// joining the watcher thread.
+    #[derive(Clone, Copy)]
+    struct SendableHandle(HANDLE);
+
+    // SAFETY: same rationale as `OwnedHandle: Send` — HANDLE values
+    // are kernel-arbitrated identifiers, safe to pass across threads.
+    #[expect(
+        unsafe_code,
+        reason = "HANDLE is a thread-safe kernel-object reference"
+    )]
+    unsafe impl Send for SendableHandle {}
+
+    /// Signal the shutdown event so the watcher thread breaks out
+    /// of `WaitForMultipleObjects`.
+    pub(super) fn signal_shutdown(shutdown: &OwnedHandle) {
+        // SAFETY: shutdown is a valid handle owned by the caller;
+        // SetEvent is sync, takes no ownership, and is the
+        // documented Win32 idiom for signaling a manual-reset
+        // event.  Errors are logged but never propagated — we are
+        // called from Drop and propagating a panic here aborts the
+        // process.
+        #[expect(unsafe_code, reason = "Win32 SetEvent FFI for shutdown signaling")]
+        let result = unsafe { SetEvent(shutdown.raw()) };
+        if let Err(err) = result {
+            tracing::warn!(
+                target: "cache.pressure",
+                error = %err,
+                "Failed to signal pressure-watcher shutdown event",
+            );
+        }
+    }
+
+    /// Spawn the watcher thread and return owned handles.
+    ///
+    /// On success, returns `(shutdown_event, join_handle)`.  On
+    /// failure (handle exhaustion, thread spawn failure, stripped
+    /// Windows edition), returns the underlying `io::Error` and any
+    /// partially-created handles are closed via `OwnedHandle::Drop`.
+    pub(super) fn spawn_watcher(
+        sender: watch::Sender<PressureLevel>,
+    ) -> io::Result<(OwnedHandle, std::thread::JoinHandle<()>)> {
+        let low = create_memory_resource_notification(LowMemoryResourceNotification)?;
+        let high = create_memory_resource_notification(HighMemoryResourceNotification)?;
+        let shutdown = create_manual_reset_event()?;
+        let shutdown_value = SendableHandle(shutdown.raw());
+
+        let thread = std::thread::Builder::new()
+            .name("uffs-pressure".to_owned())
+            .spawn(move || {
+                watcher_loop(low, high, shutdown_value, sender);
+            })
+            .map_err(|err| {
+                io::Error::other(format!("failed to spawn pressure watcher thread: {err}"))
+            })?;
+
+        Ok((shutdown, thread))
+    }
+
+    /// Watcher thread main loop.
+    ///
+    /// Owns `low` + `high` notification handles (closed on thread
+    /// exit via `OwnedHandle::Drop`).  Borrows the shutdown handle's
+    /// value — the owning `OwnedHandle` lives in
+    /// [`super::PlatformPressureSignal`] and closes it on its own
+    /// `Drop` *after* this thread has joined.
+    ///
+    /// State machine: a `Low` notification means we transition to
+    /// the Low pressure level; subsequent waits ignore further Low
+    /// signals (the kernel keeps the event set until memory
+    /// recovers) and listen only for High.  Symmetric for High.
+    /// Initial `Normal` waits for either.  Index 0 is always the
+    /// shutdown event so a clean exit preempts pressure transitions.
+    fn watcher_loop(
+        low: OwnedHandle,
+        high: OwnedHandle,
+        shutdown: SendableHandle,
+        sender: watch::Sender<PressureLevel>,
+    ) {
+        let mut current = PressureLevel::Normal;
+        loop {
+            let handles: Vec<HANDLE> = match current {
+                PressureLevel::Normal => vec![shutdown.0, low.raw(), high.raw()],
+                PressureLevel::Low => vec![shutdown.0, high.raw()],
+                PressureLevel::High => vec![shutdown.0, low.raw()],
+            };
+
+            // SAFETY: WaitForMultipleObjects takes a slice of valid
+            // HANDLE values.  All handles in the slice are kept
+            // alive by the OwnedHandle bindings (`low`, `high`) and
+            // the borrowed-but-owned-by-caller shutdown event.
+            // INFINITE is safe — the caller signals shutdown via
+            // SetEvent to release the wait.  `bWaitAll = false` so
+            // the call returns as soon as any one handle signals.
+            #[expect(unsafe_code, reason = "Win32 WaitForMultipleObjects FFI")]
+            let result = unsafe { WaitForMultipleObjects(&handles, false, INFINITE) };
+            let signaled_index = result.0;
+
+            // Index 0 is always the shutdown event.
+            if signaled_index == 0 {
+                tracing::debug!(
+                    target: "cache.pressure",
+                    "Pressure watcher exiting on shutdown signal",
+                );
+                return;
+            }
+
+            // Out-of-range index covers WAIT_FAILED (0xFFFFFFFF),
+            // WAIT_TIMEOUT (258 — shouldn't happen with INFINITE),
+            // and WAIT_ABANDONED (0x80+i — only relevant for mutex
+            // handles).  Bail and let the daemon fall back to
+            // TTL-driven demotion alone.
+            if (signaled_index as usize) >= handles.len() {
+                tracing::warn!(
+                    target: "cache.pressure",
+                    code = signaled_index,
+                    "WaitForMultipleObjects returned unexpected code; \
+                     pressure watcher exiting",
+                );
+                return;
+            }
+
+            let next_level = match (current, signaled_index) {
+                (PressureLevel::Normal, 1) | (PressureLevel::High, 1) => PressureLevel::Low,
+                (PressureLevel::Normal, 2) | (PressureLevel::Low, 1) => PressureLevel::High,
+                _ => {
+                    // Unreachable given the bounds check + the
+                    // exhaustive `handles` construction above.
+                    // Defensive return.
+                    tracing::warn!(
+                        target: "cache.pressure",
+                        index = signaled_index,
+                        state = ?current,
+                        "Pressure watcher saw unexpected handle index for current state",
+                    );
+                    return;
+                }
+            };
+
+            current = next_level;
+            // `send_replace` never fails — it stores the value
+            // unconditionally and notifies any receivers in place.
+            // We discard the previous value (subscribers track via
+            // `changed()` + `borrow_and_update`).
+            let _previous = sender.send_replace(next_level);
+            tracing::info!(
+                target: "cache.pressure",
+                level = ?next_level,
+                "Memory resource notification fired",
+            );
+        }
+    }
+
+    fn create_memory_resource_notification(
+        notification_type: MEMORY_RESOURCE_NOTIFICATION_TYPE,
+    ) -> io::Result<OwnedHandle> {
+        // SAFETY: CreateMemoryResourceNotification is a kernel API
+        // returning `Result<HANDLE>`.  Passing one of the two
+        // documented MEMORY_RESOURCE_NOTIFICATION_TYPE values
+        // (Low/High) is the documented contract.  The returned
+        // handle is owned by the caller and must be closed via
+        // CloseHandle — handled by OwnedHandle::Drop.
+        #[expect(unsafe_code, reason = "Win32 CreateMemoryResourceNotification FFI")]
+        let handle = unsafe { CreateMemoryResourceNotification(notification_type) }
+            .map_err(|err| io::Error::other(err.to_string()))?;
+        Ok(OwnedHandle(handle))
+    }
+
+    fn create_manual_reset_event() -> io::Result<OwnedHandle> {
+        // SAFETY: CreateEventW with (None, manual_reset = true,
+        // initial_state = false, name = NULL) creates a private
+        // unnamed manual-reset event whose ownership is transferred
+        // to the caller.  OwnedHandle::Drop closes the handle.
+        #[expect(unsafe_code, reason = "Win32 CreateEventW FFI for shutdown event")]
+        let handle = unsafe { CreateEventW(None, true, false, PCWSTR::null()) }
+            .map_err(|err| io::Error::other(err.to_string()))?;
+        Ok(OwnedHandle(handle))
     }
 }
 
