@@ -682,3 +682,109 @@ impl tracing::field::Visit for FieldCapture {
         self.fields.push((field.name().to_owned(), stripped));
     }
 }
+
+// ── PR-f — promote-side `mark_loaded_at` regression test ──────────
+
+/// Pin the PR-f fix at
+/// `@/Users/rnio/Private/Github/UltraFastFileSearch/crates/uffs-daemon/src/
+/// index/mod.rs:1208` — promoting a Parked shard whose `last_query_at_ms` is
+/// older than `WARM_TO_PARKED_IDLE_SECS` must NOT cause an
+/// immediate-re-demote on the very next idle tick.
+///
+/// **Background:** the v0.5.85 Windows soak captured a clear
+/// promote-then-immediate-demote thrash in the daemon log (lines
+/// 5540 → 5733 of `LOG/windows 0.5.85`):
+///
+/// ```text
+/// 21:46:59.819  letter=G from=parked to=warm restored_mb=1
+/// 21:47:04.754  letter=G from=warm   to=parked freed_mb=1
+///                              ↑ only 4.9 s of "warm" life
+/// 21:47:11      letter=G from=parked to=warm restored_mb=1   ← thrash
+/// ```
+///
+/// Three drives (G/F/M) were re-demoted within 0.5 – 5 s of their
+/// promotes, then re-promoted seconds later when the search
+/// finally completed `ensure_warm_for_dispatch` and ran
+/// `record_search_dispatch`.
+///
+/// **Root cause:** `IndexManager::ensure_warm_for_dispatch`'s
+/// per-letter promote loop did the registry write-swap but did
+/// not stamp `last_query_at_ms` on the freshly-promoted shard.
+/// The shard inherited its pre-park value from the previous
+/// `Arc<DriveStats>` (preserved by `new_warm_with_stats`).  When
+/// the shard had been Parked for > 5 min, that inherited value
+/// was already past `WARM_TO_PARKED_IDLE_SECS`, so the very next
+/// 30-s `demote_idle_shards` tick (firing while the search was
+/// still awaiting other concurrent loads) re-demoted the shard
+/// before the eventual `record_search_dispatch` could refresh it.
+///
+/// **Fix:** call `shard.stats.mark_loaded_at(now_ms)` right after
+/// the promote write-swap, mirroring the seed in
+/// `Self::add_drive` and `Self::replace_drive`.
+///
+/// **Test sequence:**
+///
+/// 1. Add C with a fresh load timestamp (Phase-3 default).
+/// 2. Park C, then backdate `last_query_at_ms` to a deep-past value (year 2001,
+///    ≪ `WARM_TO_PARKED_IDLE_SECS` ago by any real wall clock).  This
+///    faithfully reproduces the v0.5.85 state: a parked shard whose timestamp
+///    is from a long time ago.
+/// 3. Promote C via `ensure_warm_for_dispatch`.
+/// 4. Immediately fire one `demote_idle_shards(unix_now_ms())` tick — the same
+///    race-window the Windows soak hit.
+/// 5. Assert C is still Warm.  Without PR-f, `idle_secs` would be
+///    `(unix_now_ms() - 1_000_000_000) / 1000 ≫ 300`, so the shard would
+///    re-demote.  With PR-f, `last_query_at_ms ≈ unix_now_ms()` after the
+///    promote, so `idle_secs ≈ 0` and the shard stays Warm.
+#[tokio::test]
+async fn promote_resets_idle_clock_against_thrash() {
+    use crate::cache::ShardState;
+
+    let (tx, _rx) = crate::events::event_channel();
+    let body = Arc::new(build_test_drive());
+    let loader = Arc::new(FixedBodyLoader {
+        body: Arc::clone(&body),
+    });
+    let mgr = IndexManager::with_body_loader_for_test(None, tx, loader);
+    mgr.add_drive(build_test_drive()).await;
+
+    // ── Step 1–2: Park C and backdate `last_query_at_ms` to
+    // simulate a shard that has been Parked for a very long time
+    // (the production thrash precondition).
+    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    let ancient_ts_ms = 1_000_000_000_u64; // 2001-09-09T01:46:40Z
+    assert!(
+        mgr.backdate_last_query_at_ms_for_test('C', ancient_ts_ms)
+            .await,
+        "test fixture must be able to backdate last_query_at_ms",
+    );
+
+    // ── Step 3: Promote.  PR-f bumps `last_query_at_ms` to
+    // ~`unix_now_ms()` inside the registry write-swap.
+    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
+    assert_eq!(
+        mgr.shard_states_for_test().await,
+        vec![('C', ShardState::Warm)],
+        "ensure_warm_for_dispatch must promote Parked → Warm",
+    );
+
+    // ── Step 4: Idle tick at "real now".  Without PR-f the demote
+    // controller sees the still-stale ancient_ts_ms → idle_secs
+    // ~25 years → re-demote.  With PR-f the promote refreshed the
+    // timestamp → idle_secs ≈ 0 → no demote.
+    let now_ms = crate::cache::unix_now_ms();
+    mgr.demote_idle_shards(now_ms).await;
+
+    // ── Step 5: Assert no re-demote.  Pre-PR-f this assertion
+    // fails: states_post_tick == [('C', Parked)].  Post-PR-f the
+    // shard stays Warm.
+    assert_eq!(
+        mgr.shard_states_for_test().await,
+        vec![('C', ShardState::Warm)],
+        "promote must refresh `last_query_at_ms` so the next idle \
+         tick sees a fresh idle clock; without the PR-f \
+         `mark_loaded_at(now_ms)` bump, this re-demotes immediately \
+         (the v0.5.85 Windows soak thrash captured at \
+         `LOG/windows 0.5.85` lines 5540 → 5733)",
+    );
+}

@@ -1206,6 +1206,36 @@ impl IndexManager {
             };
             let mut guard = self.index.write().await;
             if let Some(new_registry) = guard.promote_letter(letter, body) {
+                // PR-f — refresh the freshly-promoted shard's
+                // `last_query_at_ms` to "now" so the demote-idle
+                // controller's first 30 s tick after this promote sees
+                // a fresh idle clock rather than the stale value the
+                // shard carried from before parking.  Without this
+                // bump, a shard whose last_query_at_ms is more than
+                // `WARM_TO_PARKED_IDLE_SECS` (default 300 s) in the
+                // past — common when re-promoting after a long idle
+                // window — will be re-demoted on the very next tick,
+                // before `record_search_dispatch` runs at the end of
+                // the search to stamp the canonical timestamp.  The
+                // observed promote-then-immediate-demote thrash on
+                // the v0.5.85 Windows soak (G/F/M demoted within 0.5
+                // –5 s of their respective promotes) was caused
+                // exactly by this gap.  See the regression test
+                // `promote_resets_idle_clock_against_thrash` in
+                // `crate::index::tests::idle_demote`.
+                //
+                // Mirrors the seed in `Self::add_drive` line 988 and
+                // `Self::replace_drive` line 1017; uses
+                // `mark_loaded_at` (single-store, no
+                // queries_total bump) so the per-drive query count
+                // stays accurate.
+                let now_ms = unix_now_ms();
+                if let Some(shard) = new_registry
+                    .iter()
+                    .find(|shard| shard.drive.eq_ignore_ascii_case(&letter))
+                {
+                    shard.stats.mark_loaded_at(now_ms);
+                }
                 *guard = Arc::new(new_registry);
                 drop(guard);
                 self.bump_index_version();
