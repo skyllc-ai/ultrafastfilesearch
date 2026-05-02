@@ -204,18 +204,58 @@ each Warm shard becoming visible to the controller.
 
 #### Capture
 
-Watch Task Manager → *Details* → the **I/O priority** column on
-`uffsd.exe` (or use Process Explorer with the *I/O Priority* column
-enabled — PE shows the value more reliably).  During each refresh
-window (the 30-second tick between `INFO USN refresh tick starting
-count=N interval_secs=30` and `INFO USN refresh tick complete
-refreshed=N failed=0 …`), `uffsd.exe` should show **Low** (or
-**Background**, depending on tool localisation).  Outside the tick
-window the priority returns to **Normal**.
+> **Per-thread, not per-process.**  `BackgroundIoScope` calls
+> `SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN)`
+> on the **calling thread only** — specifically, on the
+> `tokio::task::spawn_blocking` worker that runs the refresh closure
+> for one drive.  Windows lowers that thread's I/O priority to
+> `IoPriorityVeryLow`, memory priority to lowest, and scheduler
+> priority to `THREAD_PRIORITY_IDLE` (Base Priority = 4) atomically
+> as part of background mode.  The **process-level** I/O priority
+> (the column shown in PE's main window or Task Manager Details)
+> stays **Normal**, because the daemon's main thread + IPC accept
+> loop are not in background mode.  **Do not look at the process-row
+> I/O Priority column — it will (correctly) always show Normal.**
 
-Note: the tracing target is `shard.refresh`, but — as in G1 — the
-target name is not rendered in the log line text.  Grep on the
-message text:
+Three ways to capture per-thread priority:
+
+**(a) Process Explorer Threads tab (GUI screenshot):**
+
+1. Right-click `uffsd.exe` → **Properties** → **Threads** tab.
+2. Right-click any column header → **Select Columns** → enable
+   **I/O Priority** + **Base Priority**.
+3. During a 30 s tick window (between `USN refresh tick starting`
+   and `USN refresh tick complete` lines in the log), screenshot the
+   Threads tab.  Expect 1–7 threads with **I/O Priority = Very Low**
+   and **Base Priority = 4** (Idle).
+4. Outside the tick: those threads either no longer exist (closure
+   completed and the spawn_blocking worker returned to the pool with
+   priority restored by `Drop`) or show Base Priority = 8 (Normal).
+
+**(b) PowerShell Win32_Thread query (text artefact, no GUI):**
+
+```powershell
+$uffsdPid = (Get-Process uffsd).Id
+Get-CimInstance Win32_Thread -Filter "ProcessHandle = '$uffsdPid'" |
+    Select-Object Handle, PriorityCurrent, BasePriority, ThreadState |
+    Sort-Object PriorityCurrent |
+    Select-Object -First 30 |
+    Format-Table -AutoSize
+```
+
+Run this **during** a tick (the terminal log line
+`USN refresh tick starting` is the trigger): expect at least 1
+thread with `PriorityCurrent = 4` (Idle).  Run again **outside** a
+tick: all threads should be `PriorityCurrent >= 8` (Normal or above).
+WMI does not surface I/O priority directly, but `THREAD_MODE_BACKGROUND_BEGIN`
+lowers thread scheduling priority and I/O priority atomically, so
+seeing `PriorityCurrent = 4` on a tick-window thread is sufficient
+evidence of background mode.
+
+**(c) Sysinternals `accesschk.exe -p -t <pid>`** (if installed):
+Dumps full per-thread info including I/O priority.
+
+Grep the log for the matching tick window:
 
 ```powershell
 Select-String -Path C:\Temp\uffsd-G3.log -Pattern 'USN refresh tick' |
@@ -230,11 +270,36 @@ closure in `crate::index::transitions::IndexManager::refresh_usn_for_warm_shards
 THREAD_MODE_BACKGROUND_BEGIN)` on enter,
 `THREAD_MODE_BACKGROUND_END` on drop.
 
+##### Diagnostic if priority is not dropping
+
+`BackgroundIoScope::begin()` failures are logged at **debug** level
+under target `shard.refresh` and otherwise swallowed.  If `(b)` or
+`(c)` show the threads stuck at Normal priority during a tick,
+restart the daemon with `RUST_LOG=...,shard.refresh=debug` and
+grep:
+
+```powershell
+Select-String -Path C:\Temp\uffsd-G3.log -Pattern 'BackgroundIoPriority' |
+    Select-Object -ExpandProperty Line
+```
+
+A non-empty match on `begin failed` indicates a real bug (e.g., the
+process token is missing `SeIncreaseBasePriorityPrivilege`, or an AV
+product is intercepting `SetThreadPriority`); empty grep + threads
+at Normal would mean the scope guard is not actually running.
+
 #### Capture for the PR
 
-Screenshot of Task Manager *Details* (or Process Explorer) with
-`uffsd.exe` showing `I/O priority = Low` (or `Background`),
-timestamped against a log line in `uffsd-G3.log` of the form:
+Either:
+
+* The Threads-tab screenshot from path **(a)** — timestamped against
+  the matching tick window in `uffsd-G3.log`.
+* OR the PowerShell `Win32_Thread` output from path **(b)**, captured
+  twice: once during a tick (showing `PriorityCurrent = 4` on
+  spawn_blocking threads) and once outside (no `PriorityCurrent = 4`
+  threads).
+
+Log grep for the corresponding tick window:
 
 ```text
 INFO USN refresh tick starting count=… interval_secs=30
