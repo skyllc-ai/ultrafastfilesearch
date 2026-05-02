@@ -36,6 +36,7 @@ use serde_json as _;
 use tempfile as _;
 use thiserror as _;
 use tokio as _;
+use toml as _;
 use tracing as _;
 use tracing_appender as _;
 use tracing_subscriber as _;

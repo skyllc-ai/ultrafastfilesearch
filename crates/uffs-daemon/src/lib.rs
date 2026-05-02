@@ -43,6 +43,13 @@ mod broker_client;
 /// Phase 1 of the memory-tiering work — see
 /// `docs/refactor/memory-tiering-implementation-plan.md`.
 mod cache;
+/// `daemon.toml` parser — Phase 6 Commit B of memory-tiering.
+///
+/// Schema mirrors plan §11; defaults match Phase-3 static behavior.
+/// Commit C wires the loader into [`run_daemon`] startup and
+/// replaces the env-var-overridable static getters in
+/// [`crate::cache::policy`] with config-driven readers.
+mod config;
 /// Daemon event broadcasting — push notifications to connected clients.
 pub mod events;
 /// JSON-RPC request handler.

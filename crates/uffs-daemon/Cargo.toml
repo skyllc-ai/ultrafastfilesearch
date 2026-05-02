@@ -51,6 +51,11 @@ futures = { workspace = true }
 # Serialization (JSON-RPC)
 serde.workspace = true
 serde_json.workspace = true
+# Phase 6 of memory-tiering: `daemon.toml` parser in
+# `crate::config` (DaemonConfig with [memory] / [tiers] / [shards] /
+# [shards.per_drive] sections; per-drive tier overrides feed the
+# adaptive-TTL controller).
+toml.workspace = true
 
 # Error handling
 thiserror.workspace = true
