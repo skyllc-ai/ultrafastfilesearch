@@ -208,52 +208,103 @@ each Warm shard becoming visible to the controller.
 > `SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN)`
 > on the **calling thread only** — specifically, on the
 > `tokio::task::spawn_blocking` worker that runs the refresh closure
-> for one drive.  Windows lowers that thread's I/O priority to
-> `IoPriorityVeryLow`, memory priority to lowest, and scheduler
-> priority to `THREAD_PRIORITY_IDLE` (Base Priority = 4) atomically
-> as part of background mode.  The **process-level** I/O priority
-> (the column shown in PE's main window or Task Manager Details)
-> stays **Normal**, because the daemon's main thread + IPC accept
-> loop are not in background mode.  **Do not look at the process-row
-> I/O Priority column — it will (correctly) always show Normal.**
+> for one drive.  Windows lowers that thread's **I/O priority** to
+> `IoPriorityVeryLow` and **memory priority** to lowest; scheduling
+> priority is left unchanged at Normal (Base Priority = 8) by
+> design.  The **process-level** I/O priority (the column shown in
+> PE's main window or Task Manager Details) stays **Normal**,
+> because the daemon's main thread + IPC accept loop are not in
+> background mode.  **Do not look at the process-row I/O Priority
+> column — it will (correctly) always show Normal.**
 
-Three ways to capture per-thread priority:
+Three capture paths, in increasing operator effort:
 
-**(a) Process Explorer Threads tab (GUI screenshot):**
+> **What changes when `THREAD_MODE_BACKGROUND_BEGIN` fires.**  The
+> Win32 documentation says "the system lowers the resource scheduling
+> priorities of the thread", but the **only** properties that actually
+> change in observable Windows APIs are:
+>
+> * **I/O priority** — drops from `IoPriorityNormal` to
+>   `IoPriorityVeryLow`.  Read via
+>   `NtQueryInformationThread(ThreadIoPriority)` or PE's I/O Priority
+>   column.
+> * **Memory priority** — drops to `MEMORY_PRIORITY_LOWEST`.  Read
+>   via `GetThreadInformation(ThreadMemoryPriority)`.
+>
+> The thread's **scheduling priority** (`GetThreadPriority`, the
+> `THREAD_PRIORITY_*` enum) **stays at `THREAD_PRIORITY_NORMAL` /
+> Base Priority = 8**, by design — background mode is meant to
+> deprioritise I/O and memory without slowing CPU work when the
+> system is idle.  This means **`.NET ProcessThread.PriorityLevel`
+> and `Get-CimInstance Win32_Thread` will NOT show any change
+> during a tick** (verified empirically: 60 s of 10 Hz polling
+> across two ticks captured zero threads at lowered scheduling
+> priority).  Only the I/O Priority column or the
+> `NtQueryInformationThread` syscall surface the actual change.
 
-1. Right-click `uffsd.exe` → **Properties** → **Threads** tab.
-2. Right-click any column header → **Select Columns** → enable
-   **I/O Priority** + **Base Priority**.
-3. During a 30 s tick window (between `USN refresh tick starting`
-   and `USN refresh tick complete` lines in the log), screenshot the
-   Threads tab.  Expect 1–7 threads with **I/O Priority = Very Low**
-   and **Base Priority = 4** (Idle).
-4. Outside the tick: those threads either no longer exist (closure
-   completed and the spawn_blocking worker returned to the pool with
-   priority restored by `Drop`) or show Base Priority = 8 (Normal).
+**(a) Debug-log grep — text-only, definitive (preferred for PR
+evidence):**
 
-**(b) PowerShell Win32_Thread query (text artefact, no GUI):**
+Clear the `RUST_LOG` env var (it overrides `--log-level`), restart
+with `--log-level debug`, wait 2-3 ticks, then grep for
+`BackgroundIoPriority`.  Empty grep = `SetThreadPriority` succeeded
+on every per-drive worker; the wiring + the unit test
+(`refresh_usn_for_warm_shards_wraps_each_closure_in_background_io_scope`)
+complete the proof:
 
 ```powershell
-$uffsdPid = (Get-Process uffsd).Id
-Get-CimInstance Win32_Thread -Filter "ProcessHandle = '$uffsdPid'" |
-    Select-Object Handle, PriorityCurrent, BasePriority, ThreadState |
-    Sort-Object PriorityCurrent |
-    Select-Object -First 30 |
-    Format-Table -AutoSize
+uffs daemon stop
+Remove-Item Env:\RUST_LOG -ErrorAction SilentlyContinue
+$env:UFFS_USN_REFRESH_INTERVAL_SECS = "30"
+uffs daemon start --log-level debug --log-file C:\Temp\uffsd-G3-debug.log
+
+# Re-warm so refresh has work to do.
+uffs "*" --ext rs --drive C --limit 5 > $null
+
+Start-Sleep -Seconds 90
+
+# Empty grep = success (begin() returned Ok on every closure).
+"=== BackgroundIoPriority diagnostic (empty = good) ==="
+Select-String -Path C:\Temp\uffsd-G3-debug.log -Pattern 'BackgroundIoPriority' |
+    Select-Object -ExpandProperty Line
+
+# Tick lines confirm the controller fired during the same window.
+"=== Tick lines ==="
+Select-String -Path C:\Temp\uffsd-G3-debug.log -Pattern 'USN refresh tick' |
+    Select-Object -ExpandProperty Line
 ```
 
-Run this **during** a tick (the terminal log line
-`USN refresh tick starting` is the trigger): expect at least 1
-thread with `PriorityCurrent = 4` (Idle).  Run again **outside** a
-tick: all threads should be `PriorityCurrent >= 8` (Normal or above).
-WMI does not surface I/O priority directly, but `THREAD_MODE_BACKGROUND_BEGIN`
-lowers thread scheduling priority and I/O priority atomically, so
-seeing `PriorityCurrent = 4` on a tick-window thread is sufficient
-evidence of background mode.
+If the `BackgroundIoPriority` grep prints any `begin failed` lines,
+that's a real bug — file a follow-up issue with the error string and
+stop.  G3 stays 🟡 in that case.
+
+**(b) Process Explorer Threads tab (GUI screenshot, redundant
+verification):**
+
+1. Right-click `uffsd.exe` → **Properties** → **Threads** tab.
+2. Right-click any column header → **Select Columns** → **Threads**
+   sub-tab → enable **I/O Priority**.  (Base Priority is *not*
+   useful here — it stays at 8 in background mode.)
+3. During a tick window (between the
+   `USN refresh tick starting count=N` and
+   `USN refresh tick complete refreshed=N` log lines), screenshot.
+   Expect ≥ 1 thread with **I/O Priority = Very Low**.  Outside the
+   tick, all threads show `I/O Priority = Normal`.
 
 **(c) Sysinternals `accesschk.exe -p -t <pid>`** (if installed):
-Dumps full per-thread info including I/O priority.
+Dumps per-thread info including I/O priority — grep the output for
+`I/O Priority: VeryLow` during a tick window.
+
+> **What does NOT work for this gate:**
+>
+> * `Get-CimInstance Win32_Thread` — the WMI provider returns NULL
+>   for `PriorityCurrent` / `BasePriority` on modern Windows.
+> * `(Get-Process uffsd).Threads | Where PriorityLevel -in 'Idle',
+>   'Lowest', 'BelowNormal'` — reads scheduling priority via
+>   `GetThreadPriority`, which doesn't change in background mode.
+> * Task Manager "Details" tab I/O Priority column — process-level
+>   only; the daemon's main thread is at Normal so this column
+>   stays Normal.
 
 Grep the log for the matching tick window:
 
@@ -290,21 +341,26 @@ at Normal would mean the scope guard is not actually running.
 
 #### Capture for the PR
 
-Either:
+**Preferred (path (a) above):** the empty `BackgroundIoPriority`
+grep + populated `USN refresh tick` grep from a `--log-level debug`
+run.  Two short text blocks, no GUI required.  This is sufficient
+proof because:
 
-* The Threads-tab screenshot from path **(a)** — timestamped against
-  the matching tick window in `uffsd-G3.log`.
-* OR the PowerShell `Win32_Thread` output from path **(b)**, captured
-  twice: once during a tick (showing `PriorityCurrent = 4` on
-  spawn_blocking threads) and once outside (no `PriorityCurrent = 4`
-  threads).
+1. The unit test
+   `refresh_usn_for_warm_shards_wraps_each_closure_in_background_io_scope`
+   in `crates/uffs-daemon/src/index/tests/usn_refresh.rs` already pins
+   that `begin()` and `end()` are called exactly once per Warm shard
+   per refresh tick.
+2. The empty debug grep proves `SetThreadPriority` returned `Ok` for
+   every per-drive worker (the only failure path is `tracing::debug!`
+   target `shard.refresh` line `BackgroundIoPriority::begin failed`).
+3. The populated tick grep proves the controller fired during the
+   same observation window.
 
-Log grep for the corresponding tick window:
-
-```text
-INFO USN refresh tick starting count=… interval_secs=30
-INFO USN refresh tick complete refreshed=… failed=… total=… total_ms=…
-```
+**Optional (path (b) above):** screenshot of PE Threads tab with the
+**I/O Priority** column showing `Very Low` on a worker thread
+during a tick.  Useful if a reviewer wants visual confirmation but
+not required for sign-off.
 
 Reset before moving on:
 
