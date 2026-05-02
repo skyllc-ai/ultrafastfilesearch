@@ -300,16 +300,6 @@ impl DriveStats {
     ///
     /// Half-life is 60 s, chosen so a burst of activity is "forgotten"
     /// within ~5 minutes (5 half-lives → 1/32 of the original).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 6 consumer (adaptive-TTL controller reads the EMA \
-                      to size the demote/promote thresholds); exercised by \
-                      the `drivestats_decay_is_non_increasing` proptest in \
-                      this module under `cfg(test)`."
-        )
-    )]
     #[expect(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
@@ -340,6 +330,30 @@ impl DriveStats {
         self.rate_ema_micro_per_s
             .store((new_ema * 1.0e6) as u64, Ordering::Relaxed);
         new_ema
+    }
+
+    /// Decay the EMA to `now_ms` and return it as **queries per
+    /// minute** (the unit consumed by the Phase 6 adaptive TTL
+    /// formulas in [`crate::cache::policy::hot_ttl`] /
+    /// [`crate::cache::policy::warm_ttl`]).
+    ///
+    /// `decay_ema` returns queries-per-second (the storage unit);
+    /// this thin wrapper does the `× 60` conversion at the
+    /// controller boundary so the policy layer stays in its
+    /// canonical queries/min unit (matches the plan §5.2 formulas
+    /// and the unit tests in [`crate::cache::policy::tests`]).
+    ///
+    /// Side-effect: same as [`Self::decay_ema`] — the stored EMA
+    /// is mutated in place to reflect the elapsed-time decay.
+    /// Callers should sample once per controller tick rather than
+    /// per shard if they want a coherent batch view.
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "single multiply-by-60 to convert q/s to q/min — same \
+                  precision posture as `decay_ema` itself."
+    )]
+    pub(crate) fn decay_ema_qpm(&self, now_ms: u64) -> f64 {
+        self.decay_ema(now_ms) * 60.0
     }
 }
 

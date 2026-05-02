@@ -40,7 +40,7 @@
 //!
 //! * **Commit B (this file):** types + serde + parser + tests.  No callers
 //!   wired yet.
-//! * **Commit C (next):** wire [`DaemonConfig::load_from_path`] into
+//! * **Commit C (next):** wire [`Config::load_from_path`] into
 //!   `crate::run_daemon` startup; replace `cache::policy`'s static getters with
 //!   config-driven readers; pass `TierThresholds` into
 //!   [`crate::cache::policy::next_state_for_idle_with_thresholds`] from
@@ -48,7 +48,7 @@
 //!
 //! ## Defaults
 //!
-//! [`DaemonConfig::default()`] matches the Phase-3 static behavior
+//! [`Config::default()`] matches the Phase-3 static behavior
 //! (plan task 6.8): missing `daemon.toml` ⇒ same idle thresholds as
 //! the bare [`crate::cache::policy`] module.  Production users opt
 //! into longer retention or per-drive constraints by writing an
@@ -72,8 +72,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::cache::policy::{
-    HOT_TO_WARM_IDLE_SECS, PARKED_TO_COLD_IDLE_SECS, USN_REFRESH_INTERVAL_SECS,
-    WARM_TO_PARKED_IDLE_SECS,
+    hot_to_warm_idle_secs, parked_to_cold_idle_secs, usn_refresh_interval_secs,
+    warm_to_parked_idle_secs,
 };
 use crate::cache::shard::ShardState;
 
@@ -86,16 +86,7 @@ use crate::cache::shard::ShardState;
 /// now the type exists in isolation with full test coverage.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 6 Commit C wires this into `crate::run_daemon` \
-                  startup; until then the type is exercised only by \
-                  the unit tests in this module."
-    )
-)]
-pub(crate) struct DaemonConfig {
+pub(crate) struct Config {
     /// Global memory budget + OS integration knobs.
     pub memory: MemoryConfig,
     /// Adaptive-TTL base / cap knobs and auto-promotion rules.
@@ -115,15 +106,6 @@ pub(crate) struct DaemonConfig {
 /// sidecar opt-in (see `CACHE_SECURITY_ANALYSIS.md`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 6 Commit C wires the budget into the demote \
-                  controller; until then the type is exercised only \
-                  by the unit tests in this module."
-    )
-)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "the four booleans — respect_os_low_memory, \
@@ -189,20 +171,23 @@ impl Default for MemoryConfig {
 /// EMA.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 6 Commit C wires these into the adaptive TTL \
-                  ladder; until then the type is exercised only by \
-                  the unit tests in this module."
-    )
-)]
 pub(crate) struct TiersConfig {
     /// Hot → Warm idle threshold floor, in seconds.
     pub hot_ttl_base_secs: u64,
+    /// Hot → Warm adaptive-TTL ceiling, in seconds.  At
+    /// `rate_ema → ∞` the formula
+    /// [`crate::cache::policy::hot_ttl`] clamps to this value.
+    /// Default 3600 s (1 hr) — matches the plan §5.2 reference
+    /// point and the `hot_ttl` unit-test pin.
+    pub hot_ttl_cap_secs: u64,
     /// Warm → Parked idle threshold floor, in seconds.
     pub warm_ttl_base_secs: u64,
+    /// Warm → Parked adaptive-TTL ceiling, in seconds.  At
+    /// `rate_ema → ∞` the formula
+    /// [`crate::cache::policy::warm_ttl`] clamps to this value.
+    /// Default 14400 s (4 hr) — matches the plan §5.2 reference
+    /// point and the `warm_ttl` unit-test pin.
+    pub warm_ttl_cap_secs: u64,
     /// Parked → Cold idle threshold (no rate dependence — see
     /// `crate::cache::policy::parked_ttl`), in seconds.
     pub parked_ttl_secs: u64,
@@ -217,10 +202,21 @@ pub(crate) struct TiersConfig {
 
 impl Default for TiersConfig {
     fn default() -> Self {
+        // The `*_idle_secs()` getters are env-var-overridable
+        // (`UFFS_HOT_TO_WARM_IDLE_SECS` etc.) — funnelling them
+        // through the Config layer means env-var overrides keep
+        // working after Phase 6 Commit C wired `IndexManager` to
+        // read TTL bases from `Config` rather than the policy
+        // module's getters directly.  Without this, an operator
+        // who set `UFFS_HOT_TO_WARM_IDLE_SECS=10` for a benchmark
+        // would silently get the static default (60 s) once
+        // Commit C landed.
         Self {
-            hot_ttl_base_secs: HOT_TO_WARM_IDLE_SECS,
-            warm_ttl_base_secs: WARM_TO_PARKED_IDLE_SECS,
-            parked_ttl_secs: PARKED_TO_COLD_IDLE_SECS,
+            hot_ttl_base_secs: hot_to_warm_idle_secs(),
+            hot_ttl_cap_secs: 3_600,
+            warm_ttl_base_secs: warm_to_parked_idle_secs(),
+            warm_ttl_cap_secs: 14_400,
+            parked_ttl_secs: parked_to_cold_idle_secs(),
             heavy_query_auto_hot: true,
             sustained_rate_auto_hot_qpm: 3,
         }
@@ -238,15 +234,6 @@ impl Default for TiersConfig {
 /// `dirs_next::config_dir()` etc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 6 Commit C wires these into the daemon \
-                  startup path; until then the type is exercised \
-                  only by the unit tests in this module."
-    )
-)]
 pub(crate) struct ShardsConfig {
     /// Encrypted authoritative cache root.  `None` ⇒ daemon picks
     /// the platform default at startup (Windows:
@@ -282,7 +269,12 @@ impl Default for ShardsConfig {
             checkpoint_interval_secs: 300,
             checkpoint_after_events: 50_000,
             journal_poll_ms: 500,
-            usn_refresh_interval_secs: USN_REFRESH_INTERVAL_SECS,
+            // Env-var-overridable for the same reason
+            // `TiersConfig::default` uses the `*_idle_secs()`
+            // getters: keep `UFFS_USN_REFRESH_INTERVAL_SECS`
+            // working after Phase 6 Commit C started threading
+            // refresh cadence through the Config surface.
+            usn_refresh_interval_secs: usn_refresh_interval_secs(),
             per_drive: BTreeMap::new(),
         }
     }
@@ -312,17 +304,6 @@ impl Default for ShardsConfig {
 /// pattern doesn't justify the 1 GiB body footprint.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 6 Commit C wires this into \
-                  `IndexManager::demote_idle_shards` and \
-                  `ensure_warm_for_dispatch`; until then the type \
-                  is exercised only by the unit tests in this \
-                  module."
-    )
-)]
 pub(crate) struct PerDriveConfig {
     /// Demote-ladder floor.  `min_tier = "WARM"` ⇒ the demote
     /// controller never drops this drive below `Warm`.  `None` ⇒
@@ -349,15 +330,6 @@ pub(crate) struct PerDriveConfig {
 /// shard registry's promote / demote write-swap path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 6 Commit C wires this through PerDriveConfig \
-                  into the demote controller; until then the type \
-                  is exercised only by the unit tests in this module."
-    )
-)]
 pub(crate) enum TierLevel {
     /// Top of the ladder — body resident, trigram index built,
     /// runtime mmap active.  Selected as `min_tier` for drives
@@ -377,17 +349,6 @@ impl TierLevel {
     /// Lift a [`TierLevel`] into the corresponding [`ShardState`]
     /// for comparison against the controller's tier ladder.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 6 Commit C calls this from \
-                      `IndexManager::demote_idle_shards` to clamp \
-                      the per-drive ladder; until then the helper \
-                      is exercised only by the unit tests in this \
-                      module."
-        )
-    )]
     pub(crate) const fn to_state(self) -> ShardState {
         match self {
             Self::Hot => ShardState::Hot,
@@ -399,22 +360,12 @@ impl TierLevel {
 
 // ── Parser surface ───────────────────────────────────────────────
 
-impl DaemonConfig {
+impl Config {
     /// Parse a `daemon.toml` body.
     ///
     /// Returns the structured config or a [`ConfigError::Parse`]
     /// describing the parse failure (line / column included via
     /// `toml::de::Error`'s `Display`).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 6 Commit C wires this into \
-                      `crate::run_daemon` startup; until then the \
-                      parser is exercised only by the unit tests \
-                      in this module."
-        )
-    )]
     pub(crate) fn from_toml(body: &str) -> Result<Self, ConfigError> {
         toml::from_str(body).map_err(ConfigError::Parse)
     }
@@ -429,16 +380,6 @@ impl DaemonConfig {
     /// All other I/O errors (permission denied, EISDIR on a path
     /// that exists as a directory, etc.) propagate as
     /// [`ConfigError::Io`].
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 6 Commit C wires this into \
-                      `crate::run_daemon` startup; until then the \
-                      loader is exercised only by the unit tests \
-                      in this module."
-        )
-    )]
     #[expect(
         clippy::std_instead_of_core,
         reason = "`core::io::ErrorKind` is not yet stable — see \
@@ -471,20 +412,53 @@ impl DaemonConfig {
     pub(crate) fn to_toml(&self) -> Result<String, ConfigError> {
         toml::to_string_pretty(self).map_err(ConfigError::Serialize)
     }
+
+    /// Platform-default `daemon.toml` location.
+    ///
+    /// Returns `Some(<data_local_dir>/uffs/daemon.toml)`:
+    ///
+    /// * **Windows** ⇒ `%LOCALAPPDATA%\uffs\daemon.toml`.
+    /// * **macOS** ⇒ `~/Library/Application Support/uffs/daemon.toml`.
+    /// * **Linux** ⇒ `$XDG_DATA_HOME/uffs/daemon.toml` (or
+    ///   `~/.local/share/uffs/daemon.toml` if unset).
+    ///
+    /// Returns `None` only when `dirs_next::data_local_dir()`
+    /// itself fails (no `HOME` and no platform fallback) — in
+    /// practice on every supported platform the answer is `Some`.
+    ///
+    /// Mirrors the conventions used by [`crate::ipc::IpcServer::socket_path`]
+    /// and [`crate::default_log_file`] so the `daemon.toml` lives
+    /// alongside the lifecycle / log artifacts the daemon already
+    /// writes there.
+    #[must_use]
+    pub(crate) fn default_path() -> Option<PathBuf> {
+        dirs_next::data_local_dir().map(|dir| dir.join("uffs").join("daemon.toml"))
+    }
+
+    /// Load the config from the platform-default location.
+    ///
+    /// Convenience wrapper for the common
+    /// `Config::load_from_path(&Config::default_path().unwrap_or(...))`
+    /// idiom at daemon startup.  Returns `Self::default()` (Phase 3
+    /// behavior) when:
+    ///
+    /// * `dirs_next::data_local_dir()` itself fails — extremely rare, only on
+    ///   broken Linux installs with no `HOME` and `$XDG_DATA_HOME`; the daemon
+    ///   prefers a working config to a hard error here.
+    /// * The file at [`Self::default_path`] does not exist — task 6.8 contract:
+    ///   missing `daemon.toml` ⇒ defaults match Phase 3 static behavior.
+    ///
+    /// Other I/O / parse errors propagate as [`ConfigError`] so a
+    /// malformed config doesn't silently fall through to defaults
+    /// (which would mask the user's typo).
+    pub(crate) fn load_default() -> Result<Self, ConfigError> {
+        Self::default_path().map_or_else(|| Ok(Self::default()), |path| Self::load_from_path(&path))
+    }
 }
 
-/// Errors surfaced by [`DaemonConfig::load_from_path`] /
-/// [`DaemonConfig::from_toml`] / [`DaemonConfig::to_toml`].
+/// Errors surfaced by [`Config::load_from_path`] /
+/// [`Config::from_toml`] / [`Config::to_toml`].
 #[derive(Debug, thiserror::Error)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 6 Commit C surfaces these errors at daemon \
-                  startup; until then the variants are exercised \
-                  only by the unit tests in this module."
-    )
-)]
 pub(crate) enum ConfigError {
     /// `toml::de::Error` from a malformed config body.
     #[error("daemon.toml parse: {0}")]
@@ -511,18 +485,40 @@ mod tests {
     /// statics.
     #[test]
     fn defaults_match_phase3_static_behavior() {
-        let cfg = DaemonConfig::default();
+        // Without the env-var override, the getter must collapse
+        // to the documented static default — pin the constant
+        // mapping at the policy layer so a future tweak to the
+        // const cannot silently drift the default config without
+        // also failing this test.  Done via a const-pin so the
+        // value is fixed at build time and the assertion holds
+        // regardless of `OnceLock` cache state.  Hoisted above the
+        // first `let` so `clippy::items_after_statements` doesn't
+        // fire — the const block is build-time, so its position is
+        // purely stylistic relative to the runtime asserts below.
+        const _: () = {
+            assert!(crate::cache::policy::HOT_TO_WARM_IDLE_SECS == 60);
+            assert!(crate::cache::policy::WARM_TO_PARKED_IDLE_SECS == 300);
+            assert!(crate::cache::policy::PARKED_TO_COLD_IDLE_SECS == 86_400);
+            assert!(crate::cache::policy::USN_REFRESH_INTERVAL_SECS == 300);
+        };
 
-        // Tier defaults are byte-equal to the cache::policy
-        // statics.  Phase 6 Commit C will read these via the
-        // config rather than the OnceLock-cached env getters; the
-        // pin here guarantees no behavior change at the boundary.
-        assert_eq!(cfg.tiers.hot_ttl_base_secs, HOT_TO_WARM_IDLE_SECS);
-        assert_eq!(cfg.tiers.warm_ttl_base_secs, WARM_TO_PARKED_IDLE_SECS);
-        assert_eq!(cfg.tiers.parked_ttl_secs, PARKED_TO_COLD_IDLE_SECS);
+        let cfg = Config::default();
+
+        // Tier defaults track the env-var-aware Phase-3 getters
+        // (`hot_to_warm_idle_secs()` etc.), which themselves
+        // resolve to the `HOT_TO_WARM_IDLE_SECS` constants when
+        // the corresponding `UFFS_*_IDLE_SECS` env vars are
+        // unset.  Asserting against the getters preserves the
+        // env-var-override contract end-to-end: a developer who
+        // sets `UFFS_HOT_TO_WARM_IDLE_SECS=10` for a benchmark
+        // gets `cfg.tiers.hot_ttl_base_secs == 10` and the test
+        // still passes.
+        assert_eq!(cfg.tiers.hot_ttl_base_secs, hot_to_warm_idle_secs());
+        assert_eq!(cfg.tiers.warm_ttl_base_secs, warm_to_parked_idle_secs());
+        assert_eq!(cfg.tiers.parked_ttl_secs, parked_to_cold_idle_secs());
         assert_eq!(
             cfg.shards.usn_refresh_interval_secs,
-            USN_REFRESH_INTERVAL_SECS
+            usn_refresh_interval_secs()
         );
 
         // No per-drive overrides by default — ladder is uniform.
@@ -544,14 +540,14 @@ mod tests {
     }
 
     /// Plan task 6.8 continued: an empty `daemon.toml` body parses
-    /// to the same value as `DaemonConfig::default()`.  Distinct
+    /// to the same value as `Config::default()`.  Distinct
     /// from the missing-file case (which is exercised by
     /// `load_from_path_missing_file_returns_defaults`) — this pins
     /// the `#[serde(default)]` plumbing on every nested struct.
     #[test]
     fn empty_toml_body_parses_to_defaults() {
-        let cfg = DaemonConfig::from_toml("").expect("empty body must parse");
-        assert_eq!(cfg, DaemonConfig::default());
+        let cfg = Config::from_toml("").expect("empty body must parse");
+        assert_eq!(cfg, Config::default());
     }
 
     /// Plan task 6.8 final clause: a missing `daemon.toml` file
@@ -562,9 +558,9 @@ mod tests {
     fn load_from_path_missing_file_returns_defaults() {
         let dir = tempfile::tempdir().expect("tempdir create");
         let missing = dir.path().join("daemon.toml");
-        let cfg = DaemonConfig::load_from_path(&missing)
+        let cfg = Config::load_from_path(&missing)
             .expect("missing daemon.toml must yield defaults, not error");
-        assert_eq!(cfg, DaemonConfig::default());
+        assert_eq!(cfg, Config::default());
     }
 
     /// Loader returns the parsed body when the file exists.  Uses
@@ -581,11 +577,12 @@ mod tests {
         )
         .expect("write fixture");
 
-        let cfg = DaemonConfig::load_from_path(&path).expect("parse fixture");
+        let cfg = Config::load_from_path(&path).expect("parse fixture");
         // Overridden field landed.
         assert_eq!(cfg.tiers.hot_ttl_base_secs, 999);
-        // Sibling fields fell through to defaults.
-        assert_eq!(cfg.tiers.warm_ttl_base_secs, WARM_TO_PARKED_IDLE_SECS);
+        // Sibling fields fell through to defaults — same env-var-aware
+        // contract as `defaults_match_phase3_static_behavior`.
+        assert_eq!(cfg.tiers.warm_ttl_base_secs, warm_to_parked_idle_secs());
         // Sibling sections fell through to defaults.
         assert_eq!(cfg.memory, MemoryConfig::default());
         assert_eq!(cfg.shards, ShardsConfig::default());
@@ -600,9 +597,9 @@ mod tests {
     /// before it can ship.
     #[test]
     fn default_config_round_trips_through_toml() {
-        let original = DaemonConfig::default();
+        let original = Config::default();
         let body = original.to_toml().expect("serialize default");
-        let parsed = DaemonConfig::from_toml(&body).expect("parse round-trip");
+        let parsed = Config::from_toml(&body).expect("parse round-trip");
         assert_eq!(parsed, original);
     }
 
@@ -611,7 +608,7 @@ mod tests {
     /// substitution would make this test flaky.
     #[test]
     fn full_config_with_per_drive_round_trips() {
-        let mut original = DaemonConfig::default();
+        let mut original = Config::default();
         original
             .shards
             .per_drive
@@ -630,7 +627,7 @@ mod tests {
         original.tiers.sustained_rate_auto_hot_qpm = 5;
 
         let body = original.to_toml().expect("serialize full");
-        let parsed = DaemonConfig::from_toml(&body).expect("parse full round-trip");
+        let parsed = Config::from_toml(&body).expect("parse full round-trip");
         assert_eq!(parsed, original);
     }
 
@@ -647,7 +644,7 @@ mod tests {
 [shards.per_drive."C:"]
 min_tier = "WARM"
 "#;
-        let cfg = DaemonConfig::from_toml(body).expect("parse per-drive override");
+        let cfg = Config::from_toml(body).expect("parse per-drive override");
         let entry = cfg
             .shards
             .per_drive
@@ -668,7 +665,7 @@ min_tier = "WARM"
 "C:" = { min_tier = "WARM", max_tier = "HOT" }
 "Z:" = { max_tier = "PARKED" }
 "#;
-        let cfg = DaemonConfig::from_toml(inline).expect("parse inline form");
+        let cfg = Config::from_toml(inline).expect("parse inline form");
         let c_entry = cfg.shards.per_drive.get("C:").expect("C: present");
         assert_eq!(c_entry.min_tier, Some(TierLevel::Warm));
         assert_eq!(c_entry.max_tier, Some(TierLevel::Hot));
@@ -760,8 +757,7 @@ min_tier = "WARM"
 [tiers]
 hot_tt1_base_secs = 999
 ";
-        let err =
-            DaemonConfig::from_toml(body).expect_err("typo'd field must produce a parse error");
+        let err = Config::from_toml(body).expect_err("typo'd field must produce a parse error");
         let msg = format!("{err}");
         assert!(
             msg.contains("hot_tt1_base_secs") || msg.contains("unknown field"),
@@ -776,7 +772,7 @@ hot_tt1_base_secs = 999
 [bogus_section]
 foo = 42
 ";
-        let err = DaemonConfig::from_toml(body)
+        let err = Config::from_toml(body)
             .expect_err("unknown top-level section must produce a parse error");
         let msg = format!("{err}");
         assert!(

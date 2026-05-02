@@ -43,9 +43,12 @@ mod broker_client;
 /// Phase 1 of the memory-tiering work — see
 /// `docs/refactor/memory-tiering-implementation-plan.md`.
 mod cache;
-/// `daemon.toml` parser — Phase 6 Commit B of memory-tiering.
+/// `daemon.toml` parser — Phase 6 of memory-tiering.
 ///
 /// Schema mirrors plan §11; defaults match Phase-3 static behavior.
+/// The type is named [`config::Config`] (idiomatic
+/// `crate::module::Type`) to avoid collision with the existing
+/// [`DaemonConfig`] runtime-args wrapper that this file owns.
 /// Commit C wires the loader into [`run_daemon`] startup and
 /// replaces the env-var-overridable static getters in
 /// [`crate::cache::policy`] with config-driven readers.
@@ -249,9 +252,19 @@ pub async fn run_daemon(config: DaemonConfig) -> anyhow::Result<()> {
     // root directory.
     runtime_orphans::sweep_runtime_tempfile_orphans();
 
+    // Phase 6 Commit C task 6.5 — resolve `daemon.toml` from the
+    // platform-default location.  Factored out to keep
+    // `run_daemon`'s cognitive complexity under the workspace's
+    // strict-clippy ceiling.
+    let daemon_config = load_daemon_config()?;
+
     // Create index manager — uses the user-supplied --data-dir for offline MFT
     // discovery and hot-loading (not the lifecycle directory).
-    let idx = Arc::new(index::IndexManager::new(config.data_dir.clone(), event_tx));
+    let idx = Arc::new(index::IndexManager::new(
+        config.data_dir.clone(),
+        event_tx,
+        Arc::clone(&daemon_config),
+    ));
     tracing::debug!(index_data_dir = ?idx.data_dir(), "Index manager created");
 
     let mft_files = gather_mft_files(&config);
@@ -371,6 +384,31 @@ fn install_catastrophe_panic_hook() {
             std::process::exit(101);
         }
     }));
+}
+
+/// Resolve the operator's `daemon.toml` from the platform-default
+/// location and emit a structured `tracing::info!` event with the
+/// resolved path.
+///
+/// Phase 6 Commit C task 6.5 helper.  A missing file is **not** an
+/// error: [`config::Config::load_default`] returns the
+/// Phase-3-equivalent defaults so every existing deployment boots
+/// with the same observable behavior (plan task 6.8).  A malformed
+/// file propagates as a startup error so a typo doesn't silently
+/// fall back to defaults — the operator gets a precise parser error
+/// with line and column.
+///
+/// Returned as `Arc<Config>` so the index manager and any future
+/// background controller can share a single read-only view without
+/// cloning the BTreeMap-bearing `[shards.per_drive]` table.
+fn load_daemon_config() -> anyhow::Result<Arc<config::Config>> {
+    let cfg = config::Config::load_default()
+        .map_err(|err| anyhow::anyhow!("Failed to load daemon.toml from default path: {err}"))?;
+    tracing::info!(
+        daemon_config_path = ?config::Config::default_path(),
+        "daemon.toml resolved (or defaults used when missing)",
+    );
+    Ok(Arc::new(cfg))
 }
 
 /// Build the [`LifecycleManager`], gate against another running

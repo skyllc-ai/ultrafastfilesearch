@@ -33,7 +33,7 @@ use super::{IndexManager, build_test_drive, build_test_drive_d};
 #[tokio::test]
 async fn refresh_usn_for_warm_shards_no_op_when_empty() {
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     assert!(mgr.shard_states_for_test().await.is_empty());
 
     mgr.refresh_usn_for_warm_shards().await;
@@ -53,7 +53,7 @@ async fn refresh_usn_for_warm_shards_no_op_when_no_warm_or_hot() {
     use crate::cache::ShardState;
 
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
     assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
 
@@ -80,7 +80,7 @@ async fn refresh_usn_for_warm_shards_handles_helper_errors_gracefully() {
     use crate::cache::ShardState;
 
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
     mgr.add_drive(build_test_drive_d()).await;
 
@@ -128,20 +128,19 @@ async fn refresh_usn_for_warm_shards_handles_helper_errors_gracefully() {
 async fn refresh_usn_for_warm_shards_wraps_each_closure_in_background_io_scope() {
     use crate::cache::ShardState;
     use crate::cache::background_io::tests::CountingBackgroundIoPriority;
-    use crate::cache::prefetch::PlatformPrefetch;
-    use crate::cache::pressure::PlatformPressureSignal;
-    use crate::cache::working_set::PlatformWorkingSetTrim;
 
     let (tx, _rx) = crate::events::event_channel();
     let counting_bg_io = Arc::new(CountingBackgroundIoPriority::new());
+    let hooks = crate::index::constructors::LifecycleHooks {
+        background_io: Arc::clone(&counting_bg_io)
+            as Arc<dyn crate::cache::background_io::BackgroundIoPriority>,
+        ..crate::index::constructors::LifecycleHooks::production()
+    };
     let mgr = IndexManager::with_lifecycle_hooks_for_test(
         None,
         tx,
-        Arc::new(crate::cache::body_loader::DiskBodyLoader),
-        Arc::new(PlatformWorkingSetTrim),
-        Arc::new(PlatformPrefetch),
-        Arc::new(PlatformPressureSignal::new()),
-        Arc::clone(&counting_bg_io) as Arc<dyn crate::cache::background_io::BackgroundIoPriority>,
+        hooks,
+        Arc::new(crate::config::Config::default()),
     );
     mgr.add_drive(build_test_drive()).await;
     mgr.add_drive(build_test_drive_d()).await;
@@ -188,20 +187,19 @@ async fn refresh_usn_for_warm_shards_wraps_each_closure_in_background_io_scope()
 async fn refresh_usn_for_warm_shards_no_op_skips_background_io_scope() {
     use crate::cache::ShardState;
     use crate::cache::background_io::tests::CountingBackgroundIoPriority;
-    use crate::cache::prefetch::PlatformPrefetch;
-    use crate::cache::pressure::PlatformPressureSignal;
-    use crate::cache::working_set::PlatformWorkingSetTrim;
 
     let (tx, _rx) = crate::events::event_channel();
     let counting_bg_io = Arc::new(CountingBackgroundIoPriority::new());
+    let hooks = crate::index::constructors::LifecycleHooks {
+        background_io: Arc::clone(&counting_bg_io)
+            as Arc<dyn crate::cache::background_io::BackgroundIoPriority>,
+        ..crate::index::constructors::LifecycleHooks::production()
+    };
     let mgr = IndexManager::with_lifecycle_hooks_for_test(
         None,
         tx,
-        Arc::new(crate::cache::body_loader::DiskBodyLoader),
-        Arc::new(PlatformWorkingSetTrim),
-        Arc::new(PlatformPrefetch),
-        Arc::new(PlatformPressureSignal::new()),
-        Arc::clone(&counting_bg_io) as Arc<dyn crate::cache::background_io::BackgroundIoPriority>,
+        hooks,
+        Arc::new(crate::config::Config::default()),
     );
     // One shard, demoted → no Warm/Hot for the JoinSet phase.
     mgr.add_drive(build_test_drive()).await;

@@ -53,7 +53,7 @@ async fn ensure_warm_for_dispatch_no_op_when_all_warm() {
     use crate::cache::ShardState;
 
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
     mgr.add_drive(build_test_drive_d()).await;
 
@@ -85,7 +85,7 @@ async fn ensure_warm_for_dispatch_skips_parked_shard_outside_filter() {
     use crate::cache::ShardState;
 
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
     mgr.add_drive(build_test_drive_d()).await;
 

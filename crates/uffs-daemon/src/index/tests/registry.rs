@@ -120,7 +120,7 @@ fn shard_entry_try_transition_legal_and_illegal() {
 #[tokio::test]
 async fn shard_registry_search_two_drives_returns_rows_from_each() {
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
     mgr.add_drive(build_test_drive_d()).await;
 
@@ -152,7 +152,7 @@ async fn shard_registry_search_two_drives_returns_rows_from_each() {
 #[tokio::test]
 async fn search_records_query_on_every_active_shard() {
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
     mgr.add_drive(build_test_drive_d()).await;
 

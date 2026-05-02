@@ -41,7 +41,7 @@ use super::{
 #[tokio::test]
 async fn mark_loaded_at_seeds_freshly_added_drive() {
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
 
     // Read the shard's last_query_at_ms via a search-ish path; we
@@ -82,7 +82,7 @@ async fn demote_idle_shards_no_op_when_all_fresh() {
     use crate::cache::ShardState;
 
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
     mgr.add_drive(build_test_drive_d()).await;
 
@@ -108,7 +108,7 @@ async fn demote_idle_shards_warm_to_parked_at_ttl() {
     use crate::cache::policy::WARM_TO_PARKED_IDLE_SECS;
 
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
 
     // Backdate C's last_query_at_ms to t=1_000_000_000 ms.
@@ -134,7 +134,7 @@ async fn demote_idle_shards_below_ttl_keeps_warm() {
     use crate::cache::policy::WARM_TO_PARKED_IDLE_SECS;
 
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
 
     let last_query_ms = 1_000_000_000_u64;
@@ -168,7 +168,7 @@ async fn demote_idle_shards_parked_to_cold_at_ttl() {
     use crate::cache::policy::PARKED_TO_COLD_IDLE_SECS;
 
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
 
     // Seed C as Parked via the test escape hatch.
@@ -197,7 +197,7 @@ async fn demote_idle_shards_batches_multiple_demotes() {
     use crate::cache::policy::WARM_TO_PARKED_IDLE_SECS;
 
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
     mgr.add_drive(build_test_drive_d()).await;
 
@@ -291,7 +291,7 @@ async fn demote_idle_shards_warm_only_for_unqueried_drives() {
     use crate::cache::policy::WARM_TO_PARKED_IDLE_SECS;
 
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
     mgr.add_drive(build_test_drive_d()).await;
     mgr.add_drive(build_test_drive_e()).await;
@@ -351,7 +351,7 @@ async fn demote_idle_shards_parked_drives_demote_to_cold_past_threshold() {
     use crate::cache::policy::PARKED_TO_COLD_IDLE_SECS;
 
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
     mgr.add_drive(build_test_drive_d()).await;
     mgr.add_drive(build_test_drive_e()).await;

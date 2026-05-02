@@ -12,6 +12,8 @@
 //!   `mimalloc_committed_bytes`; `total_index_heap_bytes` matches the per-drive
 //!   breakdown.
 
+use std::sync::Arc;
+
 use super::{IndexManager, build_test_drive};
 
 /// Helper: construct a minimal [`IndexManager`] with the synthetic
@@ -19,7 +21,7 @@ use super::{IndexManager, build_test_drive};
 /// swap the internal snapshot pointer.
 async fn test_manager_with_drive() -> IndexManager {
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
     mgr
 }
@@ -122,7 +124,7 @@ async fn search_with_include_rows_true_returns_rows() {
 #[tokio::test]
 async fn fresh_index_manager_reports_no_loaded_drives() {
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     let letters = mgr.loaded_drive_letters().await;
     assert!(
         letters.is_empty(),
@@ -245,7 +247,7 @@ async fn status_populates_rss_and_mimalloc_committed() {
 #[tokio::test]
 async fn total_index_heap_bytes_zero_for_empty_manager() {
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     assert_eq!(mgr.total_index_heap_bytes().await, 0);
 }
 

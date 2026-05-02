@@ -60,15 +60,15 @@
 //!
 //! ## Decision function
 //!
-//! [`next_state_for_idle`] is the single decision function consumed
-//! by `crate::cache::registry::ShardRegistry::demote_idle_shards`;
-//! it returns `None` when the shard is not yet idle past its
-//! current tier's TTL or when the tier is already at the bottom.
-//! The Phase 6 adaptive variant
-//! [`next_state_for_idle_with_thresholds`] takes the thresholds as
-//! an explicit [`TierThresholds`] struct so the demote controller
-//! can size them per-drive from the live rate EMA + the user's
-//! `daemon.toml`.
+//! [`next_state_for_idle_with_thresholds`] is the single decision
+//! function consumed by
+//! `crate::cache::registry::ShardRegistry::demote_idle_shards`; it
+//! takes the demote-edge thresholds as an explicit
+//! [`TierThresholds`] struct so the demote controller can size them
+//! per-drive from the live rate EMA + the user's `daemon.toml`
+//! `[tiers]` section.  Returns `None` when the shard is not yet
+//! idle past its current tier's TTL or when the tier is already at
+//! the bottom.
 
 use core::time::Duration;
 use std::sync::OnceLock;
@@ -87,7 +87,9 @@ use super::shard::ShardState;
 /// query is sub-millisecond so the demotion is essentially free.
 ///
 /// Consumed by [`crate::index::IndexManager::demote_idle_shards`]
-/// (Phase 3 Commit D) via [`next_state_for_idle`].
+/// (Phase 3 Commit D) via [`next_state_for_idle_with_thresholds`]
+/// — Phase 6 Commit C feeds it adaptive thresholds derived from
+/// this constant via `crate::config::TiersConfig::default()`.
 pub(crate) const HOT_TO_WARM_IDLE_SECS: u64 = 60;
 
 /// Default for the `Warm` → `Parked` idle threshold.
@@ -208,9 +210,10 @@ pub(crate) fn usn_refresh_interval_secs() -> u64 {
 /// reads.  Phase 6 makes the thresholds per-shard adaptive (sized
 /// by the live query-rate EMA + the user's `daemon.toml`), so the
 /// decision function takes the thresholds as data rather than
-/// reading them through global state.  [`Self::from_static_policy`]
-/// preserves the Phase-3 contract for callers that don't have a
-/// rate signal (e.g. unit tests on the bare ladder).
+/// reading them through global state.  The Phase 3 static
+/// behaviour is preserved by `crate::config::TiersConfig::default()`
+/// (env-var-aware) and is exercised by the unit tests in this
+/// module via the test-only `phase3_static_thresholds()` helper.
 ///
 /// All three fields are seconds (`u64`) for direct comparison
 /// against `idle_secs = (now_ms - last_query_at_ms) / 1000`; the
@@ -230,22 +233,6 @@ pub(crate) struct TierThresholds {
     pub warm_to_parked_secs: u64,
     /// Demote edge for `Parked` → `Cold`.
     pub parked_to_cold_secs: u64,
-}
-
-impl TierThresholds {
-    /// Build a [`TierThresholds`] from the Phase-3 static policy —
-    /// the env-var-overridable [`hot_to_warm_idle_secs`] /
-    /// [`warm_to_parked_idle_secs`] / [`parked_to_cold_idle_secs`]
-    /// getters.  The single-arg [`next_state_for_idle`] wrapper
-    /// uses this so existing callers keep their semantics.
-    #[must_use]
-    pub(crate) fn from_static_policy() -> Self {
-        Self {
-            hot_to_warm_secs: hot_to_warm_idle_secs(),
-            warm_to_parked_secs: warm_to_parked_idle_secs(),
-            parked_to_cold_secs: parked_to_cold_idle_secs(),
-        }
-    }
 }
 
 /// Phase 6 adaptive `Hot` → `Warm` TTL.
@@ -270,16 +257,6 @@ impl TierThresholds {
 /// formula's actual output, not the task description's
 /// approximation.
 #[must_use]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 6 Commit C wires this into \
-                  `IndexManager::demote_idle_shards`; until then the \
-                  formula is exercised only by the unit tests in this \
-                  module."
-    )
-)]
 #[expect(
     clippy::float_arithmetic,
     clippy::cast_precision_loss,
@@ -310,16 +287,6 @@ pub(crate) fn hot_ttl(rate_ema_qpm: f64, base_secs: u64, cap_secs: u64) -> Durat
 /// * `rate = 1 024` → 300 + 600·log2(1024) = 300 + 6 000 = 6 300 s (105 min).
 /// * `rate → ∞`     → 14 400 s (cap; 4 hr).
 #[must_use]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 6 Commit C wires this into \
-                  `IndexManager::demote_idle_shards`; until then the \
-                  formula is exercised only by the unit tests in this \
-                  module."
-    )
-)]
 #[expect(
     clippy::float_arithmetic,
     clippy::cast_precision_loss,
@@ -343,29 +310,18 @@ pub(crate) fn warm_ttl(rate_ema_qpm: f64, base_secs: u64, cap_secs: u64) -> Dura
 /// the demote controller can size all three thresholds in one
 /// pass.
 #[must_use]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 6 Commit C wires this into \
-                  `IndexManager::demote_idle_shards`; until then the \
-                  helper is exercised only by the unit tests in this \
-                  module."
-    )
-)]
 pub(crate) const fn parked_ttl(secs: u64) -> Duration {
     Duration::from_secs(secs)
 }
 
 /// Decide whether a shard in `state` that has been idle for
-/// `idle_secs` seconds should demote to a colder tier.
+/// `idle_secs` seconds should demote to a colder tier given the
+/// adaptive `thresholds`.
 ///
-/// Phase-3 thin wrapper: delegates to
-/// [`next_state_for_idle_with_thresholds`] with thresholds derived
-/// from the env-var-overridable static policy
-/// ([`TierThresholds::from_static_policy`]).  Used by callers that
-/// don't have a per-drive rate signal — primarily the unit tests
-/// in this module.
+/// Pure decision function: takes the three demote-edge thresholds
+/// as data rather than reading them through `OnceLock`-cached
+/// global state, so the demote controller can size each
+/// `(drive, state)` pair independently from the live rate EMA.
 ///
 /// Returns the target state on demote, or `None` when:
 ///
@@ -380,23 +336,10 @@ pub(crate) const fn parked_ttl(secs: u64) -> Duration {
 /// query.
 ///
 /// Phase 6's `crate::index::IndexManager::demote_idle_shards`
-/// calls [`next_state_for_idle_with_thresholds`] directly with
-/// per-shard thresholds derived from the live rate EMA + the
-/// user's `daemon.toml`; this thin wrapper is preserved for the
-/// existing test surface.
-#[must_use]
-pub(crate) fn next_state_for_idle(state: ShardState, idle_secs: u64) -> Option<ShardState> {
-    next_state_for_idle_with_thresholds(state, idle_secs, &TierThresholds::from_static_policy())
-}
-
-/// Phase 6 adaptive variant of [`next_state_for_idle`].
-///
-/// Pure decision function: takes the three demote-edge thresholds
-/// as data rather than reading them through `OnceLock`-cached
-/// global state, so the demote controller can size each
-/// `(drive, state)` pair independently from the live rate EMA.
-///
-/// Same return-value semantics as [`next_state_for_idle`].
+/// calls this function directly with per-shard thresholds derived
+/// from the live rate EMA + the user's `daemon.toml`; the unit
+/// tests in this module wrap it via `next_state_for_idle`
+/// (test-only) for the static-policy boundary checks.
 #[must_use]
 pub(crate) const fn next_state_for_idle_with_thresholds(
     state: ShardState,
@@ -425,6 +368,29 @@ pub(crate) const fn next_state_for_idle_with_thresholds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Phase-3 static thresholds derived from the env-var-aware
+    /// getters — the `OnceLock`-cached values that
+    /// `crate::config::TiersConfig::default()` uses to seed the
+    /// daemon's adaptive ladder when no `daemon.toml` is present.
+    /// Test-only so the production module can stay focused on the
+    /// adaptive helpers wired by Phase 6 Commit C.
+    fn phase3_static_thresholds() -> TierThresholds {
+        TierThresholds {
+            hot_to_warm_secs: hot_to_warm_idle_secs(),
+            warm_to_parked_secs: warm_to_parked_idle_secs(),
+            parked_to_cold_secs: parked_to_cold_idle_secs(),
+        }
+    }
+
+    /// Single-arg test wrapper around
+    /// [`next_state_for_idle_with_thresholds`] that pins the
+    /// Phase-3 static-policy thresholds.  Lets the boundary tests
+    /// below stay readable (`next_state_for_idle(state, secs)`)
+    /// without re-stating the threshold struct on every call.
+    fn next_state_for_idle(state: ShardState, idle_secs: u64) -> Option<ShardState> {
+        next_state_for_idle_with_thresholds(state, idle_secs, &phase3_static_thresholds())
+    }
 
     #[test]
     fn hot_demotes_to_warm_at_threshold() {

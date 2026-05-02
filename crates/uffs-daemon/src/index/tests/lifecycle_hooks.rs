@@ -58,7 +58,7 @@ async fn drives_rpc_enumerates_warm_parked_and_cold_shards_with_tier_markers() {
     use crate::cache::ShardState;
 
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
     mgr.add_drive(build_test_drive_d()).await;
     mgr.add_drive(build_test_drive_e()).await;
@@ -119,7 +119,7 @@ async fn drives_rpc_enumerates_warm_parked_and_cold_shards_with_tier_markers() {
 #[tokio::test]
 async fn drives_rpc_returns_empty_vec_when_registry_is_empty() {
     let (tx, _rx) = crate::events::event_channel();
-    let mgr = IndexManager::new(None, tx);
+    let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
 
     let response = mgr.drives().await;
     assert!(
@@ -142,20 +142,20 @@ async fn drives_rpc_returns_empty_vec_when_registry_is_empty() {
 #[tokio::test]
 async fn demote_idle_shards_invokes_working_set_trim_once_per_batch() {
     use crate::cache::policy::WARM_TO_PARKED_IDLE_SECS;
-    use crate::cache::prefetch::PlatformPrefetch;
-    use crate::cache::pressure::PlatformPressureSignal;
     use crate::cache::working_set::tests::CountingWorkingSetTrim;
 
     let (tx, _rx) = crate::events::event_channel();
     let counting_trim = Arc::new(CountingWorkingSetTrim::new());
+    let hooks = crate::index::constructors::LifecycleHooks {
+        working_set_trim: Arc::clone(&counting_trim)
+            as Arc<dyn crate::cache::working_set::WorkingSetTrim>,
+        ..crate::index::constructors::LifecycleHooks::production()
+    };
     let mgr = IndexManager::with_lifecycle_hooks_for_test(
         None,
         tx,
-        Arc::new(crate::cache::body_loader::DiskBodyLoader),
-        Arc::clone(&counting_trim) as Arc<dyn crate::cache::working_set::WorkingSetTrim>,
-        Arc::new(PlatformPrefetch),
-        Arc::new(PlatformPressureSignal::new()),
-        Arc::new(crate::cache::background_io::PlatformBackgroundIoPriority),
+        hooks,
+        Arc::new(crate::config::Config::default()),
     );
     mgr.add_drive(build_test_drive()).await;
     mgr.add_drive(build_test_drive_d()).await;
@@ -216,8 +216,6 @@ async fn demote_idle_shards_invokes_working_set_trim_once_per_batch() {
 async fn ensure_warm_for_dispatch_invokes_prefetch_with_records_and_names_regions() {
     use crate::cache::ShardState;
     use crate::cache::prefetch::tests::RecordingPrefetch;
-    use crate::cache::pressure::PlatformPressureSignal;
-    use crate::cache::working_set::PlatformWorkingSetTrim;
 
     let (tx, _rx) = crate::events::event_channel();
 
@@ -225,16 +223,18 @@ async fn ensure_warm_for_dispatch_invokes_prefetch_with_records_and_names_region
     // against it after promote.
     let body = Arc::new(build_test_drive());
     let recording_prefetch = Arc::new(RecordingPrefetch::new());
+    let hooks = crate::index::constructors::LifecycleHooks {
+        body_loader: Arc::new(FixedBodyLoader {
+            body: Arc::clone(&body),
+        }),
+        prefetch: Arc::clone(&recording_prefetch) as Arc<dyn crate::cache::prefetch::Prefetch>,
+        ..crate::index::constructors::LifecycleHooks::production()
+    };
     let mgr = IndexManager::with_lifecycle_hooks_for_test(
         None,
         tx,
-        Arc::new(FixedBodyLoader {
-            body: Arc::clone(&body),
-        }),
-        Arc::new(PlatformWorkingSetTrim),
-        Arc::clone(&recording_prefetch) as Arc<dyn crate::cache::prefetch::Prefetch>,
-        Arc::new(PlatformPressureSignal::new()),
-        Arc::new(crate::cache::background_io::PlatformBackgroundIoPriority),
+        hooks,
+        Arc::new(crate::config::Config::default()),
     );
     mgr.add_drive(build_test_drive()).await;
     assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
@@ -309,21 +309,23 @@ async fn ensure_warm_for_dispatch_invokes_prefetch_with_records_and_names_region
 #[tokio::test]
 async fn cascade_demote_one_step_picks_lru_warm_and_drains_in_order() {
     use crate::cache::ShardState;
-    use crate::cache::prefetch::PlatformPrefetch;
     use crate::cache::pressure::tests::ControllablePressureSignal;
     use crate::cache::working_set::tests::CountingWorkingSetTrim;
 
     let (tx, _rx) = crate::events::event_channel();
     let counting_trim = Arc::new(CountingWorkingSetTrim::new());
     let pressure_fake = Arc::new(ControllablePressureSignal::new());
+    let hooks = crate::index::constructors::LifecycleHooks {
+        working_set_trim: Arc::clone(&counting_trim)
+            as Arc<dyn crate::cache::working_set::WorkingSetTrim>,
+        pressure: Arc::clone(&pressure_fake) as Arc<dyn crate::cache::pressure::PressureSignal>,
+        ..crate::index::constructors::LifecycleHooks::production()
+    };
     let mgr = IndexManager::with_lifecycle_hooks_for_test(
         None,
         tx,
-        Arc::new(crate::cache::body_loader::DiskBodyLoader),
-        Arc::clone(&counting_trim) as Arc<dyn crate::cache::working_set::WorkingSetTrim>,
-        Arc::new(PlatformPrefetch),
-        Arc::clone(&pressure_fake) as Arc<dyn crate::cache::pressure::PressureSignal>,
-        Arc::new(crate::cache::background_io::PlatformBackgroundIoPriority),
+        hooks,
+        Arc::new(crate::config::Config::default()),
     );
     mgr.add_drive(build_test_drive()).await;
     mgr.add_drive(build_test_drive_d()).await;
