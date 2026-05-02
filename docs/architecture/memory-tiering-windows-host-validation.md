@@ -66,17 +66,36 @@ Wait until `uffs status` reports `Ready` for every drive.
 
 In terminal B, allocate memory until the kernel publishes
 `LowMemoryResourceNotification`.  The simplest portable driver is a
-`testlimit64`-style PowerShell loop (no separate binary required):
+`testlimit64`-style PowerShell loop (no separate binary required).
+
+> **Critical: pages must be touched, not just reserved.**  `New-Object
+> byte[] 1073741824` on its own only commits virtual address space
+> (Private Bytes climbs) but leaves the pages non-resident (Working Set
+> flat), because Windows backs zero-filled pages on first write via the
+> demand-zero handler.  The kernel's `LowMemoryResourceNotification`
+> fires on **physical-RAM pressure**, not commit-charge pressure, so a
+> reserve-only allocator never trips the cascade.  Force commit by
+> writing a non-zero byte to every page — `[Array]::Fill($arr, [byte]1)`
+> is the fastest portable way (CLR-native; fills 1 GiB in milliseconds).
+> If you have Sysinternals installed, `testlimit.exe -d 1024 -c N`
+> bypasses .NET entirely and is the canonical tool for this.
 
 ```powershell
-# Allocate 1 GiB chunks until the OS pushes back; release on Ctrl-C.
+# Allocate 1 GiB chunks AND commit by touching every page; auto-break on Low.
 $alloc = New-Object System.Collections.Generic.List[byte[]]
 try {
   while ($true) {
-    $alloc.Add((New-Object byte[] 1073741824))
-    Write-Host ("allocated {0} GiB; free = {1:N0} MiB" -f `
-      $alloc.Count, ((Get-Counter '\Memory\Available MBytes').CounterSamples[0].CookedValue))
-    Start-Sleep -Seconds 1
+    $arr = New-Object byte[] 1073741824
+    [Array]::Fill($arr, [byte]1)            # ← commits every page; the line above only reserves
+    $alloc.Add($arr)
+    $free = (Get-Counter '\Memory\Available MBytes').CounterSamples[0].CookedValue
+    Write-Host ("allocated {0} GiB; free = {1:N0} MiB" -f $alloc.Count, $free)
+    if ($free -lt 512) {
+      Write-Host "Low-memory zone reached — holding 10 s for the cascade to drain, then releasing."
+      Start-Sleep -Seconds 10
+      break
+    }
+    Start-Sleep -Milliseconds 500
   }
 } finally {
   $alloc.Clear()
@@ -226,7 +245,11 @@ $env:RUST_LOG = "uffs_daemon=info,cache.pressure=info,shard.transition=info"
 $start = Get-Date
 $alloc = New-Object System.Collections.Generic.List[byte[]]
 while ((Get-Date) -lt $start.AddMinutes(60)) {
-  if ($alloc.Count -lt 12) { $alloc.Add((New-Object byte[] 1073741824)) }
+  if ($alloc.Count -lt 12) {
+    $arr = New-Object byte[] 1073741824
+    [Array]::Fill($arr, [byte]1)            # ← see G1 callout: pages must be touched, not just reserved
+    $alloc.Add($arr)
+  }
   Start-Sleep -Seconds 5
 }
 $alloc.Clear()
