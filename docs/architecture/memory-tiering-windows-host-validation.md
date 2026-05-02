@@ -112,13 +112,24 @@ auto-tunes the threshold to ~32 MB on the lower end and
 
 #### Capture (this is what you paste into the PR)
 
-The daemon log (`C:\Temp\uffsd-G1.log`) must show:
+The daemon log (`C:\Temp\uffsd-G1.log`) must show (note: tracing
+target names like `cache.pressure` and `shard.transition` set the
+filter routing but are **not** rendered in the log message text under
+the default formatter — grep on the message text and field names
+shown below):
 
 ```text
-INFO cache.pressure: Pressure transition observed level=Low
-INFO shard.transition: Pressure cascade demoted one LRU Warm shard drive=… from=Warm to=Parked reason=pressure-cascade
-INFO shard.transition: Pressure cascade demoted one LRU Warm shard drive=… from=Warm to=Parked reason=pressure-cascade
+INFO Pressure transition observed level=Low
+INFO Pressure cascade demoted one LRU Warm shard drive=C from="Warm" to="Parked" reason="pressure-cascade" last_query_at_ms=…
+INFO Pressure cascade demoted one LRU Warm shard drive=G from="Warm" to="Parked" reason="pressure-cascade" last_query_at_ms=…
 …
+```
+
+Grep cheat-sheet:
+
+```powershell
+Select-String -Path C:\Temp\uffsd-G1.log -Pattern 'Pressure transition|Pressure cascade demoted' |
+    Select-Object -ExpandProperty Line
 ```
 
 — one cascade line per Warm shard.  The `drive` field's order must
@@ -130,7 +141,7 @@ When you Ctrl-C the allocator the kernel fires
 `HighMemoryResourceNotification`.  The log must show:
 
 ```text
-INFO cache.pressure: Pressure transition observed level=High
+INFO Pressure transition observed level=High
 ```
 
 — and **no further** cascade lines after that timestamp.
@@ -194,12 +205,22 @@ each Warm shard becoming visible to the controller.
 #### Capture
 
 Watch Task Manager → *Details* → the **I/O priority** column on
-`uffsd.exe`.  During each `shard.refresh` window (the 30-second tick
-between `INFO shard.refresh: USN refresh tick starting count=N` and
-`INFO shard.refresh: USN refresh tick complete refreshed=N failed=0`),
-`uffsd.exe` should show **Low** (or **Background**, depending on the
-Task Manager localisation).  Outside the tick window the priority
-returns to **Normal**.
+`uffsd.exe` (or use Process Explorer with the *I/O Priority* column
+enabled — PE shows the value more reliably).  During each refresh
+window (the 30-second tick between `INFO USN refresh tick starting
+count=N interval_secs=30` and `INFO USN refresh tick complete
+refreshed=N failed=0 …`), `uffsd.exe` should show **Low** (or
+**Background**, depending on tool localisation).  Outside the tick
+window the priority returns to **Normal**.
+
+Note: the tracing target is `shard.refresh`, but — as in G1 — the
+target name is not rendered in the log line text.  Grep on the
+message text:
+
+```powershell
+Select-String -Path C:\Temp\uffsd-G3.log -Pattern 'USN refresh tick' |
+    Select-Object -ExpandProperty Line
+```
 
 The transition is driven by `crate::cache::background_io::BackgroundIoScope`
 RAII guards wrapped around each per-letter `tokio::task::spawn_blocking`
@@ -211,12 +232,13 @@ THREAD_MODE_BACKGROUND_BEGIN)` on enter,
 
 #### Capture for the PR
 
-Screenshot of Task Manager *Details* with `uffsd.exe` showing
-`I/O priority = Low` (or `Background`), timestamped against a log
-line in `uffsd-G3.log` of the form:
+Screenshot of Task Manager *Details* (or Process Explorer) with
+`uffsd.exe` showing `I/O priority = Low` (or `Background`),
+timestamped against a log line in `uffsd-G3.log` of the form:
 
 ```text
-INFO shard.refresh: USN refresh tick starting count=… interval_secs=30
+INFO USN refresh tick starting count=… interval_secs=30
+INFO USN refresh tick complete refreshed=… failed=… total=… total_ms=…
 ```
 
 Reset before moving on:
@@ -311,32 +333,46 @@ adaptive-TTL ladder drive demotions naturally.
 
 Acceptance criteria (the Phase 6 contract under `[shards.per_drive]`):
 
+**Note on grep patterns**: tracing target names (`shard.transition`,
+`shard.ttl`) are NOT rendered in the log line text under the default
+formatter.  In addition, two different conventions coexist in the
+source:
+
+* `cache/registry.rs` idle-demote / promote / usn-refresh events use
+  field name `letter=` and lowercase state names (`to=parked`).
+* `index/transitions.rs` cascade and `shard.ttl` events use field
+  name `drive=` and quoted+capitalized state names (`to="Parked"`).
+
+The patterns below handle both.  Future operators: if you change the
+daemon's tracing fields, update these patterns in the same commit.
+
 1. **C never demotes below `Warm`.**  Grep the soak log:
    ```powershell
-   Select-String -Path C:\Temp\uffsd-phase6-soak.log -Pattern 'shard.transition.*drive=C.*to=Parked' -List
+   Select-String -Path C:\Temp\uffsd-phase6-soak.log -Pattern '(letter|drive)=C\b.*to="?[Pp]arked"?' -List
    ```
    Expect **zero matches**.  Every `min-tier-clamp` event for C is
-   logged at debug-level via `shard.ttl`:
+   logged at debug-level via `shard.ttl` with the descriptive
+   message `"Demote target clamped by per-drive min_tier"`:
    ```powershell
-   Select-String -Path C:\Temp\uffsd-phase6-soak.log -Pattern 'shard.ttl.*drive=C.*reason="min-tier-clamp"' -Context 0,0 |
+   Select-String -Path C:\Temp\uffsd-phase6-soak.log -Pattern 'Demote target clamped.*drive=C' -Context 0,0 |
        Select-Object -First 5
    ```
 
 2. **Other drives demote normally** (Warm → Parked at the configured
    `warm_ttl_base_secs`):
    ```powershell
-   Select-String -Path C:\Temp\uffsd-phase6-soak.log -Pattern 'shard.transition.*drive=[DEFGMS].*from=Warm.*to=Parked' -List
+   Select-String -Path C:\Temp\uffsd-phase6-soak.log -Pattern '(letter|drive)=[DEFGMS]\b.*from="?[Ww]arm"?.*to="?[Pp]arked"?' -List
    ```
    Expect at least one match per drive (D, E, F, G, M, S).
 
 3. **Different TTLs for high-rate vs low-rate drives.**  After the
    soak, drive a synthetic 5-min load against C, leave the others
-   idle, and grep `shard.ttl` for the per-drive `chosen_ttl_sec`
-   field:
+   idle, and grep for the per-drive `chosen_ttl_sec` field on the
+   `shard.ttl` debug events (descriptive message text
+   `"Adaptive idle-demote evaluation produced demote target"`):
    ```powershell
-   Select-String -Path C:\Temp\uffsd-phase6-soak.log -Pattern 'shard.ttl' |
-       Select-String -Pattern 'chosen_ttl_sec' |
-       Select-Object -Last 30
+   Select-String -Path C:\Temp\uffsd-phase6-soak.log -Pattern 'chosen_ttl_sec' |
+       Select-Object -Last 30 -ExpandProperty Line
    ```
    The C row's `chosen_ttl_sec` should exceed the others' by the
    `60·log2(rate)` bonus from the §5.2 formula
