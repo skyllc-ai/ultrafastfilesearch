@@ -401,12 +401,13 @@ uffs daemon start --log-file C:\Temp\uffsd-G4.log
 # In a second shell, run the adaptive allocator.
 $targetAvailMB = 1024  # squeeze sysAvailable down to ~1 GB to fire Low
 $safetyAvailMB = 256   # NEVER drop below this — allocator pauses growth
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 
 $start = Get-Date
 $end   = $start.AddMinutes(60)
 $alloc = New-Object System.Collections.Generic.List[byte[]]
 
-Write-Host "Adaptive allocator (no cap; bounded by sysAvailable safety floor)."
+Write-Host "Adaptive allocator (incompressible random fill; safety floor only)."
 Write-Host "  target=$targetAvailMB MB  safety floor=$safetyAvailMB MB"
 Write-Host "  start=$($start.ToString('HH:mm:ss'))  end=$($end.ToString('HH:mm:ss'))"
 
@@ -416,7 +417,7 @@ while ((Get-Date) -lt $end) {
         "hold(safety)"
     } elseif ($avail -gt $targetAvailMB) {
         $arr = New-Object byte[] 1073741824
-        [Array]::Fill($arr, [byte]1)         # touch every page
+        $rng.GetBytes($arr)                  # incompressible — defeats Memory Compression
         $alloc.Add($arr)
         "+1 GiB"
     } else {
@@ -431,9 +432,24 @@ $alloc.Clear()
 [GC]::WaitForPendingFinalizers()
 ```
 
+> **Why cryptographic random bytes, not `[Array]::Fill($arr, [byte]1)`.**
+> Windows 10/11 enables **Memory Compression** by default: pages
+> with low entropy (uniform fill, mostly-zeros, repetitive patterns)
+> are compressed in-place to a small fraction of their size and
+> held in the **Compression Store** under the System process.
+> Verified empirically: a `byte 1` fill on a 64 GB host let the
+> allocator reach 70 GiB held while `sysAvailable` stayed at 4-7 GB
+> the whole time — the OS had compressed ~50 GiB into ~10 GiB of
+> physical memory, so kernel-Low never fired.  `RandomNumberGenerator.GetBytes`
+> produces ~8 bits/byte entropy which the compressor cannot shrink,
+> so each +1 GiB allocation drops `sysAvailable` by ~1 GiB linearly
+> as expected.  The crypto RNG path is slower (~150 MB/s vs ~3 GB/s
+> for the uniform fill) so each chunk takes ~7 s instead of <1 s,
+> but the kernel-Low signal arrives reliably.
+
 State machine (only three states, no GiB cap):
 
-* **Climb:** `sysAvailable > target` → add 1 GiB, touch every page.
+* **Climb:** `sysAvailable > target` → add 1 GiB of random bytes.
 * **Hold(target):** `safety <= sysAvailable <= target` → hold steady.
   The daemon's cascade runs here; as it frees memory, sysAvailable
   rises above target and the allocator climbs again, driving the
@@ -442,9 +458,11 @@ State machine (only three states, no GiB cap):
   OOM-killing other apps when the daemon hasn't cascaded fast enough.
 
 The allocator will grow to whatever GiB count is required to push
-sysAvailable down to the target on this specific host (typically
-40-55 GiB on a 64 GB box with the daemon at ~16 GiB, depending on
-what else is running).  Each `hold(target)` window is the daemon's
+sysAvailable down to the target on this specific host.  With
+incompressible fill that's typically (TotalRAM − DaemonRSS − ~6 GB
+OS overhead): on a 64 GB box with the daemon at ~16 GiB, expect
+the allocator to reach ~42-46 GiB held when `sysAvailable` first
+crosses the target.  Each `hold(target)` window is the daemon's
 chance to cascade; each return to `+1 GiB` is the next Low trigger.
 Over 60 min you should see the daemon log emit a
 `level=Low ... level=High` pair every 30-90 s.
