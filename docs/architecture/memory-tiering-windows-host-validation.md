@@ -378,30 +378,78 @@ uffs daemon stop
 
 #### Drive
 
-Run the G1 allocator loop **continuously** for 60 minutes with the
-daemon under it.  Replace the `Start-Sleep -Seconds 1` in the G1
-snippet with a longer cadence so the allocator doesn't add new
-chunks faster than the kernel can publish notifications:
+Run an **adaptive** allocator continuously for 60 min.  The kernel's
+`LowMemoryResourceNotification` threshold scales with physical RAM
+(roughly 1.5% of total — ~1 GB on 64 GB hosts, ~512 MB on 32 GB),
+so a static-size allocator either over-pressures small hosts or
+fails to fire on big ones.  The version below auto-detects total
+RAM, computes a safe cap that leaves room for the daemon and OS,
+and watches `\Memory\Available MBytes` to keep the system poised
+around the Low threshold for the full hour:
 
 ```powershell
+# Set up daemon log routing FIRST (before allocator), in a fresh
+# shell so RUST_LOG doesn't carry over from a previous gate.
+Remove-Item Env:\RUST_LOG -ErrorAction SilentlyContinue
 $env:RUST_LOG = "uffs_daemon=info,cache.pressure=info,shard.transition=info"
+uffs daemon stop
+uffs daemon start --log-file C:\Temp\uffsd-G4.log
+
+# In a second shell, run the adaptive allocator.
+$totalGB         = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+$daemonReserveGB = 18    # uffsd RSS + mimalloc growth headroom
+$osReserveGB     = 8     # Windows + browsers + other apps
+$maxGiB          = $totalGB - $daemonReserveGB - $osReserveGB
+$targetAvailMB   = 1024  # squeeze sysAvailable down to ~1 GB to fire Low
+$safetyAvailMB   = 256   # NEVER drop below this — allocator pauses growth
+
 $start = Get-Date
+$end   = $start.AddMinutes(60)
 $alloc = New-Object System.Collections.Generic.List[byte[]]
-while ((Get-Date) -lt $start.AddMinutes(60)) {
-  if ($alloc.Count -lt 12) {
-    $arr = New-Object byte[] 1073741824
-    [Array]::Fill($arr, [byte]1)            # ← see G1 callout: pages must be touched, not just reserved
-    $alloc.Add($arr)
-  }
-  Start-Sleep -Seconds 5
+
+Write-Host "Allocator on $totalGB GB host."
+Write-Host "  cap=$maxGiB GiB  target=$targetAvailMB MB  safety floor=$safetyAvailMB MB"
+Write-Host "  start=$($start.ToString('HH:mm:ss'))  end=$($end.ToString('HH:mm:ss'))"
+
+while ((Get-Date) -lt $end) {
+    $avail = [math]::Round((Get-Counter '\Memory\Available MBytes').CounterSamples[0].CookedValue)
+    $action = if ($alloc.Count -ge $maxGiB) {
+        "hold(cap)"
+    } elseif ($avail -lt $safetyAvailMB) {
+        "hold(safety)"
+    } elseif ($avail -gt $targetAvailMB) {
+        $arr = New-Object byte[] 1073741824
+        [Array]::Fill($arr, [byte]1)         # touch every page
+        $alloc.Add($arr)
+        "+1 GiB"
+    } else {
+        "hold(target)"
+    }
+    Write-Host "$(Get-Date -Format 'HH:mm:ss')  $($action.PadRight(13))  alloc=$($alloc.Count) GiB  sysAvailable=$avail MB"
+    Start-Sleep -Seconds 5
 }
+
 $alloc.Clear()
 [GC]::Collect()
 ```
 
-Periodically the allocator drives free RAM under the threshold; the
-daemon cascades; when the kernel fires `High` the cascade stops.
-Repeat ad infinitum for 60 minutes.
+State machine:
+
+* **Climb:** if `Available > target`, add 1 GiB (touch every page).
+* **Hold(target):** if `safety <= Available <= target`, hold steady.
+  The daemon's cascade runs here; as it frees memory `Available`
+  rises above target and the allocator climbs again — driving the
+  next Low event.
+* **Hold(safety):** if `Available < safety`, **stop adding**.
+  Prevents OOM-killing other apps when the daemon hasn't cascaded
+  fast enough.
+* **Hold(cap):** if `alloc.Count >= maxGiB`, stop adding.  Prevents
+  the allocator from devouring the entire host.
+
+Each `hold(target)` window is the daemon's chance to cascade; each
+return to `+1 GiB` is the next Low trigger.  Over 60 min you should
+see the daemon log emit a `level=Low ... level=High` pair every
+30-90 s.
 
 #### Capture
 
