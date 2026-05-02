@@ -4335,7 +4335,7 @@ checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
 
 [[package]]
 name = "uffs-broker"
-version = "0.5.85"
+version = "0.5.86"
 dependencies = [
  "anyhow",
  "tracing",
@@ -4346,7 +4346,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-ci-pipeline"
-version = "0.5.85"
+version = "0.5.86"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4363,7 +4363,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-cli"
-version = "0.5.85"
+version = "0.5.86"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -4377,7 +4377,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-client"
-version = "0.5.85"
+version = "0.5.86"
 dependencies = [
  "dirs-next",
  "libc",
@@ -4395,7 +4395,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-core"
-version = "0.5.85"
+version = "0.5.86"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -4427,7 +4427,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-daemon"
-version = "0.5.85"
+version = "0.5.86"
 dependencies = [
  "anyhow",
  "clap",
@@ -4457,7 +4457,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-diag"
-version = "0.5.85"
+version = "0.5.86"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4470,7 +4470,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-format"
-version = "0.5.85"
+version = "0.5.86"
 dependencies = [
  "chrono",
  "itoa",
@@ -4482,7 +4482,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-mcp"
-version = "0.5.85"
+version = "0.5.86"
 dependencies = [
  "anyhow",
  "axum",
@@ -4503,7 +4503,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-mft"
-version = "0.5.85"
+version = "0.5.86"
 dependencies = [
  "anyhow",
  "bitflags",
@@ -4539,14 +4539,14 @@ dependencies = [
 
 [[package]]
 name = "uffs-polars"
-version = "0.5.85"
+version = "0.5.86"
 dependencies = [
  "polars",
 ]
 
 [[package]]
 name = "uffs-security"
-version = "0.5.85"
+version = "0.5.86"
 dependencies = [
  "aes-gcm",
  "dirs-next",
@@ -4561,14 +4561,14 @@ dependencies = [
 
 [[package]]
 name = "uffs-text"
-version = "0.5.85"
+version = "0.5.86"
 dependencies = [
  "bytemuck",
 ]
 
 [[package]]
 name = "uffs-time"
-version = "0.5.85"
+version = "0.5.86"
 
 [[package]]
 name = "unarray"
