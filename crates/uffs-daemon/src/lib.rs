@@ -783,12 +783,21 @@ fn spawn_usn_refresh_controller(idx: Arc<index::IndexManager>) -> tokio::task::J
 /// `IndexManager::pressure` is dropped the receiver's `changed()`
 /// returns `Err`; the loop breaks cleanly without any extra signal.
 ///
+/// `pub(crate)` so the Phase 5 end-to-end integration test in
+/// `crate::index::tests::lifecycle_hooks` can drive the full
+/// subscribe → cascade → preempt loop against a `ControllablePressureSignal`
+/// fake without re-implementing the loop body in test code.  Production
+/// callers stay limited to [`run_daemon`] which is the only place this
+/// runs in the live daemon.
+///
 /// [`PressureLevel::requires_cascade_demote`]: crate::cache::pressure::PressureLevel::requires_cascade_demote
 /// [`PressureSignal`]: crate::cache::pressure::PressureSignal
 /// [`IndexManager::subscribe_pressure`]: crate::index::IndexManager::subscribe_pressure
 /// [`IndexManager::cascade_demote_one_step`]: crate::index::IndexManager::cascade_demote_one_step
 /// [`watch::Sender`]: tokio::sync::watch::Sender
-fn spawn_pressure_subscriber(idx: Arc<index::IndexManager>) -> tokio::task::JoinHandle<()> {
+pub(crate) fn spawn_pressure_subscriber(
+    idx: Arc<index::IndexManager>,
+) -> tokio::task::JoinHandle<()> {
     let mut rx = idx.subscribe_pressure();
     tokio::spawn(async move {
         loop {
