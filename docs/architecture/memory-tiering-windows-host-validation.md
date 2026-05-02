@@ -380,12 +380,15 @@ uffs daemon stop
 
 Run an **adaptive** allocator continuously for 60 min.  The kernel's
 `LowMemoryResourceNotification` threshold scales with physical RAM
-(roughly 1.5% of total — ~1 GB on 64 GB hosts, ~512 MB on 32 GB),
-so a static-size allocator either over-pressures small hosts or
-fails to fire on big ones.  The version below auto-detects total
-RAM, computes a safe cap that leaves room for the daemon and OS,
-and watches `\Memory\Available MBytes` to keep the system poised
-around the Low threshold for the full hour:
+(roughly 1.5% of total — ~1 GB on 64 GB hosts, ~512 MB on 32 GB), so
+the allocator must drive sysAvailable down to that threshold to fire
+Low; the only correct stop condition is "sysAvailable about to hit a
+safety floor", **not** a hardcoded GiB cap based on guessed reserves
+(an empirical lesson: a `TotalRAM − 26 GiB` cap stopped the allocator
+at 38 GiB on a 64 GB host with sysAvailable still at 7 GB, never
+firing Low).  The version below has only one stop condition — the
+256 MB safety floor — so it grows as much as the host has headroom
+for, then holds at the target while the daemon cascades:
 
 ```powershell
 # Set up daemon log routing FIRST (before allocator), in a fresh
@@ -396,26 +399,20 @@ uffs daemon stop
 uffs daemon start --log-file C:\Temp\uffsd-G4.log
 
 # In a second shell, run the adaptive allocator.
-$totalGB         = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
-$daemonReserveGB = 18    # uffsd RSS + mimalloc growth headroom
-$osReserveGB     = 8     # Windows + browsers + other apps
-$maxGiB          = $totalGB - $daemonReserveGB - $osReserveGB
-$targetAvailMB   = 1024  # squeeze sysAvailable down to ~1 GB to fire Low
-$safetyAvailMB   = 256   # NEVER drop below this — allocator pauses growth
+$targetAvailMB = 1024  # squeeze sysAvailable down to ~1 GB to fire Low
+$safetyAvailMB = 256   # NEVER drop below this — allocator pauses growth
 
 $start = Get-Date
 $end   = $start.AddMinutes(60)
 $alloc = New-Object System.Collections.Generic.List[byte[]]
 
-Write-Host "Allocator on $totalGB GB host."
-Write-Host "  cap=$maxGiB GiB  target=$targetAvailMB MB  safety floor=$safetyAvailMB MB"
+Write-Host "Adaptive allocator (no cap; bounded by sysAvailable safety floor)."
+Write-Host "  target=$targetAvailMB MB  safety floor=$safetyAvailMB MB"
 Write-Host "  start=$($start.ToString('HH:mm:ss'))  end=$($end.ToString('HH:mm:ss'))"
 
 while ((Get-Date) -lt $end) {
     $avail = [math]::Round((Get-Counter '\Memory\Available MBytes').CounterSamples[0].CookedValue)
-    $action = if ($alloc.Count -ge $maxGiB) {
-        "hold(cap)"
-    } elseif ($avail -lt $safetyAvailMB) {
+    $action = if ($avail -lt $safetyAvailMB) {
         "hold(safety)"
     } elseif ($avail -gt $targetAvailMB) {
         $arr = New-Object byte[] 1073741824
@@ -431,25 +428,26 @@ while ((Get-Date) -lt $end) {
 
 $alloc.Clear()
 [GC]::Collect()
+[GC]::WaitForPendingFinalizers()
 ```
 
-State machine:
+State machine (only three states, no GiB cap):
 
-* **Climb:** if `Available > target`, add 1 GiB (touch every page).
-* **Hold(target):** if `safety <= Available <= target`, hold steady.
-  The daemon's cascade runs here; as it frees memory `Available`
-  rises above target and the allocator climbs again — driving the
+* **Climb:** `sysAvailable > target` → add 1 GiB, touch every page.
+* **Hold(target):** `safety <= sysAvailable <= target` → hold steady.
+  The daemon's cascade runs here; as it frees memory, sysAvailable
+  rises above target and the allocator climbs again, driving the
   next Low event.
-* **Hold(safety):** if `Available < safety`, **stop adding**.
-  Prevents OOM-killing other apps when the daemon hasn't cascaded
-  fast enough.
-* **Hold(cap):** if `alloc.Count >= maxGiB`, stop adding.  Prevents
-  the allocator from devouring the entire host.
+* **Hold(safety):** `sysAvailable < safety` → stop adding.  Prevents
+  OOM-killing other apps when the daemon hasn't cascaded fast enough.
 
-Each `hold(target)` window is the daemon's chance to cascade; each
-return to `+1 GiB` is the next Low trigger.  Over 60 min you should
-see the daemon log emit a `level=Low ... level=High` pair every
-30-90 s.
+The allocator will grow to whatever GiB count is required to push
+sysAvailable down to the target on this specific host (typically
+40-55 GiB on a 64 GB box with the daemon at ~16 GiB, depending on
+what else is running).  Each `hold(target)` window is the daemon's
+chance to cascade; each return to `+1 GiB` is the next Low trigger.
+Over 60 min you should see the daemon log emit a
+`level=Low ... level=High` pair every 30-90 s.
 
 #### Capture
 
