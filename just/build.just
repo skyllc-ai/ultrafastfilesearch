@@ -63,6 +63,10 @@ copy-binary profile:
             continue
         fi
         printf "\033[0;34m  → %s → %s\033[0m\n" "$SOURCE_PATH" "$DEST_PATH"
+        # rm -f before cp so the new file gets a fresh inode — overwrites in
+        # place share the inode, which lets macOS re-use a path-cached launch
+        # services deny verdict against an earlier broken copy at the same path.
+        rm -f "$DEST_PATH"
         if cp "$SOURCE_PATH" "$DEST_PATH" && chmod +x "$DEST_PATH"; then
             printf "\033[0;32m✅ %s deployed to ~/bin/\033[0m\n" "${BIN}${EXT}"
         else
@@ -116,6 +120,10 @@ use-local:
             printf "  \033[1;33m⚠️  Removing stale directory %s\033[0m\n" "$DEST"
             rm -rf "$DEST"
         fi
+        # rm -f before cp so the new file gets a fresh inode — overwrites in
+        # place share the inode, which lets macOS re-use a path-cached launch
+        # services deny verdict against an earlier broken copy at the same path.
+        rm -f "$DEST"
         cp "$SRC" "$DEST"
         chmod +x "$DEST"
         SIZE=$(du -sh "$BIN_DIR/$NAME" | cut -f1)
@@ -217,6 +225,10 @@ use:
         DEST_NAME="${BINARIES[$SRC_NAME]}"
         SRC="$DIST_DIR/$SRC_NAME"
         if [[ -f "$SRC" ]]; then
+            # rm -f before cp so the new file gets a fresh inode — overwrites in
+            # place share the inode, which lets macOS re-use a path-cached launch
+            # services deny verdict against an earlier broken copy at the same path.
+            rm -f "$BIN_DIR/$DEST_NAME"
             cp "$SRC" "$BIN_DIR/$DEST_NAME"
             chmod +x "$BIN_DIR/$DEST_NAME"
             SIZE=$(du -sh "$BIN_DIR/$DEST_NAME" | cut -f1)
