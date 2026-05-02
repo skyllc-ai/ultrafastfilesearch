@@ -486,6 +486,49 @@ Acceptance criteria:
   alternating `level=Low` / `level=High` transitions and no fatal
   errors.
 
+> **Distinguishing pressure-cascade from TTL idle-demote.**
+> Every demote — whether TTL-driven (`demote_idle_shards`) or
+> pressure-driven (`cascade_demote_one_step`) — flows through the
+> low-level `Registry::demote_letter` primitive, which
+> unconditionally emits a `reason="demote"` event from
+> `cache/registry.rs`.  The pressure-cascade path additionally
+> emits a `reason="pressure-cascade"` event from
+> `index/transitions.rs:cascade_demote_one_step` after calling the
+> primitive.  Result: every cascade demote produces TWO log lines
+> per shard (low-level `demote` event, then high-level
+> `pressure-cascade` event), separated by the
+> `WorkingSetTrim::trim()` syscall duration (typically 6-22 ms,
+> but up to ~1 s on the first cascade demote when the daemon's
+> working set is still large).  TTL idle-demotes produce ONE log
+> line per shard.
+>
+> To reliably distinguish the two paths, grep for orphan
+> `reason="demote"` events (no paired `reason="pressure-cascade"`
+> within the same second on the same drive):
+>
+> ```powershell
+> # Cascade-demote events (the goal during a memory-pressure soak):
+> Select-String -Path C:\Temp\uffsd-G4.log -Pattern 'reason="pressure-cascade"' |
+>     Select-Object -ExpandProperty Line
+>
+> # TRUE TTL-driven idle demotes are demote events with NO
+> # paired pressure-cascade event for the same drive within ~1 s.
+> # On a clean G4 run with `UFFS_WARM_TO_PARKED_IDLE_SECS=3600`
+> # this should be empty.
+> $log = Get-Content C:\Temp\uffsd-G4.log
+> $demote = $log | Select-String 'reason="demote"' | ForEach-Object { $_.Line }
+> $cascade = $log | Select-String 'reason="pressure-cascade".*drive=([A-Z])' |
+>     ForEach-Object { $_.Line }
+> "demote events: $($demote.Count); cascade events: $($cascade.Count)"
+> # If demote == cascade: every demote was cascade-driven. Good.
+> # If demote >  cascade: the difference is real TTL idle-demotes.
+> ```
+>
+> A future cleanup may pass the reason through `demote_letter` so
+> the primitive emits a single canonical event with the correct
+> reason; until then, the pair-match grep above is the operator's
+> source of truth.
+
 ---
 
 ## 2. Phase 6 operator gate — 24-hour `min_tier = "Warm"` soak
