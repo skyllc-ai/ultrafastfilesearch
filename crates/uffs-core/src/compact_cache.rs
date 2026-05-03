@@ -149,6 +149,25 @@ pub fn compact_cache_path(drive_letter: char) -> PathBuf {
     uffs_mft::cache::cache_dir().join(format!("{drive_letter}_compact.uffs"))
 }
 
+/// Returns the per-drive USN cursor file path used by the Phase 7
+/// per-shard journal loop's [`CursorStore`] to persist the last
+/// successfully-applied USN between daemon runs.
+///
+/// The cursor file lives alongside the compact cache (`<letter>_compact.uffs`)
+/// in the same `cache_dir()` so a single owner-only directory holds
+/// every per-drive cache artifact, making backup / cleanup
+/// (`uffs daemon forget <drive>`) a single-directory operation.
+///
+/// Storage format: 8 bytes little-endian `u64`.  See
+/// `crate::cache::cursor_store::DiskCursorStore` (in `uffs-daemon`)
+/// for the read / write helpers.
+///
+/// [`CursorStore`]: # "Trait defined in `uffs-daemon::cache::journal_loop`"
+#[must_use]
+pub fn usn_cursor_path(drive_letter: char) -> PathBuf {
+    uffs_mft::cache::cache_dir().join(format!("{drive_letter}_usn.cursor"))
+}
+
 /// Remove a stale **directory** at the compact-cache target path, if any.
 ///
 /// # Background — the v0.4.23 legacy layout

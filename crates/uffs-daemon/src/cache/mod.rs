@@ -30,6 +30,7 @@
 
 pub(crate) mod background_io;
 pub(crate) mod body_loader;
+pub(crate) mod cursor_store;
 pub(crate) mod journal_loop;
 pub(crate) mod policy;
 pub(crate) mod prefetch;
