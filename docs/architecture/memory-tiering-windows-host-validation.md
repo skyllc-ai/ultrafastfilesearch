@@ -120,22 +120,34 @@ shown below):
 
 ```text
 INFO Pressure transition observed level=Low
-INFO Pressure cascade demoted one LRU Warm shard drive=C from="Warm" to="Parked" reason="pressure-cascade" last_query_at_ms=…
-INFO Pressure cascade demoted one LRU Warm shard drive=G from="Warm" to="Parked" reason="pressure-cascade" last_query_at_ms=…
+INFO letter=C from=warm to=parked freed_mb=… last_query_at_ms=… reason="pressure-cascade"
+INFO letter=G from=warm to=parked freed_mb=… last_query_at_ms=… reason="pressure-cascade"
 …
 ```
 
 Grep cheat-sheet:
 
 ```powershell
-Select-String -Path C:\Temp\uffsd-G1.log -Pattern 'Pressure transition|Pressure cascade demoted' |
+Select-String -Path C:\Temp\uffsd-G1.log -Pattern 'Pressure transition|reason="pressure-cascade"' |
     Select-Object -ExpandProperty Line
 ```
 
-— one cascade line per Warm shard.  The `drive` field's order must
+— one cascade line per Warm shard.  The `letter` field's order must
 follow oldest-`last_query_at_ms`-first (LRU contract pinned by
 `crate::index::tests::lifecycle_hooks::cascade_demote_one_step_picks_lru_warm_and_drains_in_order`
 + `pressure_subscriber_drains_warm_cascade_on_low_and_no_ops_on_high`).
+
+> **Format note** (G4 follow-up, 2026-05-02): the cascade demote
+> event was previously emitted twice per shard — once from the
+> registry primitive (`reason="demote"`, `letter=` field) and a
+> second time from `cascade_demote_one_step` itself (`reason=
+> "pressure-cascade"`, `drive=` field, with the "Pressure cascade
+> demoted one LRU Warm shard" message text).  The second event was
+> redundant and the gap between the two confused log analysis, so
+> the discriminator is now in the registry primitive's `reason`
+> field directly and the second event is gone.  Old runbooks that
+> grepped for `Pressure cascade demoted` will see zero matches —
+> use `reason="pressure-cascade"` instead.
 
 When you Ctrl-C the allocator the kernel fires
 `HighMemoryResourceNotification`.  The log must show:
@@ -489,45 +501,38 @@ Acceptance criteria:
 > **Distinguishing pressure-cascade from TTL idle-demote.**
 > Every demote — whether TTL-driven (`demote_idle_shards`) or
 > pressure-driven (`cascade_demote_one_step`) — flows through the
-> low-level `Registry::demote_letter` primitive, which
-> unconditionally emits a `reason="demote"` event from
-> `cache/registry.rs`.  The pressure-cascade path additionally
-> emits a `reason="pressure-cascade"` event from
-> `index/transitions.rs:cascade_demote_one_step` after calling the
-> primitive.  Result: every cascade demote produces TWO log lines
-> per shard (low-level `demote` event, then high-level
-> `pressure-cascade` event), separated by the
-> `WorkingSetTrim::trim()` syscall duration (typically 6-22 ms,
-> but up to ~1 s on the first cascade demote when the daemon's
-> working set is still large).  TTL idle-demotes produce ONE log
-> line per shard.
+> low-level `Registry::demote_letter_with_reason` primitive in
+> `cache/registry.rs`, which emits **exactly one** canonical
+> `INFO`-level `shard.transition` event per shard.  The
+> discriminator is in the `reason` field:
 >
-> To reliably distinguish the two paths, grep for orphan
-> `reason="demote"` events (no paired `reason="pressure-cascade"`
-> within the same second on the same drive):
+> * `reason="demote"` — TTL-driven idle demote (the
+>   `DemoteReason::IdleTtl` default).
+> * `reason="pressure-cascade"` — kernel-Low pressure cascade
+>   demote (`DemoteReason::PressureCascade`, used only by
+>   `cascade_demote_one_step`).
+>
+> Both events also carry `letter`, `from`, `to`, `freed_mb`, and
+> `last_query_at_ms` fields (the latter was promoted from a
+> cascade-only field to a uniform schema during the G4 follow-up
+> refactor).  Operator runbooks can therefore count each path
+> independently with a single grep:
 >
 > ```powershell
 > # Cascade-demote events (the goal during a memory-pressure soak):
-> Select-String -Path C:\Temp\uffsd-G4.log -Pattern 'reason="pressure-cascade"' |
->     Select-Object -ExpandProperty Line
+> $cascade = (Select-String -Path C:\Temp\uffsd-G4.log -Pattern 'reason="pressure-cascade"').Count
+> "Cascade-demote events:  $cascade"
 >
-> # TRUE TTL-driven idle demotes are demote events with NO
-> # paired pressure-cascade event for the same drive within ~1 s.
-> # On a clean G4 run with `UFFS_WARM_TO_PARKED_IDLE_SECS=3600`
-> # this should be empty.
-> $log = Get-Content C:\Temp\uffsd-G4.log
-> $demote = $log | Select-String 'reason="demote"' | ForEach-Object { $_.Line }
-> $cascade = $log | Select-String 'reason="pressure-cascade".*drive=([A-Z])' |
->     ForEach-Object { $_.Line }
-> "demote events: $($demote.Count); cascade events: $($cascade.Count)"
-> # If demote == cascade: every demote was cascade-driven. Good.
-> # If demote >  cascade: the difference is real TTL idle-demotes.
+> # TRUE TTL-driven idle demotes (should be 0 on a clean G4 run
+> # with `UFFS_WARM_TO_PARKED_IDLE_SECS=3600`):
+> $ttl = (Select-String -Path C:\Temp\uffsd-G4.log -Pattern 'reason="demote"').Count
+> "TTL idle-demote events: $ttl"
 > ```
 >
-> A future cleanup may pass the reason through `demote_letter` so
-> the primitive emits a single canonical event with the correct
-> reason; until then, the pair-match grep above is the operator's
-> source of truth.
+> No pair-match is required — the `reason` field is authoritative.
+> Pinned in `crates/uffs-daemon/src/index/tests/idle_demote.rs::cascade_demote_emits_single_event_with_pressure_cascade_reason`
+> so a future refactor can't reintroduce the prior dual-event
+> pattern.
 
 ---
 
@@ -566,10 +571,16 @@ Acceptance criteria (the Phase 6 contract under `[shards.per_drive]`):
 formatter.  In addition, two different conventions coexist in the
 source:
 
-* `cache/registry.rs` idle-demote / promote / usn-refresh events use
-  field name `letter=` and lowercase state names (`to=parked`).
-* `index/transitions.rs` cascade and `shard.ttl` events use field
-  name `drive=` and quoted+capitalized state names (`to="Parked"`).
+* `cache/registry.rs` demote / promote / usn-refresh events
+  (the canonical `shard.transition` info events, including the
+  cascade path's `reason="pressure-cascade"` after the G4
+  follow-up refactor) use field name `letter=` and lowercase
+  state names (`to=parked`).
+* `index/transitions.rs` `shard.ttl` debug / trace events
+  (idle-demote evaluation diagnostics) and `shard.refresh`
+  events (USN refresh tick) use field name `drive=` and the
+  `TierLevel` `Debug` formatter (`to=Parked`, capitalized,
+  unquoted).
 
 The patterns below handle both.  Future operators: if you change the
 daemon's tracing fields, update these patterns in the same commit.
