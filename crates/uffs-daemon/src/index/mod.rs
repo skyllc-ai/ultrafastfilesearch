@@ -16,6 +16,7 @@ mod dispatch;
 mod drives;
 mod hotload;
 mod info;
+mod journal;
 mod loading;
 mod predicates;
 mod projection;
