@@ -22,7 +22,8 @@
 use alloc::sync::Arc;
 use core::time::Duration;
 
-use super::super::{JournalSource, MacStubJournalSource, PatchSink, spawn_journal_loop};
+use super::super::sources::MacStubJournalSource;
+use super::super::{JournalSource, PatchSink, spawn_journal_loop};
 use super::{
     CONVERGENCE_DEADLINE, FakeJournalSource, RecordingSink, fast_config, null_cursor_store,
     one_change, wait_for,

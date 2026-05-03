@@ -35,9 +35,9 @@ use std::sync::Mutex;
 
 use uffs_mft::usn::FileChange;
 
+use super::sources::NullCursorStore;
 use super::{
-    CursorStore, JournalLoopConfig, JournalPollResult, JournalSource, NullCursorStore, PatchSink,
-    SaveReason,
+    CursorStore, JournalLoopConfig, JournalPollResult, JournalSource, PatchSink, SaveReason,
 };
 
 mod basics;

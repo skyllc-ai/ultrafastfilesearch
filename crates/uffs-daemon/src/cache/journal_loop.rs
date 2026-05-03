@@ -144,95 +144,6 @@ pub(crate) trait JournalSource: Send + Sync + 'static {
     fn poll(&self, cursor: u64) -> std::io::Result<JournalPollResult>;
 }
 
-/// Cross-platform always-empty journal source.
-///
-/// Used as the production journal source on macOS / Linux where
-/// USN journals don't exist, and as a default for tests that don't
-/// need to drive change events.  Every poll returns
-/// `JournalPollResult::default()` (no changes, cursor unchanged,
-/// `journal_id == 0`) without any I/O.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 7-B forward reference; production wiring \
-                  in `lib.rs::spawn_load_task` lands in the \
-                  activation commit (post-7-D, after cursor \
-                  persistence + wrap detection).  Exercised by \
-                  `cache::journal_loop::tests::mac_stub_source_*` \
-                  under `cfg(test)`."
-    )
-)]
-#[derive(Debug, Default)]
-pub(crate) struct MacStubJournalSource;
-
-impl JournalSource for MacStubJournalSource {
-    fn poll(&self, cursor: u64) -> std::io::Result<JournalPollResult> {
-        Ok(JournalPollResult {
-            changes: Vec::new(),
-            next_cursor: cursor,
-            journal_id: 0,
-        })
-    }
-}
-
-/// Windows production journal source.
-///
-/// Wraps the real `FSCTL_READ_USN_JOURNAL` path via
-/// [`uffs_mft::usn::read_usn_journal`] + [`uffs_mft::usn::aggregate_changes`].
-/// Carries the drive letter so the broker's volume-handle pool
-/// can resolve to the right NTFS volume.
-///
-/// **Phase 7-B status**: scaffolding only.  The real
-/// FSCTL-backed implementation lands when the production loop is
-/// wired into `spawn_load_task` (post-7-D activation).  Until then
-/// this type returns empty results so the daemon's existing Phase-5
-/// `refresh_usn_for_warm_shards` global tick continues to handle
-/// live USN refresh.
-#[cfg(windows)]
-#[derive(Debug)]
-pub(crate) struct WindowsJournalSource {
-    /// Drive letter for which this source reads the USN journal.
-    drive: char,
-}
-
-#[cfg(windows)]
-#[expect(
-    dead_code,
-    reason = "Phase 7-B Windows scaffolding; the FSCTL-backed \
-              implementation + production wiring land in the \
-              Phase 7 activation commit (post-7-D).  Until then \
-              `poll` returns empty so the existing Phase-5 \
-              `refresh_usn_for_warm_shards` global tick stays the \
-              authoritative live-refresh path.  The block-level \
-              `expect` covers both the constructor and any future \
-              accessor / config-update methods this type acquires \
-              before activation."
-)]
-impl WindowsJournalSource {
-    /// Create a source bound to `drive`.
-    #[must_use]
-    pub(crate) const fn new(drive: char) -> Self {
-        Self { drive }
-    }
-}
-
-#[cfg(windows)]
-impl JournalSource for WindowsJournalSource {
-    fn poll(&self, cursor: u64) -> std::io::Result<JournalPollResult> {
-        // Phase 7-B scaffolding: Windows production wiring lands in
-        // the activation commit.  Until then return empty so the
-        // existing Phase-5 global tick stays the live-refresh path.
-        // Cursor unchanged so the next poll behaves the same.
-        let _ = self.drive;
-        Ok(JournalPollResult {
-            changes: Vec::new(),
-            next_cursor: cursor,
-            journal_id: 0,
-        })
-    }
-}
-
 /// Sink that consumes change batches produced by a [`JournalLoop`].
 ///
 /// Production wires this to a closure that:
@@ -322,31 +233,6 @@ pub(crate) trait CursorStore: Send + Sync + 'static {
     /// the on-disk cursor advances in lockstep with the on-disk
     /// snapshot.
     fn store(&self, letter: char, cursor: u64);
-}
-
-/// Always-empty cursor store: `load` returns 0, `store` is a
-/// no-op.  Used as the production fallback on macOS / Linux
-/// where there is no live journal to persist a cursor for, and
-/// as a default for tests that don't care about the persistence
-/// path.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 7-D forward reference; production wiring \
-                  in `lib.rs::spawn_load_task` lands in the \
-                  activation commit (post-7-E).  Exercised by \
-                  `cache::journal_loop::tests` under `cfg(test)`."
-    )
-)]
-#[derive(Debug, Default)]
-pub(crate) struct NullCursorStore;
-
-impl CursorStore for NullCursorStore {
-    fn load(&self, _letter: char) -> u64 {
-        0
-    }
-    fn store(&self, _letter: char, _cursor: u64) {}
 }
 
 /// Why a [`PatchSink::trigger_save`] call fired.
@@ -793,6 +679,8 @@ pub(crate) fn spawn_journal_loop(
     let join = tokio::spawn(loop_state.run());
     JournalLoopHandle { cancel_tx, join }
 }
+
+pub(crate) mod sources;
 
 #[cfg(test)]
 mod tests;
