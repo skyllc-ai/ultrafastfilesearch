@@ -646,3 +646,198 @@ re-running the soak:
 
 After all five captures land, update the implementation-plan §5.1
 row for the corresponding phase to 🟢 with the date the PR landed.
+
+---
+
+## 4. Reference captures (2026-05-02 v0.5.86 — Phase 5 G1-G4 baseline)
+
+This section documents the first end-to-end Phase 5 Windows-host
+capture pass against the 7-drive reference box, run on 2026-05-02
+with the v0.5.86 dev binary (the **pre-canonical-event-refactor**
+build — the dual-logging pattern visible in the G4 excerpts below
+is the very gap that the same-day refactor commit `4a627246d`
+closes; future capture passes against v0.5.87+ binaries will
+produce one INFO `shard.transition` event per cascade step
+instead of two).  Operators running a future capture pass have a
+known-good baseline to compare against.
+
+Cross-reference: implementation-plan
+[`docs/refactor/memory-tiering-implementation-plan.md`](../refactor/memory-tiering-implementation-plan.md)
+§3 Phase 5 "Phase 5 Windows-host validation findings (2026-05-02
+capture pass, v0.5.86)" carries the per-gate analysis and the
+end-to-end contract claims (LRU cascade ordering, watcher
+`Cascade preempted by transition out of Low` mid-cascade abort,
+sustained 2 h 11 min soak with no OOM).
+
+### 4.1 Artefact index
+
+| Gate | Artefact path (under repo root) | Wall duration | What it pins |
+|---|---|---|---|
+| **G1** kernel notification → cascade | `LOG/WINDOWS uffsd-G1G2.log` (706 lines) | ~32 min (20:55 → 21:30) | Win32 watcher thread translates `MEMORY_RESOURCE_NOTIFICATION` Low/High into `PressureSignal::Low/High` events |
+| **G2** working-set drop ≤ 5 s | TaskMgr screenshots in PR + `LOG/WINDOWS uffsd-G1G2.log` lines 374-380 | TTL idle-demote at 21:00:41 freed 4592 MB across 7 drives in 27 ms wall | Demote → `EmptyWorkingSet` syscall returns memory to OS within the 5 s acceptance window |
+| **G3** background-IO priority during USN catch-up | `LOG/G3/g3-acceptance-greps.txt` + `LOG/G3/uffsd-G3-debug.log` (1527 lines) | ~3 min 30 s (22:17:38 → 22:21:08) | `BackgroundIoScope::begin()` returned `Err` zero times across 7 successive `USN refresh tick` cadences (preferred capture path (a) — empty diagnostic + populated tick) |
+| **G4** sustained-pressure soak, no OOM | `LOG/uffsd-G4.log` (33 min, 116 lines) + `LOG/uffsd-G4-bonus.log` (2 h 11 min, 110 lines) | combined 2 h 44 min (**2.7× the 60-min G4 acceptance bar**) | Daemon survives ~30 `level=Low ↔ level=High` cycle pairs at 30-90 s intervals; cascade preempts on transition-out-of-Low (4× during 7-drive drain); no panic, no `JoinError`, no shard transition fault |
+
+### 4.2 G1 — Low-pressure stress (kernel → cascade)
+
+Source: `LOG/WINDOWS uffsd-G1G2.log` lines 383-411 (12 paired
+kernel/watcher events in a 24 s window) + lines 524, 529 (first
+two cascade demotes).
+
+```text
+2026-05-02T21:28:21.134825Z  INFO Pressure transition observed level=Low
+2026-05-02T21:28:21.134793Z  INFO Memory resource notification fired level=Low
+2026-05-02T21:28:21.134912Z  INFO Memory resource notification fired level=High
+2026-05-02T21:28:21.134936Z  INFO Pressure transition observed level=High
+…
+2026-05-02T21:29:47.655430Z  INFO Pressure cascade demoted one LRU Warm shard \
+    drive=C from="Warm" to="Parked" reason="pressure-cascade" \
+    last_query_at_ms=1777757366606
+2026-05-02T21:29:49.277114Z  INFO Pressure cascade demoted one LRU Warm shard \
+    drive=G from="Warm" to="Parked" reason="pressure-cascade" \
+    last_query_at_ms=1777757385120
+```
+
+The kernel-side `Memory resource notification fired` event (target
+`cache.pressure`) and the watcher-side `Pressure transition observed`
+event arrive within 1 ms of each other — `PlatformPressureSignal::watcher`
+emits the second event right after `WaitForMultipleObjects` returns
+and the `watch::Sender::send_replace` publishes the new level.  This
+end-to-end matches the deterministic Mac unit-test contract pinned
+by `pressure_subscriber_drains_warm_cascade_on_low_and_no_ops_on_high`.
+
+> **v0.5.86-pre-refactor shape.**  The two cascade-demote lines
+> shown above are the **OLD** dual-logging format — note the
+> `drive="Warm"` (quoted-string field) in the cascade event vs the
+> `letter=C` (bare-char) field on the registry primitive.  Future
+> v0.5.87+ captures will show **one** event per cascade step with
+> the uniform `letter=` field name and `reason="pressure-cascade"`.
+
+### 4.3 G2 — Working set drop (TTL-driven baseline)
+
+Source: `LOG/WINDOWS uffsd-G1G2.log` lines 374-380 (TTL
+idle-demote at 21:00:41, ~5 min after daemon start).
+
+```text
+2026-05-02T21:00:41.838723Z  INFO letter=G from=warm to=parked freed_mb=1     reason="demote"
+2026-05-02T21:00:41.842359Z  INFO letter=M from=warm to=parked freed_mb=301   reason="demote"
+2026-05-02T21:00:41.845280Z  INFO letter=F from=warm to=parked freed_mb=448   reason="demote"
+2026-05-02T21:00:41.850675Z  INFO letter=E from=warm to=parked freed_mb=474   reason="demote"
+2026-05-02T21:00:41.853916Z  INFO letter=C from=warm to=parked freed_mb=687   reason="demote"
+2026-05-02T21:00:41.858904Z  INFO letter=D from=warm to=parked freed_mb=1318  reason="demote"
+2026-05-02T21:00:41.866166Z  INFO letter=S from=warm to=parked freed_mb=1363  reason="demote"
+```
+
+All 7 drives demoted from Warm to Parked in 27 ms wall, releasing
+**4592 MB** of body Arc state cumulatively.  `EmptyWorkingSet`
+fires once per batch (Phase 5 task 5.4 `applied > 0` gate).
+TaskMgr screenshots in the PR description show the corresponding
+`uffsd.exe` Working Set drop within the 5 s acceptance window.
+
+### 4.4 G3 — Background-IO priority during USN catch-up
+
+Source: `LOG/G3/g3-acceptance-greps.txt` (the runbook's preferred
+capture path (a) — empty `BackgroundIoPriority` debug-log grep +
+populated `USN refresh tick` cadence).
+
+```text
+=== BackgroundIoPriority diagnostic lines (empty = success) ===
+
+=== USN refresh tick lines ===
+2026-05-02T22:26:35.723436Z  INFO USN refresh tick starting count=7 interval_secs=30
+2026-05-02T22:26:49.360505Z  INFO USN refresh tick complete refreshed=7 failed=0 total=7 total_ms=13637
+2026-05-02T22:27:05.714331Z  INFO USN refresh tick starting count=7 interval_secs=30
+2026-05-02T22:27:17.389393Z  INFO USN refresh tick complete refreshed=7 failed=0 total=7 total_ms=11675
+…
+```
+
+Empty diagnostic = `BackgroundIoScope::begin()` returned `Ok`
+on every per-letter `spawn_blocking` worker across 7 successive
+30 s refresh ticks (each ~11-13 s wall for 7 drives totalling
+25.7 M records).  No leaked thread-priority elevations
+(`Drop::drop` paired `THREAD_MODE_BACKGROUND_END` correctly via
+the RAII guard).  Full debug log: `LOG/G3/uffsd-G3-debug.log`.
+
+### 4.5 G4 — 1-hour sustained-pressure soak (dual log)
+
+Source: `LOG/uffsd-G4.log` (33 min, daemon-restart phase) +
+`LOG/uffsd-G4-bonus.log` (2 h 11 min, sustained pressure).
+Combined wall **2 h 44 min, 2.7× the runbook's 60-min G4 bar**.
+
+`uffsd-G4-bonus.log` lines 38-69 capture a 7-step LRU cascade
+under sustained kernel-Low pressure (excerpted):
+
+```text
+2026-05-02T23:08:11.134135Z  INFO Memory resource notification fired level=Low
+2026-05-02T23:08:11.134161Z  INFO Pressure transition observed level=Low
+2026-05-02T23:08:11.134631Z  INFO letter=G from=warm to=parked freed_mb=1 reason="demote"
+2026-05-02T23:08:11.145475Z  INFO Memory resource notification fired level=High
+2026-05-02T23:08:11.970112Z  INFO Pressure cascade demoted one LRU Warm shard \
+    drive=G from="Warm" to="Parked" reason="pressure-cascade" \
+    last_query_at_ms=1777763174381
+2026-05-02T23:08:11.970271Z  INFO Cascade preempted by transition out of Low new_level=High
+…
+```
+
+Three end-to-end contracts demonstrated in this excerpt:
+
+1. **LRU cascade ordering under fully-tied input.**  All 7
+   cascade-demote events carry the **same** `last_query_at_ms=1777763174381`
+   because the operator drove zero queries before the soak — the
+   in-memory clock skew between `DriveStats::last_query_at_ms` of
+   different shards collapsed to a single sample.  The
+   `cascade_demote_one_step` per-call iteration through the
+   `oldest-last_query_at_ms` heuristic still drained one shard per
+   cascade tick (vs dumping all 7 at once) per the Phase 5 task
+   5.10 contract.
+
+2. **Cascade-preempt-on-High via `rx.has_changed()`.**  Lines 43,
+   49, 55, 65 (4 of 7 cascade steps) show
+   `Cascade preempted by transition out of Low new_level=High`
+   — the kernel briefly recovered headroom mid-soak, the watcher
+   thread translated the recovery to a `PressureSignal::High` send,
+   and the cascade subscriber's `rx.has_changed()` poll between
+   iterations caught it before over-shedding remaining shards.
+
+3. **Dual-logging in the wild (now fixed at the source).**  Each
+   cascade step in this excerpt emits **two** INFO events: the
+   registry primitive's `letter=G from=warm to=parked
+   freed_mb=1 reason="demote"` (line 40) **followed by** the
+   cascade's redundant `Pressure cascade demoted one LRU Warm
+   shard drive=G ... reason="pressure-cascade"` (line 42),
+   separated by 1339 ms (the `EmptyWorkingSet` syscall on the
+   first cascade demote, dropping to ~6 ms on subsequent ones).
+   Operator counting cascade demotes by grepping
+   `reason="pressure-cascade"` would see 7 events; counting by
+   `letter=` field would see 14 (each cascade step
+   double-counted).  Commit `4a627246d` (same-day refactor)
+   collapses these into one event with
+   `reason="pressure-cascade"`; future capture passes will not
+   exhibit this pattern.
+
+### 4.6 Lifecycle load-stall force-retire at 2 h 11 min (Phase 7 scope)
+
+Source: `LOG/uffsd-G4-bonus.log` line 104 — at 01:17:15 (2 h 11 min
+after daemon start), the lifecycle controller logged:
+
+```text
+2026-05-03T01:17:15.019200Z ERROR Load stalled — no drive progress, \
+    force-retiring stall_secs=300 heartbeat_age_secs=7864
+2026-05-03T01:17:15.019985Z  INFO Daemon shutting down
+```
+
+Root cause: `LifecycleManager::run_idle_timer` interprets "no
+drive-loading progress" as a stall, but a daemon serving zero
+queries against 7 fully-Parked drives **has** no drive-loading
+progress to make — the heartbeat hasn't ticked because there's
+nothing to do.  This is a **Phase 7 / lifecycle-controller scope
+item**, not a Phase 5 regression: the load-stall semantics need
+to distinguish "load incomplete, no progress" (legitimate stall)
+from "load complete, no demand" (legitimately idle).  Tracked in
+[`crates/uffs-daemon/src/lifecycle.rs`][lifecycle-rs] (file-size
+permanent-exception, see `scripts/ci/file_size_exceptions.txt`).
+G4 acceptance bar (no OOM through 60 min) was met independently
+of this — the 01:17 force-retire happened at the 2 h 11 min mark,
+well past the gate window.
+
+[lifecycle-rs]: ../../crates/uffs-daemon/src/lifecycle.rs
