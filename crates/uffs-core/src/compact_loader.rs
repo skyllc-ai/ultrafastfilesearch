@@ -11,10 +11,9 @@ use std::time::Instant;
 
 use uffs_mft::index::MftIndex;
 
-#[cfg(windows)]
-use crate::compact::{ChildrenIndex, CompactRecord};
-use crate::compact::{DriveCompactIndex, INDEX_TTL_SECONDS, build_compact_index};
-#[cfg(windows)]
+use crate::compact::{
+    ChildrenIndex, CompactRecord, DriveCompactIndex, INDEX_TTL_SECONDS, build_compact_index,
+};
 use crate::trigram::TrigramIndex;
 
 /// What produced a given `DriveCompactIndex`.
@@ -465,7 +464,15 @@ pub fn load_live_drive(
 /// Mutates records (`parent_idx`, names, flags) then rebuilds the children CSR
 /// once at the end.  Typical cost: <5ms for record mutations + ~100ms for CSR
 /// rebuild on a 7M-record drive.
-#[cfg(windows)]
+///
+/// **Platform note.**  The function itself is pure data manipulation
+/// over `DriveCompactIndex` + the platform-agnostic
+/// [`uffs_mft::usn::FileChange`] DTO and compiles + runs on all
+/// targets.  Only the *journal source* that produces the
+/// `&[FileChange]` slice (`uffs_mft::usn::read_usn_journal`) is
+/// Windows-only.  This split is what makes the Phase 7 per-shard
+/// patch path Mac-testable end-to-end via synthesised
+/// [`uffs_mft::usn::FileChange`] arrays.
 pub fn apply_usn_patch(
     drive: &mut DriveCompactIndex,
     changes: &[uffs_mft::usn::FileChange],
@@ -585,3 +592,7 @@ pub fn apply_usn_patch(
 
     stats
 }
+
+#[cfg(test)]
+#[path = "compact_loader_tests.rs"]
+mod tests;

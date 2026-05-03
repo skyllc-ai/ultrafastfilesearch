@@ -20,17 +20,72 @@
 
 use alloc::sync::Arc;
 use core::sync::atomic::Ordering;
+use std::path::PathBuf;
 
 use proptest::prelude::*;
 use uffs_core::CaseFold;
 use uffs_core::bloom::Bloom;
+use uffs_core::compact::{
+    ChildrenIndex, CompactRecord, DriveCompactIndex, ExtensionIndex, IndexSource,
+};
 use uffs_core::compact_cache::ParkedBody;
+use uffs_core::compact_storage::ColumnStorage;
 use uffs_core::path_trie::PathTrie;
+use uffs_core::trigram::TrigramIndex;
+use uffs_mft::usn::FileChange;
 
 use super::{
     DriveStats, DriveStatsSnapshot, IllegalTransition, ShardEntry, ShardState,
     drive_stats_ema_value,
 };
+
+/// Build a minimal 2-record `DriveCompactIndex` for shard-body
+/// fixture purposes — root directory + one file under it.
+///
+/// Sufficient to exercise [`ShardEntry::apply_usn_patch_to_body`]'s
+/// Arc-clone + Arc-swap contract without dragging in the
+/// `index/tests/mod.rs::build_test_drive` fixture (which builds a
+/// 7-record drive from a real `MftIndex` and is overkill for the
+/// patch-method shape tests below).
+fn make_test_body(letter: char) -> DriveCompactIndex {
+    // Names blob: letter + "/" + "f.txt".
+    let names = vec![letter as u8, b'f', b'.', b't', b'x', b't'];
+    let records = vec![
+        CompactRecord {
+            name_offset: 0,
+            flags: 0x10, // directory
+            parent_idx: u32::MAX,
+            name_len: 1,
+            name_first_byte: letter as u8,
+            ..CompactRecord::default()
+        },
+        CompactRecord {
+            name_offset: 1,
+            parent_idx: 0,
+            name_len: 5,
+            name_first_byte: b'f',
+            ..CompactRecord::default()
+        },
+    ];
+    let fold = CaseFold::default_table();
+    let trigram = TrigramIndex::build(&records, &names, fold);
+    let children = ChildrenIndex::build(&records);
+    let ext_index = ExtensionIndex::build(&records);
+    DriveCompactIndex {
+        letter,
+        records: ColumnStorage::from_vec(records),
+        names: ColumnStorage::from_vec(names),
+        trigram,
+        children,
+        ext_index,
+        fold,
+        ext_names: vec![Box::from("")],
+        source: IndexSource::MftFile(PathBuf::from(format!("{letter}:"))),
+        source_epoch: 1,
+        bloom: None,
+        path_trie: None,
+    }
+}
 
 /// Build a minimal `ParkedBody` for shard-construction tests — a
 /// 64-bit bloom + an empty path trie + the default fold table.
@@ -331,4 +386,132 @@ fn new_cold_has_no_body_and_shares_stats() {
     stats.mark_query_at(1_700_000_000_000);
     assert_eq!(shard.stats.queries_total(), 1);
     assert_eq!(shard.stats.last_query_at_ms(), 1_700_000_000_000);
+}
+
+// ── Phase 7 task 7.1 — ShardEntry::apply_usn_patch_to_body ─────────────
+
+/// Warm-shard happy path: the method returns
+/// `Some((new_arc, stats))` and the new Arc is **not**
+/// `Arc::ptr_eq` against the original body Arc — the registry can
+/// swap it in atomically without tearing concurrent reads of the
+/// previous body.
+#[test]
+fn apply_usn_patch_to_body_returns_new_arc_on_warm() {
+    let body = Arc::new(make_test_body('C'));
+    let shard = ShardEntry::new_warm('C', Arc::clone(&body));
+
+    // Empty change batch — the method must still produce a fresh
+    // Arc so the caller's swap path is exercised even on no-op ticks.
+    let frs_to_compact: Vec<u32> = vec![u32::MAX; 16];
+    let result = shard.apply_usn_patch_to_body(&[], &frs_to_compact);
+
+    let (new_body, stats) = result.expect("Warm shard must yield Some");
+    assert!(
+        !Arc::ptr_eq(&new_body, &body),
+        "patched body must be a fresh Arc, not the same allocation"
+    );
+    assert_eq!(stats.deleted, 0);
+    assert_eq!(stats.created, 0);
+    assert_eq!(stats.renamed, 0);
+    assert_eq!(stats.skipped, 0);
+    // Record count preserved on the empty-batch path.
+    assert_eq!(new_body.records.len(), body.records.len());
+}
+
+/// Parked-shard contract: no in-memory body → `None`, even with a
+/// non-empty change batch.  The caller must re-promote first via
+/// `ensure_warm_for_dispatch` and let the disk-replay path apply
+/// the deltas there.
+#[test]
+fn apply_usn_patch_to_body_returns_none_on_parked() {
+    let stats = Arc::new(DriveStats::new());
+    let parked_body = Arc::new(make_test_parked_body('C', 1));
+    let shard = ShardEntry::new_parked('C', stats, parked_body);
+
+    let changes = vec![FileChange {
+        frs: 10,
+        deleted: true,
+        ..FileChange::default()
+    }];
+    let frs_to_compact: Vec<u32> = vec![u32::MAX; 16];
+
+    let result = shard.apply_usn_patch_to_body(&changes, &frs_to_compact);
+    assert!(
+        result.is_none(),
+        "Parked shard has no in-memory body — must return None"
+    );
+}
+
+/// Cold-shard contract: same as Parked — no body, no patch.
+/// Pinned separately so a future tier-state regression that lets
+/// Cold shards return an empty body Arc (instead of `None`) is
+/// caught immediately.
+#[test]
+fn apply_usn_patch_to_body_returns_none_on_cold() {
+    let stats = Arc::new(DriveStats::new());
+    let shard = ShardEntry::new_cold('C', stats);
+
+    let frs_to_compact: Vec<u32> = vec![u32::MAX; 16];
+    let result = shard.apply_usn_patch_to_body(&[], &frs_to_compact);
+    assert!(
+        result.is_none(),
+        "Cold shard has no in-memory body — must return None"
+    );
+}
+
+/// End-to-end smoke against a non-empty change batch: a single
+/// delete on a Warm shard's root child lands on the new Arc with
+/// `stats.deleted == 1` and the deleted record's `name_len`
+/// zeroed.  Pins that the daemon-side wrapper preserves the
+/// platform-agnostic patch contract from
+/// `uffs_core::compact_loader::apply_usn_patch`.
+#[test]
+fn apply_usn_patch_to_body_lands_delete_on_new_arc() {
+    let body = Arc::new(make_test_body('C'));
+    let shard = ShardEntry::new_warm('C', Arc::clone(&body));
+
+    // FRS 10 → compact_idx 1 (the file under the root in the
+    // 2-record fixture).  All other FRS map to the sentinel.
+    // Iterator-collect form sidesteps `clippy::indexing_slicing`.
+    let frs_to_compact: Vec<u32> = (0_usize..16)
+        .map(|frs| if frs == 10 { 1 } else { u32::MAX })
+        .collect();
+
+    let changes = vec![FileChange {
+        frs: 10,
+        deleted: true,
+        ..FileChange::default()
+    }];
+
+    let (new_body, stats) = shard
+        .apply_usn_patch_to_body(&changes, &frs_to_compact)
+        .expect("Warm shard yields Some");
+
+    assert_eq!(stats.deleted, 1, "exactly one delete should land");
+    let deleted_record = new_body
+        .records
+        .as_slice()
+        .get(1)
+        .expect("two-record fixture has compact_idx 1");
+    assert_eq!(
+        deleted_record.name_len, 0,
+        "deleted record's name_len must be zeroed"
+    );
+    assert_eq!(
+        deleted_record.parent_idx,
+        u32::MAX,
+        "deleted record's parent_idx must be u32::MAX"
+    );
+
+    // The original body Arc is unchanged — concurrent readers see
+    // the previous record_count + 1 child unaffected.
+    let original_record = body
+        .records
+        .as_slice()
+        .get(1)
+        .expect("original fixture still has compact_idx 1");
+    assert_eq!(
+        original_record.name_len, 5,
+        "original body Arc must be unaffected by patch on the clone"
+    );
 }

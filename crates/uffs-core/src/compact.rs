@@ -18,14 +18,15 @@ use rayon::prelude::*;
 use uffs_mft::index::MftIndex;
 
 use crate::bloom::Bloom;
+pub use crate::compact_loader::apply_usn_patch;
+#[cfg(windows)]
+#[expect(deprecated, reason = "re-export kept for backward compatibility")]
+pub use crate::compact_loader::load_live_drive;
 // Re-export loader types and functions so callers can still use `compact::*`.
 #[expect(deprecated, reason = "re-export kept for backward compatibility")]
 pub use crate::compact_loader::{
     IndexSource, LoadTiming, MftSource, PatchStats, load_drive, load_mft_file, refresh_drive,
 };
-#[cfg(windows)]
-#[expect(deprecated, reason = "re-export kept for backward compatibility")]
-pub use crate::compact_loader::{apply_usn_patch, load_live_drive};
 use crate::compact_storage::ColumnStorage;
 use crate::path_trie::PathTrie;
 use crate::trigram::TrigramIndex;
@@ -137,6 +138,7 @@ const _: () = assert!(
 /// `children(i)` returns the compact indices of record i's children as
 /// a contiguous `&[u32]` slice.  The CSR layout avoids per-record `Vec`
 /// allocations and enables bulk serialization/deserialization.
+#[derive(Clone)]
 pub struct ChildrenIndex {
     /// CSR offsets — one per record + sentinel.  Length = `record_count` + 1.
     /// Children of record `i` are `values[offsets[i]..offsets[i+1]]`.
@@ -240,6 +242,7 @@ impl ChildrenIndex {
 /// CSR layout identical to `ChildrenIndex`.  Built once at load time in a
 /// single O(N) pass so `--ext rs` queries can iterate only matching records
 /// instead of scanning all 25M entries.
+#[derive(Clone)]
 pub struct ExtensionIndex {
     /// CSR offsets — length = `max_ext_id` + 2 (one per `ext_id` + sentinel).
     offsets: Vec<u32>,
@@ -330,6 +333,7 @@ impl ExtensionIndex {
 }
 
 /// A loaded drive with compact index.
+#[derive(Clone)]
 pub struct DriveCompactIndex {
     /// Drive letter (e.g., 'C').
     pub letter: char,

@@ -46,6 +46,7 @@ use crate::compact::CompactRecord;
 /// Trigram inverted index in CSR (Compressed Sparse Row) layout.
 ///
 /// Keys are packed `u64` char-trigrams (3 folded `u16` codepoints).
+#[derive(Clone)]
 pub struct TrigramIndex {
     /// Sorted packed char-trigram keys (`u64`, see [`pack_char_trigram`]).
     keys: Vec<u64>,
