@@ -36,14 +36,10 @@
 //!
 //! ## Phase 7 commit boundary
 //!
-//! This commit (task 7.2 + 7.3) lands the **infrastructure**: trait,
-//! impls, loop body, spawn helper, cancellation handle, tests.
-//! Production spawning from `lib.rs::spawn_load_task` is wired in a
-//! later commit (after task 7.4 threshold-triggered save and
-//! task 7.6/7.7 cursor persistence + wrap detection land), so the
-//! existing Phase-5 5-min global tick (`refresh_usn_for_warm_shards`)
-//! continues to handle live USN refresh until the per-shard path is
-//! activation-complete.
+//! This module lands the per-shard infrastructure (tasks 7.2 / 7.3 /
+//! 7.4 / 7.6 / 7.7).  Production spawning from `lib.rs::spawn_load_task`
+//! waits for the activation commit; until then the existing Phase-5
+//! 5-min global tick (`refresh_usn_for_warm_shards`) is the live path.
 
 use alloc::sync::Arc;
 use core::time::Duration;
@@ -279,6 +275,78 @@ pub(crate) trait PatchSink: Send + Sync + 'static {
     /// the save fails, the implementor logs but does not
     /// propagate — the next threshold crossing will retry.
     fn trigger_save(&self, letter: char, reason: SaveReason);
+
+    /// Notify the sink that the USN journal for `letter` was
+    /// detected to have wrapped (Phase 7 task 7.7).
+    ///
+    /// A wrap is detected when [`JournalPollResult::journal_id`]
+    /// changes between two successive non-zero-id polls — the
+    /// journal was deleted + recreated (Windows admins can do this,
+    /// or the volume can run out of journal space and rotate the
+    /// `$UsnJrnl`).  Incremental patches don't apply across a wrap
+    /// because the FRS → `compact_idx` mapping is now stale, so the
+    /// production sink must force-rebuild the body on the next
+    /// promote (typically by evicting the shard back to Cold and
+    /// letting the standard cold-load path re-read the MFT).
+    ///
+    /// The loop resets its cursor to 0 after this call, so the
+    /// next poll starts from the new journal's head.  No patches
+    /// are applied for the wrap-tick — the sink's `accept` is
+    /// **not** called.
+    fn journal_wrapped(&self, letter: char);
+}
+
+/// Pluggable cursor-persistence surface (Phase 7 task 7.6).
+///
+/// Production wires [`NullCursorStore`] (always-empty) as a
+/// fallback on platforms without a real persisted cursor and the
+/// disk-backed implementation lands in the activation commit.
+/// Tests wire [`tests::FakeCursorStore`] (in-memory `HashMap`)
+/// to drive the load / store path deterministically.
+///
+/// Both methods are **infallible** at the trait level: any
+/// underlying I/O failure must be logged and absorbed by the
+/// implementor (cursor persistence is best-effort — a missed
+/// store just means the next cold-boot re-replays a few extra
+/// seconds of journal entries, which is correct since the body
+/// patcher is idempotent on duplicate change records).
+pub(crate) trait CursorStore: Send + Sync + 'static {
+    /// Load the persisted cursor for `letter`.  Returns 0 (the
+    /// "start from journal head" sentinel) when no cursor has
+    /// been persisted yet or when the load failed.
+    fn load(&self, letter: char) -> u64;
+
+    /// Persist `cursor` for `letter`.  Best-effort — the
+    /// implementor logs failures but does not propagate.  The
+    /// loop calls this every time it fires a save trigger so
+    /// the on-disk cursor advances in lockstep with the on-disk
+    /// snapshot.
+    fn store(&self, letter: char, cursor: u64);
+}
+
+/// Always-empty cursor store: `load` returns 0, `store` is a
+/// no-op.  Used as the production fallback on macOS / Linux
+/// where there is no live journal to persist a cursor for, and
+/// as a default for tests that don't care about the persistence
+/// path.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Phase 7-D forward reference; production wiring \
+                  in `lib.rs::spawn_load_task` lands in the \
+                  activation commit (post-7-E).  Exercised by \
+                  `cache::journal_loop::tests` under `cfg(test)`."
+    )
+)]
+#[derive(Debug, Default)]
+pub(crate) struct NullCursorStore;
+
+impl CursorStore for NullCursorStore {
+    fn load(&self, _letter: char) -> u64 {
+        0
+    }
+    fn store(&self, _letter: char, _cursor: u64) {}
 }
 
 /// Why a [`PatchSink::trigger_save`] call fired.
@@ -375,16 +443,16 @@ impl SaveTrigger {
 ///
 /// Carries the tuning knobs the production loop reads from env
 /// vars and the test loop sets directly.  Keeping these in one
-/// place lets future tasks (7.7 wrap detection, 7.6 cursor
-/// persistence) extend the config without churning the loop
-/// signature.
+/// place lets future tasks extend the config without churning
+/// the loop signature.
 #[derive(Debug, Clone)]
 pub(crate) struct JournalLoopConfig {
     /// Cadence between successive polls.  Default 500 ms.
     pub(crate) poll_interval: Duration,
-    /// Initial cursor passed into the first poll.  Production
-    /// reads this from the persisted `usn.cursor` (Phase 7 task
-    /// 7.6); tests use 0 as a clean-slate baseline.
+    /// Fallback cursor used when the [`CursorStore`] returns 0
+    /// (no persisted cursor for this letter yet).  Tests use 0
+    /// as a clean-slate baseline; production keeps it 0 because
+    /// real cursor seeding flows through the cursor store.
     pub(crate) initial_cursor: u64,
     /// Events-since-last-save ceiling (Phase 7 task 7.4).
     /// Crossing this triggers a [`SaveReason::EventsExceeded`]
@@ -426,6 +494,11 @@ pub(crate) struct JournalLoop {
     source: Arc<dyn JournalSource>,
     /// Plug-in patch consumer.
     sink: Arc<dyn PatchSink>,
+    /// Plug-in cursor-persistence surface (Phase 7 task 7.6).
+    /// Loaded once at start of `run` to seed `cursor`; stored at
+    /// the same time as each `trigger_save` call so on-disk cursor
+    /// and on-disk body advance together.
+    cursor_store: Arc<dyn CursorStore>,
     /// Cancellation channel — set to `true` by the daemon shutdown
     /// path; the loop checks on every iteration and exits cleanly.
     cancel_rx: watch::Receiver<bool>,
@@ -435,17 +508,25 @@ pub(crate) struct JournalLoop {
     /// Mutated on every non-empty tick by [`SaveTrigger::record`]
     /// + [`SaveTrigger::evaluate`].
     save_trigger: SaveTrigger,
+    /// Last `journal_id` observed from a non-zero-id poll
+    /// (Phase 7 task 7.7 wrap detection).  `None` until the first
+    /// non-zero `journal_id` is observed; transitions to
+    /// `Some(id)` on the first such poll, then any subsequent
+    /// poll with `journal_id != id` (and `journal_id != 0`) fires
+    /// `sink.journal_wrapped` and resets the cursor.
+    last_journal_id: Option<u64>,
 }
 
 impl JournalLoop {
     /// Construct a loop bound to `letter`, polling `source`,
-    /// applying via `sink`, watching `cancel_rx`, configured by
-    /// `config`.
+    /// applying via `sink`, persisting cursor via `cursor_store`,
+    /// watching `cancel_rx`, configured by `config`.
     #[must_use]
     pub(crate) fn new(
         letter: char,
         source: Arc<dyn JournalSource>,
         sink: Arc<dyn PatchSink>,
+        cursor_store: Arc<dyn CursorStore>,
         cancel_rx: watch::Receiver<bool>,
         config: JournalLoopConfig,
     ) -> Self {
@@ -453,9 +534,11 @@ impl JournalLoop {
             letter,
             source,
             sink,
+            cursor_store,
             cancel_rx,
             config,
             save_trigger: SaveTrigger::new(),
+            last_journal_id: None,
         }
     }
 
@@ -470,8 +553,14 @@ impl JournalLoop {
     /// reconnect) and the daemon should resume cleanly when the
     /// surface returns.
     pub(crate) async fn run(mut self) {
-        let mut cursor = self.config.initial_cursor;
         let letter = self.letter;
+        // Seed cursor from the persistence store; fall back to
+        // the config's initial_cursor when the store returns 0
+        // (no persisted cursor for this letter yet).
+        let mut cursor = match self.cursor_store.load(letter) {
+            0 => self.config.initial_cursor,
+            persisted => persisted,
+        };
         loop {
             if !wait_for_next_tick(&mut self.cancel_rx, self.config.poll_interval, letter).await {
                 return;
@@ -481,8 +570,32 @@ impl JournalLoop {
                 continue;
             };
 
+            // Wrap-detection (Phase 7 task 7.7): if the journal_id
+            // changed between two successive non-zero-id polls, the
+            // journal was recreated.  Notify the sink, reset cursor
+            // to the new journal's head, skip the patch.
+            if let Some(prev_id) = self.last_journal_id
+                && result.journal_id != 0
+                && result.journal_id != prev_id
+            {
+                tracing::warn!(
+                    drive = %letter,
+                    prev_journal_id = prev_id,
+                    new_journal_id = result.journal_id,
+                    "Journal wrap detected; sink must force-rebuild body"
+                );
+                self.sink.journal_wrapped(letter);
+                cursor = 0;
+                self.last_journal_id = Some(result.journal_id);
+                self.cursor_store.store(letter, cursor);
+                continue;
+            }
+            if result.journal_id != 0 {
+                self.last_journal_id = Some(result.journal_id);
+            }
+
             cursor = result.next_cursor;
-            process_tick(
+            let saved = process_tick(
                 self.sink.as_ref(),
                 letter,
                 cursor,
@@ -491,6 +604,11 @@ impl JournalLoop {
                 self.config.save_threshold_events,
                 self.config.save_threshold_age,
             );
+            // Persist the cursor in lockstep with each save so
+            // on-disk cursor and on-disk body advance together.
+            if saved {
+                self.cursor_store.store(letter, cursor);
+            }
         }
     }
 }
@@ -563,6 +681,9 @@ async fn poll_blocking(
 /// On a non-empty tick, also: (a) records the event count into
 /// `save_trigger`, (b) evaluates the save thresholds, and (c)
 /// fires [`PatchSink::trigger_save`] when a threshold crosses.
+///
+/// **Returns** `true` when a save was triggered this tick (the
+/// caller persists the cursor in lockstep), `false` otherwise.
 fn process_tick(
     sink: &dyn PatchSink,
     letter: char,
@@ -571,15 +692,17 @@ fn process_tick(
     save_trigger: &mut SaveTrigger,
     save_threshold_events: u64,
     save_threshold_age: Duration,
-) {
+) -> bool {
     if changes.is_empty() {
         tracing::trace!(drive = %letter, "Journal poll: no changes");
-        return;
+        return false;
     }
     let accepted = sink.accept(letter, changes);
     save_trigger.record(changes.len() as u64);
+    let mut saved = false;
     if let Some(reason) = save_trigger.evaluate(save_threshold_events, save_threshold_age) {
         sink.trigger_save(letter, reason);
+        saved = true;
         tracing::info!(
             drive = %letter,
             ?reason,
@@ -594,6 +717,7 @@ fn process_tick(
         cursor,
         "Journal poll: applied tick"
     );
+    saved
 }
 
 /// Handle returned by [`spawn_journal_loop`] for cancellation +
@@ -661,10 +785,11 @@ pub(crate) fn spawn_journal_loop(
     letter: char,
     source: Arc<dyn JournalSource>,
     sink: Arc<dyn PatchSink>,
+    cursor_store: Arc<dyn CursorStore>,
     config: JournalLoopConfig,
 ) -> JournalLoopHandle {
     let (cancel_tx, cancel_rx) = watch::channel(false);
-    let loop_state = JournalLoop::new(letter, source, sink, cancel_rx, config);
+    let loop_state = JournalLoop::new(letter, source, sink, cursor_store, cancel_rx, config);
     let join = tokio::spawn(loop_state.run());
     JournalLoopHandle { cancel_tx, join }
 }

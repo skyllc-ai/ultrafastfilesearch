@@ -1,27 +1,32 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Mac-deterministic tests for the per-shard USN journal loop
-//! (Phase 7 tasks 7.2 + 7.3).
+//! Mac-deterministic test fixture for the per-shard USN journal
+//! loop (Phase 7 tasks 7.2 / 7.3 / 7.4 / 7.6 / 7.7).
 //!
-//! These tests drive [`super::JournalLoop`] end-to-end via a
-//! programmable [`FakeJournalSource`] + a recording
-//! [`RecordingSink`], pinning the state-machine contract:
+//! This module hosts the shared helpers (programmable
+//! [`FakeJournalSource`], recording [`RecordingSink`], in-memory
+//! [`FakeCursorStore`], `wait_for` deadline-driven convergence
+//! helper) plus the submodule split for individual phase contracts.
+//! Submodule layout keeps each file well under the workspace
+//! 800-LOC file-size policy:
 //!
-//! * **Empty ticks** — no `accept()` call when the journal returns no changes.
-//! * **Non-empty ticks** — exactly one `accept()` call per tick with the
-//!   matching change batch and drive letter.
-//! * **Cursor advance** — each poll receives the cursor returned by the
-//!   previous poll (monotonic except across journal-wrap, which Phase 7 task
-//!   7.7 will pin once activated).
-//! * **Cancellation** — `JournalLoopHandle::cancel()` causes the loop to exit
-//!   within one poll-interval.
-//! * **Source error recovery** — a single `Err` from the source does not abort
-//!   the loop; the next tick proceeds normally.
+//! * [`basics`] \u2014 Phase 7-B (loop lifecycle, cancellation, source error
+//!   recovery, [`MacStubJournalSource`] always-empty contract).
+//! * [`thresholds`] \u2014 Phase 7-C (events / age threshold-triggered
+//!   `trigger_save` calls + counter-reset semantics).
+//! * [`wrap_and_persistence`] \u2014 Phase 7-D (cursor seeding from
+//!   [`CursorStore::load`], cursor-on-save persistence, journal-wrap detection
+//!   via `journal_id` comparison).
 //!
-//! No Windows host, no live MFT, no `read_usn_journal` syscall:
-//! the entire surface is covered by deterministic time-based
-//! tokio runtime control.
+//! All tests use real wall-clock time (`tokio::time::sleep`) because
+//! the loop's `spawn_blocking` poll runs on a real OS thread and
+//! tokio's `pause`-mode virtual time cannot drive it forward.
+//! Convergence is deadline-driven via [`wait_for`] which mirrors
+//! the established `lifecycle_hooks.rs::CASCADE_DEADLINE` pattern
+//! in this crate.
+//!
+//! [`MacStubJournalSource`]: super::MacStubJournalSource
 
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
@@ -31,8 +36,13 @@ use std::sync::Mutex;
 use uffs_mft::usn::FileChange;
 
 use super::{
-    JournalLoopConfig, JournalPollResult, JournalSource, PatchSink, SaveReason, spawn_journal_loop,
+    CursorStore, JournalLoopConfig, JournalPollResult, JournalSource, NullCursorStore, PatchSink,
+    SaveReason,
 };
+
+mod basics;
+mod thresholds;
+mod wrap_and_persistence;
 
 /// Acquire `mutex`, defusing any poison error by recovering the
 /// inner guard.  Test code never deliberately poisons — this
@@ -60,6 +70,12 @@ struct FakeJournalSource {
     /// Lets tests assert the loop carried each `next_cursor`
     /// forward into the subsequent call.
     cursors_seen: Mutex<Vec<u64>>,
+    /// Last `journal_id` of an enqueued result.  Used as the
+    /// `journal_id` for post-drain empty polls so the loop's
+    /// wrap-detection state machine doesn't false-fire when the
+    /// queue empties — a real journal's id is stable until the
+    /// journal is genuinely recreated, not per-poll.
+    last_enqueued_journal_id: Mutex<u64>,
 }
 
 impl FakeJournalSource {
@@ -67,15 +83,30 @@ impl FakeJournalSource {
         Self {
             queue: Mutex::new(VecDeque::new()),
             cursors_seen: Mutex::new(Vec::new()),
+            last_enqueued_journal_id: Mutex::new(1),
         }
     }
 
-    /// Enqueue a successful poll result.
+    /// Enqueue a successful poll result with the default test
+    /// `journal_id` of 1.
     fn enqueue_changes(&self, changes: Vec<FileChange>, next_cursor: u64) {
+        self.enqueue_changes_with_journal_id(changes, next_cursor, 1);
+    }
+
+    /// Enqueue a successful poll result with an explicit
+    /// `journal_id`.  Phase 7-D wrap-detection tests use this to
+    /// alternate between `journal_id` values across successive polls.
+    fn enqueue_changes_with_journal_id(
+        &self,
+        changes: Vec<FileChange>,
+        next_cursor: u64,
+        journal_id: u64,
+    ) {
+        *lock_or_recover(&self.last_enqueued_journal_id) = journal_id;
         lock_or_recover(&self.queue).push_back(Ok(JournalPollResult {
             changes,
             next_cursor,
-            journal_id: 1,
+            journal_id,
         }));
     }
 
@@ -108,13 +139,18 @@ impl JournalSource for FakeJournalSource {
             None => Ok(JournalPollResult {
                 changes: Vec::new(),
                 next_cursor: cursor,
-                journal_id: 1,
+                // Mirror the last-enqueued journal_id so post-drain
+                // empty polls don't false-trip the loop's wrap
+                // detection.  A real journal's id is stable until
+                // the journal is genuinely recreated.
+                journal_id: *lock_or_recover(&self.last_enqueued_journal_id),
             }),
         }
     }
 }
 
-/// Recording sink that captures every `accept()` invocation.
+/// Recording sink that captures every `accept()`, `trigger_save`,
+/// and `journal_wrapped` invocation.
 struct RecordingSink {
     /// One entry per `accept()` call: `(letter, change_count)`.
     /// Storing only the count (not the full `Vec<FileChange>`)
@@ -125,6 +161,11 @@ struct RecordingSink {
     /// Phase 7-C surface — lets tests assert the threshold state
     /// machine fires the right reason at the right time.
     save_calls: Mutex<Vec<(char, SaveReason)>>,
+    /// One entry per `journal_wrapped()` call: `letter`.
+    /// Phase 7-D surface — lets tests assert the wrap-detection
+    /// state machine fires when `journal_id` changes between
+    /// successive non-zero polls.
+    wrap_calls: Mutex<Vec<char>>,
     /// Boolean to return from `accept()`.  Tests flip this to
     /// `false` to exercise the registry-race / Parked-shard path
     /// (loop must continue cleanly when accept returns false).
@@ -136,6 +177,7 @@ impl RecordingSink {
         Self {
             calls: Mutex::new(Vec::new()),
             save_calls: Mutex::new(Vec::new()),
+            wrap_calls: Mutex::new(Vec::new()),
             accept_outcome: Mutex::new(true),
         }
     }
@@ -146,6 +188,10 @@ impl RecordingSink {
 
     fn save_calls(&self) -> Vec<(char, SaveReason)> {
         lock_or_recover(&self.save_calls).clone()
+    }
+
+    fn wrap_calls(&self) -> Vec<char> {
+        lock_or_recover(&self.wrap_calls).clone()
     }
 }
 
@@ -158,6 +204,61 @@ impl PatchSink for RecordingSink {
     fn trigger_save(&self, letter: char, reason: SaveReason) {
         lock_or_recover(&self.save_calls).push((letter, reason));
     }
+
+    fn journal_wrapped(&self, letter: char) {
+        lock_or_recover(&self.wrap_calls).push(letter);
+    }
+}
+
+/// In-memory cursor store backed by a `HashMap<char, u64>`.
+/// Pre-loaded by tests via [`Self::set_cursor`] to seed the
+/// loop's initial cursor; observed via [`Self::store_log`] to
+/// assert the loop's persistence behaviour.
+struct FakeCursorStore {
+    cursors: Mutex<std::collections::HashMap<char, u64>>,
+    /// Append-only log of every `(letter, cursor)` passed to
+    /// `store()`, in call order.  Lets tests assert which
+    /// cursors were persisted at which points (not just the
+    /// final state).
+    store_log: Mutex<Vec<(char, u64)>>,
+}
+
+impl FakeCursorStore {
+    fn new() -> Self {
+        Self {
+            cursors: Mutex::new(std::collections::HashMap::new()),
+            store_log: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn set_cursor(&self, letter: char, cursor: u64) {
+        lock_or_recover(&self.cursors).insert(letter, cursor);
+    }
+
+    fn store_log(&self) -> Vec<(char, u64)> {
+        lock_or_recover(&self.store_log).clone()
+    }
+}
+
+impl CursorStore for FakeCursorStore {
+    fn load(&self, letter: char) -> u64 {
+        lock_or_recover(&self.cursors)
+            .get(&letter)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn store(&self, letter: char, cursor: u64) {
+        lock_or_recover(&self.cursors).insert(letter, cursor);
+        lock_or_recover(&self.store_log).push((letter, cursor));
+    }
+}
+
+/// Default cursor store for the existing tick / cancel / cursor /
+/// threshold tests that don't care about persistence — the
+/// `NullCursorStore` returns 0 on `load` and is a no-op on `store`.
+fn null_cursor_store() -> Arc<dyn CursorStore> {
+    Arc::new(NullCursorStore)
 }
 
 /// Helper: small fake change so the queue is exercising a
@@ -197,8 +298,7 @@ fn fast_config() -> JournalLoopConfig {
 const CONVERGENCE_DEADLINE: Duration = Duration::from_millis(250);
 
 /// Yield to the runtime + sleep a small amount so the journal
-/// loop has a chance to fire one tick.  Used by every assertion
-/// helper below.
+/// loop has a chance to fire one tick.  Used by [`wait_for`].
 async fn yield_one_tick() {
     tokio::time::sleep(Duration::from_millis(10)).await;
 }
@@ -215,415 +315,4 @@ async fn wait_for<F: Fn() -> bool>(predicate: F) -> bool {
         yield_one_tick().await;
     }
     predicate()
-}
-
-// ── Empty-tick contract: no accept() call when source has no changes ─
-
-#[tokio::test]
-async fn empty_tick_does_not_call_accept() {
-    let source = Arc::new(FakeJournalSource::new());
-    let sink = Arc::new(RecordingSink::new());
-
-    // Empty queue → poll() returns default (empty changes).
-    let handle = spawn_journal_loop(
-        'C',
-        Arc::clone(&source) as Arc<dyn JournalSource>,
-        Arc::clone(&sink) as Arc<dyn PatchSink>,
-        fast_config(),
-    );
-
-    // Let several ticks fire — every one returns empty changes.
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    let join = handle.cancel();
-    drop(tokio::time::timeout(CONVERGENCE_DEADLINE, join).await);
-
-    assert!(
-        sink.calls().is_empty(),
-        "no accept() call should fire when every poll returns empty changes"
-    );
-    // The source must still have been polled — prove the loop
-    // wasn't simply stuck before reaching the source.
-    assert!(
-        !source.cursors_seen().is_empty(),
-        "loop must have polled the source at least once"
-    );
-}
-
-// ── Non-empty tick contract: exactly one accept() with matching batch ─
-
-#[tokio::test]
-async fn non_empty_tick_invokes_accept_once() {
-    let source = Arc::new(FakeJournalSource::new());
-    let sink = Arc::new(RecordingSink::new());
-
-    source.enqueue_changes(vec![one_change(10), one_change(11)], 100);
-
-    let handle = spawn_journal_loop(
-        'C',
-        Arc::clone(&source) as Arc<dyn JournalSource>,
-        Arc::clone(&sink) as Arc<dyn PatchSink>,
-        fast_config(),
-    );
-
-    // Wait until the recording sink sees exactly one accept().
-    let sink_for_pred = Arc::clone(&sink);
-    let converged = wait_for(move || sink_for_pred.calls().len() == 1).await;
-
-    let join = handle.cancel();
-    drop(tokio::time::timeout(CONVERGENCE_DEADLINE, join).await);
-
-    assert!(
-        converged,
-        "loop did not invoke accept() within {CONVERGENCE_DEADLINE:?}"
-    );
-    let calls = sink.calls();
-    assert_eq!(calls.len(), 1, "exactly one accept() call expected");
-    assert_eq!(
-        calls.first().copied(),
-        Some(('C', 2_usize)),
-        "letter + change-count must round-trip"
-    );
-}
-
-// ── Cursor monotonicity: each poll sees the previous next_cursor ─────
-
-#[tokio::test]
-async fn cursor_advances_monotonically_across_ticks() {
-    let source = Arc::new(FakeJournalSource::new());
-    let sink = Arc::new(RecordingSink::new());
-
-    // Queue three successful polls with increasing next_cursor.
-    source.enqueue_changes(vec![one_change(10)], 100);
-    source.enqueue_changes(vec![one_change(11)], 200);
-    source.enqueue_changes(vec![one_change(12)], 300);
-
-    let handle = spawn_journal_loop(
-        'C',
-        Arc::clone(&source) as Arc<dyn JournalSource>,
-        Arc::clone(&sink) as Arc<dyn PatchSink>,
-        fast_config(),
-    );
-
-    // Wait until at least 3 polls have been observed.
-    let source_for_pred = Arc::clone(&source);
-    let converged = wait_for(move || source_for_pred.cursors_seen().len() >= 3).await;
-
-    let join = handle.cancel();
-    drop(tokio::time::timeout(CONVERGENCE_DEADLINE, join).await);
-
-    assert!(
-        converged,
-        "loop did not produce 3 polls within {CONVERGENCE_DEADLINE:?}"
-    );
-    let cursors = source.cursors_seen();
-    // First poll uses the initial cursor (0).  Subsequent polls
-    // see the previous next_cursor (100, then 200).
-    assert_eq!(
-        cursors.first().copied(),
-        Some(0),
-        "first poll must use initial cursor"
-    );
-    assert_eq!(
-        cursors.get(1).copied(),
-        Some(100),
-        "second poll must carry next_cursor=100"
-    );
-    assert_eq!(
-        cursors.get(2).copied(),
-        Some(200),
-        "third poll must carry next_cursor=200"
-    );
-}
-
-// ── Source-error retry: one Err does not abort the loop ──────────────
-
-#[tokio::test]
-async fn source_error_does_not_abort_loop() {
-    let source = Arc::new(FakeJournalSource::new());
-    let sink = Arc::new(RecordingSink::new());
-
-    // Pattern: Err → Ok with changes.  Loop must skip the Err
-    // and apply the next batch on the following tick.
-    source.enqueue_error(std::io::Error::other("fake source error"));
-    source.enqueue_changes(vec![one_change(10)], 100);
-
-    let handle = spawn_journal_loop(
-        'C',
-        Arc::clone(&source) as Arc<dyn JournalSource>,
-        Arc::clone(&sink) as Arc<dyn PatchSink>,
-        fast_config(),
-    );
-
-    // Wait for accept() to fire — proves the loop survived the Err.
-    let sink_for_pred = Arc::clone(&sink);
-    let converged = wait_for(move || !sink_for_pred.calls().is_empty()).await;
-
-    let join = handle.cancel();
-    drop(tokio::time::timeout(CONVERGENCE_DEADLINE, join).await);
-
-    assert!(
-        converged,
-        "loop must have continued past the Err and applied the subsequent batch within {CONVERGENCE_DEADLINE:?}; got 0 accept() calls"
-    );
-}
-
-// ── Cancellation contract: cancel() exits within CONVERGENCE_DEADLINE ─
-
-#[tokio::test]
-async fn cancel_exits_within_convergence_deadline() {
-    let source = Arc::new(FakeJournalSource::new());
-    let sink = Arc::new(RecordingSink::new());
-
-    let handle = spawn_journal_loop(
-        'C',
-        Arc::clone(&source) as Arc<dyn JournalSource>,
-        Arc::clone(&sink) as Arc<dyn PatchSink>,
-        fast_config(),
-    );
-
-    // Cancel immediately and assert the join handle resolves
-    // within the convergence deadline.
-    let join = handle.cancel();
-    let result = tokio::time::timeout(CONVERGENCE_DEADLINE, join).await;
-    assert!(
-        result.is_ok(),
-        "cancellation must drive the loop to exit within {CONVERGENCE_DEADLINE:?}; timed out instead"
-    );
-}
-
-// ── Phase 7-C: events-based save threshold fires after enough churn ──
-
-#[tokio::test]
-async fn events_threshold_triggers_save() {
-    let source = Arc::new(FakeJournalSource::new());
-    let sink = Arc::new(RecordingSink::new());
-
-    // Two batches of 3 + 4 = 7 events; threshold of 5 means the
-    // second batch must trigger an EventsExceeded save.
-    source.enqueue_changes(vec![one_change(10), one_change(11), one_change(12)], 100);
-    source.enqueue_changes(
-        vec![
-            one_change(13),
-            one_change(14),
-            one_change(15),
-            one_change(16),
-        ],
-        200,
-    );
-
-    let config = JournalLoopConfig {
-        poll_interval: Duration::from_millis(5),
-        initial_cursor: 0,
-        save_threshold_events: 5,
-        save_threshold_age: Duration::from_hours(24),
-    };
-    let handle = spawn_journal_loop(
-        'C',
-        Arc::clone(&source) as Arc<dyn JournalSource>,
-        Arc::clone(&sink) as Arc<dyn PatchSink>,
-        config,
-    );
-
-    // Wait for both accept()s + the save trigger.
-    let sink_for_pred = Arc::clone(&sink);
-    let converged = wait_for(move || !sink_for_pred.save_calls().is_empty()).await;
-
-    let join = handle.cancel();
-    drop(tokio::time::timeout(CONVERGENCE_DEADLINE, join).await);
-
-    assert!(
-        converged,
-        "events threshold did not fire trigger_save within {CONVERGENCE_DEADLINE:?}"
-    );
-    let saves = sink.save_calls();
-    assert_eq!(
-        saves.len(),
-        1,
-        "exactly one EventsExceeded save expected; got {saves:?}"
-    );
-    assert_eq!(
-        saves.first().copied(),
-        Some(('C', SaveReason::EventsExceeded)),
-        "save reason must be EventsExceeded"
-    );
-}
-
-// ── Phase 7-C: age-based save threshold fires after time elapses ─────
-
-#[tokio::test]
-async fn age_threshold_triggers_save_with_pending_events() {
-    let source = Arc::new(FakeJournalSource::new());
-    let sink = Arc::new(RecordingSink::new());
-
-    // First tick lands one event (under the events-threshold,
-    // and well within the age-threshold from spawn time).
-    source.enqueue_changes(vec![one_change(10)], 100);
-
-    let config = JournalLoopConfig {
-        poll_interval: Duration::from_millis(5),
-        initial_cursor: 0,
-        save_threshold_events: u64::MAX,
-        save_threshold_age: Duration::from_millis(30),
-    };
-    let handle = spawn_journal_loop(
-        'C',
-        Arc::clone(&source) as Arc<dyn JournalSource>,
-        Arc::clone(&sink) as Arc<dyn PatchSink>,
-        config,
-    );
-
-    // Wait for the first batch to land via accept() — proves
-    // events_since_save is now > 0.
-    let sink_for_accept_pred = Arc::clone(&sink);
-    let first_accept_landed = wait_for(move || !sink_for_accept_pred.calls().is_empty()).await;
-    assert!(
-        first_accept_landed,
-        "first batch must land before age can be tested"
-    );
-
-    // Sleep past the 30 ms age threshold while events stay pending
-    // (no save fires on empty ticks — those skip the threshold
-    // evaluation per Phase 7 task 7.4 design).
-    tokio::time::sleep(Duration::from_millis(60)).await;
-
-    // Now enqueue the second batch.  Its tick will observe
-    // elapsed >= 30 ms with events_since_save > 0, firing AgeElapsed.
-    source.enqueue_changes(vec![one_change(11)], 200);
-
-    // Wait for the save to fire.
-    let sink_for_save_pred = Arc::clone(&sink);
-    let converged = wait_for(move || !sink_for_save_pred.save_calls().is_empty()).await;
-
-    let join = handle.cancel();
-    drop(tokio::time::timeout(CONVERGENCE_DEADLINE, join).await);
-
-    assert!(
-        converged,
-        "age threshold did not fire trigger_save within {CONVERGENCE_DEADLINE:?}"
-    );
-    let saves = sink.save_calls();
-    assert_eq!(
-        saves.first().copied(),
-        Some(('C', SaveReason::AgeElapsed)),
-        "save reason must be AgeElapsed; got {saves:?}"
-    );
-}
-
-// ── Phase 7-C: zero-event drive never triggers a save ─────────────────
-
-#[tokio::test]
-async fn zero_events_drive_does_not_trigger_save() {
-    let source = Arc::new(FakeJournalSource::new());
-    let sink = Arc::new(RecordingSink::new());
-
-    // Empty queue + tight age threshold.  The age threshold
-    // SHOULD NOT fire because no events have ever been recorded
-    // — Phase 7 task 7.4 contract: zero-churn drives produce
-    // no wasteful saves.
-    let config = JournalLoopConfig {
-        poll_interval: Duration::from_millis(5),
-        initial_cursor: 0,
-        save_threshold_events: 1,
-        save_threshold_age: Duration::from_millis(20),
-    };
-    let handle = spawn_journal_loop(
-        'C',
-        Arc::clone(&source) as Arc<dyn JournalSource>,
-        Arc::clone(&sink) as Arc<dyn PatchSink>,
-        config,
-    );
-
-    // Let several ticks fire well past the age threshold.
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let join = handle.cancel();
-    drop(tokio::time::timeout(CONVERGENCE_DEADLINE, join).await);
-
-    let saves = sink.save_calls();
-    assert!(
-        saves.is_empty(),
-        "zero-event drive must not produce any save triggers; got {saves:?}"
-    );
-    // Sanity: the loop did poll the source.
-    assert!(
-        !source.cursors_seen().is_empty(),
-        "loop must have polled the source"
-    );
-}
-
-// ── Phase 7-C: counter resets after save — no double-fire on next tick ──
-
-#[tokio::test]
-async fn counter_resets_after_save() {
-    let source = Arc::new(FakeJournalSource::new());
-    let sink = Arc::new(RecordingSink::new());
-
-    // First batch of 5 events crosses the events_threshold = 5
-    // → first save fires.  Second batch of 1 event must NOT
-    // trigger another save (counter reset; 1 < 5).
-    source.enqueue_changes(
-        vec![
-            one_change(10),
-            one_change(11),
-            one_change(12),
-            one_change(13),
-            one_change(14),
-        ],
-        100,
-    );
-    source.enqueue_changes(vec![one_change(15)], 200);
-
-    let config = JournalLoopConfig {
-        poll_interval: Duration::from_millis(5),
-        initial_cursor: 0,
-        save_threshold_events: 5,
-        save_threshold_age: Duration::from_hours(24),
-    };
-    let handle = spawn_journal_loop(
-        'C',
-        Arc::clone(&source) as Arc<dyn JournalSource>,
-        Arc::clone(&sink) as Arc<dyn PatchSink>,
-        config,
-    );
-
-    // Wait until both accept() calls land + first save fires.
-    let sink_for_pred = Arc::clone(&sink);
-    let converged = wait_for(move || {
-        sink_for_pred.calls().len() >= 2 && !sink_for_pred.save_calls().is_empty()
-    })
-    .await;
-
-    // Give the loop one extra tick window to potentially fire
-    // a wrong second save.
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    let join = handle.cancel();
-    drop(tokio::time::timeout(CONVERGENCE_DEADLINE, join).await);
-
-    assert!(converged, "loop did not converge within deadline");
-    let saves = sink.save_calls();
-    assert_eq!(
-        saves.len(),
-        1,
-        "exactly one save expected (counter reset after first); got {saves:?}"
-    );
-}
-
-// ── MacStubJournalSource production fallback: always-empty contract ──
-
-#[test]
-fn mac_stub_source_returns_empty_with_unchanged_cursor() -> std::io::Result<()> {
-    let stub = super::MacStubJournalSource;
-    let res = stub.poll(42)?;
-    assert!(
-        res.changes.is_empty(),
-        "MacStub must always return empty changes"
-    );
-    assert_eq!(
-        res.next_cursor, 42,
-        "MacStub must keep the cursor unchanged"
-    );
-    assert_eq!(res.journal_id, 0, "MacStub journal_id is the zero sentinel");
-    Ok(())
 }
