@@ -41,6 +41,7 @@ use super::{
 };
 
 mod basics;
+mod integration;
 mod thresholds;
 mod wrap_and_persistence;
 
