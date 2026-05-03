@@ -47,6 +47,7 @@
 
 use alloc::sync::Arc;
 use core::time::Duration;
+use std::time::Instant;
 
 use tokio::sync::watch;
 use uffs_mft::usn::FileChange;
@@ -58,6 +59,28 @@ use uffs_mft::usn::FileChange;
 /// long-running soak tests slow the tick down to reduce log noise
 /// without recompiling.
 pub(crate) const DEFAULT_POLL_INTERVAL_MS: u64 = 500;
+
+/// Default events-since-save threshold for triggering a background
+/// compact-cache save (Phase 7 task 7.4).
+///
+/// Sized to approximate the plan's "5% churn" criterion at the
+/// typical 1.3 GB × ~7 M-record drive shape (`50_000` events ≈ 0.7%
+/// churn, comfortably below 5%).  Saving more frequently would
+/// thrash the disk; less frequently would let the on-disk snapshot
+/// drift far enough that a cold-boot replay window grows beyond
+/// the cost of an incremental save.
+pub(crate) const DEFAULT_SAVE_THRESHOLD_EVENTS: u64 = 50_000;
+
+/// Default time-since-save threshold for triggering a background
+/// compact-cache save (Phase 7 task 7.4) — 5 minutes.
+///
+/// Provides a wall-clock ceiling for how stale the on-disk snapshot
+/// can get under low-churn workloads (where the events-threshold
+/// would never fire on its own).  Five minutes matches the cadence
+/// of the existing Phase-5 `refresh_usn_for_warm_shards` global
+/// tick so the persistence guarantee carries over to the per-shard
+/// path without changing the operator-visible recovery window.
+pub(crate) const DEFAULT_SAVE_THRESHOLD_AGE: Duration = Duration::from_mins(5);
 
 /// Result of one [`JournalSource::poll`] call.
 ///
@@ -241,14 +264,120 @@ pub(crate) trait PatchSink: Send + Sync + 'static {
     /// shard, registry race, etc.).  The boolean is purely
     /// informational — the loop continues in either case.
     fn accept(&self, letter: char, changes: &[FileChange]) -> bool;
+
+    /// Trigger a background compact-cache save for `letter`.
+    ///
+    /// Phase 7 task 7.4 — the loop calls this when the
+    /// per-shard [`SaveTrigger`] decides the in-memory body has
+    /// drifted far enough from the on-disk snapshot that a
+    /// persist is warranted.  Production wires this to
+    /// [`uffs_core::compact_cache::save_compact_cache_background`];
+    /// tests record the call for assertion.
+    ///
+    /// The trigger is **fire-and-forget**.  The save runs on a
+    /// background thread; the loop does not wait for it.  If
+    /// the save fails, the implementor logs but does not
+    /// propagate — the next threshold crossing will retry.
+    fn trigger_save(&self, letter: char, reason: SaveReason);
+}
+
+/// Why a [`PatchSink::trigger_save`] call fired.
+///
+/// Encoded so observability surfaces (logs, metrics) can
+/// distinguish heavy-churn-driven saves from time-pressure-driven
+/// saves; the production sink also passes this through to the
+/// compact-cache writer for telemetry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveReason {
+    /// `events_since_save >= save_threshold_events` — lots of
+    /// churn has accumulated and the on-disk snapshot is
+    /// progressively stale.
+    EventsExceeded,
+    /// `Instant::now() - last_save_at >= save_threshold_age` —
+    /// time-pressure path for low-churn drives where the
+    /// events threshold would otherwise never fire.
+    AgeElapsed,
+}
+
+/// Per-shard save-threshold state machine (Phase 7 task 7.4).
+///
+/// Tracks the wall-clock time of the last save trigger and the
+/// number of events accumulated since.  Crossing either the
+/// events- or age-threshold (with at least one event pending)
+/// produces a [`SaveReason`] and resets both counters.  Held
+/// inside the [`JournalLoop`] so each per-shard task carries
+/// its own independent counters.
+#[derive(Debug)]
+struct SaveTrigger {
+    /// Wall-clock time of the last save trigger (or, before any
+    /// triggers, the loop's spawn time).  Compared against
+    /// `Instant::now()` to compute elapsed-since-last-save.
+    last_save_at: Instant,
+    /// Total events accumulated across [`Self::record`] calls
+    /// since the last save trigger.  Compared against
+    /// `save_threshold_events` to fire the events-based save.
+    events_since_save: u64,
+}
+
+impl SaveTrigger {
+    /// Construct a fresh trigger with `last_save_at` set to
+    /// `Instant::now()` (so the first age-based save can't fire
+    /// until at least `save_threshold_age` has elapsed since
+    /// loop spawn).
+    fn new() -> Self {
+        Self {
+            last_save_at: Instant::now(),
+            events_since_save: 0,
+        }
+    }
+
+    /// Record `change_count` events accumulating toward the
+    /// events-based threshold.  Saturating add so a runaway
+    /// drive can't wrap and silently miss the threshold.
+    const fn record(&mut self, change_count: u64) {
+        self.events_since_save = self.events_since_save.saturating_add(change_count);
+    }
+
+    /// Evaluate the thresholds.
+    ///
+    /// **Returns** `Some(reason)` if a save should fire — and
+    /// resets both counters as a side effect (so the next
+    /// `evaluate` after a save starts from a clean slate).
+    /// Returns `None` when no threshold is crossed *or* when no
+    /// events are pending (zero-churn drives never produce
+    /// no-op saves).
+    fn evaluate(
+        &mut self,
+        save_threshold_events: u64,
+        save_threshold_age: Duration,
+    ) -> Option<SaveReason> {
+        if self.events_since_save == 0 {
+            return None;
+        }
+        let now = Instant::now();
+        let elapsed = now.saturating_duration_since(self.last_save_at);
+        let reason = if self.events_since_save >= save_threshold_events {
+            Some(SaveReason::EventsExceeded)
+        } else if elapsed >= save_threshold_age {
+            Some(SaveReason::AgeElapsed)
+        } else {
+            None
+        };
+        if reason.is_some() {
+            self.last_save_at = now;
+            self.events_since_save = 0;
+        }
+        reason
+    }
 }
 
 /// Configuration for a single [`JournalLoop`] task.
 ///
 /// Carries the tuning knobs the production loop reads from env
 /// vars and the test loop sets directly.  Keeping these in one
-/// place lets future tasks (7.4 thresholds, 7.7 wrap detection)
-/// extend the config without churning the loop signature.
+/// place lets future tasks (7.7 wrap detection, 7.6 cursor
+/// persistence) extend the config without churning the loop
+/// signature.
 #[derive(Debug, Clone)]
 pub(crate) struct JournalLoopConfig {
     /// Cadence between successive polls.  Default 500 ms.
@@ -257,6 +386,15 @@ pub(crate) struct JournalLoopConfig {
     /// reads this from the persisted `usn.cursor` (Phase 7 task
     /// 7.6); tests use 0 as a clean-slate baseline.
     pub(crate) initial_cursor: u64,
+    /// Events-since-last-save ceiling (Phase 7 task 7.4).
+    /// Crossing this triggers a [`SaveReason::EventsExceeded`]
+    /// save.  Default [`DEFAULT_SAVE_THRESHOLD_EVENTS`] (50K).
+    pub(crate) save_threshold_events: u64,
+    /// Time-since-last-save ceiling (Phase 7 task 7.4).
+    /// Crossing this triggers a [`SaveReason::AgeElapsed`] save
+    /// when at least one event is pending.  Default
+    /// [`DEFAULT_SAVE_THRESHOLD_AGE`] (5 min).
+    pub(crate) save_threshold_age: Duration,
 }
 
 impl Default for JournalLoopConfig {
@@ -264,6 +402,8 @@ impl Default for JournalLoopConfig {
         Self {
             poll_interval: Duration::from_millis(DEFAULT_POLL_INTERVAL_MS),
             initial_cursor: 0,
+            save_threshold_events: DEFAULT_SAVE_THRESHOLD_EVENTS,
+            save_threshold_age: DEFAULT_SAVE_THRESHOLD_AGE,
         }
     }
 }
@@ -291,6 +431,10 @@ pub(crate) struct JournalLoop {
     cancel_rx: watch::Receiver<bool>,
     /// Tuning knobs.
     config: JournalLoopConfig,
+    /// Per-shard save-threshold state (Phase 7 task 7.4).
+    /// Mutated on every non-empty tick by [`SaveTrigger::record`]
+    /// + [`SaveTrigger::evaluate`].
+    save_trigger: SaveTrigger,
 }
 
 impl JournalLoop {
@@ -298,7 +442,7 @@ impl JournalLoop {
     /// applying via `sink`, watching `cancel_rx`, configured by
     /// `config`.
     #[must_use]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         letter: char,
         source: Arc<dyn JournalSource>,
         sink: Arc<dyn PatchSink>,
@@ -311,6 +455,7 @@ impl JournalLoop {
             sink,
             cancel_rx,
             config,
+            save_trigger: SaveTrigger::new(),
         }
     }
 
@@ -337,7 +482,15 @@ impl JournalLoop {
             };
 
             cursor = result.next_cursor;
-            process_tick(self.sink.as_ref(), letter, cursor, &result.changes);
+            process_tick(
+                self.sink.as_ref(),
+                letter,
+                cursor,
+                &result.changes,
+                &mut self.save_trigger,
+                self.config.save_threshold_events,
+                self.config.save_threshold_age,
+            );
         }
     }
 }
@@ -406,12 +559,34 @@ async fn poll_blocking(
 
 /// Apply the post-poll change batch to `sink`, or trace-log the
 /// no-op tick when `changes` is empty.
-fn process_tick(sink: &dyn PatchSink, letter: char, cursor: u64, changes: &[FileChange]) {
+///
+/// On a non-empty tick, also: (a) records the event count into
+/// `save_trigger`, (b) evaluates the save thresholds, and (c)
+/// fires [`PatchSink::trigger_save`] when a threshold crosses.
+fn process_tick(
+    sink: &dyn PatchSink,
+    letter: char,
+    cursor: u64,
+    changes: &[FileChange],
+    save_trigger: &mut SaveTrigger,
+    save_threshold_events: u64,
+    save_threshold_age: Duration,
+) {
     if changes.is_empty() {
         tracing::trace!(drive = %letter, "Journal poll: no changes");
         return;
     }
     let accepted = sink.accept(letter, changes);
+    save_trigger.record(changes.len() as u64);
+    if let Some(reason) = save_trigger.evaluate(save_threshold_events, save_threshold_age) {
+        sink.trigger_save(letter, reason);
+        tracing::info!(
+            drive = %letter,
+            ?reason,
+            cursor,
+            "Journal poll: triggered background compact-cache save"
+        );
+    }
     tracing::debug!(
         drive = %letter,
         accepted,
