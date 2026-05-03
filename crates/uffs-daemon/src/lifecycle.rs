@@ -11,7 +11,7 @@
 //! fragment the shutdown semantics.
 
 use alloc::sync::Arc;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use core::time::Duration;
 use std::path::PathBuf;
 
@@ -48,6 +48,21 @@ pub(crate) struct LifecycleHandle {
     /// Updated by `IndexManager` when each drive finishes loading.
     /// Checked by the idle timer to detect stuck loads.
     load_heartbeat: Arc<AtomicU64>,
+    /// Load-phase complete latch.  Set by [`record_load_complete`] once
+    /// the load task in `spawn_load_task` finishes draining both
+    /// data-dir loads and (on Windows) live-drive loads.  Latches
+    /// `false` → `true` exactly once and never reverses.  While unset,
+    /// [`LifecycleManager::load_stalled_force_retire`] enforces the
+    /// `LOAD_STALL_TIMEOUT_SECS` heartbeat-freshness invariant against a
+    /// hung kernel-mode NTFS read; once set, the guard is permanently
+    /// disarmed so a fully-loaded daemon serving zero queries against
+    /// fully-Parked drives doesn't get killed by the startup safety
+    /// net.  Per-drive stuck-load detection remains active via
+    /// `DRIVE_LOAD_TIMEOUT` inside
+    /// `index/loading.rs::collect_drive_load_results`.
+    ///
+    /// [`record_load_complete`]: Self::record_load_complete
+    load_complete: Arc<AtomicBool>,
 }
 
 impl LifecycleHandle {
@@ -123,6 +138,23 @@ impl LifecycleHandle {
         let delta = now.saturating_sub(prev);
         tracing::debug!(heartbeat_delta_secs = delta, "Load heartbeat updated");
     }
+
+    /// Latch the load phase as complete — called by `spawn_load_task`
+    /// once both data-dir loads and (on Windows) live-drive loads have
+    /// drained.  After this latch is set,
+    /// [`LifecycleManager::load_stalled_force_retire`] is a no-op, so a
+    /// daemon serving zero queries against fully-loaded drives doesn't
+    /// get killed by the stuck-NTFS-read safety net at the next idle
+    /// deadline.
+    ///
+    /// Idempotent: calling this multiple times has no effect after the
+    /// first — the underlying [`AtomicBool`] is a one-shot latch.
+    pub(crate) fn record_load_complete(&self) {
+        let was_complete = self.load_complete.swap(true, Ordering::Relaxed);
+        if !was_complete {
+            tracing::debug!("Load phase complete — stall guard disarmed");
+        }
+    }
 }
 
 /// Lifecycle manager: PID file, idle timer, shutdown coordination.
@@ -163,6 +195,10 @@ impl LifecycleManager {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |dur| dur.as_secs());
         let load_heartbeat = Arc::new(AtomicU64::new(now_epoch));
+        // Load-phase latch starts unset — the stall guard is armed
+        // until `spawn_load_task` calls `record_load_complete` after
+        // draining the data-dir + (Windows) live-drive load paths.
+        let load_complete = Arc::new(AtomicBool::new(false));
 
         let pid_path = data_dir.join("daemon.pid");
 
@@ -176,6 +212,7 @@ impl LifecycleManager {
                 max_session_tier,
                 events,
                 load_heartbeat,
+                load_complete,
             },
             pid_path,
             idle_timeout,
@@ -447,7 +484,16 @@ impl LifecycleManager {
 
     /// Returns `true` when the load heartbeat is older than the
     /// stall threshold, in which case the caller must force-retire.
+    ///
+    /// Once `LifecycleHandle::record_load_complete` has been called,
+    /// the guard is permanently disarmed: a fully-loaded daemon
+    /// serving zero queries is legitimately idle, not stalled.
+    /// Per-drive stuck-load detection remains active independently via
+    /// `DRIVE_LOAD_TIMEOUT` inside `collect_drive_load_results`.
     fn load_stalled_force_retire(handle: &LifecycleHandle) -> bool {
+        if handle.load_complete.load(Ordering::Relaxed) {
+            return false;
+        }
         let last_hb = handle.load_heartbeat.load(Ordering::Relaxed);
         let now_epoch = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -782,6 +828,83 @@ mod tests {
         assert!(
             timer.is_finished(),
             "no-retire should exit after shutdown signal"
+        );
+    }
+
+    // ── Load-stall guard: heartbeat-age force-retire (Phase 5 G4 finding) ─
+
+    /// Test helper installed on `LifecycleHandle` only under `cfg(test)`.
+    /// Required because `LOAD_STALL_TIMEOUT_SECS` is wall-clock-based via
+    /// `SystemTime::now()` and can't be mocked; without this we'd have to
+    /// wait 300+ seconds per test.
+    impl LifecycleHandle {
+        pub(crate) fn set_load_heartbeat_for_test(&self, secs: u64) {
+            self.load_heartbeat.store(secs, Ordering::Relaxed);
+        }
+    }
+
+    /// Helper: epoch seconds "now" for the regression tests.
+    fn epoch_now_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |dur| dur.as_secs())
+    }
+
+    #[test]
+    fn load_stall_force_retire_fires_during_loading_with_stale_heartbeat() {
+        // Preserves the original safety-net contract: while loading is
+        // in progress (load_complete unset) and no heartbeat update has
+        // arrived for >= LOAD_STALL_TIMEOUT_SECS, the guard MUST fire.
+        let mgr = test_lifecycle(Some(Duration::from_mins(1)));
+        let handle = mgr.handle();
+
+        let now = epoch_now_secs();
+        handle.set_load_heartbeat_for_test(now.saturating_sub(LOAD_STALL_TIMEOUT_SECS + 100));
+
+        assert!(
+            LifecycleManager::load_stalled_force_retire(&handle),
+            "guard must fire when heartbeat is stale and load_complete is unset"
+        );
+    }
+
+    #[test]
+    fn load_stall_force_retire_disarms_after_record_load_complete() {
+        // Regression for Phase 5 G4 capture (LOG/uffsd-G4-bonus.log line
+        // 104, 2 h 11 min mark): a daemon that finished loading long ago
+        // but is serving zero queries against fully-Parked drives is
+        // legitimately idle, not stalled.  Once `record_load_complete`
+        // latches the load phase as done, the guard MUST stay quiet.
+        let mgr = test_lifecycle(Some(Duration::from_mins(1)));
+        let handle = mgr.handle();
+
+        let now = epoch_now_secs();
+        handle.set_load_heartbeat_for_test(now.saturating_sub(LOAD_STALL_TIMEOUT_SECS + 100));
+
+        handle.record_load_complete();
+
+        assert!(
+            !LifecycleManager::load_stalled_force_retire(&handle),
+            "guard must be disarmed after record_load_complete, even with stale heartbeat"
+        );
+    }
+
+    #[test]
+    fn record_load_complete_is_idempotent() {
+        // Calling `record_load_complete` more than once must not re-arm
+        // the guard or panic.  The latch is `false` → `true` exactly
+        // once; subsequent calls are a no-op.
+        let mgr = test_lifecycle(Some(Duration::from_mins(1)));
+        let handle = mgr.handle();
+
+        handle.record_load_complete();
+        handle.record_load_complete();
+
+        let now = epoch_now_secs();
+        handle.set_load_heartbeat_for_test(now.saturating_sub(LOAD_STALL_TIMEOUT_SECS + 100));
+
+        assert!(
+            !LifecycleManager::load_stalled_force_retire(&handle),
+            "guard must remain disarmed after multiple record_load_complete calls"
         );
     }
 

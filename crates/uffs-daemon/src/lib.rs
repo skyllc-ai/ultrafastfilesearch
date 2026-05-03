@@ -556,6 +556,15 @@ fn spawn_load_task(
         }
         tracing::info!("Load task completed");
 
+        // Latch the load phase as complete: from this point on, a daemon
+        // serving zero queries against fully-loaded drives is legitimately
+        // idle (not stalled), so the load-stall force-retire guard is
+        // permanently disarmed.  Per-drive stuck-load detection remains
+        // active via `DRIVE_LOAD_TIMEOUT` inside the load loop itself.
+        // Closes the Phase 5 G4 finding (LOG/uffsd-G4-bonus.log line 104,
+        // 2 h 11 min force-retire on a healthy idle daemon).
+        load_lifecycle.record_load_complete();
+
         zero_drive_shutdown_guard(&load_index, &load_lifecycle).await;
     })
 }
