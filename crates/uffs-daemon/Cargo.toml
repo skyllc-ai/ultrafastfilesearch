@@ -93,6 +93,11 @@ proptest.workspace = true
 # Phase 2b of memory-tiering: scoped tempdirs for the runtime-orphan-sweep
 # test in `src/lib.rs::tests`.
 tempfile.workspace = true
+# Phase 7 task 7.2 of memory-tiering: `tokio::test(start_paused = true)` +
+# `tokio::time::advance` for deterministic time-based assertions on the
+# per-shard USN journal loop in `src/cache/journal_loop/tests.rs`.  Matches
+# the pattern already used by `uffs-core`, `uffs-mft`, and `uffs-mcp`.
+tokio = { workspace = true, features = ["test-util", "macros"] }
 
 [lints]
 workspace = true
