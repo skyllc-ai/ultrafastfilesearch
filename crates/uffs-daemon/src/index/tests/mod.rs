@@ -24,6 +24,9 @@
 //! * [`lifecycle_hooks`] — Phase 5 task 5.8 / 5.9 / 5.10 `WorkingSetTrim` +
 //!   `Prefetch` + `PressureSignal` injection tests, plus the `drives` RPC
 //!   tier-marker enumeration.
+//! * [`tracing_capture`] — shared `tracing::Subscriber` scaffold (`EventLog` /
+//!   `CapturedEvent`) used by [`idle_demote`]'s `shard.transition`
+//!   observability-contract tests.
 
 #![expect(
     clippy::std_instead_of_alloc,
@@ -43,11 +46,13 @@ use super::aggregation::AggregationRequest;
 
 mod aggregate;
 mod aggregate_drilldown;
+mod body_loader_fakes;
 mod ensure_warm;
 mod idle_demote;
 mod lifecycle_hooks;
 mod manager;
 mod registry;
+mod tracing_capture;
 mod usn_refresh;
 
 /// Build a synthetic drive with root + 1 dir + 5 files of varied

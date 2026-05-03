@@ -194,17 +194,27 @@ impl IndexManager {
                 .map(|shard| (shard.drive, shard.stats.last_query_at_ms()))
                 .min_by_key(|&(_, ts)| ts)
         };
-        let (letter, last_query_at_ms) = pick?;
+        let (letter, _last_query_at_ms) = pick?;
 
         // ── Phase 2: write-lock atomic single-shard demote ─────────
         // Re-check inside the write lock — a concurrent promote
         // could have moved the picked shard back to Hot/Warm
         // between the read-lock and the write-lock acquisition.
-        // `demote_letter` returns `None` for an illegal transition,
-        // in which case we skip and the next cascade tick re-picks.
+        // `demote_letter_with_reason` returns `None` for an illegal
+        // transition, in which case we skip and the next cascade
+        // tick re-picks.  The `PressureCascade` reason flows into
+        // the canonical `shard.transition` event so operators can
+        // distinguish cascade demotes from TTL idle demotes by
+        // grepping `reason="pressure-cascade"` (Phase 5 G4
+        // follow-up — the cascade no longer emits its own
+        // duplicate event of the same demote).
         let target = ShardState::Parked;
         let mut guard = self.index.write().await;
-        let new_registry = guard.demote_letter(letter, target)?;
+        let new_registry = guard.demote_letter_with_reason(
+            letter,
+            target,
+            crate::cache::registry::DemoteReason::PressureCascade,
+        )?;
         *guard = Arc::new(new_registry);
         drop(guard);
         self.bump_index_version();
@@ -223,16 +233,6 @@ impl IndexManager {
                 "WorkingSetTrim::trim failed; daemon continues",
             );
         }
-
-        tracing::info!(
-            target: "shard.transition",
-            drive = %letter,
-            from = "Warm",
-            to = "Parked",
-            reason = "pressure-cascade",
-            last_query_at_ms,
-            "Pressure cascade demoted one LRU Warm shard",
-        );
 
         Some((letter, target))
     }

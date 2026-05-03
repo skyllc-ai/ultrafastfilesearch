@@ -17,18 +17,11 @@
 //!   propagate uniformly to all waiters).
 //!
 //! `FixedBodyLoader` is shared with `super::lifecycle_hooks` and
-//! lives in `super`; the other loader fakes
-//! (`MissingBodyLoader`, `PanickingBodyLoader`, `SlowBodyLoader`,
-//! `CountingBodyLoader`) are scoped to this submodule.
-//!
-//! Exception: file-size policy permanent exception (see
-//! `scripts/ci/file_size_exceptions.txt`).  This module is the
-//! single home for the 11-test
-//! `IndexManager::ensure_warm_for_dispatch` suite; the tests share
-//! 5 `BodyLoader` fakes, the `build_test_drive_with_tight_bloom`
-//! Phase 4 fixture, and the `wait_for_in_flight_clear` PR-e polling
-//! helper.  Splitting fragments the shared fakes + scenarios that
-//! must run against the same drive fixtures from `super`.
+//! [`super::idle_demote`] and lives in `super` (`mod.rs`).  The
+//! other loader fakes (`MissingBodyLoader`, `PanickingBodyLoader`,
+//! `SlowBodyLoader`, `CountingBodyLoader`) and the
+//! `wait_for_in_flight_clear` PR-e polling helper live in the
+//! sibling [`super::body_loader_fakes`] module.
 
 #![expect(
     clippy::std_instead_of_alloc,
@@ -38,6 +31,10 @@
 
 use std::sync::Arc;
 
+use super::body_loader_fakes::{
+    CountingBodyLoader, MissingBodyLoader, PanickingBodyLoader, SlowBodyLoader,
+    wait_for_in_flight_clear,
+};
 use super::{
     FixedBodyLoader, IndexManager, build_test_drive, build_test_drive_d, build_test_drive_e,
 };
@@ -103,29 +100,6 @@ async fn ensure_warm_for_dispatch_skips_parked_shard_outside_filter() {
         states_post, states_pre,
         "filter excluded C — Parked state must survive",
     );
-}
-
-/// A `BodyLoader` that always returns `None` — simulates a missing
-/// or stale cache file between demote and promote.
-struct MissingBodyLoader;
-
-impl crate::cache::body_loader::BodyLoader for MissingBodyLoader {
-    fn load(&self, _letter: char) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
-        None
-    }
-}
-
-/// A `BodyLoader` whose `load` method panics — exercises the
-/// `Err(JoinError)` arm of the spawn-blocking match in
-/// `ensure_warm_for_dispatch`.  The panic is contained inside
-/// `tokio::task::spawn_blocking`'s thread; the daemon stays up and
-/// the shard stays in its current tier.
-struct PanickingBodyLoader;
-
-impl crate::cache::body_loader::BodyLoader for PanickingBodyLoader {
-    fn load(&self, _letter: char) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
-        panic!("PanickingBodyLoader::load — synthetic panic for the JoinError arm");
-    }
 }
 
 /// Pin the success path with an injected `FixedBodyLoader`:
@@ -236,63 +210,6 @@ async fn ensure_warm_for_dispatch_handles_panicking_body_loader_gracefully() {
 }
 
 // ── Phase 5 (#93) — parallel re-promote ────────────────────────────
-
-/// A `BodyLoader` that sleeps for `delay` before returning a clone
-/// of `body`, and records the peak number of concurrent calls
-/// in flight.  Used to verify that
-/// [`IndexManager::ensure_warm_for_dispatch`] fans out per-letter
-/// loads across the blocking pool instead of serialising them.
-struct SlowBodyLoader {
-    body: Arc<uffs_core::compact::DriveCompactIndex>,
-    delay: core::time::Duration,
-    in_flight: core::sync::atomic::AtomicUsize,
-    peak_in_flight: core::sync::atomic::AtomicUsize,
-}
-
-impl SlowBodyLoader {
-    fn new(body: Arc<uffs_core::compact::DriveCompactIndex>, delay: core::time::Duration) -> Self {
-        Self {
-            body,
-            delay,
-            in_flight: core::sync::atomic::AtomicUsize::new(0),
-            peak_in_flight: core::sync::atomic::AtomicUsize::new(0),
-        }
-    }
-
-    fn peak(&self) -> usize {
-        self.peak_in_flight
-            .load(core::sync::atomic::Ordering::Acquire)
-    }
-}
-
-impl crate::cache::body_loader::BodyLoader for SlowBodyLoader {
-    fn load(&self, _letter: char) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
-        use core::sync::atomic::Ordering;
-
-        let now = self.in_flight.fetch_add(1, Ordering::AcqRel) + 1;
-        // Bump peak via a CAS loop: read the current peak, write
-        // back `now` only if it's strictly larger.  Pure `fetch_max`
-        // would be one call but isn't stable on all targets we
-        // build; the loop is portable and the contention window is
-        // microscopic (only the first few in-flight loaders ever
-        // raise the peak).
-        let mut prev = self.peak_in_flight.load(Ordering::Acquire);
-        while now > prev {
-            match self.peak_in_flight.compare_exchange_weak(
-                prev,
-                now,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(actual) => prev = actual,
-            }
-        }
-        std::thread::sleep(self.delay);
-        self.in_flight.fetch_sub(1, Ordering::AcqRel);
-        Some(Arc::clone(&self.body))
-    }
-}
 
 /// Pin the parallelisation contract of `ensure_warm_for_dispatch`
 /// (#93): with N Parked drives and a `BodyLoader::load` that
@@ -557,85 +474,6 @@ async fn ensure_warm_for_dispatch_promotes_parked_when_bloom_hits() {
 //    fires (no stale `Shared` reuse).
 // 3. `failure_propagates_to_all_waiters` — failed load ⇒ all 5 callers see the
 //    failure, slot cleared, exactly 1 load attempt.
-
-/// `BodyLoader` that records the total number of `load` calls
-/// across its lifetime and optionally sleeps `delay` per call.
-///
-/// `body == Some` returns a clone (success path); `body == None`
-/// simulates a missing-cache failure.  The `delay` is what makes
-/// the dedup race observable: with N concurrent callers and a
-/// delay long enough to outlast the slot-install scheduler turn,
-/// every caller after the first finds the existing
-/// `Shared` slot and joins the in-flight load instead of
-/// installing its own.
-struct CountingBodyLoader {
-    body: Option<Arc<uffs_core::compact::DriveCompactIndex>>,
-    calls: core::sync::atomic::AtomicUsize,
-    delay: core::time::Duration,
-}
-
-impl CountingBodyLoader {
-    fn succeeding(
-        body: Arc<uffs_core::compact::DriveCompactIndex>,
-        delay: core::time::Duration,
-    ) -> Self {
-        Self {
-            body: Some(body),
-            calls: core::sync::atomic::AtomicUsize::new(0),
-            delay,
-        }
-    }
-
-    fn failing(delay: core::time::Duration) -> Self {
-        Self {
-            body: None,
-            calls: core::sync::atomic::AtomicUsize::new(0),
-            delay,
-        }
-    }
-
-    fn call_count(&self) -> usize {
-        self.calls.load(core::sync::atomic::Ordering::Acquire)
-    }
-}
-
-impl crate::cache::body_loader::BodyLoader for CountingBodyLoader {
-    fn load(&self, _letter: char) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
-        self.calls
-            .fetch_add(1, core::sync::atomic::Ordering::AcqRel);
-        std::thread::sleep(self.delay);
-        self.body.clone()
-    }
-}
-
-/// Spin-wait for the `in_flight_promotes` map to drain — the
-/// cleanup task spawned by `load_or_join_in_flight` runs
-/// asynchronously, and the `slot_clears_after_completion` test
-/// needs to assert the slot is gone before it triggers the
-/// re-promote.  Polling via the test accessor (rather than a
-/// real-time sleep) keeps the test deterministic on slow CI
-/// runners.
-///
-/// Times out after ~100 ms; if the cleanup task hasn't run by
-/// then, the test fails loudly with a clear message.  100 ms is
-/// 1000× the expected cleanup latency (a single mutex acquire +
-/// a `HashMap` remove, ~µs), so the bound only fires on a real
-/// regression.
-async fn wait_for_in_flight_clear(mgr: &IndexManager) {
-    // Suffix the loop bound to dodge `clippy::default_numeric_fallback`
-    // (the codebase forbids implicit `i32` integer types).
-    for _ in 0_u32..100_u32 {
-        if mgr.in_flight_promotes_len_for_test() == 0 {
-            return;
-        }
-        tokio::time::sleep(core::time::Duration::from_millis(1)).await;
-    }
-    panic!(
-        "in-flight promote slot did not clear within ~100 ms — \
-         the cleanup task spawned by `load_or_join_in_flight` did \
-         not run (regression: `Shared` slot leak)"
-    );
-}
 
 /// Headline PR-e contract: with N=10 concurrent search
 /// dispatches all targeting the same Parked drive, the

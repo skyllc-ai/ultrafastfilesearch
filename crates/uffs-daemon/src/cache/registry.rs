@@ -7,11 +7,74 @@
 //! See [`crate::cache`] module docs for the bigger picture.
 
 use alloc::sync::Arc;
+use core::fmt;
 
 use uffs_core::compact::DriveCompactIndex;
 use uffs_core::search::backend::DriveIndex;
 
 use super::shard::{ShardEntry, ShardState};
+
+/// Why a [`ShardRegistry::demote_letter_with_reason`] call was issued.
+///
+/// The registry primitive uses this to populate the `reason` field of
+/// the canonical `shard.transition` `INFO` event so operators can
+/// distinguish TTL-driven idle demotes from kernel-Low pressure
+/// cascade demotes by grepping a single field.
+///
+/// Wire format (must stay stable — operator runbooks grep for these
+/// exact strings):
+///
+/// * [`Self::IdleTtl`] → `reason="demote"` (default).  Preserved as `"demote"`
+///   rather than `"idle-ttl"` for backwards compatibility with existing
+///   operator runbooks and the Phase 3 task 3.9 observability contract test
+///   (`shard_transition_events_emitted_on_demote_and_promote`).
+/// * [`Self::PressureCascade`] → `reason="pressure-cascade"`.
+///
+/// Phase 5 G4 follow-up — replaces the prior dual-logging pattern
+/// where every cascade demote emitted **two** events (the registry
+/// primitive's generic `reason="demote"` plus a second
+/// cascade-specific event from `cascade_demote_one_step`); the
+/// canonical event now carries the discriminator directly so the
+/// second event is gone.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum DemoteReason {
+    /// TTL-driven idle demote — the per-tier `_ttl_secs` config has
+    /// elapsed since the last query against this shard.  Emitted by
+    /// [`crate::index::IndexManager::demote_idle_shards`].
+    IdleTtl,
+    /// Kernel memory-pressure cascade demote — the Windows
+    /// `LowMemoryResourceNotification` fired and the cascade subscriber
+    /// loop is draining LRU `Warm` shards.  Emitted by
+    /// [`crate::index::IndexManager::cascade_demote_one_step`].
+    PressureCascade,
+}
+
+impl DemoteReason {
+    /// The wire string that ends up in the `reason=` field of the
+    /// canonical `shard.transition` `INFO` event.
+    ///
+    /// Used directly via `reason = reason.as_str()` in the tracing
+    /// macro (rather than via `%reason` Display formatting) so the
+    /// `tracing-subscriber` default formatter routes the value
+    /// through `record_str` → Debug-formatted-string → **quoted**
+    /// output (`reason="pressure-cascade"`).  The Display path
+    /// (`%`) goes through `record_debug` with `format_args`, which
+    /// renders the value **unquoted** (`reason=pressure-cascade`)
+    /// — incompatible with the legacy operator runbook regexes
+    /// authored against `reason="demote"` and `reason="usn-refresh"`.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::IdleTtl => "demote",
+            Self::PressureCascade => "pressure-cascade",
+        }
+    }
+}
+
+impl fmt::Display for DemoteReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Predicate: can a shard in `from` legally demote to `target`?
 ///
@@ -197,9 +260,29 @@ impl ShardRegistry {
     }
 
     /// Demote the shard for `letter` to `target` (`Parked` or
+    /// `Cold`) with the default [`DemoteReason::IdleTtl`] reason.
+    ///
+    /// Convenience wrapper over [`Self::demote_letter_with_reason`]
+    /// for the production idle-demote controller and every test that
+    /// doesn't care about the exact `reason` field on the resulting
+    /// `shard.transition` event.
+    ///
+    /// Wired into the production demote path by
+    /// [`crate::index::IndexManager::demote_idle_shards`] (Phase 3
+    /// Commit D).  The pressure-cascade path uses
+    /// [`Self::demote_letter_with_reason`] directly so its events
+    /// carry `reason="pressure-cascade"` instead of the default
+    /// `reason="demote"`.
+    #[must_use]
+    pub(crate) fn demote_letter(&self, letter: char, target: ShardState) -> Option<Self> {
+        self.demote_letter_with_reason(letter, target, DemoteReason::IdleTtl)
+    }
+
+    /// Demote the shard for `letter` to `target` (`Parked` or
     /// `Cold`), dropping the body and emitting a single
-    /// `shard.transition` tracing event.  Returns the rebuilt
-    /// registry, or `None` when:
+    /// `shard.transition` `INFO` event with the supplied `reason`
+    /// in its `reason` field.  Returns the rebuilt registry, or
+    /// `None` when:
     ///
     /// * `letter` is not registered;
     /// * `target` is not a demote-legal tier (must be `Parked` or `Cold`);
@@ -219,11 +302,24 @@ impl ShardRegistry {
     /// new `Arc` reads the new state forever, and the registry's
     /// `Vec` swap is the linearisation point.
     ///
-    /// Wired into the production demote path by
-    /// [`crate::index::IndexManager::demote_idle_shards`] (Phase 3
-    /// Commit D).
+    /// **Single canonical event.**  Phase 5 G4 follow-up — every
+    /// demote (TTL idle or pressure cascade) emits exactly one
+    /// `INFO`-level `shard.transition` event from this method.
+    /// The cascade path used to emit a second event of its own with
+    /// `reason="pressure-cascade"`; that event was redundant with the
+    /// primitive's event and added an artificial 6-836 ms gap (the
+    /// `WorkingSetTrim::trim` syscall duration) that confused
+    /// operator log analysis.  The discriminator now lives in the
+    /// `reason` field of the single canonical event, and
+    /// `last_query_at_ms` (previously cascade-only) is included for
+    /// every demote so operator runbooks get a uniform schema.
     #[must_use]
-    pub(crate) fn demote_letter(&self, letter: char, target: ShardState) -> Option<Self> {
+    pub(crate) fn demote_letter_with_reason(
+        &self,
+        letter: char,
+        target: ShardState,
+        reason: DemoteReason,
+    ) -> Option<Self> {
         // Locate the matching shard by enumerating once: returns
         // `(pos, &Arc<ShardEntry>)` so we never index into
         // `self.shards` (clippy::indexing_slicing).
@@ -242,6 +338,10 @@ impl ShardRegistry {
         let freed_mb = old_arc.body().map_or(0_u64, |body| {
             (body.heap_size_bytes().total / 1_048_576) as u64
         });
+        // Capture the LRU timestamp before we rebuild — useful in the
+        // canonical event so cascade callers don't need to emit a
+        // second event of their own just to log this field.
+        let last_query_at_ms = old_arc.stats.last_query_at_ms();
         let stats = Arc::clone(&old_arc.stats);
         let drive = old_arc.drive;
         let new_entry = match target {
@@ -260,7 +360,7 @@ impl ShardRegistry {
                         letter = %letter.to_ascii_uppercase(),
                         from = %from_state,
                         to = %target,
-                        reason = "demote",
+                        reason = reason.as_str(),
                         "Hot/Warm shard had no body during demote; skipping",
                     );
                     return None;
@@ -300,7 +400,8 @@ impl ShardRegistry {
             from = %from_state,
             to = %target,
             freed_mb,
-            reason = "demote",
+            last_query_at_ms,
+            reason = reason.as_str(),
         );
         Some(Self::from_shards(shards))
     }
