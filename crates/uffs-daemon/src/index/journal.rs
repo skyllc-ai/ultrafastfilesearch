@@ -44,6 +44,20 @@
 use alloc::sync::Arc;
 
 use super::IndexManager;
+use crate::cache::journal_loop::JournalLoopHandle;
+
+/// Helper for [`IndexManager::attach_journal_handle`] and
+/// [`IndexManager::drain_journal_handles`]: lock the journal-handle
+/// map, recovering from poison.  Mirrors the existing
+/// `lock_in_flight_promotes` / `verify_shutdown_nonce` poison
+/// handling pattern in this crate (per the `in_flight_promotes`
+/// field doc rationale).
+fn lock_journal_handles(
+    map: &std::sync::Mutex<std::collections::HashMap<char, JournalLoopHandle>>,
+) -> std::sync::MutexGuard<'_, std::collections::HashMap<char, JournalLoopHandle>> {
+    map.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 impl IndexManager {
     /// Drive a full per-shard USN refresh + body swap for `letter`.
@@ -76,25 +90,20 @@ impl IndexManager {
     /// `false` is **not** an error to propagate — the caller logs
     /// at warn/debug level depending on whether the failure was a
     /// real I/O error or just a benign demote race.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 7 activation forward reference; the \
-                      production caller is the `RegistryPatchSink` \
-                      applier task in `crate::cache::journal_sink` \
-                      which is constructed by `lib.rs::\
-                      spawn_journal_loops_for_warm_shards` (commit \
-                      A4).  Until A4 wires the spawner this method \
-                      is reachable only from the sink's `cfg(test)` \
-                      lifecycle tests."
-        )
-    )]
     pub(crate) async fn handle_journal_refresh(&self, letter: char, reason: &str) -> bool {
         // Heavy work: live MFT read + USN replay + compact rebuild.
         // Runs on the blocking pool so the runtime's worker threads
         // stay free to service search RPCs concurrent with the refresh.
+        // The closure enters [`BackgroundIoScope`] so the per-letter
+        // syscalls run at Windows `THREAD_MODE_BACKGROUND_BEGIN`
+        // priority — yielding to any foreground RPC handler under
+        // disk contention.  RAII via `_bg_scope` ensures the matching
+        // `_END` fires even if the underlying loader panics.  No-op
+        // on Mac/Linux.  Mirrors the deleted Phase-5
+        // `refresh_usn_for_warm_shards` per-letter wrapping.
+        let background_io = Arc::clone(&self.background_io);
         let body_result = tokio::task::spawn_blocking(move || {
+            let _bg_scope = crate::cache::background_io::BackgroundIoScope::enter(background_io);
             uffs_core::compact_loader::load_drive_with_usn_refresh(letter)
         })
         .await;
@@ -103,6 +112,31 @@ impl IndexManager {
             return false;
         };
         self.apply_journal_body(letter, reason, body).await
+    }
+
+    /// Phase 7 activation: store a [`JournalLoopHandle`] for `letter`
+    /// in the per-letter handle map.
+    ///
+    /// Called once per loaded drive from
+    /// `lib.rs::spawn_journal_loops_for_warm_shards` after each
+    /// [`crate::cache::journal_loop::spawn_journal_loop`] call.  If
+    /// a handle is already present for `letter` (defensive — never
+    /// happens in the production flow because each drive is loaded
+    /// exactly once before this method fires), the previous handle
+    /// is **cancelled** so the orphaned loop tears down cleanly.
+    pub(crate) fn attach_journal_handle(&self, letter: char, handle: JournalLoopHandle) {
+        let mut guard = lock_journal_handles(&self.journal_handles);
+        if let Some(previous) = guard.insert(letter, handle) {
+            tracing::warn!(
+                target: "shard.journal",
+                drive = %letter,
+                "Replacing existing journal-loop handle (defensive cancel of previous loop)",
+            );
+            // Best-effort cancel: send the watch signal and forget
+            // the JoinHandle.  The previous loop converges on its
+            // next tick (~500 ms) and is reaped by the runtime.
+            let _join = previous.cancel();
+        }
     }
 
     /// Per-letter write-lock swap of a freshly-loaded body Arc.

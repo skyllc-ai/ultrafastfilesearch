@@ -35,17 +35,6 @@ use std::path::PathBuf;
 /// computing it from `uffs_mft::cache::cache_dir()` so tests can
 /// drive the round-trip semantics against a `tempfile::TempDir`
 /// without colliding with the host's real cache directory.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 7 activation forward reference; production \
-                  construction site lands in commit A4 \
-                  (`lib.rs::spawn_journal_loops_for_warm_shards`).  \
-                  Exercised end-to-end on Mac via the `cfg(test)` \
-                  module below using `tempfile::TempDir`."
-    )
-)]
 #[derive(Debug)]
 pub(crate) struct DiskCursorStore {
     /// Directory under which `<letter>_usn.cursor` files live.
@@ -54,14 +43,6 @@ pub(crate) struct DiskCursorStore {
     cache_root: PathBuf,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 7 activation forward reference; constructor \
-                  + path helper are wired up in commit A4."
-    )
-)]
 impl DiskCursorStore {
     /// Construct a store rooted at `cache_root`.
     ///

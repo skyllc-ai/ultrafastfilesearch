@@ -57,19 +57,6 @@ use crate::index::IndexManager;
 /// Each variant maps 1-to-1 with a [`PatchSink`] callback.  Carrying
 /// only the minimum metadata (letter + per-callback context) keeps
 /// the channel's per-message size small even at high churn.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 7 activation forward reference; the variants \
-                  are constructed by `RegistryPatchSink`'s `PatchSink` \
-                  callbacks but the sink itself is not yet wired into \
-                  production until commit A4 (`lib.rs::\
-                  spawn_journal_loops_for_warm_shards`).  Exercised \
-                  end-to-end on Mac via the `cfg(test)` lifecycle \
-                  tests in this module."
-    )
-)]
 #[derive(Debug)]
 enum ApplyMsg {
     /// `accept` callback — for now, just an event-count signal so
@@ -111,17 +98,6 @@ enum ApplyMsg {
 /// Stateless apart from the `mpsc::UnboundedSender` — every callback
 /// is a one-line enqueue + immediate return.  The receiver lives in
 /// the spawned applier task (see [`Self::spawn_with_applier`]).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 7 activation forward reference; the production \
-                  construction site lands in commit A4 \
-                  (`lib.rs::spawn_journal_loops_for_warm_shards`).  \
-                  Exercised end-to-end on Mac via the `cfg(test)` \
-                  lifecycle tests in this module."
-    )
-)]
 pub(crate) struct RegistryPatchSink {
     /// Channel into the applier task.  `UnboundedSender::send` is
     /// sync-non-blocking, which is exactly what the loop's sync
@@ -149,15 +125,6 @@ impl RegistryPatchSink {
     /// does NOT extend the daemon's lifetime — when all
     /// `Arc<IndexManager>` instances drop the applier exits cleanly
     /// via the `Weak::upgrade` `None` arm.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 7 activation forward reference; the \
-                      production construction site lands in commit \
-                      A4 (`lib.rs::spawn_journal_loops_for_warm_shards`)."
-        )
-    )]
     pub(crate) fn spawn_with_applier(idx: &Arc<IndexManager>) -> (Arc<Self>, JoinHandle<()>) {
         let (apply_tx, apply_rx) = mpsc::unbounded_channel();
         let weak = Arc::downgrade(idx);

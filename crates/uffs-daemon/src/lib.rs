@@ -11,7 +11,7 @@
 //! Rationale: `run_daemon` plus the cohesive cluster of background-
 //! task spawners (`spawn_load_task`, `spawn_ipc_servers`,
 //! `spawn_stats_heartbeat`, `spawn_idle_demote_controller`,
-//! `spawn_usn_refresh_controller`, `spawn_pressure_subscriber`)
+//! `spawn_journal_loops_for_warm_shards`, `spawn_pressure_subscriber`)
 //! form the daemon's startup graph; splitting the controllers
 //! across sibling modules fragments the shared `DaemonConfig` /
 //! `EventSender` wiring and obscures the parent-task lifetime
@@ -292,12 +292,11 @@ pub async fn run_daemon(config: DaemonConfig) -> anyhow::Result<()> {
     // Phase 3 Commit D — periodic shard idle-demote sweep.
     let _idle_demote_task = spawn_idle_demote_controller(Arc::clone(&idx));
 
-    // Phase 5 (#95) — periodic background USN refresh of Warm/Hot
-    // shards so search results reflect live filesystem state without
-    // waiting for the next idle-tier transition.  Cadence is the
-    // `UFFS_USN_REFRESH_INTERVAL_SECS`-overridable
-    // `cache::policy::USN_REFRESH_INTERVAL_SECS` (5 min default).
-    let _usn_refresh_task = spawn_usn_refresh_controller(Arc::clone(&idx));
+    // Phase 7 activation: per-shard journal loops are spawned
+    // inside `spawn_load_task` after `record_load_complete()`.  They
+    // replace the deleted Phase-5 `spawn_usn_refresh_controller`
+    // 5-min global tick with per-letter event-driven refresh — see
+    // `spawn_journal_loops_for_warm_shards` below.
 
     // Phase 5 task 5.6 — memory-pressure subscriber.  Cascade-
     // demotes LRU Warm shards on `Low` transitions until pressure
@@ -565,6 +564,15 @@ fn spawn_load_task(
         // 2 h 11 min force-retire on a healthy idle daemon).
         load_lifecycle.record_load_complete();
 
+        // Phase 7 activation: spawn one per-shard journal loop for
+        // every loaded letter.  Replaces the deleted Phase-5 global
+        // 5-min `refresh_usn_for_warm_shards` tick.  The applier
+        // task's JoinHandle is fire-and-forget here — it stays alive
+        // for the daemon's lifetime via the `Arc<RegistryPatchSink>`
+        // captured by the per-loop sink clones; on shutdown the
+        // applier exits cleanly when the last sink Arc drops.
+        let _journal_applier = spawn_journal_loops_for_warm_shards(&load_index).await;
+
         zero_drive_shutdown_guard(&load_index, &load_lifecycle).await;
     })
 }
@@ -728,36 +736,118 @@ fn spawn_idle_demote_controller(idx: Arc<index::IndexManager>) -> tokio::task::J
     })
 }
 
-/// Spawn the Phase 5 (#95) background USN refresh controller —
-/// every `UFFS_USN_REFRESH_INTERVAL_SECS` (default 5 min), ask
-/// `IndexManager::refresh_usn_for_warm_shards` to walk every Warm/Hot
-/// shard, fold live USN journal deltas into the in-memory body, and
-/// persist a fresher compact cache to disk.
+/// Phase 7 activation: spawn one [`crate::cache::journal_loop::JournalLoop`]
+/// per loaded drive letter.
 ///
-/// The first tick is skipped so cold-boot's existing
-/// `load_drive_with_usn_refresh` path (the new #94 cold-boot WARM
-/// flow) handles the t=0 USN apply.  Subsequent ticks keep the
-/// in-memory state diverging by at most one interval from the live
-/// filesystem.
+/// Replaces the deleted Phase-5 `spawn_usn_refresh_controller`
+/// global 5-min tick with per-shard event-driven refresh.  Each
+/// loop polls its drive's NTFS USN journal at the configured
+/// cadence (default 500 ms via
+/// [`crate::cache::journal_loop::JournalLoopConfig`]) and fires save triggers
+/// when the per-shard `SaveTrigger`'s events-threshold (50K events) or
+/// age-threshold (5 min) crosses. Each save trigger drives a full
+/// [`crate::index::IndexManager::handle_journal_refresh`] which
+/// reuses the Phase-5
+/// [`uffs_core::compact_loader::load_drive_with_usn_refresh`] infrastructure
+/// for the body refresh + compact-cache write.
 ///
-/// On non-Windows the underlying refresh helper errors out by
-/// design (USN journals are NTFS-only); the loop still runs and
-/// logs the per-drive `anyhow` errors so the timer mechanics are
-/// exercised on dev machines, but no body changes.
-fn spawn_usn_refresh_controller(idx: Arc<index::IndexManager>) -> tokio::task::JoinHandle<()> {
-    let interval_secs = cache::policy::usn_refresh_interval_secs();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(core::time::Duration::from_secs(interval_secs));
-        // Skip the first tick (fires immediately at task spawn).
-        // The cold-boot path through `load_drive` (#94) already
-        // applied USN deltas; the next refresh comes one interval
-        // later.
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            idx.refresh_usn_for_warm_shards().await;
-        }
-    })
+/// All loops share a single [`crate::cache::journal_sink::RegistryPatchSink`]
+/// applier task: the sink's mpsc channel preserves FIFO ordering
+/// across letters and avoids re-entering the runtime from the
+/// loop's sync `accept` callback — see the `journal_sink` module
+/// docs for the full rationale.
+///
+/// **Platform split**:
+/// * **Windows**: each letter gets a
+///   [`crate::cache::journal_loop::sources::WindowsJournalSource`] (real
+///   `FSCTL_QUERY_USN_JOURNAL` + `FSCTL_READ_USN_JOURNAL`) and a
+///   [`crate::cache::cursor_store::DiskCursorStore`] rooted at
+///   `uffs_mft::cache::cache_dir()`.
+/// * **macOS / Linux**: each letter gets a
+///   [`crate::cache::journal_loop::sources::MacStubJournalSource`]
+///   (always-empty polls) and a
+///   [`crate::cache::journal_loop::sources::NullCursorStore`] (no-op).  The
+///   loop ticks at the configured cadence but produces no patches and triggers
+///   no saves — there's no live USN journal to drive against.
+///
+/// Returns the [`tokio::task::JoinHandle`] for the applier task.
+/// The caller (`run_daemon`) keeps it alive for the daemon's
+/// lifetime; per-letter loop handles are stored on `IndexManager`
+/// via [`crate::index::IndexManager::attach_journal_handle`].  On
+/// daemon shutdown the per-loop `watch::Sender`s are dropped with
+/// the `IndexManager`, signalling every loop's cancellation arm
+/// (matching the existing fire-and-forget pattern used by
+/// `spawn_idle_demote_controller` / `spawn_pressure_subscriber`).
+async fn spawn_journal_loops_for_warm_shards(
+    idx: &Arc<index::IndexManager>,
+) -> tokio::task::JoinHandle<()> {
+    use cache::cursor_store::DiskCursorStore;
+    use cache::journal_loop::sources::NullCursorStore;
+    use cache::journal_loop::{
+        CursorStore, JournalLoopConfig, JournalSource, PatchSink, spawn_journal_loop,
+    };
+    use cache::journal_sink::RegistryPatchSink;
+
+    let (sink, applier_handle) = RegistryPatchSink::spawn_with_applier(idx);
+    let sink_dyn: Arc<dyn PatchSink> = sink;
+
+    // Cursor-store choice: Windows persists per-drive cursors next
+    // to the compact cache; Mac/Linux uses the always-zero
+    // NullCursorStore (no journal → no cursor → fall back to
+    // "start from journal head" semantics, which is the correct
+    // no-op on those platforms).
+    let cursor_store: Arc<dyn CursorStore> = if cfg!(windows) {
+        Arc::new(DiskCursorStore::new(uffs_mft::cache::cache_dir()))
+    } else {
+        Arc::new(NullCursorStore)
+    };
+
+    let config = JournalLoopConfig::default();
+    let letters = idx.loaded_drive_letters().await;
+    tracing::info!(
+        target: "shard.journal",
+        count = letters.len(),
+        letters = ?letters,
+        poll_interval_ms = config.poll_interval.as_millis(),
+        save_threshold_events = config.save_threshold_events,
+        save_threshold_age_secs = config.save_threshold_age.as_secs(),
+        "Spawning per-shard journal loops",
+    );
+    for letter in letters {
+        let source: Arc<dyn JournalSource> = make_journal_source(letter);
+        let handle = spawn_journal_loop(
+            letter,
+            source,
+            Arc::clone(&sink_dyn),
+            Arc::clone(&cursor_store),
+            config.clone(),
+        );
+        idx.attach_journal_handle(letter, handle);
+    }
+
+    applier_handle
+}
+
+/// Construct the platform-correct [`crate::cache::journal_loop::JournalSource`]
+/// for `letter`.
+///
+/// Extracted from [`spawn_journal_loops_for_warm_shards`] as two
+/// cfg-gated definitions so the unused-`letter` parameter on
+/// Mac/Linux uses the canonical `_letter` rename rather than a
+/// `let _ = letter;` body workaround that clippy flags.
+#[cfg(windows)]
+fn make_journal_source(letter: char) -> Arc<dyn cache::journal_loop::JournalSource> {
+    Arc::new(cache::journal_loop::sources::WindowsJournalSource::new(
+        letter,
+    ))
+}
+
+/// Mac/Linux variant of [`make_journal_source`] — always returns
+/// the [`crate::cache::journal_loop::sources::MacStubJournalSource`]
+/// stub (no NTFS USN journal on these platforms).
+#[cfg(not(windows))]
+fn make_journal_source(_letter: char) -> Arc<dyn cache::journal_loop::JournalSource> {
+    Arc::new(cache::journal_loop::sources::MacStubJournalSource)
 }
 
 /// Spawn the Phase 5 task 5.6 memory-pressure subscriber.

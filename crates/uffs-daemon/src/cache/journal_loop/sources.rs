@@ -40,14 +40,19 @@ use super::{CursorStore, JournalPollResult, JournalSource};
 /// `JournalPollResult::default()` (no changes, cursor unchanged,
 /// `journal_id == 0`) without any I/O.
 #[cfg_attr(
-    not(test),
+    all(windows, not(test)),
     expect(
         dead_code,
-        reason = "Phase 7 activation forward reference; production \
-                  construction site lands in commit A4 \
-                  (`lib.rs::spawn_journal_loops_for_warm_shards`).  \
-                  Exercised by `cache::journal_loop::tests::\
-                  mac_stub_source_*` under `cfg(test)`."
+        reason = "Production on Windows uses `WindowsJournalSource` \
+                  (real FSCTL-backed) instead of this stub; \
+                  `MacStubJournalSource` IS constructed on every \
+                  platform under `cfg(test)` (the journal_loop test \
+                  suite uses it as the default empty source) and \
+                  on Mac/Linux production via the matching \
+                  `cfg(not(windows))` arm of `lib.rs::\
+                  make_journal_source`.  This narrow `expect` \
+                  silences the Windows-prod-only dead-code warning \
+                  without disabling cross-platform reachability."
     )
 )]
 #[derive(Debug, Default)]
@@ -87,15 +92,6 @@ pub(crate) struct WindowsJournalSource {
 }
 
 #[cfg(windows)]
-#[expect(
-    dead_code,
-    reason = "Phase 7 activation forward reference; the production \
-              construction site lands in commit A4 \
-              (`lib.rs::spawn_journal_loops_for_warm_shards`).  The \
-              FSCTL-backed `poll` body is fully wired (commit A2) \
-              and exercised on the Windows host via gates G7.1 / \
-              G7.2 / G7.3."
-)]
 impl WindowsJournalSource {
     /// Create a source bound to `drive`.
     #[must_use]
@@ -166,17 +162,6 @@ impl JournalSource for WindowsJournalSource {
 /// where there is no live journal to persist a cursor for, and
 /// as a default for tests that don't care about the persistence
 /// path.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 7 activation forward reference; production \
-                  construction site lands in commit A4 \
-                  (`lib.rs::spawn_journal_loops_for_warm_shards`).  \
-                  Exercised by `cache::journal_loop::tests` under \
-                  `cfg(test)`."
-    )
-)]
 #[derive(Debug, Default)]
 pub(crate) struct NullCursorStore;
 

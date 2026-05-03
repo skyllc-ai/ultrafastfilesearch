@@ -98,16 +98,6 @@ pub(crate) struct JournalPollResult {
     /// Journal identifier.  Compared against the previous tick's
     /// value to detect journal-wrap (Phase 7 task 7.7); changed
     /// → force a full rebuild on the next promote.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 7-B forward reference; the wrap-detection \
-                      consumer in Phase 7 task 7.7 reads this field. \
-                      Exercised by `cache::journal_loop::tests` under \
-                      `cfg(test)`."
-        )
-    )]
     pub(crate) journal_id: u64,
 }
 
@@ -610,17 +600,6 @@ fn process_tick(
 /// join.  Holding it keeps the loop alive; dropping the
 /// `cancel_tx` causes the loop to exit on its next iteration via
 /// the `watch` receiver's `changed()` arm.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 7-B infrastructure; production spawn path \
-                  lands in the activation commit (post-7-D, after \
-                  cursor persistence + wrap detection).  Exercised \
-                  end-to-end by `cache::journal_loop::tests` under \
-                  `cfg(test)`."
-    )
-)]
 pub(crate) struct JournalLoopHandle {
     /// Sender side of the cancellation watch.  Setting it to
     /// `true` (or dropping it) causes the loop to exit.
@@ -636,15 +615,6 @@ impl JournalLoopHandle {
     /// this call, awaiting the returned `JoinHandle` blocks until
     /// the loop's next iteration observes the signal and returns
     /// (typically within one [`JournalLoopConfig::poll_interval`]).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 7-B infrastructure; cancellation entry \
-                      point exercised by tests, awaiting production \
-                      activation."
-        )
-    )]
     pub(crate) fn cancel(self) -> tokio::task::JoinHandle<()> {
         let _ignore = self.cancel_tx.send(true);
         self.join
@@ -657,15 +627,6 @@ impl JournalLoopHandle {
 /// Caller responsibility: ensure the runtime is alive for the
 /// duration of the loop, and call [`JournalLoopHandle::cancel`]
 /// before the runtime tears down.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 7-B infrastructure; production spawn site \
-                  in `lib.rs::spawn_load_task` lands in the \
-                  activation commit (post-7-D)."
-    )
-)]
 #[must_use]
 pub(crate) fn spawn_journal_loop(
     letter: char,

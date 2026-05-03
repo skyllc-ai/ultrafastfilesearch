@@ -17,8 +17,6 @@
 //! * [`ensure_warm`] — `ensure_warm_for_dispatch` happy-path, missing-cache,
 //!   panicking-loader, parallel re-promote, and bloom-aware promote-side gating
 //!   (Phase 4 task 4.11).
-//! * [`usn_refresh`] — `refresh_usn_for_warm_shards` no-op + error-recovery
-//!   contract (Phase 5 #95).
 //! * [`idle_demote`] — `demote_idle_shards` TTL-driven cascade, round-trip
 //!   query stats, and `shard.transition` event emission.
 //! * [`lifecycle_hooks`] — Phase 5 task 5.8 / 5.9 / 5.10 `WorkingSetTrim` +
@@ -53,7 +51,6 @@ mod lifecycle_hooks;
 mod manager;
 mod registry;
 mod tracing_capture;
-mod usn_refresh;
 
 /// Build a synthetic drive with root + 1 dir + 5 files of varied
 /// sizes/extensions.

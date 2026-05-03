@@ -166,6 +166,7 @@ impl IndexManager {
             pressure,
             background_io,
             in_flight_promotes: Arc::new(StdMutex::new(std::collections::HashMap::new())),
+            journal_handles: Arc::new(StdMutex::new(std::collections::HashMap::new())),
             config,
         }
     }

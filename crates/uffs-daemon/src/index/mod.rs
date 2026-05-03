@@ -215,7 +215,7 @@ pub(crate) struct IndexManager {
     /// cascade order.
     pressure: Arc<dyn crate::cache::pressure::PressureSignal>,
     /// Thread-level background-I/O priority hook (Phase 5 task 5.7).
-    /// Held so [`Self::refresh_usn_for_warm_shards`] can wrap each
+    /// Held so [`Self::handle_journal_refresh`] can wrap the
     /// per-letter `tokio::task::spawn_blocking` closure in a
     /// [`crate::cache::background_io::BackgroundIoScope`] so the USN
     /// catch-up + encrypted-cache write happen at Windows
@@ -223,10 +223,14 @@ pub(crate) struct IndexManager {
     /// foreground RPC handler under disk contention.  Production
     /// wires [`crate::cache::background_io::PlatformBackgroundIoPriority`]
     /// (no-op on Mac/Linux, `SetThreadPriority` on Windows); the
-    /// Phase 5 unit test injects
+    /// Phase 5 unit tests inject
     /// [`crate::cache::background_io::tests::CountingBackgroundIoPriority`]
     /// to assert the begin/end pair fires exactly once per refresh
     /// closure.
+    ///
+    /// Phase 7 activation moved the call site from the deleted
+    /// `refresh_usn_for_warm_shards` global tick to
+    /// [`Self::handle_journal_refresh`] (per-shard, threshold-driven).
     background_io: Arc<dyn crate::cache::background_io::BackgroundIoPriority>,
     /// Per-letter single-flight dedup for body loads — PR-e fix
     /// for the thundering-herd promote stampede observed on
@@ -248,6 +252,42 @@ pub(crate) struct IndexManager {
     /// per Parked drive in flight at any moment, ≈ 2 GB peak for
     /// the same workload.  See [`Self::load_or_join_in_flight`].
     in_flight_promotes: InFlightPromotes,
+    /// Phase 7 activation: per-letter [`JournalLoopHandle`] map.
+    ///
+    /// Populated by [`Self::attach_journal_handle`] from the
+    /// per-shard journal-loop spawn site
+    /// (`lib.rs::spawn_journal_loops_for_warm_shards`) after each
+    /// [`crate::cache::journal_loop::spawn_journal_loop`] call.
+    ///
+    /// On daemon shutdown the field's `Drop` cancels nothing
+    /// explicitly — the per-loop [`watch::Sender`] inside each
+    /// handle is dropped when the map is dropped, which signals
+    /// every loop's `cancel_rx.changed()` arm and the loop exits
+    /// on its next iteration (within one
+    /// [`crate::cache::journal_loop::JournalLoopConfig::poll_interval`]).
+    /// A future graceful-shutdown commit may add an explicit
+    /// drain-and-parallel-cancel surface here once the daemon's
+    /// other fire-and-forget background tasks (idle-demote,
+    /// pressure subscriber, mem-snapshot) get a coordinated
+    /// teardown path.
+    ///
+    /// Wrapped in [`std::sync::Mutex`] (not [`tokio::sync::Mutex`])
+    /// because the critical section is microscopic — a
+    /// [`std::collections::HashMap::insert`] on a map bounded by
+    /// the loaded-drive count (≤ 26 entries).  Mirrors the
+    /// [`Self::in_flight_promotes`] field's lock-choice rationale
+    /// immediately above.
+    ///
+    /// Poison handling matches [`Self::in_flight_promotes`] (the
+    /// `HashMap` stores no invariants that need recovery, so we
+    /// recover the inner state via [`std::sync::PoisonError::into_inner`]
+    /// rather than panicking on poisoning).
+    ///
+    /// [`JournalLoopHandle`]: crate::cache::journal_loop::JournalLoopHandle
+    /// [`watch::Sender`]: tokio::sync::watch::Sender
+    journal_handles: Arc<
+        StdMutex<std::collections::HashMap<char, crate::cache::journal_loop::JournalLoopHandle>>,
+    >,
     /// Parsed `daemon.toml` (Phase 6).  Loaded once at
     /// [`crate::run_daemon`] startup via
     /// [`crate::config::Config::load_default`] and shared across
