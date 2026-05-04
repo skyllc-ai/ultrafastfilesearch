@@ -14,6 +14,7 @@ mod aggregation;
 mod constructors;
 mod dispatch;
 mod drives;
+pub(crate) mod forget_drive;
 mod hotload;
 mod info;
 mod journal;
@@ -23,6 +24,7 @@ mod projection;
 mod refresh;
 pub(crate) mod search;
 mod stats;
+mod status_drives;
 mod test_helpers;
 #[cfg(test)]
 mod tests;
@@ -233,6 +235,20 @@ pub(crate) struct IndexManager {
     /// `refresh_usn_for_warm_shards` global tick to
     /// [`Self::handle_journal_refresh`] (per-shard, threshold-driven).
     background_io: Arc<dyn crate::cache::background_io::BackgroundIoPriority>,
+    /// Per-drive cache-file cleanup hook (Phase 8-D `forget` RPC).
+    ///
+    /// Called from [`Self::forget_drive`] after the in-memory
+    /// shard has been evicted from the registry, to delete every
+    /// per-drive on-disk artefact (encrypted compact body, USN
+    /// cursor, MFT index, lock file).  Production wires
+    /// [`crate::cache::cache_cleaner::PlatformCacheCleaner`] which
+    /// resolves the canonical cache paths via
+    /// [`uffs_core::compact_cache`] / [`uffs_mft::cache`] and
+    /// unlinks each via [`std::fs::remove_file`]; tests inject
+    /// [`crate::cache::cache_cleaner::CountingCacheCleaner`] so
+    /// registry-eviction behaviour can be verified deterministically
+    /// without ever touching the host's cache directory.
+    cache_cleaner: Arc<dyn crate::cache::cache_cleaner::CacheCleaner>,
     /// Per-letter single-flight dedup for body loads — PR-e fix
     /// for the thundering-herd promote stampede observed on
     /// Windows v0.5.83 MCP-validation soak (see

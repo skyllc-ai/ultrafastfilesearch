@@ -4,22 +4,23 @@
 //! Memory-tiering RPC helpers for [`crate::connect_sync::UffsClientSync`].
 //!
 //! Split off [`crate::connect_sync`] so the tiering RPC cluster
-//! (`hibernate`, `preload`, plus `forget` / `status_drives` in later
-//! sub-phases 8-D / 8-E) lives next to the
-//! [`crate::protocol::response_tiering`] wire types it consumes —
-//! same sibling-module pattern as the daemon-state cluster
-//! (`response_status` ↔ inline `connect_sync` helpers).
+//! (`hibernate`, `preload`, `forget`, `status_drives`) lives next
+//! to the [`crate::protocol::response_tiering`] wire types it
+//! consumes — same sibling-module pattern as the daemon-state
+//! cluster (`response_status` ↔ inline `connect_sync` helpers).
 //!
-//! Phase 8-B / 8-C — paired with the daemon-side handlers in
+//! Phase 8-B … 8-E — paired with the daemon-side handlers in
 //! `crates/uffs-daemon/src/handler.rs` (`handle_hibernate`,
-//! `handle_preload`).  Both helpers do the typed envelope dance:
-//! serialise the params struct, fire the JSON-RPC, deserialise the
-//! response into the matching wire type.
+//! `handle_preload`, `handle_forget`, `handle_status_drives`).
+//! Every helper does the typed-envelope dance: serialise the
+//! params struct, fire the JSON-RPC, deserialise the response
+//! into the matching wire type.
 
 use crate::connect_sync::UffsClientSync;
 use crate::error::ClientError;
 use crate::protocol::response::{
-    HibernateParams, HibernateResponse, PreloadParams, PreloadResponse,
+    ForgetParams, ForgetResponse, HibernateParams, HibernateResponse, PreloadParams,
+    PreloadResponse, StatusDrivesParams, StatusDrivesResponse,
 };
 
 impl UffsClientSync {
@@ -68,6 +69,49 @@ impl UffsClientSync {
         let payload =
             serde_json::to_value(params).map_err(|err| ClientError::Protocol(err.to_string()))?;
         let result = self.send_request("preload", Some(payload))?;
+        serde_json::from_value(result).map_err(|err| ClientError::Protocol(err.to_string()))
+    }
+
+    /// Evict drive(s) from the registry and unlink their on-disk
+    /// cache files via the daemon's `forget` RPC.
+    ///
+    /// Without `params.force`, the daemon refuses non-`Cold` drives
+    /// with [`crate::protocol::ERR_DRIVE_BUSY`] (`-4`); the helper
+    /// surfaces that as [`ClientError::Protocol`] with the daemon's
+    /// listing of the busy drives.  With `params.force` the daemon
+    /// auto-hibernates each non-`Cold` drive first.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ClientError` on I/O, protocol, or `ERR_DRIVE_BUSY`
+    /// failure.  Per-drive `permission denied`-style errors land in
+    /// [`ForgetResponse::errors`] without failing the call.
+    pub fn forget(&mut self, params: &ForgetParams) -> Result<ForgetResponse, ClientError> {
+        let payload =
+            serde_json::to_value(params).map_err(|err| ClientError::Protocol(err.to_string()))?;
+        let result = self.send_request("forget", Some(payload))?;
+        serde_json::from_value(result).map_err(|err| ClientError::Protocol(err.to_string()))
+    }
+
+    /// Per-drive tier + telemetry table via the daemon's
+    /// `status_drives` RPC.
+    ///
+    /// Operator-facing companion to [`Self::status_raw`] — widens
+    /// the tier marker into a structured row per drive
+    /// (`resident_bytes`, `query_rate_per_min`, `pin_until_unix_ms`,
+    /// …) so a CLI can render a table without cross-referencing
+    /// tracing logs.  Sends an empty params object (the wire type is
+    /// a unit struct that round-trips as `{}`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `ClientError` on I/O, protocol, or timeout failure.
+    /// An empty registry produces an `Ok` with `drives = []` rather
+    /// than an error.
+    pub fn status_drives(&mut self) -> Result<StatusDrivesResponse, ClientError> {
+        let payload = serde_json::to_value(StatusDrivesParams)
+            .map_err(|err| ClientError::Protocol(err.to_string()))?;
+        let result = self.send_request("status_drives", Some(payload))?;
         serde_json::from_value(result).map_err(|err| ClientError::Protocol(err.to_string()))
     }
 }
