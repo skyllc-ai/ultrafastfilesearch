@@ -84,7 +84,7 @@ uffs-client = { path = "crates/uffs-client" }
 # via `tokio::net`.  Crates that actually use `tokio::net` (uffs-daemon,
 # uffs-mcp, and the `async` feature of uffs-client) re-enable `net`
 # explicitly in their own Cargo.toml via `features = ["net"]`.
-tokio = { version = "1.52.1", default-features = false, features = [
+tokio = { version = "1.52.2", default-features = false, features = [
   "io-util",
   "macros",
   "rt",
