@@ -19,8 +19,15 @@ updates:
     labels:
       - "dependencies"
       - "rust"
+    # Use `chore` so the generated PR title (`chore(deps): bump foo …`)
+    # passes `.github/workflows/commitlint.yml`'s Conventional Commits
+    # allowlist (`feat|fix|perf|refactor|docs|test|build|ci|chore|style|
+    # revert`).  `deps` would be rejected — the previous setting was the
+    # root cause of the 2026-05 Dependabot pipeline stall (see PR #125).
+    # `chore(deps): …` is also the default Dependabot upstream uses and
+    # the most common convention in OSS Rust crates.
     commit-message:
-      prefix: "deps"
+      prefix: "chore"
       include: "scope"
     # Group minor/patch updates to reduce PR noise
     groups:

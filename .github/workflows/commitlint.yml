@@ -213,8 +213,20 @@ jobs:
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING_ID}" \
               -f body="${BODY}" >/dev/null
           else
+            # Pass --repo explicitly so `gh` does not try to infer the
+            # repo slug from the working directory's git remote — this
+            # job runs without an `actions/checkout` step, so a remote-
+            # less invocation crashes with `fatal: not a git repository`
+            # and the script's `set -euo pipefail` propagates the
+            # failure, defeating the advisory-mode `exit 0` below.
+            # (Discovered while diagnosing the stalled Dependabot tokio
+            # PR #125 — the workflow was supposed to be advisory but
+            # this single bug turned every non-conforming title into a
+            # red required-check.)
             echo "::notice::Posting new advisory comment"
-            gh pr comment "${PR_NUMBER}" --body "${BODY}"
+            gh pr comment "${PR_NUMBER}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --body "${BODY}"
           fi
 
           # ADVISORY MODE: exit 0 even on non-conformance.
