@@ -236,7 +236,18 @@ lint-fast:
 lint-pre-push:
     @bash scripts/hooks/_lint_pre_push.sh
 
-# Install the tracked git hooks (pre-commit + pre-push).
+# Validate every non-merge commit subject in `origin/main..HEAD` against
+# the same Conventional Commits regex CI runs on the PR title (see
+# `.github/workflows/commitlint.yml`).  Same validator the pre-push
+# `commit-subjects` job invokes; useful for ad-hoc checks during a
+# rebase / amend session before re-running `just lint-pre-push`.
+#
+# Bypass once: `COMMIT_SUBJECT_BYPASS=1 just check-commits` (logged).
+check-commits:
+    @printf "\033[0;34m📝 Checking commit subjects against Conventional Commits...\033[0m\n"
+    @COMMIT_SUBJECT_VERBOSE=1 bash scripts/ci/check_commit_subjects.sh range origin/main..HEAD
+
+# Install the tracked git hooks (pre-commit + commit-msg + pre-push).
 # Idempotent — safe to re-run.  Sets `git config core.hooksPath` to the
 # tracked `scripts/hooks/` directory so the hooks survive `git clone`
 # and cannot be accidentally deleted from `.git/hooks/`.
@@ -245,11 +256,13 @@ install-hooks:
     set -euo pipefail
     printf "\033[0;34m🪝 Installing tracked git hooks...\033[0m\n"
     git config core.hooksPath scripts/hooks
-    chmod +x scripts/hooks/pre-commit scripts/hooks/pre-push \
-             scripts/hooks/_lint_fast.sh scripts/hooks/_lint_pre_push.sh
+    chmod +x scripts/hooks/pre-commit scripts/hooks/commit-msg scripts/hooks/pre-push \
+             scripts/hooks/_lint_fast.sh scripts/hooks/_lint_pre_push.sh \
+             scripts/ci/check_commit_subjects.sh
     printf "\033[0;32m✅ Git hooks installed:\033[0m\n"
-    printf "   \033[0;36mpre-commit\033[0m → just lint-fast     (staged-scoped, sub-2 s)\n"
-    printf "   \033[0;36mpre-push\033[0m   → just lint-pre-push  (workspace parallel)\n"
+    printf "   \033[0;36mpre-commit\033[0m → just lint-fast       (staged-scoped, sub-2 s)\n"
+    printf "   \033[0;36mcommit-msg\033[0m → Conventional Commits  (subject-line, instant)\n"
+    printf "   \033[0;36mpre-push\033[0m   → just lint-pre-push    (workspace parallel)\n"
     printf "   \033[0;33mBypass once\033[0m with \`git commit --no-verify\` / \`git push --no-verify\`.\n"
     printf "   \033[0;33mInstall optional tools\033[0m with \`just install-dev-tools\`.\n"
 

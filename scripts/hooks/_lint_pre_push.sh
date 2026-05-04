@@ -69,6 +69,15 @@
 #                 via git's pre-push stdin protocol).  HARD-FAIL if
 #                 `cargo-vet` is missing in that case — this closes the
 #                 CI-only loophole that caused PR #43's 4x round-trip.
+#   * commit-subjects — `scripts/ci/check_commit_subjects.sh range …`:
+#                 validates every non-merge commit subject in the pushed
+#                 range against the SAME Conventional Commits regex CI's
+#                 `.github/workflows/commitlint.yml` runs on the PR
+#                 title.  Closes the local-vs-remote feedback loop that
+#                 used to surface scope typos like
+#                 `feat(uffs-core, daemon)` only after the workflow had
+#                 already failed upstream.  Uses the same OID range data
+#                 that drives change-classification (see below).
 #
 # Cross-platform coverage (soft-skipped when tool missing):
 #   * check-windows — `cargo xwin check --workspace --all-targets
@@ -126,6 +135,11 @@ fi
 # docs/architecture/dev-flow-implementation-plan.md § 2.3 for details.
 ZERO='0000000000000000000000000000000000000000'
 CHANGED_FILES=""
+# Newline-delimited list of `BASE..LOCAL_OID` ranges for the
+# `commit-subjects` Bucket-1 job.  Same data source as `CHANGED_FILES`
+# (git's pre-push stdin protocol) so the validator iterates the same
+# set of new commits that classification inspected.
+COMMIT_RANGES=""
 if [[ ! -t 0 ]]; then
     # stdin is piped; try git's pre-push protocol.
     while IFS=' ' read -r _local_ref local_oid _remote_ref remote_oid; do
@@ -142,6 +156,7 @@ if [[ ! -t 0 ]]; then
         fi
         if [[ -n "$base" ]]; then
             CHANGED_FILES+=$'\n'$(git diff --name-only "$base" "$local_oid" 2>/dev/null || true)
+            COMMIT_RANGES+="$base..$local_oid"$'\n'
         else
             CHANGED_FILES="__UNKNOWN__"
             break
@@ -150,6 +165,19 @@ if [[ ! -t 0 ]]; then
 fi
 # Empty stdin (manual invocation, or push with only deletions) → conservative.
 [[ -z "${CHANGED_FILES// /}" ]] && CHANGED_FILES="__UNKNOWN__"
+# Manual-mode commit-range fallback: validate everything between
+# `origin/main` and the current HEAD.  Branches with no diverged
+# commits (already merged, or fresh `main` checkout) get an empty
+# range which the validator silently accepts.
+if [[ -z "${COMMIT_RANGES// /}" ]]; then
+    if git rev-parse --verify origin/main >/dev/null 2>&1; then
+        COMMIT_RANGES="origin/main..HEAD"$'\n'
+    fi
+fi
+# Exported so the Bucket-1 `commit-subjects` job can read it from the
+# `bash -c` subshell environment (forked shells inherit env vars but
+# not unexported shell vars).
+export COMMIT_RANGES
 
 class_matches() {
     [[ "$CHANGED_FILES" == "__UNKNOWN__" ]] && return 0
@@ -224,6 +252,22 @@ run_seq() {
 # case hard-fails the whole push with an install hint.
 spawn_bg "fmt"       cargo fmt --all -- --check
 spawn_bg "file-size" bash scripts/ci/check_file_size_policy.sh
+# Conventional Commits subject validator — mirrors
+# `.github/workflows/commitlint.yml`'s PR-title regex so a malformed
+# scope (e.g. `feat(uffs-core, daemon)`) hard-fails locally instead
+# of surfacing as a post-push advisory comment.  Iterates every
+# range captured from git's pre-push stdin (or the manual-mode
+# `origin/main..HEAD` fallback above).  Bypass once via
+# `COMMIT_SUBJECT_BYPASS=1 git push` if you need to land a subject
+# the regex doesn't cover.
+spawn_bg "commit-subjects" bash -c '
+    set -euo pipefail
+    [[ -z "${COMMIT_RANGES// /}" ]] && exit 0
+    while IFS= read -r range; do
+        [[ -z "$range" ]] && continue
+        bash scripts/ci/check_commit_subjects.sh range "$range"
+    done <<< "$COMMIT_RANGES"
+'
 
 if (( DEP_CHANGED )); then
     if ! command -v cargo-vet >/dev/null 2>&1; then
