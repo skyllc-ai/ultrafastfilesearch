@@ -46,6 +46,7 @@ mod aggregate;
 mod aggregate_drilldown;
 mod body_loader_fakes;
 mod ensure_warm;
+mod forget_status;
 mod idle_demote;
 mod lifecycle_hooks;
 mod manager;

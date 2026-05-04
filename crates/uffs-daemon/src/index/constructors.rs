@@ -74,6 +74,12 @@ pub(crate) struct LifecycleHooks {
     pub(crate) pressure: Arc<dyn crate::cache::pressure::PressureSignal>,
     /// Thread-level background-I/O priority hook (Phase 5 task 5.7).
     pub(crate) background_io: Arc<dyn crate::cache::background_io::BackgroundIoPriority>,
+    /// Per-drive cache-file cleanup hook (Phase 8-D `forget` RPC).
+    /// Production uses [`crate::cache::cache_cleaner::PlatformCacheCleaner`];
+    /// tests inject [`crate::cache::cache_cleaner::CountingCacheCleaner`]
+    /// so registry-eviction behaviour can be verified without
+    /// touching the host's real cache directory.
+    pub(crate) cache_cleaner: Arc<dyn crate::cache::cache_cleaner::CacheCleaner>,
 }
 
 impl LifecycleHooks {
@@ -90,6 +96,7 @@ impl LifecycleHooks {
             prefetch: Arc::new(crate::cache::prefetch::PlatformPrefetch),
             pressure: Arc::new(crate::cache::pressure::PlatformPressureSignal::new()),
             background_io: Arc::new(crate::cache::background_io::PlatformBackgroundIoPriority),
+            cache_cleaner: Arc::new(crate::cache::cache_cleaner::PlatformCacheCleaner),
         }
     }
 }
@@ -141,6 +148,7 @@ impl IndexManager {
             prefetch,
             pressure,
             background_io,
+            cache_cleaner,
         } = hooks;
         let cpus = std::thread::available_parallelism().map_or(4, core::num::NonZeroUsize::get);
         Self {
@@ -165,6 +173,7 @@ impl IndexManager {
             prefetch,
             pressure,
             background_io,
+            cache_cleaner,
             in_flight_promotes: Arc::new(StdMutex::new(std::collections::HashMap::new())),
             journal_handles: Arc::new(StdMutex::new(std::collections::HashMap::new())),
             config,
