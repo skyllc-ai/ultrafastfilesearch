@@ -424,14 +424,14 @@ mod windows_impl {
                 )
             };
             let handle = handle_result.map_err(io::Error::other)?;
-            // SAFETY: `handle` is a valid kernel handle returned by
-            // `CreateFileW`; we transfer ownership into the `File`
-            // wrapper, which closes it on drop.  No other code path
-            // observes the raw handle.
             #[expect(
                 unsafe_code,
                 reason = "transfer ownership Win32 HANDLE → std::fs::File"
             )]
+            // SAFETY: `handle` is a valid kernel handle returned by
+            // `CreateFileW`; we transfer ownership into the `File`
+            // wrapper, which closes it on drop.  No other code path
+            // observes the raw handle.
             let file = unsafe { File::from_raw_handle(handle.0) };
             Ok(RuntimeFile {
                 file,
@@ -473,7 +473,10 @@ mod windows_impl {
                 // ERROR_ACCESS_DENIED (5) = pid exists but ACL
                 // forbids us.  Treat as alive (don't stomp on a
                 // protected or other-user process).
-                err.code().0 == windows::Win32::Foundation::ERROR_ACCESS_DENIED.0 as i32
+                err.code().0
+                    == windows::Win32::Foundation::ERROR_ACCESS_DENIED
+                        .0
+                        .cast_signed()
             }
         }
     }

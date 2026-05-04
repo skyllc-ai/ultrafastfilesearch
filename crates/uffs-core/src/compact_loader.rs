@@ -176,10 +176,12 @@ pub struct RefreshTiming {
     pub total: u128,
 }
 
-/// Phase 5 (#94) re-promote helper: load the per-drive `MftIndex`
-/// from cache, apply USN journal deltas, rebuild the
-/// `DriveCompactIndex` from the refreshed MFT, and submit a
-/// background compact-cache save so the next call is faster.
+/// Phase 5 (#94) re-promote helper.
+///
+/// Loads the per-drive `MftIndex` from cache, applies USN journal
+/// deltas, rebuilds the `DriveCompactIndex` from the refreshed MFT,
+/// and submits a background compact-cache save so the next call is
+/// faster.
 ///
 /// Used by the daemon's `DiskBodyLoader::load` and (eventually) the
 /// background USN refresh timer (#95).  On Windows the call goes
@@ -348,11 +350,11 @@ fn load_mft_index_from_file(
 }
 
 /// Load `MftIndex` from a live Windows volume (cache → cold read via IOCP).
+///
+/// Extracted from `load_drive` for readability; the workspace allows
+/// `clippy::single_call_fn` so this remains a one-call helper rather
+/// than being inlined.
 #[cfg(windows)]
-#[expect(
-    clippy::single_call_fn,
-    reason = "extracted for readability from load_drive"
-)]
 fn load_mft_index_live(drive_letter: char, no_cache: bool) -> anyhow::Result<MftIndex> {
     use anyhow::Context;
 

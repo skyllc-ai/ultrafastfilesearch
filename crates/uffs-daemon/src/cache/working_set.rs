@@ -59,21 +59,26 @@ impl WorkingSetTrim for PlatformWorkingSetTrim {
         use windows::Win32::System::ProcessStatus::EmptyWorkingSet;
         use windows::Win32::System::Threading::GetCurrentProcess;
 
-        // SAFETY: `GetCurrentProcess` returns a pseudo-handle that
-        // is always valid for the lifetime of the process; passing
-        // it straight to `EmptyWorkingSet` is the documented Win32
-        // idiom.  Both calls are sync, take no ownership, and the
-        // windows-rs `Result<()>` already wraps the underlying
-        // `BOOL` / `GetLastError` protocol.
-        //
-        // We translate any windows-rs error into
-        // `io::Error::other` so the demote controller's
-        // `tracing::warn!` line stays platform-agnostic.
         #[expect(
             unsafe_code,
-            reason = "EmptyWorkingSet requires unsafe FFI; balanced by GetCurrentProcess pseudo-handle that does not need closing"
+            reason = "GetCurrentProcess Win32 FFI returning a process pseudo-handle"
         )]
-        let result = unsafe { EmptyWorkingSet(GetCurrentProcess()) };
+        // SAFETY: `GetCurrentProcess` returns a pseudo-handle that is
+        // always valid for the lifetime of the process; the
+        // pseudo-handle does not need closing.
+        let process = unsafe { GetCurrentProcess() };
+        #[expect(
+            unsafe_code,
+            reason = "EmptyWorkingSet Win32 FFI on the current process's pseudo-handle"
+        )]
+        // SAFETY: `process` was just obtained from `GetCurrentProcess`
+        // above and is valid for the process lifetime.  The call is
+        // sync, takes no ownership, and the windows-rs `Result<()>`
+        // already wraps the underlying `BOOL` / `GetLastError`
+        // protocol.  We translate any windows-rs error into
+        // `io::Error::other` so the demote controller's
+        // `tracing::warn!` line stays platform-agnostic.
+        let result = unsafe { EmptyWorkingSet(process) };
         result.map_err(|err| io::Error::other(err.to_string()))
     }
 

@@ -125,22 +125,26 @@ impl BackgroundIoPriority for PlatformBackgroundIoPriority {
             GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
         };
 
-        // SAFETY: `GetCurrentThread` returns a pseudo-handle that is
-        // always valid for the lifetime of the calling thread; passing
-        // it straight to `SetThreadPriority` is the documented Win32
-        // idiom — the pseudo-handle does not need closing.  The
-        // priority constant `THREAD_MODE_BACKGROUND_BEGIN` is one of
-        // the two windows-rs `THREAD_PRIORITY` flags carved out for
-        // this transition (the other being `THREAD_MODE_BACKGROUND_END`),
-        // so the call shape matches the underlying Win32 contract
-        // exactly.  Failures translate to `io::Error::other` so the
-        // `BackgroundIoScope` guard's `tracing::debug!` line stays
-        // platform-agnostic.
         #[expect(
             unsafe_code,
-            reason = "SetThreadPriority requires unsafe FFI; balanced by GetCurrentThread pseudo-handle that does not need closing"
+            reason = "GetCurrentThread Win32 FFI returning a thread pseudo-handle"
         )]
-        let result = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) };
+        // SAFETY: `GetCurrentThread` returns a pseudo-handle that is
+        // always valid for the lifetime of the calling thread; the
+        // pseudo-handle does not need closing.
+        let thread = unsafe { GetCurrentThread() };
+        #[expect(
+            unsafe_code,
+            reason = "SetThreadPriority Win32 FFI on the current thread's pseudo-handle"
+        )]
+        // SAFETY: `thread` was just obtained from `GetCurrentThread`
+        // above and is valid for the calling thread's lifetime.
+        // `THREAD_MODE_BACKGROUND_BEGIN` is the documented Win32 flag
+        // for transitioning the calling thread to background-I/O
+        // priority; failures translate to `io::Error::other` so the
+        // `BackgroundIoScope` guard's `tracing::debug!` line stays
+        // platform-agnostic.
+        let result = unsafe { SetThreadPriority(thread, THREAD_MODE_BACKGROUND_BEGIN) };
         result.map_err(|err| io::Error::other(err.to_string()))
     }
 
@@ -150,16 +154,24 @@ impl BackgroundIoPriority for PlatformBackgroundIoPriority {
             GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_END,
         };
 
-        // SAFETY: same reasoning as `begin` above; the `_END` flag
-        // is the documented pair to `_BEGIN` and the kernel treats
-        // the call as a no-op when the thread isn't currently in
-        // background mode (so calling `end` without a matching
-        // `begin` is harmless).
         #[expect(
             unsafe_code,
-            reason = "SetThreadPriority requires unsafe FFI; balanced by GetCurrentThread pseudo-handle that does not need closing"
+            reason = "GetCurrentThread Win32 FFI returning a thread pseudo-handle"
         )]
-        let result = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END) };
+        // SAFETY: `GetCurrentThread` returns a pseudo-handle that is
+        // always valid for the lifetime of the calling thread; the
+        // pseudo-handle does not need closing.
+        let thread = unsafe { GetCurrentThread() };
+        #[expect(
+            unsafe_code,
+            reason = "SetThreadPriority Win32 FFI on the current thread's pseudo-handle"
+        )]
+        // SAFETY: `thread` was just obtained from `GetCurrentThread`
+        // above; the `_END` flag is the documented pair to `_BEGIN`
+        // and the kernel treats the call as a no-op when the thread
+        // isn't currently in background mode (so calling `end`
+        // without a matching `begin` is harmless).
+        let result = unsafe { SetThreadPriority(thread, THREAD_MODE_BACKGROUND_END) };
         result.map_err(|err| io::Error::other(err.to_string()))
     }
 

@@ -119,20 +119,29 @@ impl Prefetch for PlatformPrefetch {
             })
             .collect();
 
-        // SAFETY: `GetCurrentProcess` returns a pseudo-handle valid
-        // for the process lifetime.  `entries.as_ptr()` is non-null
-        // and aligned (Vec invariant), valid for `entries.len()`
-        // contiguous reads of `WIN32_MEMORY_RANGE_ENTRY`.  The
-        // caller (orchestrator) keeps the body `Arc` alive across
-        // this call so each `region.ptr` remains a live mapping.
-        // `flags = 0` is the documented "no special behaviour"
-        // value per Win32 docs (PrefetchVirtualMemory accepts only
-        // `PREFETCH_PROCESS_FOR_RECEIVE` or 0; we want 0).
         #[expect(
             unsafe_code,
-            reason = "PrefetchVirtualMemory requires unsafe FFI; safety preconditions are satisfied by the orchestrator holding the body Arc across the call"
+            reason = "GetCurrentProcess Win32 FFI returning a process pseudo-handle"
         )]
-        let result = unsafe { PrefetchVirtualMemory(GetCurrentProcess(), &entries, 0) };
+        // SAFETY: `GetCurrentProcess` returns a pseudo-handle valid
+        // for the process lifetime; the pseudo-handle does not need
+        // closing.
+        let process = unsafe { GetCurrentProcess() };
+        #[expect(
+            unsafe_code,
+            reason = "PrefetchVirtualMemory Win32 FFI; safety preconditions satisfied by the orchestrator holding the body Arc across the call"
+        )]
+        // SAFETY: `process` was just obtained from `GetCurrentProcess`
+        // above and is valid for the process lifetime.
+        // `entries.as_ptr()` is non-null and aligned (Vec invariant),
+        // valid for `entries.len()` contiguous reads of
+        // `WIN32_MEMORY_RANGE_ENTRY`.  The caller (orchestrator)
+        // keeps the body `Arc` alive across this call so each
+        // `region.ptr` remains a live mapping.  `flags = 0` is the
+        // documented "no special behaviour" value per Win32 docs
+        // (`PrefetchVirtualMemory` accepts only
+        // `PREFETCH_PROCESS_FOR_RECEIVE` or 0; we want 0).
+        let result = unsafe { PrefetchVirtualMemory(process, &entries, 0) };
         result.map_err(|err| io::Error::other(err.to_string()))
     }
 

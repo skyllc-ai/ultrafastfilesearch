@@ -246,13 +246,13 @@ impl Drop for PlatformPressureSignal {
         if let Some(shutdown) = &self.shutdown_event {
             windows_handles::signal_shutdown(shutdown);
         }
-        if let Some(handle) = self.watcher_thread.take() {
-            if let Err(payload) = handle.join() {
-                tracing::warn!(
-                    target: "cache.pressure",
-                    "Pressure watcher thread panicked: {payload:?}",
-                );
-            }
+        if let Some(handle) = self.watcher_thread.take()
+            && let Err(payload) = handle.join()
+        {
+            tracing::warn!(
+                target: "cache.pressure",
+                "Pressure watcher thread panicked: {payload:?}",
+            );
         }
         // shutdown_event drops automatically here, closing the
         // kernel handle exactly once via OwnedHandle's Drop.
@@ -302,6 +302,10 @@ mod windows_handles {
     /// exactly once even if the owner panics.
     pub(super) struct OwnedHandle(HANDLE);
 
+    #[expect(
+        unsafe_code,
+        reason = "HANDLE is a thread-safe kernel-object reference"
+    )]
     // SAFETY: HANDLE is an opaque kernel-object reference (an
     // `isize`-sized identifier); the kernel arbitrates concurrent
     // access to the underlying object and Win32 APIs that take
@@ -310,19 +314,26 @@ mod windows_handles {
     // — the only mutation site is `Drop::drop` which takes
     // `&mut self`, so `&OwnedHandle` shared between threads is
     // race-free.
-    #[expect(
-        unsafe_code,
-        reason = "HANDLE is a thread-safe kernel-object reference"
-    )]
     unsafe impl Send for OwnedHandle {}
     #[expect(
         unsafe_code,
         reason = "HANDLE is a thread-safe kernel-object reference"
     )]
+    // SAFETY: same rationale as `OwnedHandle: Send` — see immediately
+    // above.  Sync is sound because the only mutation site
+    // (`Drop::drop`) takes `&mut self`, so shared `&OwnedHandle`
+    // observers across threads cannot race against the close.
     unsafe impl Sync for OwnedHandle {}
 
     impl OwnedHandle {
-        fn raw(&self) -> HANDLE {
+        /// Borrow the wrapped Win32 handle for use in syscalls that
+        /// take a `HANDLE` by value (e.g. `WaitForMultipleObjects`).
+        ///
+        /// The returned `HANDLE` is a Copy bit-pattern — callers must
+        /// **not** close it; ownership stays with `self` and the
+        /// underlying kernel handle is released exactly once via
+        /// [`OwnedHandle::Drop`].
+        const fn raw(&self) -> HANDLE {
             self.0
         }
     }
@@ -330,15 +341,21 @@ mod windows_handles {
     impl Drop for OwnedHandle {
         fn drop(&mut self) {
             if !self.0.is_invalid() {
-                // SAFETY: self.0 is a valid handle returned by a
-                // Win32 Create*-family API and not yet closed
-                // (single-ownership invariant).  CloseHandle is
-                // sync and the documented Win32 idiom for releasing
-                // handles.  Errors are silently ignored — we are
-                // already in Drop and have no useful recovery.
                 #[expect(unsafe_code, reason = "Win32 CloseHandle FFI for handle cleanup")]
-                unsafe {
-                    let _ = CloseHandle(self.0);
+                // SAFETY: `self.0` is a valid handle returned by a
+                // Win32 `Create*`-family API and not yet closed
+                // (single-ownership invariant).  `CloseHandle` is
+                // sync and the documented Win32 idiom for releasing
+                // handles.  Errors are debug-logged — we are already
+                // in `Drop` and have no useful recovery beyond
+                // visibility.
+                let close_result = unsafe { CloseHandle(self.0) };
+                if let Err(err) = close_result {
+                    tracing::debug!(
+                        target: "cache.pressure",
+                        err = ?err,
+                        "CloseHandle failed in OwnedHandle::Drop",
+                    );
                 }
             }
         }
@@ -354,12 +371,12 @@ mod windows_handles {
     #[derive(Clone, Copy)]
     struct SendableHandle(HANDLE);
 
-    // SAFETY: same rationale as `OwnedHandle: Send` — HANDLE values
-    // are kernel-arbitrated identifiers, safe to pass across threads.
     #[expect(
         unsafe_code,
         reason = "HANDLE is a thread-safe kernel-object reference"
     )]
+    // SAFETY: same rationale as `OwnedHandle: Send` — HANDLE values
+    // are kernel-arbitrated identifiers, safe to pass across threads.
     unsafe impl Send for SendableHandle {}
 
     /// Signal the shutdown event so the watcher thread breaks out
@@ -422,6 +439,15 @@ mod windows_handles {
     /// recovers) and listen only for High.  Symmetric for High.
     /// Initial `Normal` waits for either.  Index 0 is always the
     /// shutdown event so a clean exit preempts pressure transitions.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "watcher_loop takes ownership of `low` / `high` / `sender` for the \
+                  thread's lifetime: the OwnedHandles must be closed exactly once via \
+                  Drop on thread exit, and the watch sender must outlive the loop so \
+                  every iteration can broadcast.  Passing by reference would force \
+                  the spawn site to hold borrows across the join, breaking the \
+                  ownership-transfer pattern"
+    )]
     fn watcher_loop(
         low: OwnedHandle,
         high: OwnedHandle,
@@ -430,78 +456,145 @@ mod windows_handles {
     ) {
         let mut current = PressureLevel::Normal;
         loop {
-            let handles: Vec<HANDLE> = match current {
-                PressureLevel::Normal => vec![shutdown.0, low.raw(), high.raw()],
-                PressureLevel::Low => vec![shutdown.0, high.raw()],
-                PressureLevel::High => vec![shutdown.0, low.raw()],
-            };
-
-            // SAFETY: WaitForMultipleObjects takes a slice of valid
-            // HANDLE values.  All handles in the slice are kept
-            // alive by the OwnedHandle bindings (`low`, `high`) and
-            // the borrowed-but-owned-by-caller shutdown event.
-            // INFINITE is safe — the caller signals shutdown via
-            // SetEvent to release the wait.  `bWaitAll = false` so
-            // the call returns as soon as any one handle signals.
-            #[expect(unsafe_code, reason = "Win32 WaitForMultipleObjects FFI")]
-            let result = unsafe { WaitForMultipleObjects(&handles, false, INFINITE) };
-            let signaled_index = result.0;
-
-            // Index 0 is always the shutdown event.
-            if signaled_index == 0 {
-                tracing::debug!(
-                    target: "cache.pressure",
-                    "Pressure watcher exiting on shutdown signal",
-                );
-                return;
-            }
-
-            // Out-of-range index covers WAIT_FAILED (0xFFFFFFFF),
-            // WAIT_TIMEOUT (258 — shouldn't happen with INFINITE),
-            // and WAIT_ABANDONED (0x80+i — only relevant for mutex
-            // handles).  Bail and let the daemon fall back to
-            // TTL-driven demotion alone.
-            if (signaled_index as usize) >= handles.len() {
-                tracing::warn!(
-                    target: "cache.pressure",
-                    code = signaled_index,
-                    "WaitForMultipleObjects returned unexpected code; \
-                     pressure watcher exiting",
-                );
-                return;
-            }
-
-            let next_level = match (current, signaled_index) {
-                (PressureLevel::Normal, 1) | (PressureLevel::High, 1) => PressureLevel::Low,
-                (PressureLevel::Normal, 2) | (PressureLevel::Low, 1) => PressureLevel::High,
-                _ => {
-                    // Unreachable given the bounds check + the
-                    // exhaustive `handles` construction above.
-                    // Defensive return.
-                    tracing::warn!(
-                        target: "cache.pressure",
-                        index = signaled_index,
-                        state = ?current,
-                        "Pressure watcher saw unexpected handle index for current state",
-                    );
-                    return;
+            let handles = compute_handle_set(current, &low, &high, shutdown);
+            let signaled_index = wait_for_signal(&handles);
+            match interpret_signal(current, signaled_index, handles.len()) {
+                SignalAction::Exit => return,
+                SignalAction::Transition(next_level) => {
+                    current = next_level;
+                    broadcast_pressure_change(&sender, next_level);
                 }
-            };
-
-            current = next_level;
-            // `send_replace` never fails — it stores the value
-            // unconditionally and notifies any receivers in place.
-            // We discard the previous value (subscribers track via
-            // `changed()` + `borrow_and_update`).
-            let _previous = sender.send_replace(next_level);
-            tracing::info!(
-                target: "cache.pressure",
-                level = ?next_level,
-                "Memory resource notification fired",
-            );
+            }
         }
     }
 
+    /// Build the per-level `WaitForMultipleObjects` handle slice.
+    ///
+    /// Index 0 is always the shutdown event so a clean exit
+    /// preempts pressure transitions.  At `Normal`, both Low and
+    /// High notification handles are included; once a transition
+    /// fires the kernel keeps the source event set until memory
+    /// recovers, so subsequent waits drop the redundant handle and
+    /// listen only for the opposite transition.
+    fn compute_handle_set(
+        current: PressureLevel,
+        low: &OwnedHandle,
+        high: &OwnedHandle,
+        shutdown: SendableHandle,
+    ) -> Vec<HANDLE> {
+        match current {
+            PressureLevel::Normal => vec![shutdown.0, low.raw(), high.raw()],
+            PressureLevel::Low => vec![shutdown.0, high.raw()],
+            PressureLevel::High => vec![shutdown.0, low.raw()],
+        }
+    }
+
+    /// Block on `WaitForMultipleObjects(handles, bWaitAll = false,
+    /// INFINITE)` and return the raw `WAIT_OBJECT_<n>` index.
+    ///
+    /// Returns the raw `u32` so [`interpret_signal`] can dispatch
+    /// without knowing about the Win32 result type.  Out-of-range
+    /// values (`WAIT_FAILED` / `WAIT_TIMEOUT` / `WAIT_ABANDONED`)
+    /// flow through unchanged so the caller can warn and exit the
+    /// watcher cleanly.
+    fn wait_for_signal(handles: &[HANDLE]) -> u32 {
+        #[expect(unsafe_code, reason = "Win32 WaitForMultipleObjects FFI")]
+        // SAFETY: `handles` is a non-null aligned slice of valid
+        // HANDLE values; all handles are kept alive by the
+        // OwnedHandle bindings in `watcher_loop` and the borrowed-
+        // but-owned-by-caller shutdown event.  `INFINITE` is safe —
+        // the caller signals shutdown via `SetEvent` to release the
+        // wait.  `bWaitAll = false` so the call returns as soon as
+        // any one handle signals.
+        let result = unsafe { WaitForMultipleObjects(handles, false, INFINITE) };
+        result.0
+    }
+
+    /// Translate a `WaitForMultipleObjects` index into a watcher
+    /// loop control-flow decision.
+    ///
+    /// Index 0 is always shutdown.  Indices `1..max_index` are
+    /// pressure-event signals; their meaning depends on the current
+    /// pressure level (the handle slice changes shape across
+    /// levels).  Out-of-range values (`WAIT_FAILED`, `WAIT_TIMEOUT`,
+    /// `WAIT_ABANDONED`) and impossible state combinations both
+    /// resolve to `Exit` after a warn-log.
+    fn interpret_signal(
+        current: PressureLevel,
+        signaled_index: u32,
+        max_index: usize,
+    ) -> SignalAction {
+        if signaled_index == 0 {
+            tracing::debug!(
+                target: "cache.pressure",
+                "Pressure watcher exiting on shutdown signal",
+            );
+            return SignalAction::Exit;
+        }
+        if (signaled_index as usize) >= max_index {
+            tracing::warn!(
+                target: "cache.pressure",
+                code = signaled_index,
+                "WaitForMultipleObjects returned unexpected code; \
+                 pressure watcher exiting",
+            );
+            return SignalAction::Exit;
+        }
+        match (current, signaled_index) {
+            (PressureLevel::Normal | PressureLevel::High, 1) => {
+                SignalAction::Transition(PressureLevel::Low)
+            }
+            (PressureLevel::Normal, 2) | (PressureLevel::Low, 1) => {
+                SignalAction::Transition(PressureLevel::High)
+            }
+            _ => {
+                tracing::warn!(
+                    target: "cache.pressure",
+                    index = signaled_index,
+                    state = ?current,
+                    "Pressure watcher saw unexpected handle index for current state",
+                );
+                SignalAction::Exit
+            }
+        }
+    }
+
+    /// Broadcast a pressure-level change to every subscriber and
+    /// emit the operator-visible info log.
+    ///
+    /// `send_replace` never fails — it stores the value
+    /// unconditionally and notifies any receivers in place.  We
+    /// discard the previous value (subscribers track via
+    /// `changed()` + `borrow_and_update`).
+    fn broadcast_pressure_change(sender: &watch::Sender<PressureLevel>, next_level: PressureLevel) {
+        let _previous = sender.send_replace(next_level);
+        tracing::info!(
+            target: "cache.pressure",
+            level = ?next_level,
+            "Memory resource notification fired",
+        );
+    }
+
+    /// Control-flow result of [`interpret_signal`].
+    enum SignalAction {
+        /// Exit the watcher loop — either a clean shutdown signal
+        /// or an unrecoverable wait failure.
+        Exit,
+        /// Transition the watcher's tracked pressure level.  The
+        /// caller updates `current`, broadcasts via
+        /// [`broadcast_pressure_change`], and re-enters the wait.
+        Transition(PressureLevel),
+    }
+
+    /// Create a Win32 memory-resource-notification handle for the
+    /// given notification type (`Low` or `High`).
+    ///
+    /// Wraps [`CreateMemoryResourceNotification`] and returns the
+    /// resulting `HANDLE` boxed in an [`OwnedHandle`] so the watcher
+    /// thread closes it exactly once on exit via
+    /// [`OwnedHandle::Drop`].  Maps any windows-rs error into
+    /// `io::Error::other` so the surrounding orchestrator's error
+    /// path stays platform-agnostic.
     fn create_memory_resource_notification(
         notification_type: MEMORY_RESOURCE_NOTIFICATION_TYPE,
     ) -> io::Result<OwnedHandle> {
@@ -517,6 +610,14 @@ mod windows_handles {
         Ok(OwnedHandle(handle))
     }
 
+    /// Create an unnamed manual-reset Win32 event handle.
+    ///
+    /// Used as the watcher thread's shutdown signal: the owning
+    /// [`super::PlatformPressureSignal::Drop`] calls
+    /// [`signal_shutdown`] (which pulses `SetEvent`) so the next
+    /// `WaitForMultipleObjects` returns and the thread exits.  The
+    /// returned [`OwnedHandle`] closes the event on its own `Drop`
+    /// after the watcher has joined.
     fn create_manual_reset_event() -> io::Result<OwnedHandle> {
         // SAFETY: CreateEventW with (None, manual_reset = true,
         // initial_state = false, name = NULL) creates a private
