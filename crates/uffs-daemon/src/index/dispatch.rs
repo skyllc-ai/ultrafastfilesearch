@@ -276,7 +276,7 @@ impl IndexManager {
     /// `async move` block in [`Self::ensure_warm_for_dispatch`]
     /// without forcing the surrounding loop to hold a borrow of
     /// `self` across the await.
-    async fn load_or_join_in_flight(
+    pub(super) async fn load_or_join_in_flight(
         in_flight: InFlightPromotes,
         loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
         prefetch: Arc<dyn crate::cache::prefetch::Prefetch>,

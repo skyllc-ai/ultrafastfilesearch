@@ -457,6 +457,24 @@ pub(crate) struct ShardEntry {
     /// entirely (zero-RAM-touch contract).  See
     /// [`crate::index::IndexManager::ensure_warm_for_dispatch`].
     parked_body: Option<Arc<ParkedBody>>,
+    /// Tier-pin expiry as Unix-millis.
+    ///
+    /// `0` means "not pinned" (the demote controllers may demote on
+    /// idle / pressure cascade).  Non-zero means "do not demote
+    /// before this Unix-millis timestamp" — the idle-demote tick
+    /// (`@/Users/.../uffs-daemon/src/index/transitions.rs::demote_idle_shards`)
+    /// and the pressure-cascade loop
+    /// (`@/Users/.../uffs-daemon/src/index/transitions.
+    /// rs::cascade_demote_one_step`) both consult [`Self::is_pinned`]
+    /// before taking action. Hibernate (Phase 8-B) explicitly clears the
+    /// pin by virtue of rebuilding the shard as `Cold` (the new
+    /// `ShardEntry` starts with `pin_until_ms = 0`).
+    ///
+    /// Phase 8-C — operator-driven `preload <drive>` arms this
+    /// timestamp via [`Self::pin_until`] after the Cold → Warm → Hot
+    /// promote sequence completes.  Atomic so the pressure-cascade
+    /// subscriber can read it without holding the registry lock.
+    pin_until_ms: AtomicU64,
 }
 
 impl ShardEntry {
@@ -475,6 +493,7 @@ impl ShardEntry {
             stats: Arc::new(DriveStats::new()),
             body: Some(body),
             parked_body: None,
+            pin_until_ms: AtomicU64::new(0),
         }
     }
 
@@ -495,6 +514,36 @@ impl ShardEntry {
             stats,
             body: Some(body),
             parked_body: None,
+            pin_until_ms: AtomicU64::new(0),
+        }
+    }
+
+    /// Construct a `Hot` shard wrapping `body` and sharing an existing
+    /// `Arc<DriveCompactIndex>` as well as an `Arc<DriveStats>`.
+    ///
+    /// Phase 8-C — operator-driven `preload <drive>` flows through
+    /// this constructor after the body has been pre-faulted via
+    /// [`crate::cache::prefetch::Prefetch::hint`].  The pin is left
+    /// at `0`; the caller arms it via [`Self::pin_until`] once the
+    /// new entry is installed in the registry.
+    ///
+    /// Mirrors [`Self::new_warm_with_stats`]: the per-drive
+    /// [`Arc<DriveStats>`] is lifted from the previous shard so
+    /// query counters and `last_query_at_ms` survive the round-trip
+    /// through Cold/Parked → Warm → Hot.
+    #[must_use]
+    pub(crate) const fn new_hot_with_stats(
+        drive: char,
+        body: Arc<DriveCompactIndex>,
+        stats: Arc<DriveStats>,
+    ) -> Self {
+        Self {
+            drive,
+            state: AtomicU8::new(ShardState::Hot as u8),
+            stats,
+            body: Some(body),
+            parked_body: None,
+            pin_until_ms: AtomicU64::new(0),
         }
     }
 
@@ -522,6 +571,7 @@ impl ShardEntry {
             stats,
             body: None,
             parked_body: Some(parked_body),
+            pin_until_ms: AtomicU64::new(0),
         }
     }
 
@@ -543,6 +593,7 @@ impl ShardEntry {
             stats,
             body: None,
             parked_body: None,
+            pin_until_ms: AtomicU64::new(0),
         }
     }
 
@@ -550,6 +601,35 @@ impl ShardEntry {
     #[must_use]
     pub(crate) fn state(&self) -> ShardState {
         ShardState::from_repr(self.state.load(Ordering::Acquire))
+    }
+
+    /// Whether this shard is currently pinned against demote.
+    ///
+    /// `now_ms` is the caller's view of the wall clock (Unix-millis);
+    /// passing it as a parameter keeps the demote controllers'
+    /// per-tick "now" snapshot consistent across every shard the
+    /// tick examines (mirrors the
+    /// [`crate::index::IndexManager::demote_idle_shards`] convention).
+    ///
+    /// Returns `false` for unpinned shards (`pin_until_ms = 0`) and
+    /// for shards whose pin has already elapsed (`pin_until_ms <= now_ms`).
+    #[must_use]
+    pub(crate) fn is_pinned(&self, now_ms: u64) -> bool {
+        let until = self.pin_until_ms.load(Ordering::Acquire);
+        until > now_ms
+    }
+
+    /// Arm or extend the tier pin to expire at `pin_until_ms`
+    /// (Unix-millis).
+    ///
+    /// Atomic store — no registry rebuild required, so a
+    /// `preload C:` against an already-Hot drive can extend the
+    /// pin window without producing a `shard.transition` event.
+    /// Pass `0` to clear the pin (today only used by the future
+    /// 8-D `forget --force` path; hibernate clears the pin
+    /// implicitly by rebuilding the shard as `Cold`).
+    pub(crate) fn pin_until(&self, pin_until_ms: u64) {
+        self.pin_until_ms.store(pin_until_ms, Ordering::Release);
     }
 
     /// Cheap clone of the in-memory body, present only for

@@ -331,7 +331,7 @@ impl UffsClientSync {
     /// # Errors
     ///
     /// Returns `ClientError` on I/O, protocol, or timeout failure.
-    fn send_request(
+    pub(crate) fn send_request(
         &mut self,
         method: &str,
         params: Option<serde_json::Value>,

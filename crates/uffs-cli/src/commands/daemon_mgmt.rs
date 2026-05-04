@@ -48,6 +48,13 @@ pub fn daemon(action: &DaemonAction) -> Result<()> {
             drives,
             no_cache,
         } => daemon_load(mft_file, data_dir.as_deref(), drives, *no_cache),
+        DaemonAction::Hibernate { drives } => {
+            crate::commands::daemon_tiering::daemon_hibernate(drives)
+        }
+        DaemonAction::Preload {
+            drives,
+            pin_minutes,
+        } => crate::commands::daemon_tiering::daemon_preload(drives, *pin_minutes),
     }
 }
 

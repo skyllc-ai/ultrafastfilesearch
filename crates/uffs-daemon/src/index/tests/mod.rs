@@ -50,6 +50,7 @@ mod idle_demote;
 mod lifecycle_hooks;
 mod manager;
 mod registry;
+mod tiering_ops;
 mod tracing_capture;
 
 /// Build a synthetic drive with root + 1 dir + 5 files of varied

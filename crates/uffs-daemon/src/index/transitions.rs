@@ -94,11 +94,19 @@ impl IndexManager {
         // tracing events so operators can observe the controller's
         // decisions without re-deriving the formulas (plan task
         // 6.7).
+        //
+        // Phase 8-C — pinned shards (operator-driven `preload`)
+        // skip the policy evaluation entirely.  No `shard.ttl`
+        // event is emitted for "would have demoted but for pin"
+        // because pin is an explicit operator override and the
+        // adaptive-TTL telemetry is meant to surface tuning
+        // signals, not pin-window noise.
         let config = Arc::clone(&self.config);
         let demotes: Vec<(char, ShardState)> = {
             let guard = self.index.read().await;
             guard
                 .iter()
+                .filter(|shard| !shard.is_pinned(now_ms))
                 .filter_map(|shard| {
                     evaluate_idle_demote(shard, now_ms, &config).map(|target| (shard.drive, target))
                 })
@@ -188,11 +196,21 @@ impl IndexManager {
         // Enumerate Warm shards and keep the one with the oldest
         // `last_query_at_ms`.  `min_by_key` returns `None` when no
         // Warm shards exist; the caller stops the cascade.
+        //
+        // Phase 8-C — pinned shards (operator-driven `preload`)
+        // are excluded from the LRU pick.  This means a sustained
+        // memory-pressure cascade can run out of demote candidates
+        // even when total RAM remains tight; the pressure
+        // subscriber loop in `lib.rs` handles that case by yielding
+        // and waking on the next pressure transition.  Operators
+        // who explicitly pinned a shard accepted that trade-off.
+        let now_ms = crate::cache::unix_now_ms();
         let pick: Option<(char, u64)> = {
             let guard = self.index.read().await;
             guard
                 .iter()
                 .filter(|shard| shard.state() == ShardState::Warm)
+                .filter(|shard| !shard.is_pinned(now_ms))
                 .map(|shard| (shard.drive, shard.stats.last_query_at_ms()))
                 .min_by_key(|&(_, ts)| ts)
         };

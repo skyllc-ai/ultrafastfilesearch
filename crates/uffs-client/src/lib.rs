@@ -58,6 +58,13 @@ pub(crate) mod connect_sync_platform;
 /// out of release builds entirely.
 #[cfg(test)]
 mod connect_sync_tests;
+/// Memory-tiering RPC helpers (`hibernate`, `preload`).
+///
+/// Phase 8-B / 8-C — split off `connect_sync` so the tiering cluster
+/// stays under the 800-LOC policy ceiling without a file-size
+/// exception.  Same precedent as the daemon-state types in
+/// [`protocol::response_status`].
+pub mod connect_sync_tiering;
 /// Wire-protocol unit tests for [`connect::UffsClient`].
 ///
 /// Exercises the JSON-RPC request/response path via in-memory tokio
