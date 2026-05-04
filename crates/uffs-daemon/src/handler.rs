@@ -8,8 +8,8 @@ use uffs_client::protocol::response::{
     SearchPayload,
 };
 use uffs_client::protocol::{
-    AggregateSpecWire, ERR_INVALID_PARAMS, ERR_METHOD_NOT_FOUND, RpcErrorResponse, RpcRequest,
-    RpcResponse, SearchParams,
+    AggregateSpecWire, ERR_INVALID_PARAMS, ERR_METHOD_NOT_FOUND, ERR_NOT_IMPLEMENTED,
+    RpcErrorResponse, RpcRequest, RpcResponse, SearchParams,
 };
 
 /// Maximum pattern length to prevent regex `DoS` (`S4.4.3`).
@@ -60,6 +60,13 @@ impl RequestHandler {
             "facet_values" => self.handle_facet_values(id, req).await,
             "keepalive" => self.handle_keepalive(id, req),
             "shutdown" => self.handle_shutdown(id, req),
+            // Phase 8-A scaffolding: these arms compile + serialise but
+            // return ERR_NOT_IMPLEMENTED until the corresponding
+            // follow-up sub-phase fills in the logic.
+            "hibernate" => Self::handle_hibernate(id),
+            "preload" => Self::handle_preload(id),
+            "forget" => Self::handle_forget(id),
+            "status_drives" => Self::handle_status_drives(id),
             _ => serde_json::to_string(&RpcErrorResponse::error(
                 Some(id),
                 ERR_METHOD_NOT_FOUND,
@@ -495,6 +502,57 @@ impl RequestHandler {
 
         let result = serde_json::json!({"ok": true});
         serde_json::to_string(&RpcResponse::success(id, result)).unwrap_or_default()
+    }
+
+    /// Handle `hibernate` method (Phase 8-A stub).
+    ///
+    /// Returns [`ERR_NOT_IMPLEMENTED`] until sub-phase 8-B fills in
+    /// the registry-walking demote logic.  The dispatch arm is wired
+    /// here at 8-A so the wire format is observable end-to-end and
+    /// 8-B becomes a pure handler-body change.
+    fn handle_hibernate(id: u64) -> String {
+        Self::not_implemented_response(id, "hibernate", "8-B")
+    }
+
+    /// Handle `preload` method (Phase 8-A stub).
+    ///
+    /// Returns [`ERR_NOT_IMPLEMENTED`] until sub-phase 8-C fills in
+    /// the promote-to-Hot + pin-tier logic.
+    fn handle_preload(id: u64) -> String {
+        Self::not_implemented_response(id, "preload", "8-C")
+    }
+
+    /// Handle `forget` method (Phase 8-A stub).
+    ///
+    /// Returns [`ERR_NOT_IMPLEMENTED`] until sub-phase 8-D fills in
+    /// the cache-file deletion + registry-eviction logic.
+    fn handle_forget(id: u64) -> String {
+        Self::not_implemented_response(id, "forget", "8-D")
+    }
+
+    /// Handle `status_drives` method (Phase 8-A stub).
+    ///
+    /// Returns [`ERR_NOT_IMPLEMENTED`] until sub-phase 8-E fills in
+    /// the per-drive tier + telemetry snapshot.
+    fn handle_status_drives(id: u64) -> String {
+        Self::not_implemented_response(id, "status_drives", "8-E")
+    }
+
+    /// Build a uniform `ERR_NOT_IMPLEMENTED` response for the Phase
+    /// 8-A scaffolding stage.
+    ///
+    /// Centralises the message format so every stub renders the same
+    /// `<method>: not yet implemented (Phase <sub_phase>)` shape — gives
+    /// operators a single greppable signature to flag method-not-yet-
+    /// implemented hits in daemon logs without ambiguity.
+    fn not_implemented_response(id: u64, method: &str, sub_phase: &str) -> String {
+        let message = format!("{method}: not yet implemented (Phase {sub_phase})");
+        serde_json::to_string(&RpcErrorResponse::error(
+            Some(id),
+            ERR_NOT_IMPLEMENTED,
+            &message,
+        ))
+        .unwrap_or_default()
     }
 
     /// Handle `shutdown` method.

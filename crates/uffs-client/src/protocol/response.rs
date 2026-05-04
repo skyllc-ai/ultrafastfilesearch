@@ -15,6 +15,10 @@ pub use super::response_status::{
     DaemonStatus, DriveInfo, DriveMemoryInfo, DrivesResponse, ShardTier, StatsResponse,
     StatusResponse,
 };
+pub use super::response_tiering::{
+    DEFAULT_PRELOAD_PIN_MINUTES, DriveTierStatus, ForgetParams, ForgetResponse, HibernateParams,
+    HibernateResponse, PreloadParams, PreloadResponse, StatusDrivesParams, StatusDrivesResponse,
+};
 use super::{
     AggregateResultWire, BucketWire, RpcError, RpcErrorResponse, RpcRequest, RpcResponse,
     SearchResponseMode, SearchSortSpec,

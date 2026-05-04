@@ -1781,3 +1781,229 @@ fn from_cli_args_no_output_with_aggregation_stays_false() {
         "aggregation must still be forwarded to the daemon"
     );
 }
+
+// ── Phase 8-A: tiering RPC wire-format round-trips ─────────────────
+//
+// These tests pin the wire format for the four new methods scaffolded
+// in Phase 8-A (`hibernate` / `preload` / `forget` / `status_drives`).
+// Each test runs encode → decode and asserts every field round-trips
+// faithfully, matching the harness style of `request_round_trip` and
+// `search_params_round_trip` above.  The dispatcher-level
+// `ERR_NOT_IMPLEMENTED` behaviour is exercised by the daemon-side
+// integration tests; here we lock the data shapes the handlers will
+// fill in during sub-phases 8-B / 8-C / 8-D / 8-E.
+
+use crate::protocol::response::{
+    DEFAULT_PRELOAD_PIN_MINUTES, DriveTierStatus, ForgetParams, ForgetResponse, HibernateParams,
+    HibernateResponse, PreloadParams, PreloadResponse, StatusDrivesParams, StatusDrivesResponse,
+};
+use crate::protocol::{ERR_DRIVE_BUSY, ERR_NOT_IMPLEMENTED};
+
+/// Lock the numeric values of the two new application error codes so a
+/// future protocol-version bump cannot silently renumber them.  Wire
+/// callers (uffs-mcp, third-party scripts) match on the integer code,
+/// not the message — renumbering would be a hard breakage.
+#[test]
+fn tiering_error_codes_have_stable_values() {
+    assert_eq!(
+        ERR_NOT_IMPLEMENTED, -3_i32,
+        "ERR_NOT_IMPLEMENTED is the wire contract for the Phase 8-A scaffolding stubs; \
+         renumbering would break every client that already grepped daemon logs for it"
+    );
+    assert_eq!(
+        ERR_DRIVE_BUSY, -4_i32,
+        "ERR_DRIVE_BUSY is reserved for the Phase 8-D forget refusal path; \
+         renumbering would break clients matching on the code"
+    );
+}
+
+/// Default-preload-pin-minutes constant pins the wire-level default a
+/// caller sees when [`PreloadParams::pin_minutes`] is `None`.  Changing
+/// it is a wire-format change because operators script around it.
+#[test]
+fn default_preload_pin_minutes_is_thirty() {
+    assert_eq!(
+        DEFAULT_PRELOAD_PIN_MINUTES, 30_u32,
+        "30-minute default is documented in the memory-tiering plan §5.1 \
+         sub-phase 8-C and in user-facing CLI help — change requires plan + docs update"
+    );
+}
+
+#[test]
+fn hibernate_params_round_trip() {
+    let params = HibernateParams {
+        drives: vec!['C', 'D', 'E'],
+    };
+    let json = serde_json::to_string(&params).expect("serialize");
+    let parsed: HibernateParams = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed, params);
+}
+
+/// Empty `drives` ⇒ "every loaded drive" wire convention.  Default
+/// must round-trip cleanly so the daemon's `serde(default)` picks up
+/// the empty vector when callers omit the field entirely.
+#[test]
+fn hibernate_params_empty_drives_means_all() {
+    let parsed: HibernateParams = serde_json::from_str("{}").expect("deserialize");
+    assert!(
+        parsed.drives.is_empty(),
+        "omitted drives field deserialises to empty vec (= every loaded drive)"
+    );
+}
+
+#[test]
+fn hibernate_response_round_trip() {
+    let resp = HibernateResponse {
+        hot_demoted: vec!['C'],
+        warm_demoted: vec!['D', 'E'],
+        parked_demoted: vec!['F'],
+        already_cold: vec!['G', 'H'],
+    };
+    let json = serde_json::to_string(&resp).expect("serialize");
+    let parsed: HibernateResponse = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed, resp);
+}
+
+#[test]
+fn preload_params_round_trip() {
+    let params = PreloadParams {
+        drives: vec!['C'],
+        pin_minutes: Some(60_u32),
+    };
+    let json = serde_json::to_string(&params).expect("serialize");
+    let parsed: PreloadParams = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed, params);
+}
+
+/// Omitted `pin_minutes` deserialises to `None` so the daemon applies
+/// [`DEFAULT_PRELOAD_PIN_MINUTES`].  Locks the on-the-wire optionality
+/// shape: `null` and absence are both valid no-pin-override signals.
+#[test]
+fn preload_params_pin_minutes_optional() {
+    let from_omit: PreloadParams =
+        serde_json::from_str(r#"{"drives":["C"]}"#).expect("deserialize");
+    assert_eq!(from_omit.pin_minutes, None);
+    let from_null: PreloadParams =
+        serde_json::from_str(r#"{"drives":["C"],"pin_minutes":null}"#).expect("deserialize");
+    assert_eq!(from_null.pin_minutes, None);
+}
+
+#[test]
+fn preload_response_round_trip() {
+    let resp = PreloadResponse {
+        promoted: vec!['C'],
+        already_hot: vec!['D'],
+        errors: vec!["Z: cache file missing".to_owned()],
+        pin_until_unix_ms: 1_800_000_000_000_i64,
+    };
+    let json = serde_json::to_string(&resp).expect("serialize");
+    let parsed: PreloadResponse = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed, resp);
+}
+
+#[test]
+fn forget_params_round_trip() {
+    let params = ForgetParams {
+        drives: vec!['Z'],
+        force: true,
+    };
+    let json = serde_json::to_string(&params).expect("serialize");
+    let parsed: ForgetParams = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed, params);
+}
+
+/// Default `force = false` is the safe path: omitted field
+/// deserialises to `false`, so the daemon refuses to forget a non-
+/// `Cold` drive unless the operator explicitly opts into the
+/// auto-hibernate side effect.
+#[test]
+fn forget_params_force_defaults_false() {
+    let parsed: ForgetParams = serde_json::from_str(r#"{"drives":["Z"]}"#).expect("deserialize");
+    assert!(
+        !parsed.force,
+        "force defaults to false so destructive auto-hibernate is opt-in"
+    );
+}
+
+#[test]
+fn forget_response_round_trip() {
+    let resp = ForgetResponse {
+        forgotten: vec!['Z'],
+        already_absent: vec!['Y'],
+        freed_bytes: 1_234_567_890_u64,
+        errors: vec!["X: permission denied".to_owned()],
+    };
+    let json = serde_json::to_string(&resp).expect("serialize");
+    let parsed: ForgetResponse = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed, resp);
+}
+
+/// `StatusDrivesParams` is intentionally fieldless today; round-tripping
+/// `{}` keeps the door open for adding fields in a wire-compatible way
+/// (existing clients send `{}`, future clients add fields, the daemon
+/// honours `serde(default)` for missing ones).
+#[test]
+fn status_drives_params_empty_round_trip() {
+    let params = StatusDrivesParams {};
+    let json = serde_json::to_string(&params).expect("serialize");
+    let parsed: StatusDrivesParams = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed, params);
+}
+
+#[test]
+fn status_drives_response_round_trip() {
+    let resp = StatusDrivesResponse {
+        drives: vec![
+            DriveTierStatus {
+                letter: 'C',
+                tier: "hot".to_owned(),
+                resident_bytes: 1_073_741_824_u64, // 1 GiB
+                query_rate_per_min: 12.5_f64,
+                last_query_at_ms: 1_700_000_000_000_i64,
+                promotions_total: 3_u64,
+                pin_until_unix_ms: 1_700_001_800_000_i64,
+            },
+            DriveTierStatus {
+                letter: 'D',
+                tier: "cold".to_owned(),
+                resident_bytes: 0_u64,
+                query_rate_per_min: 0.0_f64,
+                last_query_at_ms: 0_i64,
+                promotions_total: 0_u64,
+                pin_until_unix_ms: 0_i64,
+            },
+        ],
+    };
+    let json = serde_json::to_string(&resp).expect("serialize");
+    let parsed: StatusDrivesResponse = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed, resp);
+    // Float comparison via the parent assert_eq! works because PartialEq
+    // on f64 is bit-identical for in-memory round-trips at this size;
+    // pin a hard guard on the first drive to make the intent explicit.
+    assert!(
+        (parsed.drives[0].query_rate_per_min - 12.5).abs() < f64::EPSILON,
+        "query_rate_per_min round-trips bit-identical for in-memory JSON"
+    );
+}
+
+/// End-to-end RPC envelope round-trip: a request encoded with the new
+/// `hibernate` method name decodes correctly and dispatches by string
+/// match (mirrors `request_round_trip` for `search`).  Catches a
+/// future regression where someone wraps the method name in an enum
+/// without a `serde(rename_all = "snake_case")` and breaks the wire
+/// contract.
+#[test]
+fn hibernate_request_envelope_round_trip() {
+    let req = RpcRequest::new(
+        7_u64,
+        "hibernate",
+        Some(serde_json::json!({"drives": ["C", "D"]})),
+    );
+    let json = serde_json::to_string(&req).expect("serialize");
+    let parsed: RpcRequest = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed.method, "hibernate");
+    assert_eq!(parsed.id, Some(7));
+    let inner: HibernateParams = serde_json::from_value(parsed.params.expect("params present"))
+        .expect("nested params decode");
+    assert_eq!(inner.drives, vec!['C', 'D']);
+}

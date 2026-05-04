@@ -10,6 +10,7 @@ pub mod cli_args;
 mod cli_args_helpers;
 pub mod response;
 pub mod response_status;
+pub mod response_tiering;
 pub mod search_params;
 #[cfg(test)]
 mod tests;
@@ -205,6 +206,22 @@ pub enum SearchResponseMode {
 pub const ERR_NOT_READY: i32 = -1;
 /// Search pattern compilation failed (bad regex).
 pub const ERR_BAD_PATTERN: i32 = -2;
+/// Method is wired into the protocol surface but has no handler
+/// implementation yet.
+///
+/// Used by the Phase 8-A scaffolding stage of the memory-tiering
+/// rollout: `hibernate` / `preload` / `forget` / `status_drives` are
+/// reachable in the dispatcher and serialise round-trip cleanly,
+/// but each handler returns this error until the corresponding
+/// follow-up sub-phase (8-B / 8-C / 8-D / 8-E) fills in the logic.
+pub const ERR_NOT_IMPLEMENTED: i32 = -3;
+/// Drive is non-`Cold` and cannot be modified by a destructive
+/// operation that requires it to be at rest.
+///
+/// Reserved for the `forget` method (Phase 8-D) which refuses to
+/// delete cache files for a drive whose shard is still warm in RAM.
+/// Operators must `hibernate` the drive first or pass `force = true`.
+pub const ERR_DRIVE_BUSY: i32 = -4;
 
 // ────────────────────────────────────────────────────────────────────────────
 // Method parameters
