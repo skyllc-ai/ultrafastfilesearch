@@ -120,6 +120,26 @@ pub enum DaemonAction {
         /// Override the default 30-min pin window.
         pin_minutes: Option<u32>,
     },
+    /// Evict drive(s) from the registry and delete their on-disk
+    /// caches (Phase 8-D).
+    ///
+    /// Refuses non-`Cold` drives unless `force = true`; with
+    /// `force` the daemon auto-hibernates each drive first
+    /// (clearing pins) before unlinking the cache files.
+    Forget {
+        /// Drive letter(s) to forget (must be non-empty).
+        drives: Vec<char>,
+        /// Force-forget non-`Cold` drives by auto-hibernating first.
+        force: bool,
+    },
+    /// Per-drive tier + telemetry table (Phase 8-E).
+    ///
+    /// Operator-facing companion to `daemon status`: surfaces tier,
+    /// pin expiry, query rate (EWMA), resident bytes, and last-query
+    /// timestamps for every drive the registry knows about — Cold
+    /// shards included so `forget` candidates are visible without
+    /// cross-referencing tracing logs.
+    StatusDrives,
 }
 
 /// Parse `uffs daemon <action> [flags...]` from raw args.
@@ -140,8 +160,11 @@ pub fn parse_daemon_action(args: &[String]) -> Result<DaemonAction, anyhow::Erro
         "load" => Ok(parse_daemon_load(rest)),
         "hibernate" => Ok(parse_daemon_hibernate(rest)),
         "preload" => parse_daemon_preload(rest),
+        "forget" => parse_daemon_forget(rest),
+        "status_drives" | "status-drives" => Ok(DaemonAction::StatusDrives),
         other => anyhow::bail!(
-            "Unknown daemon action: '{other}'. Use: start, status, stats, stop, kill, restart, load, hibernate, preload"
+            "Unknown daemon action: '{other}'. Use: start, status, stats, stop, kill, \
+             restart, load, hibernate, preload, forget, status_drives"
         ),
     }
 }
@@ -316,6 +339,49 @@ fn parse_daemon_preload(rest: &[String]) -> Result<DaemonAction, anyhow::Error> 
     })
 }
 
+/// Parse `uffs daemon forget <DRIVES...> [--force]` /
+/// `[--drive D]` / `[--drives A,B]`.
+///
+/// Empty drive list is rejected — the daemon would reply with
+/// `ERR_INVALID_PARAMS`, but a CLI-side error is faster and more
+/// actionable.
+///
+/// `--force` (also `-f`) flips the auto-hibernate-then-evict path on,
+/// matching the wire-level
+/// [`uffs_client::protocol::response::ForgetParams::force`] field.  Without
+/// `--force`, the daemon refuses non-`Cold` drives with `ERR_DRIVE_BUSY` and
+/// the CLI surfaces the listing.
+///
+/// # Errors
+///
+/// Returns an error when the resulting drive list is empty.
+fn parse_daemon_forget(rest: &[String]) -> Result<DaemonAction, anyhow::Error> {
+    let mut drives = Vec::new();
+    let mut force = false;
+    let mut iter = rest.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--drive" | "-d" | "--drives" => {
+                if let Some(val) = iter.next() {
+                    extend_drives_from_csv(&mut drives, val);
+                }
+            }
+            "--force" | "-f" => force = true,
+            other => {
+                // Bare positional drive letter.
+                extend_drives_from_csv(&mut drives, other);
+            }
+        }
+    }
+    if drives.is_empty() {
+        anyhow::bail!(
+            "`uffs daemon forget` requires at least one drive letter; \
+             see `uffs daemon forget --help`"
+        );
+    }
+    Ok(DaemonAction::Forget { drives, force })
+}
+
 /// Append every drive letter parsed from a comma-separated value to
 /// `drives`.  Tolerates `"C,D"`, `"c,d"`, `"C:,D:"`, single-letter
 /// values, and whitespace.  Silently skips entries that don't parse
@@ -423,6 +489,11 @@ ACTIONS:
     [DRIVE...]         Drive letter(s); at least one required
     --drives A,B       Drive letter(s) as comma-separated list
     --pin-minutes N    Pin window in minutes (default: 30)
+  forget             Evict drive(s) from registry and delete on-disk caches
+    [DRIVE...]         Drive letter(s); at least one required
+    --drives A,B       Drive letter(s) as comma-separated list
+    --force            Auto-hibernate non-Cold drives first (default: refuse)
+  status_drives      Per-drive tier + telemetry table (Hot/Warm/Parked/Cold)
 ";
 
 /// Print daemon help.

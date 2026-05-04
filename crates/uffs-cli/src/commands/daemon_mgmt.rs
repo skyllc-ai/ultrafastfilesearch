@@ -9,6 +9,7 @@ use uffs_client::daemon_ctl::{pid_file_path, socket_path};
 use uffs_client::protocol::response::{DaemonStatus, DriveInfo, ShardTier};
 
 use crate::args::DaemonAction;
+use crate::commands::daemon_tiering;
 
 /// Execute a daemon management action.
 ///
@@ -48,13 +49,13 @@ pub fn daemon(action: &DaemonAction) -> Result<()> {
             drives,
             no_cache,
         } => daemon_load(mft_file, data_dir.as_deref(), drives, *no_cache),
-        DaemonAction::Hibernate { drives } => {
-            crate::commands::daemon_tiering::daemon_hibernate(drives)
-        }
+        DaemonAction::Hibernate { drives } => daemon_tiering::daemon_hibernate(drives),
         DaemonAction::Preload {
             drives,
             pin_minutes,
-        } => crate::commands::daemon_tiering::daemon_preload(drives, *pin_minutes),
+        } => daemon_tiering::daemon_preload(drives, *pin_minutes),
+        DaemonAction::Forget { drives, force } => daemon_tiering::daemon_forget(drives, *force),
+        DaemonAction::StatusDrives => daemon_tiering::daemon_status_drives(),
     }
 }
 

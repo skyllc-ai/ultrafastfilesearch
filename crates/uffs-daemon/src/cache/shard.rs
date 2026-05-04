@@ -625,11 +625,28 @@ impl ShardEntry {
     /// Atomic store — no registry rebuild required, so a
     /// `preload C:` against an already-Hot drive can extend the
     /// pin window without producing a `shard.transition` event.
-    /// Pass `0` to clear the pin (today only used by the future
-    /// 8-D `forget --force` path; hibernate clears the pin
-    /// implicitly by rebuilding the shard as `Cold`).
+    /// Pass `0` to clear the pin (used by the 8-D `forget --force`
+    /// path; hibernate clears the pin implicitly by rebuilding the
+    /// shard as `Cold`).
     pub(crate) fn pin_until(&self, pin_until_ms: u64) {
         self.pin_until_ms.store(pin_until_ms, Ordering::Release);
+    }
+
+    /// Read the absolute pin-expiry timestamp (Unix-millis).
+    ///
+    /// Returns `0` when the shard has never been pinned (the
+    /// constructors initialise [`Self::pin_until_ms`] to `0`); the
+    /// "pin elapsed" case is indistinguishable from "never pinned"
+    /// here — callers that need the live distinction use
+    /// [`Self::is_pinned`] which folds the `now_ms` comparison in.
+    ///
+    /// Phase 8-E `status_drives` surfaces this raw value so the
+    /// operator-facing CLI table can render either "pinned until
+    /// HH:MM" or a hyphen ("-") depending on whether the value
+    /// has elapsed against the operator's local clock.
+    #[must_use]
+    pub(crate) fn pin_until_ms_value(&self) -> u64 {
+        self.pin_until_ms.load(Ordering::Acquire)
     }
 
     /// Cheap clone of the in-memory body, present only for

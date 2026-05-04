@@ -4,13 +4,13 @@
 //! JSON-RPC request handler: dispatches methods to [`IndexManager`].
 
 use uffs_client::protocol::response::{
-    DEFAULT_PRELOAD_PIN_MINUTES, FacetValuesParams, FacetValuesResponse, HibernateParams,
-    HibernateResponse, LoadDriveParams, LoadDriveResponse, PreloadParams, PreloadResponse,
-    RefreshParams, SearchPayload,
+    DEFAULT_PRELOAD_PIN_MINUTES, FacetValuesParams, FacetValuesResponse, ForgetParams,
+    ForgetResponse, HibernateParams, HibernateResponse, LoadDriveParams, LoadDriveResponse,
+    PreloadParams, PreloadResponse, RefreshParams, SearchPayload, StatusDrivesResponse,
 };
 use uffs_client::protocol::{
-    AggregateSpecWire, ERR_INVALID_PARAMS, ERR_METHOD_NOT_FOUND, ERR_NOT_IMPLEMENTED,
-    RpcErrorResponse, RpcRequest, RpcResponse, SearchParams,
+    AggregateSpecWire, ERR_DRIVE_BUSY, ERR_INVALID_PARAMS, ERR_METHOD_NOT_FOUND, RpcErrorResponse,
+    RpcRequest, RpcResponse, SearchParams,
 };
 
 /// Maximum pattern length to prevent regex `DoS` (`S4.4.3`).
@@ -61,15 +61,15 @@ impl RequestHandler {
             "facet_values" => self.handle_facet_values(id, req).await,
             "keepalive" => self.handle_keepalive(id, req),
             "shutdown" => self.handle_shutdown(id, req),
-            // Phase 8-B / 8-C — operator-driven memory tiering.
+            // Phase 8-B … 8-E — operator-driven memory tiering.
             // Phase 8-A scaffolded these arms with NotImplemented
-            // stubs; this commit fills in `hibernate` and `preload`
-            // and leaves `forget` / `status_drives` for sub-phases
-            // 8-D / 8-E respectively.
+            // stubs; sub-phases 8-B / 8-C / 8-D / 8-E filled in
+            // `hibernate`, `preload`, `forget`, and `status_drives`
+            // respectively.
             "hibernate" => self.handle_hibernate(id, req).await,
             "preload" => self.handle_preload(id, req).await,
-            "forget" => Self::handle_forget(id),
-            "status_drives" => Self::handle_status_drives(id),
+            "forget" => self.handle_forget(id, req).await,
+            "status_drives" => self.handle_status_drives(id).await,
             _ => serde_json::to_string(&RpcErrorResponse::error(
                 Some(id),
                 ERR_METHOD_NOT_FOUND,
@@ -613,37 +613,79 @@ impl RequestHandler {
         serde_json::to_string(&RpcResponse::success(id, result)).unwrap_or_default()
     }
 
-    /// Handle `forget` method (Phase 8-A stub).
+    /// Handle `forget` method (Phase 8-D).
     ///
-    /// Returns [`ERR_NOT_IMPLEMENTED`] until sub-phase 8-D fills in
-    /// the cache-file deletion + registry-eviction logic.
-    fn handle_forget(id: u64) -> String {
-        Self::not_implemented_response(id, "forget", "8-D")
+    /// Parses [`ForgetParams`] from the JSON-RPC envelope and
+    /// dispatches to [`IndexManager::forget_drives`].  Empty
+    /// `drives` is rejected up-front with [`ERR_INVALID_PARAMS`];
+    /// non-`Cold` drives without `force = true` produce a
+    /// top-level [`ERR_DRIVE_BUSY`] refusal listing the busy
+    /// drives.  Successful runs return [`ForgetResponse`] populated
+    /// from [`crate::index::forget_drive::ForgetOutcome`].
+    async fn handle_forget(&self, id: u64, req: &RpcRequest) -> String {
+        use crate::index::forget_drive::ForgetOutcomeOrBusy;
+
+        let params: ForgetParams = req
+            .params
+            .as_ref()
+            .and_then(|val| serde_json::from_value(val.clone()).ok())
+            .unwrap_or_default();
+        if params.drives.is_empty() {
+            return serde_json::to_string(&RpcErrorResponse::error(
+                Some(id),
+                ERR_INVALID_PARAMS,
+                "forget: `drives` must contain at least one drive letter",
+            ))
+            .unwrap_or_default();
+        }
+
+        match self.index.forget_drives(&params.drives, params.force).await {
+            ForgetOutcomeOrBusy::Busy(busy) => {
+                let listing = busy
+                    .iter()
+                    .map(|(letter, state)| format!("{letter} ({state})"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let message = format!(
+                    "forget refused: drive(s) busy: {listing}. \
+                     Pass `force = true` to auto-hibernate first."
+                );
+                serde_json::to_string(&RpcErrorResponse::error(Some(id), ERR_DRIVE_BUSY, &message))
+                    .unwrap_or_default()
+            }
+            ForgetOutcomeOrBusy::Ok(outcome) => {
+                let response = ForgetResponse {
+                    forgotten: outcome
+                        .forgotten
+                        .into_iter()
+                        .map(|letter| letter.to_ascii_uppercase())
+                        .collect(),
+                    already_absent: outcome
+                        .already_absent
+                        .into_iter()
+                        .map(|letter| letter.to_ascii_uppercase())
+                        .collect(),
+                    freed_bytes: outcome.freed_bytes,
+                    errors: outcome.errors,
+                };
+                let result = serde_json::to_value(&response).unwrap_or_default();
+                serde_json::to_string(&RpcResponse::success(id, result)).unwrap_or_default()
+            }
+        }
     }
 
-    /// Handle `status_drives` method (Phase 8-A stub).
+    /// Handle `status_drives` method (Phase 8-E).
     ///
-    /// Returns [`ERR_NOT_IMPLEMENTED`] until sub-phase 8-E fills in
-    /// the per-drive tier + telemetry snapshot.
-    fn handle_status_drives(id: u64) -> String {
-        Self::not_implemented_response(id, "status_drives", "8-E")
-    }
-
-    /// Build a uniform `ERR_NOT_IMPLEMENTED` response for the Phase
-    /// 8-A scaffolding stage.
-    ///
-    /// Centralises the message format so every stub renders the same
-    /// `<method>: not yet implemented (Phase <sub_phase>)` shape — gives
-    /// operators a single greppable signature to flag method-not-yet-
-    /// implemented hits in daemon logs without ambiguity.
-    fn not_implemented_response(id: u64, method: &str, sub_phase: &str) -> String {
-        let message = format!("{method}: not yet implemented (Phase {sub_phase})");
-        serde_json::to_string(&RpcErrorResponse::error(
-            Some(id),
-            ERR_NOT_IMPLEMENTED,
-            &message,
-        ))
-        .unwrap_or_default()
+    /// No params — the unit-struct
+    /// [`uffs_client::protocol::response::StatusDrivesParams`]
+    /// serialises as `{}` so callers omitting the envelope flow
+    /// through unchanged.  Dispatches to
+    /// [`IndexManager::status_drives`] and returns the per-drive
+    /// tier + telemetry snapshot directly.
+    async fn handle_status_drives(&self, id: u64) -> String {
+        let response: StatusDrivesResponse = self.index.status_drives().await;
+        let result = serde_json::to_value(&response).unwrap_or_default();
+        serde_json::to_string(&RpcResponse::success(id, result)).unwrap_or_default()
     }
 
     /// Handle `shutdown` method.

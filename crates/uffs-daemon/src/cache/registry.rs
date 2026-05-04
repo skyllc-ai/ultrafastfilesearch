@@ -221,15 +221,10 @@ impl ShardRegistry {
     ///
     /// Match is case-insensitive — see [`Self::replace`] for the
     /// rationale.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 3 consumer (tier-transition cleanup); exercised \
-                      by `cache::registry::tests::remove_missing_is_noop` \
-                      under `cfg(test)`."
-        )
-    )]
+    ///
+    /// Phase 8-D `forget` activates this as a production consumer:
+    /// [`crate::index::IndexManager::forget_drives`] calls `remove`
+    /// after the eviction guard checks pass.
     #[must_use]
     pub(crate) fn remove(&self, drive: char) -> Self {
         let shards: Vec<Arc<ShardEntry>> = self
