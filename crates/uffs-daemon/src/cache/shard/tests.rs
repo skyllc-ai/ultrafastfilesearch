@@ -71,6 +71,20 @@ fn make_test_body(letter: char) -> DriveCompactIndex {
     let trigram = TrigramIndex::build(&records, &names, fold);
     let children = ChildrenIndex::build(&records);
     let ext_index = ExtensionIndex::build(&records);
+
+    // Phase 8: populate `frs_to_compact` for the 2-record fixture
+    // (root @ FRS 5 → compact_idx 0; file @ FRS 10 → compact_idx 1).
+    // Sized to 16 entries so existing patch-method tests can address
+    // FRS 10 without resize gymnastics; the iterator-collect form
+    // sidesteps `clippy::indexing_slicing`.
+    let frs_to_compact: Vec<u32> = (0_usize..16)
+        .map(|frs| match frs {
+            5 => 0_u32,
+            10 => 1,
+            _ => u32::MAX,
+        })
+        .collect();
+
     DriveCompactIndex {
         letter,
         records: ColumnStorage::from_vec(records),
@@ -84,6 +98,7 @@ fn make_test_body(letter: char) -> DriveCompactIndex {
         source_epoch: 1,
         bloom: None,
         path_trie: None,
+        frs_to_compact,
     }
 }
 
@@ -402,8 +417,7 @@ fn apply_usn_patch_to_body_returns_new_arc_on_warm() {
 
     // Empty change batch — the method must still produce a fresh
     // Arc so the caller's swap path is exercised even on no-op ticks.
-    let frs_to_compact: Vec<u32> = vec![u32::MAX; 16];
-    let result = shard.apply_usn_patch_to_body(&[], &frs_to_compact);
+    let result = shard.apply_usn_patch_to_body(&[]);
 
     let (new_body, stats) = result.expect("Warm shard must yield Some");
     assert!(
@@ -433,9 +447,8 @@ fn apply_usn_patch_to_body_returns_none_on_parked() {
         deleted: true,
         ..FileChange::default()
     }];
-    let frs_to_compact: Vec<u32> = vec![u32::MAX; 16];
 
-    let result = shard.apply_usn_patch_to_body(&changes, &frs_to_compact);
+    let result = shard.apply_usn_patch_to_body(&changes);
     assert!(
         result.is_none(),
         "Parked shard has no in-memory body — must return None"
@@ -451,8 +464,7 @@ fn apply_usn_patch_to_body_returns_none_on_cold() {
     let stats = Arc::new(DriveStats::new());
     let shard = ShardEntry::new_cold('C', stats);
 
-    let frs_to_compact: Vec<u32> = vec![u32::MAX; 16];
-    let result = shard.apply_usn_patch_to_body(&[], &frs_to_compact);
+    let result = shard.apply_usn_patch_to_body(&[]);
     assert!(
         result.is_none(),
         "Cold shard has no in-memory body — must return None"
@@ -470,13 +482,10 @@ fn apply_usn_patch_to_body_lands_delete_on_new_arc() {
     let body = Arc::new(make_test_body('C'));
     let shard = ShardEntry::new_warm('C', Arc::clone(&body));
 
-    // FRS 10 → compact_idx 1 (the file under the root in the
-    // 2-record fixture).  All other FRS map to the sentinel.
-    // Iterator-collect form sidesteps `clippy::indexing_slicing`.
-    let frs_to_compact: Vec<u32> = (0_usize..16)
-        .map(|frs| if frs == 10 { 1 } else { u32::MAX })
-        .collect();
-
+    // FRS 10 → compact_idx 1 in the fixture's `frs_to_compact`
+    // (populated by `make_test_body`); the test exercises the
+    // delete-on-warm path through the full `apply_usn_patch_to_body`
+    // surface without re-specifying the mapping.
     let changes = vec![FileChange {
         frs: 10,
         deleted: true,
@@ -484,7 +493,7 @@ fn apply_usn_patch_to_body_lands_delete_on_new_arc() {
     }];
 
     let (new_body, stats) = shard
-        .apply_usn_patch_to_body(&changes, &frs_to_compact)
+        .apply_usn_patch_to_body(&changes)
         .expect("Warm shard yields Some");
 
     assert_eq!(stats.deleted, 1, "exactly one delete should land");

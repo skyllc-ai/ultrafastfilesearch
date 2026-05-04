@@ -35,10 +35,11 @@ use crate::trigram::TrigramIndex;
 /// * FRS 11 → `"bar.rs"`  parent=5 @ `compact_idx` 2
 /// * FRS 12 → `"baz.md"`  parent=5 @ `compact_idx` 3
 ///
-/// Returns the drive plus a `frs_to_compact[100]` mapping sized to
-/// cover FRS 13 (newly-created in tests) and FRS 99 (unmapped /
-/// skipped) without bounds-check failures.
-fn make_synthetic_drive() -> (DriveCompactIndex, Vec<u32>) {
+/// `drive.frs_to_compact` is populated with the mapping above plus
+/// `u32::MAX` sentinels for FRS 13 (newly-created in the create
+/// test) and FRS 99 (unmapped / skipped) so tests can patch the
+/// drive in place without touching a separate slice.
+fn make_synthetic_drive() -> DriveCompactIndex {
     // Names blob layout:
     //   "C"       [0..1]
     //   "foo.txt" [1..8]
@@ -82,23 +83,9 @@ fn make_synthetic_drive() -> (DriveCompactIndex, Vec<u32>) {
     let children = ChildrenIndex::build(&records);
     let ext_index = ExtensionIndex::build(&records);
 
-    let drive = DriveCompactIndex {
-        letter: 'T',
-        records: ColumnStorage::from_vec(records),
-        names: ColumnStorage::from_vec(names),
-        trigram,
-        children,
-        ext_index,
-        fold,
-        ext_names: vec![Box::from("")],
-        source: IndexSource::MftFile(PathBuf::from("T:")),
-        source_epoch: 42,
-        bloom: None,
-        path_trie: None,
-    };
-
-    // FRS → compact_idx mapping.  Sized to cover FRS 13 (newly-created)
-    // and FRS 99 (skipped — no compact slot) without bounds checks.
+    // FRS → compact_idx mapping.  Sized to 100 entries so test
+    // batches can address FRS 13 (newly-created) and FRS 99
+    // (skipped — no compact slot) without resize gymnastics.
     // Built via iterator-collect to avoid `clippy::indexing_slicing`;
     // FRS 13 left at u32::MAX so the create-branch fires for it.
     let frs_to_compact: Vec<u32> = (0_usize..100)
@@ -111,7 +98,21 @@ fn make_synthetic_drive() -> (DriveCompactIndex, Vec<u32>) {
         })
         .collect();
 
-    (drive, frs_to_compact)
+    DriveCompactIndex {
+        letter: 'T',
+        records: ColumnStorage::from_vec(records),
+        names: ColumnStorage::from_vec(names),
+        trigram,
+        children,
+        ext_index,
+        fold,
+        ext_names: vec![Box::from("")],
+        source: IndexSource::MftFile(PathBuf::from("T:")),
+        source_epoch: 42,
+        bloom: None,
+        path_trie: None,
+        frs_to_compact,
+    }
 }
 
 /// Headline contract test: a mixed batch of create / delete / rename /
@@ -119,7 +120,7 @@ fn make_synthetic_drive() -> (DriveCompactIndex, Vec<u32>) {
 /// cross-talk.
 #[test]
 fn apply_usn_patch_handles_create_delete_rename_skip() {
-    let (mut drive, frs_to_compact) = make_synthetic_drive();
+    let mut drive = make_synthetic_drive();
 
     let changes = vec![
         // Delete FRS 10 ("foo.txt").
@@ -152,7 +153,7 @@ fn apply_usn_patch_handles_create_delete_rename_skip() {
         },
     ];
 
-    let stats = apply_usn_patch(&mut drive, &changes, &frs_to_compact);
+    let stats = apply_usn_patch(&mut drive, &changes);
 
     assert_eq!(
         stats.deleted, 1,
@@ -177,14 +178,14 @@ fn apply_usn_patch_handles_create_delete_rename_skip() {
 /// from any directory's child list (tombstone semantics).
 #[test]
 fn apply_usn_patch_marks_deleted_record_with_zero_name_len() {
-    let (mut drive, frs_to_compact) = make_synthetic_drive();
+    let mut drive = make_synthetic_drive();
     let changes = vec![FileChange {
         frs: 10,
         deleted: true,
         ..FileChange::default()
     }];
 
-    apply_usn_patch(&mut drive, &changes, &frs_to_compact);
+    apply_usn_patch(&mut drive, &changes);
 
     let record = drive
         .records
@@ -204,7 +205,7 @@ fn apply_usn_patch_marks_deleted_record_with_zero_name_len() {
 /// reflects the new byte count.
 #[test]
 fn apply_usn_patch_renamed_record_has_new_name_in_blob() {
-    let (mut drive, frs_to_compact) = make_synthetic_drive();
+    let mut drive = make_synthetic_drive();
     let changes = vec![FileChange {
         frs: 11,
         parent_frs: 5,
@@ -213,7 +214,7 @@ fn apply_usn_patch_renamed_record_has_new_name_in_blob() {
         ..FileChange::default()
     }];
 
-    apply_usn_patch(&mut drive, &changes, &frs_to_compact);
+    apply_usn_patch(&mut drive, &changes);
 
     let record = drive
         .records
@@ -241,7 +242,7 @@ fn apply_usn_patch_renamed_record_has_new_name_in_blob() {
 /// `name_len`, and `name_first_byte`.
 #[test]
 fn apply_usn_patch_created_record_appended_with_correct_parent() {
-    let (mut drive, frs_to_compact) = make_synthetic_drive();
+    let mut drive = make_synthetic_drive();
     let initial_record_count = drive.records.len();
 
     let changes = vec![FileChange {
@@ -252,7 +253,7 @@ fn apply_usn_patch_created_record_appended_with_correct_parent() {
         ..FileChange::default()
     }];
 
-    apply_usn_patch(&mut drive, &changes, &frs_to_compact);
+    apply_usn_patch(&mut drive, &changes);
 
     assert_eq!(
         drive.records.len(),
@@ -282,11 +283,11 @@ fn apply_usn_patch_created_record_appended_with_correct_parent() {
 /// derived structures don't grow on an empty batch.
 #[test]
 fn apply_usn_patch_no_changes_is_no_op_with_zero_stats() {
-    let (mut drive, frs_to_compact) = make_synthetic_drive();
+    let mut drive = make_synthetic_drive();
     let initial_record_count = drive.records.len();
     let initial_names_len = drive.names.len();
 
-    let stats = apply_usn_patch(&mut drive, &[], &frs_to_compact);
+    let stats = apply_usn_patch(&mut drive, &[]);
 
     assert_eq!(stats.deleted, 0);
     assert_eq!(stats.created, 0);
@@ -302,7 +303,7 @@ fn apply_usn_patch_no_changes_is_no_op_with_zero_stats() {
 /// children list must no longer include that record's `compact_idx`.
 #[test]
 fn apply_usn_patch_rebuilds_children_csr_excluding_deletes() {
-    let (mut drive, frs_to_compact) = make_synthetic_drive();
+    let mut drive = make_synthetic_drive();
 
     // Pre-state sanity: root (compact_idx 0) starts with three
     // children — compact_idx 1 ("foo.txt"), 2 ("bar.rs"), 3 ("baz.md").
@@ -319,7 +320,7 @@ fn apply_usn_patch_rebuilds_children_csr_excluding_deletes() {
         ..FileChange::default()
     }];
 
-    apply_usn_patch(&mut drive, &changes, &frs_to_compact);
+    apply_usn_patch(&mut drive, &changes);
 
     let post_root_children: Vec<u32> = drive.children.get(0).to_vec();
     assert!(
@@ -330,5 +331,153 @@ fn apply_usn_patch_rebuilds_children_csr_excluding_deletes() {
         post_root_children.len(),
         2,
         "root should have two surviving children after one delete"
+    );
+}
+
+/// Phase 8 invariant: `apply_usn_patch` keeps `drive.frs_to_compact`
+/// in lock-step with `drive.records` across creates and deletes.
+///
+/// Pins:
+/// 1. **Create populates the slot.**  A brand-new FRS (13) lands at the
+///    appended `compact_idx`; `drive.frs_to_compact[13]` reflects that slot
+///    exactly.
+/// 2. **Delete clears the slot.**  After deleting an existing FRS (10),
+///    `drive.frs_to_compact[10] == u32::MAX`.
+/// 3. **FRS reuse round-trip.**  Create FRS 13 → delete FRS 13 → create FRS 13
+///    again yields a *fresh* `compact_idx` (NOT the tombstoned one).  This
+///    guards the long-running daemon against NTFS FRS-slot reuse ambiguity.
+/// 4. **Out-of-range create extends the table.**  A create on FRS 200 (beyond
+///    the fixture's len-100 mapping) grows `frs_to_compact` and registers the
+///    new slot at index 200.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Phase 8 lockstep invariant test — the four pinned cases \
+              (Create / Delete / FRS-reuse / Out-of-range-create) form a \
+              single linear narrative; splitting into per-case helpers \
+              would scatter the read-modify-assert flow across four \
+              functions and obscure the invariant the test exists to \
+              regression-pin."
+)]
+fn apply_usn_patch_keeps_frs_to_compact_in_lockstep() {
+    // ── 1. Create FRS 13 → expect new compact_idx + mapping update.
+    let mut drive = make_synthetic_drive();
+    let initial_records = drive.records.len();
+    let initial_mapping_len = drive.frs_to_compact.len();
+    assert_eq!(
+        drive
+            .frs_to_compact
+            .get(13)
+            .copied()
+            .expect("fixture sized to 100"),
+        u32::MAX,
+        "FRS 13 starts unmapped"
+    );
+
+    apply_usn_patch(&mut drive, &[FileChange {
+        frs: 13,
+        parent_frs: 5,
+        filename: "n1.txt".to_owned(),
+        created: true,
+        ..FileChange::default()
+    }]);
+
+    let first_compact_idx = drive
+        .frs_to_compact
+        .get(13)
+        .copied()
+        .expect("create updated mapping");
+    assert_ne!(
+        first_compact_idx,
+        u32::MAX,
+        "create must register FRS 13 → compact_idx mapping"
+    );
+    assert_eq!(
+        first_compact_idx as usize, initial_records,
+        "new compact_idx must equal pre-create records.len()"
+    );
+
+    // ── 2. Delete existing FRS 10 → expect slot reset to u32::MAX.
+    apply_usn_patch(&mut drive, &[FileChange {
+        frs: 10,
+        deleted: true,
+        ..FileChange::default()
+    }]);
+    assert_eq!(
+        drive
+            .frs_to_compact
+            .get(10)
+            .copied()
+            .expect("fixture sized to 100"),
+        u32::MAX,
+        "delete must reset FRS 10 mapping to u32::MAX"
+    );
+
+    // ── 3. Reuse round-trip: delete FRS 13, then create FRS 13 again.
+    apply_usn_patch(&mut drive, &[FileChange {
+        frs: 13,
+        deleted: true,
+        ..FileChange::default()
+    }]);
+    assert_eq!(
+        drive
+            .frs_to_compact
+            .get(13)
+            .copied()
+            .expect("fixture sized to 100"),
+        u32::MAX,
+        "delete must clear FRS 13 mapping after the create"
+    );
+
+    let pre_recreate_records = drive.records.len();
+    apply_usn_patch(&mut drive, &[FileChange {
+        frs: 13,
+        parent_frs: 5,
+        filename: "n2.txt".to_owned(),
+        created: true,
+        ..FileChange::default()
+    }]);
+    let second_compact_idx = drive
+        .frs_to_compact
+        .get(13)
+        .copied()
+        .expect("recreate updated mapping");
+    assert_ne!(
+        second_compact_idx, first_compact_idx,
+        "FRS-13 reuse must yield a fresh compact_idx, not the tombstoned one"
+    );
+    assert_eq!(
+        second_compact_idx as usize, pre_recreate_records,
+        "recreated compact_idx must equal records.len() at the second create"
+    );
+
+    // ── 4. Out-of-range create grows the mapping.
+    apply_usn_patch(&mut drive, &[FileChange {
+        frs: 200,
+        parent_frs: 5,
+        filename: "far.txt".to_owned(),
+        created: true,
+        ..FileChange::default()
+    }]);
+    assert!(
+        drive.frs_to_compact.len() >= 201,
+        "creates beyond the build-time max must extend frs_to_compact \
+         (was {initial_mapping_len}; now {})",
+        drive.frs_to_compact.len()
+    );
+    let far_compact_idx = drive
+        .frs_to_compact
+        .get(200)
+        .copied()
+        .expect("table extended past index 200");
+    assert_ne!(
+        far_compact_idx,
+        u32::MAX,
+        "FRS 200 must map to the freshly-appended compact slot"
+    );
+    assert_eq!(
+        far_compact_idx as usize,
+        drive.records.len() - 1,
+        "FRS 200 must point at the most recently appended record"
     );
 }

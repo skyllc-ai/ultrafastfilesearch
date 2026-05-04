@@ -212,6 +212,7 @@ mod tests {
             source_epoch: 1,
             bloom: None,
             path_trie: None,
+            frs_to_compact: Vec::new(),
         }
     }
 
@@ -330,6 +331,7 @@ mod tests {
             source_epoch: 0,
             bloom: None,
             path_trie: None,
+            frs_to_compact: Vec::new(),
         };
 
         let bloom = drive.build_bloom();

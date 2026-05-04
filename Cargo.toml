@@ -150,7 +150,7 @@ thiserror = "2.0.18"
 anyhow = "1.0.102"
 
 # ───── MCP (Model Context Protocol) ─────
-rmcp = { version = "1.5.0", features = ["server", "transport-io", "macros"] }
+rmcp = { version = "1.6.0", features = ["server", "transport-io", "macros"] }
 schemars = "1.2.1"
 
 # ───── HTTP / Tower (for MCP Streamable HTTP gateway) ─────

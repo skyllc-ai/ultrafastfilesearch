@@ -1,32 +1,31 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Per-shard USN journal refresh path (Phase 7 activation).
+//! Per-shard USN journal refresh path (Phase 7 activation, Phase 8
+//! surgical-patch).
 //!
-//! The single [`IndexManager::handle_journal_refresh`] method drives
-//! a full per-shard body refresh in response to a save / wrap signal
-//! from the per-shard journal loop's
-//! [`crate::cache::journal_sink::RegistryPatchSink`].
+//! Two entry points feed the per-shard journal loop's
+//! [`crate::cache::journal_sink::RegistryPatchSink`] applier task:
 //!
-//! ## Why a full refresh and not a surgical patch
+//! * [`IndexManager::handle_journal_save`] (Phase 8) — clones the warm
+//!   `DriveCompactIndex` body, applies the buffered
+//!   [`uffs_mft::usn::FileChange`] batch via
+//!   [`crate::cache::ShardEntry::apply_usn_patch_to_body`], swaps the new Arc
+//!   into the registry, and persists via
+//!   [`uffs_core::compact_cache::save_compact_cache_background`]. Fast path:
+//!   ~600 ms patch + ~5 s background save on a 7M-record drive, vs ~7 s for the
+//!   full reload.
 //!
-//! Phase 7-A landed [`crate::cache::ShardEntry::apply_usn_patch_to_body`]
-//! which patches an existing `DriveCompactIndex` in-place from a
-//! [`uffs_mft::usn::FileChange`] batch.  But that surgical path
-//! requires a `frs_to_compact: &[u32]` mapping that is **not** stored
-//! on `DriveCompactIndex` (`CompactRecord` has no `frs` field; the
-//! mapping is built once at index-build time from `MftIndex.frs_to_idx`
-//! and discarded).  Persisting the mapping is a Phase 8 follow-up
-//! (ticket: surgical USN body-patch end-to-end).
+//! * [`IndexManager::handle_journal_refresh`] (Phase 7) — full per-shard body
+//!   refresh via [`uffs_core::compact_loader::load_drive_with_usn_refresh`]
+//!   (MFT read + USN replay + compact rebuild).  Heavy (~2-7 s per drive) but
+//!   correct against journal-wrap events where the buffered batch is stale
+//!   relative to the new cursor.
 //!
-//! For activation, the cleanest option is to reuse the Phase-5
-//! infrastructure unchanged: every save / wrap trigger drives a full
-//! [`uffs_core::compact_loader::load_drive_with_usn_refresh`] which
-//! does an MFT read + USN replay + compact rebuild.  Heavy (~2-7 s per
-//! drive on a 7-drive box) but correct, and the per-shard
-//! event-threshold + age-threshold cadence still cuts the global
-//! 5-min tick down to a per-shard schedule that activates only when
-//! a drive actually saw churn.
+//! The split lets save triggers (events-exceeded / age-elapsed) take
+//! the cheap surgical path while wrap triggers fall back to the full
+//! reload — exactly the cadence the Phase-7 activation introduced,
+//! now with a fast save path.
 //!
 //! ## Mac/Linux behaviour
 //!
@@ -34,21 +33,26 @@
 //! errors out by design on non-Windows targets (USN journals are
 //! NTFS-only).  This method preserves that contract: the err arm
 //! warn-logs the per-drive failure and returns `false` so the caller
-//! can record the no-op without aborting the loop.  In production
-//! the Mac/Linux journal loop wires [`MacStubJournalSource`] (always
-//! empty) so the threshold-driven save trigger never fires anyway —
-//! the err arm is defensive, not a hot path.
+//! can record the no-op without aborting the loop.  The surgical
+//! [`IndexManager::handle_journal_save`] path is platform-agnostic
+//! (it operates over the in-memory body + a `Vec<FileChange>` DTO)
+//! and is exercised on Mac via synthesised `FileChange` inputs in
+//! the per-method unit tests.  In production the Mac/Linux journal
+//! loop wires [`MacStubJournalSource`] (always empty) so the
+//! threshold-driven save trigger never fires anyway — the err arm
+//! is defensive, not a hot path.
 //!
 //! [`MacStubJournalSource`]: crate::cache::journal_loop::sources::MacStubJournalSource
 
 use alloc::sync::Arc;
 
+use uffs_mft::usn::FileChange;
+
 use super::IndexManager;
 use crate::cache::journal_loop::JournalLoopHandle;
 
-/// Helper for [`IndexManager::attach_journal_handle`] and
-/// [`IndexManager::drain_journal_handles`]: lock the journal-handle
-/// map, recovering from poison.  Mirrors the existing
+/// Helper for [`IndexManager::attach_journal_handle`]: lock the
+/// journal-handle map, recovering from poison.  Mirrors the existing
 /// `lock_in_flight_promotes` / `verify_shutdown_nonce` poison
 /// handling pattern in this crate (per the `in_flight_promotes`
 /// field doc rationale).
@@ -114,6 +118,118 @@ impl IndexManager {
         self.apply_journal_body(letter, reason, body).await
     }
 
+    /// Phase 8 surgical-patch path: clone the Warm body, apply the
+    /// drained per-letter [`FileChange`] batch via
+    /// [`crate::cache::ShardEntry::apply_usn_patch_to_body`], swap
+    /// the new Arc into the registry, and persist the patched body
+    /// via [`uffs_core::compact_cache::save_compact_cache_background`].
+    ///
+    /// Called by the [`crate::cache::journal_sink::RegistryPatchSink`]
+    /// applier task on every `Save` message (events-exceeded /
+    /// age-elapsed) — the *fast* counterpart to
+    /// [`Self::handle_journal_refresh`] (which the applier still
+    /// uses for `Wrap` messages where the cursor reset invalidates
+    /// the buffered batch).
+    ///
+    /// ## Returns
+    ///
+    /// * `true` when the body was successfully Arc-swapped into the registry
+    ///   AND the background save task was spawned.  An empty `changes` batch
+    ///   also returns `true` (no-op short-circuit).
+    /// * `false` on every failure mode:
+    ///   - the shard for `letter` is not registered;
+    ///   - the patch task aborted (panic, runtime shutdown);
+    ///   - the shard demoted to `Parked` / `Cold` between the trigger and the
+    ///     patch (`apply_usn_patch_to_body` returns `None`); the next promote
+    ///     re-reads the cached body which a previous patch tick already
+    ///     updated, so the per-shard drift is bounded by the per-shard save
+    ///     cadence;
+    ///   - the body swap lost a separate demote race (`apply_journal_body`
+    ///     returns `false`).
+    pub(crate) async fn handle_journal_save(
+        &self,
+        letter: char,
+        reason: &str,
+        changes: Vec<FileChange>,
+    ) -> bool {
+        if changes.is_empty() {
+            log_save_empty_batch(letter, reason);
+            return true;
+        }
+
+        let change_count = changes.len();
+        let Some(shard) = self.snapshot_shard_for_letter(letter).await else {
+            log_save_no_shard(letter, reason, change_count);
+            return false;
+        };
+
+        let (new_body, stats) = match self
+            .run_surgical_patch_task(&shard, letter, reason, changes)
+            .await
+        {
+            PatchTaskOutcome::Applied(body, stats) => (body, stats),
+            PatchTaskOutcome::ShardNotWarm => {
+                log_save_shard_demoted(letter, reason, change_count);
+                return false;
+            }
+            PatchTaskOutcome::TaskAborted => return false,
+        };
+
+        log_save_patch_applied(letter, reason, change_count, &stats);
+
+        if !self
+            .apply_journal_body(letter, reason, Arc::clone(&new_body))
+            .await
+        {
+            return false;
+        }
+
+        spawn_compact_cache_save_task(letter, new_body);
+        true
+    }
+
+    /// Snapshot the shard for `letter` from the registry read-lock,
+    /// cloning the `Arc<ShardEntry>` so subsequent registry
+    /// mutations (demote, promote, `replace_warm_body`) leave this
+    /// snapshot observing the pre-tick state.
+    async fn snapshot_shard_for_letter(
+        &self,
+        letter: char,
+    ) -> Option<Arc<crate::cache::shard::ShardEntry>> {
+        let guard = self.index.read().await;
+        guard.iter().find(|entry| entry.drive == letter).cloned()
+    }
+
+    /// Run the surgical-patch heavy work on the blocking pool.
+    ///
+    /// Deep-clones the body (~100 ms `ColumnStorage` promote) +
+    /// applies the patch + rebuilds children CSR + trigram +
+    /// `ext_index` (~600 ms total on a 7M-record drive).  Wraps the
+    /// closure in [`crate::cache::background_io::BackgroundIoScope`]
+    /// so any syscall-bound work (mmap promote on Windows) yields
+    /// to foreground search RPCs.  Drains the resulting
+    /// [`tokio::task::JoinHandle`] through [`classify_patch_result`]
+    /// so callers see the three explicit outcomes
+    /// (`Applied` / `ShardNotWarm` / `TaskAborted`) without
+    /// `Option<Option<_>>` smell.
+    async fn run_surgical_patch_task(
+        &self,
+        shard: &Arc<crate::cache::shard::ShardEntry>,
+        letter: char,
+        reason: &str,
+        changes: Vec<FileChange>,
+    ) -> PatchTaskOutcome {
+        let background_io = Arc::clone(&self.background_io);
+        let shard_for_patch = Arc::clone(shard);
+        let change_count = changes.len();
+        let patch_result = tokio::task::spawn_blocking(move || {
+            let _bg_scope = crate::cache::background_io::BackgroundIoScope::enter(background_io);
+            shard_for_patch.apply_usn_patch_to_body(&changes)
+        })
+        .await;
+        classify_patch_result(patch_result, letter, reason, change_count)
+    }
+
     /// Phase 7 activation: store a [`JournalLoopHandle`] for `letter`
     /// in the per-letter handle map.
     ///
@@ -172,6 +288,172 @@ impl IndexManager {
             "USN refresh applied",
         );
         true
+    }
+}
+
+/// Log the empty-batch fast path of [`IndexManager::handle_journal_save`].
+///
+/// Age-elapsed triggers on quiet drives produce empty change
+/// batches; the surgical patch short-circuits to a debug-log no-op
+/// so the journal loop's cursor still advances and the per-shard
+/// save trigger resets.
+fn log_save_empty_batch(letter: char, reason: &str) {
+    tracing::debug!(
+        target: "shard.journal",
+        drive = %letter,
+        reason,
+        "Surgical patch skipped (empty change batch)",
+    );
+}
+
+/// Log the "no shard registered for letter" arm of
+/// [`IndexManager::handle_journal_save`].
+///
+/// Defensive: in production every drive that emits journal events
+/// has been registered via `add_drive` before its journal loop
+/// starts.  Reaching this arm indicates a startup-ordering bug or
+/// an out-of-order drive eject, both worth surfacing.
+fn log_save_no_shard(letter: char, reason: &str, change_count: usize) {
+    tracing::debug!(
+        target: "shard.journal",
+        drive = %letter,
+        reason,
+        change_count,
+        "No shard registered for letter; dropping changes",
+    );
+}
+
+/// Log the "shard demoted between trigger and patch" arm of
+/// [`IndexManager::handle_journal_save`].
+///
+/// Most likely cause: a Parked / Cold demote raced ahead of the
+/// surgical-patch blocking task.  The next promote re-reads the
+/// on-disk body which a previous patch tick already updated, so
+/// the per-shard drift is bounded by the per-shard save cadence.
+fn log_save_shard_demoted(letter: char, reason: &str, change_count: usize) {
+    tracing::debug!(
+        target: "shard.journal",
+        drive = %letter,
+        reason,
+        change_count,
+        "Shard demoted between trigger and patch; dropping changes",
+    );
+}
+
+/// Log the success path of
+/// [`IndexManager::handle_journal_save`] with per-variant patch
+/// stats so operators can grep for the surgical-patch tick rate
+/// and the create / delete / rename / skip mix per drive.
+fn log_save_patch_applied(
+    letter: char,
+    reason: &str,
+    change_count: usize,
+    stats: &uffs_core::compact_loader::PatchStats,
+) {
+    tracing::debug!(
+        target: "shard.journal",
+        drive = %letter,
+        reason,
+        change_count,
+        applied_create = stats.created,
+        applied_delete = stats.deleted,
+        applied_rename = stats.renamed,
+        applied_skip = stats.skipped,
+        "Surgical patch applied",
+    );
+}
+
+/// Spawn a blocking task that persists the patched
+/// `DriveCompactIndex` to disk via
+/// [`uffs_core::compact_cache::save_compact_cache_background`].
+///
+/// **Why blocking?**  `save_compact_cache_background` does the heavy
+/// serialise + zstd compress synchronously on the calling thread;
+/// only the encrypt + write steps run on a child thread that the
+/// helper spawns internally.  We don't want the serialise +
+/// compress on the runtime's async workers — hence
+/// `tokio::task::spawn_blocking`.
+///
+/// **Best-effort.**  A save failure does NOT roll back the
+/// in-memory swap (the patched Arc is already serving queries via
+/// the `IndexManager` registry); the helper just warn-logs the
+/// failure for operator visibility.  The next save tick re-attempts
+/// from the latest in-memory body, so transient disk errors heal
+/// themselves.
+fn spawn_compact_cache_save_task(letter: char, body: Arc<uffs_core::compact::DriveCompactIndex>) {
+    let _save_join = tokio::task::spawn_blocking(move || {
+        if let Err(err) = uffs_core::compact_cache::save_compact_cache_background(&body) {
+            tracing::warn!(
+                target: "shard.journal",
+                drive = %letter,
+                error = %err,
+                "Background compact-cache save failed after surgical patch (in-memory body still serving fresh data)",
+            );
+        }
+    });
+}
+
+/// Three-way classification of the surgical-patch blocking task's
+/// `JoinHandle` result — lets [`IndexManager::handle_journal_save`]
+/// match each outcome with its own diagnostic + control-flow
+/// without resorting to the `Option<Option<T>>` shape `clippy`
+/// (rightly) flags as a smell.
+enum PatchTaskOutcome {
+    /// The task ran to completion and the shard's
+    /// [`crate::cache::ShardEntry::apply_usn_patch_to_body`] returned
+    /// a fresh body Arc + per-batch stats.  Caller swaps the body
+    /// into the registry + spawns a background cache save.
+    Applied(
+        Arc<uffs_core::compact::DriveCompactIndex>,
+        uffs_core::compact_loader::PatchStats,
+    ),
+    /// The task ran to completion but the shard wasn't `Warm` /
+    /// `Hot` at the moment the patch fired — most likely a demote
+    /// race between the journal trigger and the blocking task
+    /// scheduling.  Caller drops the changes; the next promote
+    /// re-reads the on-disk body which a previous patch tick has
+    /// already saved.
+    ShardNotWarm,
+    /// The blocking task itself aborted before producing a result
+    /// (panic, runtime shutdown).  The classifier already
+    /// warn-logged the [`tokio::task::JoinError`] with full
+    /// context; caller short-circuits the body swap.
+    TaskAborted,
+}
+
+/// Classify the surgical-patch task's `JoinHandle` result into a
+/// [`PatchTaskOutcome`].
+///
+/// On `Err(join_err)` the helper emits a `shard.journal` warn-log
+/// (the same shape `handle_journal_refresh`'s
+/// [`unwrap_refreshed_body`] uses for its task-abort arm) and returns
+/// [`PatchTaskOutcome::TaskAborted`] so the caller doesn't re-log.
+fn classify_patch_result(
+    patch_result: Result<
+        Option<(
+            Arc<uffs_core::compact::DriveCompactIndex>,
+            uffs_core::compact_loader::PatchStats,
+        )>,
+        tokio::task::JoinError,
+    >,
+    letter: char,
+    reason: &str,
+    change_count: usize,
+) -> PatchTaskOutcome {
+    match patch_result {
+        Ok(Some((body, stats))) => PatchTaskOutcome::Applied(body, stats),
+        Ok(None) => PatchTaskOutcome::ShardNotWarm,
+        Err(join_err) => {
+            tracing::warn!(
+                target: "shard.journal",
+                drive = %letter,
+                reason,
+                change_count,
+                error = %join_err,
+                "Surgical patch blocking task aborted; shard kept previous body",
+            );
+            PatchTaskOutcome::TaskAborted
+        }
     }
 }
 

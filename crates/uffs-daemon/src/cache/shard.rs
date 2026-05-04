@@ -635,26 +635,24 @@ impl ShardEntry {
     /// [`crate::index::IndexManager::ensure_warm_for_dispatch`]
     /// before attempting incremental patching.
     ///
-    /// The `frs_to_compact` slice is a `frs → compact_idx` mapping
-    /// produced by the caller from the same `DriveCompactIndex` the
-    /// `body` Arc points at; mismatched slices produce all-skipped
-    /// `PatchStats` rather than corrupting the index.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 7 task 7.1 surface; production caller \
-                      (per-shard journal loop) lands in Phase 7 task 7.2. \
-                      Exercised by `cache::shard::tests::\
-                      apply_usn_patch_to_body_returns_new_arc_on_warm` \
-                      and the matching `_returns_none_on_parked` companion."
-        )
-    )]
+    /// **Phase 8.** The FRS → `compact_idx` mapping is read from
+    /// the cloned body's [`DriveCompactIndex::frs_to_compact`]
+    /// field (no longer a separate parameter) and updated in-place
+    /// by [`uffs_core::compact_loader::apply_usn_patch`] across
+    /// the create / delete / rename batch.  Pre-v10 caches are
+    /// rejected at the cache-format header check (forcing a fresh
+    /// MFT rebuild that emits a v10 cache with the mapping
+    /// populated), so the empty-mapping fallback in
+    /// `apply_usn_patch` is purely defensive — covers test
+    /// fixtures that build the body by struct literal without
+    /// populating the field, plus any future cache format that
+    /// revisits the layout.
+    ///
+    /// [`DriveCompactIndex::frs_to_compact`]: uffs_core::compact::DriveCompactIndex::frs_to_compact
     #[must_use]
     pub(crate) fn apply_usn_patch_to_body(
         &self,
         changes: &[uffs_mft::usn::FileChange],
-        frs_to_compact: &[u32],
     ) -> Option<(
         Arc<DriveCompactIndex>,
         uffs_core::compact_loader::PatchStats,
@@ -664,9 +662,12 @@ impl ShardEntry {
         // mutates the clone — never the live Arc that concurrent
         // readers are observing.  ColumnStorage::clone() promotes
         // mmap-backed columns to heap-resident Vec, so the cloned
-        // body is fully mutable without remap ceremony.
+        // body is fully mutable without remap ceremony.  The
+        // `frs_to_compact` mapping rides along on the clone so
+        // `apply_usn_patch` can patch it in lock-step with the
+        // records.
         let mut owned: DriveCompactIndex = (**body_arc).clone();
-        let stats = uffs_core::compact_loader::apply_usn_patch(&mut owned, changes, frs_to_compact);
+        let stats = uffs_core::compact_loader::apply_usn_patch(&mut owned, changes);
         Some((Arc::new(owned), stats))
     }
 }

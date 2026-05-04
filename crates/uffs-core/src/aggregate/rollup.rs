@@ -326,6 +326,8 @@ mod tests {
             source_epoch: 0,
             bloom: None,
             path_trie: None,
+            // unused by aggregation tests — see compact.rs::frs_to_compact docs.
+            frs_to_compact: Vec::new(),
         }
     }
 

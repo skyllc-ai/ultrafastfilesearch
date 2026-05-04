@@ -24,6 +24,12 @@
 use super::*;
 
 /// Build a minimal `DriveCompactIndex` with 3 records for testing.
+///
+/// **Phase 8.** Populates `frs_to_compact` with a representative
+/// 8-entry mapping (FRS 5 → root, FRS 10 → "foo", FRS 11 → "bar",
+/// FRS 12 → "baz"; other slots `u32::MAX`) so v10 round-trip tests
+/// exercise the section.  Iterator-collect form sidesteps
+/// `clippy::indexing_slicing`.
 fn make_test_index() -> DriveCompactIndex {
     let names = b"foobarbaz".to_vec(); // "foo" [0..3], "bar" [3..6], "baz" [6..9]
     let records = vec![
@@ -54,6 +60,15 @@ fn make_test_index() -> DriveCompactIndex {
     let trigram = TrigramIndex::build(&records, &names, fold);
     let children = ChildrenIndex::build(&records);
     let ext_index = ExtensionIndex::build(&records);
+    let frs_to_compact: Vec<u32> = (0_usize..16)
+        .map(|frs| match frs {
+            5 => 0_u32,
+            10 => 1,
+            11 => 2,
+            12 => 3,
+            _ => u32::MAX,
+        })
+        .collect();
     DriveCompactIndex {
         letter: 'T',
         records: ColumnStorage::from_vec(records),
@@ -67,6 +82,7 @@ fn make_test_index() -> DriveCompactIndex {
         source_epoch: 42,
         bloom: None,
         path_trie: None,
+        frs_to_compact,
     }
 }
 
@@ -99,49 +115,80 @@ fn v6_round_trip_preserves_trigram() {
     assert_eq!(loaded.source_epoch, 42);
 }
 
+/// Phase 8 B2: a v9-stamped cache must be rejected so the caller's
+/// MFT-rebuild fallback writes a fresh v10 cache (with the
+/// `frs_to_compact` mapping the surgical-patch path needs).  This
+/// supersedes the now-deleted `v5_backward_compat_rebuilds_trigram`
+/// test: v < 10 caches are no longer parseable at all, regardless of
+/// section completeness.
 #[test]
-fn v5_backward_compat_rebuilds_trigram() {
-    // Serialize a v6 index, then patch the version to v5 and replace
-    // the trigram section with the v5 sentinel (trigram_count = 0).
+fn v9_rejected_forces_rebuild() {
     let index = make_test_index();
     let mut serialized = serialize_compact(&index);
-
-    // Patch version to 5.
     serialized
         .get_mut(8..10)
         .expect("buffer too short for version")
-        .copy_from_slice(&5_u16.to_le_bytes());
-
-    // Find the trigram section: after children CSR.
-    // Children CSR starts after names, offsets are (records+1)*4, then values.
-    let record_count = index.records.len();
-    let names_len = index.names.len();
-    let records_end = 26 + record_count * RECORD_BYTES;
-    let names_end = records_end + names_len;
-    let csr_offsets_end = names_end + (record_count + 1) * 4;
-    let total_children = index.children.total_children();
-    let postings_end = csr_offsets_end + total_children * 4;
-
-    // Truncate at postings_end + 4 (v5 sentinel: trigram_count = 0).
-    serialized.truncate(postings_end + 4);
-    serialized
-        .get_mut(postings_end..postings_end + 4)
-        .expect("buffer too short for trigram sentinel")
-        .copy_from_slice(&0_u32.to_le_bytes());
-
-    let (loaded, _tri_ms) = deserialize_compact(&serialized, 'T').unwrap();
-
-    // Trigram was rebuilt — should match the original.
-    let (orig_keys, orig_offsets, orig_values) = index.trigram.as_csr();
-    let (loaded_keys, loaded_offsets, loaded_values) = loaded.trigram.as_csr();
-    assert_eq!(loaded_keys, orig_keys, "rebuilt trigram keys mismatch");
-    assert_eq!(
-        loaded_offsets, orig_offsets,
-        "rebuilt trigram offsets mismatch"
+        .copy_from_slice(&9_u16.to_le_bytes());
+    let err = deserialize_compact(&serialized, 'T')
+        .err()
+        .expect("v9 cache must be rejected");
+    assert!(
+        err.contains("stale compact version"),
+        "v9 rejection error message must mention 'stale compact version'; got: {err}"
     );
+}
+
+/// Phase 8 B2: round-trip a non-empty `frs_to_compact` mapping
+/// through both deserialize paths and assert byte-equal recovery.
+/// Pins:
+///   1. The serialised section is recoverable (no truncation, no trailing-byte
+///      miscount).
+///   2. `aligned_vec_from_bytes` returns the same `Vec<u32>` content.
+///   3. The runtime-mmap path (records + names mmap-backed) doesn't drop the
+///      heap-resident `frs_to_compact` column.
+#[test]
+fn v10_round_trip_preserves_frs_to_compact() {
+    let index = make_test_index();
+    let original_mapping = index.frs_to_compact.clone();
+    assert!(
+        original_mapping.iter().any(|&value| value != u32::MAX),
+        "fixture must populate at least one mapped slot"
+    );
+
+    let serialized = serialize_compact(&index);
+
+    // Heap deserialise path.
+    let (heap_loaded, _) = deserialize_compact(&serialized, 'T').expect("heap deser");
     assert_eq!(
-        loaded_values, orig_values,
-        "rebuilt trigram values mismatch"
+        heap_loaded.frs_to_compact, original_mapping,
+        "heap-loaded frs_to_compact must match the source mapping"
+    );
+
+    // Runtime-mmap deserialise path.
+    let (_tmp, runtime_path) = runtime_fixture("f2c_round_trip.live");
+    let runtime_dir = uffs_security::runtime_dir::DefaultRuntimeDir::default();
+    let (mmap_loaded, _) =
+        deserialize_compact_into_runtime(&serialized, 'T', &runtime_dir, &runtime_path)
+            .expect("runtime mmap deser");
+    assert_eq!(
+        mmap_loaded.frs_to_compact, original_mapping,
+        "runtime-mmap-loaded frs_to_compact must match the source mapping"
+    );
+}
+
+/// Phase 8 B2 edge case: a zero-length `frs_to_compact` (e.g. a
+/// freshly-built body that hasn't populated the field yet) round-trips
+/// to an empty `Vec`, not `Err` or panic.  Guards the `count == 0`
+/// fast path in `parse_compact_body`.
+#[test]
+fn v10_round_trip_empty_frs_to_compact() {
+    let mut index = make_test_index();
+    index.frs_to_compact = Vec::new();
+    let serialized = serialize_compact(&index);
+    let (loaded, _) = deserialize_compact(&serialized, 'T').expect("empty mapping deser");
+    assert!(
+        loaded.frs_to_compact.is_empty(),
+        "empty-mapping round-trip must yield Vec::new()"
     );
 }
 
@@ -223,6 +270,9 @@ fn v9_round_trip_preserves_path_trie() {
     );
 }
 
+/// v < 10 caches are rejected outright by the Phase 8 header check.
+/// `v1` is the historical canary; the modern rejection covers v1–v9
+/// in a single branch.
 #[test]
 fn v1_rejected() {
     let mut data = vec![0_u8; 64];
@@ -232,7 +282,13 @@ fn v1_rejected() {
     data.get_mut(8..10)
         .expect("buffer too short for version")
         .copy_from_slice(&1_u16.to_le_bytes());
-    assert!(deserialize_compact(&data, 'X').is_err());
+    let err = deserialize_compact(&data, 'X')
+        .err()
+        .expect("v1 cache must be rejected");
+    assert!(
+        err.contains("stale compact version"),
+        "v1 rejection error must mention 'stale compact version'; got: {err}"
+    );
 }
 
 #[test]

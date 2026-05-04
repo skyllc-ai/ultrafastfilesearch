@@ -383,6 +383,36 @@ pub struct DriveCompactIndex {
     /// Phase 4 directory-only path trie.  Same `None`-handling
     /// rationale as [`Self::bloom`].
     pub path_trie: Option<PathTrie>,
+    /// Phase 8: FRS → `compact_idx` mapping.
+    ///
+    /// Indexed by FRS-as-`usize`; values are the matching primary
+    /// `compact_idx` in [`Self::records`], or [`u32::MAX`] for
+    /// unmapped slots (system metafiles 0-15, FRS values higher
+    /// than the build-time max, deleted records).
+    ///
+    /// Populated by [`build_compact_index`] from
+    /// [`uffs_mft::MftIndex::frs_to_idx`] (which is otherwise
+    /// dropped when the `MftIndex` goes out of scope).  Maintained
+    /// in lock-step with [`Self::records`] by
+    /// [`crate::compact_loader::apply_usn_patch`] across
+    /// create / delete / rename batches: creates extend the table
+    /// and assign the new compact slot, deletes mark the slot
+    /// `u32::MAX`, renames leave the slot intact (only `parent_idx`
+    /// + name move).
+    ///
+    /// **Why not stored in `MftIndex`?**  The `MftIndex` is
+    /// transient — `build_compact_index` consumes it and drops it.
+    /// The compact body is what survives to serve search queries
+    /// and accept journal patches.  Keeping the mapping next to the
+    /// records it indexes means [`crate::compact_loader::apply_usn_patch`]
+    /// can patch the body in place without touching the MFT.
+    ///
+    /// **Backward compatibility**: caches written before v10
+    /// (Phase 8) didn't persist this mapping; for those, the field
+    /// loads as an empty `Vec` and the surgical patch path
+    /// silently degrades to the full-reload fallback.  See the
+    /// v9 → v10 cache format bump in `compact_cache::COMPACT_VERSION`.
+    pub frs_to_compact: Vec<u32>,
 }
 
 /// Per-component heap footprint of a [`DriveCompactIndex`].
@@ -402,6 +432,10 @@ pub struct HeapReport {
     pub ext_index: usize,
     /// `ext_names: Vec<Box<str>>` heap (Vec + string data).
     pub ext_names: usize,
+    /// `frs_to_compact: Vec<u32>` capacity in bytes (Phase 8 —
+    /// `~max_frs * 4` bytes; ~40 MB on a 7M-record drive with
+    /// max FRS ≈ 10M).
+    pub frs_to_compact: usize,
     /// Sum of all components.
     pub total: usize,
 }
@@ -428,6 +462,7 @@ impl DriveCompactIndex {
         let ext_names_data: usize = self.ext_names.iter().map(|en| en.len()).sum();
         let ext_names_vec = self.ext_names.capacity() * size_of::<Box<str>>();
         let ext_names = ext_names_data + ext_names_vec;
+        let frs_to_compact = self.frs_to_compact.capacity() * size_of::<u32>();
         HeapReport {
             records,
             names,
@@ -435,7 +470,8 @@ impl DriveCompactIndex {
             children,
             ext_index,
             ext_names,
-            total: records + names + trigram + children + ext_index + ext_names,
+            frs_to_compact,
+            total: records + names + trigram + children + ext_index + ext_names + frs_to_compact,
         }
     }
 
@@ -452,11 +488,12 @@ impl DriveCompactIndex {
             children_mb = mb(hr.children),
             ext_index_mb = mb(hr.ext_index),
             ext_names_mb = mb(hr.ext_names),
+            frs_to_compact_mb = mb(hr.frs_to_compact),
             total_mb = mb(hr.total),
-            "[HEAP] {}: rec={} names={} tri={} ch={} ext={} | total={} MB",
+            "[HEAP] {}: rec={} names={} tri={} ch={} ext={} f2c={} | total={} MB",
             self.letter,
             mb(hr.records), mb(hr.names), mb(hr.trigram),
-            mb(hr.children), mb(hr.ext_index),
+            mb(hr.children), mb(hr.ext_index), mb(hr.frs_to_compact),
             mb(hr.total),
         );
     }
@@ -839,6 +876,17 @@ pub fn build_compact_index(
 
     shrink_compact_vecs(drive_letter, &mut records, &mut names, &mut ext_names);
 
+    // Phase 8: clone the FRS → mft_idx mapping off the transient
+    // `MftIndex` before it goes out of scope.  In the primary
+    // `build_compact_index` path compact_idx == mft_idx (records
+    // are produced 1:1 by `index.records.par_iter().enumerate()`),
+    // so `frs_to_idx` is exactly the FRS → compact_idx mapping the
+    // surgical-patch path needs.  Hardlink / ADS-expanded records
+    // append at the END with the same FRS but higher compact_idx;
+    // those secondary slots are not addressable from journal events
+    // (USN events reference primary FRS) so the primary mapping is
+    // sufficient.  `uffs_mft::NO_ENTRY == u32::MAX` matches the
+    // sentinel `frs_to_compact` uses for unmapped slots.
     let mut compact_index = DriveCompactIndex {
         letter: drive_letter,
         records: ColumnStorage::from_vec(records),
@@ -852,6 +900,7 @@ pub fn build_compact_index(
         source_epoch: index.build_epoch,
         bloom: None,
         path_trie: None,
+        frs_to_compact: index.frs_to_idx.clone(),
     };
 
     // Phase 4: populate bloom + path_trie from the freshly-built

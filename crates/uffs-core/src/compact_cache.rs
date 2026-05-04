@@ -131,7 +131,15 @@ const COMPACT_MAGIC: &[u8; 8] = b"UFFSCOM\0";
 ///   `_pad`)
 /// - v9: Phase 4 bloom + path-trie sections appended after `ext_names` (see
 ///   `compact_cache::filters_io`)
-const COMPACT_VERSION: u16 = 9;
+/// - v10: Phase 8 `frs_to_compact: Vec<u32>` section appended after the path
+///   trie (`u32 len` + `len * u32` raw values, `u32::MAX` for unmapped slots).
+///   This mapping is what the per-shard surgical patch path
+///   ([`crate::compact_loader::apply_usn_patch`]) needs to translate USN
+///   journal events to compact-record updates without re-reading the MFT.  v <
+///   10 caches are rejected at the header check so the daemon does a fresh MFT
+///   rebuild and writes a v10 cache; carrying them forward with an empty
+///   `frs_to_compact` would silently disable the surgical-patch path.
+const COMPACT_VERSION: u16 = 10;
 
 mod filters_io;
 pub mod parked;
@@ -385,6 +393,13 @@ pub fn serialize_compact(index: &DriveCompactIndex) -> Vec<u8> {
         .map_or_else(|| Cow::Owned(index.build_path_trie()), Cow::Borrowed);
     filters_io::push_trie_section(&mut buf, trie_section.as_ref());
 
+    // v10: frs_to_compact section — `u32 len` + `len * u32` raw
+    // values.  An empty mapping (e.g. tests that build the body
+    // by struct literal without populating it) writes len=0 with
+    // no values; the reader handles that branch symmetrically.
+    push_u32(&mut buf, index.frs_to_compact.len());
+    buf.extend_from_slice(bytemuck::cast_slice(&index.frs_to_compact));
+
     buf
 }
 
@@ -454,6 +469,11 @@ pub fn serialize_compact_to_writer<W: io::Write>(
         .as_ref()
         .map_or_else(|| Cow::Owned(index.build_path_trie()), Cow::Borrowed);
     filters_io::write_trie_section(writer, trie_section.as_ref())?;
+
+    // v10: frs_to_compact section.  Symmetric with the
+    // [`Vec<u8>`]-backed [`serialize_compact`] path.
+    write_u32(writer, index.frs_to_compact.len())?;
+    writer.write_all(bytemuck::cast_slice(&index.frs_to_compact))?;
 
     writer.flush()?;
     Ok(())
@@ -575,6 +595,13 @@ struct ParsedCompactBody<'data> {
     /// the cache; `None` if the cache predates v9 and the trie must
     /// be rebuilt via [`DriveCompactIndex::build_path_trie`].
     trie_loaded: Option<crate::path_trie::PathTrie>,
+    /// `Some` if a v10+ `frs_to_compact` section was loaded directly
+    /// from the cache; `None` if the cache predates v10 (which is
+    /// rejected at the header check, so this is `None` only on
+    /// future format extensions that revisit the layout).  An
+    /// empty `Vec` is *not* `None` — a zero-record drive's mapping
+    /// is legitimately empty.
+    frs_to_compact_loaded: Option<Vec<u32>>,
     /// Resolved case-fold table for the drive.
     fold: uffs_text::case_fold::CaseFold,
 }
@@ -649,12 +676,41 @@ fn parse_compact_body(
     // truncated section signals corruption rather than legacy
     // format.  v < 9 caches simply skip this branch and the
     // assembler rebuilds the filters from records / names.
-    let (bloom_loaded, trie_loaded) = if version >= 9 {
+    let (bloom_loaded, trie_loaded, after_trie) = if version >= 9 {
         let (bloom, after_bloom) = filters_io::read_bloom_section(data, after_ext)?;
-        let (trie, _after_trie) = filters_io::read_trie_section(data, after_bloom)?;
-        (Some(bloom), Some(trie))
+        let (trie, after_trie) = filters_io::read_trie_section(data, after_bloom)?;
+        (Some(bloom), Some(trie), after_trie)
     } else {
-        (None, None)
+        (None, None, after_ext)
+    };
+
+    // v10: frs_to_compact section.  Reject mismatched bytes
+    // explicitly so a truncated cache surfaces as a parse error
+    // (which the daemon retries by rebuilding from MFT) instead of
+    // a silent empty mapping that disables the surgical-patch path.
+    let frs_to_compact_loaded = if version >= 10 {
+        if data.len() < after_trie + 4 {
+            return Err("truncated frs_to_compact len");
+        }
+        let count = read_u32(data, after_trie) as usize;
+        let bytes_len = count
+            .checked_mul(4)
+            .ok_or("frs_to_compact bytes overflow")?;
+        let start = after_trie + 4;
+        let end = start
+            .checked_add(bytes_len)
+            .ok_or("frs_to_compact end overflow")?;
+        if data.len() < end {
+            return Err("truncated frs_to_compact values");
+        }
+        let values: Vec<u32> = if count == 0 {
+            Vec::new()
+        } else {
+            aligned_vec_from_bytes(data.get(start..end).ok_or("frs_to_compact slice")?)
+        };
+        Some(values)
+    } else {
+        None
     };
 
     Ok(ParsedCompactBody {
@@ -667,6 +723,7 @@ fn parse_compact_body(
         ext_names_loaded,
         bloom_loaded,
         trie_loaded,
+        frs_to_compact_loaded,
         fold,
     })
 }
@@ -726,6 +783,12 @@ where
         source_epoch: parsed.source_epoch,
         bloom: None,
         path_trie: None,
+        // Phase 8 B2: v10 caches embed the FRS → compact_idx mapping
+        // directly.  v < 10 caches are rejected at the header check
+        // (`parse_compact_header`); the `unwrap_or_default()` here
+        // covers the future-format edge case where a new cache
+        // version omits the section.
+        frs_to_compact: parsed.frs_to_compact_loaded.unwrap_or_default(),
     };
 
     // Phase 4 Commit D — v9+ caches embed the bloom + trie directly,
@@ -821,8 +884,13 @@ fn parse_compact_header(data: &[u8]) -> Result<(u64, usize, u16), &'static str> 
         .get(8..10)
         .and_then(|slice| <[u8; 2]>::try_from(slice).ok())
         .map_or(0, u16::from_le_bytes);
-    if version < 2 {
-        return Err("stale compact version (v1 → rebuild)");
+    if version < 10 {
+        // Phase 8 cache-format break: v < 10 caches don't carry the
+        // `frs_to_compact` mapping, so the surgical patch path
+        // (`apply_usn_patch`) can't operate on them.  Reject here
+        // and let the caller's full-MFT-rebuild fallback write a
+        // fresh v10 cache.
+        return Err("stale compact version (v<10 → rebuild for Phase 8 frs_to_compact)");
     }
     if version > COMPACT_VERSION {
         return Err("unsupported compact version (future)");

@@ -517,6 +517,7 @@ mod tests {
             source_epoch: 1234,
             bloom: None,
             path_trie: None,
+            frs_to_compact: Vec::new(),
         };
         index.bloom = Some(index.build_bloom());
         index.path_trie = Some(index.build_path_trie());
@@ -561,10 +562,13 @@ mod tests {
         assert_eq!(body.source_epoch, 1234);
     }
 
-    /// Pre-v9 caches have no bloom + trie sections.  Patching the
-    /// version byte to 8 must be rejected with a recognisable error.
+    /// Pre-v10 caches don't carry the Phase 8 `frs_to_compact`
+    /// mapping; the cross-cutting [`super::super::parse_compact_header`]
+    /// rejection covers the parked-body load too.  Patching the
+    /// version byte to 8 must surface the modern "v<10 → rebuild"
+    /// error string.
     #[test]
-    fn parked_load_rejects_pre_v9_caches() {
+    fn parked_load_rejects_pre_v10_caches() {
         let index = make_test_index();
         let mut serialized = super::super::serialize_compact(&index);
 
@@ -575,8 +579,8 @@ mod tests {
 
         let err = deserialize_parked_body(&serialized, 'C').expect_err("v8 must reject");
         assert!(
-            err.contains("v9"),
-            "error should mention v9 minimum: {err:?}",
+            err.contains("stale compact version"),
+            "error should mention 'stale compact version': {err:?}",
         );
     }
 
@@ -598,32 +602,48 @@ mod tests {
     /// surface an error from whichever offset-arithmetic /
     /// section-read routine first runs out of bytes.  Pins the
     /// "no panic on corrupt input" contract.
+    ///
+    /// **Phase 8.** The v10 `frs_to_compact` section lives at the
+    /// tail of the cache and is *not* read by the parked-body load
+    /// path (parked bodies only need bloom + trie).  The prefix
+    /// sweep therefore stops at the parked-body cutoff
+    /// (`serialized.len() - frs_to_compact_section_bytes`); any
+    /// prefix beyond that boundary only damages bytes the parker
+    /// load deliberately skips and would not be rejected by design.
     #[test]
     fn parked_load_rejects_truncated_at_every_prefix() {
         let index = make_test_index();
         let serialized = super::super::serialize_compact(&index);
 
-        // Sample a handful of prefix lengths covering header, mid-body,
-        // and the bloom + trie sections.  Full-length is the success
-        // case and is excluded; every shorter prefix must be rejected.
-        let len = serialized.len();
+        // v10 frs_to_compact section size: 4-byte count + 4 bytes per
+        // entry.  The parked body is complete just before this section.
+        let frs_to_compact_bytes = 4 + index.frs_to_compact.len() * 4;
+        let parked_end = serialized
+            .len()
+            .checked_sub(frs_to_compact_bytes)
+            .expect("v10 cache must include the frs_to_compact section");
+
+        // Sample header offsets + four positions strictly inside the
+        // parked-body region.  Full-length parked region is the
+        // success case and is excluded.
         let prefixes = [
             0,
             8,  // post-magic, pre-version
             10, // post-version
             18, // pre-epoch (v3+)
             26, // post-header
-            len / 4,
-            len / 2,
-            len * 3 / 4,
-            len - 1,
+            parked_end / 4,
+            parked_end / 2,
+            parked_end * 3 / 4,
+            parked_end - 1,
         ];
         for &prefix in &prefixes {
             let truncated = serialized.get(..prefix).expect("prefix in range");
             let result = deserialize_parked_body(truncated, 'C');
             assert!(
                 result.is_err(),
-                "prefix {prefix}/{len} must be rejected (got {result:?})",
+                "prefix {prefix}/{parked_end} (full {full}) must be rejected (got {result:?})",
+                full = serialized.len(),
             );
         }
     }

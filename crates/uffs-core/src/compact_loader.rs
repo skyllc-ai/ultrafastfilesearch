@@ -461,9 +461,11 @@ pub fn load_live_drive(
 
 /// Apply USN changes in-place to the compact index.
 ///
-/// Mutates records (`parent_idx`, names, flags) then rebuilds the children CSR
-/// once at the end.  Typical cost: <5ms for record mutations + ~100ms for CSR
-/// rebuild on a 7M-record drive.
+/// Mutates records (`parent_idx`, names, flags) and the
+/// `frs_to_compact` mapping then rebuilds the children CSR + path
+/// lengths + trigram + extension index once at the end.  Typical
+/// cost: <5ms for record mutations + ~100ms for CSR rebuild on a
+/// 7M-record drive (the rebuild dominates).
 ///
 /// **Platform note.**  The function itself is pure data manipulation
 /// over `DriveCompactIndex` + the platform-agnostic
@@ -473,16 +475,49 @@ pub fn load_live_drive(
 /// Windows-only.  This split is what makes the Phase 7 per-shard
 /// patch path Mac-testable end-to-end via synthesised
 /// [`uffs_mft::usn::FileChange`] arrays.
+///
+/// **Phase 8.** The `frs_to_compact` mapping is read from
+/// [`DriveCompactIndex::frs_to_compact`] (no longer a separate
+/// parameter) and maintained in lock-step with the records:
+///
+/// * **Create** \u2014 a new compact slot is appended at `records.len()` and
+///   `frs_to_compact[new_frs]` is updated to point at it (extending the table
+///   if the FRS exceeds the current `frs_to_compact.len()`).
+/// * **Delete** \u2014 `frs_to_compact[deleted_frs] = u32::MAX` so subsequent
+///   batches referencing the deleted FRS take the skip branch instead of
+///   mis-applying to a tombstoned slot.
+/// * **Rename** \u2014 the FRS keeps its compact slot; only `parent_idx` + name
+///   move.  Mapping is unchanged.
+///
+/// **Empty-mapping fallback.** When `drive.frs_to_compact.is_empty()`
+/// (v9 caches loaded before Phase 8 cache format v10) every change
+/// looks up to `u32::MAX` and the function increments `skipped` for
+/// the whole batch \u2014 the surgical patch silently degrades to a
+/// no-op so the caller's full-reload fallback path runs.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Phase 8 surgical-patch loop: the create / delete / rename \
+              branches each mutate `drive.frs_to_compact` in a \
+              variant-specific way (delete tombstones the slot, create \
+              extends + registers, rename leaves it intact); splitting \
+              into per-variant helpers would scatter the FRS-mapping \
+              invariant across functions and obscure the symmetric \
+              treatment that's central to the surgical-patch correctness \
+              contract."
+)]
 pub fn apply_usn_patch(
     drive: &mut DriveCompactIndex,
     changes: &[uffs_mft::usn::FileChange],
-    frs_to_compact: &[u32],
 ) -> PatchStats {
     let mut stats = PatchStats::default();
 
     for change in changes {
         let frs_usize = uffs_mft::frs_to_usize(change.frs);
-        let compact_idx = frs_to_compact.get(frs_usize).copied().unwrap_or(u32::MAX);
+        let compact_idx = drive
+            .frs_to_compact
+            .get(frs_usize)
+            .copied()
+            .unwrap_or(u32::MAX);
 
         if change.deleted {
             if compact_idx == u32::MAX {
@@ -491,6 +526,12 @@ pub fn apply_usn_patch(
                 rec.name_len = 0;
                 // Clear parent so CSR rebuild excludes this record.
                 rec.parent_idx = u32::MAX;
+                // Phase 8: mark the FRS slot unmapped so a future
+                // batch can't re-animate the tombstone via the
+                // `compact_idx != u32::MAX` create branch below.
+                if let Some(slot) = drive.frs_to_compact.get_mut(frs_usize) {
+                    *slot = u32::MAX;
+                }
                 stats.deleted += 1;
             }
         } else if change.created {
@@ -517,7 +558,8 @@ pub fn apply_usn_patch(
                     .extend_from_slice(change.filename.as_bytes());
 
                 let parent_frs_usize = uffs_mft::frs_to_usize(change.parent_frs);
-                let parent_compact = frs_to_compact
+                let parent_compact = drive
+                    .frs_to_compact
                     .get(parent_frs_usize)
                     .copied()
                     .unwrap_or(u32::MAX);
@@ -544,7 +586,25 @@ pub fn apply_usn_patch(
                     _pad: [0; 1],
                 };
 
+                let new_compact_idx = uffs_mft::len_to_u32(drive.records.len());
                 drive.records.as_mut_vec().push(new_rec);
+
+                // Phase 8: register the new FRS → compact_idx mapping
+                // so future batches that reference this FRS find the
+                // correct slot.  Extend the table if needed (the FRS
+                // may exceed the build-time max — e.g. NTFS reuses
+                // freed FRS slots after deletes, and a long-running
+                // daemon can outgrow the original `frs_to_idx`
+                // capacity).  Sentinel-fill any intermediate gap so
+                // skipped FRS values still report `u32::MAX`.
+                if frs_usize >= drive.frs_to_compact.len() {
+                    drive
+                        .frs_to_compact
+                        .resize(frs_usize.saturating_add(1), u32::MAX);
+                }
+                if let Some(slot) = drive.frs_to_compact.get_mut(frs_usize) {
+                    *slot = new_compact_idx;
+                }
                 stats.created += 1;
             } else {
                 stats.skipped += 1;
@@ -564,13 +624,16 @@ pub fn apply_usn_patch(
                 }
 
                 let new_parent_frs = uffs_mft::frs_to_usize(change.parent_frs);
-                let new_parent_compact = frs_to_compact
+                let new_parent_compact = drive
+                    .frs_to_compact
                     .get(new_parent_frs)
                     .copied()
                     .unwrap_or(u32::MAX);
 
                 // Update parent_idx — CSR rebuild picks this up.
                 rec.parent_idx = new_parent_compact;
+                // Rename keeps the FRS in the same compact slot;
+                // mapping is unchanged.
                 stats.renamed += 1;
             }
         } else {
