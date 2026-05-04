@@ -14,6 +14,135 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Phase 8: operator-driven memory tiering (v0.6.0 staging)
+
+The full operator-facing memory-tiering surface — every command end-to-end
+from CLI → typed JSON-RPC client → daemon handler → `IndexManager`
+primitives → registry / cache / pin atomics.  See the
+[Windows-host runbook](docs/architecture/memory-tiering-windows-host-validation.md)
+for the operator-facing validation flow.
+
+- **`uffs daemon hibernate [DRIVES…]`** (Phase 8-B, PR #122) — demote
+  loaded shards to `Cold` in a single write-lock batch.  Empty drive
+  list ⇒ every loaded drive.  Releases the in-memory body but keeps
+  the encrypted compact cache on disk so a subsequent search or
+  `preload` can re-warm without a full MFT re-parse.  Reports the
+  per-pre-call-tier breakdown (`hot_demoted` / `warm_demoted` /
+  `parked_demoted` / `already_cold`) so the operator audit trail
+  captures what actually changed.
+
+- **`uffs daemon preload <DRIVES…> [--pin-minutes N]`** (Phase 8-C,
+  PR #122) — promote drive(s) to `Hot` and pin the tier against
+  demote for `N` minutes (default 30).  Pin contracts:
+  - Cold/Parked/Warm → Hot via single-flight body load + registry
+    rebuild.
+  - Already-Hot drives skip the rebuild entirely and atomically
+    extend the pin via `ShardEntry::pin_until`.
+  - Pinned shards survive idle-tick demote (`demote_idle_shards`)
+    and pressure-cascade demote (`cascade_demote_one_step`).
+  - Explicit `hibernate` and `forget --force` override the pin via
+    registry rebuild (the rebuilt `ShardEntry` starts at
+    `pin_until_ms = 0`).
+
+- **`uffs daemon forget <DRIVES…> [--force]`** (Phase 8-D, PR #123) —
+  evict drive(s) from the registry **and** delete every per-drive
+  on-disk cache artefact (encrypted compact body, USN cursor, MFT
+  index, lock file).  Three-phase orchestration:
+  1. Read-lock detect — refuse the whole request with
+     `ERR_DRIVE_BUSY` if any drive is non-`Cold` and `--force` is
+     not set, so a typo on one of five drives cannot accidentally
+     forget the other four.
+  2. Optional auto-hibernate (`--force` only) — demote every
+     non-`Cold` drive to `Cold` first via
+     `OperatorHibernate`-tagged `demote_letter_with_reason` calls,
+     clearing pins implicitly.
+  3. Per-drive evict + clean — `freed_bytes > 0` ⇒ `forgotten`,
+     idempotent re-runs land in `already_absent`.
+
+- **`uffs daemon status_drives`** (Phase 8-E, PR #123) — per-drive
+  tier + telemetry table.  Operator-facing companion to `daemon
+  status`: surfaces tier, pin expiry, query rate (EWMA), resident
+  bytes, and last-query timestamps for every drive the registry
+  knows about — including `Cold` shards (encrypted cache on disk,
+  zero RAM) so `forget` candidates are visible without
+  cross-referencing tracing logs.  Output sorted ascending by drive
+  letter so the table is stable across re-runs.
+
+- **`ShardEntry::pin_until_ms`** atomic field (Phase 8-C) — new
+  `AtomicU64` on every shard, initialised to `0` (unpinned) by all
+  four constructors.  `is_pinned(now_ms)` predicate folds the
+  `now_ms` comparison in for the demote-side gates;
+  `pin_until_ms_value()` accessor (added in Phase 8-E) returns the
+  raw timestamp for the `status_drives` wire output.
+
+- **`OperatorHibernate` `DemoteReason` variant** — surfaces in the
+  canonical `shard.transition` tracing event with
+  `reason="operator-hibernate"` so operators can grep the audit
+  trail to distinguish manual hibernation from idle-tick or
+  pressure-cascade demotes.
+
+- **`CacheCleaner` lifecycle hook** (Phase 8-D) — new
+  `Arc<dyn CacheCleaner>` field on `LifecycleHooks`.
+  `PlatformCacheCleaner` resolves the four canonical per-drive
+  paths via `uffs_core::compact_cache` / `uffs_mft::cache` and
+  unlinks each via `std::fs::remove_file`; `CountingCacheCleaner`
+  test fake records the call sequence so registry-eviction
+  behaviour can be verified without ever touching the host's real
+  cache directory.
+
+- **`promote_letter_to_hot` registry method** (Phase 8-C) — mirrors
+  `promote_letter` but rebuilds the registry with a `Hot` shard.
+  Accepts `Cold` / `Parked` / `Warm` source states; rejects `Hot`
+  (caller extends pin via atomic store on the live `Arc`) and
+  `Unknown` / `Evicting` (controller-only).
+
+### Added — wire format
+
+- **4 new JSON-RPC methods**: `hibernate`, `preload`, `forget`,
+  `status_drives` (Phase 8-A scaffolding pre-existing on `main`).
+- **2 new application error codes**: `ERR_DRIVE_BUSY = -4` (forget
+  refused without `--force`), `ERR_NOT_IMPLEMENTED = -3` (retired in
+  Phase 8-D once every Phase 8-A stub became a real handler).
+- **6 new wire types** in `uffs-client::protocol::response_tiering`:
+  `HibernateParams` / `HibernateResponse`, `PreloadParams` /
+  `PreloadResponse`, `ForgetParams` / `ForgetResponse`,
+  `StatusDrivesParams` / `StatusDrivesResponse`,
+  `DriveTierStatus`, plus `DEFAULT_PRELOAD_PIN_MINUTES = 30`.
+
+### Added — typed RPC client surface
+
+- **`UffsClientSync::{hibernate, preload, forget, status_drives}`**
+  in `uffs-client::connect_sync_tiering` — typed envelope helpers.
+  Matches the existing `connect_sync` shape; sibling-module split
+  keeps both files under the 800-LOC ceiling without an exception.
+
+### Added — tests
+
+- **22 new daemon-side integration tests** covering the full pin
+  contract surface, the all-or-nothing forget refusal, the
+  auto-hibernate-then-evict path, the deterministic `status_drives`
+  sort, and per-tier `resident_bytes` calculation across the
+  Hot/Warm/Parked/Cold ladder.  Plus 4 unit tests on the
+  `delete_drive_cache_files` helper using `tempfile::TempDir` so
+  the on-disk cleanup logic is exercised without ever touching the
+  host's cache directory.
+
+### Fixed — Dependabot pipeline (PR #126)
+
+- **`dependabot.yml` cargo-ecosystem prefix** flipped from `deps` to
+  `chore` so generated PR titles (`chore(deps): bump foo …`) pass
+  `.github/workflows/commitlint.yml`'s Conventional Commits
+  allowlist.  The previous `deps` prefix was never in the allowlist;
+  every cargo Dependabot PR was failing the title check.
+- **`commitlint.yml` advisory step** — pass `--repo` explicitly to
+  `gh pr comment` so the workflow does not crash when invoked
+  without an `actions/checkout` step.  The `gh` CLI was falling
+  through to a `fatal: not a git repository` error, which Bash's
+  `set -euo pipefail` propagated past the documented advisory-mode
+  `exit 0` escape hatch — turning every non-conforming PR title
+  into a red required check rather than the documented advisory
+  warning.
+
 ## [0.5.89] - 2026-04-25
 
 ### Fixed

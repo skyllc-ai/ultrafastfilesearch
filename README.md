@@ -92,9 +92,30 @@ uffs "*.txt" --data-dir ~/uffs_data
 # Daemon management
 uffs daemon status
 uffs daemon restart
+
+# Memory tiering — operator-driven controls (Phase 8)
+uffs daemon status_drives                 # per-drive tier + telemetry table
+uffs daemon hibernate                     # demote every drive to Cold (free RAM)
+uffs daemon preload C --pin-minutes 60    # pin a hot drive in RAM
+uffs daemon forget C --force              # evict + delete on-disk caches
 ```
 
 > 📖 **[Installation](docs/user-manual/installation.md)** · **[5-minute tutorial](docs/user-manual/getting-started.md)** · **[CLI reference](docs/user-manual/cli-overview.md)** · **[40+ filters](docs/user-manual/filters.md)**
+
+### Memory tiering at a glance
+
+The daemon keeps each drive's compact index in one of four tiers, demoted automatically by an idle TTL ladder + memory-pressure cascade and promoted on first search:
+
+| Tier | RAM cost | Source-of-truth | When |
+|---|---|---|---|
+| **Hot** | full body + bloom + trie | live in RAM | actively pinned (post-`preload`) or recently queried |
+| **Warm** | full body + bloom + trie | live in RAM | default after load; ready for any search |
+| **Parked** | bloom + trie only | live in RAM | idle past warm TTL; can answer "definitely not on this drive" without re-promote |
+| **Cold** | (nothing in RAM) | encrypted compact cache on disk | idle past parked TTL or operator-hibernated; re-promote on next search |
+
+Operator commands let you tune this manually for known workload shapes — `preload` pins a search-heavy drive against demote, `hibernate` frees RAM during long idle stretches, `forget` permanently evicts a drive plus its on-disk caches, and `status_drives` surfaces the live tier + pin + query-rate snapshot.
+
+> 📖 **[Memory-tiering Windows-host runbook](docs/architecture/memory-tiering-windows-host-validation.md)** — what to run on a multi-drive Windows box to validate the operator surface.
 
 ---
 
