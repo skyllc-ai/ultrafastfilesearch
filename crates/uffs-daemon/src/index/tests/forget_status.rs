@@ -298,7 +298,10 @@ async fn status_drives_single_warm_shard_full_snapshot() {
         row.resident_bytes
     );
     assert_eq!(row.pin_until_unix_ms, 0, "no preload ⇒ no pin");
-    assert_eq!(row.promotions_total, 0, "Phase 9 placeholder, always 0");
+    assert_eq!(
+        row.promotions_total, 0,
+        "no Cold → Hot preload ⇒ promotions_total stays 0 (Phase 9 counter)",
+    );
     assert!(
         row.last_query_at_ms > 0,
         "add_drive seeds last_query_at_ms via mark_loaded_at; got {}",
@@ -415,5 +418,106 @@ async fn status_drives_sorts_rows_by_letter_ascending() {
         letters,
         vec!['C', 'D', 'E'],
         "rows must be sorted by drive letter ascending regardless of load order"
+    );
+}
+
+// ── Phase 9 — promotions_total wire integration ────────────────────
+
+/// Phase 9 — `status_drives` surfaces the live Cold → Hot
+/// promotion counter, NOT the placeholder `0` that Phase 8-E
+/// shipped.  After one preload-from-Cold cycle the wire field
+/// reflects the bump.
+#[tokio::test]
+async fn status_drives_surfaces_promotions_total_after_cold_to_hot_preload() {
+    use crate::index::tiering_ops::PreloadOutcome;
+
+    let cleaner = Arc::new(CountingCacheCleaner::new(0));
+    let body = Arc::new(build_test_drive());
+    let loader = Arc::new(FixedBodyLoader {
+        body: Arc::clone(&body),
+    });
+    let mgr = make_manager(
+        cleaner,
+        Some(loader as Arc<dyn crate::cache::body_loader::BodyLoader>),
+    );
+    mgr.add_drive(build_test_drive()).await;
+    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+
+    // Pre-condition: status_drives reports promotions_total = 0.
+    let pre = mgr.status_drives().await;
+    let [pre_row] = pre.drives.as_slice() else {
+        panic!(
+            "expected exactly 1 drive pre-preload; got {}",
+            pre.drives.len()
+        );
+    };
+    assert_eq!(
+        pre_row.promotions_total, 0,
+        "Cold shard must report promotions_total = 0 before any preload",
+    );
+
+    // Drive: preload C from Cold (the canonical Phase 9 bump path).
+    let preload = mgr.preload_drive('C', 30).await;
+    assert!(matches!(preload, PreloadOutcome::Promoted { .. }));
+
+    // Post-condition: status_drives reports promotions_total = 1.
+    let post = mgr.status_drives().await;
+    let [post_row] = post.drives.as_slice() else {
+        panic!(
+            "expected exactly 1 drive post-preload; got {}",
+            post.drives.len()
+        );
+    };
+    assert_eq!(post_row.tier, "hot");
+    assert_eq!(
+        post_row.promotions_total, 1,
+        "post-preload-from-Cold the wire field must report 1 promotion",
+    );
+}
+
+/// Phase 9 — `preload` against an already-Hot drive does NOT
+/// double-count.  The second call hits the `AlreadyHot` arm in
+/// [`crate::index::tiering_ops::IndexManager::preload_drive`]
+/// which only extends the pin atomically — no registry rebuild,
+/// no `promote_letter_to_hot` call, no counter bump.
+#[tokio::test]
+async fn status_drives_promotions_total_does_not_double_count_already_hot_preload() {
+    use crate::index::tiering_ops::PreloadOutcome;
+
+    let cleaner = Arc::new(CountingCacheCleaner::new(0));
+    let body = Arc::new(build_test_drive());
+    let loader = Arc::new(FixedBodyLoader {
+        body: Arc::clone(&body),
+    });
+    let mgr = make_manager(
+        cleaner,
+        Some(loader as Arc<dyn crate::cache::body_loader::BodyLoader>),
+    );
+    mgr.add_drive(build_test_drive()).await;
+    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+
+    // First preload: Cold → Hot, bumps counter to 1.
+    let first = mgr.preload_drive('C', 5).await;
+    assert!(matches!(first, PreloadOutcome::Promoted { .. }));
+
+    // Second preload: AlreadyHot path — extends pin only, must
+    // NOT bump the counter.
+    let second = mgr.preload_drive('C', 60).await;
+    assert!(
+        matches!(second, PreloadOutcome::AlreadyHot { .. }),
+        "second preload must hit the AlreadyHot arm (no rebuild); got {second:?}",
+    );
+
+    let response = mgr.status_drives().await;
+    let [row] = response.drives.as_slice() else {
+        panic!(
+            "expected exactly 1 drive after preload cycles; got {}",
+            response.drives.len()
+        );
+    };
+    assert_eq!(
+        row.promotions_total, 1,
+        "AlreadyHot preload must NOT bump promotions_total \
+         (only the first Cold → Hot transition counted)",
     );
 }

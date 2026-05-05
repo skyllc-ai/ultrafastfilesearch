@@ -376,3 +376,149 @@ fn promote_letter_already_warm_returns_none() {
         "promote on already-Warm shard must return None"
     );
 }
+
+// ── Phase 9 — Cold → Hot promotion counter on `promote_letter_to_hot` ──
+
+/// `promote_letter_to_hot` from a `Cold` source bumps the per-shard
+/// `promotions_total` counter by 1 — the canonical
+/// `uffs daemon preload <drive>`-against-evicted-drive path that
+/// Phase 9 wires through.
+#[test]
+fn promote_letter_to_hot_bumps_promotions_total_when_source_is_cold() {
+    use crate::cache::{ShardRegistry, ShardState};
+
+    let body_c = Arc::new(build_test_drive());
+    let mut reg = ShardRegistry::new().add(Arc::clone(&body_c));
+    // Demote C to Cold (the typical state pre-`preload`).
+    reg = reg.demote_letter('C', ShardState::Cold).expect("demote");
+    assert_eq!(
+        reg.iter()
+            .find(|shard| shard.drive == 'C')
+            .expect("C present after Cold demote")
+            .stats
+            .promotions_total(),
+        0,
+        "freshly-demoted Cold shard must have promotions_total = 0",
+    );
+
+    // Promote Cold → Hot (the actual preload-from-Cold path).
+    reg = reg
+        .promote_letter_to_hot('C', Arc::clone(&body_c))
+        .expect("promote_letter_to_hot from Cold");
+
+    let c = reg
+        .iter()
+        .find(|shard| shard.drive == 'C')
+        .expect("C present post-promote");
+    assert_eq!(c.state(), ShardState::Hot, "post-promote tier must be Hot");
+    assert_eq!(
+        c.stats.promotions_total(),
+        1,
+        "Cold → Hot promote must bump promotions_total by exactly one",
+    );
+}
+
+/// `promote_letter_to_hot` from a `Warm` source does NOT bump the
+/// counter — that's an "already in RAM, just flip the tier marker"
+/// path, not the expensive Cold-source re-decrypt path the wire
+/// docstring scopes the field to.
+#[test]
+fn promote_letter_to_hot_does_not_bump_promotions_total_when_source_is_warm() {
+    use crate::cache::{ShardRegistry, ShardState};
+
+    let body_c = Arc::new(build_test_drive());
+    let mut reg = ShardRegistry::new().add(Arc::clone(&body_c));
+    // C lands in Warm (the default after add).
+    let pre_state = reg
+        .iter()
+        .find(|shard| shard.drive == 'C')
+        .expect("C present after add")
+        .state();
+    assert_eq!(pre_state, ShardState::Warm);
+
+    // Promote Warm → Hot (the operator preloads an already-Warm
+    // drive — a no-cost tier-marker flip).
+    reg = reg
+        .promote_letter_to_hot('C', Arc::clone(&body_c))
+        .expect("promote_letter_to_hot from Warm");
+
+    let c = reg
+        .iter()
+        .find(|shard| shard.drive == 'C')
+        .expect("C present post-promote");
+    assert_eq!(c.state(), ShardState::Hot);
+    assert_eq!(
+        c.stats.promotions_total(),
+        0,
+        "Warm → Hot promote must NOT bump promotions_total \
+         (only Cold → Hot counts per the wire docstring)",
+    );
+}
+
+/// `promote_letter_to_hot` from a `Parked` source does NOT bump the
+/// counter — the body is materialised from the existing
+/// `parked_body` bloom + trie, NOT from a re-decrypt of the
+/// on-disk encrypted compact cache, so it doesn't match the
+/// "expensive re-promote" semantics `promotions_total` is meant
+/// to measure.
+#[test]
+fn promote_letter_to_hot_does_not_bump_promotions_total_when_source_is_parked() {
+    use crate::cache::{ShardRegistry, ShardState};
+
+    let body_c = Arc::new(build_test_drive());
+    let mut reg = ShardRegistry::new().add(Arc::clone(&body_c));
+    reg = reg
+        .demote_letter('C', ShardState::Parked)
+        .expect("demote to Parked");
+
+    // Promote Parked → Hot.
+    reg = reg
+        .promote_letter_to_hot('C', Arc::clone(&body_c))
+        .expect("promote_letter_to_hot from Parked");
+
+    let c = reg
+        .iter()
+        .find(|shard| shard.drive == 'C')
+        .expect("C present post-promote");
+    assert_eq!(c.state(), ShardState::Hot);
+    assert_eq!(
+        c.stats.promotions_total(),
+        0,
+        "Parked → Hot promote must NOT bump promotions_total \
+         (only Cold → Hot counts; Parked source uses the live \
+         parked_body, no re-decrypt cost)",
+    );
+}
+
+/// Two consecutive Cold → Hot promotes (e.g. operator runs
+/// `preload C` → `hibernate C` → `preload C` again) bump the
+/// counter to 2 — the per-drive `Arc<DriveStats>` survives the
+/// registry rebuild, so the count accumulates across the
+/// shard-rebuild churn.
+#[test]
+fn promote_letter_to_hot_accumulates_across_repeated_cold_to_hot_cycles() {
+    use crate::cache::{ShardRegistry, ShardState};
+
+    let body_c = Arc::new(build_test_drive());
+    let mut reg = ShardRegistry::new().add(Arc::clone(&body_c));
+
+    for _ in 0_u32..2_u32 {
+        // Demote to Cold.
+        reg = reg.demote_letter('C', ShardState::Cold).expect("demote");
+        // Promote Cold → Hot.
+        reg = reg
+            .promote_letter_to_hot('C', Arc::clone(&body_c))
+            .expect("promote_letter_to_hot");
+    }
+
+    let c = reg
+        .iter()
+        .find(|shard| shard.drive == 'C')
+        .expect("C present post-cycle");
+    assert_eq!(c.state(), ShardState::Hot);
+    assert_eq!(
+        c.stats.promotions_total(),
+        2,
+        "two Cold → Hot cycles must accumulate to promotions_total = 2",
+    );
+}
