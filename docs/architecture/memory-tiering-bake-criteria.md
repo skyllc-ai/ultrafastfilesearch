@@ -52,9 +52,26 @@ What is **not** allowed:
 
 ## 1. Daily bake checks
 
-Run these every weekday during the bake period.  ~10 minutes wall-clock.
+Run these every weekday during the bake period.  Wall-clock varies
+from ~10 min (no-soak days) to 24 h (soak days) — see the
+activity-routing rules below.
 
-### 1.1 Mac side (M-series ARM64)
+> **🚨 Daemon-killing vs daemon-preserving actions.**
+> `just readiness` (§1.1 / §1.2 below) **kills the daemon** at every
+> scenario boundary — it's a lifecycle smoke that exercises
+> start/stop/kill/restart.  It is **incompatible with any 24-h soak
+> in flight** (Phase 6 §1.5, Phase 7 §1.6, the Working-Set
+> trajectory §1.7) because killing the daemon mid-soak invalidates
+> the soak's contract (no demote-below-Warm window, no journal-loop
+> continuity, no monotonic Working-Set series).
+>
+> **Routing rule:**  on any bake-day where a soak is running, skip
+> §1.1 / §1.2 entirely and use the **lightweight non-destructive
+> smoke** in §1.4 — it observes the soaking daemon without touching
+> its lifecycle.  The full readiness pass runs on the no-soak days
+> (typically 4 of the 7 bake-days; see §1.8).
+
+### 1.1 Mac side — full readiness (no-soak days only)
 
 ```bash
 just readiness 2>&1 | tee ~/uffs_bake/$(date +%Y-%m-%d)-mac.log
@@ -72,7 +89,7 @@ just readiness 2>&1 | tee ~/uffs_bake/$(date +%Y-%m-%d)-mac.log
   - `preload` mean ≤ 1 950 ms
   - `status_drives` mean ≤ 320 ms
 
-### 1.2 Windows side (production NTFS host)
+### 1.2 Windows side — full readiness (no-soak days only)
 
 ```powershell
 just readiness *>&1 | Tee-Object -FilePath ~/uffs_bake/$(Get-Date -Format yyyy-MM-dd)-win.log
@@ -113,13 +130,76 @@ Select-String -Path ~/uffs_bake/$(Get-Date -Format yyyy-MM-dd)-win.log `
 
 **Pass criteria:** every grep returns no matches (empty output).
 
-### 1.4 Process-stability snapshot (Windows only, daily)
+### 1.4 Lightweight non-destructive smoke (any day, REQUIRED on soak days)
 
-The daemon is restarted by every readiness run, but the bake should also
-catch slow leaks in the long-running daemon path.  Once per week,
-capture a 24 h `uffsd.exe` Working-Set trajectory:
+Observe-only.  Does not kill the daemon, does not bounce its lifecycle.
+Safe to run during any 24-h soak.
+
+```bash
+# Mac (or any Unix-like host)
+uffs daemon status            # must report `Status: Ready` + `Drives: 7 of 7 ready`
+uffs daemon status_drives     # must show 7 rows, sorted ASCII ascending
+uffs '*' --ext rs --limit 5   # quick search probe — must return ≥ 1 row
+ps -p $(pgrep uffsd) -o pid,rss,vsz,etime  # process snapshot
+```
 
 ```powershell
+# Windows (production host)
+uffs daemon status
+uffs daemon status_drives
+uffs '*' --ext rs --limit 5 *> $null
+Get-Process uffsd | Select-Object Id, WS, PM, NPM, VM, CPU, StartTime |
+    ConvertTo-Json -Compress
+```
+
+**Pass criteria:**
+
+- `daemon status` reports `Ready` + 7 drives loaded.
+- `status_drives` returns 7 rows, each with `TIER ∈ {warm, hot, parked, cold}`.
+- Search probe returns ≥ 1 row (daemon is responsive).
+- Process PID matches the previous day's PID **if a soak is in progress**
+  (proves the daemon hasn't been restarted mid-soak).  On no-soak days
+  the PID changes daily because §1.1 / §1.2 restart the daemon.
+
+### 1.5 Phase 6 24-h soak (one bake-day, Windows only)
+
+Close the master-plan §5.1 Phase 6 row.  Mutually exclusive with
+§1.1 / §1.2 on the same day.
+
+```powershell
+just soak phase6
+```
+
+**Pass criteria:** harness reports `══ ALL GREEN ══  N/N assertions passed`
+and writes a populated `summary.txt` + `validation/*.pass` breadcrumbs to
+`$env:USERPROFILE\uffs_soak\phase6-<timestamp>\`.  See
+[`memory-tiering-windows-host-validation.md`](memory-tiering-windows-host-validation.md)
+§2 (Phase 6 soak) for the per-assertion contract.
+
+### 1.6 Phase 7 24-h soak (one bake-day, Windows only)
+
+Close the master-plan §5.1 Phase 7 row.  Mutually exclusive with
+§1.1 / §1.2 on the same day.
+
+```powershell
+just soak phase7
+```
+
+**Pass criteria:** harness reports `══ ALL GREEN ══  N/N assertions passed`
+and writes a populated `summary.txt` + `validation/*.pass` breadcrumbs to
+`$env:USERPROFILE\uffs_soak\phase7-<timestamp>\`.  See
+[`memory-tiering-windows-host-validation.md`](memory-tiering-windows-host-validation.md)
+§3 (Phase 7 soak) for the per-assertion contract.
+
+### 1.7 Working-Set trajectory (one bake-day, Windows only)
+
+Catches slow leaks in the long-running daemon path.  Mutually
+exclusive with §1.1 / §1.2 on the same day.  Run **after** Phase 6 +
+Phase 7 soaks have validated the operator surface, so a leak observed
+here can't be confused with a tier-transition pattern.
+
+```powershell
+# Hourly Get-Process samples for 24 h.  Daemon must already be Running.
 1..24 | ForEach-Object {
     Get-Process uffsd | Select-Object Id, WS, PM, NPM, VM, CPU,
         @{Name='ts'; Expression={ Get-Date -Format 'HH:mm:ss' }}
@@ -128,7 +208,30 @@ capture a 24 h `uffsd.exe` Working-Set trajectory:
 ```
 
 **Pass criteria:** Working Set at hour 24 ≤ 1.5× Working Set at hour 1
-(allows for normal cache fill-up but flags a runaway leak).
+(allows normal cache fill-up; flags a runaway leak).  PID at hour 1
+must equal PID at hour 24 (no restart inside the window).
+
+### 1.8 Bake-day activity routing
+
+The seven bake-days split between full-readiness days (§1.1 / §1.2)
+and soak days (§1.4 lightweight + one of §1.5 / §1.6 / §1.7).
+Recommended split:
+
+| Bake-day | Mac | Windows |
+|---:|---|---|
+| 1 | full readiness (§1.1) | full readiness (§1.2) |
+| 2 | full readiness | **Phase 6 soak** (§1.5) + lightweight smoke (§1.4) at start + end |
+| 3 | full readiness | full readiness |
+| 4 | full readiness | **Phase 7 soak** (§1.6) + lightweight smoke at start + end |
+| 5 | full readiness | full readiness |
+| 6 | full readiness | **WS trajectory** (§1.7) + lightweight smoke at hour 0 / 12 / 24 |
+| 7 | full readiness | full readiness |
+
+Mac runs full readiness all 7 days — the soaks are Windows-only by
+design (NTFS auto-discovery, Win32 Working Set).  The schedule above
+is a recommendation, not a requirement; an operator can re-order as
+long as the three soaks each occupy a distinct 24-h window and the
+remaining four days run full readiness on both platforms.
 
 ---
 
@@ -167,9 +270,14 @@ minor-bump invocation:
 
 - [ ] **7 consecutive bake-days** with all daily checks (§1) green.
       "Consecutive" excludes weekends — 7 weekdays with at least one
-      Mac run and one Windows run each.
-- [ ] **At least one 24 h Working-Set trace** (§1.4) captured and within
-      pass criteria.
+      Mac and one Windows check each (full readiness on no-soak days,
+      lightweight smoke on soak days).
+- [ ] **Phase 6 24-h soak captured** (§1.5) and `summary.txt` shows all
+      assertions PASS — closes the master-plan §5.1 Phase 6 row.
+- [ ] **Phase 7 24-h soak captured** (§1.6) and `summary.txt` shows all
+      assertions PASS — closes the master-plan §5.1 Phase 7 row.
+- [ ] **Working-Set trajectory captured** (§1.7) within pass criteria
+      (≤ 1.5× over 24 h).
 - [ ] **CHANGELOG `Unreleased` section finalized** — every shipped PR
       since v0.5.85 listed under the right heading
       (`Added` / `Changed` / `Fixed`).
@@ -198,16 +306,16 @@ record the wall-clock of each readiness run and a one-word `notes`
 field; failure days record the failure summary and link the regression
 PR.
 
-| Day | Date       | Mac result   | Mac wall | Win result   | Win wall | Notes |
-|----:|------------|--------------|---------:|--------------|---------:|-------|
-| 0   | 2026-05-05 | 150/150 ✅ |    4m 30s | 150/150 ✅ |     ~12m | Reference capture — pre-bake validation. |
-|  1  |            |              |          |              |          |       |
-|  2  |            |              |          |              |          |       |
-|  3  |            |              |          |              |          |       |
-|  4  |            |              |          |              |          |       |
-|  5  |            |              |          |              |          |       |
-|  6  |            |              |          |              |          |       |
-|  7  |            |              |          |              |          |       |
+| Day | Date       | Mac activity   | Mac result   | Win activity         | Win result   | Notes |
+|----:|------------|----------------|--------------|----------------------|--------------|-------|
+| 0   | 2026-05-05 | full readiness | 150/150 ✅ | full readiness       | 150/150 ✅ | Reference capture — pre-bake validation. |
+|  1  |            | full readiness |              | full readiness       |              |       |
+|  2  |            | full readiness |              | Phase 6 soak (§1.5)  |              |       |
+|  3  |            | full readiness |              | full readiness       |              |       |
+|  4  |            | full readiness |              | Phase 7 soak (§1.6)  |              |       |
+|  5  |            | full readiness |              | full readiness       |              |       |
+|  6  |            | full readiness |              | WS trajectory (§1.7) |              |       |
+|  7  |            | full readiness |              | full readiness       |              |       |
 
 **Cut day:** the day after Day 7 if all rows are green.
 
