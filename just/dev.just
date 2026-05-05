@@ -60,6 +60,34 @@ orphan *ARGS:
 readiness *ARGS:
     @rust-script scripts/dev/daemon-readiness.rs {{ ARGS }}
 
+# Tier-load A/B benchmark — Cold vs Parked worst-case.
+#
+# Empirically validates that worst-case re-promote wall-clock is
+# **identical** between the `Cold` and `Parked` source tiers when
+# every drive's bloom hits the query (the broadest possible filter).
+# The bloom optimisation in `ensure_warm_for_dispatch` only helps
+# when some blooms *miss* — under a broad filter every drive must
+# body-load regardless of source tier, and the per-drive decrypt
+# cost is shared by the same `load_or_join_in_flight` primitive on
+# both code paths.
+#
+# Runs N iterations (default 3) of each phase with a hard 15 %
+# parity assertion at the end.  Total wall-clock ~3 min for N=3
+# (driven by the 35 s warm→parked TTL wait per Phase B iteration).
+#
+# Pass `~/uffs_data` (or any data dir / MFT file) on macOS / Linux;
+# omit on Windows for live NTFS auto-discovery.  The script self-
+# manages the daemon TTL env vars (`UFFS_WARM_TO_PARKED_IDLE_SECS=5`,
+# `UFFS_PARKED_TO_COLD_IDLE_SECS=900`) so callers don't have to.
+#
+# Examples:
+#   just tier-compare ~/uffs_data
+#   just tier-compare ~/uffs_data --pattern '*.dll' --iterations 5
+#   just tier-compare ~/uffs_data --max-delta-percent 5     # tighter
+#   just tier-compare ~/uffs_data --pattern 'xyzzy.log'     # narrow query — expect FAIL
+tier-compare *ARGS:
+    @rust-script scripts/dev/tier-load-compare.rs {{ ARGS }}
+
 # Install cross-compilation targets for GitHub Actions compatibility.
 setup-cross:
     @printf "\033[0;34m Installing cross-compilation targets...\033[0m\n"

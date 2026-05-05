@@ -228,16 +228,50 @@ pub fn daemon_forget(drives: &[char], force: bool) -> Result<()> {
 ///
 /// ```bash
 /// $ uffs daemon status_drives
-/// DRIVE  TIER    RESIDENT     QPM   LAST QUERY (ms)   PIN UNTIL (ms)
-/// C      hot     1.20 GiB   45.30   1700000000000     1700001800000
-/// D      warm    843 MiB     2.10   1699999940000     -
-/// E      parked  12 MiB      0.00   1699999600000     -
-/// F      cold    0 B         0.00   -                 -
+/// DRIVE  TIER    RESIDENT     QPM   LAST QUERY (ms)   PIN UNTIL (ms)   PROMOTIONS
+/// C      hot     1.20 GiB   45.30   1700000000000     1700001800000              3
+/// D      warm    843 MiB     2.10   1699999940000     -                          0
+/// E      parked  12 MiB      0.00   1699999600000     -                          1
+/// F      cold    0 B         0.00   -                 -                          0
 /// ```
+///
+/// The `PROMOTIONS` column surfaces the cumulative `Cold → Hot`
+/// promotion count for each drive (Phase 9 — see
+/// [`uffs_client::protocol::response::DriveTierStatus::promotions_total`]).
+/// It bumps once per `preload <drive>` against a fully-evicted
+/// (Cold-state) drive, when the daemon has to re-decrypt the
+/// encrypted compact cache from disk.  Already-Warm preloads (cheap
+/// tier-marker flip — no body load) and `Parked → Hot` promotes do
+/// **not** bump it.  Note that `Parked → Hot` *does* pay a
+/// body-decrypt cost (the parked bloom + trie are dropped and the
+/// body loader is re-run, see `crates/uffs-daemon/src/index/
+/// tiering_ops.rs` source arms) — the counter still skips because
+/// its contract is named for the `Cold → Hot` *tier transition*,
+/// not for "promotes that paid a decrypt cost".  See
+/// `crates/uffs-daemon/src/cache/registry.rs::promote_letter_to_hot`
+/// for the bump site (`if from_state == ShardState::Cold`).
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 pub fn daemon_status_drives() -> Result<()> {
-    let mut client = UffsClientSync::connect_raw()
-        .map_err(|err| anyhow::anyhow!("Daemon is not running: {err}"))?;
+    // Read-only commands match `daemon status`'s graceful "daemon
+    // down" rendering on connection failure — same stdout shape,
+    // same exit 0 — so an operator pipeline like
+    //   `uffs daemon status_drives | grep cold`
+    // doesn't crash on a stopped daemon.  Mutating commands
+    // (`hibernate` / `preload` / `forget`) deliberately stay on the
+    // bail-with-error path because the operator needs to know their
+    // requested mutation didn't run.
+    //
+    // Note: only the **connect** failure is gracefully handled.  An
+    // RPC dispatch failure (e.g. stale daemon returning
+    // `ERR_METHOD_NOT_FOUND` for a method introduced after the
+    // daemon was last rebuilt, or a serde decode error) surfaces the
+    // real error so the operator sees the actual cause — rather than
+    // a misleading "daemon is not running" when the daemon is
+    // actually up but speaking an older protocol.
+    let Ok(mut client) = UffsClientSync::connect_raw() else {
+        crate::commands::daemon_mgmt::print_not_running();
+        return Ok(());
+    };
 
     let response = client
         .status_drives()
@@ -249,8 +283,8 @@ pub fn daemon_status_drives() -> Result<()> {
     }
 
     println!(
-        "{:<6} {:<7} {:<10} {:<7} {:<17} {:<14}",
-        "DRIVE", "TIER", "RESIDENT", "QPM", "LAST QUERY (ms)", "PIN UNTIL (ms)",
+        "{:<6} {:<7} {:<10} {:<7} {:<17} {:<16} {:>10}",
+        "DRIVE", "TIER", "RESIDENT", "QPM", "LAST QUERY (ms)", "PIN UNTIL (ms)", "PROMOTIONS",
     );
     for drive in &response.drives {
         print_status_drive_row(drive);
@@ -263,7 +297,12 @@ pub fn daemon_status_drives() -> Result<()> {
 ///
 /// Split out so the column widths stay co-located between the
 /// header and the per-row writer — easier to keep aligned when the
-/// schema gains a new column in a future sub-phase.
+/// schema gains a new column in a future sub-phase.  The
+/// `PROMOTIONS` column right-aligns its integer (the `{:>10}`
+/// format spec) since it is a count, not a label — this matches
+/// the convention CLI tools use for numeric tail columns
+/// (e.g. `du -h` puts the byte count on the left, but a counter
+/// column reads better right-aligned for at-a-glance comparison).
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn print_status_drive_row(drive: &DriveTierStatus) {
     let last_query = if drive.last_query_at_ms > 0 {
@@ -277,13 +316,14 @@ fn print_status_drive_row(drive: &DriveTierStatus) {
         "-".to_owned()
     };
     println!(
-        "{:<6} {:<7} {:<10} {:<7.2} {:<17} {:<14}",
+        "{:<6} {:<7} {:<10} {:<7.2} {:<17} {:<16} {:>10}",
         drive.letter,
         drive.tier,
         format_bytes(drive.resident_bytes),
         drive.query_rate_per_min,
         last_query,
         pin_until,
+        drive.promotions_total,
     );
 }
 

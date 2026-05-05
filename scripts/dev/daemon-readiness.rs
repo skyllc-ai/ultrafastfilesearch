@@ -34,6 +34,14 @@
 //   Scenario P: full Phase 8 round-trip cycle — search → hibernate →
 //               preload → search → forget, with per-step timing
 //   Scenario Q: Phase 9 promotions_total counter wire surface
+//   Scenario R: search-driven re-promote latency profile
+//               (Warm baseline → Cold → Warm via decrypt → Warm → Hot
+//                via preload → Hot search; cost ladder at a glance)
+//   Scenario S: TTL-gated Parked→Hot re-promote latency (operator opt-in
+//               via --park-wait-secs; sleeps through the warm-to-parked
+//               idle window and times preload of an organically Parked
+//               drive — the only path scenario R cannot reach without
+//               touching the test-only `demote_letter_for_test` helper)
 //
 // Each Phase 8 scenario captures per-RPC wall-clock timings so an
 // operator can see where time is spent in the operator-driven tier
@@ -85,23 +93,114 @@ struct Cli {
     #[arg(long, default_value = "*.rs")]
     pattern: String,
 
-    /// Skip the Phase 8 operator-command scenarios (L-Q).  Useful when
-    /// running against a daemon build that predates Phase 8 (PRs #122 +
-    /// #123) or when the operator only wants the lifecycle smoke tests.
-    /// Defaults to running all scenarios.
+    /// Skip the Phase 8/9 operator-command scenarios (L-S).  Useful
+    /// when running against a daemon build that predates Phase 8
+    /// (PRs #122 + #123) or when the operator only wants the
+    /// lifecycle smoke tests.  Defaults to running all scenarios
+    /// (S still requires `--park-wait-secs > 0` to actually run;
+    /// when the flag is 0 scenario S prints a dimmed `skipped`
+    /// marker and returns immediately).
     #[arg(long)]
     skip_phase8: bool,
 
     /// Drive letter to use as the *destructive* target for the forget
     /// scenario (O) and the round-trip cycle (P).  Whatever drive you
-    /// pass here will have its on-disk caches DELETED; pick something
-    /// you can afford to re-build (the daemon will cold-load it the
-    /// next time it appears in a search).  Defaults to `Z` because no
-    /// real drive normally has that letter — operators on the 7-drive
-    /// reference box should override this with a small drive like `M`
-    /// or `S` so the destructive path is actually exercised.
-    #[arg(long, default_value = "Z")]
+    /// pass here will have its on-disk caches DELETED; the daemon
+    /// will cold-load it the next time it appears in a search
+    /// (one body-decrypt + body-load, ~seconds depending on drive
+    /// size).
+    ///
+    /// Defaults to **`G`** — the canonical test drive on the
+    /// reference 7-drive box, matching the `tests/fixtures/drive_g/`
+    /// fixture.  The destructive path is therefore exercised on
+    /// every readiness pass, which is the whole point of including
+    /// scenarios O and P in the run.
+    ///
+    /// Operators on a different host (or who don't want G to be
+    /// the destructive target) should pass `--forget-drive <letter>`
+    /// to point at a drive they're happy to have re-cold-loaded.
+    /// Pre-Phase-9 the default was `Z` (a safe placeholder that
+    /// rarely exists), but the resulting `[skipped — pre-forget had
+    /// no on-disk cache]` outcomes meant the destructive path was
+    /// almost never actually exercised — defeating the purpose of
+    /// having scenario O in the readiness pass.
+    #[arg(long, default_value = "G")]
     forget_drive: String,
+
+    /// Optional seconds to wait inside scenario N to verify the
+    /// preload pin survives a real demote-controller evaluation.
+    /// Default `0` skips the wait — scenario N then only checks the
+    /// structural pin shape (drive=hot, PIN UNTIL>0).  Recommended
+    /// value is `90` together with `UFFS_WARM_TO_PARKED_IDLE_SECS=30`
+    /// in the environment so the controller fires at least twice
+    /// during the window (the env var is inherited by the daemon
+    /// process the script spawns).
+    ///
+    /// Example:
+    ///
+    /// ```bash
+    /// UFFS_WARM_TO_PARKED_IDLE_SECS=30 \
+    ///   just readiness ~/uffs_data --pin-ttl-wait-secs 90
+    /// ```
+    ///
+    /// Adds ~`<value>` seconds of wall-clock to the run.  Mirrors
+    /// the Windows-host runbook G6 gate (see
+    /// `docs/architecture/memory-tiering-windows-host-validation.md`
+    /// §3 G6 — "preload pin contract survives idle TTL").
+    #[arg(long, default_value_t = 0)]
+    pin_ttl_wait_secs: u64,
+
+    /// Optional seconds to wait inside scenario S to let the demote
+    /// controller demote the target drive Warm → Parked.  Default
+    /// `0` skips scenario S entirely (the fast lane).  Recommended
+    /// invocation (~35 s wall-clock — the practical minimum):
+    ///
+    /// ```bash
+    /// UFFS_WARM_TO_PARKED_IDLE_SECS=5 \
+    ///   UFFS_PARKED_TO_COLD_IDLE_SECS=900 \
+    ///   just readiness ~/uffs_data --park-wait-secs 35
+    /// ```
+    ///
+    /// The two env vars matter in **opposite** directions:
+    ///
+    ///   * `UFFS_WARM_TO_PARKED_IDLE_SECS` should be **shorter** than
+    ///     `--park-wait-secs` so the demote controller actually fires
+    ///     during the wait window („how soon does idle become Parked“).
+    ///   * `UFFS_PARKED_TO_COLD_IDLE_SECS` should be **much longer**
+    ///     than `--park-wait-secs` so the drive doesn't slip past
+    ///     Parked into Cold before scenario S can observe it
+    ///     („how long does Parked stay Parked“).  The 900-second value
+    ///     above gives a comfortable 15-minute Parked window.
+    ///
+    /// **30 s controller-tick floor.**  The daemon's idle-demote
+    /// controller fires every 30 s on a hard-coded tokio interval
+    /// (see `spawn_idle_demote_controller` in
+    /// `crates/uffs-daemon/src/lib.rs`).  The first tick is skipped
+    /// (so freshly loaded shards aren't immediately demoted), which
+    /// means the controller's **first** evaluation happens 30 s
+    /// after daemon-start.  Lowering `UFFS_WARM_TO_PARKED_IDLE_SECS`
+    /// below 30 does **not** speed up scenario S below ~35 s — the
+    /// controller still has to wait for its tick boundary.  There is
+    /// no operator-driven force-park RPC today (`hibernate` walks
+    /// the cascade all the way to Cold; `preload` only goes upward;
+    /// `forget` is destructive).  Adding one would be a Phase-10
+    /// candidate; until then the TTL wait is the only path to
+    /// observe an organically-Parked drive end-to-end.
+    ///
+    /// Without the env vars the controller uses the policy defaults
+    /// (warm-to-parked = 360 s; parked-to-cold = 86400 s = 24 h —
+    /// see `crates/uffs-daemon/src/cache/policy.rs`).  In that case
+    /// `--park-wait-secs 400` would also work but the run time grows
+    /// proportionally.
+    ///
+    /// Adds ~`<value>` seconds of wall-clock to the run on top of the
+    /// preload + cleanup overhead (~5 s).  The Parked-tier preload
+    /// itself measures the Parked→Hot transition cost, which is
+    /// dominated by the body re-load + decrypt (drops the Parked
+    /// bloom + trie, see `crates/uffs-daemon/src/cache/registry.rs::
+    /// promote_letter_to_hot` Parked-source arm).
+    #[arg(long, default_value_t = 0)]
+    park_wait_secs: u64,
 }
 
 /// Detect whether the user passed a file or directory and return the
@@ -132,6 +231,15 @@ struct Runner {
     /// Operator-supplied destructive target for scenarios O + P.
     /// Anything passed here will have its on-disk caches deleted.
     forget_drive: char,
+    /// Optional pin-TTL wait window for scenario N (0 = skip).
+    /// See `Cli::pin_ttl_wait_secs` for the recommended invocation
+    /// pattern (env var + flag).
+    pin_ttl_wait_secs: u64,
+    /// Optional warm-to-parked TTL wait for scenario S (0 = skip
+    /// scenario S entirely).  See `Cli::park_wait_secs` for the
+    /// two-env-var setup pattern (`UFFS_WARM_TO_PARKED_IDLE_SECS`
+    /// short + `UFFS_PARKED_TO_COLD_IDLE_SECS` long).
+    park_wait_secs: u64,
     passed: u32,
     failed: u32,
     timings: Vec<(String, u128)>,
@@ -148,6 +256,8 @@ impl Runner {
         source_path: String,
         pattern: String,
         forget_drive: char,
+        pin_ttl_wait_secs: u64,
+        park_wait_secs: u64,
     ) -> Self {
         Self {
             binary,
@@ -155,6 +265,8 @@ impl Runner {
             source_path,
             pattern,
             forget_drive,
+            pin_ttl_wait_secs,
+            park_wait_secs,
             passed: 0,
             failed: 0,
             timings: Vec::new(),
@@ -412,16 +524,21 @@ impl Runner {
     /// Parse the `PIN UNTIL (ms)` column for a specific drive.
     /// Returns `None` if the drive isn't listed; `Some(0)` if the
     /// column shows `-` (unpinned).
+    ///
+    /// Post-Phase-9 the row layout is:
+    ///   `letter tier resident_value resident_unit qpm last_query pin_until promotions`
+    /// — `pin_until` is the **second-to-last** token, with
+    /// `promotions` (the new Phase 9 column) at the very end.
     fn parse_pin_until(table: &str, drive: char) -> Option<u64> {
         for line in table.lines() {
             let trimmed = line.trim_start();
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
             // Row shape: [letter, tier, resident_value, resident_unit,
-            //             qpm, last_query, pin_until]
+            //             qpm, last_query, pin_until, promotions]
             // RESIDENT spans two tokens (`1.20 GiB`); when the value
             // is `0` the unit collapses to a single token (`B`) and
             // the row is one column shorter.  Defend against both.
-            if parts.len() < 6 {
+            if parts.len() < 7 {
                 continue;
             }
             let letter_token = parts[0];
@@ -433,11 +550,36 @@ impl Runner {
             {
                 continue;
             }
-            let pin_token = parts.last()?;
+            // pin_until is second-to-last (promotions is last).
+            let pin_token = parts.get(parts.len().saturating_sub(2))?;
             if *pin_token == "-" {
                 return Some(0);
             }
             return pin_token.parse::<u64>().ok();
+        }
+        None
+    }
+
+    /// Parse the `PROMOTIONS` column for a specific drive (Phase 9).
+    /// Returns `None` if the drive isn't listed.  The value is the
+    /// last token on each row.
+    fn parse_promotions_total(table: &str, drive: char) -> Option<u64> {
+        for line in table.lines() {
+            let trimmed = line.trim_start();
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() < 7 {
+                continue;
+            }
+            let letter_token = parts[0];
+            if letter_token.len() != 1
+                || !letter_token
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.eq_ignore_ascii_case(&drive))
+            {
+                continue;
+            }
+            return parts.last()?.parse::<u64>().ok();
         }
         None
     }
@@ -540,9 +682,10 @@ impl Runner {
     }
 
     /// Pick a loaded drive letter that is **not** equal to
-    /// `self.forget_drive`, so the forget scenario can target the
-    /// safe placeholder (`Z` by default) without colliding with the
-    /// drive selected for preload / search round-trips.
+    /// `self.forget_drive`, so scenarios that need a stable preload
+    /// / search target (Q, R, S) don't collide with the drive
+    /// scenario O / P will destructively reset.  The default
+    /// forget target is `G` (see `Cli::forget_drive` rationale).
     fn first_loaded_drive_not_forget_target(&mut self) -> Result<char> {
         let target = self.forget_drive.to_ascii_uppercase();
         let (out, _ms) = self.status_drives()?;
@@ -952,20 +1095,27 @@ fn scenario_l(r: &mut Runner) {
         r.ensure_stopped();
         Ok(String::new())
     });
-    r.step("L1  Status_drives on stopped daemon", |r| {
-        let (out, _) = r.status_drives()?;
-        // Without a daemon, the CLI bails with "Daemon is not
-        // running" (the connect_raw failure path); we accept either
-        // that or a "(no drives loaded)" reply, depending on whether
-        // the connect path bypassed auto-start.
+    r.step("L1  Status_drives on stopped daemon (graceful)", |r| {
+        // Read-only daemon commands must match `daemon status`'s
+        // graceful "daemon down" rendering: exit 0 with a clear
+        // stdout message.  This contract was unified in the same
+        // commit that added Scenario L (sibling to this scenario
+        // — see `daemon_tiering.rs::daemon_status_drives`).
+        // Mutating commands (`hibernate` / `preload` / `forget`)
+        // deliberately stay on the bail-with-error path because
+        // the operator needs to know their mutation didn't run;
+        // those error paths are exercised in scenarios M / N / O
+        // when the daemon happens to be up and healthy.
+        let out = r.run_ok(&["daemon", "status_drives"])?;
         let lower = out.to_lowercase();
-        if !lower.contains("not running") && !lower.contains("no drives loaded") {
-            // Some hosts auto-start the daemon on a status_drives
-            // call — that's a separate scenario (J for the search
-            // path).  Don't fail here; just record the response shape.
-            return Ok(format!("[stopped-state response: {} bytes]", out.len()));
+        if !lower.contains("not running") {
+            bail!(
+                "expected `daemon status_drives` to print `Daemon is not running.` \
+                 on stdout when the daemon is down (matching `daemon status`); \
+                 got: {out}"
+            );
         }
-        Ok(format!("[reports daemon down: {} bytes]", out.len()))
+        Ok(format!("[graceful exit 0 + 'not running' on stdout]"))
     });
     r.step("L2  Start daemon", |r| {
         r.start_daemon()?;
@@ -977,8 +1127,16 @@ fn scenario_l(r: &mut Runner) {
     r.step("L4  Header row + column names", |r| {
         let (out, ms) = r.status_drives()?;
         let needles = [
-            "DRIVE", "TIER", "RESIDENT", "QPM",
-            "LAST QUERY (ms)", "PIN UNTIL (ms)",
+            "DRIVE",
+            "TIER",
+            "RESIDENT",
+            "QPM",
+            "LAST QUERY (ms)",
+            "PIN UNTIL (ms)",
+            // Phase 9 — `promotions_total` is exposed as a CLI column
+            // so operators can audit Cold→Hot re-promote frequency
+            // without scraping the wire JSON.
+            "PROMOTIONS",
         ];
         for needle in needles {
             if !out.contains(needle) {
@@ -986,7 +1144,7 @@ fn scenario_l(r: &mut Runner) {
             }
         }
         header_seen = true;
-        Ok(format!("[all 6 columns present, {ms}ms]"))
+        Ok(format!("[all 7 columns present, {ms}ms]"))
     });
 
     r.step("L5  Default tier for loaded drives is `warm`", |_r| {
@@ -1239,6 +1397,48 @@ fn scenario_n(r: &mut Runner) {
         Ok(format!("[{ms}ms — should be ≪ first preload]"))
     });
 
+    // ── Optional TTL-wait subscenario (mirrors Windows runbook G6) ─
+    //
+    // When --pin-ttl-wait-secs > 0, sleep through the configured
+    // window and re-check the preloaded drive's tier.  This proves
+    // the pin defended against the **live** demote controller, not
+    // just the structural shape of the post-preload state.  The
+    // wait is only meaningful when the operator also exports
+    // UFFS_WARM_TO_PARKED_IDLE_SECS to a value shorter than the
+    // wait — otherwise the controller's default 30-min TTL never
+    // fires and the test passes trivially.
+    if r.pin_ttl_wait_secs > 0 {
+        r.step("N8a Wait through warm-to-parked TTL window", |r| {
+            let secs = r.pin_ttl_wait_secs;
+            let env_ttl = std::env::var("UFFS_WARM_TO_PARKED_IDLE_SECS")
+                .unwrap_or_else(|_| "(unset, controller using built-in default)".to_owned());
+            println!(
+                "    sleeping {secs}s ... (UFFS_WARM_TO_PARKED_IDLE_SECS = {env_ttl})"
+            );
+            std::thread::sleep(Duration::from_secs(secs));
+            Ok(format!("[slept {secs}s]"))
+        });
+        r.step("N8b Preloaded drive is STILL `hot` post-wait", |r| {
+            if target == '?' {
+                return Ok(String::new());
+            }
+            let (out, _) = r.status_drives()?;
+            let tier = Runner::parse_drive_tier(&out, target).unwrap_or_default();
+            if tier != "hot" {
+                bail!(
+                    "pin was overridden by demote controller during the wait \
+                     — expected {target} tier=hot, got tier={tier:?}.  \
+                     If you set UFFS_WARM_TO_PARKED_IDLE_SECS shorter than \
+                     the wait this is a real failure (Phase 8-C pin contract \
+                     regression).  If the env var was unset, the controller's \
+                     default TTL never fired and this assertion is moot — \
+                     re-run with `UFFS_WARM_TO_PARKED_IDLE_SECS=30`."
+                );
+            }
+            Ok(format!("[{target} stayed hot through wait]"))
+        });
+    }
+
     r.step("N9  Cleanup: stop", |r| {
         r.run_ok(&["daemon", "stop"])?;
         Ok(String::new())
@@ -1331,8 +1531,11 @@ fn scenario_o(r: &mut Runner) {
         let pre = pre_count_total.1;
         let Some(reported) = freed_bytes else {
             // Either the target had no caches (operator passed
-            // --forget-drive Z and Z never had any), or the parser
-            // failed.  Both are acceptable on a fresh box.
+            // `--forget-drive Z` against a host where Z doesn't
+            // exist, or the previous run already wiped the
+            // default-G caches and the daemon hasn't been searched
+            // since to re-cold-load), or the parser failed.  Both
+            // are acceptable on a fresh box.
             return Ok("[skipped — pre-forget had no on-disk cache or parse failed]".to_owned());
         };
         if pre == 0 {
@@ -1468,28 +1671,48 @@ fn scenario_q(r: &mut Runner) {
         Ok(format!("[picked {target}]"))
     });
 
-    // The Phase 9 wire field surfaces the cumulative Cold → Hot count
-    // in the `status_drives` table's row; per the docstring on
-    // `crates/uffs-cli/src/commands/daemon_tiering.rs::print_status_drive_row`
-    // the column order is:
-    //   DRIVE TIER RESIDENT QPM LAST_QUERY PIN_UNTIL
-    // — so `promotions_total` does NOT have its own dedicated column
-    // in the CLI render today.  This scenario therefore asserts the
-    // contract via per-RPC timing comparisons instead: a freshly-Cold
-    // drive's first preload pays a real decrypt cost; the AlreadyHot
-    // re-preload and any subsequent N-th preload-from-Cold cycle all
-    // re-incur that cost (verifying the counter would actually
-    // increment in production).  When a future CLI render exposes
-    // the column, this scenario can be expanded to assert the value
-    // directly.
+    // Phase 9 wire field is now exposed as a `PROMOTIONS` column in
+    // the `status_drives` CLI render, so this scenario can directly
+    // assert the counter value instead of inferring it from per-RPC
+    // timing.  Timing assertions are still kept as a defence-in-depth
+    // signal — if the counter is ever mis-bumped (e.g. a refactor
+    // that fires record_cold_to_hot_promote on the AlreadyHot path),
+    // both the column reading AND the timing-ratio check would
+    // catch it independently.
+    let mut pre_q4_promotions: u64 = 0;
+    r.step("Q3a Pre-preload promotions baseline", |r| {
+        if target == '?' {
+            return Ok(String::new());
+        }
+        let (out, _) = r.status_drives()?;
+        pre_q4_promotions = Runner::parse_promotions_total(&out, target).unwrap_or(0);
+        Ok(format!("[{target}.promotions_total = {pre_q4_promotions}]"))
+    });
+
     let mut first_preload_ms: u128 = 0;
-    r.step("Q4  First preload from Cold (counter would go 0→1)", |r| {
+    r.step("Q4  First preload from Cold (counter 0→1)", |r| {
         if target == '?' {
             bail!("no target drive selected");
         }
         let (_out, ms) = r.preload(target, 5)?;
         first_preload_ms = ms;
         Ok(format!("[{ms}ms]"))
+    });
+
+    r.step("Q4a Verify PROMOTIONS column incremented by 1", |r| {
+        if target == '?' {
+            return Ok(String::new());
+        }
+        let (out, _) = r.status_drives()?;
+        let post = Runner::parse_promotions_total(&out, target).unwrap_or(0);
+        let expected = pre_q4_promotions.saturating_add(1);
+        if post != expected {
+            bail!(
+                "expected promotions_total = {expected} (pre = {pre_q4_promotions} + 1 Cold→Hot), \
+                 got {post}"
+            );
+        }
+        Ok(format!("[{pre_q4_promotions} → {post}]"))
     });
 
     let mut already_hot_ms: u128 = 0;
@@ -1505,28 +1728,57 @@ fn scenario_q(r: &mut Runner) {
         Ok(format!("[{ms}ms — pin extension only]"))
     });
 
+    r.step("Q5a Verify PROMOTIONS column unchanged after AlreadyHot", |r| {
+        if target == '?' {
+            return Ok(String::new());
+        }
+        let (out, _) = r.status_drives()?;
+        let post = Runner::parse_promotions_total(&out, target).unwrap_or(0);
+        let expected = pre_q4_promotions.saturating_add(1);
+        if post != expected {
+            bail!(
+                "AlreadyHot bumped the counter — Phase 9 contract regression!  \
+                 expected {expected}, got {post}"
+            );
+        }
+        Ok(format!("[stayed at {post}]"))
+    });
+
     r.step("Q6  Hibernate target back to Cold", |r| {
         if target == '?' {
             return Ok(String::new());
         }
-        let target_str = target.to_string();
         let (_, ms) = r.hibernate(&[target])?;
         // After the explicit hibernate, the pin is implicitly
         // cleared (registry rebuild installs a fresh ShardEntry
         // with pin_until_ms = 0) — this is the contract pinned by
         // `tests/forget_status.rs::hibernate_overrides_preload_pin`.
-        let _ = target_str;
         Ok(format!("[{ms}ms]"))
     });
 
     let mut second_preload_ms: u128 = 0;
-    r.step("Q7  Second Cold→Hot cycle (counter would go 1→2)", |r| {
+    r.step("Q7  Second Cold→Hot cycle (counter 1→2)", |r| {
         if target == '?' {
             return Ok(String::new());
         }
         let (_out, ms) = r.preload(target, 5)?;
         second_preload_ms = ms;
         Ok(format!("[{ms}ms]"))
+    });
+
+    r.step("Q7a Verify PROMOTIONS column incremented by 1 again", |r| {
+        if target == '?' {
+            return Ok(String::new());
+        }
+        let (out, _) = r.status_drives()?;
+        let post = Runner::parse_promotions_total(&out, target).unwrap_or(0);
+        let expected = pre_q4_promotions.saturating_add(2);
+        if post != expected {
+            bail!(
+                "expected promotions_total = {expected} (pre + 2 Cold→Hot), got {post}"
+            );
+        }
+        Ok(format!("[{post}]"))
     });
 
     r.step("Q8  AlreadyHot path is ≥ 5x faster than Cold→Hot", |_r| {
@@ -1573,6 +1825,406 @@ fn scenario_q(r: &mut Runner) {
     });
 
     r.step("Q10 Cleanup: stop", |r| {
+        r.run_ok(&["daemon", "stop"])?;
+        Ok(String::new())
+    });
+}
+
+fn scenario_r(r: &mut Runner) {
+    println!(
+        "\n{}",
+        "── Scenario R: search-driven re-promote latency profile ──"
+            .cyan()
+            .bold()
+    );
+
+    // Scenario K already measures COLD/WARM/HOT at **daemon
+    // startup**.  This scenario factors out the per-drive
+    // re-promote cost during normal operation: when an idle drive
+    // demotes to Cold (or Parked) and the next search hits it, the
+    // daemon's `ensure_warm_for_dispatch` decrypts + loads the
+    // body to bring the shard back to `Warm`.  We measure that
+    // single-drive re-warm cost and compare it to:
+    //
+    //   * **Already-Warm search** — the steady-state per-shard
+    //     dispatch cost (no transition).  Acts as a baseline.
+    //   * **Warm → Hot via preload** — the operator-driven path
+    //     that takes a body already in RAM and just flips the tier
+    //     marker.  Should be ≪ Cold→Warm (no decrypt) but slightly
+    //     > AlreadyHot (it does a registry rebuild for the new
+    //     `ShardEntry::new_hot_with_stats`).
+    //
+    // Parked → Warm is **not** measured here because reaching
+    // Parked from outside the daemon requires either waiting
+    // through the warm-to-parked TTL (slow) or the test-only
+    // `demote_letter_for_test` escape hatch (not exposed via RPC).
+    // The Windows-host runbook G1 captures the Parked → Warm path
+    // implicitly via the cascade-demote → re-search flow.
+
+    r.step("R0  Ensure stopped", |r| {
+        r.ensure_stopped();
+        Ok(String::new())
+    });
+    r.step("R1  Start", |r| {
+        r.start_daemon()?;
+        Ok(String::new())
+    });
+    r.step("R2  Verify Ready", |r| r.assert_ready());
+
+    let mut target = '?';
+    r.step("R3  Pick non-forget target", |r| {
+        target = r.first_loaded_drive_not_forget_target()?;
+        Ok(format!("[picked {target}]"))
+    });
+
+    // Baseline: an already-Warm shard.  All shards start Warm
+    // post-load (Phase 1+ contract), so the first search after
+    // `daemon start` hits a steady-state Warm shard.
+    let mut warm_search_ms: u128 = 0;
+    r.step("R4  Baseline search (Warm — no transition)", |r| {
+        let t = Instant::now();
+        let n = r.search(100)?;
+        warm_search_ms = t.elapsed().as_millis();
+        if n == 0 {
+            bail!("Warm-state search returned zero rows");
+        }
+        Ok(format!("[{n} rows in {warm_search_ms}ms]"))
+    });
+
+    // Hibernate everything → Cold.
+    r.step("R5  Hibernate (every drive → Cold)", |r| {
+        r.hibernate(&[])?;
+        Ok(String::new())
+    });
+
+    // The next search must re-warm AT LEAST the target drive via
+    // `ensure_warm_for_dispatch` → encrypted-cache decrypt + body
+    // load.  Other drives may also re-warm depending on how the
+    // CLI dispatches the search; for the timing baseline we
+    // capture the FIRST search after hibernation as the
+    // Cold→Warm path.
+    let mut cold_to_warm_ms: u128 = 0;
+    r.step("R6  Search after hibernate (Cold → Warm via cache decrypt)", |r| {
+        let t = Instant::now();
+        let n = r.search(100)?;
+        cold_to_warm_ms = t.elapsed().as_millis();
+        Ok(format!("[{n} rows in {cold_to_warm_ms}ms — re-decrypt + body load]"))
+    });
+
+    // The drive should now be Warm again (search promoted it).
+    r.step("R7  Verify target is now Warm or Hot", |r| {
+        if target == '?' {
+            return Ok(String::new());
+        }
+        let (out, _) = r.status_drives()?;
+        let tier = Runner::parse_drive_tier(&out, target).unwrap_or_default();
+        if tier != "warm" && tier != "hot" {
+            bail!(
+                "expected {target} tier=warm/hot post-search, got tier={tier:?}.  \
+                 Either ensure_warm_for_dispatch didn't promote, or the \
+                 demote controller raced and re-demoted."
+            );
+        }
+        Ok(format!("[{target} = {tier}]"))
+    });
+
+    // Now exercise Warm → Hot via preload.  The drive is Warm, so
+    // preload goes through promote_letter_to_hot's Warm-source
+    // arm — which does a registry rebuild but no body load.
+    let mut warm_to_hot_ms: u128 = 0;
+    r.step("R8  Preload from Warm (Warm → Hot, no body load)", |r| {
+        if target == '?' {
+            bail!("no target drive selected");
+        }
+        // ensure_warm_for_dispatch may have left the body in Hot
+        // already (under load); refresh tier and skip if so.
+        let (out_pre, _) = r.status_drives()?;
+        let pre_tier = Runner::parse_drive_tier(&out_pre, target).unwrap_or_default();
+        if pre_tier == "hot" {
+            warm_to_hot_ms = 0;
+            return Ok(format!("[{target} already hot — Warm→Hot path not exercisable]"));
+        }
+        let (_out, ms) = r.preload(target, 5)?;
+        warm_to_hot_ms = ms;
+        Ok(format!("[{ms}ms — registry rebuild only]"))
+    });
+
+    // Repeat the search now — drive is Hot + pinned, fastest path.
+    let mut hot_search_ms: u128 = 0;
+    r.step("R9  Search against Hot pinned drive", |r| {
+        let t = Instant::now();
+        let n = r.search(100)?;
+        hot_search_ms = t.elapsed().as_millis();
+        if n == 0 {
+            bail!("Hot-state search returned zero rows");
+        }
+        Ok(format!("[{n} rows in {hot_search_ms}ms]"))
+    });
+
+    // Render the latency ladder so the operator sees the cost
+    // hierarchy at a glance.
+    r.step("R10 Re-promote cost ladder", |_r| {
+        Ok(format!(
+            "[Warm-baseline-search: {warm_search_ms}ms | \
+              Cold→Warm-search: {cold_to_warm_ms}ms | \
+              Warm→Hot-preload: {warm_to_hot_ms}ms | \
+              Hot-search: {hot_search_ms}ms]"
+        ))
+    });
+
+    // Sanity-check the cost hierarchy.  These bounds are loose
+    // because real timing depends heavily on host hardware + drive
+    // size, but they should hold on any reasonable box:
+    //
+    //   * Cold→Warm-search ≥ 5× Warm-baseline-search  (decrypt cost)
+    //   * Warm→Hot-preload ≤ Cold→Warm-search          (no decrypt)
+    //
+    // If either fails, something is genuinely wrong (decrypt path
+    // dropped, or Warm→Hot accidentally went through the body
+    // loader).
+    r.step("R11 Cold→Warm is ≥ 3× Warm baseline (decrypt cost)", |_r| {
+        if warm_search_ms == 0 || cold_to_warm_ms == 0 {
+            return Ok("[skipped — no timing data]".to_owned());
+        }
+        let ratio = cold_to_warm_ms as f64 / warm_search_ms.max(1) as f64;
+        if ratio < 3.0 {
+            return Ok(format!(
+                "[unexpectedly small gap: warm={warm_search_ms}ms vs cold={cold_to_warm_ms}ms = {ratio:.1}x — investigate]"
+            ));
+        }
+        Ok(format!(
+            "[warm={warm_search_ms}ms vs cold={cold_to_warm_ms}ms = {ratio:.1}x]"
+        ))
+    });
+
+    r.step("R12 Warm→Hot ≤ Cold→Warm (no decrypt cost)", |_r| {
+        if warm_to_hot_ms == 0 || cold_to_warm_ms == 0 {
+            return Ok("[skipped — no timing data]".to_owned());
+        }
+        if warm_to_hot_ms > cold_to_warm_ms {
+            return Ok(format!(
+                "[unexpected: warm→hot {warm_to_hot_ms}ms exceeded cold→warm {cold_to_warm_ms}ms — investigate]"
+            ));
+        }
+        Ok(format!(
+            "[warm→hot={warm_to_hot_ms}ms ≤ cold→warm={cold_to_warm_ms}ms]"
+        ))
+    });
+
+    r.step("R13 Cleanup: stop", |r| {
+        r.run_ok(&["daemon", "stop"])?;
+        Ok(String::new())
+    });
+}
+
+/// Scenario S — TTL-gated Parked → Hot re-promote latency.
+///
+/// Skipped entirely when `--park-wait-secs == 0` (the default).
+/// When enabled, the scenario sleeps through the warm-to-parked
+/// idle window so the demote controller fires organically, then
+/// asserts the target drive landed in `Parked` (not Cold, not still
+/// Warm), then times the operator-issued `preload` to measure the
+/// Parked → Hot transition cost.
+///
+/// The Parked-source arm of
+/// [`crate::cache::registry::ShardRegistry::promote_letter_to_hot`]
+/// drops the parked bloom + trie and runs the body loader (see
+/// `crates/uffs-daemon/src/index/tiering_ops.rs:303-312`), so
+/// Parked → Hot pays the same body-decrypt cost as Cold → Hot.
+/// The interesting comparison vs scenario R is that this rung is
+/// reached **organically** (no `hibernate` RPC; no test-only
+/// `demote_letter_for_test`) — proving the operator-driven
+/// re-promote path works end-to-end against a drive the live
+/// demote controller put into Parked.
+///
+/// Why this is a sibling scenario instead of a subscenario inside
+/// R: scenario R measures the no-TTL-wait fast lane (~5 s end to
+/// end) and runs in every readiness pass.  Scenario S is opt-in
+/// because the wait dominates wall-clock, and operators on a
+/// 7-drive box doing fast-iteration daemon work shouldn't pay the
+/// soak cost on every smoke run.  Set `--park-wait-secs` only
+/// when verifying the Parked-tier contract end-to-end.
+fn scenario_s(r: &mut Runner) {
+    if r.park_wait_secs == 0 {
+        // Print a dimmed marker so the operator sees scenario S is
+        // a known-skipped slot (rather than wondering why the
+        // alphabetical sequence stops at R).  Mirrors the way
+        // scenario L handles the Phase 8 skip flag.
+        println!(
+            "\n{}",
+            "── Scenario S: Parked→Hot re-promote (skipped — pass --park-wait-secs to enable) ──"
+                .dimmed()
+        );
+        return;
+    }
+
+    println!(
+        "\n{}",
+        "── Scenario S: TTL-gated Parked→Hot re-promote latency ──"
+            .cyan()
+            .bold()
+    );
+
+    r.step("S0  Ensure stopped", |r| {
+        r.ensure_stopped();
+        Ok(String::new())
+    });
+    r.step("S1  Start", |r| {
+        r.start_daemon()?;
+        Ok(String::new())
+    });
+    r.step("S2  Verify Ready", |r| r.assert_ready());
+
+    let mut target = '?';
+    r.step("S3  Pick non-forget target", |r| {
+        target = r.first_loaded_drive_not_forget_target()?;
+        Ok(format!("[picked {target}]"))
+    });
+
+    // Touch the target so its `last_query_at_ms` is "now"; the
+    // controller's idle clock starts ticking from here.  Reusing
+    // this as the Warm-baseline timing so scenario S is
+    // self-contained — the operator can compare Parked→Hot vs
+    // Warm-baseline without cross-referencing scenario R's R4.
+    let mut warm_search_ms: u128 = 0;
+    r.step("S4  Baseline search (Warm — resets idle clock)", |r| {
+        let t = Instant::now();
+        let n = r.search(100)?;
+        warm_search_ms = t.elapsed().as_millis();
+        if n == 0 {
+            bail!("Warm-state search returned zero rows");
+        }
+        Ok(format!("[{n} rows in {warm_search_ms}ms]"))
+    });
+
+    // Sleep through the warm-to-parked TTL window.  The two env
+    // vars in the docstring on `Cli::park_wait_secs` are the
+    // operator's responsibility — we surface their current values
+    // so a misconfigured run shows the diagnosis inline.
+    r.step("S5  Wait through warm-to-parked TTL window", |r| {
+        let secs = r.park_wait_secs;
+        let env_warm = std::env::var("UFFS_WARM_TO_PARKED_IDLE_SECS")
+            .unwrap_or_else(|_| "(unset — controller using 360s default)".to_owned());
+        let env_parked = std::env::var("UFFS_PARKED_TO_COLD_IDLE_SECS")
+            .unwrap_or_else(|_| "(unset — controller using 86400s/24h default)".to_owned());
+        println!(
+            "    sleeping {secs}s ... \
+             (UFFS_WARM_TO_PARKED_IDLE_SECS = {env_warm}, \
+             UFFS_PARKED_TO_COLD_IDLE_SECS = {env_parked})"
+        );
+        std::thread::sleep(Duration::from_secs(secs));
+        Ok(format!("[slept {secs}s]"))
+    });
+
+    // Hard assert the controller actually moved the drive into
+    // Parked.  The error message enumerates the two
+    // misconfigurations that cause the most common failure modes
+    // so the operator's first action is reading the diagnosis,
+    // not reading the source.
+    r.step("S6  Verify target tier == parked", |r| {
+        if target == '?' {
+            return Ok(String::new());
+        }
+        let waited = r.park_wait_secs;
+        let (out, _) = r.status_drives()?;
+        let tier = Runner::parse_drive_tier(&out, target).unwrap_or_default();
+        if tier != "parked" {
+            bail!(
+                "expected {target} tier=parked after {waited}s wait, got tier={tier:?}.  \
+                 Two common misconfigurations:\n  \
+                 (a) UFFS_WARM_TO_PARKED_IDLE_SECS > --park-wait-secs (controller never fired) — \
+                     export UFFS_WARM_TO_PARKED_IDLE_SECS=30 and pass --park-wait-secs 60.\n  \
+                 (b) UFFS_PARKED_TO_COLD_IDLE_SECS < --park-wait-secs (drive slipped past Parked into Cold) — \
+                     export UFFS_PARKED_TO_COLD_IDLE_SECS=900 (or higher) so the Parked window covers the wait."
+            );
+        }
+        Ok(format!("[{target} = parked]"))
+    });
+
+    // Time the Parked → Hot promote.  Goes through the
+    // Cold/Parked-source arm of `preload_drive` (see
+    // `crates/uffs-daemon/src/index/tiering_ops.rs:303-312`) — the
+    // body is re-loaded from the encrypted compact cache and the
+    // parked bloom + trie are dropped.  Cost should be similar to
+    // scenario Q's Cold→Hot (Q4) since both arms take the same
+    // body-load path.
+    let mut parked_to_hot_ms: u128 = 0;
+    r.step("S7  Preload from Parked (Parked → Hot, body re-decrypt)", |r| {
+        if target == '?' {
+            bail!("no target drive selected");
+        }
+        let (_out, ms) = r.preload(target, 5)?;
+        parked_to_hot_ms = ms;
+        Ok(format!("[{ms}ms — body re-load + drop bloom/trie]"))
+    });
+
+    // Verify the post-preload state shape: tier=hot AND
+    // pin_until_ms > 0.  Reuses the existing `parse_pin_until`
+    // helper which already accounts for the Phase 9 PROMOTIONS
+    // column being last (pin_until is second-to-last).
+    r.step("S8  Verify target tier == hot + pin_until > 0", |r| {
+        if target == '?' {
+            return Ok(String::new());
+        }
+        let (out, _) = r.status_drives()?;
+        let tier = Runner::parse_drive_tier(&out, target).unwrap_or_default();
+        if tier != "hot" {
+            bail!("expected {target} tier=hot post-preload, got tier={tier:?}");
+        }
+        let pin = Runner::parse_pin_until(&out, target).unwrap_or(0);
+        if pin == 0 {
+            bail!("expected pin_until > 0 post-preload, got 0");
+        }
+        Ok(format!("[{target} = hot, pin_until = {pin}]"))
+    });
+
+    let mut hot_search_ms: u128 = 0;
+    r.step("S9  Search against Hot pinned drive", |r| {
+        let t = Instant::now();
+        let n = r.search(100)?;
+        hot_search_ms = t.elapsed().as_millis();
+        if n == 0 {
+            bail!("Hot-state search returned zero rows");
+        }
+        Ok(format!("[{n} rows in {hot_search_ms}ms]"))
+    });
+
+    // Render a one-rung profile.  The operator gets the absolute
+    // ms numbers + the Parked→Hot vs Warm-baseline ratio.  For
+    // cross-scenario comparison (Parked→Hot vs Cold→Hot from
+    // scenario Q, vs Warm→Hot from scenario R) the operator reads
+    // the per-step lines above each profile — keeping the rendering
+    // local to the scenario that produced the timing avoids
+    // sequence-coupled state between scenarios.
+    r.step("S10 Parked-rung latency profile", |_r| {
+        Ok(format!(
+            "[Warm-baseline-search: {warm_search_ms}ms | \
+              Parked→Hot-preload: {parked_to_hot_ms}ms | \
+              Hot-search: {hot_search_ms}ms]"
+        ))
+    });
+
+    // Sanity-check the cost hierarchy.  Bound is loose (3×) to
+    // tolerate fast NVMe + small drives; a real regression
+    // (Parked→Hot accidentally skipping the body load) would
+    // collapse the ratio to ≈1×.
+    r.step("S11 Parked→Hot is ≥ 3× Warm baseline (decrypt cost)", |_r| {
+        if warm_search_ms == 0 || parked_to_hot_ms == 0 {
+            return Ok("[skipped — no timing data]".to_owned());
+        }
+        let ratio = parked_to_hot_ms as f64 / warm_search_ms.max(1) as f64;
+        if ratio < 3.0 {
+            return Ok(format!(
+                "[unexpectedly small gap: warm={warm_search_ms}ms vs \
+                 parked→hot={parked_to_hot_ms}ms = {ratio:.1}x — investigate]"
+            ));
+        }
+        Ok(format!(
+            "[warm={warm_search_ms}ms vs parked→hot={parked_to_hot_ms}ms = {ratio:.1}x]"
+        ))
+    });
+
+    r.step("S12 Cleanup: stop", |r| {
         r.run_ok(&["daemon", "stop"])?;
         Ok(String::new())
     });
@@ -1638,30 +2290,61 @@ fn find_workspace_root() -> std::path::PathBuf {
     cwd
 }
 
-/// Build a fresh release binary and return the path to it (macOS/Linux).
+/// Build a fresh release **workspace** and return the path to the
+/// `uffs` CLI binary (macOS/Linux).
+///
+/// Builds every workspace package — not just `uffs-cli` — so the
+/// daemon (`uffsd`, from `uffs-daemon`), the MCP host (`uffsmcp`,
+/// from `uffs-mcp`), and the auxiliary `uffs_mft` binary all get
+/// rebuilt in lock-step with the CLI.  Building only `uffs-cli` was
+/// the source of a real bug discovered on 2026-05-04: the script
+/// rebuilt `target/release/uffs` to pick up a CLI fix, but
+/// `target/release/uffsd` was left at its prior mtime.  When the
+/// fresh CLI invoked `daemon start`, `find_daemon_exe()` resolved
+/// to the **stale** `uffsd` (sibling-of-uffs lookup), so every
+/// Phase 8 RPC the readiness suite tested was sent to a daemon
+/// that didn't know the new methods.  See
+/// `crates/uffs-client/src/daemon_ctl.rs::find_daemon_exe` for the
+/// sibling-lookup that makes co-versioning critical.
 fn ensure_fresh_release_build() -> String {
     let workspace = find_workspace_root();
     let binary_path = workspace.join("target").join("release").join("uffs");
 
     eprintln!("╔══════════════════════════════════════════════════════════════════╗");
-    eprintln!("║  Building fresh release binary...                                ║");
+    eprintln!("║  Building fresh release workspace (uffs + uffsd + uffsmcp …)...  ║");
     eprintln!("╚══════════════════════════════════════════════════════════════════╝");
     eprintln!("  Workspace: {}", workspace.display());
 
     let start = Instant::now();
     let status = Command::new("cargo")
-        .args(["build", "--release", "-p", "uffs-cli"])
+        .args(["build", "--release", "--workspace"])
         .current_dir(&workspace)
         .status();
 
     match status {
         Ok(s) if s.success() => {
-            eprintln!("  ✅ Build completed in {:.1}s", start.elapsed().as_secs_f64());
-            eprintln!("  Binary: {}", binary_path.display());
+            eprintln!(
+                "  ✅ Build completed in {:.1}s",
+                start.elapsed().as_secs_f64()
+            );
+            eprintln!("  CLI binary: {}", binary_path.display());
+            // Surface the daemon binary's mtime alongside the CLI
+            // so a stale `uffsd` is loud at the top of the run rather
+            // than mystery-failing inside a Phase 8 scenario.
+            let uffsd = workspace.join("target").join("release").join("uffsd");
+            if let Ok(meta) = std::fs::metadata(&uffsd) {
+                if let Ok(modified) = meta.modified() {
+                    eprintln!(
+                        "  uffsd:      {} ({:.0}s ago)",
+                        uffsd.display(),
+                        modified.elapsed().map_or(0.0, |d| d.as_secs_f64())
+                    );
+                }
+            }
             eprintln!();
         }
         Ok(s) => {
-            eprintln!("  ❌ cargo build --release failed (exit {s})");
+            eprintln!("  ❌ cargo build --release --workspace failed (exit {s})");
             std::process::exit(1);
         }
         Err(e) => {
@@ -1743,12 +2426,26 @@ fn main() -> Result<()> {
     }
     println!("  pattern:          {}", cli.pattern);
     if cli.skip_phase8 {
-        println!("  phase 8 (L-Q):    skipped (--skip-phase8)");
+        println!("  phase 8/9 (L-S):  skipped (--skip-phase8)");
     } else {
         println!("  forget target:    {forget_drive}");
+        if cli.pin_ttl_wait_secs > 0 {
+            println!("  pin TTL wait:     {}s (scenario N)", cli.pin_ttl_wait_secs);
+        }
+        if cli.park_wait_secs > 0 {
+            println!("  park wait:        {}s (scenario S)", cli.park_wait_secs);
+        }
     }
 
-    let mut r = Runner::new(binary, source_flag, source_path, cli.pattern, forget_drive);
+    let mut r = Runner::new(
+        binary,
+        source_flag,
+        source_path,
+        cli.pattern,
+        forget_drive,
+        cli.pin_ttl_wait_secs,
+        cli.park_wait_secs,
+    );
 
     // Phase 5/6/7 lifecycle scenarios — pre-existing.
     scenario_a(&mut r);
@@ -1771,6 +2468,8 @@ fn main() -> Result<()> {
         scenario_o(&mut r);
         scenario_p(&mut r);
         scenario_q(&mut r);
+        scenario_r(&mut r);
+        scenario_s(&mut r);
     }
 
     // Final cleanup

@@ -420,3 +420,171 @@ async fn preload_warm_drive_skips_body_load() {
     let states = mgr.shard_states_for_test().await;
     assert_eq!(states, vec![('C', ShardState::Hot)]);
 }
+
+// ── Phase 9 — `promotions_total` Cold→Hot counter contract ──────────
+//
+// Mirrors the `scripts/dev/daemon-readiness.rs::scenario_q` Q3a /
+// Q4a / Q5a / Q7a column-reading assertions in unit-test form, so a
+// regression in the bump site (or the source-state filter) is
+// caught at `cargo nextest` time without needing to run the full
+// readiness script against a live daemon.
+
+/// Phase 9 — the counter goes 0 → 1 → 2 across two `Cold → Hot`
+/// cycles, and the `AlreadyHot` path between them does **not** bump.
+///
+/// This is the canonical contract documented on
+/// [`crate::cache::shard::DriveStats::promotions_total`] and
+/// surfaced via the wire response's `promotions_total` field /
+/// the CLI's `PROMOTIONS` column.
+#[tokio::test]
+async fn preload_cold_to_hot_bumps_promotions_total_per_cycle() {
+    // Helper hoisted above the let-bindings to satisfy
+    // `clippy::items_after_statements` (items must precede
+    // statements within a function body).  Reads the counter via
+    // the public `status_drives` RPC surface so the test pins the
+    // operator-visible contract, not a private accessor.
+    async fn read_counter(mgr: &IndexManager) -> u64 {
+        let response = mgr.status_drives().await;
+        let [row] = response.drives.as_slice() else {
+            panic!("expected exactly 1 drive; got {}", response.drives.len());
+        };
+        row.promotions_total
+    }
+
+    let (tx, _rx) = crate::events::event_channel();
+    let body = Arc::new(build_test_drive());
+    let loader = Arc::new(FixedBodyLoader {
+        body: Arc::clone(&body),
+    });
+    let mgr = IndexManager::with_body_loader_for_test(None, tx, loader);
+    mgr.add_drive(build_test_drive()).await;
+
+    assert_eq!(
+        read_counter(&mgr).await,
+        0,
+        "fresh `add_drive` must leave promotions_total at 0"
+    );
+
+    // ── Cycle 1: Cold → Hot ─────────────────────────────────────
+    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(matches!(
+        mgr.preload_drive('C', 5).await,
+        PreloadOutcome::Promoted { .. }
+    ));
+    assert_eq!(
+        read_counter(&mgr).await,
+        1,
+        "Cold→Hot preload must bump promotions_total exactly once"
+    );
+
+    // ── AlreadyHot — must NOT bump ──────────────────────────────
+    assert!(matches!(
+        mgr.preload_drive('C', 60).await,
+        PreloadOutcome::AlreadyHot { .. }
+    ));
+    assert_eq!(
+        read_counter(&mgr).await,
+        1,
+        "AlreadyHot preload skips the rebuild and must not bump promotions_total"
+    );
+
+    // ── Cycle 2: Hot → Cold (via test escape) → Hot ─────────────
+    // `demote_letter_for_test` overrides the pin; same effect as
+    // an operator `hibernate` for counter-bump purposes.
+    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(matches!(
+        mgr.preload_drive('C', 5).await,
+        PreloadOutcome::Promoted { .. }
+    ));
+    assert_eq!(
+        read_counter(&mgr).await,
+        2,
+        "second Cold→Hot cycle must bump promotions_total to 2 \
+         (1 + 1, AlreadyHot in between is a no-op)"
+    );
+}
+
+/// Phase 9 — the `Warm → Hot` source arm of `promote_letter_to_hot`
+/// is a tier-marker flip with no body load and no decrypt cost; it
+/// must **not** bump `promotions_total`.
+///
+/// Reuses the `PanicOnLoad` body loader from
+/// `preload_warm_drive_skips_body_load` so any accidental body
+/// load (which would also be the wrong implementation) panics
+/// before the assertion runs.
+#[tokio::test]
+async fn preload_warm_to_hot_does_not_bump_promotions_total() {
+    use crate::cache::body_loader::BodyLoader as BodyLoaderTrait;
+
+    struct PanicOnLoad;
+    impl BodyLoaderTrait for PanicOnLoad {
+        fn load(&self, letter: char) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
+            panic!(
+                "PanicOnLoad::load — Warm→Hot source arm must not call the loader (letter={letter})"
+            )
+        }
+    }
+
+    let (tx, _rx) = crate::events::event_channel();
+    let mgr = IndexManager::with_body_loader_for_test(None, tx, Arc::new(PanicOnLoad));
+    mgr.add_drive(build_test_drive()).await; // C lands in Warm.
+
+    assert!(matches!(
+        mgr.preload_drive('C', 5).await,
+        PreloadOutcome::Promoted {
+            from_state: ShardState::Warm,
+            ..
+        }
+    ));
+
+    let response = mgr.status_drives().await;
+    let [row] = response.drives.as_slice() else {
+        panic!("expected exactly 1 drive; got {}", response.drives.len());
+    };
+    assert_eq!(
+        row.promotions_total, 0,
+        "Warm→Hot is a tier-marker flip; promotions_total counts \
+         Cold→Hot transitions only"
+    );
+}
+
+/// Phase 9 — the `Parked → Hot` source arm of `promote_letter_to_hot`
+/// **does** pay a body-decrypt cost (drops the parked bloom + trie
+/// and re-runs the body loader; see
+/// `crate::index::tiering_ops::IndexManager::preload_drive` source
+/// arms), but the `promotions_total` counter still must **not** bump
+/// — the contract is named for the `Cold → Hot` tier transition,
+/// not for "transitions that paid a decrypt cost".  This guard test
+/// pins that distinction so a future refactor that consolidates the
+/// Cold/Parked source arms can't silently broaden the bump.
+#[tokio::test]
+async fn preload_parked_to_hot_does_not_bump_promotions_total() {
+    let (tx, _rx) = crate::events::event_channel();
+    let body = Arc::new(build_test_drive());
+    let loader = Arc::new(FixedBodyLoader {
+        body: Arc::clone(&body),
+    });
+    let mgr = IndexManager::with_body_loader_for_test(None, tx, loader);
+    mgr.add_drive(build_test_drive()).await;
+
+    // Seed C as Parked (legal demote target from Warm).
+    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+
+    assert!(matches!(
+        mgr.preload_drive('C', 5).await,
+        PreloadOutcome::Promoted {
+            from_state: ShardState::Parked,
+            ..
+        }
+    ));
+
+    let response = mgr.status_drives().await;
+    let [row] = response.drives.as_slice() else {
+        panic!("expected exactly 1 drive; got {}", response.drives.len());
+    };
+    assert_eq!(
+        row.promotions_total, 0,
+        "Parked→Hot pays a decrypt cost but is NOT a Cold→Hot \
+         transition; promotions_total must stay at 0"
+    );
+}

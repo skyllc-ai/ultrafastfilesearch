@@ -8,6 +8,12 @@
 
 /// Aggregate analytics subcommand.
 pub mod aggregate;
+/// `uffs daemon load` — hot-load MFT file(s) into a running daemon.
+///
+/// Split off `daemon_mgmt` so the lifecycle file stays under the
+/// 800-LOC policy ceiling without a file-size exception (mirrors
+/// the `daemon_tiering` decomposition for the Phase 8 commands).
+pub mod daemon_load;
 /// Daemon management subcommands.
 pub mod daemon_mgmt;
 /// Memory-tiering operator commands (`hibernate` / `preload`).
