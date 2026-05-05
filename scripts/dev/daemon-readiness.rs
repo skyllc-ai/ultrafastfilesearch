@@ -144,9 +144,12 @@ struct Cli {
     /// ```
     ///
     /// Adds ~`<value>` seconds of wall-clock to the run.  Mirrors
-    /// the Windows-host runbook G6 gate (see
-    /// `docs/architecture/memory-tiering-windows-host-validation.md`
-    /// §3 G6 — "preload pin contract survives idle TTL").
+    /// the Windows-host runbook gate **G6 — `uffs daemon preload` pin
+    /// contract survives idle TTL** (Ctrl-F for `G6 —` in
+    /// `docs/architecture/memory-tiering-windows-host-validation.md`).
+    /// Reference uses the gate ID, not the section number, so future
+    /// renumbering of the runbook (e.g. inserting a new section)
+    /// doesn't silently invalidate this comment.
     #[arg(long, default_value_t = 0)]
     pin_ttl_wait_secs: u64,
 

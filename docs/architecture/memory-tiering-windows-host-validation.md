@@ -38,6 +38,15 @@ the `just soak` recipe (see
 lifecycle, hourly snapshots, and the end-of-soak grep validators that
 close each gate.
 
+> **Cross-reference convention.**  External code / docs that point INTO
+> this runbook should reference **gate IDs** (`G1`, `G6`, `Phase 6 soak`,
+> etc.) — *never* raw section numbers (`§3`, `§5`).  Section numbers
+> renumber when new sections land (Phase 7 added 2026-05-05 forced one
+> such renumbering).  Gate IDs are stable for the life of the gate.
+> When inserting a new section here, search the workspace for `§`
+> references that point at this file before bumping any number — and
+> prefer rewriting them to anchor / gate-ID style on the way through.
+
 ---
 
 ## 0. Prerequisites
