@@ -37,6 +37,29 @@ kill:
 orphan *ARGS:
     @rust-script scripts/dev/orphan-cleanup.rs {{ ARGS }}
 
+# Daemon-readiness end-to-end verification.
+#
+# Exercises every meaningful daemon lifecycle (clean start/stop, kill
+# recovery, double-start, restart, auto-start), the Phase 5/6/7 stats
+# accumulation, COLD→WARM→HOT timing capture, AND the Phase 8 / 9
+# operator-driven memory-tiering surface (status_drives, hibernate,
+# preload --pin-minutes, forget --force, full round-trip cycle, and
+# the Phase 9 promotions_total counter contract).  Renders a per-RPC
+# timing summary at the end so an operator can see where time is
+# spent across the operator commands.
+#
+# Pass `~/uffs_data` (or any data dir / MFT file) on macOS / Linux;
+# omit on Windows for live NTFS auto-discovery.  Use `--forget-drive Z`
+# (default) to avoid actually deleting any cache files; override with
+# a small test drive (e.g. `M`) to exercise the destructive path.
+#
+# Examples:
+#   just readiness ~/uffs_data
+#   just readiness ~/uffs_data --skip-phase8
+#   just readiness ~/uffs_data --forget-drive Z --pattern '*.txt'
+readiness *ARGS:
+    @rust-script scripts/dev/daemon-readiness.rs {{ ARGS }}
+
 # Install cross-compilation targets for GitHub Actions compatibility.
 setup-cross:
     @printf "\033[0;34m Installing cross-compilation targets...\033[0m\n"
