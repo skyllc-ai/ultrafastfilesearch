@@ -27,14 +27,19 @@ operator workflow and the same `uffsd.exe` process.  §3 is the
   the never-fires path documented in `crate::cache::pressure`).
 * The daemon binary built from the branch under test, copied to the
   host (or built locally with `cargo build --release -p uffs-daemon`).
-* The seven NTFS volumes loaded against the daemon — confirm with:
+* The seven NTFS volumes loaded against the daemon — confirm with the
+  Phase-8-E per-drive tier table:
   ```powershell
-  uffs status --drives
+  uffs daemon status     # expect: Status: Ready
+  uffs daemon status_drives
   ```
-  Expect `Ready` plus a per-drive table showing `[Hot]` / `[Warm]`
-  markers.  If any drive shows `[Parked]` / `[Cold]` from the start
-  the gate setup is wrong; bounce the daemon (`uffs daemon stop` →
-  `uffs daemon start --drives C,D,E,F,G,M,S`).
+  `daemon status_drives` is the canonical post-Phase-8 view: a fixed-
+  width table with `DRIVE / TIER / RESIDENT / QPM / LAST QUERY (ms) /
+  PIN UNTIL (ms)` columns, sorted ASCII ascending by drive letter.
+  Expect every drive's `TIER` column to be `warm` (default after
+  load) — any `parked` / `cold` from the start means the gate setup
+  is wrong; bounce the daemon (`uffs daemon stop` → `uffs daemon
+  start --drives C,D,E,F,G,M,S`).
 * Task Manager → **Details** tab → enable the **I/O priority** column
   via column-header → *Select columns…* → check `I/O priority`.  This
   is required for gate **G3** (USN catch-up I/O priority capture).
@@ -626,11 +631,312 @@ uffs daemon stop
 
 ---
 
-## 3. PR-attachment checklist
+## 3. Phase 8 operator-command gates — G5-G8, 4 captures, ~20 min wall-clock
 
-Before opening the Phase 5 / Phase 6 acceptance PR, paste the
-following into the description so the reviewer can sign off without
-re-running the soak:
+These gates validate the four operator-driven memory-tiering
+commands shipped in Phase 8 (PRs #122 + #123).  They run against
+the same daemon used for the Phase 5 / 6 gates — pick any moment
+when interactive search is paused.  Captures go in the same PR
+description as the Phase 5 / 6 captures.
+
+The four gates correspond 1:1 to plan tasks 8.1 / 8.2 / 8.3 / 8.4.
+Run them in order — G7 is destructive (deletes a drive's caches)
+and the order leaves the daemon in a known-good shape for the
+final G8 render.
+
+### G5 — `uffs daemon hibernate` demotes every drive to Cold
+
+**Duration:** ~3 min wall-clock.
+**Plan reference:** plan task 8.1; PR #122.
+
+#### Setup
+
+A daemon running with the seven drives in mixed tiers (any steady
+state — typically the post-G4 shape after the Phase-5 soak).
+
+#### Drive
+
+```powershell
+# Capture pre-hibernate state.
+"=== Pre-hibernate ==="
+Get-Process uffsd | Select Id, WS, PM, NPM, VM
+uffs daemon status_drives
+```
+
+```powershell
+# Hibernate every loaded drive.
+uffs daemon hibernate
+```
+
+Expected stdout (drive letters depend on the registry):
+
+```text
+Daemon hibernated 7 drive(s):
+  Hot     -> Cold:  C
+  Warm    -> Cold:  D, E, F
+  Parked  -> Cold:  G, M, S
+  Already Cold:     (none)
+```
+
+#### Capture
+
+```powershell
+"=== Post-hibernate ==="
+Get-Process uffsd | Select Id, WS, PM, NPM, VM
+uffs daemon status_drives
+
+# Hibernate keeps the encrypted compact caches on disk — verify
+# they're all still there (the *_compact.uffs files are the
+# Cold-tier source-of-truth for re-promote).
+"=== Cache files preserved ==="
+Get-ChildItem "$env:LOCALAPPDATA\uffs\cache\*_compact.uffs" |
+    Select-Object Name, Length, LastWriteTime
+```
+
+Acceptance criteria:
+
+* Every drive's `TIER` column in `status_drives` is `cold`.
+* `uffsd.exe` Working Set drops by ≥ 50 % vs the pre-hibernate
+  sample (no body Arc, no parked-body bloom + trie resident).
+* Every `<letter>_compact.uffs` file from the pre-hibernate sample
+  is still on disk with the same `Length` (hibernate releases RAM
+  only — disk untouched).
+
+### G6 — `uffs daemon preload` pin contract survives idle TTL
+
+**Duration:** ~10 min wall-clock.
+**Plan reference:** plan task 8.2; PR #122.
+
+The pin-contract test that the Mac unit-test suite cannot exercise
+is "pinned shard survives the live demote-controller's idle-TTL
+evaluation" — Mac tests inject mock clocks; this gate uses the
+real wall clock with shortened TTLs so the operator can observe
+the pin actually defending against demote in the wild.
+
+#### Setup
+
+Continuing from G5 — every drive Cold.  Lower the warm-to-parked
+TTL via env so the demote-controller can prove the pin works
+without a default-30-min wait:
+
+```powershell
+$env:UFFS_WARM_TO_PARKED_IDLE_SECS = "30"
+$env:UFFS_PARKED_TO_COLD_IDLE_SECS = "60"
+$env:RUST_LOG = "uffs_daemon=info,shard.transition=info,shard.ttl=debug"
+uffs daemon stop
+uffs daemon start --drives C,D,E,F,G,M,S 2>&1 |
+    Tee-Object -FilePath C:\Temp\uffsd-G6.log
+```
+
+#### Drive
+
+```powershell
+# Pin C in Hot for 5 minutes.
+uffs daemon preload C --pin-minutes 5
+```
+
+Expected stdout:
+
+```text
+Daemon preloaded (5-min pin):
+  Promoted to Hot:  C
+  Already Hot:      (none)
+  Pin expires at:   <unix-millis> (Unix-millis)
+```
+
+Verify C is Hot + pinned and the others are still Cold:
+
+```powershell
+"=== Pre-wait ==="
+uffs daemon status_drives
+```
+
+Wait through 1.5× the warm-to-parked TTL — total ~90 s — long
+enough for `demote_idle_shards` to evaluate every shard at least
+twice:
+
+```powershell
+"=== Wait 90 s for the idle-demote controller to fire ==="
+Start-Sleep -Seconds 90
+"=== Post-wait ==="
+uffs daemon status_drives
+```
+
+Confirm the demote-controller log shows zero `to=parked` /
+`to=cold` lines for `letter=C`:
+
+```powershell
+Select-String -Path C:\Temp\uffsd-G6.log -Pattern '(letter|drive)=C\b.*to="?[Pp]arked|cold"?' |
+    Select-Object -ExpandProperty Line
+```
+
+Empty output = the pin gate in `IndexManager::demote_idle_shards`
++ `cascade_demote_one_step` correctly skipped C.
+
+#### Capture
+
+Paste into the PR:
+
+* Pre-wait `status_drives` row for C — `tier=hot`,
+  `pin_until_ms > 0`.
+* Post-wait `status_drives` row for C — still `tier=hot` despite
+  90 s past the warm-to-parked TTL.
+* Empty grep result above (verbatim).
+
+Acceptance criteria:
+
+* C's `TIER` column stays `hot` for the full 90-s window.
+* C's `PIN UNTIL (ms)` column is non-zero and at least 5 min in
+  the future.
+* No `letter=C` `to=parked` / `to=cold` events in the daemon log
+  for the wait window.
+
+#### Reset
+
+```powershell
+Remove-Item Env:\UFFS_WARM_TO_PARKED_IDLE_SECS
+Remove-Item Env:\UFFS_PARKED_TO_COLD_IDLE_SECS
+uffs daemon stop
+uffs daemon start --drives C,D,E,F,G,M,S
+```
+
+### G7 — `uffs daemon forget --force` evicts + deletes caches
+
+**Duration:** ~3 min wall-clock.
+**Plan reference:** plan task 8.3; PR #123.
+
+> **WARNING — destructive.**  This gate **deletes** a drive's
+> on-disk caches.  The next search of that drive must re-read the
+> entire MFT (cold boot, ~30-60 s for a 4 M-record drive).  Pick
+> a drive you can afford to re-build — the documented choice on
+> the 7-drive reference box is **`M:`** (smaller volume, less
+> painful re-warm).  **DO NOT** run this gate against `C:`.
+
+#### Setup
+
+The daemon from G6's reset.  Capture the chosen drive's on-disk
+cache footprint pre-forget so we can verify the freed-bytes
+accounting:
+
+```powershell
+$drive = 'M'
+$cacheRoot = "$env:LOCALAPPDATA\uffs\cache"
+
+# Phase 8-D unlinks four canonical paths.  Filenames are
+# case-mixed in production (uffs-mft uses uppercase for
+# `_index.{uffs,lock}`; uffs-core uses lowercase for
+# `_compact.uffs` / `_usn.cursor`) — the cleaner is case-tolerant
+# but the Test-Path verification has to be too.
+$cachePaths = @(
+    "$cacheRoot\$($drive.ToLower())_compact.uffs"
+    "$cacheRoot\$($drive.ToLower())_usn.cursor"
+    "$cacheRoot\$($drive.ToUpper())_index.uffs"
+    "$cacheRoot\$($drive.ToUpper())_index.lock"
+)
+
+"=== Pre-forget cache footprint ==="
+$total = 0
+foreach ($p in $cachePaths) {
+    if (Test-Path $p) {
+        $size = (Get-Item $p).Length
+        Write-Host ("  {0,12:N0} bytes  {1}" -f $size, (Split-Path -Leaf $p))
+        $total += $size
+    }
+}
+"  --------"
+("  {0,12:N0} bytes  TOTAL" -f $total)
+```
+
+#### Drive
+
+```powershell
+uffs daemon forget M --force
+```
+
+Expected stdout:
+
+```text
+Daemon forgot 1 drive(s); freed XX.XX MiB:
+  Forgotten:        M
+  Already absent:   (none)
+```
+
+#### Capture
+
+```powershell
+# Verify M is gone from the registry.
+"=== Post-forget status_drives — M must NOT be listed ==="
+uffs daemon status_drives
+
+# Verify every per-drive cache file is gone.
+"=== Post-forget cache files — every Test-Path must be False ==="
+foreach ($p in $cachePaths) {
+    $exists = Test-Path $p
+    Write-Host ("  exists={0}  {1}" -f $exists, $p)
+}
+```
+
+Acceptance criteria:
+
+* `forget` stdout's freed-bytes value (the `Daemon forgot 1
+  drive(s); freed XX.XX MiB` line) matches the pre-forget total
+  within rounding.
+* `status_drives` no longer lists `M`.
+* Every per-drive cache file (`*_compact.uffs`, `*_usn.cursor`,
+  `*_index.uffs`, `*_index.lock`) is absent on disk.
+
+#### Reset
+
+To restore `M:` to the daemon, hot-load it (re-reads the MFT cold,
+~30-60 s for a typical drive):
+
+```powershell
+uffs daemon load --drive M
+```
+
+### G8 — `uffs daemon status_drives` table render contract
+
+**Duration:** ~1 min wall-clock.
+**Plan reference:** plan task 8.4; PR #123.
+
+#### Drive
+
+```powershell
+uffs daemon status_drives
+```
+
+#### Capture
+
+Paste the full table output verbatim into the PR description.
+
+Acceptance criteria:
+
+* Header row exactly matches:
+  ```text
+  DRIVE  TIER    RESIDENT     QPM   LAST QUERY (ms)   PIN UNTIL (ms)
+  ```
+* One row per drive currently loaded (post-G7 this is 6 if you
+  forgot `M`; 7 if you re-loaded it via the G7 reset).
+* Rows are sorted by drive letter ASCII ascending.
+* `TIER` column values are lowercase (`hot` / `warm` / `parked` /
+  `cold`).
+* `RESIDENT` column has the right unit suffix per tier:
+  * `hot` / `warm` ⇒ `MiB` or `GiB` (full body heap)
+  * `parked` ⇒ `KiB` or `MiB` (bloom + trie only)
+  * `cold` ⇒ `0 B`
+* `PIN UNTIL (ms)` column is `-` for unpinned drives, a Unix-millis
+  integer for pinned ones (only the drive last `preload`-ed within
+  the pin window).
+* `LAST QUERY (ms)` column is `-` for never-queried drives, a
+  Unix-millis integer otherwise.
+
+---
+
+## 4. PR-attachment checklist
+
+Before opening the Phase 5 / Phase 6 / Phase 8 acceptance PR, paste
+the following into the description so the reviewer can sign off
+without re-running the soak:
 
 * **G1** capture — log excerpt showing `Low` → cascade chain →
   `High` with the LRU-ordered `drive=` field.
@@ -643,13 +949,27 @@ re-running the soak:
 * **Phase 6 24-h soak** capture — three grep results from §2 above
   (`drive=C…to=Parked` empty, peer-drive demotes present, different
   `chosen_ttl_sec` after synthetic load).
+* **G5 hibernate** capture — pre/post `status_drives` showing every
+  drive demoted to `cold`, plus the `Get-ChildItem
+  *_compact.uffs` listing proving the on-disk caches were
+  preserved.
+* **G6 preload pin** capture — pre-/post-wait `status_drives` rows
+  for `C` showing `tier=hot` survives a 90-s wait past the
+  warm-to-parked TTL, plus the empty `letter=C ... to=parked|cold`
+  log grep.
+* **G7 forget** capture — pre-forget cache-file size table +
+  post-forget `Test-Path` listing showing all four files absent +
+  the `freed_bytes` total from the `forget` command's stdout.
+* **G8 status_drives** capture — full table output as it appears
+  in the operator's terminal (header row + one row per loaded
+  drive, sorted ASCII ascending).
 
-After all five captures land, update the implementation-plan §5.1
+After all nine captures land, update the implementation-plan §5.1
 row for the corresponding phase to 🟢 with the date the PR landed.
 
 ---
 
-## 4. Reference captures (2026-05-02 v0.5.86 — Phase 5 G1-G4 baseline)
+## 5. Reference captures (2026-05-02 v0.5.86 — Phase 5 G1-G4 baseline)
 
 This section documents the first end-to-end Phase 5 Windows-host
 capture pass against the 7-drive reference box, run on 2026-05-02
