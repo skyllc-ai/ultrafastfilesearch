@@ -455,16 +455,28 @@ sync:
 refresh: sync use
 
 # Git commit with auto-generated message.
+#
+# Uses `git commit -S` (force-sign) because the resulting commit
+# eventually lands on `main`, which has the GitHub branch-protection
+# rule "Require signed commits".  Bypassing signing here used to
+# silently break the merge gate downstream — PR #130 was blocked on
+# 2026-05-05 because a single unsigned commit slipped through.
+# Inherits the user's `user.signingkey`; fails loudly if no key is
+# configured (correct: the commit cannot land on `main` without one).
 commit:
     @printf "\033[0;34m📝 Creating auto-generated commit...\033[0m\n"
     git add .
     @NEW_VERSION=`awk '/^\[workspace\.package\]/{flag=1; next} flag && /^version/{print $3; exit}' Cargo.toml | tr -d '"'`; \
-    git -c commit.gpgsign=false commit -m "chore: release v$NEW_VERSION - comprehensive testing complete [auto-commit]"
+    git commit -S -m "chore: release v$NEW_VERSION - comprehensive testing complete [auto-commit]"
 
 # Git push to remote.
+#
+# The implicit-commit branch uses `git commit -S` for the same
+# reason as the `commit` recipe above: pushes go straight to `main`,
+# which has "Require signed commits" branch-protection.
 push:
     @printf "\033[0;34m🚀 Pushing to remote...\033[0m\n"
-    @if git diff --quiet && git diff --cached --quiet; then echo "📋 Working directory is clean"; else echo "📋 Committing pending changes..."; git add .; git -c commit.gpgsign=false commit -m "chore: commit pending changes before push [auto-commit]"; fi
+    @if git diff --quiet && git diff --cached --quiet; then echo "📋 Working directory is clean"; else echo "📋 Committing pending changes..."; git add .; git commit -S -m "chore: commit pending changes before push [auto-commit]"; fi
     git pull origin main --rebase
     git push origin main
 

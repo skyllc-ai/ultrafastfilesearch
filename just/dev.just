@@ -313,9 +313,18 @@ quick-deploy:
     printf "\033[0;32m  → Build completed in %ds\033[0m\n" $((END - START))
 
     # 3. Git commit
+    #
+    # Uses `git commit -S` (force-sign) because this commit is
+    # pushed directly to `main`, which has the GitHub branch-
+    # protection rule "Require signed commits".  Bypassing signing
+    # here used to silently break the merge gate on PRs that
+    # touched the same files later (PR #130, 2026-05-05).  Inherits
+    # the user's `user.signingkey`; fails loudly if no key is
+    # configured (correct: the commit cannot land on `main`
+    # without one).
     printf "\n\033[0;34m📝 Step 3/4: Git commit...\033[0m\n"
     git add .
-    git -c commit.gpgsign=false commit -m "debug: quick-deploy v${NEW_VERSION} [skip ci]"
+    git commit -S -m "debug: quick-deploy v${NEW_VERSION} [skip ci]"
     printf "\033[0;32m  → Committed\033[0m\n"
 
     # 4. Git push
