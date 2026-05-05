@@ -12,6 +12,16 @@ local working copy on the implementer's machine).  Use this runbook
 when you want the **what to run on Windows** without the
 implementation-side context.
 
+**Companion docs (added 2026-05-05 alongside the v0.6.0 readiness pass):**
+
+- [`memory-tiering-readiness-validation-2026-05-05.md`](memory-tiering-readiness-validation-2026-05-05.md) —
+  dual-platform capture of the Phase 8 + 9 operator-surface readiness
+  pass (150 / 150 scenarios on Mac and Windows).  This is the canonical
+  validation evidence for the v0.6.0 cut.
+- [`memory-tiering-bake-criteria.md`](memory-tiering-bake-criteria.md) —
+  operationalised exit criteria for the one-week `main` bake that
+  precedes the v0.6.0 cut.
+
 The four Phase 5 operator gates that the all-Mac unit-test suite cannot
 exercise are listed in §1 below.  §2 covers the deferred Phase 6
 gate (24-h `min_tier = "Warm"` soak) since it shares the same
