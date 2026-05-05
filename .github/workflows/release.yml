@@ -241,6 +241,17 @@ jobs:
           # previous compile graph; only crates whose sources actually
           # changed need recompilation.  `pr-fast.yml` uses the same
           # pattern; the divergence here was unintentional.
+          #
+          # The cache this step restores is kept warm by
+          # `release-cache-warm.yml` — that workflow runs the same
+          # `shared-key` build on every Cargo-affecting `main` push
+          # plus a weekly cron, so the cache's last-access timestamp
+          # is refreshed often enough to survive GitHub's 7-day TTL +
+          # 10-GB-cap LRU eviction.  Without it, releases paid the
+          # full cold-build tax every time (issue #132).  If you
+          # change the build invocation below, mirror the change in
+          # `release-cache-warm.yml::warm` so the warmed cache stays
+          # bit-compatible with what this job needs.
           shared-key: release-${{ matrix.target }}
           cache-on-failure: 'true'
 
