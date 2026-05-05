@@ -88,6 +88,48 @@ readiness *ARGS:
 tier-compare *ARGS:
     @rust-script scripts/dev/tier-load-compare.rs {{ ARGS }}
 
+# 24h Phase 6 / Phase 7 Windows-host validation soaks.
+#
+# Closes the two outstanding Windows-host gates for the v0.6.0
+# memory-tiering epic.  Subcommands:
+#
+#   phase6 — `min_tier="Warm"` 24h idle soak.  Writes a temporary
+#            daemon.toml with the per-drive override, soaks idle
+#            for 24h, captures hourly per-drive tier snapshots,
+#            then drives a 5-min synthetic load and validates:
+#            (1) drive C never demotes below Warm, (2) peer drives
+#            demote normally, (3) `chosen_ttl_sec` differs between
+#            high-rate (C) and idle drives.
+#
+#   phase7 — Per-shard USN-journal continuous-churn 24h soak.
+#            Spawns a background create/modify/delete worker in
+#            `%USERPROFILE%\uffs-soak\churn` (or `--churn-dir`),
+#            captures hourly snapshots including encrypted-cache
+#            file sizes, then validates: new-file latency ≤ 2s,
+#            no `uffsd.exe` Working-Set growth > 1.5×, encrypted-
+#            cache refresh fired during the soak, no panic / OOM /
+#            unexpected demote-to-Parked.
+#
+# Both subcommands accept `--dev` for an abbreviated 5-min shake-out
+# (1-min snapshot interval, relaxed validation) so the harness can
+# be sanity-checked on Mac without burning 24h.
+#
+# Output: $HOME/uffs_soak/<gate>-<YYYYMMDD-HHMMSS>/
+#   - daemon.log                   (full RUST_LOG-filtered tee)
+#   - snapshots/<NN>h-*.{txt,json} (per-snapshot artifacts)
+#   - validation/*.{pass,fail}     (one breadcrumb per assertion)
+#   - summary.txt                  (human-readable PASS/FAIL roll-up)
+#
+# Examples:
+#   just soak phase6                    # 24h idle soak, drive C
+#   just soak phase6 --drive D          # apply min_tier=Warm to D instead
+#   just soak phase6 --dev              # 5-min Mac shake-out
+#   just soak phase7                    # 24h churn soak, default churn dir
+#   just soak phase7 --churn-rate 20    # 20 files/sec churn rate
+#   just soak phase7 --duration 1h      # 1-hour smoke run on real Windows
+soak *ARGS:
+    @rust-script scripts/dev/long-soak.rs {{ ARGS }}
+
 # Install cross-compilation targets for GitHub Actions compatibility.
 setup-cross:
     @printf "\033[0;34m Installing cross-compilation targets...\033[0m\n"

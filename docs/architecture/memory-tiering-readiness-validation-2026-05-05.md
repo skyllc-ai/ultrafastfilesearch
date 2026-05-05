@@ -261,12 +261,42 @@ This capture closes the validation half of the v0.6.0 Definition of Done
 
 **Remaining items for the v0.6.0 cut:**
 
-1. One-week bake on `main` per the criteria in
+1. **Phase 6 + Phase 7 24-h Windows-host soaks.**  Run via the
+   `just soak phase6` / `just soak phase7` recipes documented in
+   [`memory-tiering-windows-host-validation.md`](memory-tiering-windows-host-validation.md)
+   §2 + §3.  These close the last two operator-gate items left in the
+   master plan §5.1 status table (Phase 6 `min_tier="Warm"` 24-h soak,
+   Phase 7 USN-journal continuous-churn 24-h soak).
+2. One-week bake on `main` per the criteria in
    [`memory-tiering-bake-criteria.md`](memory-tiering-bake-criteria.md).
-2. CHANGELOG `Unreleased` → `0.6.0` finalize.
-3. Release notes drafted (this file is the primary input).
-4. Manual review of the diff `v0.5.85..v0.6.0`.
-5. `just ship` with `build/update_all_versions.rs minor`.
+3. CHANGELOG `Unreleased` → `0.6.0` finalize.
+4. Release notes drafted (this file is the primary input).
+5. Manual review of the diff `v0.5.85..v0.6.0`.
+6. `just ship` with `build/update_all_versions.rs minor`.
 
 The bake period now begins.  No new operator-surface features land on
 `main` until `v0.6.0` ships.
+
+---
+
+## 6. Phase-status closure note (for `memory-tiering-implementation-plan.md` §5.1)
+
+The master plan's `§5.1 Phase status` table is **gitignored** (lives
+only on the implementer's machine), so this note exists in-tree as the
+canonical paper trail for the **Phase 8 row flip**.
+
+**Phase 8 — Polish + cutover:** ⚪ → 🟢
+
+| Field | Value |
+|---|---|
+| Status | 🟢 (complete; Mac + Windows gates green) |
+| Mac gate | 🟢 — readiness pass §2 above (150 / 150 scenarios) |
+| Windows gate | 🟢 — readiness pass §3 above (150 / 150 scenarios) |
+| Closing PRs | #122 (8-A/B/C scaffold + hibernate + preload) · #123 (8-D/E forget + status_drives) · #127 (8-F CHANGELOG + README cutover) · #128 (8-G Windows G5-G8 captures) · #129 (Phase 9 `promotions_total` counter wire) · #133 (this readiness capture + bake criteria) |
+| Closing artifact | This file. |
+| Date closed | 2026-05-05 |
+| Outstanding | None at the operator-surface level. (Phase 9 = "Hot-cold record split" remains explicitly **deferred** per the master-plan §3 Phase 9 GO / NO-GO rule — post-Phase-4 measurement decision, not a v0.6.0 blocker.) |
+
+The remaining gate work for v0.6.0 is the **Phase 6 + Phase 7 24-h
+Windows-host soaks** described above and the bake period.  Phase 8 is
+no longer a blocker.

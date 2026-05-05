@@ -22,11 +22,21 @@ implementation-side context.
   operationalised exit criteria for the one-week `main` bake that
   precedes the v0.6.0 cut.
 
-The four Phase 5 operator gates that the all-Mac unit-test suite cannot
-exercise are listed in §1 below.  §2 covers the deferred Phase 6
-gate (24-h `min_tier = "Warm"` soak) since it shares the same
-operator workflow and the same `uffsd.exe` process.  §3 is the
-"what to capture" checklist for the PR description.
+Section map:
+
+- **§1** — Phase 5 operator gates (G1-G4), ~75 min wall-clock total.
+- **§2** — Phase 6 24-h `min_tier = "Warm"` operator soak.
+- **§3** — Phase 7 24-h USN-journal continuous-churn operator soak.
+- **§4** — Phase 8 operator-command gates (G5-G8), ~20 min wall-clock total.
+- **§5** — PR-attachment checklist for the acceptance PR.
+- **§6** — Reference captures from the 2026-05-02 v0.5.86 baseline run.
+
+For the long-running §2 + §3 soaks, the operator-friendly entry point is
+the `just soak` recipe (see
+[`scripts/dev/long-soak.rs`](../../scripts/dev/long-soak.rs) and
+[`just/dev.just`](../../just/dev.just)), which automates the daemon
+lifecycle, hourly snapshots, and the end-of-soak grep validators that
+close each gate.
 
 ---
 
@@ -639,9 +649,144 @@ Remove-Item $cfgPath
 uffs daemon stop
 ```
 
+#### Automation
+
+`just soak phase6` (or `rust-script scripts/dev/long-soak.rs phase6`)
+automates the entire setup → soak → end-of-soak load → validation
+flow.  See §3 just below for the matching Phase 7 recipe — the two
+recipes share their snapshot / output-dir / validation-report shape.
+
 ---
 
-## 3. Phase 8 operator-command gates — G5-G8, 4 captures, ~20 min wall-clock
+## 3. Phase 7 operator gate — 24-hour USN-journal churn soak
+
+**Duration:** 24 h wall-clock (set up and walk away).
+**Plan reference:**
+[`docs/refactor/memory-tiering-implementation-plan.md`](../refactor/memory-tiering-implementation-plan.md)
+§3 Phase 7 Windows gate.
+
+Validates that the per-shard USN-journal loop
+(`crates/uffs-daemon/src/cache/journal_loop.rs`, PR #117 / activation
+PR #118) keeps a Warm shard's body, bloom, and trie in sync with the
+live NTFS journal across 24 h of continuous churn — the long-running
+Windows-host equivalent of the Mac-side 1048 / 1048 unit test suite.
+
+#### Setup
+
+The `just soak phase7` recipe takes care of everything below; the
+manual steps are documented for the operator who wants to understand
+what the harness is doing or run a slice of it standalone.
+
+```powershell
+# 1. Pick a churn directory under the user profile.  Default in
+#    long-soak.rs.  Avoid system-owned paths so the soak can clean
+#    up after itself without elevation.
+$churnDir = "$env:USERPROFILE\uffs-soak\churn"
+New-Item -ItemType Directory -Path $churnDir -Force | Out-Null
+
+# 2. Bounce the daemon with the right log filter.
+Remove-Item Env:\RUST_LOG -ErrorAction SilentlyContinue
+$env:RUST_LOG = "uffs_daemon=info,shard.refresh=info,shard.transition=info,journal_loop=debug"
+uffs daemon stop
+uffs daemon start --drives C,D,E,F,G,M,S \
+    --log-file "$env:USERPROFILE\uffs_soak\phase7-$(Get-Date -Format yyyyMMdd-HHmmss)\daemon.log"
+```
+
+#### Drive
+
+A continuous create / modify / delete loop in `$churnDir`.  The
+`just soak phase7` recipe spawns a background thread for this; the
+portable PowerShell-only equivalent is:
+
+```powershell
+# Run for 24 h, ~5 files / sec.
+$end = (Get-Date).AddHours(24)
+$counter = 0
+while ((Get-Date) -lt $end) {
+    $path = Join-Path $churnDir "churn-$($counter % 1024).tmp"
+    "phase7 churn payload $counter"  | Set-Content -Path $path
+    "appended at $(Get-Date -Format o)" | Add-Content -Path $path
+    if ($counter % 4 -eq 0) { Remove-Item -Path $path -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 200
+    $counter++
+}
+```
+
+#### Capture
+
+Four acceptance criteria (the Phase 7 contract under
+`memory-tiering-implementation-plan.md` §3 Phase 7 Windows gate):
+
+1. **New-item latency ≤ 2 s.**  Drop a unique probe file in
+   `$churnDir`; confirm `uffs daemon status_drives` returns a
+   non-error response within 2 s of the file's `LastWriteTime`.
+   The harness probes once at T+0 and once at T+24h; both must hit
+   the budget.
+
+2. **Encrypted-cache refresh fired during the soak** (≤ 1× / 5 min,
+   ≥ 1× total over 24 h).  Grep the daemon log for
+   `shard.refresh` save-trigger events:
+   ```powershell
+   Select-String -Path C:\Temp\uffsd-phase7-soak.log `
+       -Pattern 'USN refresh tick|trigger_save|threshold.*save|encrypted cache refresh' |
+       Select-Object -ExpandProperty Line | Measure-Object
+   ```
+   `count` must be `≥ 1` (≥ 1× total).  A 24 h soak typically
+   produces 50-300 events depending on the threshold mix.
+
+3. **`uffsd.exe` Working Set ≤ 1.5× over 24 h.**  Hourly
+   `Get-Process uffsd | Select Id, WS, ...` snapshots.  Compare
+   the first to the last:
+   ```powershell
+   $first = Get-Content (Resolve-Path "$soakDir\snapshots\00h-process.json") | ConvertFrom-Json
+   $last  = Get-Content (Resolve-Path "$soakDir\snapshots\24h-process.json") | ConvertFrom-Json
+   $ratio = $last.WS / $first.WS
+   "WS ratio: $ratio (must be <= 1.5)"
+   ```
+   The harness wraps this assertion as a `validation/*.{pass,fail}`
+   breadcrumb.
+
+4. **No `panic` / `OutOfMemoryError` / `FATAL`.**  Same grep
+   pattern as G4:
+   ```powershell
+   Select-String -Path C:\Temp\uffsd-phase7-soak.log `
+       -Pattern '\bpanic\b|\bOutOfMemoryError\b|\bFATAL\b'
+   ```
+   Must return zero matches.
+
+#### Reset
+
+```powershell
+uffs daemon stop
+Remove-Item -Recurse -Force "$env:USERPROFILE\uffs-soak\churn"
+```
+
+#### Automation
+
+The one-line invocation that captures all four assertions in a
+single 24 h run is:
+
+```powershell
+just soak phase7
+```
+
+…which writes its full output (daemon log + per-hour snapshots +
+validation breadcrumbs + summary) into
+`$env:USERPROFILE\uffs_soak\phase7-<timestamp>\`.  Attach
+`summary.txt` + the snapshot dir to the acceptance PR.
+
+For a Mac-side shake-out before burning the real Windows 24 h:
+
+```bash
+just soak phase7 --dev   # 5-min run, 1-min snapshots, relaxed bounds
+```
+
+The `--dev` flag is documented in the harness CLI; production
+invocations omit it.
+
+---
+
+## 4. Phase 8 operator-command gates — G5-G8, 4 captures, ~20 min wall-clock
 
 These gates validate the four operator-driven memory-tiering
 commands shipped in Phase 8 (PRs #122 + #123).  They run against
@@ -942,11 +1087,11 @@ Acceptance criteria:
 
 ---
 
-## 4. PR-attachment checklist
+## 5. PR-attachment checklist
 
-Before opening the Phase 5 / Phase 6 / Phase 8 acceptance PR, paste
-the following into the description so the reviewer can sign off
-without re-running the soak:
+Before opening the Phase 5 / Phase 6 / Phase 7 / Phase 8 acceptance
+PR, paste the following into the description so the reviewer can
+sign off without re-running the soak:
 
 * **G1** capture — log excerpt showing `Low` → cascade chain →
   `High` with the LRU-ordered `drive=` field.
@@ -956,9 +1101,19 @@ without re-running the soak:
   matching log line.
 * **G4** capture — `Get-Process uffsd` table at 0 / 30 / 60 min plus
   the soak-log tail.
-* **Phase 6 24-h soak** capture — three grep results from §2 above
-  (`drive=C…to=Parked` empty, peer-drive demotes present, different
-  `chosen_ttl_sec` after synthetic load).
+* **Phase 6 24-h soak** capture — `summary.txt` from
+  `$env:USERPROFILE\uffs_soak\phase6-<timestamp>\` plus the three
+  grep-result files under `validation/` (`Drive_C_never_demotes_below_Warm.pass`,
+  the per-peer-drive `Warm-Parked.pass` files, and
+  `Drive_C_chosen_ttl_sec_exceeds_peers.pass`).
+* **Phase 7 24-h soak** capture — `summary.txt` from
+  `$env:USERPROFILE\uffs_soak\phase7-<timestamp>\` plus the four
+  grep-result files under `validation/`
+  (`No_panic_OOM_FATAL.pass`, both `*latency*.pass`,
+  `Encrypted-cache_refresh_fired.pass`,
+  `Working-Set_growth_ratio.pass`).  Also attach
+  `snapshots/00h-process.json` and `snapshots/24h-process.json` so
+  the reviewer can independently spot-check the WS bound.
 * **G5 hibernate** capture — pre/post `status_drives` showing every
   drive demoted to `cold`, plus the `Get-ChildItem
   *_compact.uffs` listing proving the on-disk caches were
@@ -974,12 +1129,12 @@ without re-running the soak:
   in the operator's terminal (header row + one row per loaded
   drive, sorted ASCII ascending).
 
-After all nine captures land, update the implementation-plan §5.1
+After all ten captures land, update the implementation-plan §5.1
 row for the corresponding phase to 🟢 with the date the PR landed.
 
 ---
 
-## 5. Reference captures (2026-05-02 v0.5.86 — Phase 5 G1-G4 baseline)
+## 6. Reference captures (2026-05-02 v0.5.86 — Phase 5 G1-G4 baseline)
 
 This section documents the first end-to-end Phase 5 Windows-host
 capture pass against the 7-drive reference box, run on 2026-05-02
