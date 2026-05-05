@@ -91,13 +91,15 @@ fn build_row(shard: &ShardEntry, now_ms: u64) -> DriveTierStatus {
         resident_bytes,
         query_rate_per_min,
         last_query_at_ms: i64_from_u64_saturating(last_query_at_ms),
-        // The wire format documents `promotions_total` as the
-        // cumulative Cold → Hot promotion count.  Today the daemon
-        // does not maintain a dedicated counter for this — Phase 9
-        // (`shard.transition` event aggregation) will plumb one
-        // through.  Surface `0` for now so the field round-trips
-        // cleanly without lying about activity.
-        promotions_total: 0,
+        // Phase 9 — `promotions_total` reads the live Cold → Hot
+        // counter maintained by
+        // [`crate::cache::shard::DriveStats::record_cold_to_hot_promote`].
+        // Bumped from
+        // [`crate::cache::registry::ShardRegistry::promote_letter_to_hot`]
+        // when the source tier was `Cold`; remains `0` for drives
+        // that have only been Warm/Hot since daemon start (no
+        // explicit re-promote-from-Cold event).
+        promotions_total: shard.stats.promotions_total(),
         pin_until_unix_ms: i64_from_u64_saturating(pin_until_unix_ms),
     }
 }
