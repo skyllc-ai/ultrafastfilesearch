@@ -146,12 +146,20 @@ use-local:
 # are bit-identical to what your end users download.  For local dev builds
 # from source, use `just use-local` instead.
 #
-# Strategy:
-#   1. Prefer `dist/vX.Y.Z/` matching the current `Cargo.toml` version
-#   2. Fall back to latest `dist/v*` if matching cache missing
-#   3. Fall back to `gh release download` otherwise (requires `gh` CLI)
+# Resilience strategy (each tier falls through to the next on miss):
+#   A. Exact cache hit on `dist/vX.Y.Z` matching workspace `Cargo.toml`.
+#   B. `gh release download vX.Y.Z` for the workspace version.
+#   C. `gh release download <latest-published-tag>` — graceful older-version
+#      install when the workspace version's release PR is still in CI
+#      (the exact failure mode that motivated this recipe: `just ship`
+#      bumped Cargo.toml to v0.5.90, but PR #131's release workflow
+#      hadn't published the binaries yet, so step B 404'd).
+#   D. Latest populated `dist/v*` cache (offline / `gh` missing / no
+#      published releases at all).
 #
-# Install binaries from the matching GitHub Release to ~/bin.
+# Each fallback is loud about *why* it fired, so a stale install never
+# fails silently.  The exit-1 path is reserved for "no usable binaries
+# anywhere" and prints a triage hint pointing at the release PR.
 [unix]
 use:
     #!/usr/bin/env bash
@@ -161,51 +169,90 @@ use:
     # Read workspace version from Cargo.toml
     CARGO_VER=$(awk '/^\[workspace\.package\]/{flag=1; next} flag && /^version/{print "v"$3; exit}' Cargo.toml | tr -d '"')
 
-    # Find matching dist/ version (prefer workspace version).
-    # An empty `dist/$CARGO_VER` is treated as a cache miss — `just
-    # ship` (and prior failed `just use` runs) can leave the directory
-    # behind without any binaries, and accepting it here would skip
-    # the GH-release download fallback below.
     DIST_DIR=""
+    STALE_NOTE=""
+
+    # ── A. Exact cache hit on workspace version ──────────────────────
+    # Empty `dist/$CARGO_VER` is treated as a miss: `just ship` (and
+    # prior failed `just use` runs) can leave the directory behind
+    # without any binaries, and accepting it here would skip the
+    # GH-release download steps below.
     if [[ -n "$CARGO_VER" ]] \
         && [[ -d "dist/$CARGO_VER" ]] \
         && [[ -n "$(ls -A "dist/$CARGO_VER" 2>/dev/null)" ]]; then
         DIST_DIR="dist/$CARGO_VER"
-        printf "\033[0;32m  Found dist/%s (matches workspace)\033[0m\n" "$CARGO_VER"
-    elif [[ -d "dist" ]]; then
-        LATEST=$(ls -d dist/v* 2>/dev/null | sort -V | tail -1 || true)
-        if [[ -n "$LATEST" ]] \
-            && [[ -d "$LATEST" ]] \
-            && [[ -n "$(ls -A "$LATEST" 2>/dev/null)" ]]; then
-            LATEST_VER=$(basename "$LATEST")
-            if [[ -n "$CARGO_VER" ]] && [[ "$LATEST_VER" != "$CARGO_VER" ]]; then
-                printf "\033[1;33m⚠️  dist/ has %s but workspace is %s\033[0m\n" "$LATEST_VER" "$CARGO_VER"
-                printf "\033[1;33m   Downloading %s from GitHub Release...\033[0m\n" "$CARGO_VER"
+        printf "\033[0;32m  ✅ dist/%s — exact cache hit\033[0m\n" "$CARGO_VER"
+    fi
+
+    # ── B. Download workspace version from GitHub Release ────────────
+    if [[ -z "$DIST_DIR" ]] && [[ -n "$CARGO_VER" ]] && command -v gh &>/dev/null; then
+        printf "\033[0;34m  ⬇  gh release download %s …\033[0m\n" "$CARGO_VER"
+        TARGET="dist/$CARGO_VER"
+        mkdir -p "$TARGET"
+        if gh release download "$CARGO_VER" --dir "$TARGET" --clobber >/dev/null 2>&1; then
+            DIST_DIR="$TARGET"
+            printf "\033[0;32m  ✅ Downloaded %s\033[0m\n" "$CARGO_VER"
+        else
+            # Clean up the empty cache dir created by `mkdir -p` so a
+            # subsequent `just use` doesn't false-positive on tier A.
+            rmdir "$TARGET" 2>/dev/null || true
+            printf "\033[1;33m  ⚠️  Release %s not published yet (release PR likely mid-merge)\033[0m\n" "$CARGO_VER"
+        fi
+    fi
+
+    # ── C. Download latest published release (older than workspace) ──
+    if [[ -z "$DIST_DIR" ]] && command -v gh &>/dev/null; then
+        LATEST_PUB=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+        if [[ -n "$LATEST_PUB" ]] && [[ "$LATEST_PUB" != "$CARGO_VER" ]]; then
+            TARGET="dist/$LATEST_PUB"
+            if [[ -d "$TARGET" ]] && [[ -n "$(ls -A "$TARGET" 2>/dev/null)" ]]; then
+                DIST_DIR="$TARGET"
+                printf "\033[1;33m  ⚠️  Falling back to cached %s (workspace is %s)\033[0m\n" "$LATEST_PUB" "$CARGO_VER"
             else
-                DIST_DIR="$LATEST"
+                printf "\033[0;34m  ⬇  gh release download %s (latest published) …\033[0m\n" "$LATEST_PUB"
+                mkdir -p "$TARGET"
+                if gh release download "$LATEST_PUB" --dir "$TARGET" --clobber >/dev/null 2>&1; then
+                    DIST_DIR="$TARGET"
+                    printf "\033[1;33m  ⚠️  Downloaded %s as fallback (workspace is %s)\033[0m\n" "$LATEST_PUB" "$CARGO_VER"
+                else
+                    rmdir "$TARGET" 2>/dev/null || true
+                fi
             fi
+            STALE_NOTE="(stale: workspace at $CARGO_VER, installed binaries are $LATEST_PUB)"
         fi
     fi
 
-    # Fallback: download from GitHub Release
-    if [[ -z "$DIST_DIR" ]] || [[ ! -d "$DIST_DIR" ]]; then
-        printf "\033[1;33m⚠️  No matching dist/ cache. Downloading from GitHub Release...\033[0m\n"
-        if ! command -v gh &>/dev/null; then
-            printf "\033[0;31m❌ gh CLI not found. Install with: brew install gh\033[0m\n"
-            exit 1
+    # ── D. Latest local cache (offline / gh missing / no releases) ───
+    if [[ -z "$DIST_DIR" ]] && [[ -d "dist" ]]; then
+        LATEST_LOCAL=$(ls -d dist/v* 2>/dev/null | sort -V | tail -1 || true)
+        if [[ -n "$LATEST_LOCAL" ]] \
+            && [[ -d "$LATEST_LOCAL" ]] \
+            && [[ -n "$(ls -A "$LATEST_LOCAL" 2>/dev/null)" ]]; then
+            DIST_DIR="$LATEST_LOCAL"
+            LATEST_VER=$(basename "$LATEST_LOCAL")
+            printf "\033[1;33m  ⚠️  Using stale local cache %s (workspace is %s, GH unreachable)\033[0m\n" "$LATEST_VER" "$CARGO_VER"
+            STALE_NOTE="(stale: workspace at $CARGO_VER, installed binaries are $LATEST_VER)"
         fi
-        VERSION="${CARGO_VER:-$(gh release view --json tagName -q .tagName 2>/dev/null || true)}"
-        if [[ -z "$VERSION" ]]; then
-            printf "\033[0;31m❌ No GitHub Release found. Run 'just ship' first.\033[0m\n"
-            exit 1
-        fi
-        DIST_DIR="dist/$VERSION"
-        mkdir -p "$DIST_DIR"
-        gh release download "$VERSION" --dir "$DIST_DIR" --clobber
-        printf "\033[0;32m✅ Downloaded %s to %s\033[0m\n" "$VERSION" "$DIST_DIR"
     fi
 
-    printf "\033[0;34m  → Using: %s\033[0m\n" "$DIST_DIR"
+    # ── No tier produced a usable cache ──────────────────────────────
+    if [[ -z "$DIST_DIR" ]]; then
+        printf "\033[0;31m❌ Could not locate UFFS binaries (workspace: %s)\033[0m\n" "${CARGO_VER:-unknown}"
+        printf "\n   Triage (in order of likelihood):\n"
+        printf "     1. Release PR for this version is still in CI.  Check:\n"
+        printf "        \033[0;36mgh pr list --base main --search \"release/v\"\033[0m\n"
+        printf "        \033[0;36mgh pr checks <number> --watch\033[0m\n"
+        printf "     2. dist/ is empty AND gh is missing/unauthenticated:\n"
+        printf "        \033[0;36mbrew install gh && gh auth login\033[0m\n"
+        printf "     3. No GitHub Releases exist yet: \033[0;36mjust ship\033[0m to bootstrap.\n"
+        exit 1
+    fi
+
+    if [[ -n "$STALE_NOTE" ]]; then
+        printf "\033[0;34m  → Source: %s \033[1;33m%s\033[0m\n" "$DIST_DIR" "$STALE_NOTE"
+    else
+        printf "\033[0;34m  → Source: %s\033[0m\n" "$DIST_DIR"
+    fi
 
     BIN_DIR="$HOME/bin"
     mkdir -p "$BIN_DIR"
@@ -260,9 +307,17 @@ use:
         fi
     done
 
-# Install UFFS binaries from local dist/ cache to ~/bin (Windows).
-# If dist/ is empty, downloads the latest release from GitHub first.
-# Prerequisite for fallback: `gh` CLI (winget install GitHub.cli)
+# Install UFFS binaries from GitHub Release (cached in dist/) to ~/bin (Windows).
+#
+# Resilience strategy (mirrors the unix recipe — see its docstring for
+# the motivating failure mode and the design rationale).  Each tier
+# falls through to the next on miss:
+#   A. Exact cache hit on `dist/vX.Y.Z` matching workspace `Cargo.toml`.
+#   B. `gh release download vX.Y.Z` for the workspace version.
+#   C. `gh release download <latest-published-tag>` (older fallback).
+#   D. Latest populated `dist/v*` cache (offline / gh missing).
+#
+# Prerequisite for B/C: `gh` CLI (winget install GitHub.cli).
 [windows]
 use:
     #!powershell
@@ -277,51 +332,103 @@ use:
         if ($line -match '^\[' -and $inPkg) { break }
     }
 
-    # Try to find matching dist/ version (prefer workspace version).
-    # An empty `dist/$cargoVer` is treated as a cache miss — `just
-    # ship` (and prior failed `just use` runs) can leave the directory
-    # behind without any binaries, and accepting it here would skip
-    # the GH-release download fallback below.
     $distDir = $null
+    $staleNote = ""
+    $ghAvailable = [bool](Get-Command gh -ErrorAction SilentlyContinue)
+
+    # Helper: does `dir` exist AND contain at least one entry?
+    function Test-Populated($path) {
+        if (-not $path) { return $false }
+        if (-not (Test-Path $path)) { return $false }
+        return (@(Get-ChildItem -Path $path -Force -ErrorAction SilentlyContinue)).Count -gt 0
+    }
+
+    # ── A. Exact cache hit on workspace version ──────────────────────
     $candidate = if ($cargoVer) { Join-Path "dist" $cargoVer } else { $null }
-    if ($candidate -and (Test-Path $candidate) -and `
-            (@(Get-ChildItem -Path $candidate -Force -ErrorAction SilentlyContinue)).Count -gt 0) {
+    if (Test-Populated $candidate) {
         $distDir = $candidate
-        Write-Host "  Found dist/$cargoVer (matches workspace)" -ForegroundColor Green
-    } elseif (Test-Path "dist") {
-        $versions = Get-ChildItem -Path "dist" -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match '^v\d+\.\d+\.\d+$' } |
-            Where-Object { (@(Get-ChildItem -Path $_.FullName -Force -ErrorAction SilentlyContinue)).Count -gt 0 } |
-            Sort-Object { [version]($_.Name -replace '^v','') } -Descending
-        if ($versions) {
-            $distDir = $versions[0].FullName
-            $distVer = $versions[0].Name
-            if ($cargoVer -and $distVer -ne $cargoVer) {
-                Write-Host "  WARNING: dist/ has $distVer but workspace is $cargoVer" -ForegroundColor Yellow
-                Write-Host "  Downloading $cargoVer from GitHub Release..." -ForegroundColor Yellow
-                $distDir = $null  # force download
+        Write-Host "  OK: dist/$cargoVer - exact cache hit" -ForegroundColor Green
+    }
+
+    # ── B. Download workspace version from GitHub Release ────────────
+    if (-not $distDir -and $cargoVer -and $ghAvailable) {
+        Write-Host "  -> gh release download $cargoVer ..." -ForegroundColor Blue
+        $target = Join-Path "dist" $cargoVer
+        New-Item -ItemType Directory -Path $target -Force | Out-Null
+        gh release download $cargoVer --dir $target --clobber 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0 -and (Test-Populated $target)) {
+            $distDir = $target
+            Write-Host "  OK: Downloaded $cargoVer" -ForegroundColor Green
+        } else {
+            # Drop empty cache dir so tier A doesn't false-positive next run.
+            if ((Test-Path $target) -and -not (Test-Populated $target)) {
+                Remove-Item $target -Force -ErrorAction SilentlyContinue
+            }
+            Write-Host "  WARNING: Release $cargoVer not published yet (release PR likely mid-merge)" -ForegroundColor Yellow
+        }
+    }
+
+    # ── C. Download latest published release (older than workspace) ──
+    if (-not $distDir -and $ghAvailable) {
+        $latestPub = (gh release view --json tagName -q ".tagName" 2>$null)
+        if ($latestPub -and $latestPub -ne $cargoVer) {
+            $target = Join-Path "dist" $latestPub
+            if (Test-Populated $target) {
+                $distDir = $target
+                Write-Host "  WARNING: Falling back to cached $latestPub (workspace is $cargoVer)" -ForegroundColor Yellow
+            } else {
+                Write-Host "  -> gh release download $latestPub (latest published) ..." -ForegroundColor Blue
+                New-Item -ItemType Directory -Path $target -Force | Out-Null
+                gh release download $latestPub --dir $target --clobber 2>$null | Out-Null
+                if ($LASTEXITCODE -eq 0 -and (Test-Populated $target)) {
+                    $distDir = $target
+                    Write-Host "  WARNING: Downloaded $latestPub as fallback (workspace is $cargoVer)" -ForegroundColor Yellow
+                } else {
+                    if ((Test-Path $target) -and -not (Test-Populated $target)) {
+                        Remove-Item $target -Force -ErrorAction SilentlyContinue
+                    }
+                }
+            }
+            if ($distDir) {
+                $staleNote = "(stale: workspace at $cargoVer, installed binaries are $latestPub)"
             }
         }
     }
 
-    # Fallback: download from GitHub Release
-    if (-not $distDir) {
-        Write-Host "  No matching dist/ cache. Downloading from GitHub Release..." -ForegroundColor Yellow
-        if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-            Write-Host "  FAIL: gh CLI not found. Install with: winget install GitHub.cli" -ForegroundColor Red
-            exit 1
+    # ── D. Latest local cache (offline / gh missing / no releases) ───
+    if (-not $distDir -and (Test-Path "dist")) {
+        $versions = Get-ChildItem -Path "dist" -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^v\d+\.\d+\.\d+$' } |
+            Where-Object { Test-Populated $_.FullName } |
+            Sort-Object { [version]($_.Name -replace '^v','') } -Descending
+        if ($versions) {
+            $distDir = $versions[0].FullName
+            $distVer = $versions[0].Name
+            Write-Host "  WARNING: Using stale local cache $distVer (workspace is $cargoVer, GH unreachable)" -ForegroundColor Yellow
+            $staleNote = "(stale: workspace at $cargoVer, installed binaries are $distVer)"
         }
-        $version = if ($cargoVer) { $cargoVer } else { (gh release view --json tagName -q ".tagName" 2>$null) }
-        if (-not $version) { Write-Host "  FAIL: No GitHub Release found." -ForegroundColor Red; exit 1 }
-        $distDir = Join-Path "dist" $version
-        New-Item -ItemType Directory -Path $distDir -Force | Out-Null
-        gh release download $version --dir $distDir --clobber
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  FAIL: download failed." -ForegroundColor Red; exit 1
-        }
-        Write-Host "  OK: Downloaded $version to $distDir" -ForegroundColor Green
     }
-    Write-Host "  Source: $distDir" -ForegroundColor Cyan
+
+    # ── No tier produced a usable cache ──────────────────────────────
+    if (-not $distDir) {
+        $vDisplay = if ($cargoVer) { $cargoVer } else { "unknown" }
+        Write-Host "FAIL: Could not locate UFFS binaries (workspace: $vDisplay)" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  Triage (in order of likelihood):"
+        Write-Host "    1. Release PR for this version is still in CI.  Check:"
+        Write-Host "       gh pr list --base main --search `"release/v`"" -ForegroundColor Cyan
+        Write-Host "       gh pr checks <number> --watch" -ForegroundColor Cyan
+        Write-Host "    2. dist/ is empty AND gh is missing/unauthenticated:"
+        Write-Host "       winget install GitHub.cli ; gh auth login" -ForegroundColor Cyan
+        Write-Host "    3. No GitHub Releases exist yet: just ship to bootstrap." -ForegroundColor Cyan
+        exit 1
+    }
+
+    if ($staleNote) {
+        Write-Host "  Source: $distDir $staleNote" -ForegroundColor Yellow
+    } else {
+        Write-Host "  Source: $distDir" -ForegroundColor Cyan
+    }
     $binDir = Join-Path $env:USERPROFILE 'bin'
     if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }
 
