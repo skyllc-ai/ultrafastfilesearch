@@ -18,8 +18,8 @@ UFFS - Ultra Fast File Search
 
 | Phase | Description | Status |
 |---|---|---|
-| 0 | Plan + schema design | 🟡 in flight (this doc) |
-| 1 | Manifest + drift detector (no consumer changes) | ⏭ pending |
+| 0 | Plan + schema design | ✅ landed (PR #139) |
+| 1 | Manifest + drift detector (no consumer changes) | 🟡 in flight (PR #140) |
 | 2 | Codegen for `_lint_pre_push.sh` | ⏭ pending |
 | 3 | Codegen for `_lint_fast.sh` + `pr-fast.yml` + doc tables | ⏭ pending |
 
@@ -616,7 +616,7 @@ Other workflows are opaque to it.
 
 | Date | Event | PR |
 |---|---|---|
-| 2026-05-06 | Plan drafted | (this PR, target: `docs(plan): gates manifest`) |
-| TBD | Phase 1 lands (manifest + drift detector) | TBD |
+| 2026-05-06 | Plan drafted (this doc) + landed | #139 |
+| 2026-05-06 | Phase 1 in flight — manifest (`scripts/ci/gates.toml`) + drift detector (`scripts/ci/check_gates_drift.sh`) + pre-push Bucket 1 wiring + new `pr-fast.yml::gates-drift` job + `just gates-drift` recipe | #140 |
 | TBD | Phase 2 lands (`gen-hooks` for pre-push) | TBD |
 | TBD | Phase 3 lands (full migration) | TBD |

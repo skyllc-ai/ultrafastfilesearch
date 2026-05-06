@@ -1,0 +1,488 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025-2026 SKY, LLC.
+#
+# UFFS quality-gate manifest — single source of truth for the gate
+# set enforced at pre-commit, pre-push, and PR Fast CI.
+#
+# This file is the implementation of Phase 1 of
+# `docs/architecture/gates-manifest-plan.md`.  See that doc for the
+# full schema spec, generator interface, and migration order.
+#
+# Phase 1 status: this manifest is INFORMATIONAL.  The consumer files
+# (`scripts/hooks/_lint_fast.sh`, `scripts/hooks/_lint_pre_push.sh`,
+# `.github/workflows/pr-fast.yml`) are still hand-maintained.  The
+# `scripts/ci/check_gates_drift.sh` drift detector verifies the
+# manifest stays in sync with what those files actually do — it
+# fails CI if any gate listed here is missing from the corresponding
+# consumer, or if a consumer-defined gate is missing from this file.
+#
+# Phase 2/3 will replace the hand-maintenance with codegen FROM this
+# file.  Until then, every gate change must be made in TWO places:
+# the consumer file AND this manifest.  The drift detector enforces
+# that you didn't forget either side.
+#
+# Field semantics: see `docs/architecture/gates-manifest-plan.md` §3.
+
+[manifest]
+version = 1
+generated_files = [
+  # Phase 1: empty — nothing is generated yet.
+  # Phase 2: "scripts/hooks/_lint_pre_push.sh"
+  # Phase 3: + "scripts/hooks/_lint_fast.sh", ".github/workflows/pr-fast.yml"
+]
+
+# Change-classification regexes used by the pre-push hook + CI's
+# `classify` job to gate condition-driven jobs.  These MUST be kept
+# in lockstep across consumers; the drift detector grep's for them.
+[classification]
+rust = '\.rs$'
+dep = '^(.*Cargo\.toml$|Cargo\.lock$|supply-chain/)'
+infra = '^(\.github/|scripts/|\.cargo/|\.config/|just/|rust-toolchain|clippy\.toml$|rustfmt\.toml$|deny\.toml$|REUSE\.toml$|codecov\.yml$)'
+docs = '\.md$'
+# code = (rust OR dep OR infra) — derived; not a regex
+
+# ─────────────────────────────────────────────────────────────────────
+# Always-on gates — fire regardless of change classification
+# ─────────────────────────────────────────────────────────────────────
+
+[[gate]]
+id = "fmt"
+label = "cargo fmt --check"
+command = ["cargo", "fmt", "--all", "--", "--check"]
+tiers = ["pre-commit", "pre-push", "pr-fast"]
+gate_when = "rust_changed"
+hard = true
+tool = "cargo"
+expected_runtime_secs = 1
+bucket = "bg"
+order = 10
+consumer_names = { "pre-commit" = "fmt-check" }
+notes = """
+Always-on at pre-push; gated on `rust_changed` at pre-commit (which
+is staged-scoped) and at pr-fast (`fmt` job's `if:` condition).
+Legacy: pre-commit hook calls it `fmt-check` (historical); pre-push
+and pr-fast call it `fmt`.  Phase 2/3 codegen will normalise.
+"""
+
+[[gate]]
+id = "file-size"
+label = "file-size policy"
+command = ["bash", "scripts/ci/check_file_size_policy.sh"]
+tiers = ["pre-commit", "pre-push", "pr-fast"]
+gate_when = "always"
+hard = true
+tool = "bash"
+expected_runtime_secs = 1
+bucket = "bg"
+order = 20
+notes = """
+Enforces the workspace's 800-LOC-per-Rust-file policy with a
+documented exception list at `scripts/ci/file_size_exceptions.txt`.
+"""
+
+[[gate]]
+id = "gates-drift"
+label = "Gate-manifest drift detector"
+command = ["bash", "scripts/ci/check_gates_drift.sh"]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "always"
+hard = true
+tool = "bash"
+expected_runtime_secs = 1
+bucket = "bg"
+order = 25
+notes = """
+Phase 1 of `docs/architecture/gates-manifest-plan.md`.  Self-referential
+gate that verifies this manifest stays in lockstep with the gate set
+actually defined in `_lint_fast.sh`, `_lint_pre_push.sh`, and
+`pr-fast.yml`.  Bypass once via `BYPASS_GATES_DRIFT=1 git push`
+(mirrors `COMMIT_SUBJECT_BYPASS=1`); CI has no bypass — drift on
+`main` is a deliberate "fix-me-now" signal.
+"""
+
+[[gate]]
+id = "commit-subjects"
+label = "Conventional Commits subject validator"
+command = [
+  "bash",
+  "scripts/ci/check_commit_subjects.sh",
+  "range",
+  "{{COMMIT_RANGES}}",
+]
+tiers = ["pre-push"]
+gate_when = "always"
+hard = true
+tool = "bash"
+expected_runtime_secs = 1
+bucket = "bg"
+order = 30
+notes = """
+Validates every non-merge commit subject in the pushed range against
+the SAME Conventional Commits regex CI's
+`.github/workflows/commitlint.yml` runs on the PR title.  Closes the
+local-vs-remote feedback loop that used to surface scope typos like
+`feat(uffs-core, daemon)` only after the workflow had already failed
+upstream.  Bypass via `COMMIT_SUBJECT_BYPASS=1 git push`.
+"""
+
+# ─────────────────────────────────────────────────────────────────────
+# Rust-changed gates — fire when *.rs is touched
+# ─────────────────────────────────────────────────────────────────────
+
+[[gate]]
+id = "lint-prod"
+label = "ultra-strict production clippy (--lib --bins)"
+command = ["just", "lint-prod"]
+tiers = ["pre-commit", "pre-push"]
+gate_when = "rust_changed"
+hard = true
+tool = "cargo"
+expected_runtime_secs = 8
+bucket = "seq"
+order = 30
+flag_template = "prod_flags"
+notes = """
+Pedantic + nursery + cargo + unwrap_used + missing_docs_in_private_items.
+NOT in pr-fast (pr-fast's `clippy` job uses `lint-ci`'s --all-targets
+flag stack which subsumes lint-prod's --lib --bins).
+"""
+
+[[gate]]
+id = "lint-tests"
+label = "strict test clippy (--tests, unwrap allowed)"
+command = ["just", "lint-tests"]
+tiers = ["pre-commit", "pre-push"]
+gate_when = "rust_changed"
+hard = true
+tool = "cargo"
+expected_runtime_secs = 8
+bucket = "seq"
+order = 40
+flag_template = "test_flags"
+notes = """
+Same lint base as `lint-prod` with unwrap/expect allowed for test
+code.  Same not-in-pr-fast rationale.
+"""
+
+[[gate]]
+id = "lint-ci"
+label = "CI-mirror clippy (--all-targets -D warnings)"
+command = ["just", "lint-ci"]
+tiers = ["pre-commit", "pre-push", "pr-fast"]
+gate_when = "rust_changed"
+hard = true
+tool = "cargo"
+expected_runtime_secs = 10
+bucket = "seq"
+order = 20
+consumer_names = { "pr-fast" = "clippy" }
+notes = """
+The exact clippy flag stack `pr-fast.yml`'s `clippy` job runs.
+Kept in lockstep manually until Phase 2 codegen lands.
+"""
+
+[[gate]]
+id = "rustdoc"
+label = "rustdoc -D warnings"
+command = [
+  "env",
+  "RUSTDOCFLAGS=-Dwarnings",
+  "cargo",
+  "doc",
+  "--workspace",
+  "--all-features",
+  "--no-deps",
+  "--locked",
+]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "rust_changed"
+hard = true
+tool = "cargo"
+expected_runtime_secs = 1
+bucket = "seq"
+order = 50
+consumer_names = { "pr-fast" = "docs" }
+notes = """
+Catches broken doc-links, unresolved `[symbol]` references, and any
+intra-doc cross-reference drift.  pr-fast's `docs` job runs both
+this and `doc-tests` in one step.
+"""
+
+[[gate]]
+id = "doc-tests"
+label = "cargo test --doc"
+command = [
+  "env",
+  "RUSTDOCFLAGS=-Dwarnings",
+  "cargo",
+  "test",
+  "--doc",
+  "--workspace",
+  "--all-features",
+  "--locked",
+]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "rust_changed"
+hard = true
+tool = "cargo"
+expected_runtime_secs = 14
+bucket = "seq"
+order = 60
+consumer_names = { "pr-fast" = "docs" }
+notes = """
+Phase 1 addition (dev-flow §6.2): actually EXECUTES the `/// ```rust`
+blocks rustdoc only compiled.  CI catches this today, but the local
+gate closes a ~30 s round-trip for broken doctests.  Bundled into
+pr-fast's `docs` job alongside `rustdoc`.
+"""
+
+# ─────────────────────────────────────────────────────────────────────
+# Code-changed gates (rust|dep|infra) — fire when any code class touched
+# ─────────────────────────────────────────────────────────────────────
+
+[[gate]]
+id = "cargo-check"
+label = "cargo check --workspace --all-targets --all-features --locked"
+command = [
+  "cargo",
+  "check",
+  "--workspace",
+  "--all-targets",
+  "--all-features",
+  "--locked",
+]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "code_changed"
+hard = true
+tool = "cargo"
+expected_runtime_secs = 1
+bucket = "seq"
+order = 10
+consumer_names = { "pr-fast" = "sanity" }
+notes = """
+Fastest compile gate; runs FIRST in Bucket 2 so the most likely
+failure class (type errors after a refactor) surfaces before
+clippy / rustdoc / tests pay their setup cost.  `pr-fast.yml`'s
+`sanity` job runs the equivalent.
+"""
+
+[[gate]]
+id = "test-build"
+label = "test compile (nextest --no-run)"
+command = [
+  "cargo",
+  "nextest",
+  "run",
+  "--workspace",
+  "--all-targets",
+  "--all-features",
+  "--no-run",
+  "--locked",
+  "--hide-progress-bar",
+]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "code_changed"
+hard = true
+tool = "cargo-nextest"
+expected_runtime_secs = 4
+bucket = "seq"
+order = 70
+consumer_names = { "pre-push" = "tests" }
+notes = """
+Links every test binary without running it.  Catches `#[cfg(test)]`
+drift, missing dev-deps, and linker-level regressions that
+`cargo clippy --all-targets` (check-only, no linking) misses.
+Legacy: pre-push hook calls it `tests` (the run_seq label is
+`tests` even though the command is `--no-run`); pr-fast calls it
+`test-build`.  Phase 2/3 codegen will normalise.
+"""
+
+[[gate]]
+id = "smoke"
+label = "nextest pre-push-smoke profile"
+command = [
+  "cargo",
+  "nextest",
+  "run",
+  "--workspace",
+  "--profile",
+  "pre-push-smoke",
+  "--locked",
+]
+tiers = ["pre-push"]
+gate_when = "code_changed"
+hard = true
+tool = "cargo-nextest"
+expected_runtime_secs = 9
+bucket = "seq"
+order = 80
+notes = """
+Phase 1 addition (dev-flow §6.X): RUNS a fast unit-test subset
+(~6 s warm).  Excludes the validation suite and `uffs-client` shmem
+tests which would blow the budget.  Full suite still runs in CI.
+"""
+
+[[gate]]
+id = "tests"
+label = "full nextest run (PR CI)"
+command = [
+  "cargo",
+  "nextest",
+  "run",
+  "--workspace",
+  "--all-targets",
+  "--all-features",
+  "--locked",
+]
+tiers = ["pr-fast"]
+gate_when = "code_changed"
+hard = true
+tool = "cargo-nextest"
+expected_runtime_secs = 300
+notes = """
+The full test suite, deferred from pre-push (too slow) to PR CI.
+`pre-push` has the `smoke` subset above and `test-build` for compile
+confidence.
+"""
+
+# ─────────────────────────────────────────────────────────────────────
+# Dep-changed gates — fire when Cargo.{toml,lock} or supply-chain/ touched
+# ─────────────────────────────────────────────────────────────────────
+
+[[gate]]
+id = "vet"
+label = "cargo vet check --locked"
+command = ["cargo", "vet", "check", "--locked"]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "dep_changed"
+hard = true
+tool = "cargo-vet"
+expected_runtime_secs = 2
+bucket = "bg"
+order = 40
+consumer_names = { "pr-fast" = "security" }
+notes = """
+HARD-FAIL if `cargo-vet` is missing when Cargo.{toml,lock} or
+supply-chain/** changed.  Closes the CI-only loophole that caused
+PR #43's 4x round-trip.  Soft-skip with install-hint advisory when
+the trigger doesn't fire.  pr-fast's `security` job bundles vet + deny.
+"""
+
+[[gate]]
+id = "deny"
+label = "cargo deny check"
+command = ["cargo", "deny", "check", "--hide-inclusion-graph"]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "dep_changed"
+hard = true
+tool = "cargo-deny"
+expected_runtime_secs = 5
+bucket = "seq"
+order = 90
+consumer_names = { "pr-fast" = "security" }
+notes = """
+Advisories / bans / licences / sources.  Note: cargo-deny does not
+accept --locked (it reads Cargo.lock from disk directly); cargo-vet
+takes --locked on the bucket-1 side.  pr-fast's `security` job
+bundles vet + deny.
+"""
+
+# ─────────────────────────────────────────────────────────────────────
+# Cross-platform gate — Windows lint via cargo-xwin
+# ─────────────────────────────────────────────────────────────────────
+
+[[gate]]
+id = "lint-ci-windows"
+label = "Windows xwin clippy (-D warnings)"
+command = ["just", "lint-ci-windows"]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "code_changed"
+hard = false
+tool = "cargo-xwin"
+expected_runtime_secs = 6
+bucket = "seq"
+order = 100
+consumer_names = { "pr-fast" = "windows-lint" }
+notes = """
+Phase W5.5 + W5.6 of `windows-clippy-and-linux-cross-plan.md` (PR
+#138) upgraded this from `cargo xwin check` (compile-only) to `cargo
+xwin clippy -- -D warnings`.
+
+Pre-push hook runs `just lint-ci-windows` (cross-compiled cargo-xwin
+clippy with the strict flag stack).  Soft-skip with install-hint
+when `cargo-xwin` missing (MSVC SDK download is ~400 MB; not all
+contributors want that footprint).
+
+Authoritative gate is `pr-fast.yml::windows-lint` which runs the
+equivalent strict clippy NATIVELY on `windows-latest`.
+"""
+
+# ─────────────────────────────────────────────────────────────────────
+# Optional / advisory gates — soft-skip with install hint
+# ─────────────────────────────────────────────────────────────────────
+
+[[gate]]
+id = "typos"
+label = "typos spell-check"
+command = ["typos", "."]
+tiers = ["pre-commit", "pre-push"]
+gate_when = "always"
+hard = false
+tool = "typos"
+expected_runtime_secs = 1
+bucket = "bg"
+order = 50
+notes = """
+Cheap workspace-wide spell-check.  Soft-skip with install hint when
+`typos` is missing (dev-loop nicety, not a hard prerequisite).
+"""
+
+[[gate]]
+id = "reuse"
+label = "reuse SPDX header check"
+command = ["reuse", "lint", "--quiet"]
+tiers = ["pre-commit", "pre-push"]
+gate_when = "always"
+hard = false
+tool = "reuse"
+expected_runtime_secs = 1
+bucket = "bg"
+order = 60
+notes = """
+SPDX licence header compliance.  Soft-skip with `pipx install reuse`
+hint when missing.
+"""
+
+[[gate]]
+id = "taplo"
+label = "taplo TOML format check (staged scope)"
+command = ["taplo", "fmt", "--check", "{{STAGED_TOML}}"]
+tiers = ["pre-commit"]
+gate_when = "always"
+hard = false
+tool = "taplo"
+expected_runtime_secs = 1
+bucket = "bg"
+order = 70
+notes = """
+Pre-commit only — `*.toml` staged-scope.  At pre-push there is no
+staged set; running over the whole workspace surfaces pre-existing
+TOML drift that is out of scope for the push being validated.
+"""
+
+[[gate]]
+id = "vet-fmt"
+label = "cargo-vet config format check"
+command = ["bash", "scripts/hooks/_check_vet_fmt.sh"]
+tiers = ["pre-commit"]
+gate_when = "always"
+hard = true
+tool = "bash"
+expected_runtime_secs = 1
+bucket = "bg"
+order = 80
+notes = """
+Catches `cargo vet` config drift (missing newlines, etc.) before
+push.  Hard at pre-commit only — at pre-push the `vet` gate already
+checks the same constraints transitively.
+"""

@@ -189,6 +189,23 @@ lint-ci-linux-zig:
         cargo-zigbuild clippy --workspace --all-targets --all-features --target x86_64-unknown-linux-gnu --no-deps -- -D warnings
     @printf "\033[0;32m✅ Linux clippy gate (zigbuild) passed\033[0m\n"
 
+# Gate-manifest drift detector (Phase 1 of
+# `docs/architecture/gates-manifest-plan.md`).
+#
+# Verifies that every gate listed in `scripts/ci/gates.toml` is present
+# in the corresponding consumer file (`scripts/hooks/_lint_fast.sh`,
+# `scripts/hooks/_lint_pre_push.sh`, `.github/workflows/pr-fast.yml`),
+# and that every gate present in those consumers has a matching
+# manifest entry.  Hard-fails on mismatch; bypass once via
+# `BYPASS_GATES_DRIFT=1 git push` (mirrors `COMMIT_SUBJECT_BYPASS=1`).
+#
+# Wired into the pre-push hook (Bucket 1, fire-and-forget) and the
+# `pr-fast.yml::gates-drift` job so any new gate that gets added to a
+# consumer without the manifest (or vice versa) blocks merge until
+# the manifest is updated.
+gates-drift:
+    @bash scripts/ci/check_gates_drift.sh
+
 # Host-only on purpose — Windows (`lint-*-windows`) and Linux-in-Docker
 # (`lint-ci-linux`) are separate recipes.  They will be wired into this
 # sweep after their backlogs converge to zero (Phase W5 of the

@@ -195,6 +195,25 @@ jobs:
       - run: bash scripts/ci/check_file_size_policy.sh
 
   # ─────────────────────────────────────────────────────────────────────
+  # gates-drift — Phase 1 of `docs/architecture/gates-manifest-plan.md`.
+  # Verifies `scripts/ci/gates.toml` stays in lockstep with the gate
+  # set actually defined in `_lint_fast.sh`, `_lint_pre_push.sh`, and
+  # this file.  Always-on; sub-second; no classify gating (a manifest
+  # / consumer mismatch is meaningful regardless of which files
+  # changed in the PR).  Bypass not supported in CI — drift on `main`
+  # is a deliberate "fix-me-now" signal.
+  # ─────────────────────────────────────────────────────────────────────
+  gates-drift:
+    name: Gates manifest drift
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - run: bash scripts/ci/check_gates_drift.sh
+
+  # ─────────────────────────────────────────────────────────────────────
   # fmt — rustfmt check.  Gates on rust_changed (pure TOML / config /
   # docs edits don't need rustfmt).
   # ─────────────────────────────────────────────────────────────────────
@@ -485,6 +504,7 @@ jobs:
     needs:
       - classify
       - file-size
+      - gates-drift
       - fmt
       - sanity
       - clippy
@@ -506,6 +526,7 @@ jobs:
           set -u
           declare -A R=(
             [file-size]='${{ needs.file-size.result }}'
+            [gates-drift]='${{ needs.gates-drift.result }}'
             [fmt]='${{ needs.fmt.result }}'
             [sanity]='${{ needs.sanity.result }}'
             [clippy]='${{ needs.clippy.result }}'
@@ -537,7 +558,7 @@ jobs:
   notify-failure:
     name: 🔔 Notify on Failure
     runs-on: ubuntu-latest
-    needs: [classify, file-size, fmt, sanity, clippy, docs, test-build, tests, security, windows-lint, required]
+    needs: [classify, file-size, gates-drift, fmt, sanity, clippy, docs, test-build, tests, security, windows-lint, required]
     if: failure() && github.event_name != 'pull_request'
     permissions:
       contents: read

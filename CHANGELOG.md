@@ -127,6 +127,62 @@ for the operator-facing validation flow.
   the on-disk cleanup logic is exercised without ever touching the
   host's cache directory.
 
+### Added — Gates manifest Phase 1: source-of-truth + drift detector (PR #140)
+
+Phase 1 of [`docs/architecture/gates-manifest-plan.md`](docs/architecture/gates-manifest-plan.md)
+(itself the implementation companion to
+[`docs/architecture/dev-flow-implementation-plan.md` §2.7](docs/architecture/dev-flow-implementation-plan.md)).
+Closes the "documented but not implemented" status of §2.7 with the
+foundation for the upcoming Phase 2 + Phase 3 codegen work.
+
+- **NEW `scripts/ci/gates.toml`** — declarative source-of-truth for
+  the workspace's PR-time gate set (20 entries covering pre-commit /
+  pre-push / pr-fast tiers).  Each `[[gate]]` entry carries id,
+  label, command, tier membership, change-classification trigger,
+  hard/soft semantics, missing-tool detection key, expected runtime,
+  pre-push bucket assignment, and free-form notes.  Per-tier
+  consumer-name overrides via `consumer_names` table cover the few
+  gates whose hook id differs from their pr-fast.yml job name (e.g.
+  manifest `lint-ci` ⇄ pr-fast `clippy`, manifest `cargo-check` ⇄
+  pr-fast `sanity`, manifest `vet` + `deny` ⇄ pr-fast `security`).
+- **NEW `scripts/ci/check_gates_drift.sh`** — bidirectional drift
+  detector.  Forward direction: every manifest `[[gate]]` entry must
+  appear in its declared tiers' consumer files (pre-commit hook,
+  pre-push hook, pr-fast.yml).  Reverse direction: every gate
+  defined in a consumer (via `spawn`/`spawn_bg`/`run_seq` in the
+  hooks, or top-level YAML job under `jobs:` in pr-fast.yml) must
+  have a matching manifest entry — except for orchestration-only
+  jobs (`classify`, `required`, `notify-failure`).  Bash-only;
+  awk-based TOML parsing (no extra runtime deps).  Bypass once via
+  `BYPASS_GATES_DRIFT=1 git push` for emergency landings; CI has no
+  bypass — drift on `main` is a deliberate "fix-me-now" signal.
+- **MODIFIED `scripts/hooks/_lint_pre_push.sh`** — drift check
+  added as a new Bucket 1 step (cheap, parallel, fire-and-forget;
+  same tier as `fmt` / `file-size`).
+- **MODIFIED `.github/workflows/pr-fast.yml`** — NEW `gates-drift`
+  job (always-on, no classify gating; sub-second; modeled after
+  `file-size`).  Added to the `required` aggregator's `needs:`
+  list, success-conditional declare-A array, and `notify-failure`'s
+  `needs:` list so a manifest mismatch hard-blocks merge.
+- **NEW `just gates-drift`** recipe — manual invocation surface.
+- **MODIFIED docs/architecture/gates-manifest-plan.md** — Status
+  table updated (Phase 0 ✅, Phase 1 🟡 in flight); §9 action log
+  updated.
+
+Verification:
+- `bash scripts/ci/check_gates_drift.sh` — exit 0 against current
+  `main` (20 gates correctly matched).
+- Mutation tests: injecting a fake gate into the manifest fires the
+  forward-direction error; injecting a `spawn_bg "ghost-gate"` into
+  the pre-push hook fires the reverse-direction error; restoring
+  the original state returns to clean.
+- `BYPASS_GATES_DRIFT=1` exits 0 immediately with a tombstone log
+  line.
+- `actionlint` exit 0 on the modified `pr-fast.yml`.
+- `shellcheck scripts/ci/check_gates_drift.sh` exit 0 (3 SC2016
+  false-positive backtick warnings explicitly disabled with
+  inline directives).
+
 ### Changed — Windows clippy CI/pre-push flip + Linux zigbuild accelerator (PR #138)
 
 Closes Phases **W5** and **L1** of

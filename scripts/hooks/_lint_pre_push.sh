@@ -259,6 +259,13 @@ run_seq() {
 # case hard-fails the whole push with an install hint.
 spawn_bg "fmt"       cargo fmt --all -- --check
 spawn_bg "file-size" bash scripts/ci/check_file_size_policy.sh
+# Gate-manifest drift detector — Phase 1 of
+# `docs/architecture/gates-manifest-plan.md`.  Verifies
+# `scripts/ci/gates.toml` stays in lockstep with the gate set actually
+# defined in `_lint_fast.sh`, `_lint_pre_push.sh`, and `pr-fast.yml`.
+# Cheap (sub-second), no cargo-lock contention.  Bypass once via
+# `BYPASS_GATES_DRIFT=1 git push` (mirrors `COMMIT_SUBJECT_BYPASS=1`).
+spawn_bg "gates-drift" bash scripts/ci/check_gates_drift.sh
 # Conventional Commits subject validator — mirrors
 # `.github/workflows/commitlint.yml`'s PR-title regex so a malformed
 # scope (e.g. `feat(uffs-core, daemon)`) hard-fails locally instead
