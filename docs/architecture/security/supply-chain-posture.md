@@ -354,7 +354,7 @@ on `main` at branch-open time.
 - `supply-chain/config.toml` — `cargo-vet` imports + exemptions
 - `supply-chain/audits.toml` — our local audit records (starts empty)
 - `supply-chain/imports.lock` — pinned upstream audit snapshots
-- `.github/workflows/pr-fast.yml` — required per-PR gate (fmt, clippy, docs, tests, windows-check, `cargo-deny` + `cargo-vet check` in `security` job) (Tier 1)
+- `.github/workflows/pr-fast.yml` — required per-PR gate (fmt, clippy, docs, tests, **windows-lint** [native `cargo clippy -- -D warnings` on `windows-latest` post-W5.5], `cargo-deny` + `cargo-vet check` in `security` job) (Tier 1)
 - `.github/workflows/tier-2.yml` — weekly coverage / udeps / Miri / Windows compile check
 - `.github/workflows/release.yml` — SLSA attestation + ancestor check + CycloneDX SBOM
 - `.github/workflows/codeql.yml` — Rust SAST (public preview)

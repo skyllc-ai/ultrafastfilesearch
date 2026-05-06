@@ -208,7 +208,7 @@ lint-all:
 #   IDE save   → rust-analyzer check-on-save
 #   pre-commit → `just lint-fast`       (staged-scoped, sub-2 s)
 #   pre-push   → `just lint-pre-push`   (workspace-parallel, ≤ 60 s)
-#   PR CI      → .github/workflows/pr-fast.yml (classify-gated matrix + native windows-check)
+#   PR CI      → .github/workflows/pr-fast.yml (classify-gated matrix + native windows-lint)
 # Recipes below back both the git hooks and manual invocations so the
 # two surfaces never drift — see `scripts/hooks/_lint_*.sh` for the
 # shared parallel runners.

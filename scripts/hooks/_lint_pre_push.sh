@@ -97,12 +97,15 @@
 #   * typos     — cheap spell-check across the repo.
 #   * reuse     — SPDX / licence-header compliance.
 #
-# The Linux-only lint drift gate (`just lint-ci-linux` via Docker) is NOT
-# run here — it is a minutes-scale cross-platform check best left to CI
-# or a conscious manual invocation.  Run `just check-all-targets` for a
-# full sweep across macOS + Linux (Docker) + Windows (xwin).  The full
-# runtime test suite (`cargo nextest run` without `--no-run`) and doc
-# tests are likewise deferred to `just phase1-test` or CI.
+# The Linux-only lint drift gate is NOT run here — it is best left to CI
+# or a conscious manual invocation.  Two local options exist: Docker
+# (`just lint-ci-linux`, authoritative — mirrors CI's `rust:latest`
+# image; minutes-scale) or cargo-zigbuild (`just lint-ci-linux-zig`,
+# Phase L1, accelerator — ~50 s cold / sub-second warm; needs zig 0.14.1
+# pinned via `just install-dev-tools`).  Run `just check-all-targets` for
+# a full sweep across macOS + Linux (zigbuild-or-Docker) + Windows (xwin).
+# The full runtime test suite (`cargo nextest run` without `--no-run`)
+# and doc tests are likewise deferred to `just phase1-test` or CI.
 
 set -euo pipefail
 

@@ -117,7 +117,7 @@ Cargo.toml or lockfile bump can break any of those.  Infra-only PRs
 | `cargo check --locked` | `code_changed` | T2 | always present |
 | test-compile (`nextest --no-run --locked`) | `code_changed` | T2 | `cargo-nextest` required; hard-fail on missing (pinned in `.config/nextest.toml`) |
 | **nextest `pre-push-smoke` profile** | `code_changed` | **T2 (new)** | same; hard-fail on missing |
-| **Windows xwin check (local)** | `code_changed` | T2 | **advisory locally**: soft-skip with install hint when `cargo-xwin` missing.  Hard-gated at T3 by native `windows-check` job. |
+| **Windows xwin clippy (local)** | `code_changed` | T2 | **advisory locally**: soft-skip with install hint when `cargo-xwin` missing.  Hard-gated at T3 by native `windows-lint` job (Phase W5.5 of `windows-clippy-and-linux-cross-plan.md` flipped this from `cargo check` to `cargo clippy -- -D warnings`). |
 | pr-fast required aggregate | always | T3 | n/a |
 
 ### 1.3.2 Advisory gates (soft-skip; install hint printed on miss)
@@ -139,7 +139,8 @@ is the exact bug that caused the v0.5.71 four-round-trip incident.
 **Windows xwin is deliberately split** between advisory-local and
 hard-required-remote.  Rationale: `cargo-xwin` downloads the MSVC SDK on
 first run (~400 MB) and not all contributors want that footprint.  The
-PR-fast native `windows-check` job is the authoritative gate; the local
+PR-fast native `windows-lint` job (Phase W5.5; runs `cargo clippy -- -D
+warnings` on `windows-latest`) is the authoritative gate; the local
 xwin step is an ergonomics win for contributors who already have it
 installed.  This is **not** a regression of the v1 "hard xwin" position
 — the feedback correctly flagged that treating a 400 MB download as a
@@ -180,7 +181,7 @@ where supported):**
 7. `cargo deny check` — runs when `dep_changed`, advisory otherwise
 8. `cargo nextest run --no-run --workspace --all-targets --all-features --locked` (test compile)
 9. `cargo nextest run --profile pre-push-smoke --locked` (new)
-10. `cargo xwin check --workspace --all-targets --all-features --target x86_64-pc-windows-msvc --locked` — **advisory locally** (soft-skip with install hint if `cargo-xwin` missing; authoritative gate is PR-fast native `windows-check`)
+10. `cargo xwin clippy --workspace --all-targets --all-features --target x86_64-pc-windows-msvc --no-deps -- -D warnings` (`just lint-ci-windows`, Phase W5.6) — **advisory locally** (soft-skip with install hint if `cargo-xwin` missing; authoritative gate is PR-fast native `windows-lint` on `windows-latest`)
 
 The first red in Bucket 2 aborts the rest (fail-fast).  Bucket 1
 continues to completion so the user sees all cheap-check results in
@@ -678,6 +679,14 @@ jobs:
       - run: cargo deny check --locked
       - run: cargo vet check --locked
 
+  # NOTE: This sample shows the original Phase 4 `windows-check`
+  # job (cargo check).  Phase W5.5 of
+  # `windows-clippy-and-linux-cross-plan.md` renamed it to
+  # `windows-lint` and switched the command to
+  # `cargo clippy --workspace --all-targets --all-features --locked
+  # --no-deps -- -D warnings`.  The live workflow at
+  # `.github/workflows/pr-fast.yml::windows-lint` is the source of
+  # truth; this snippet is preserved for historical context only.
   windows-check:
     name: Windows compile check
     runs-on: windows-latest
@@ -1505,7 +1514,7 @@ Measured against current `v0.5.71` baseline:
 |---|---|---|
 | Median time to first actionable failure after `git push` | CI (~5 min to first red) | T2 pre-push (&lt; 30 s) |
 | PR-blocking full-pipeline wall time | 8-15 min (ci.yml) | &lt; 8 min (pr-fast) |
-| Windows regression detection latency | release-time (~15 min into `just ship`) | PR-time (pr-fast windows-check) |
+| Windows regression detection latency | release-time (~15 min into `just ship`) | PR-time (pr-fast `windows-lint`, post-W5.5: clippy `-D warnings` not just compile-check) |
 | Cargo-vet round-trip incidents per release | 1-3 today | 0 (hard-gated at T1) |
 | Ship resumable state bugs per month | ≥1 (v0.5.71) | 0 after Phase 6 |
 
@@ -1863,9 +1872,14 @@ the `uffs-client` package.  Runtime remains within budget.
   external observers (branch protection, GitHub search for "vet")
   expect a distinct `Security` check in the check-runs list.  Cost
   is ~10 s on warm cache.
-- `windows-check` uses `cargo check` (not `build`) — the PR-fast lane
-  only needs compile-confidence.  Full release-shaped builds move to
-  `preview-artifacts.yml` where they belong.
+- `windows-check` originally used `cargo check` (not `build`) — the
+  PR-fast lane only needs compile-confidence.  Full release-shaped
+  builds live in `preview-artifacts.yml` where they belong.  **Phase
+  W5.5 update**: `windows-check` was renamed to `windows-lint` and the
+  command flipped to `cargo clippy --workspace --all-targets
+  --all-features --locked --no-deps -- -D warnings` once the Windows
+  clippy backlog hit zero (PR #62 cleared 1346 errors → 0).  PR-fast
+  Windows now catches both compile errors AND lint regressions.
 
 #### Phase 4b — Actions hardening retrofit
 

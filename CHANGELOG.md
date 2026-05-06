@@ -127,6 +127,65 @@ for the operator-facing validation flow.
   the on-disk cleanup logic is exercised without ever touching the
   host's cache directory.
 
+### Changed — Windows clippy CI/pre-push flip + Linux zigbuild accelerator (PR #138)
+
+Closes Phases **W5** and **L1** of
+[`docs/architecture/windows-clippy-and-linux-cross-plan.md`](docs/architecture/windows-clippy-and-linux-cross-plan.md).
+Every plan phase (W0 baseline, W1 recipes, W2 prod, W3-W5 tests, W5.5
+CI flip, W5.6 pre-push flip, L1 zigbuild) now ✅; §8 acceptance items
+all checked.
+
+- **`pr-fast.yml::windows-check` → `windows-lint`** (Phase W5.5).
+  Renamed the job and switched the command from `cargo check` to
+  `cargo clippy --workspace --all-targets --all-features --locked
+  --no-deps -- -D warnings` natively on `windows-latest`.  PR #62
+  cleared the Windows clippy backlog (W0 baseline: 1346 errors → 0)
+  so the strict-clippy stack now exits 0.  Aggregator (`required`)
+  + `notify-failure` `needs:` lists updated; `preview-artifacts.yml`
+  comment refreshed.
+- **`scripts/hooks/_lint_pre_push.sh`** dispatches `just lint-ci-windows`
+  (cargo xwin clippy with the same `-D warnings` stack) instead of
+  `just check-windows` (compile-only) (Phase W5.6).  W1.4 measurement
+  pegs the upgrade at ~6 s warm; pre-push budget unchanged at
+  ~25–60 s warm.  Net: a Windows-only `unwrap_used` /
+  `cast_possible_truncation` regression now hard-fails BOTH the local
+  pre-push hook AND the authoritative PR Fast CI job, on the same
+  surface and flag stack.
+- **NEW `just lint-ci-linux-zig` recipe** (Phase L1.2): native
+  macOS → Linux clippy via `cargo-zigbuild` (no Docker required).
+  ~50 s cold, sub-second warm.  Docker `lint-ci-linux` remains the
+  authoritative gate (mirrors CI's `rust:latest` image exactly);
+  zigbuild is a developer-loop accelerator for fast inner-loop sweeps.
+  `check-all-targets` prefers zigbuild when `zig` + `cargo-zigbuild`
+  are both on PATH, falls back to Docker, soft-skips when neither.
+- **`install-dev-tools`** extended (macOS hosts only) to install
+  `zig 0.14.1` from the official `ziglang.org` tarball into
+  `~/.local/zig/0.14.1/`, symlink it into `~/.cargo/bin/zig`, install
+  `cargo-zigbuild`, and add the `x86_64-unknown-linux-gnu` rustup
+  target.  Pinned to 0.14.1 because Homebrew's `zig` formula tracks
+  latest (currently 0.16.x) which has unrelated incompat issues with
+  `psm`'s `src/arch/x86_64.s` ATT-syntax assembly.
+- **Two non-obvious gotchas baked into the L1 recipe** (surfaced
+  during empirical L1.3 verification):
+  1. Recipe overrides `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS`
+     to pin `target-cpu=x86-64-v3` (matches `release.yml`'s Linux
+     baseline) for the cross-compile only.  `.cargo/config.toml`'s
+     default `target-cpu=native` resolves to `apple-m4` on macOS,
+     which `cargo-zigbuild` propagates to `zig cc -mcpu=native`,
+     which corrupts zig's integrated-assembler dialect detection
+     for hand-written x86_64 SIMD asm in `psm` and `blake3`.
+  2. Recipe invokes `cargo-zigbuild clippy` directly (the binary
+     exposes `clippy` / `check` / `test` as proper subcommands)
+     rather than `cargo zigbuild clippy` (cargo plugin form), which
+     always routes into the `zigbuild` build subcommand.
+- **Docs**: `CONTRIBUTING.md` four-layer table + cross-platform
+  section refreshed for the new gate names + flag stack;
+  `windows-clippy-and-linux-cross-plan.md` gets a `Status (2026-05-06)`
+  header with every phase ✅, both gotchas documented, §8 acceptance
+  criteria all checked, §9 cross-references refreshed;
+  `dev-flow-implementation-plan.md` + `dev-flow.md` + `supply-chain-posture.md`
+  updated for the post-W5 job names.
+
 ### Fixed — Dependabot pipeline (PR #126)
 
 - **`dependabot.yml` cargo-ecosystem prefix** flipped from `deps` to

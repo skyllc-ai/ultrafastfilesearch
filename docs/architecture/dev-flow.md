@@ -153,7 +153,7 @@ and `.github/workflows/tier-2.yml` (all as of commit `185ed8825`).
 | test COMPILE (`nextest --no-run`) | — | ✅ | ✅ (test-build) | — |
 | test EXECUTE (`nextest run`) | — | **❌** | ✅ | via coverage |
 | **`cargo test --doc`** | — | **❌** | ✅ | — |
-| Windows compile (`cargo-xwin`) | ✅ if *.rs staged + xwin | ✅ if xwin | — | ✅ native |
+| Windows xwin clippy (`lint-ci-windows`, `cargo xwin clippy -- -D warnings`) | — (Phase 2 budget cap) | ✅ if xwin (advisory; W5.6 upgraded from `check` to `clippy`) | ✅ native (`pr-fast.yml::windows-lint`, W5.5) | ✅ native (Tier 2 `windows-check`, redundant post-W5) |
 | `taplo fmt --check` | ✅ if *.toml staged | — | — | — |
 | `typos` | ✅ optional | ✅ optional | — | — |
 | `reuse lint` (SPDX) | ✅ optional | ✅ optional | — | — |
@@ -168,8 +168,9 @@ CI catches something local never runs.
 
 ### 3.3 Measured budgets (current)
 
-- **Pre-commit** — 2 s docs-only, 15–25 s with Rust changes warm sccache,
-  40–90 s cold-xwin.  Stays under the "must not block flow" threshold.
+- **Pre-commit** — 2 s docs-only, 15–25 s with Rust changes warm sccache.
+  Stays under the "must not block flow" threshold.  (Phase 2 removed xwin
+  from this tier — its 40–90 s cold cost violated the T1 budget.)
 - **Pre-push** — 23–45 s warm, 60–90 s cold.  Heaviest jobs: rustdoc and
   nextest `--no-run` share the same target-dir.  File-locking serializes
   them; the non-cargo jobs (deny, typos, reuse, file-size) genuinely run
@@ -647,8 +648,8 @@ from each repo's `.pre-commit-config.yaml` / `Makefile.toml` /
 | **polars** | ruff + black + minimal Rust | none | Mixed Python/Rust project. |
 | **clap** | fmt + clippy | none | Heavy CI matrix. |
 | **bytes** | fmt | none | Tiny; CI-heavy. |
-| **UFFS (current)** | clippy trio + xwin + file-size + typos + reuse + taplo | clippy trio + rustdoc + deny + test-compile + xwin + file-size + typos + reuse | Deeper local gates than any above. |
-| **UFFS (proposed)** | (same as current) | (current) + **cargo-vet** + **doc-tests** | Closes the two CI-only gates whose inputs are 100% local. |
+| **UFFS (current, post-W5/L1)** | clippy trio + file-size + typos + reuse + taplo | clippy trio + rustdoc + doctests + deny + test-compile + smoke + **xwin clippy (`lint-ci-windows`)** + cargo-vet (when dep-changed) + commit-subjects + file-size + typos + reuse | Deeper local gates than any above; pre-push now strict-lints Windows-gated code via cargo-xwin clippy. |
+| **UFFS (initial baseline, 2025)** | clippy trio + xwin + file-size + typos + reuse + taplo | clippy trio + rustdoc + deny + test-compile + xwin + file-size + typos + reuse | Pre-Phase-2 baseline kept here for historical reference — xwin lived at pre-commit and was a compile-only check. |
 
 **Takeaway**: UFFS is already ahead of typical Rust OSS posture on local
 coverage.  The shift-left work here is about closing two specific holes,
