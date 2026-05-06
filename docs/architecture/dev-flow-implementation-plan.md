@@ -1047,6 +1047,15 @@ Long-term direction: replace the hand-maintained correspondence between
 by all three.  Deferred — documented here so future-us knows the target
 shape.
 
+> **2026-05-06 update**: this stretch goal now has its own
+> implementation plan at
+> [`docs/architecture/gates-manifest-plan.md`](gates-manifest-plan.md).
+> That doc owns the schema spec, generator interface, golden-file
+> verification strategy, per-phase migration order (3 phases), risk
+> analysis, and rollback strategy.  Phase 1 (manifest + drift
+> detector, no consumer changes) is the first concrete step.  The
+> sketch below is preserved as the original problem statement.
+
 ```toml
 # gates.toml (proposed, not yet implemented)
 [[gate]]
@@ -1328,7 +1337,11 @@ update `just/workflow.just` to `cargo run -p ci-pipeline --release --`.
 
 ### Phase 8 (stretch, optional) — Machine-readable gate manifest (Commit 8)
 
-Deferred to a future session.  See §2.7 for target shape.
+Deferred to a future session.  See §2.7 for the original sketch and
+[`docs/architecture/gates-manifest-plan.md`](gates-manifest-plan.md)
+for the full implementation plan (schema, generator interface,
+3-phase migration order, golden-file verification strategy, risk
+analysis).
 
 ---
 
