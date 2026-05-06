@@ -19,8 +19,8 @@ UFFS - Ultra Fast File Search
 | Phase | Description | Status |
 |---|---|---|
 | 0 | Plan + schema design | ✅ landed (PR #139) |
-| 1 | Manifest + drift detector (no consumer changes) | 🟡 in flight (PR #140) |
-| 2 | Codegen for `_lint_pre_push.sh` | ⏭ pending |
+| 1 | Manifest + drift detector (no consumer changes) | ✅ landed (PR #140) |
+| 2 | Codegen for `_lint_pre_push.sh` | 🟡 in flight (PR #141) |
 | 3 | Codegen for `_lint_fast.sh` + `pr-fast.yml` + doc tables | ⏭ pending |
 
 Closing all four phases brings the workspace to **zero hand-maintained
@@ -617,6 +617,6 @@ Other workflows are opaque to it.
 | Date | Event | PR |
 |---|---|---|
 | 2026-05-06 | Plan drafted (this doc) + landed | #139 |
-| 2026-05-06 | Phase 1 in flight — manifest (`scripts/ci/gates.toml`) + drift detector (`scripts/ci/check_gates_drift.sh`) + pre-push Bucket 1 wiring + new `pr-fast.yml::gates-drift` job + `just gates-drift` recipe | #140 |
-| TBD | Phase 2 lands (`gen-hooks` for pre-push) | TBD |
-| TBD | Phase 3 lands (full migration) | TBD |
+| 2026-05-06 | Phase 1 landed — manifest + drift detector + pre-push Bucket 1 wiring + `pr-fast.yml::gates-drift` job + `just gates-drift` recipe | #140 |
+| 2026-05-06 | Phase 2 in flight — `scripts/ci/gen-hooks` Rust crate (manifest model + emit module + 24 unit tests) + auto-generated `_lint_pre_push.sh` (banner, embedded preamble, generated dispatch, embedded footer) + `hooks-drift` self-referential gate + `just gen-hooks` / `just hooks-drift` recipes + `pr-fast.yml::hooks-drift` job | #141 |
+| TBD | Phase 3 lands (codegen for pre-commit + pr-fast.yml + doc tables) | TBD |

@@ -206,6 +206,35 @@ lint-ci-linux-zig:
 gates-drift:
     @bash scripts/ci/check_gates_drift.sh
 
+# Regenerate the pre-push hook from the canonical gates manifest
+# (Phase 2 of `docs/architecture/gates-manifest-plan.md`).
+#
+# The generator (`scripts/ci/gen-hooks`) reads `scripts/ci/gates.toml`
+# and writes `scripts/hooks/_lint_pre_push.sh`.  Use this recipe
+# whenever you change the manifest; the on-disk hook carries an
+# AUTO-GENERATED banner and any manual edits will be overwritten on
+# the next regen.
+#
+# Idempotency contract (plan §4.4): running this twice in a row
+# leaves the file byte-identical; the `hooks-drift` recipe below is
+# the CI-side check that enforces the same property.
+gen-hooks:
+    @cargo run -q --release -p uffs-gen-hooks
+
+# Hook-codegen drift detector (Phase 2 of
+# `docs/architecture/gates-manifest-plan.md`).
+#
+# Verifies that the on-disk `scripts/hooks/_lint_pre_push.sh` matches
+# what `gen-hooks` would produce from the canonical
+# `scripts/ci/gates.toml`.  Catches the failure mode where someone
+# manually edits the generated hook (whose header banner explicitly
+# warns "MANUAL EDITS WILL BE OVERWRITTEN") instead of editing the
+# manifest and regenerating.  Wired into the pre-push hook
+# (Bucket 1) and the `pr-fast.yml::hooks-drift` job so manifest /
+# emitted-hook divergence hard-blocks merge.
+hooks-drift:
+    @cargo run -q --release -p uffs-gen-hooks -- --check
+
 # Host-only on purpose — Windows (`lint-*-windows`) and Linux-in-Docker
 # (`lint-ci-linux`) are separate recipes.  They will be wired into this
 # sweep after their backlogs converge to zero (Phase W5 of the

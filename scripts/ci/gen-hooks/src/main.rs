@@ -1,0 +1,209 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2025-2026 SKY, LLC.
+//
+// gen-hooks — gate-manifest hook generator.
+//
+// Phase 2 of `docs/architecture/gates-manifest-plan.md`.  Reads
+// `scripts/ci/gates.toml` and emits `scripts/hooks/_lint_pre_push.sh`
+// so the hook content is never hand-maintained.  See `manifest.rs`
+// for the schema model and `emit.rs` for the template + per-gate
+// emission logic.
+//
+// USAGE: gen-hooks [--check] [--tier <tier>] [--verbose]
+//
+// EXIT:
+//   0  emit succeeded (or no-op with --check)
+//   1  diff detected (with --check)
+//   2  schema error (manifest invalid)
+
+/// Per-target hook emission — turns a parsed manifest into the bash
+/// text of `_lint_pre_push.sh`.
+mod emit;
+/// Manifest schema model + lightweight invariant validation.
+mod manifest;
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use anyhow::{Context, Result};
+use clap::Parser;
+
+use crate::emit::EmitTarget;
+use crate::manifest::Manifest;
+
+/// CLI arguments for `gen-hooks`.  Flags follow the pattern set by
+/// `scripts/ci-pipeline` and the rest of the workspace's internal
+/// tools.  See the file-level doc-comment for exit-code semantics.
+#[derive(Parser, Debug)]
+#[command(
+    name = "gen-hooks",
+    version,
+    about = "Generate _lint_pre_push.sh from gates.toml (Phase 2 of gates-manifest-plan.md)"
+)]
+struct Args {
+    /// Diff mode: do not write files; exit 1 if regen would change them.
+    /// Used by CI's `hooks-drift` job and the pre-push Bucket-1 step.
+    #[arg(long)]
+    check: bool,
+
+    /// Restrict emit to one tier.  Currently only `pre-push` is
+    /// supported (Phase 2 scope).  `pre-commit` is hand-written and
+    /// reserved for Phase 3.
+    #[arg(long, default_value = "pre-push")]
+    tier: String,
+
+    /// Print per-gate emit decisions to stderr.
+    #[arg(long, short)]
+    verbose: bool,
+
+    /// Override the manifest path (default: `scripts/ci/gates.toml`).
+    /// Test-only escape hatch.
+    #[arg(long, hide = true)]
+    manifest: Option<PathBuf>,
+
+    /// Override the output path (default: `scripts/hooks/_lint_pre_push.sh`).
+    /// Test-only escape hatch.
+    #[arg(long, hide = true)]
+    output: Option<PathBuf>,
+}
+
+/// CLI entry point.  Delegates straight to [`run`] so the
+/// `Result<ExitCode>` propagation pattern stays composable; an
+/// emit failure surfaces as exit code `2` (schema error class)
+/// with the underlying error chain on stderr.
+fn main() -> ExitCode {
+    let args = Args::parse();
+    match run(&args) {
+        Ok(code) => code,
+        Err(err) => {
+            eprintln!("gen-hooks: {err:#}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// Inner driver.  Splits cleanly into: parse args → read manifest
+/// → validate → render → (write or check).  Any failure short-circuits
+/// via `?`; the return value distinguishes "emit succeeded" (0) from
+/// "diff detected in --check mode" (1).  Schema errors propagate up
+/// to `main`, which maps them to exit code `2`.
+fn run(args: &Args) -> Result<ExitCode> {
+    if args.tier != "pre-push" {
+        anyhow::bail!(
+            "tier `{}` not supported in Phase 2.  Only `pre-push` is generated; \
+             `_lint_fast.sh` (pre-commit) is hand-written until Phase 3.",
+            args.tier
+        );
+    }
+
+    let manifest_path = args
+        .manifest
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("scripts/ci/gates.toml"));
+    let output_path = args
+        .output
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("scripts/hooks/_lint_pre_push.sh"));
+
+    let manifest_text = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("reading manifest at {}", manifest_path.display()))?;
+    let manifest: Manifest = toml::from_str(&manifest_text)
+        .with_context(|| format!("parsing manifest at {}", manifest_path.display()))?;
+    manifest
+        .validate()
+        .with_context(|| format!("validating manifest at {}", manifest_path.display()))?;
+
+    if args.verbose {
+        emit_verbose_dump(&manifest, &manifest_path, &args.tier);
+    }
+
+    let target = EmitTarget::PrePush;
+    let emitted = target.render(&manifest);
+
+    if args.check {
+        let on_disk = std::fs::read_to_string(&output_path)
+            .with_context(|| format!("reading output at {}", output_path.display()))?;
+        if on_disk == emitted {
+            if args.verbose {
+                eprintln!("gen-hooks: --check passed (no diff)");
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
+        eprintln!(
+            "gen-hooks: --check FAILED — {} is out of sync with the manifest.\n\
+             \n\
+             Regenerate it with:\n    just gen-hooks\n\
+             \n\
+             (Or run `cargo run -p uffs-gen-hooks --` directly.)",
+            output_path.display()
+        );
+        return Ok(ExitCode::from(1));
+    }
+
+    std::fs::write(&output_path, &emitted)
+        .with_context(|| format!("writing {}", output_path.display()))?;
+    if args.verbose {
+        eprintln!(
+            "gen-hooks: wrote {} ({} bytes)",
+            output_path.display(),
+            emitted.len()
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Print a human-readable dump of the parsed manifest to stderr.
+/// Used by `--verbose` to confirm what the generator saw before
+/// rendering — header metadata, the `[classification]` regex stack
+/// (Phase 3 will wire these into the preamble), and one line per
+/// gate that participates in `tier`, including the documentary
+/// `expected_runtime_secs` budget and the first line of `notes`.
+fn emit_verbose_dump(manifest: &Manifest, manifest_path: &std::path::Path, tier: &str) {
+    eprintln!(
+        "gen-hooks: parsed manifest at {} (schema v{}{})",
+        manifest_path.display(),
+        manifest.header.version,
+        manifest
+            .header
+            .plan_doc
+            .as_deref()
+            .map(|p| format!(", plan: {p}"))
+            .unwrap_or_default(),
+    );
+    if let Some(cls) = manifest.classification.as_ref() {
+        let mut keys: Vec<&str> = cls.patterns.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        eprintln!(
+            "gen-hooks: classification keys ({}): {}",
+            keys.len(),
+            keys.join(", ")
+        );
+    }
+    eprintln!(
+        "gen-hooks: {} gates total, emitting tier `{}`",
+        manifest.gate.len(),
+        tier
+    );
+    for gate in &manifest.gate {
+        if !gate.tiers.iter().any(|t| t == tier) {
+            continue;
+        }
+        let first_note = gate
+            .notes
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("(no notes)");
+        eprintln!(
+            "  · [{tier}] {id} ({label}) bucket={bucket} when={when} hard={hard} \
+             ~{secs}s — {note}",
+            tier = tier,
+            id = gate.id,
+            label = gate.label,
+            bucket = gate.bucket.as_deref().unwrap_or("<n/a>"),
+            when = gate.when,
+            hard = gate.hard,
+            secs = gate.expected_runtime_secs,
+            note = first_note,
+        );
+    }
+}

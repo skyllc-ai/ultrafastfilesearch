@@ -4481,6 +4481,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "uffs-gen-hooks"
+version = "0.5.90"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "uffs-mcp"
 version = "0.5.90"
 dependencies = [

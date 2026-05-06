@@ -101,6 +101,40 @@ actually defined in `_lint_fast.sh`, `_lint_pre_push.sh`, and
 """
 
 [[gate]]
+id = "hooks-drift"
+label = "Hook codegen drift detector (gen-hooks --check)"
+command = [
+  "cargo",
+  "run",
+  "-q",
+  "--release",
+  "-p",
+  "uffs-gen-hooks",
+  "--",
+  "--check",
+]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "always"
+hard = true
+tool = "cargo"
+expected_runtime_secs = 2
+bucket = "bg"
+order = 26
+notes = """
+Phase 2 of `docs/architecture/gates-manifest-plan.md`.  Verifies that
+the on-disk `scripts/hooks/_lint_pre_push.sh` is byte-for-byte equal
+to what `gen-hooks` would emit from the canonical
+`scripts/ci/gates.toml`.  Catches the failure mode where someone
+manually edits the generated hook (whose AUTO-GENERATED banner
+explicitly warns "MANUAL EDITS WILL BE OVERWRITTEN") instead of
+editing the manifest and regenerating via `just gen-hooks`.
+
+Pairs with `gates-drift`: the latter ensures the manifest matches
+the *gate set* of every consumer; this one ensures the generator's
+emitted hook matches what the manifest would produce.
+"""
+
+[[gate]]
 id = "commit-subjects"
 label = "Conventional Commits subject validator"
 command = [

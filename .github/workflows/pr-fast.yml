@@ -214,6 +214,29 @@ jobs:
       - run: bash scripts/ci/check_gates_drift.sh
 
   # ─────────────────────────────────────────────────────────────────────
+  # hooks-drift — Phase 2 of `docs/architecture/gates-manifest-plan.md`.
+  # Verifies the on-disk `scripts/hooks/_lint_pre_push.sh` is
+  # byte-for-byte equal to what `gen-hooks` would emit from the
+  # canonical `scripts/ci/gates.toml`.  Always-on; bypass not
+  # supported in CI.  Cache key is shared with `sanity` so the
+  # gen-hooks binary build piggybacks on the existing rust-cache.
+  # ─────────────────────────────────────────────────────────────────────
+  hooks-drift:
+    name: Hook codegen drift
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: pr-fast-sanity
+          save-if: 'false'
+      - run: cargo run -q --release -p uffs-gen-hooks -- --check
+
+  # ─────────────────────────────────────────────────────────────────────
   # fmt — rustfmt check.  Gates on rust_changed (pure TOML / config /
   # docs edits don't need rustfmt).
   # ─────────────────────────────────────────────────────────────────────
@@ -505,6 +528,7 @@ jobs:
       - classify
       - file-size
       - gates-drift
+      - hooks-drift
       - fmt
       - sanity
       - clippy
@@ -527,6 +551,7 @@ jobs:
           declare -A R=(
             [file-size]='${{ needs.file-size.result }}'
             [gates-drift]='${{ needs.gates-drift.result }}'
+            [hooks-drift]='${{ needs.hooks-drift.result }}'
             [fmt]='${{ needs.fmt.result }}'
             [sanity]='${{ needs.sanity.result }}'
             [clippy]='${{ needs.clippy.result }}'
@@ -558,7 +583,7 @@ jobs:
   notify-failure:
     name: 🔔 Notify on Failure
     runs-on: ubuntu-latest
-    needs: [classify, file-size, gates-drift, fmt, sanity, clippy, docs, test-build, tests, security, windows-lint, required]
+    needs: [classify, file-size, gates-drift, hooks-drift, fmt, sanity, clippy, docs, test-build, tests, security, windows-lint, required]
     if: failure() && github.event_name != 'pull_request'
     permissions:
       contents: read

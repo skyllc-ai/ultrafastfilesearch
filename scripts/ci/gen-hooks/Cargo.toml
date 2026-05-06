@@ -1,0 +1,63 @@
+# =============================================================================
+# scripts/ci/gen-hooks/Cargo.toml — UFFS gate-manifest hook generator
+# =============================================================================
+#
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025-2026 SKY, LLC.
+#
+# Phase 2 of `docs/architecture/gates-manifest-plan.md`.  Reads the
+# canonical `scripts/ci/gates.toml` manifest and emits the matching
+# `scripts/hooks/_lint_pre_push.sh` so that the hook content is never
+# hand-maintained.  Pre-commit (`_lint_fast.sh`) stays hand-written
+# (Phase 3 picks it up).
+#
+# Lint policy: same as `scripts/ci-pipeline` — does NOT inherit
+# `[lints] workspace = true`.  This is an internal tool; the production
+# library lints (deny unwrap, deny println, deny missing_docs_in_private_items)
+# fight readability for an operational binary.  Default clippy passes on
+# this crate via the standard `cargo clippy` invocation.
+# =============================================================================
+
+[package]
+name = "uffs-gen-hooks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "UFFS gate-manifest hook generator (Phase 2 of gates-manifest-plan); not published"
+publish = false
+
+[[bin]]
+name = "gen-hooks"
+path = "src/main.rs"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+# Every dependency is aliased to `[workspace.dependencies]` in the root
+# Cargo.toml so a single Cargo.lock entry serves this tool and every other
+# crate.  See `scripts/ci-pipeline/Cargo.toml` for the rationale.
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lints policy
+# ─────────────────────────────────────────────────────────────────────────────
+# This crate intentionally does NOT opt into `[lints] workspace = true`,
+# matching the convention established by `scripts/ci-pipeline`.  The
+# `[workspace.lints]` stack adds restriction-class lints
+# (`print_stderr`, `min_ident_chars`, `indexing_slicing`,
+# `std_instead_of_alloc`) that fight the ergonomics of an operational
+# CLI tool that legitimately writes to stderr.
+#
+# The `just lint-prod` and `just lint-tests` recipes (which the
+# pre-push hook and `pr-fast.yml::clippy` job both run) still apply
+# the strict CLI flag stack — `pedantic`, `nursery`, `cargo`,
+# `unwrap_used`, `expect_used`, `missing_docs_in_private_items`,
+# `-D warnings` — and this crate passes them cleanly without any
+# per-item suppressions.
