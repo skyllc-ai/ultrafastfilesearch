@@ -198,18 +198,27 @@ exclusive with §1.1 / §1.2 on the same day.  Run **after** Phase 6 +
 Phase 7 soaks have validated the operator surface, so a leak observed
 here can't be confused with a tier-transition pattern.
 
+The daemon must already be Ready before invoking this — `ws-trace` is
+observe-only and refuses to start against a stopped daemon.  It also
+spawns a keep-warm worker that fires `uffs '*' --ext rs --limit 5`
+every 5 min so drives stay in WARM across the 24 h window; without
+keep-warm the trace would observe idle-shutdown decay rather than the
+steady-state operator-load Working Set we want to bound.
+
 ```powershell
-# Hourly Get-Process samples for 24 h.  Daemon must already be Running.
-1..24 | ForEach-Object {
-    Get-Process uffsd | Select-Object Id, WS, PM, NPM, VM, CPU,
-        @{Name='ts'; Expression={ Get-Date -Format 'HH:mm:ss' }}
-    Start-Sleep -Seconds 3600
-} | Export-Csv -Path ~/uffs_bake/uffsd-ws-trace-$(Get-Date -Format yyyy-MM-dd).csv -NoTypeInformation
+# Confirm the daemon is Ready, then start the trace.
+uffs daemon status                  # must report `Status: Ready`
+just soak ws-trace
 ```
 
-**Pass criteria:** Working Set at hour 24 ≤ 1.5× Working Set at hour 1
-(allows normal cache fill-up; flags a runaway leak).  PID at hour 1
-must equal PID at hour 24 (no restart inside the window).
+**Pass criteria** (validated automatically by the harness; see
+`summary.txt` for the roll-up):
+
+- ≥ 20 hourly snapshots captured.
+- Keep-warm worker fired ≥ ~75 % of expected probes (ensures the
+  daemon was actually under steady-state load, not silently demoted).
+- Daemon PID at hour 24 == PID at hour 0 (no restart mid-trace).
+- Working Set at hour 24 ≤ 1.5× Working Set at hour 0.
 
 ### 1.8 Bake-day activity routing
 

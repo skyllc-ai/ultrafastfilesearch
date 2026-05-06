@@ -33,9 +33,16 @@
 //   just soak phase7
 //   rust-script scripts/dev/long-soak.rs phase7
 //
+//   # Working-Set trajectory — 24h Get-Process / ps observation of an
+//   # already-running daemon.  Validates PID stability + WS ≤ 1.5× over
+//   # the window.  Closes the bake-criteria §1.7 leak-detection gate.
+//   just soak ws-trace
+//   rust-script scripts/dev/long-soak.rs ws-trace
+//
 //   # Mac dev shake-out — abbreviated 5-min run, relaxed host validation.
 //   rust-script scripts/dev/long-soak.rs phase6 --dev
 //   rust-script scripts/dev/long-soak.rs phase7 --dev
+//   rust-script scripts/dev/long-soak.rs ws-trace --dev --no-daemon-check
 //
 // OUTPUT LAYOUT
 //
@@ -89,6 +96,13 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 /// from the idle peer drives' QPM.
 const PHASE6_LOAD_SECS: u64 = 5 * 60;
 
+/// WS-trace keep-warm probe interval default.  5 min keeps drives in
+/// the WARM tier under the registry's default `PARKED_TTL` (longer
+/// than 5 min in every shipping config) without escalating into a
+/// hot-load test (which is Phase 7's job).  Operators can tune via
+/// `--keep-warm-interval=10min` or disable with `--keep-warm-interval=0`.
+const WS_TRACE_KEEP_WARM_DEFAULT: Duration = Duration::from_secs(5 * 60);
+
 // ── CLI ───────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
@@ -98,8 +112,10 @@ const PHASE6_LOAD_SECS: u64 = 5 * 60;
     after_help = "EXAMPLES:\n  \
         just soak phase6\n  \
         just soak phase7\n  \
+        just soak ws-trace\n  \
         rust-script scripts/dev/long-soak.rs phase6 --dev\n  \
-        rust-script scripts/dev/long-soak.rs phase7 --duration 1h"
+        rust-script scripts/dev/long-soak.rs phase7 --duration 1h\n  \
+        rust-script scripts/dev/long-soak.rs ws-trace --dev --no-daemon-check"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -159,6 +175,32 @@ enum Cmd {
         #[arg(long, default_value_t = 5)]
         churn_rate: u32,
     },
+    /// Working-Set trajectory — 24h hourly observation of an
+    /// already-running daemon.  Verifies the daemon's Working Set
+    /// stays bounded (≤ 1.5× over the window) and that no restart
+    /// happened mid-window (PID stable).  Does NOT manage the
+    /// daemon's lifecycle — the daemon must already be Ready before
+    /// invoking this subcommand.  Closes the bake-criteria §1.7 gate.
+    WsTrace {
+        /// Skip the "daemon must be Ready" precondition check.
+        /// Lets the script be sanity-checked on a host with no
+        /// daemon running (e.g. Mac shake-out under --dev).
+        #[arg(long)]
+        no_daemon_check: bool,
+
+        /// How often to fire a keep-warm probe (`uffs '*' --ext rs
+        /// --limit 5`) against the daemon to prevent drives from
+        /// demoting all the way to PARKED/COLD across the trace
+        /// window.  Without this, a 24-h idle trace would exit with
+        /// a sharply DECREASING Working Set as drives unmap their
+        /// MFTs — passing the ≤ 1.5× bound vacuously while measuring
+        /// the wrong thing (we want steady-state operator-load WS,
+        /// not idle-shutdown WS).  Default: 5min.  Set to `0` to
+        /// disable (e.g. when testing the daemon's idle-shutdown
+        /// behaviour explicitly).
+        #[arg(long)]
+        keep_warm_interval: Option<String>,
+    },
 }
 
 // ── Entry point ───────────────────────────────────────────────────────
@@ -170,6 +212,10 @@ fn main() {
         Cmd::Phase7 { churn_dir, churn_rate } => {
             run_phase7(&cli, churn_dir.clone(), *churn_rate)
         }
+        Cmd::WsTrace {
+            no_daemon_check,
+            keep_warm_interval,
+        } => run_ws_trace(&cli, *no_daemon_check, keep_warm_interval.as_deref()),
     };
     match result {
         Ok(failed) if failed => std::process::exit(1),
@@ -1124,6 +1170,384 @@ fn parse_ws_bytes(path: &Path) -> Option<u64> {
     let re = Regex::new(r#""WS"\s*:\s*(\d+)"#).ok()?;
     let cap = re.captures(&content)?;
     cap.get(1)?.as_str().parse::<u64>().ok()
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// WS-Trace — 24h Working-Set trajectory (observe-only)
+// ─────────────────────────────────────────────────────────────────────
+//
+// Closes bake-criteria §1.7.  Unlike Phase 6 / Phase 7, this gate does
+// NOT manage the daemon's lifecycle — it observes a daemon the operator
+// already has running, so it's safe to interleave with normal use.
+//
+// Validations:
+//   1. ≥ N snapshots captured (N=20 in production, 3 in --dev mode).
+//   2. Keep-warm worker fired ≥ ~75 % of expected probes — without
+//      ambient query traffic the daemon's drives demote all the way
+//      to PARKED/COLD across 24 h and the WS trajectory observes
+//      idle-shutdown decay rather than the steady-state operator-load
+//      working set we actually want to bound.
+//   3. Daemon PID stable across the window (no restart mid-trace —
+//      otherwise the WS trajectory's interpretation breaks).
+//   4. Working Set at the last snapshot ≤ 1.5× WS at the first snapshot
+//      (Windows-only because Mac `ps` doesn't expose the same metric;
+//      on Mac under --dev the assertion auto-passes).
+
+fn run_ws_trace(
+    cli: &Cli,
+    no_daemon_check: bool,
+    keep_warm_interval: Option<&str>,
+) -> Result<bool> {
+    let bin = locate_binary(cli.binary.as_deref())?;
+    let out_root = cli
+        .out
+        .clone()
+        .unwrap_or_else(|| dirs_home().join("uffs_soak"));
+    let out = OutputDir::new(out_root, "wstrace")?;
+    let duration = parse_duration_or(
+        cli.duration.as_deref(),
+        if cli.dev { DEV_DURATION } else { DURATION_DEFAULT },
+    )?;
+    let snap_iv = parse_duration_or(
+        cli.snapshot_interval.as_deref(),
+        if cli.dev { DEV_SNAPSHOT } else { SNAPSHOT_DEFAULT },
+    )?;
+    let keep_warm = parse_duration_or(keep_warm_interval, WS_TRACE_KEEP_WARM_DEFAULT)?;
+
+    println!(
+        "{}",
+        "═══ WS-trace soak — Working-Set trajectory ═══".cyan().bold()
+    );
+    println!("  binary:    {}", bin.display());
+    println!("  out:       {}", out.root.display());
+    println!("  duration:  {}", fmt_dur(duration));
+    println!("  snapshot:  every {}", fmt_dur(snap_iv));
+    if keep_warm > Duration::ZERO {
+        println!("  keep-warm: every {} (idle-decay guard)", fmt_dur(keep_warm));
+    } else {
+        println!("  keep-warm: {}", "DISABLED — daemon will demote to PARKED/COLD".yellow());
+    }
+    if cli.dev {
+        println!("  {}", "(--dev mode: relaxed validation, abbreviated run)".yellow());
+    }
+    if no_daemon_check {
+        println!("  {}", "(--no-daemon-check: skipping Ready precondition)".yellow());
+    }
+
+    let daemon = Daemon { binary: bin.clone(), log_file: out.daemon_log() };
+
+    // Precondition: daemon must already be Ready.  WS-trace observes;
+    // it does not manage lifecycle.  Bail with an operator-friendly
+    // error if the daemon isn't running so the trace doesn't silently
+    // capture 24 h of "Get-Process returned nothing".
+    if !no_daemon_check {
+        let status = daemon
+            .run(&["daemon", "status"])
+            .context("running `uffs daemon status` to check Ready precondition")?;
+        if !status.contains("Ready") {
+            bail!(
+                "WS-trace requires a Ready daemon — observed status:\n\
+                 ───\n{status}───\n\n\
+                 Start the daemon first (e.g. `uffs daemon start \
+                 --log-file ~/uffs_soak/wstrace.log`) and confirm \
+                 `uffs daemon status` reports Ready before re-running."
+            );
+        }
+        println!("  {}", "Daemon Ready precondition OK".green());
+    }
+
+    let cancel = Arc::new(AtomicBool::new(false));
+
+    // Spawn keep-warm worker BEFORE the snapshot loop so the very
+    // first snapshot already reflects a daemon that's serving probes.
+    // Otherwise `00h-process.json` captures a still-cold WS and the
+    // 1.5× ratio compares cold-to-warm, which is the wrong baseline.
+    let keep_warm_handle = if keep_warm > Duration::ZERO {
+        Some(spawn_keep_warm_worker(
+            bin.clone(),
+            keep_warm,
+            out.root.join("keep-warm.log"),
+            Arc::clone(&cancel),
+        ))
+    } else {
+        None
+    };
+
+    // Per-hour snapshot loop.  capture_cache=false (WS-trace doesn't
+    // care about encrypted-cache file sizes — that's Phase 7's gate).
+    let snap_count = run_snapshot_loop(&daemon, &out, duration, snap_iv, false, &cancel)?;
+    println!("  {} {} snapshots captured", "✓".green(), snap_count);
+
+    // Stop keep-warm worker and collect counts.
+    cancel.store(true, Ordering::Relaxed);
+    let keep_warm_summary = keep_warm_handle
+        .map(|h| h.join().unwrap_or_default())
+        .unwrap_or_default();
+    if keep_warm > Duration::ZERO {
+        println!(
+            "  {} keep-warm: {} probes fired ({} ok, {} err)",
+            "✓".green(),
+            keep_warm_summary.fired,
+            keep_warm_summary.ok,
+            keep_warm_summary.err
+        );
+    }
+
+    // Build a single CSV from the per-snapshot JSON files for easy
+    // paste-back.  The bake-criteria §1.7 "what to bring back" advice
+    // points at this CSV; without it the operator would have to ship
+    // 24 individual files.
+    if let Err(e) = write_ws_trace_csv(&out) {
+        eprintln!("  {} CSV write failed: {e:#}", "⚠".yellow());
+    }
+
+    // Validation.
+    let mut report = ValidationReport::new("wstrace");
+    validate_ws_trace(
+        &out,
+        snap_count,
+        keep_warm,
+        duration,
+        &keep_warm_summary,
+        cli.dev,
+        &mut report,
+    );
+    report.write(&out)?;
+    report.print();
+
+    Ok(report.failed())
+}
+
+/// Result counts for the keep-warm probe worker.
+#[derive(Default, Clone)]
+struct KeepWarmSummary {
+    fired: u64,
+    ok: u64,
+    err: u64,
+}
+
+/// Spawn a thread that fires `uffs '*' --ext rs --limit 5` every
+/// `interval` against the running daemon, until `cancel` is set.
+/// Logs every probe (one line per call) to `log_file` so the
+/// operator can trace gaps if the WS analysis turns up surprises.
+fn spawn_keep_warm_worker(
+    bin: PathBuf,
+    interval: Duration,
+    log_file: PathBuf,
+    cancel: Arc<AtomicBool>,
+) -> thread::JoinHandle<KeepWarmSummary> {
+    thread::spawn(move || {
+        use std::io::Write as _;
+        let mut summary = KeepWarmSummary::default();
+        let mut next = Instant::now();
+        while !cancel.load(Ordering::Relaxed) {
+            let now = Instant::now();
+            if now < next {
+                let chunk = std::cmp::min(next - now, Duration::from_millis(500));
+                thread::sleep(chunk);
+                continue;
+            }
+            next = now + interval;
+
+            let result = Command::new(&bin)
+                .args(["*", "--ext", "rs", "--limit", "5"])
+                .output();
+            summary.fired += 1;
+            let ok = matches!(&result, Ok(o) if o.status.success());
+            if ok {
+                summary.ok += 1;
+            } else {
+                summary.err += 1;
+            }
+
+            // One-line probe log.  Append-only so the keep-warm.log
+            // is a faithful timeline even if the trace is killed mid-
+            // flight (no buffered final flush needed).
+            if let Ok(mut f) = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_file)
+            {
+                let _ = writeln!(
+                    f,
+                    "{} probe #{} {}",
+                    Utc::now().format("%Y-%m-%dT%H:%M:%SZ"),
+                    summary.fired,
+                    if ok { "OK" } else { "ERR" }
+                );
+            }
+        }
+        summary
+    })
+}
+
+fn write_ws_trace_csv(out: &OutputDir) -> Result<()> {
+    let mut snaps: Vec<PathBuf> = fs::read_dir(out.snapshot_dir())?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.ends_with("-process.json"))
+                .unwrap_or(false)
+        })
+        .collect();
+    snaps.sort();
+
+    let mut csv = String::new();
+    csv.push_str("label,pid,ws_bytes,pm_bytes,npm_bytes,vm_bytes,cpu_seconds\n");
+    for path in &snaps {
+        let label = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?")
+            .trim_end_matches("-process")
+            .to_string();
+        let body = fs::read_to_string(path).unwrap_or_default();
+        let pid = parse_field_u64(&body, "Id").unwrap_or(0);
+        let ws = parse_field_u64(&body, "WS").unwrap_or(0);
+        let pm = parse_field_u64(&body, "PM").unwrap_or(0);
+        let npm = parse_field_u64(&body, "NPM").unwrap_or(0);
+        let vm = parse_field_u64(&body, "VM").unwrap_or(0);
+        let cpu = parse_field_f64(&body, "CPU").unwrap_or(0.0);
+        csv.push_str(&format!("{label},{pid},{ws},{pm},{npm},{vm},{cpu}\n"));
+    }
+    fs::write(out.root.join("wstrace.csv"), csv)?;
+    Ok(())
+}
+
+fn validate_ws_trace(
+    out: &OutputDir,
+    snap_count: usize,
+    keep_warm: Duration,
+    duration: Duration,
+    keep_warm_summary: &KeepWarmSummary,
+    dev_mode: bool,
+    report: &mut ValidationReport,
+) {
+    // 1. Minimum sample count.  Below this we don't have enough data
+    //    to claim "stable across 24h"; treat as inconclusive.
+    let min_samples = if dev_mode { 3 } else { 20 };
+    report.assert(
+        format!("Captured ≥ {min_samples} snapshots"),
+        snap_count >= min_samples,
+        format!("captured {snap_count}"),
+    );
+
+    // 1b. Keep-warm probes actually fired.  Without this the WS
+    //     trace observes idle-decay rather than steady-state load,
+    //     and the 1.5× ratio passes vacuously.  Skip the check if
+    //     the operator explicitly disabled keep-warm.
+    if keep_warm > Duration::ZERO {
+        // Expect roughly `duration / interval` probes, allow 25 %
+        // shortfall for startup overlap + the final cancel-window.
+        let expected = duration.as_secs() / keep_warm.as_secs().max(1);
+        let min_expected = (expected as f64 * 0.75) as u64;
+        // In --dev mode we run for 5 min with 5-min keep-warm → expect
+        // ~1 probe; floor the assertion at 1 so the harness still
+        // catches a totally-broken keep-warm path.
+        let floor = if dev_mode { 1 } else { min_expected.max(10) };
+        report.assert(
+            format!("Keep-warm worker fired ≥ {floor} probes"),
+            keep_warm_summary.fired >= floor,
+            format!(
+                "fired={}, ok={}, err={} (expected ~{}, floor {})",
+                keep_warm_summary.fired,
+                keep_warm_summary.ok,
+                keep_warm_summary.err,
+                expected,
+                floor
+            ),
+        );
+    }
+
+    // 2. Daemon PID stable across the window.  A PID flip means the
+    //    daemon was restarted mid-trace — the WS comparison is then
+    //    apples-to-oranges.  Windows-only because Mac --dev mode emits
+    //    `ps` text, not the JSON the parser expects.
+    let pids = collect_pids(out);
+    if cfg!(windows) && !pids.is_empty() {
+        let stable = pids.first() == pids.last();
+        report.assert(
+            "Daemon PID stable across the window",
+            stable,
+            format!(
+                "first PID={:?}, last PID={:?}, sample count={}",
+                pids.first(),
+                pids.last(),
+                pids.len()
+            ),
+        );
+    } else {
+        report.assert(
+            "Daemon PID stable (Windows only)",
+            dev_mode || !cfg!(windows),
+            "no JSON snapshots parsed (expected on Mac --dev)".to_string(),
+        );
+    }
+
+    // 3. Working-Set bound — same shape as Phase 7's WS check, reusing
+    //    `first_and_last_ws()` which already gracefully returns None
+    //    on Mac.
+    if let Some((first_ws, last_ws)) = first_and_last_ws(out) {
+        let ratio = (last_ws as f64) / (first_ws.max(1) as f64);
+        report.assert(
+            "Working-Set growth ≤ 1.5× over window",
+            ratio <= 1.5,
+            format!(
+                "first={first_ws} bytes, last={last_ws} bytes, ratio={ratio:.2}×"
+            ),
+        );
+    } else {
+        report.assert(
+            "Working-Set captured at start and end (Windows only)",
+            dev_mode || !cfg!(windows),
+            "could not parse Working-Set from process snapshots".to_string(),
+        );
+    }
+}
+
+/// Collect daemon PIDs from each `*-process.json` snapshot in the run's
+/// snapshot directory, sorted by snapshot label (which matches time
+/// order: `00h`, `01h`, … or `00m`, `01m`, …).  Returns an empty Vec
+/// when no JSON snapshots exist (Mac under --dev).
+fn collect_pids(out: &OutputDir) -> Vec<u64> {
+    let mut snaps: Vec<PathBuf> = match fs::read_dir(out.snapshot_dir()) {
+        Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
+        Err(_) => return Vec::new(),
+    };
+    snaps.retain(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.ends_with("-process.json"))
+            .unwrap_or(false)
+    });
+    snaps.sort();
+    snaps
+        .iter()
+        .filter_map(|p| {
+            let body = fs::read_to_string(p).ok()?;
+            parse_field_u64(&body, "Id")
+        })
+        .collect()
+}
+
+/// Parse `"<key>":<digits>` from a compact-JSON snapshot body.
+/// Returns None when the key is absent or the value isn't an integer.
+/// Used by `write_ws_trace_csv` and `collect_pids`.
+fn parse_field_u64(body: &str, key: &str) -> Option<u64> {
+    let pat = format!(r#""{key}"\s*:\s*(\d+)"#);
+    let re = Regex::new(&pat).ok()?;
+    re.captures(body)?.get(1)?.as_str().parse::<u64>().ok()
+}
+
+/// Parse `"<key>":<float>` from a compact-JSON snapshot body.  CPU is
+/// emitted by PowerShell `ConvertTo-Json` as a float (seconds); WS / PM
+/// / NPM / VM are integers and use `parse_field_u64` instead.
+fn parse_field_f64(body: &str, key: &str) -> Option<f64> {
+    let pat = format!(r#""{key}"\s*:\s*([\d.]+)"#);
+    let re = Regex::new(&pat).ok()?;
+    re.captures(body)?.get(1)?.as_str().parse::<f64>().ok()
 }
 
 // ── Misc helpers ──────────────────────────────────────────────────────
