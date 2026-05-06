@@ -20,8 +20,10 @@ UFFS - Ultra Fast File Search
 |---|---|---|
 | 0 | Plan + schema design | ✅ landed (PR #139) |
 | 1 | Manifest + drift detector (no consumer changes) | ✅ landed (PR #140) |
-| 2 | Codegen for `_lint_pre_push.sh` | 🟡 in flight (PR #141) |
-| 3 | Codegen for `_lint_fast.sh` + `pr-fast.yml` + doc tables | ⏭ pending |
+| 2 | Codegen for `_lint_pre_push.sh` | ✅ landed (PR #141) |
+| 3 | `pr-fast.yml` structural validator (revised from "codegen" — see §4.2 pivot) | 🟡 plan revision in flight |
+| 3a (skipped) | `_lint_fast.sh` codegen | ⏭ deferred (marginal value; §Phase 3 scope notes) |
+| 3c (deferred) | gen-docs | ⏭ deferred (prose tables; §4.3 rationale) |
 
 Closing all four phases brings the workspace to **zero hand-maintained
 gate-set drift** between local hooks, CI workflows, and contributor
@@ -219,45 +221,114 @@ FLAGS:
   --verbose         Print per-gate emit decisions to stderr.
 ```
 
-### 4.2 `scripts/ci/gen-workflow` (Phase 3)
+### 4.2 `scripts/ci/gen-workflow` (Phase 3) — structural validator only
 
 ```
-USAGE: gen-workflow [--check]
+USAGE: gen-workflow [--check]   # --write does not exist
 
-Reads scripts/ci/gates.toml.
-Writes (or checks) the generated job blocks within
-.github/workflows/pr-fast.yml.
+Reads scripts/ci/gates.toml AND .github/workflows/pr-fast.yml.
+Validates structural properties; never mutates the workflow file.
 
-EXIT: same as gen-hooks.
-
-The workflow has hand-written + generated sections.  Only the
-job blocks for individual gates are generated; the `classify`,
-`required` aggregator, and `notify-failure` jobs stay
-hand-maintained but are validated against the manifest's
-generated `needs:` list.  Generator markers in the YAML:
-
-    # >>> generated:gates-manifest <<<
-    [generated content here]
-    # <<< generated:gates-manifest >>>
-
-Hand edits between the markers fail CI.
+EXIT:
+  0  pr-fast.yml is structurally consistent with the manifest.
+  1  one or more drift conditions detected.
+  2  parse error (YAML or TOML).
 ```
 
-### 4.3 `scripts/ci/gen-docs` (Phase 3, optional)
+**Pivot from the original design** (recorded in §9 action log on
+2026-05-06): the original §4.2 specified a YAML emitter that would
+own the per-gate job blocks between marker comments.  Investigation
+during Phase 3 prep showed that every job in `pr-fast.yml` is
+bespoke — eleven distinct shapes for ~thirteen pr-fast-tier gates
+(differences in runner OS, timeout, `needs:` chain, rust-cache key
+strategy, free-disk preamble, conditional cargo-vet install + run,
+multi-step commands, etc.).  Encoding all of that in TOML so the
+generator can emit it back is a YAML-in-TOML translation problem
+with no real upside, AND it stakes branch protection on a
+hand-rolled YAML emitter.
+
+The structural-validator design retains every drift-protection
+guarantee the original codegen design promised, while reducing the
+blast radius to "same as Phase 1's `gates-drift`" — the tool only
+reads files; it cannot break the workflow.
+
+**Properties enforced by `gen-workflow --check`**:
+
+1. **Job presence** — every manifest gate with `tier="pr-fast"` has
+   a job in `pr-fast.yml` whose key matches the gate id (or a
+   per-tier `consumer_names` override).
+2. **`if:` predicate alignment** — every such job's `if:`
+   expression matches the gate's `gate_when` class:
+   - `gate_when = "always"`           → no `if:` (or vacuously true)
+   - `gate_when = "rust_changed"`     → `needs.classify.outputs.rust == 'true'`
+   - `gate_when = "dep_changed"`      → `needs.classify.outputs.dep == 'true'`
+   - `gate_when = "infra_changed"`    → `needs.classify.outputs.infra == 'true'`
+   - `gate_when = "code_changed"`     → `needs.classify.outputs.code == 'true'`
+3. **Aggregator coverage** — every gate's id is present in:
+   - `required.needs:` list
+   - the `declare -A R=(...)` aggregator inside the `required` job
+   - `notify-failure.needs:` list
+   This is the exact failure mode that motivated the plan: a rename
+   in the manifest that wasn't propagated to all three list-shaped
+   consumers in this single file.
+4. **Branch-protection guard** — the `required` job's `name:` is
+   exactly the literal string `PR Fast CI / required`.  This name
+   is in the repo's branch-protection rule
+   (`required_status_checks`); a generator that renamed it would
+   silently break merge for every subsequent PR.
+5. **Naming convention** — every per-gate job's `name:` field
+   matches the manifest's `label` (or a documented mapping for
+   legacy names).
+
+**What is explicitly NOT validated** (and why):
+
+- **Job step contents** — the actual `run:` commands, runner
+  selection, cache key strategy, conditional steps.  These are
+  per-job craft; pinning them via the validator would freeze
+  legitimate evolution (e.g. adding a `df -h /` debug step
+  during a disk-pressure investigation).  The Phase 1 `gates-drift`
+  detector still catches the gate-set mismatch class; structural
+  validator catches the "rename bookkeeping" class; per-step
+  correctness stays in code review's hands.
+- **YAML formatting** — indentation, blank-line placement, comment
+  positioning.  These are reviewer concerns, not drift concerns.
+- **Job ordering** — the file lists jobs in roughly cost order;
+  the validator doesn't enforce any ordering invariant.
+
+### 4.3 `scripts/ci/gen-docs` (Phase 3, deferred)
 
 ```
 USAGE: gen-docs [--check]
 
 Reads scripts/ci/gates.toml.
-Writes (or checks) the gate-matrix tables in:
-  - CONTRIBUTING.md (four-layer quality gates table)
-  - docs/architecture/dev-flow.md (§3.2 gate matrix)
-  - docs/architecture/dev-flow-implementation-plan.md (§1.3.1 hard gates table)
-
-EXIT: same as gen-hooks.
-
-Same marker convention as gen-workflow.
+Writes (or checks) a gate-matrix table generated from the manifest.
 ```
+
+**Status: deferred** (recorded in §9 action log on 2026-05-06).
+Investigation during Phase 3 prep showed that every existing
+gate-matrix table in the repo is prose-laden:
+
+- `CONTRIBUTING.md` §Four-layer quality gates: full-paragraph cells
+  with W5/L1 migration history, runtime budgets, install hints.
+- `docs/architecture/dev-flow.md` §3.2 Gate matrix: cells like
+  `✅ if xwin (advisory; W5.6 upgraded from `check` to `clippy`)`.
+- `docs/architecture/dev-flow-implementation-plan.md` §1.3.1 Hard
+  gates: cells with rationale (`hard-fail with install hint — not
+  soft-skip`, `pinned in .config/nextest.toml`).
+
+None of this prose is derivable from the manifest's structured
+fields without inventing per-table `notes_per_tier` /
+`migration_history` / `missing_tool_behavior` fields.  At that
+point we are encoding markdown prose in TOML, which is strictly
+worse than markdown.
+
+If gen-docs is ever revived, the right shape is **a new canonical
+reference doc** (e.g. `docs/architecture/gates-manifest-reference.md`)
+that is 100 % generated and is linked from the prose-heavy tables
+as "see also".  The prose tables stay hand-maintained because
+their value IS the prose.  Marginal value because the manifest
+itself is already the canonical structured source; this would just
+be a render.
 
 ### 4.4 Idempotency contract
 
@@ -424,83 +495,94 @@ git checkout scripts/hooks/_lint_pre_push.sh       # revert
 identical to the pre-Phase-2 file (the golden), so reverting yields
 the previous hand-maintained version exactly.
 
-### Phase 3 — Codegen for `_lint_fast.sh` + `pr-fast.yml` + doc tables (`feat/gates-manifest-phase-3`)
+### Phase 3 — `pr-fast.yml` structural validator (`feat/gates-manifest-phase-3-workflow-drift`)
 
-**Scope**:
+**Scope** (revised from the original "big-bang Phase 3" plan):
 
-1. EXTEND `gen-hooks` to also emit `_lint_fast.sh`.
-2. NEW `scripts/ci/gen-workflow/` — Rust binary per §4.2.  Emits
-   the per-gate job blocks in `pr-fast.yml` between the `# >>>
-   generated:gates-manifest <<<` markers.  Hand-written sections
-   (classify, required, notify-failure) stay hand-maintained.
-3. NEW `scripts/ci/gen-docs/` — Rust binary per §4.3 (optional —
-   may be deferred to a Phase 3b sub-PR if scope grows too large).
-4. NEW `tests/ci/golden/_lint_fast.sh` + `tests/ci/golden/pr-fast.yml`
-   — byte-for-byte snapshots.
-5. MODIFIED `scripts/hooks/_lint_fast.sh` + `.github/workflows/pr-fast.yml`
-   — both now generated (with hand-written sections clearly marked).
-6. NEW CI jobs: `workflow-drift`, optional `docs-drift`.
+1. NEW `scripts/ci/gen-workflow/` — Rust binary per §4.2.
+   `--check`-only.  Reads `scripts/ci/gates.toml` AND
+   `.github/workflows/pr-fast.yml`; validates the five structural
+   properties listed in §4.2; never mutates the workflow file.
+2. NEW manifest `[[gate]]` entry `workflow-drift` — self-referential
+   gate at tier `[pre-push, pr-fast]`, bucket `bg`,
+   `gate_when = always`, `hard = true`.  The generator that emits
+   `_lint_pre_push.sh` (Phase 2's `gen-hooks`) picks this up
+   automatically; no Phase-2-side changes needed.
+3. NEW `pr-fast.yml::workflow-drift` job — hand-written following
+   the same shape as Phase 1's `gates-drift` and Phase 2's
+   `hooks-drift`.  Validates the workflow against itself.
+4. NEW `just workflow-drift` recipe.
+5. MODIFIED `docs/architecture/gates-manifest-plan.md` — §4.2
+   pivoted from "YAML emitter" to "structural validator".
+6. MODIFIED `CHANGELOG.md` — entry under `[Unreleased]`.
 
-**Critical constraint**: `pr-fast.yml`'s `required` job's `name:` field
-MUST stay as `PR Fast CI / required` — that exact string is in the
-repo's branch-protection ruleset's `required_status_checks`.  Changing
-it silently breaks merge protection.  The generator MUST hard-code
-that string and surface a comment explaining why.
+**Explicitly NOT in scope**:
+
+- **`_lint_fast.sh` codegen** (the original Phase 3a) — deferred /
+  skipped.  Phase 1's `gates-drift` already catches the only
+  meaningful failure mode (gate-set mismatch).  Generating the
+  ~70-line file would cost more code than it saves; symmetry with
+  `_lint_pre_push.sh` is not worth the complexity.  If revived,
+  it's a tiny extension to Phase 2's `gen-hooks` (add an
+  `EmitTarget::PreCommit` variant).
+- **`gen-docs`** (the original Phase 3c) — deferred.  See §4.3.
+- **YAML emission of any kind** — see §4.2 pivot rationale.
+
+**Critical constraint preserved**: `pr-fast.yml`'s `required` job's
+`name:` field is `PR Fast CI / required`.  The structural validator
+actively enforces this string (Property 4 in §4.2) so future
+refactors cannot silently break branch protection.
 
 **Acceptance criteria**:
 
-- [ ] All Phase 2 acceptance items still hold for `_lint_pre_push.sh`.
-- [ ] Generated `_lint_fast.sh` is byte-for-byte equivalent to the
-      golden snapshot.
-- [ ] Generated `pr-fast.yml` is byte-for-byte equivalent to the
-      golden snapshot **between the markers**; hand-written sections
-      (above + below + classify + required + notify-failure)
-      unchanged.
-- [ ] `actionlint .github/workflows/pr-fast.yml` exit=0.
-- [ ] `bash -n scripts/hooks/_lint_fast.sh`.
-- [ ] `just lint-fast` + `just lint-pre-push` exit 0 with identical
-      observable behaviour to pre-PR.
-- [ ] **Branch protection still works**: the PR itself depends on
-      `PR Fast CI / required` (same name as before); auto-merge
-      gates correctly.
-- [ ] Drift detectors (Phase 1 `gates-drift`, Phase 2 `hooks-drift`,
-      new `workflow-drift`) all pass.
+- [ ] `gen-workflow --check` exits 0 against the current
+      `pr-fast.yml` (= Phase 2's tip-of-main version, including the
+      `workflow-drift` job once added).
+- [ ] Synthetic-mutation tests prove each of the five structural
+      properties is enforced (rename a gate → detected; remove a
+      gate from `required.needs:` → detected; flip an `if:`
+      predicate to the wrong class → detected; rename the `required`
+      job → detected; mismatch a job `name:` field → detected).
+- [ ] All Phase 1 + Phase 2 acceptance items still hold.
+- [ ] `actionlint .github/workflows/pr-fast.yml` exit=0 (sanity
+      check; not validator-enforced).
+- [ ] Drift detectors (`gates-drift`, `hooks-drift`,
+      `workflow-drift`) all pass.
+- [ ] No mutation of `pr-fast.yml` job step contents — only the
+      additive `workflow-drift` job, which is itself byte-for-byte
+      identical to the patterns established by `gates-drift` /
+      `hooks-drift` (no novel YAML shape to validate).
 
-**Risk**: High.  `pr-fast.yml` is the highest-blast-radius file in the
-repo — every PR depends on it.  A generator bug that emits invalid
-YAML, drops a job, or renames the `required` job breaks merge
-protection silently for every subsequent PR.
+**Risk**: Low.  `gen-workflow` only reads files; it cannot break
+the workflow.  The `workflow-drift` job added to `pr-fast.yml` uses
+the exact same shape as the existing `hooks-drift` job (5 lines of
+YAML, no new pattern).  The branch-protection guard string
+(`PR Fast CI / required`) is asserted by the validator itself, so
+a future PR that renamed it would fail `workflow-drift` before
+landing.
 
-**Mitigation**:
-
-- Land `gen-workflow` behind the marker convention so hand-written
-  sections (especially `required` + branch-protection-facing names)
-  are **not** generated.
-- Run the generator in dry-run mode in a separate `validate-workflow`
-  PR (zero behavioural change) to flush out any emit bugs before
-  flipping `pr-fast.yml` to generated mode.
-- Phase 3 can be split into 3a (`_lint_fast.sh` only) + 3b
-  (`pr-fast.yml`) + 3c (`gen-docs`) sub-PRs if reviewer load demands.
-
-**Verification before merge**: same matrix as Phase 2 plus:
+**Verification before merge**:
 
 ```bash
-# Workflow YAML still parses + matches golden
-just gen-workflow
-diff -u tests/ci/golden/pr-fast.yml \
-        .github/workflows/pr-fast.yml               # empty within markers
-actionlint .github/workflows/pr-fast.yml            # exit 0
-
-# Required-check name is preserved
-grep -n 'name: PR Fast CI / required' \
-    .github/workflows/pr-fast.yml                   # exactly one match
+cargo test -p uffs-gen-workflow                      # unit tests
+cargo run -q --release -p uffs-gen-workflow -- --check  # exit 0
+bash scripts/ci/check_gates_drift.sh                  # exit 0 (Phase 1)
+cargo run -q --release -p uffs-gen-hooks -- --check   # exit 0 (Phase 2)
+just lint-pre-push                                    # exit 0 (full sweep)
+actionlint .github/workflows/pr-fast.yml              # exit 0
 ```
 
-**Rollback**: Revert the PR.  All three generated files are
-byte-for-byte identical to their goldens (= the pre-Phase-3 hand-
-maintained versions), so revert yields the previous state exactly.
-Branch protection's required-check name is preserved across the
-rollback.
+**Rollback**: Revert the PR.  No file is mutated except the
+additive `workflow-drift` job in `pr-fast.yml` and the additive
+`[[gate]]` entry in the manifest — both safe to revert.
+
+**Future evolution**: if YAML generation ever becomes desirable
+(e.g. the workspace grows past ~30 pr-fast gates and the bespoke-
+shape problem becomes a maintenance burden), the structural
+validator established here is the foundation: a generator can be
+added later that emits between markers, with the validator enforcing
+property equivalence between hand-written and generated sections
+during the transition.
 
 ## 6. Golden-file verification strategy
 
@@ -618,5 +700,6 @@ Other workflows are opaque to it.
 |---|---|---|
 | 2026-05-06 | Plan drafted (this doc) + landed | #139 |
 | 2026-05-06 | Phase 1 landed — manifest + drift detector + pre-push Bucket 1 wiring + `pr-fast.yml::gates-drift` job + `just gates-drift` recipe | #140 |
-| 2026-05-06 | Phase 2 in flight — `scripts/ci/gen-hooks` Rust crate (manifest model + emit module + 24 unit tests) + auto-generated `_lint_pre_push.sh` (banner, embedded preamble, generated dispatch, embedded footer) + `hooks-drift` self-referential gate + `just gen-hooks` / `just hooks-drift` recipes + `pr-fast.yml::hooks-drift` job | #141 |
-| TBD | Phase 3 lands (codegen for pre-commit + pr-fast.yml + doc tables) | TBD |
+| 2026-05-06 | Phase 2 landed — `scripts/ci/gen-hooks` Rust crate + auto-generated `_lint_pre_push.sh` + `hooks-drift` self-referential gate + `just gen-hooks` / `just hooks-drift` recipes + `pr-fast.yml::hooks-drift` job | #141 |
+| 2026-05-06 | **Phase 3 plan pivot** — §4.2 revised from "YAML emitter with markers" to "structural validator (`--check` only)".  Investigation during Phase 3 prep showed every per-gate job in `pr-fast.yml` is bespoke (eleven distinct shapes for ~thirteen gates); encoding all of that in TOML degenerates to YAML-in-TOML.  Structural validator retains every drift-protection guarantee at the same risk profile as Phase 1's `gates-drift`.  §4.3 (gen-docs) and §Phase 3a (`_lint_fast.sh` codegen) deferred for the same reasons (prose tables, marginal value).  This PR lands the plan revision; implementation lands in a follow-up PR. | TBD |
+| TBD | Phase 3 implementation lands (`gen-workflow` + `workflow-drift` gate + `pr-fast.yml::workflow-drift` job) | TBD |
