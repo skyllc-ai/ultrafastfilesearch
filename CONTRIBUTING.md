@@ -64,31 +64,34 @@ UFFS uses a shift-left pipeline: cheap checks fire close to the keystroke, expen
 | Layer | Trigger | Recipe | Budget | What it runs |
 |------|--------|--------|--------|-------------|
 | **IDE save** | On save | `rust-analyzer` | instant | type-check-on-save, clippy-on-save |
-| **pre-commit** | `git commit` | `just lint-fast` | sub-2 s (docs-only) / 15–25 s warm (`*.rs` staged) | `fmt --check`, **`lint-prod`** (ultra-strict: pedantic + nursery + cargo + unwrap_used + missing_docs_in_private_items), **`lint-tests`** (same base + unwrap allowed), **`lint-ci`** (CI-mirror `-D warnings --all-targets`), **`check-windows`** (`cargo xwin check` of Windows-only `#[cfg(windows)]` paths) — all when `*.rs` staged; plus `taplo fmt --check` (if `*.toml` staged), `typos`, `reuse lint`, file-size policy — all in parallel; missing optional tools soft-skip |
-| **pre-push** | `git push` | `just lint-pre-push` | 25–40 s warm | Same three ultra-strict clippy passes + **Windows `cargo xwin check`** + `fmt --check` + `rustdoc -D warnings` + `cargo deny check` + `nextest run --no-run` (test-binary link check) + file-size policy + `typos` + `reuse lint` — all in parallel. Full parity with `just ship` Phase 1 lint surface plus cross-platform Windows coverage; only the full test runtime (`nextest run`) is deferred to CI. |
-| **PR CI** | on PR to `main` | `.github/workflows/pr-fast.yml` | minutes | PR-blocking matrix (classify → file-size, fmt, sanity, clippy, docs, test-build, tests, security, windows-check, required).  The `classify` job short-circuits docs-only / dep-only / infra-only PRs so heavy jobs only run when code actually changed.  Linux jobs run on `ubuntu-22.04`; `windows-check` runs natively on `windows-latest` (so `#[cfg(windows)]` compile errors now surface at PR time, not release time).  Tier 2 weekly workflow (`.github/workflows/tier-2.yml`) runs coverage + udeps + miri out of the critical path. |
+| **pre-commit** | `git commit` | `just lint-fast` | sub-2 s (docs-only) / 15–25 s warm (`*.rs` staged) | `fmt --check`, **`lint-prod`** (ultra-strict: pedantic + nursery + cargo + unwrap_used + missing_docs_in_private_items), **`lint-tests`** (same base + unwrap allowed), **`lint-ci`** (CI-mirror `-D warnings --all-targets`) — all when `*.rs` staged; plus `taplo fmt --check` (if `*.toml` staged), `typos`, `reuse lint`, file-size policy — all in parallel; missing optional tools soft-skip.  Windows xwin lint lives at pre-push, not pre-commit (40–90 s cold cost violates T1 budget). |
+| **pre-push** | `git push` | `just lint-pre-push` | 25–60 s warm | Same three ultra-strict clippy passes + **Windows `cargo xwin clippy -- -D warnings`** (`lint-ci-windows`, Phase W5.6) + `fmt --check` + `rustdoc -D warnings` + `cargo deny check` + `nextest run --no-run` (test-binary link check) + file-size policy + `typos` + `reuse lint` — all in parallel.  Full parity with `just ship` Phase 1 lint surface plus cross-platform Windows clippy coverage; only the full test runtime (`nextest run`) is deferred to CI. |
+| **PR CI** | on PR to `main` | `.github/workflows/pr-fast.yml` | minutes | PR-blocking matrix (classify → file-size, fmt, sanity, clippy, docs, test-build, tests, security, **windows-lint**, required).  The `classify` job short-circuits docs-only / dep-only / infra-only PRs so heavy jobs only run when code actually changed.  Linux jobs run on `ubuntu-22.04`; **`windows-lint`** runs `cargo clippy -- -D warnings` natively on `windows-latest` (Phase W5.5) so both `#[cfg(windows)]` compile errors and lint regressions surface at PR time.  Tier 2 weekly workflow (`.github/workflows/tier-2.yml`) runs coverage + udeps + miri out of the critical path. |
 | **Release** | manual today; automated after release-automation R4 | `just ship` today; release-plz release PR after R4 | minutes | today: version bump + `release/vX.Y.Z` PR + signed commit + auto-tag + binary build.  **Target state** (see [`docs/architecture/release-automation-plan.md`](docs/architecture/release-automation-plan.md)): release-plz opens `chore(release): prepare vX.Y.Z` PR automatically from conventional commits on `main`; merging that PR creates the tag; `release.yml` builds binaries as today. |
 
 The ultra-strict flag stack — `common_flags` / `prod_flags` / `test_flags` — is defined in `@/Users/rnio/Private/Github/UltraFastFileSearch/just/shared.just:21-26` and pulled in identically by the local hooks and by `just ship` Phase 1, so **the rules a commit is checked against locally are the exact rules CI enforces**.
 
 ### Cross-platform coverage
 
-As of the 2026-04-23 Phase 4 cutover, `pr-fast.yml`'s `windows-check` job runs natively on `windows-latest` so Windows compile errors surface at PR time.  The pre-commit / pre-push hooks still run `cargo xwin check` against `x86_64-pc-windows-msvc` as an advisory pre-PR gate (local fast-feedback); the CI `windows-check` is the authoritative one.  Breakdown:
+As of Phase W5 of [`docs/architecture/windows-clippy-and-linux-cross-plan.md`](docs/architecture/windows-clippy-and-linux-cross-plan.md), `pr-fast.yml`'s `windows-lint` job runs strict `cargo clippy -- -D warnings` natively on `windows-latest` so both compile errors and lint regressions on `#[cfg(windows)]` paths surface at PR time.  Pre-push runs the cross-compiled equivalent (`just lint-ci-windows`, ~6 s warm) as an advisory local mirror; CI on `windows-latest` is authoritative.  Breakdown:
 
-- **Windows** — `cargo xwin check --workspace --all-targets --all-features` via `cargo-xwin` (provisions the MSVC SDK under `~/Library/Caches/xwin/`). Runs in **2–5 s warm** once the SDK is cached. Mandatory at pre-commit (when `*.rs` is staged) and pre-push.
-- **Linux** — covered by CI matrix (`ubuntu-22.04`); a local Docker-based gate is available via `just lint-ci-linux` for conscious cross-platform sweeps but is **not** run at pre-push (minutes-scale, disproportionate for commit-time).
+- **Windows** — `cargo xwin clippy --workspace --all-targets --all-features --no-deps -- -D warnings` via `cargo-xwin` (provisions the MSVC SDK under `~/Library/Caches/xwin/`).  Runs in **~6 s warm** once the SDK is cached.  Wired into pre-push (advisory) and `pr-fast.yml::windows-lint` (authoritative native).
+- **Linux** — covered by CI's native `clippy` job on `ubuntu-22.04`.  Two local options for ad-hoc sweeps: **`just lint-ci-linux-zig`** (native macOS → Linux via `cargo-zigbuild`; ~50 s cold / sub-second warm; needs `zig 0.14.1` + `cargo-zigbuild` from `just install-dev-tools`) or **`just lint-ci-linux`** (Docker; mirrors CI's `rust:latest` image exactly; minutes-scale).  Neither runs at pre-push by default.  The zig version is pinned to **0.14.1** — Homebrew's `zig` formula tracks the latest release (currently 0.16.x) which has incompat issues with `psm` and `blake3` x86_64 hand-written SIMD assembly, so `install-dev-tools` downloads the tarball from `ziglang.org` instead.
 - **macOS / native host** — covered by the three native clippy passes (`lint-ci` / `lint-prod` / `lint-tests`) at both pre-commit and pre-push.
 
-For a full sweep across all three targets, run `just check-all-targets` (native + xwin + Docker Linux). The recipe soft-skips tools that are not installed and reports which targets were exercised.
+For a full sweep across all three targets, run `just check-all-targets` (native + xwin + zigbuild-or-Docker Linux).  The recipe prefers zigbuild when `zig` is on `PATH`, falls back to Docker, and soft-skips when neither is available.
 
 ### First-time setup
 
 ```bash
 just install-hooks         # sets core.hooksPath → scripts/hooks/
-just install-dev-tools     # installs typos-cli + taplo-cli + cargo-xwin + x86_64-pc-windows-msvc target; prints pipx hint for `reuse`
+just install-dev-tools     # installs typos-cli + taplo-cli + cargo-xwin + x86_64-pc-windows-msvc target;
+                           # on macOS hosts also installs zig 0.14.1 (from ziglang.org — NOT brew) +
+                           # cargo-zigbuild + x86_64-unknown-linux-gnu target;
+                           # prints pipx hint for `reuse`
 ```
 
-Re-run `just install-hooks` after any rebase that touches `scripts/hooks/` — it's idempotent. The first time `cargo xwin check` runs it will download the MSVC SDK into `~/Library/Caches/xwin/` (~1–2 GB); subsequent runs reuse the cache.
+Re-run `just install-hooks` after any rebase that touches `scripts/hooks/` — it's idempotent.  The first time `cargo xwin clippy` runs it will download the MSVC SDK into `~/Library/Caches/xwin/` (~1–2 GB); subsequent runs reuse the cache.  `zig` lands in `~/.local/zig/0.14.1/` with a symlink in `~/.cargo/bin/zig` so it shadows any `brew install zig` you may have done previously.
 
 ### Running gates manually
 
@@ -96,9 +99,11 @@ Re-run `just install-hooks` after any rebase that touches `scripts/hooks/` — i
 just lint-fast             # the pre-commit bundle on demand
 just lint-pre-push         # the pre-push bundle on demand
 just lint-ci               # the single clippy gate that CI runs (`--all-targets --all-features --no-deps`)
-just lint-ci-linux         # same clippy gate under a Linux x86_64 Docker image (catches macOS↔Linux drift)
-just check-windows         # cargo xwin check against x86_64-pc-windows-msvc (Windows cross-platform gate)
-just check-all-targets     # full sweep: native + Windows (xwin) + Linux (Docker)
+just lint-ci-linux         # same clippy gate under a Linux x86_64 Docker image (authoritative cross-target)
+just lint-ci-linux-zig     # same clippy gate via cargo-zigbuild (native macOS → Linux; no Docker; faster)
+just check-windows         # cargo xwin check against x86_64-pc-windows-msvc (compile-only fast check)
+just lint-ci-windows       # cargo xwin clippy -- -D warnings (matches `pr-fast.yml::windows-lint`)
+just check-all-targets     # full sweep: native + Windows (xwin) + Linux (zigbuild or Docker)
 just phase1-test           # the full `just ship` Phase-1 validation (pre-ship rehearsal)
 ```
 

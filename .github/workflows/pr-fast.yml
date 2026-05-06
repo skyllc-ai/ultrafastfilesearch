@@ -427,14 +427,20 @@ jobs:
         run: cargo vet check --locked
 
   # ─────────────────────────────────────────────────────────────────────
-  # windows-check — native Windows compile check on `windows-latest`.
-  # Authoritative gate (local xwin is advisory — see
+  # windows-lint — native Windows clippy gate on `windows-latest`.
+  # Authoritative cross-target lint gate (local xwin is advisory — see
   # dev-flow-implementation-plan.md § 1.3.3).  Replaces the weekly
   # Tier 2 Windows job; Tier 2 drops that job in the same PR as Phase
   # 4b housekeeping.
+  #
+  # Phase W5.5 of windows-clippy-and-linux-cross-plan.md flipped this
+  # job from `cargo check` → `cargo clippy -- -D warnings`.  The
+  # Windows clippy backlog (W0 baseline: 1346 errors on `--all-targets
+  # -D warnings`) was driven to zero in PR #62 (W2–W5 cleanup) so the
+  # strict flag stack now passes natively on `windows-latest`.
   # ─────────────────────────────────────────────────────────────────────
-  windows-check:
-    name: Windows compile check
+  windows-lint:
+    name: Windows clippy
     runs-on: windows-latest
     needs: [classify, sanity]
     if: needs.classify.outputs.code == 'true'
@@ -455,7 +461,10 @@ jobs:
         with:
           shared-key: pr-fast-windows
 
-      - run: cargo check --workspace --all-targets --all-features --locked
+      # Strict clippy with `-D warnings` matches `just lint-ci-windows`
+      # locally (cargo-xwin variant).  Native Windows runs natively here;
+      # local xwin remains the developer-loop equivalent.
+      - run: cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────
   # required — sole branch-protection target (post-2026-04-23 cutover).
@@ -483,7 +492,7 @@ jobs:
       - test-build
       - tests
       - security
-      - windows-check
+      - windows-lint
     steps:
       - name: Gate on classify
         run: |
@@ -504,7 +513,7 @@ jobs:
             [test-build]='${{ needs.test-build.result }}'
             [tests]='${{ needs.tests.result }}'
             [security]='${{ needs.security.result }}'
-            [windows-check]='${{ needs.windows-check.result }}'
+            [windows-lint]='${{ needs.windows-lint.result }}'
           )
           fail=0
           for job in "${!R[@]}"; do
@@ -528,7 +537,7 @@ jobs:
   notify-failure:
     name: 🔔 Notify on Failure
     runs-on: ubuntu-latest
-    needs: [classify, file-size, fmt, sanity, clippy, docs, test-build, tests, security, windows-check, required]
+    needs: [classify, file-size, fmt, sanity, clippy, docs, test-build, tests, security, windows-lint, required]
     if: failure() && github.event_name != 'pull_request'
     permissions:
       contents: read

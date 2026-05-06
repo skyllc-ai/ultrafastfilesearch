@@ -175,13 +175,22 @@ check-windows:
 
 # Cross-platform compile check across all three supported targets.
 #
-# Runs native (host) + Linux (via Docker, through `lint-ci-linux`) +
-# Windows (via xwin, through `check-windows`).  Intended as a manual
-# "pre-PR sweep"; the pre-push hook runs the host + Windows subset only
-# (Linux-in-Docker is too slow for a commit-time gate — CI covers it).
+# Runs native (host) + Linux (via cargo-zigbuild when `zig` is on PATH,
+# else Docker `lint-ci-linux`) + Windows (via xwin, through
+# `check-windows`).  Intended as a manual "pre-PR sweep"; the pre-push
+# hook runs the host + Windows subset only (Linux is too slow for a
+# commit-time gate — CI covers it).
 #
-# Skips silently if a prerequisite tool (cargo-xwin, docker) is missing,
-# but reports which targets were exercised so you know the coverage.
+# Linux path order (Phase L1.4 of windows-clippy-and-linux-cross-plan.md):
+#   1. Prefer `just lint-ci-linux-zig` (native, ~10–20 s warm) when
+#      `zig` and `cargo-zigbuild` are both available.
+#   2. Fall back to `just lint-ci-linux` (Docker, authoritative —
+#      mirrors CI's `rust:latest` image exactly).
+#   3. Skip with a hint when neither is available.
+#
+# Skips silently if a prerequisite tool (cargo-xwin, zig, docker) is
+# missing, but reports which targets were exercised so you know the
+# coverage.
 check-all-targets:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -196,11 +205,15 @@ check-all-targets:
     else
         printf "\033[1;33m   ⚠  cargo-xwin not installed — skipping; install with: \033[0;36mcargo install cargo-xwin\033[0m\n\n"
     fi
-    printf "\033[0;36m   ── Linux x86_64-unknown-linux-gnu (Docker) ──\033[0m\n"
-    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    printf "\033[0;36m   ── Linux x86_64-unknown-linux-gnu ──\033[0m\n"
+    if command -v zig >/dev/null 2>&1 && command -v cargo-zigbuild >/dev/null 2>&1; then
+        printf "\033[0;36m   · using cargo-zigbuild (native, no Docker)\033[0m\n"
+        just lint-ci-linux-zig
+    elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        printf "\033[0;36m   · using Docker (authoritative; install \033[0;36mzig\033[0m + \033[0;36mcargo-zigbuild\033[0m for the faster path)\033[0m\n"
         just lint-ci-linux
     else
-        printf "\033[1;33m   ⚠  Docker not available — skipping; start Docker Desktop / colima / OrbStack\033[0m\n"
+        printf "\033[1;33m   ⚠  Neither zigbuild nor Docker available — skipping; install one via \033[0;36mjust install-dev-tools\033[0m\n"
     fi
     printf "\033[0;32m✅ Cross-platform check complete\033[0m\n"
 

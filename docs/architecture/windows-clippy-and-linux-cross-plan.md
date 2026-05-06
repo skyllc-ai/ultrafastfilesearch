@@ -13,9 +13,69 @@ UFFS — Windows Clippy + Linux Native Cross-Check Plan
 > [`release-automation-plan.md`](release-automation-plan.md)
 > (post-merge concerns).  This plan owns **making the super-strict
 > lint flow actually strict on every target we ship to** —
-> currently the strict `clippy` stack only runs natively on macOS
-> and in Docker for Linux; the Windows gate is `cargo check` only
-> (type-check, not lint), and no native macOS → Linux path exists.
+> originally the strict `clippy` stack only ran natively on macOS
+> and in Docker for Linux; the Windows gate was `cargo check` only
+> (type-check, not lint), and no native macOS → Linux path existed.
+
+## Status (2026-05-06)
+
+All phases now closed:
+
+| Phase | Lands in | Status |
+|---|---|---|
+| W0 baseline | (in-doc) | ✅ 2026-04-24 |
+| W1 xwin clippy recipes | PR #61 | ✅ |
+| W2 prod gate | PR #62 (W2–W5 cleanup) | ✅ v0.5.72 |
+| W3 test T1 mechanical | PR #62 | ✅ v0.5.72 |
+| W4 test T2 targeted | PR #62 | ✅ v0.5.72 |
+| W5 test T3 + CI/pre-push flip | PR #138 (this) | ✅ |
+| L1 zigbuild accelerator | PR #138 (this) | ✅ |
+| L2 CI parity verification | (deferred; CI Docker image already mirrors `rust:latest`) | ⏭ |
+| P1 plan codification | landed with W0/W1 | ✅ |
+
+The Windows clippy backlog (W0 baseline: 1346 errors on the
+authoritative `--all-targets -D warnings` pass) was driven to zero in
+PR #62 (v0.5.72).  PR #138 closes the loop by upgrading both gates
+that had been left on `cargo check`:
+
+- `pr-fast.yml::windows-check` (CI) → `pr-fast.yml::windows-lint`
+  running `cargo clippy --workspace --all-targets --all-features
+  --locked --no-deps -- -D warnings` natively on `windows-latest`.
+- `scripts/hooks/_lint_pre_push.sh` (local) → `just lint-ci-windows`
+  (cargo-xwin clippy with the same flag stack), ≈6 s warm.
+
+And adds the L1 zigbuild accelerator: `just lint-ci-linux-zig` runs
+the full Linux clippy gate natively on macOS via `cargo-zigbuild` (no
+Docker required) in ~50 s cold and sub-second warm.  The Docker
+`lint-ci-linux` path remains authoritative; zigbuild is a
+developer-loop accelerator only.
+
+Two non-obvious wrinkles surfaced during L1.3 empirical verification
+on this workspace and are now baked into the recipe + install path:
+
+1. **Zig version pin (0.14.1).**  Homebrew's `zig` formula tracks
+   latest (currently 0.16.x) which has unrelated incompat issues with
+   `psm`'s `src/arch/x86_64.s` ATT-syntax assembly.  zig 0.14.1
+   compiles `psm` cleanly (and works around a separate `blake3`
+   dialect-detection issue when paired with the rustflags override
+   below).  `just install-dev-tools` therefore downloads the official
+   ziglang.org tarball into `~/.local/zig/0.14.1/` and symlinks it
+   into `~/.cargo/bin/zig` so it shadows any `brew install zig`.
+
+2. **`target-cpu=native` rustflags override.**  `.cargo/config.toml`
+   sets `rustflags = ["-C", "target-cpu=native", …]` for the Linux
+   target so native Linux builds get host-tuned codegen.  On a macOS
+   host that resolves to `apple-m4`, which `cargo-zigbuild`
+   propagates to `zig cc -mcpu=native` alongside `-target
+   x86_64-linux-gnu`.  The combined flag set corrupts zig's
+   integrated-assembler dialect detection, producing thousands of
+   `unrecognized instruction mnemonic` errors when compiling the
+   x86_64 SIMD hand-written assembly that ships in `psm` and
+   `blake3`.  The recipe overrides
+   `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS` to pin
+   `target-cpu=x86-64-v3` (the same baseline `release.yml`'s Linux
+   matrix uses) for the cross-compile only — native Linux builds via
+   the Docker path are unaffected.
 
 ## 0. TL;DR
 
@@ -24,9 +84,9 @@ UFFS — Windows Clippy + Linux Native Cross-Check Plan
 | Strict clippy flag stack | `prod_flags` + `test_flags` + `-D warnings` (see `@/Users/rnio/Private/Github/UltraFastFileSearch/just/shared.just:28-30`) | **Unchanged** — zero flag churn; only the surface it runs on changes |
 | macOS host gate | `lint-prod` + `lint-tests` + `lint-ci` — strict ✅ | **Unchanged** |
 | Linux-in-Docker gate | `lint-ci-linux` — `-D warnings` ✅ | **Unchanged** (stays the authoritative Linux gate) |
-| Linux native from macOS | Blocked (`zstd-sys` `build.rs` needs a C cross-compiler Apple `cc` can't provide) | **`cargo-zigbuild`** accelerator — handles C deps via `zig cc`; Docker path stays authoritative |
-| Windows local (macOS → Win) | `cargo xwin check` only (type-check, no lint) — see `@/Users/rnio/Private/Github/UltraFastFileSearch/just/dev.just:52-55` | **`cargo xwin clippy`** with the same three-pass flag stack (prod / tests / CI) |
-| Windows CI | `cargo check` on `windows-latest` — see `@/Users/rnio/Private/Github/UltraFastFileSearch/.github/workflows/pr-fast.yml:436-458` | **`cargo clippy -- -D warnings`** on `windows-latest` |
+| Linux native from macOS | Blocked (`zstd-sys` `build.rs` needs a C cross-compiler Apple `cc` can't provide) → ✅ **`cargo-zigbuild`** accelerator now wired (`just lint-ci-linux-zig`) | **Done** — handles C deps via `zig cc`; Docker path stays authoritative |
+| Windows local (macOS → Win) | `cargo xwin check` only (type-check, no lint) → ✅ **pre-push now runs `just lint-ci-windows`** (cargo xwin clippy `-- -D warnings`) | **Done** — same three-pass flag stack |
+| Windows CI | `cargo check` on `windows-latest` → ✅ **`cargo clippy -- -D warnings`** on `windows-latest` (`pr-fast.yml::windows-lint`) | **Done** |
 | Windows clippy backlog (prod: `--lib --bins`) | **93** errors (measured W0, 2026-04-24) | **0** after Phase W2 |
 | Windows clippy backlog (tests: `--tests`) | **1,342** errors (measured W0) | **0** after Phases W3 – W5 |
 | Windows clippy backlog (ci: `--all-targets -D warnings`) | **1,346** errors (measured W0) | **0** after W5 |
@@ -361,21 +421,23 @@ If a single lint rule (typically `significant_drop_tightening`) accumulates > 3 
 
 ## 8. Acceptance criteria (rollup)
 
-- [ ] `just lint-prod-windows` + `just lint-tests-windows` + `just lint-ci-windows` exist and are green.
-- [ ] `just lint-ci-linux-zig` exists and green; Docker path unchanged and still green.
-- [ ] PR Fast CI `windows-lint` job runs `cargo clippy -- -D warnings` natively on `windows-latest`; `required` aggregator gates on it.
-- [ ] Zero blanket `#[allow]` added in this workstream; fewer than 20 `#[expect(…, reason = …)]` across the Windows surface (budget revised from 10 after W0 revealed cast-family FFI site density).
-- [ ] Every `#[expect]` has an inline justification comment referencing either the FFI signature it accommodates or an open ticket to remove it.
-- [ ] CONTRIBUTING.md + `dev-flow-implementation-plan.md` + `release-automation-plan.md` cross-reference this plan.
-- [ ] "New Windows code must be lint-clean from day 1" rule enforced at pre-push after W2 (prod) and at PR CI after W5 (full).
+- [x] `just lint-prod-windows` + `just lint-tests-windows` + `just lint-ci-windows` exist and are green.  (PR #61 / PR #62)
+- [x] `just lint-ci-linux-zig` exists and green; Docker path unchanged and still green.  (PR #138 — verified locally on macOS arm64 with `zig 0.14.1` (pinned, see Status section) + `cargo-zigbuild 0.22.3` against `x86_64-unknown-linux-gnu` target; ~50 s cold, sub-second warm.)
+- [x] PR Fast CI `windows-lint` job runs `cargo clippy -- -D warnings` natively on `windows-latest`; `required` aggregator gates on it.  (PR #138)
+- [x] Zero blanket `#[allow]` added in this workstream; fewer than 20 `#[expect(…, reason = …)]` across the Windows surface (budget revised from 10 after W0 revealed cast-family FFI site density).  (PR #62)
+- [x] Every `#[expect]` has an inline justification comment referencing either the FFI signature it accommodates or an open ticket to remove it.  (PR #62)
+- [x] CONTRIBUTING.md + `dev-flow-implementation-plan.md` + `release-automation-plan.md` cross-reference this plan.  (PR #138 refreshed CONTRIBUTING.md text for the post-W5 state.)
+- [x] "New Windows code must be lint-clean from day 1" rule enforced at pre-push after W2 (prod) and at PR CI after W5 (full).  (PR #138 — pre-push hook now runs `just lint-ci-windows`, CI runs strict `cargo clippy -- -D warnings`.)
 
 ## 9. Cross-references
 
 - **Strict lint flag stack source of truth**: `@/Users/rnio/Private/Github/UltraFastFileSearch/just/shared.just:28-30`
-- **Current Linux Docker gate**: `@/Users/rnio/Private/Github/UltraFastFileSearch/just/test.just:82-107`
-- **Current Windows xwin check gate (local)**: `@/Users/rnio/Private/Github/UltraFastFileSearch/just/dev.just:52-55`
-- **Current Windows CI gate**: `@/Users/rnio/Private/Github/UltraFastFileSearch/.github/workflows/pr-fast.yml:436-458`
-- **Pre-push hook runner**: `@/Users/rnio/Private/Github/UltraFastFileSearch/scripts/hooks/_lint_pre_push.sh`
+- **Linux Docker lint gate**: `@/Users/rnio/Private/Github/UltraFastFileSearch/just/test.just:82-107`
+- **Linux zigbuild lint gate (Phase L1, native macOS → Linux)**: `@/Users/rnio/Private/Github/UltraFastFileSearch/just/test.just:142-190`
+- **Windows xwin compile-check (local fast path)**: `@/Users/rnio/Private/Github/UltraFastFileSearch/just/dev.just:171-174`
+- **Windows xwin clippy gate (`lint-ci-windows`, mirrors CI's strict pass)**: `@/Users/rnio/Private/Github/UltraFastFileSearch/just/test.just:132-140`
+- **Windows CI gate (`pr-fast.yml::windows-lint`, native `windows-latest`)**: `@/Users/rnio/Private/Github/UltraFastFileSearch/.github/workflows/pr-fast.yml:429-467`
+- **Pre-push hook runner (calls `lint-ci-windows`)**: `@/Users/rnio/Private/Github/UltraFastFileSearch/scripts/hooks/_lint_pre_push.sh:316-318`
 - **Gate architecture**: `@/Users/rnio/Private/Github/UltraFastFileSearch/docs/architecture/dev-flow-implementation-plan.md`
 - **Release architecture**: `@/Users/rnio/Private/Github/UltraFastFileSearch/docs/architecture/release-automation-plan.md`
 - **Cargo-zigbuild upstream**: https://github.com/rust-cross/cargo-zigbuild

@@ -80,14 +80,18 @@
 #                 that drives change-classification (see below).
 #
 # Cross-platform coverage (soft-skipped when tool missing):
-#   * check-windows — `cargo xwin check --workspace --all-targets
-#                     --all-features --target x86_64-pc-windows-msvc`.
-#                     CI today only runs `ubuntu-22.04`, so this gate is
-#                     the only pre-PR check that exercises Windows-only
-#                     code (`#[cfg(windows)]` tests, benches, and
-#                     `std::os::windows::*` usage).  Catches type drift
-#                     between platforms in ~2–5 s warm.  Requires
-#                     `cargo-xwin` (installed by `just install-dev-tools`).
+#   * lint-ci-windows — `cargo xwin clippy --workspace --all-targets
+#                     --all-features --target x86_64-pc-windows-msvc
+#                     --no-deps -- -D warnings`.  Phase W5.6 of
+#                     `docs/architecture/windows-clippy-and-linux-cross-plan.md`
+#                     upgraded this from the type-only `cargo xwin check`
+#                     to the strict clippy stack so new Windows-gated
+#                     code is gated on the same surface that the
+#                     `pr-fast.yml::windows-lint` job enforces natively
+#                     on `windows-latest`.  Catches lint drift between
+#                     platforms in ~6 s warm (W1.4 measurement).
+#                     Requires `cargo-xwin` (installed by
+#                     `just install-dev-tools`).
 #
 # Optional jobs (soft-skipped when tool missing):
 #   * typos     — cheap spell-check across the repo.
@@ -303,11 +307,14 @@ if (( CODE_CHANGED )); then
     if (( DEP_CHANGED )); then
         run_seq "deny"    cargo deny check --hide-inclusion-graph
     fi
-    # Windows xwin is ADVISORY locally (see dev-flow-implementation-plan.md
-    # § 1.3.3) — PR-fast's native `windows-check` job is the authoritative
-    # gate.  Soft-skip with install hint when `cargo-xwin` is missing.
+    # Windows xwin clippy is ADVISORY locally (see dev-flow-implementation-plan.md
+    # § 1.3.3) — PR-fast's native `windows-lint` job on `windows-latest` is the
+    # authoritative gate.  Phase W5.6 upgraded this from `check-windows`
+    # (type-only) to `lint-ci-windows` (strict clippy with `-D warnings`)
+    # so new Windows-gated regressions surface locally before push.
+    # Soft-skip with install hint when `cargo-xwin` is missing.
     if command -v cargo-xwin >/dev/null 2>&1; then
-        run_seq "check-windows" just check-windows
+        run_seq "lint-ci-windows" just lint-ci-windows
     fi
 fi
 

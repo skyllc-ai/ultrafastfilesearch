@@ -110,13 +110,14 @@ lint-ci-linux:
 #
 # The Windows counterpart of `lint-prod` / `lint-tests` / `lint-ci` — mirrors
 # the exact same flag stack so the strict clippy rules apply identically on
-# Windows-gated code.  Until Phase W5 of
-# `docs/architecture/windows-clippy-and-linux-cross-plan.md` lands, these
-# recipes emit hundreds of lints (W0 baseline: prod=93, tests=1342, ci=1346)
-# and are therefore not yet wired into `lint-all` or the pre-push hook.
-# They exist as the authoritative surface the Windows backlog is being
-# converged against phase by phase.  Requires `cargo-xwin` + target
-# `x86_64-pc-windows-msvc` (both from `just install-dev-tools`).
+# Windows-gated code.  Phase W5 of
+# `docs/architecture/windows-clippy-and-linux-cross-plan.md` cleared the
+# backlog (W0 baseline: prod=93, tests=1342, ci=1346 → zero) so these
+# recipes now exit 0 against the workspace.  `lint-ci-windows` is wired
+# into the pre-push hook (W5.6) and `pr-fast.yml`'s `windows-lint` job
+# runs the equivalent native clippy on `windows-latest` (W5.5).  Requires
+# `cargo-xwin` + target `x86_64-pc-windows-msvc` (both from
+# `just install-dev-tools`).
 #
 # Ultra-strict Windows production linting (workspace lints on --lib --bins).
 lint-prod-windows:
@@ -128,13 +129,65 @@ lint-tests-windows:
     @printf "\033[0;34m🪟 Windows strict test lint (cargo xwin clippy)...\033[0m\n"
     cargo xwin clippy --workspace --tests --all-features --target x86_64-pc-windows-msvc --no-deps -- {{ test_flags }}
 
-# This is the gate the PR Fast CI `windows-check` job will adopt after Phase
-# W5 (see cross-target plan) completes.
-#
-# Windows CI lint gating (all-targets, deny warnings).
+# Authoritative cross-target lint gate for Windows — mirrors the strict
+# `cargo clippy --all-targets --all-features --no-deps -- -D warnings`
+# stack the `pr-fast.yml::windows-lint` job runs natively on
+# `windows-latest` (Phase W5.5).  Pre-push runs this via
+# `scripts/hooks/_lint_pre_push.sh` (Phase W5.6) so new Windows-gated
+# code is gated on the same surface CI enforces.
 lint-ci-windows:
     @printf "\033[0;34m🚨 Windows CI lint gating (cargo xwin clippy)...\033[0m\n"
     cargo xwin clippy --workspace --all-targets --all-features --target x86_64-pc-windows-msvc --no-deps -- -D warnings
+
+# Native macOS → Linux clippy sweep via cargo-zigbuild (Phase L1.2 of
+# `docs/architecture/windows-clippy-and-linux-cross-plan.md`).
+#
+# Faster inner-loop alternative to `lint-ci-linux` (which uses Docker).
+# The Docker path stays authoritative because it mirrors CI's exact
+# `rust:latest` image; this recipe is a developer accelerator that
+# avoids spinning up a container for quick local sweeps.
+#
+# How it works: `cargo-zigbuild`'s `clippy` subcommand sets up a `zig
+# cc` wrapper as the C cross-compiler so `cc-rs` (which drives
+# `zstd-sys` / `psm` / `blake3` build.rs files) produces native Linux
+# x86_64 ELF objects from a macOS host — no Docker, no Linux VM, no
+# separate cross-toolchain install.
+#
+# Pinned to `zig 0.14.1`.  Homebrew's `zig` formula tracks latest
+# (currently 0.16.x), which has unrelated incompat issues with `psm`
+# and `blake3` x86_64 hand-written SIMD assembly that are not worth
+# working around at this layer.  `just install-dev-tools` installs
+# 0.14.1 from the official ziglang.org tarball into `~/.local/zig/`
+# and symlinks it into `~/.cargo/bin/`.
+#
+# Requires: `zig 0.14.1` and `cargo-zigbuild` (both installed by
+# `just install-dev-tools` on macOS hosts).
+lint-ci-linux-zig:
+    @printf "\033[0;34m🦎 Linux x86_64 clippy via cargo-zigbuild (native macOS → Linux)...\033[0m\n"
+    @if ! command -v zig >/dev/null 2>&1; then printf "\033[0;31m❌ zig not found — install with: \033[0;36mjust install-dev-tools\033[0m\n"; exit 1; fi
+    @if ! command -v cargo-zigbuild >/dev/null 2>&1; then printf "\033[0;31m❌ cargo-zigbuild not found — install with: \033[0;36mjust install-dev-tools\033[0m\n"; exit 1; fi
+    # Override `.cargo/config.toml`'s `target-cpu=native` rustflags for
+    # the cross-compile target.  On macOS the host CPU is `apple-m4`
+    # (or similar arm64 codename) which cargo-zigbuild propagates to
+    # `zig cc -mcpu=native`.  Combined with `-target x86_64-linux-gnu`
+    # this corrupts the integrated assembler's dialect detection for
+    # hand-written x86_64 SIMD assembly in transitive deps (`psm`'s
+    # `src/arch/x86_64.s`, `blake3`'s `c/blake3_*_x86-64_unix.S`),
+    # producing thousands of `unrecognized instruction mnemonic` /
+    # `invalid operand` errors that look like syntax issues but are
+    # really architecture-confusion.  Pin to `x86-64-v3` (the same
+    # baseline `release.yml`'s Linux matrix uses) so behaviour matches
+    # CI as closely as possible.
+    #
+    # Note: invoke the cargo-zigbuild binary directly (not via the `cargo
+    # zigbuild` subcommand-plugin pattern).  `cargo zigbuild` always
+    # routes into the `zigbuild` build subcommand and rejects further
+    # subcommand args; the binary itself exposes `clippy` / `check` /
+    # `test` / etc. as proper subcommands that wire up the same zig-cc
+    # linker shim cargo-zigbuild's `zigbuild` does.
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C target-cpu=x86-64-v3 -C link-arg=-Wl,--gc-sections" \
+        cargo-zigbuild clippy --workspace --all-targets --all-features --target x86_64-unknown-linux-gnu --no-deps -- -D warnings
+    @printf "\033[0;32m✅ Linux clippy gate (zigbuild) passed\033[0m\n"
 
 # Host-only on purpose — Windows (`lint-*-windows`) and Linux-in-Docker
 # (`lint-ci-linux`) are separate recipes.  They will be wired into this
@@ -198,20 +251,78 @@ install-dev-tools:
     else
         printf "   \033[0;32m✓\033[0m taplo already installed\n"
     fi
-    # cargo-xwin is required by the pre-commit / pre-push `check-windows`
-    # gate.  Optional on Windows hosts (where `cargo check` is native), but
-    # effectively mandatory on macOS / Linux dev machines since CI only
-    # runs Ubuntu and cannot catch Windows-specific compile errors.
+    # cargo-xwin is required by the pre-commit / pre-push `lint-ci-windows`
+    # gate (Phase W5.6).  Optional on Windows hosts (where `cargo clippy`
+    # is native), but effectively mandatory on macOS / Linux dev machines
+    # since CI's authoritative `windows-lint` job runs on `windows-latest`
+    # and we need the local mirror to catch issues before PR.
     if ! command -v cargo-xwin >/dev/null 2>&1; then
         cargo install --locked cargo-xwin
     else
         printf "   \033[0;32m✓\033[0m cargo-xwin already installed\n"
     fi
     # Ensure the Windows cross-compilation target is available for
-    # `cargo xwin check`.  `rustup target add` is idempotent.
+    # `cargo xwin clippy`.  `rustup target add` is idempotent.
     rustup target add x86_64-pc-windows-msvc >/dev/null 2>&1 || true
     if rustup target list --installed 2>/dev/null | grep -q '^x86_64-pc-windows-msvc$'; then
         printf "   \033[0;32m✓\033[0m x86_64-pc-windows-msvc target installed\n"
+    fi
+    # zig + cargo-zigbuild back the `lint-ci-linux-zig` accelerator
+    # (Phase L1).  Optional but recommended on macOS hosts — lets
+    # contributors run the Linux clippy sweep natively (no Docker)
+    # for fast inner-loop checks.  The Docker `lint-ci-linux` path
+    # remains authoritative; this is a dev-loop accelerator only.
+    #
+    # zig is pinned to 0.14.1 (Homebrew's `zig` formula tracks latest,
+    # currently 0.16.x, which has incompat issues with `psm` and
+    # `blake3` x86_64 hand-written SIMD assembly that are not worth
+    # working around at this layer).  Install via the official
+    # ziglang.org tarball; symlink onto PATH via `~/.cargo/bin/zig`.
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        ZIG_PIN="0.14.1"
+        ZIG_DIR="$HOME/.local/zig/${ZIG_PIN}"
+        ZIG_LINK="$HOME/.cargo/bin/zig"
+        ZIG_OK=0
+        if [[ -x "$ZIG_LINK" ]] && "$ZIG_LINK" version 2>/dev/null | grep -qx "$ZIG_PIN"; then
+            ZIG_OK=1
+        fi
+        if [[ "$ZIG_OK" == "1" ]]; then
+            printf "   \033[0;32m✓\033[0m zig ${ZIG_PIN} already installed\n"
+        else
+            ZIG_ARCH="$(uname -m)"
+            case "$ZIG_ARCH" in arm64) ZIG_ARCH="aarch64";; esac
+            ZIG_TARBALL="zig-${ZIG_ARCH}-macos-${ZIG_PIN}.tar.xz"
+            ZIG_URL="https://ziglang.org/download/${ZIG_PIN}/${ZIG_TARBALL}"
+            printf "   \033[0;36m·\033[0m installing zig ${ZIG_PIN} from ${ZIG_URL}\n"
+            mkdir -p "$HOME/.local/zig"
+            tmpdir="$(mktemp -d)"
+            (
+                cd "$tmpdir" && \
+                curl -fL --retry 5 --retry-delay 3 "$ZIG_URL" -o "$ZIG_TARBALL" && \
+                tar -xJf "$ZIG_TARBALL" && \
+                rm -rf "$ZIG_DIR" && \
+                mv "zig-${ZIG_ARCH}-macos-${ZIG_PIN}" "$ZIG_DIR" && \
+                xattr -dr com.apple.quarantine "$ZIG_DIR" 2>/dev/null || true
+            )
+            rm -rf "$tmpdir"
+            ln -sf "$ZIG_DIR/zig" "$ZIG_LINK"
+            if "$ZIG_LINK" version 2>/dev/null | grep -qx "$ZIG_PIN"; then
+                printf "   \033[0;32m✓\033[0m zig ${ZIG_PIN} installed at \033[0;36m${ZIG_DIR}\033[0m (linked from \033[0;36m${ZIG_LINK}\033[0m)\n"
+            else
+                printf "   \033[0;31m✗\033[0m zig ${ZIG_PIN} install failed; check ${ZIG_URL} manually\n"
+            fi
+        fi
+        if ! command -v cargo-zigbuild >/dev/null 2>&1; then
+            cargo install --locked cargo-zigbuild
+        else
+            printf "   \033[0;32m✓\033[0m cargo-zigbuild already installed\n"
+        fi
+        # Ensure the Linux cross-compilation target is available for
+        # `cargo-zigbuild clippy --target x86_64-unknown-linux-gnu`.
+        rustup target add x86_64-unknown-linux-gnu >/dev/null 2>&1 || true
+        if rustup target list --installed 2>/dev/null | grep -q '^x86_64-unknown-linux-gnu$'; then
+            printf "   \033[0;32m✓\033[0m x86_64-unknown-linux-gnu target installed\n"
+        fi
     fi
     if ! command -v reuse >/dev/null 2>&1; then
         printf "   \033[1;33m!\033[0m reuse not found — install with: \033[0;36mpipx install reuse\033[0m\n"

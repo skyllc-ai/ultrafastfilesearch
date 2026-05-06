@@ -17,8 +17,9 @@
 #
 # Windows xwin check was removed from this gate in Phase 2 of
 # dev-flow-implementation-plan.md § 2.4 because its 40-90 s cold cost
-# violated the T1 budget.  xwin lives at pre-push (advisory) and
-# `pr-fast.yml` (authoritative native `windows-check` job).
+# violated the T1 budget.  xwin lives at pre-push (advisory, upgraded
+# to strict clippy in Phase W5.6 of windows-clippy-and-linux-cross-plan.md)
+# and `pr-fast.yml` (authoritative native `windows-lint` job).
 #
 # Soft-skips missing optional tools (typos, taplo, reuse) with a
 # one-line install hint so new contributors are not blocked before
@@ -126,7 +127,8 @@ fi
 # Windows cross-check (cargo-xwin) was REMOVED from pre-commit in
 # Phase 2 of dev-flow-implementation-plan.md § 2.4 because its 40-90 s
 # cold cost violates the < 15 s T1 budget.  xwin lives at pre-push
-# (advisory) and `pr-fast.yml` (authoritative native `windows-check`).
+# (advisory — strict clippy after Phase W5.6) and `pr-fast.yml`
+# (authoritative native `windows-lint` job).
 if has_staged_rs; then
     spawn "lint-prod"    just lint-prod
     spawn "lint-tests"   just lint-tests

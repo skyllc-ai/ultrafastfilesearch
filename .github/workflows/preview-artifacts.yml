@@ -97,7 +97,7 @@ jobs:
   #
   # Budget: 120 × 15 s = 30 min.  PR Fast CI on a full-matrix run
   # (infra-change or rust-change) can take 20–25 min cold (test-build
-  # → tests sequential + windows-check in parallel).  The original
+  # → tests sequential + windows-lint in parallel).  The original
   # 10-min cap was calibrated for docs-only short-circuit PRs and
   # timed out on the first real infra-change preview attempt
   # (2026-04-23; see §10.5 of the plan doc).  Don't drop this below
