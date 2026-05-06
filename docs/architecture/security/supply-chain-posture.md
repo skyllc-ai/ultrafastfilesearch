@@ -70,7 +70,7 @@ control lands or a deferred item is promoted.
 | Import refresh | `cargo-vet-refresh.yml` | Weekly `cargo vet regenerate imports` → PR | Mondays 08:00 UTC | GitHub schedules |
 | Structural audit | `cargo-geiger` via `just geiger` | unsafe / build.rs / proc-macro footprint | On-demand (monthly) | No |
 | Semantic SAST | `codeql.yml` (Rust, public preview) | Dataflow-based bug patterns (path / SQL / regex injection, crypto misuse, unvalidated redirects) | PR + Tuesdays 06:30 UTC | Informational (not a required gate yet) |
-| Windows regression check | Tier 2 `windows-check` job | `cargo check --workspace --all-features --all-targets` on `windows-latest` | Weekly (Mondays 06:00 UTC) | GitHub schedules |
+| Windows regression check | `pr-fast.yml::windows-lint` job | `cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D warnings` on `windows-latest` | **Every PR** (was weekly Tier 2 pre-PR-#138; now PR-time) | GitHub-required-check |
 | Human review for minor/major bumps | Dependabot PRs for minor + major + security advisories are NOT auto-merged | Minor / major / security-advisory bumps | Every Dependabot PR | GitHub enforces |
 | Gated auto-merge for patch bumps | `dependabot-auto-merge.yml` | Only `version-update:semver-patch` bumps with NO active security advisory, gated on all required checks (cargo-deny, cargo-vet, clippy, tests, doc-tests, file-size policy) + branch-protection rules (signed commits, required reviews) | Every Dependabot PR | Gates enforced via required checks + branch protection |
 
@@ -85,7 +85,7 @@ control lands or a deferred item is promoted.
 | Malicious `build.rs` / proc-macro executing in CI | **High** | Dependabot PRs run with **read-only `GITHUB_TOKEN`** + no repo secrets (GitHub default); `permissions:` block denies writes elsewhere; `cargo-vet` imports from Mozilla/Google are the primary vetting signal for new build-script crates | **Medium** — blast radius bounded (runner has no sensitive tokens); new unaudited crate bumps are caught by `cargo vet check`, forcing a conscious decision |
 | Release binary swapped on GitHub Release page | Medium | SHA256 `CHECKSUMS.txt` + SLSA build-provenance attestation via `gh attestation verify` | Low — requires attacker to also swap attestation, which is stored in GitHub Attestations API (separate audit trail) |
 | SBOM swapped on GitHub Release page (misleading component inventory) | Medium | `sbom-*.cdx.json` files are covered by the same SLSA attestation as the binaries — `gh attestation verify` on the SBOM matches only if the bytes match this workflow run | Low — inherits the binary-swap residual |
-| Windows-only build regression lands on main and only surfaces at release time | Low | Tier 2 `windows-check` job runs weekly on `windows-latest`; `cargo check --workspace --all-features --all-targets` catches type / link errors before `just ship` does | Low — up to a week of lag between merge and detection (acceptable given human-review gating on every merge) |
+| Windows-only build regression lands on main and only surfaces at release time | Low | `pr-fast.yml::windows-lint` job runs strict `cargo clippy -- -D warnings` natively on `windows-latest` on every PR (post-PR-#138 / Phase W5.5).  `cargo clippy` does a full type-check + executes every dep's `build.rs`, so any Windows-only build regression is caught at PR-time | Very low — minutes-scale detection latency, hard-gates merge to `main` |
 | Semantic bug class (path / SQL / regex injection, crypto misuse) slipping past clippy | Medium | `codeql.yml` Rust SAST on every PR + weekly baseline | Medium — Rust support is in public preview; false-negative rate unknown |
 | Rollback attack (release an older vulnerable commit) | Medium | `commit_sha` ancestor-of-main guard in `release.yml` | Low |
 | Rogue `v*` tag push by write-access user | Low | `tag-protection-v-prefix` ruleset blocks deletion + update | **Medium on creation** — GitHub API does not support `Integration` bypass for user-owned repos, so `creation` rule not enforced (bot couldn't push tags if it were).  Partial protection only. |
@@ -355,7 +355,7 @@ on `main` at branch-open time.
 - `supply-chain/audits.toml` — our local audit records (starts empty)
 - `supply-chain/imports.lock` — pinned upstream audit snapshots
 - `.github/workflows/pr-fast.yml` — required per-PR gate (fmt, clippy, docs, tests, **windows-lint** [native `cargo clippy -- -D warnings` on `windows-latest` post-W5.5], `cargo-deny` + `cargo-vet check` in `security` job) (Tier 1)
-- `.github/workflows/tier-2.yml` — weekly coverage / udeps / Miri / Windows compile check
+- `.github/workflows/tier-2.yml` — weekly coverage / udeps / Miri (Windows compile check removed in PR #138 — superseded by `pr-fast.yml::windows-lint`'s per-PR strict clippy)
 - `.github/workflows/release.yml` — SLSA attestation + ancestor check + CycloneDX SBOM
 - `.github/workflows/codeql.yml` — Rust SAST (public preview)
 - `.github/workflows/dependabot-review.yml` — dep-tree growth annotation

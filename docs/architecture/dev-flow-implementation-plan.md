@@ -1039,7 +1039,10 @@ jobs:
   `PR Fast CI / required` aggregate.
 - `tier-2.yml` → **keep as-is** except: drop `windows-check` job
   (now in `pr-fast.yml`).  Tier 2 stays the deep-assurance lane
-  (coverage, miri, udeps).
+  (coverage, miri, udeps).  **DONE** in PR #138 (W5 follow-on) once
+  `pr-fast.yml::windows-lint` flipped to strict clippy and strictly
+  subsumed Tier 2's weekly compile-check; tombstone comment in
+  `tier-2.yml` documents the removal.
 
 ### 2.6 `scripts/ci/ci-pipeline.rs` → workspace binary `scripts/ci-pipeline/`
 
@@ -1236,7 +1239,7 @@ green**.
 - Create `preview-artifacts.yml` (stub, artifact build only, no smoke
   runner yet — that's Phase 5).
 - Keep `ci.yml` intact; both workflows run in parallel for one week.
-- Update `tier-2.yml` — drop `windows-check` job (now in `pr-fast.yml`).
+- Update `tier-2.yml` — drop `windows-check` job (now in `pr-fast.yml`).  **DONE** in PR #138 (W5 follow-on, see above).
 - Confirm `.github/dependabot.yml` tracks both new workflows.
 
 **Validation** (each item MUST pass before Phase 4 cutover):

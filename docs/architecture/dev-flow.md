@@ -153,7 +153,7 @@ and `.github/workflows/tier-2.yml` (all as of commit `185ed8825`).
 | test COMPILE (`nextest --no-run`) | — | ✅ | ✅ (test-build) | — |
 | test EXECUTE (`nextest run`) | — | **❌** | ✅ | via coverage |
 | **`cargo test --doc`** | — | **❌** | ✅ | — |
-| Windows xwin clippy (`lint-ci-windows`, `cargo xwin clippy -- -D warnings`) | — (Phase 2 budget cap) | ✅ if xwin (advisory; W5.6 upgraded from `check` to `clippy`) | ✅ native (`pr-fast.yml::windows-lint`, W5.5) | ✅ native (Tier 2 `windows-check`, redundant post-W5) |
+| Windows xwin clippy (`lint-ci-windows`, `cargo xwin clippy -- -D warnings`) | — (Phase 2 budget cap) | ✅ if xwin (advisory; W5.6 upgraded from `check` to `clippy`) | ✅ native (`pr-fast.yml::windows-lint`, W5.5) | — (Tier 2 `windows-check` removed in PR #138, strictly subsumed by T3 `windows-lint`) |
 | `taplo fmt --check` | ✅ if *.toml staged | — | — | — |
 | `typos` | ✅ optional | ✅ optional | — | — |
 | `reuse lint` (SPDX) | ✅ optional | ✅ optional | — | — |

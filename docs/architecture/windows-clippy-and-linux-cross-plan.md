@@ -29,6 +29,7 @@ All phases now closed:
 | W3 test T1 mechanical | PR #62 | ✅ v0.5.72 |
 | W4 test T2 targeted | PR #62 | ✅ v0.5.72 |
 | W5 test T3 + CI/pre-push flip | PR #138 (this) | ✅ |
+| W5 follow-on — Tier 2 `windows-check` removal | PR #138 (this) | ✅ |
 | L1 zigbuild accelerator | PR #138 (this) | ✅ |
 | L2 CI parity verification | (deferred; CI Docker image already mirrors `rust:latest`) | ⏭ |
 | P1 plan codification | landed with W0/W1 | ✅ |
@@ -43,6 +44,15 @@ that had been left on `cargo check`:
   --locked --no-deps -- -D warnings` natively on `windows-latest`.
 - `scripts/hooks/_lint_pre_push.sh` (local) → `just lint-ci-windows`
   (cargo-xwin clippy with the same flag stack), ≈6 s warm.
+
+PR #138 also drops the now-redundant Tier 2 `windows-check` job
+(plan §5 follow-on).  Pre-W5.5 it ran `cargo check --workspace
+--all-features --all-targets` weekly on `windows-latest` as the
+backstop catching Windows-only regressions before `just ship`.
+With `windows-lint` now running strict clippy on every PR (which
+does a full type-check + executes every dep's `build.rs`), the
+weekly job became strictly redundant and was tombstoned with an
+inline comment in `tier-2.yml` explaining the removal.
 
 And adds the L1 zigbuild accelerator: `just lint-ci-linux-zig` runs
 the full Linux clippy gate natively on macOS via `cargo-zigbuild` (no

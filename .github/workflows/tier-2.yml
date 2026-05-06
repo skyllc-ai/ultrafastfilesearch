@@ -113,57 +113,19 @@ jobs:
           verbose: true
 
   # ══════════════════════════════════════════════════════════════════════════
-  # Windows Compile Check — catches Windows-only build regressions between
-  # releases.  Runs NATIVELY on `windows-latest` (not Linux → MSVC cross),
-  # so it picks up any breakage that would otherwise first surface 10-15
-  # minutes into a `just ship` release build.  `cargo check` (not `build`)
-  # because we only care about type-checks / linking metadata; full builds
-  # happen in `release.yml`.
+  # Tier 2 / Windows Compile Check — REMOVED by PR #138 (Phase W5.5 of
+  # `docs/architecture/windows-clippy-and-linux-cross-plan.md`).
   #
-  # History: an earlier `Tier 2 / Windows Cross-Check` cross-compiled from
-  # ubuntu-latest and permanently red-X'd Tier 2 because ubuntu has no MSVC
-  # linker / import libraries (see
-  # `docs/xwin-msvc-rlib-size-root-cause-and-workarounds.md`).  Running on
-  # `windows-latest` sidesteps that entirely.
-  # ══════════════════════════════════════════════════════════════════════════
-  windows-check:
-    name: Tier 2 / Windows Compile Check
-    runs-on: windows-latest
-    timeout-minutes: 60
-    env:
-      # Mirror the release-time Windows rustflags so the check runs under
-      # the same compilation conditions as a real release build.  If a
-      # target-cpu bump starts breaking compilation, this job fails
-      # BEFORE `just ship` does.
-      RUSTFLAGS: "-C target-cpu=x86-64-v3"
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Install pinned nightly (from rust-toolchain.toml)
-        run: rustup show
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          # Dedicated cache key — the Linux Tier 2 jobs below have fragments
-          # that make the default key hash to something different on Windows
-          # anyway, but be explicit so a future refactor does not cross the
-          # streams.
-          shared-key: tier-2-windows-check
-          # Persist a partial cache even if the job fails — runner
-          # pre-emption (SIGTERM) mid-compile is the most common Tier 2
-          # failure mode (issue #83), so the next attempt should resume
-          # from the partially-built compile graph.
-          cache-on-failure: 'true'
-
-      - name: cargo check --workspace --all-features
-        # --all-features to exercise every feature-gated path that only
-        # compiles on Windows (e.g. live MFT / USN / IOCP code paths).
-        # --all-targets so test-only Windows code is also type-checked.
-        # --locked per §2.8 so lockfile drift surfaces as a CI failure
-        # rather than silently pulling in a newer patch version.
-        run: cargo check --locked --workspace --all-features --all-targets
+  # `pr-fast.yml::windows-lint` now runs `cargo clippy --workspace
+  # --all-targets --all-features --locked --no-deps -- -D warnings`
+  # natively on `windows-latest` on EVERY PR.  `cargo clippy` does a
+  # full type-check + executes every dep's `build.rs`, so any
+  # Windows-only build regression that the old weekly `cargo check`
+  # would have caught is now caught at PR-time — minutes after the bad
+  # commit lands on the PR branch instead of up to 7 days later.
+  # Strict clippy on top is a bonus.  Tier 2 stays as the
+  # deep-assurance lane for things genuinely too expensive for
+  # PR-time: coverage, miri, udeps.
 
   build-validation:
     name: Tier 2 / Build Validation
@@ -277,7 +239,7 @@ jobs:
   tier-2-summary:
     name: Tier 2 / Summary
     runs-on: ubuntu-latest
-    needs: [file-size-policy, coverage, build-validation, udeps, miri, windows-check]
+    needs: [file-size-policy, coverage, build-validation, udeps, miri]
     if: always()
     timeout-minutes: 5
     steps:
@@ -287,8 +249,7 @@ jobs:
                 "${{ needs.coverage.result }}" == "success" && \
                 "${{ needs.build-validation.result }}" == "success" && \
                 "${{ needs.udeps.result }}" == "success" && \
-                "${{ needs.miri.result }}" == "success" && \
-                "${{ needs.windows-check.result }}" == "success" ]]; then
+                "${{ needs.miri.result }}" == "success" ]]; then
             echo "✅ All Tier 2 nightly checks passed!"
           else
             echo "❌ Some Tier 2 nightly checks failed - review above"
@@ -297,17 +258,23 @@ jobs:
 
       - name: Create summary
         if: success()
+        # Single grouped redirect (SC2129) with the env-var quoted (SC2086)
+        # — one pipe to the GITHUB_STEP_SUMMARY file instead of nine, and
+        # safe against word-splitting if `$GITHUB_STEP_SUMMARY` ever
+        # contains a space (it doesn't on hosted runners today, but
+        # quoting is the defensible default).
         run: |
-          echo "## ✅ UFFS Tier 2 Nightly CI Passed" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| File size policy | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| Coverage | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build validation | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| cargo-udeps | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| Miri | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| Windows Compile Check | ✅ |" >> $GITHUB_STEP_SUMMARY
+          {
+              echo "## ✅ UFFS Tier 2 Nightly CI Passed"
+              echo ""
+              echo "| Check | Status |"
+              echo "|-------|--------|"
+              echo "| File size policy | ✅ |"
+              echo "| Coverage | ✅ |"
+              echo "| Build validation | ✅ |"
+              echo "| cargo-udeps | ✅ |"
+              echo "| Miri | ✅ |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Failure Notification — opens a GitHub Issue on any job failure
@@ -316,7 +283,7 @@ jobs:
   notify-failure:
     name: 🔔 Notify on Failure
     runs-on: ubuntu-latest
-    needs: [file-size-policy, coverage, build-validation, udeps, miri, windows-check]
+    needs: [file-size-policy, coverage, build-validation, udeps, miri]
     if: failure()
     # §2.8: every job caps its runtime.  Cheap notifier — 2 min is
     # generous for a single API call round-trip + JSON formatting.

@@ -132,8 +132,8 @@ for the operator-facing validation flow.
 Closes Phases **W5** and **L1** of
 [`docs/architecture/windows-clippy-and-linux-cross-plan.md`](docs/architecture/windows-clippy-and-linux-cross-plan.md).
 Every plan phase (W0 baseline, W1 recipes, W2 prod, W3-W5 tests, W5.5
-CI flip, W5.6 pre-push flip, L1 zigbuild) now ✅; §8 acceptance items
-all checked.
+CI flip, W5.6 pre-push flip, W5 follow-on Tier-2 redundancy cleanup,
+L1 zigbuild) now ✅; §8 acceptance items all checked.
 
 - **`pr-fast.yml::windows-check` → `windows-lint`** (Phase W5.5).
   Renamed the job and switched the command from `cargo check` to
@@ -178,13 +178,25 @@ all checked.
      exposes `clippy` / `check` / `test` as proper subcommands)
      rather than `cargo zigbuild clippy` (cargo plugin form), which
      always routes into the `zigbuild` build subcommand.
+- **`tier-2.yml::windows-check` REMOVED** (W5 follow-on, plan §5).
+  Pre-W5.5 it ran `cargo check --workspace --all-features
+  --all-targets` weekly on `windows-latest` as the backstop catching
+  Windows-only regressions before `just ship`.  With `windows-lint`
+  now running strict clippy on every PR (which does a full
+  type-check + executes every dep's `build.rs`), the weekly job
+  became strictly redundant.  Tombstoned with an inline comment in
+  `tier-2.yml` explaining the removal; references in the
+  `tier-2-summary` and `notify-failure` `needs:` lists + the success
+  conditional + the summary-table line all dropped.  Tier 2 stays
+  the deep-assurance lane (coverage, miri, udeps).
 - **Docs**: `CONTRIBUTING.md` four-layer table + cross-platform
   section refreshed for the new gate names + flag stack;
   `windows-clippy-and-linux-cross-plan.md` gets a `Status (2026-05-06)`
-  header with every phase ✅, both gotchas documented, §8 acceptance
-  criteria all checked, §9 cross-references refreshed;
-  `dev-flow-implementation-plan.md` + `dev-flow.md` + `supply-chain-posture.md`
-  updated for the post-W5 job names.
+  header with every phase ✅ (including the Tier 2 follow-on),
+  both L1 gotchas documented, §8 acceptance criteria all checked,
+  §9 cross-references refreshed; `dev-flow-implementation-plan.md`
+  + `dev-flow.md` + `supply-chain-posture.md` updated for the
+  post-W5 job names and the Tier 2 removal.
 
 ### Fixed — Dependabot pipeline (PR #126)
 
