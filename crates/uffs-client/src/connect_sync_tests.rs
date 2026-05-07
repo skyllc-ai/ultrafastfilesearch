@@ -310,6 +310,62 @@ fn await_ready_short_circuits_when_cached_status_is_ready() {
     );
 }
 
+/// Regression pin — 2026-05-07 Phase 7 soak: a non-I/O `status`
+/// error (here a JSON-RPC error → `ClientError::Protocol`) must
+/// **not** abort `await_ready`; it must keep polling until the
+/// deadline.
+///
+/// **Background.**  The 2026-05-07 Phase 7 24-h soak attempt failed
+/// with `Daemon did not become ready in time / request timed out`
+/// even though the captured `daemon.log` showed the daemon up and
+/// IPC-listening 1.3 s after spawn.  Root cause: the sync
+/// `await_ready` matched `Err(other) => return Err(other)`, so a
+/// single transient error during the Windows `AF_UNIX` socket-bind
+/// race aborted the readiness probe while the daemon was healthy.
+///
+/// **Contract pinned here.**  Any non-Ready, non-success outcome
+/// (Loading status, I/O error, connection closed, RPC timeout, or
+/// a transient protocol error) keeps the loop running until the
+/// `timeout` deadline.  The async sibling at
+/// `connect.rs::await_ready` has always behaved this way via
+/// `PollOutcome::OtherError`; this test pins the sync path's
+/// alignment.
+///
+/// **Test mechanics.**  We canned-feed a JSON-RPC error response
+/// to the first poll, which the client surfaces as
+/// `ClientError::Protocol("...")` (per `connect_sync.rs::send_request`
+/// line 408 in the async sibling — same shape in the sync path).
+/// Subsequent polls hit EOF on the cursor and surface as
+/// `ConnectionClosed` (already retried).  Pre-fix the very first
+/// poll's `Protocol` error would have returned immediately; post-fix
+/// the loop continues until the 120 ms deadline elapses and we get
+/// the canonical `ClientError::Timeout` instead.
+#[test]
+fn await_ready_retries_on_protocol_error_until_deadline() {
+    // JSON-RPC error response → `send_request` returns
+    // `Err(ClientError::Protocol("...message..."))`.  Pre-fix this
+    // would have bubbled out of `await_ready` immediately; post-fix
+    // it must be treated as transient and retried.
+    let canned = br#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"transient mid-handshake error"}}
+"#;
+    let (mut client, _writer) = client_with_canned_response(canned);
+
+    let outcome = client.await_ready(core::time::Duration::from_millis(120));
+
+    // Critical assertion: the outcome is `Timeout`, NOT `Protocol`.
+    // Pre-fix this test fails with `Err(Protocol("transient ..."))`
+    // because the very first poll's protocol error short-circuits the
+    // loop.  Post-fix the loop swallows the protocol error, retries
+    // (subsequent reads hit EOF → `ConnectionClosed`, already retried
+    // pre-fix), and bails with `Timeout` only after the 120 ms
+    // deadline elapses.
+    assert!(
+        matches!(outcome, Err(ClientError::Timeout)),
+        "non-Ready, non-success status results must keep polling \
+         until the deadline; got {outcome:?}",
+    );
+}
+
 /// Regression pin — 2026-04-19: when `cached_status` is not
 /// `Ready` (e.g. `Loading`), `await_ready` must fall through to its
 /// original polling path rather than short-circuit on the stale
