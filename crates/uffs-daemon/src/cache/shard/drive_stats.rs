@@ -70,6 +70,29 @@ pub(crate) struct DriveStats {
     /// `last_decay_ms` so the elapsed-time arithmetic in
     /// `decay_ema` is deterministic.
     pub(super) last_decay_ms: AtomicU64,
+    /// Snapshot of [`Self::queries_total`] at the last
+    /// [`Self::decay_ema`] call.  Used to compute the per-second
+    /// query rate over the elapsed tick window so the EMA can
+    /// **integrate new queries**, not just decay.
+    ///
+    /// Phase 6 fix (2026-05-07 24-h soak finding): the original
+    /// docstring on [`Self::decay_ema`] promised a "separate path"
+    /// that fed `mark_query_at` bumps into the EMA via the
+    /// controller tick.  That path was never built — `decay_ema`
+    /// only ever decayed, so `rate_ema_micro_per_s` stayed at `0`
+    /// regardless of search load.  The Phase 6 24-h `min_tier`
+    /// soak captured `rate_qpm=0.0` across **all 2882
+    /// `chosen_ttl_sec` events for the queried drive C** — the
+    /// adaptive bonus formula in `crate::cache::policy::warm_ttl`
+    /// could never engage in production.  Tracking this delta
+    /// alongside `last_decay_ms` lets `decay_ema` reconstruct the
+    /// rate sample without the search hot path having to do
+    /// per-query EMA arithmetic.
+    ///
+    /// Visibility: `pub(super)` — read by the proptest harness
+    /// in `cache/shard/tests.rs` for the EMA-integration regression
+    /// test pinning the Phase 6 24-h soak finding.
+    pub(super) last_decay_queries_total: AtomicU64,
     /// Unix-millis timestamp of the last [`Self::mark_query_at`] call.
     /// Zero means "never queried" — the Phase-3 demote controller in
     /// `crate::cache::registry::ShardRegistry::demote_idle_shards`
@@ -109,6 +132,7 @@ impl DriveStats {
             queries_total: AtomicU64::new(0),
             rate_ema_micro_per_s: AtomicU64::new(0),
             last_decay_ms: AtomicU64::new(0),
+            last_decay_queries_total: AtomicU64::new(0),
             last_query_at_ms: AtomicU64::new(0),
             promotions_total: AtomicU64::new(0),
         }
@@ -222,19 +246,41 @@ impl DriveStats {
         self.queries_total.load(Ordering::Relaxed)
     }
 
-    /// Apply exponential decay to the EMA based on elapsed time since
-    /// the last call and return the new EMA in queries/sec.
+    /// Sample the EMA against `now_ms`: integrate any new queries
+    /// observed since the last call, then apply exponential decay
+    /// for the elapsed window.  Returns the post-update EMA in
+    /// queries/sec.
     ///
-    /// First call after construction returns the stored value as-is
-    /// (no elapsed-time signal to decay against).
+    /// First call after construction returns the stored EMA as-is
+    /// (no elapsed window to compute a rate sample over).  Otherwise
+    /// the standard EMA blend formula applies:
     ///
-    /// The EMA half-life is 60 s — every 60 s without any new query
-    /// the rate halves.  Bumps from `mark_query_at` are not directly
-    /// integrated here; instead the controller (Phase 6) calls this
-    /// once per tick, then if `queries_total` increased since the
-    /// last call, computes the per-second rate and feeds it into the
-    /// EMA via a separate path.  This split keeps the search hot
-    /// path branch-free.
+    /// ```text
+    /// sample      = (queries_total - last_decay_queries_total) / elapsed_secs
+    /// decay       = 0.5 ^ (elapsed_ms / HALF_LIFE_MS)         // half-life 60 s
+    /// new_ema     = decay · prev_ema  +  (1 - decay) · sample
+    /// ```
+    ///
+    /// Half-life is fixed at 60 s — every 60 s without any new
+    /// query the EMA halves; under steady-state load at rate `R`
+    /// q/s the EMA converges to `R`.
+    ///
+    /// **Phase 6 fix (2026-05-07).**  Pre-fix, this method **only
+    /// decayed**: `rate_ema_micro_per_s` was never written outside
+    /// the decay-store, so the EMA stayed at `0` regardless of how
+    /// many queries `mark_query_at` recorded.  The 24-h soak
+    /// captured `rate_qpm=0.0` for the queried drive C across all
+    /// 2882 `shard.ttl` events — the adaptive bonus formula in
+    /// `crate::cache::policy::warm_ttl` could never engage in
+    /// production.  See the regression test
+    /// `decay_ema_integrates_new_queries_into_rate_estimate` in
+    /// `cache/shard/tests.rs` for the Phase-6 contract pin.
+    ///
+    /// **Hot-path posture preserved.**  `mark_query_at` still
+    /// touches only `queries_total` and `last_query_at_ms` — two
+    /// relaxed atomics, no float arithmetic.  The integration
+    /// happens once per controller tick (every 30 s) inside
+    /// `decay_ema`, so the search dispatch path remains branch-free.
     #[expect(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
@@ -249,17 +295,36 @@ impl DriveStats {
     pub(crate) fn decay_ema(&self, now_ms: u64) -> f64 {
         const HALF_LIFE_MS: u64 = 60_000;
         let prev_ms = self.last_decay_ms.swap(now_ms, Ordering::Relaxed);
+        let cur_queries = self.queries_total.load(Ordering::Relaxed);
+        let prev_queries = self
+            .last_decay_queries_total
+            .swap(cur_queries, Ordering::Relaxed);
         let prev_ema_fixed = self.rate_ema_micro_per_s.load(Ordering::Relaxed);
-        if prev_ms == 0 || prev_ema_fixed == 0 {
-            // Convert micro/s fixed-point to /s float.
+        if prev_ms == 0 {
+            // First call after construction: no elapsed window to
+            // compute a rate sample over.  Initialise the
+            // tracking pair (already done by the swaps above) and
+            // return the stored EMA as-is.
             return prev_ema_fixed as f64 / 1.0e6;
         }
         let elapsed_ms = now_ms.saturating_sub(prev_ms);
-        // Half-life formula: new = old * 0.5^(elapsed / HL).
+        // Half-life formula factored as `decay = exp(-half_lives · ln 2)`.
         let half_lives = elapsed_ms as f64 / HALF_LIFE_MS as f64;
-        let decay_factor = (-half_lives * core::f64::consts::LN_2).exp();
-        let new_ema = (prev_ema_fixed as f64 / 1.0e6_f64) * decay_factor;
-        // Store back the decayed value as fixed-point µ/s.
+        let decay = (-half_lives * core::f64::consts::LN_2).exp();
+        let prev_ema = prev_ema_fixed as f64 / 1.0e6_f64;
+        // Per-second rate over the elapsed window.  Floor the
+        // denominator at 1 ms so very-fast successive ticks (a
+        // status_drives RPC racing the demote tick on a hot drive)
+        // don't divide by zero or produce a kHz-scale rate spike.
+        let elapsed_secs = (elapsed_ms.max(1) as f64) / 1000.0_f64;
+        let delta_queries = cur_queries.saturating_sub(prev_queries);
+        let sample_rate = (delta_queries as f64) / elapsed_secs;
+        // EMA blend: new = decay · prev + (1 - decay) · sample.
+        // Express as a fused multiply-add (`mul_add`) so clippy's
+        // `suboptimal_flops` pedantic gate is satisfied and the
+        // arithmetic is also marginally more accurate (single
+        // rounding instead of two).
+        let new_ema = decay.mul_add(prev_ema, (1.0_f64 - decay) * sample_rate);
         let new_fixed = (new_ema * 1.0e6_f64) as u64;
         self.rate_ema_micro_per_s
             .store(new_fixed, Ordering::Relaxed);
@@ -323,6 +388,14 @@ pub(crate) struct DriveStatsSnapshot {
     /// deserialise as "never queried" rather than rejecting.
     #[serde(default)]
     pub last_query_at_ms: u64,
+    /// Snapshot of [`DriveStats::queries_total`] at the last
+    /// `decay_ema` call.  Defaults to `0` so pre-Phase-6-fix
+    /// snapshots without this field deserialise as "first call
+    /// after restore" — the next `decay_ema` will short-circuit on
+    /// the `prev_ms == 0` path and seed the tracking pair before
+    /// integrating, exactly as a freshly-constructed `DriveStats`.
+    #[serde(default)]
+    pub last_decay_queries_total: u64,
     /// Cumulative `Cold → Hot` promotions.
     /// See [`DriveStats::promotions_total`].  Defaults to `0` so
     /// pre-Phase-9 snapshots that don't carry the field deserialise
@@ -339,6 +412,7 @@ impl From<&DriveStats> for DriveStatsSnapshot {
             rate_ema_micro_per_s: stats.rate_ema_micro_per_s.load(Ordering::Relaxed),
             last_decay_ms: stats.last_decay_ms.load(Ordering::Relaxed),
             last_query_at_ms: stats.last_query_at_ms.load(Ordering::Relaxed),
+            last_decay_queries_total: stats.last_decay_queries_total.load(Ordering::Relaxed),
             promotions_total: stats.promotions_total.load(Ordering::Relaxed),
         }
     }
@@ -350,6 +424,7 @@ impl From<DriveStatsSnapshot> for DriveStats {
             queries_total: AtomicU64::new(snap.queries_total),
             rate_ema_micro_per_s: AtomicU64::new(snap.rate_ema_micro_per_s),
             last_decay_ms: AtomicU64::new(snap.last_decay_ms),
+            last_decay_queries_total: AtomicU64::new(snap.last_decay_queries_total),
             last_query_at_ms: AtomicU64::new(snap.last_query_at_ms),
             promotions_total: AtomicU64::new(snap.promotions_total),
         }

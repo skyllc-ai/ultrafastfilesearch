@@ -51,6 +51,7 @@ mod idle_demote;
 mod lifecycle_hooks;
 mod manager;
 mod registry;
+mod shard_ttl_events;
 mod tiering_ops;
 mod tracing_capture;
 
