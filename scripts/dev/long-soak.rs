@@ -440,12 +440,49 @@ impl Daemon {
         bail!("daemon failed to stop within {}s", STOP_TIMEOUT.as_secs());
     }
 
+    /// True when `uffs daemon status` reports `Ready` — i.e. the
+    /// daemon is up AND past the Loading phase.
+    fn is_ready(&self) -> bool {
+        matches!(self.run(&["daemon", "status"]), Ok(out) if out.contains("Ready"))
+    }
+
+    /// Bring the daemon up to Ready, idempotently.
+    ///
+    /// **Idempotent attach.**  If a daemon is already running and
+    /// `Ready`, this returns immediately without spawning a second
+    /// process — matches the operator principle "don't kill a healthy
+    /// daemon, don't try to start a second one."  The caller is
+    /// responsible for deciding whether to `ensure_stopped()` first
+    /// (Phase 6 must, because it mutates `daemon.toml`; Phase 7 /
+    /// ws-trace need not).
+    ///
+    /// **Race-tolerant spawn.**  When we DO spawn, the CLI's own
+    /// `daemon start` readiness probe has a tight wall-clock budget
+    /// (~1.5 s) that races with Windows AF_UNIX socket bind (~1.3 s
+    /// observed on the 2026-05-07 Phase 7 attempt; the daemon was
+    /// already up and IPC-listening by the time the CLI gave up at
+    /// `attempt 3/20`).  We treat a non-zero spawn exit as advisory:
+    /// if the daemon reaches `Ready` via our own [`READY_TIMEOUT`]
+    /// poll loop, we accept it and emit a one-line warning so the
+    /// operator can see the race without the soak failing.
     fn start(&self, env: &[(&str, &str)], data_dir: Option<&Path>) -> Result<()> {
-        // We can't tee the detached daemon's output to our own pipe — instead
-        // pass --log-file so the daemon writes its own log directly.  See
-        // `crates/uffs-cli/src/commands/daemon_mgmt.rs::daemon_start` for
-        // why env-var-based log routing is unreliable on Windows under
-        // elevation.
+        // 1. Idempotent attach: skip the spawn entirely if the daemon
+        //    is already Ready.
+        if self.is_ready() {
+            println!(
+                "  {} daemon already Ready — attaching to running instance \
+                 (no respawn)",
+                "→".cyan(),
+            );
+            return Ok(());
+        }
+
+        // 2. Spawn.  We can't tee the detached daemon's output to our
+        //    own pipe — instead pass --log-file so the daemon writes
+        //    its own log directly.  See
+        //    `crates/uffs-cli/src/commands/daemon_mgmt.rs::daemon_start`
+        //    for why env-var-based log routing is unreliable on
+        //    Windows under elevation.
         let log_arg = self.log_file.to_string_lossy().into_owned();
         let mut cmd = Command::new(&self.binary);
         cmd.args(["daemon", "start", "--log-file", &log_arg]);
@@ -461,20 +498,36 @@ impl Daemon {
         let status = cmd
             .status()
             .with_context(|| format!("exec daemon start: {}", self.binary.display()))?;
-        if !status.success() {
-            bail!("daemon start exit {}", status.code().unwrap_or(-1));
-        }
-        // Wait for Ready.
+        let spawn_exit_code = status.code().unwrap_or(-1);
+        let spawn_exit_ok = status.success();
+
+        // 3. Race-tolerant wait.  Always run the Ready poll regardless
+        //    of spawn exit code — the CLI's internal readiness probe
+        //    can race with Windows AF_UNIX bind even when the daemon
+        //    is healthy.  We bail only if Ready never appears within
+        //    READY_TIMEOUT.
         let deadline = Instant::now() + READY_TIMEOUT;
         while Instant::now() < deadline {
-            if let Ok(out) = self.run(&["daemon", "status"]) {
-                if out.contains("Ready") {
-                    return Ok(());
+            if self.is_ready() {
+                if !spawn_exit_ok {
+                    eprintln!(
+                        "  {} `daemon start` exited {} but the daemon \
+                         reached Ready via our status poll — racy CLI \
+                         readiness probe (Windows AF_UNIX bind takes \
+                         ~1 s); daemon is healthy, continuing.",
+                        "⚠".yellow(),
+                        spawn_exit_code,
+                    );
                 }
+                return Ok(());
             }
             thread::sleep(Duration::from_millis(500));
         }
-        bail!("daemon failed to reach Ready within {}s", READY_TIMEOUT.as_secs());
+        bail!(
+            "daemon failed to reach Ready within {}s (spawn exit {})",
+            READY_TIMEOUT.as_secs(),
+            spawn_exit_code,
+        );
     }
 
     fn status_drives(&self) -> Result<String> {
