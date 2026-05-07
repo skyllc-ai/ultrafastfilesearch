@@ -366,6 +366,24 @@ fn evaluate_idle_demote(shard: &ShardEntry, now_ms: u64, config: &Config) -> Opt
     let target =
         crate::cache::policy::next_state_for_idle_with_thresholds(current, idle_secs, &thresholds);
 
+    // Phase 6 fix (2026-05-07 24-h soak finding):
+    //
+    // Pre-fix the event only emitted `chosen_ttl_sec`, which is the
+    // outgoing edge of the drive's *current* tier — different fields
+    // for Warm vs Parked drives, so a log-driven peer-vs-target audit
+    // (e.g., the Phase 6 24-h soak validator) could not compare
+    // like-with-like.  Emitting all three thresholds keeps the log
+    // self-describing: any consumer can pick a single edge
+    // (`warm_ttl_sec` is the most rate-sensitive) and compare across
+    // drives regardless of what tier each happens to be in.
+    //
+    // `chosen_ttl_sec` stays for back-compat — it is still the most
+    // useful single number for "what edge was this evaluation
+    // watching" — so existing dashboards / log greps don't break.
+    let hot_ttl_sec = thresholds.hot_to_warm_secs;
+    let warm_ttl_sec = thresholds.warm_to_parked_secs;
+    let parked_ttl_sec = thresholds.parked_to_cold_secs;
+
     match (target, min_tier_for_drive(shard.drive, config)) {
         (Some(proposed), Some(floor)) if tier_rank(proposed) < tier_rank(floor) => {
             tracing::debug!(
@@ -375,6 +393,9 @@ fn evaluate_idle_demote(shard: &ShardEntry, now_ms: u64, config: &Config) -> Opt
                 proposed = ?proposed,
                 min_tier = ?floor,
                 chosen_ttl_sec,
+                hot_ttl_sec,
+                warm_ttl_sec,
+                parked_ttl_sec,
                 rate_qpm,
                 reason = "min-tier-clamp",
                 "Demote target clamped by per-drive min_tier",
@@ -388,6 +409,9 @@ fn evaluate_idle_demote(shard: &ShardEntry, now_ms: u64, config: &Config) -> Opt
                 from = ?current,
                 to = ?proposed,
                 chosen_ttl_sec,
+                hot_ttl_sec,
+                warm_ttl_sec,
+                parked_ttl_sec,
                 rate_qpm,
                 reason = "idle-demote",
                 "Adaptive idle-demote evaluation produced demote target",
@@ -401,6 +425,9 @@ fn evaluate_idle_demote(shard: &ShardEntry, now_ms: u64, config: &Config) -> Opt
                 from = ?current,
                 idle_secs,
                 chosen_ttl_sec,
+                hot_ttl_sec,
+                warm_ttl_sec,
+                parked_ttl_sec,
                 rate_qpm,
                 reason = "below-ttl",
                 "Adaptive idle-demote evaluation: not yet idle past TTL",

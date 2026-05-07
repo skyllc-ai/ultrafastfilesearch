@@ -671,6 +671,11 @@ async fn cascade_demote_emits_single_event_with_pressure_cascade_reason() {
     );
 }
 
+// Phase 6 fix (2026-05-07 24-h soak finding) — `shard.ttl` event
+// shape regression test extracted to the sibling
+// [`super::shard_ttl_events`] module to keep this file under the
+// workspace's 800-LOC file-size policy.
+
 // ── PR-f — promote-side `mark_loaded_at` regression test ──────────
 
 /// Pin the PR-f fix at

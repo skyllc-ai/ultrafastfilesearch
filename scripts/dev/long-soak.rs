@@ -440,12 +440,49 @@ impl Daemon {
         bail!("daemon failed to stop within {}s", STOP_TIMEOUT.as_secs());
     }
 
+    /// True when `uffs daemon status` reports `Ready` — i.e. the
+    /// daemon is up AND past the Loading phase.
+    fn is_ready(&self) -> bool {
+        matches!(self.run(&["daemon", "status"]), Ok(out) if out.contains("Ready"))
+    }
+
+    /// Bring the daemon up to Ready, idempotently.
+    ///
+    /// **Idempotent attach.**  If a daemon is already running and
+    /// `Ready`, this returns immediately without spawning a second
+    /// process — matches the operator principle "don't kill a healthy
+    /// daemon, don't try to start a second one."  The caller is
+    /// responsible for deciding whether to `ensure_stopped()` first
+    /// (Phase 6 must, because it mutates `daemon.toml`; Phase 7 /
+    /// ws-trace need not).
+    ///
+    /// **Race-tolerant spawn.**  When we DO spawn, the CLI's own
+    /// `daemon start` readiness probe has a tight wall-clock budget
+    /// (~1.5 s) that races with Windows AF_UNIX socket bind (~1.3 s
+    /// observed on the 2026-05-07 Phase 7 attempt; the daemon was
+    /// already up and IPC-listening by the time the CLI gave up at
+    /// `attempt 3/20`).  We treat a non-zero spawn exit as advisory:
+    /// if the daemon reaches `Ready` via our own [`READY_TIMEOUT`]
+    /// poll loop, we accept it and emit a one-line warning so the
+    /// operator can see the race without the soak failing.
     fn start(&self, env: &[(&str, &str)], data_dir: Option<&Path>) -> Result<()> {
-        // We can't tee the detached daemon's output to our own pipe — instead
-        // pass --log-file so the daemon writes its own log directly.  See
-        // `crates/uffs-cli/src/commands/daemon_mgmt.rs::daemon_start` for
-        // why env-var-based log routing is unreliable on Windows under
-        // elevation.
+        // 1. Idempotent attach: skip the spawn entirely if the daemon
+        //    is already Ready.
+        if self.is_ready() {
+            println!(
+                "  {} daemon already Ready — attaching to running instance \
+                 (no respawn)",
+                "→".cyan(),
+            );
+            return Ok(());
+        }
+
+        // 2. Spawn.  We can't tee the detached daemon's output to our
+        //    own pipe — instead pass --log-file so the daemon writes
+        //    its own log directly.  See
+        //    `crates/uffs-cli/src/commands/daemon_mgmt.rs::daemon_start`
+        //    for why env-var-based log routing is unreliable on
+        //    Windows under elevation.
         let log_arg = self.log_file.to_string_lossy().into_owned();
         let mut cmd = Command::new(&self.binary);
         cmd.args(["daemon", "start", "--log-file", &log_arg]);
@@ -461,20 +498,36 @@ impl Daemon {
         let status = cmd
             .status()
             .with_context(|| format!("exec daemon start: {}", self.binary.display()))?;
-        if !status.success() {
-            bail!("daemon start exit {}", status.code().unwrap_or(-1));
-        }
-        // Wait for Ready.
+        let spawn_exit_code = status.code().unwrap_or(-1);
+        let spawn_exit_ok = status.success();
+
+        // 3. Race-tolerant wait.  Always run the Ready poll regardless
+        //    of spawn exit code — the CLI's internal readiness probe
+        //    can race with Windows AF_UNIX bind even when the daemon
+        //    is healthy.  We bail only if Ready never appears within
+        //    READY_TIMEOUT.
         let deadline = Instant::now() + READY_TIMEOUT;
         while Instant::now() < deadline {
-            if let Ok(out) = self.run(&["daemon", "status"]) {
-                if out.contains("Ready") {
-                    return Ok(());
+            if self.is_ready() {
+                if !spawn_exit_ok {
+                    eprintln!(
+                        "  {} `daemon start` exited {} but the daemon \
+                         reached Ready via our status poll — racy CLI \
+                         readiness probe (Windows AF_UNIX bind takes \
+                         ~1 s); daemon is healthy, continuing.",
+                        "⚠".yellow(),
+                        spawn_exit_code,
+                    );
                 }
+                return Ok(());
             }
             thread::sleep(Duration::from_millis(500));
         }
-        bail!("daemon failed to reach Ready within {}s", READY_TIMEOUT.as_secs());
+        bail!(
+            "daemon failed to reach Ready within {}s (spawn exit {})",
+            READY_TIMEOUT.as_secs(),
+            spawn_exit_code,
+        );
     }
 
     fn status_drives(&self) -> Result<String> {
@@ -773,38 +826,73 @@ fn validate_phase6(log: &str, drive: char, dev_mode: bool, report: &mut Validati
         }
     }
 
-    // 4. Per-drive TTL telemetry differentiation (chosen_ttl_sec).
-    let ttls = parse_chosen_ttls(log);
-    let target_ttl = ttls.get(&drive).copied();
-    let peer_max = ttls
+    // 4. Per-drive TTL telemetry differentiation — Phase 6 fix
+    //    (2026-05-07 24-h soak finding).
+    //
+    //    Pre-fix: this assertion compared `chosen_ttl_sec` (the
+    //    outgoing edge of the drive's CURRENT tier) across drives.
+    //    Drives in different tiers therefore reported different
+    //    fields — the queried target settled in Warm and emitted
+    //    `warm_to_parked_secs` (≤ 4 h cap), while idle peers settled
+    //    in Parked and emitted `parked_to_cold_secs` (24 h base,
+    //    NON-adaptive per `crate::cache::policy::parked_ttl`).  The
+    //    `target > peers` comparison was structurally impossible to
+    //    pass under the default ladder.
+    //
+    //    Post-fix the daemon emits all four TTL fields on every
+    //    `shard.ttl` event (`chosen_ttl_sec` for back-compat, plus
+    //    `hot_ttl_sec` / `warm_ttl_sec` / `parked_ttl_sec`).  We
+    //    pick `warm_ttl_sec` for the comparison because:
+    //
+    //    a) it is the rate-sensitive Warm→Parked edge whose
+    //       `bonus_secs = 600·log2(rate)` formula is what the
+    //       Phase 6 adaptive contract is actually about;
+    //    b) the field exists on every drive's events regardless of
+    //       current tier (apples-to-apples);
+    //    c) drives in production rarely hit Hot under operator
+    //       load, so `hot_ttl_sec` would be too sparse a signal.
+    //
+    //    We also capture the MAX observed value per drive across
+    //    the whole soak (rather than the latest) so the assertion
+    //    is robust against EMA decay between the synthetic-load
+    //    window and the validation read.  A regression that drops
+    //    the EMA-integration path entirely would leave every drive
+    //    at the base `warm_ttl_sec` (300 s default) and fail
+    //    decisively.
+    let warm_ttls = parse_max_ttl_field(log, "warm_ttl_sec");
+    let target_warm = warm_ttls.get(&drive).copied();
+    let peer_max_warm = warm_ttls
         .iter()
         .filter(|(d, _)| **d != drive)
         .map(|(_, t)| *t)
         .max();
-    match (target_ttl, peer_max) {
+    match (target_warm, peer_max_warm) {
         (Some(t), Some(p)) => report.assert(
-            format!("Drive {drive} chosen_ttl_sec exceeds peers"),
+            format!("Drive {drive} warm_ttl_sec exceeds peers (adaptive bonus engaged)"),
             t > p,
-            format!("{drive}.ttl={t}s vs max(peers.ttl)={p}s"),
+            format!("{drive}.max_warm_ttl={t}s vs max(peers.max_warm_ttl)={p}s"),
         ),
         (Some(t), None) => {
-            // No peer TTLs captured.  Still pass the assertion if --dev
-            // (no time for peer TTL evals) or note the condition.
+            // No peer TTLs captured (e.g. --dev mode is too short
+            // for peer demote evals).  Still record the contract
+            // we did observe so the operator sees the target's
+            // adaptive surface engaged.
             report.assert(
-                format!("Drive {drive} chosen_ttl_sec captured"),
+                format!("Drive {drive} warm_ttl_sec captured"),
                 true,
-                format!("{drive}.ttl={t}s; no peer chosen_ttl_sec events captured yet"),
+                format!("{drive}.max_warm_ttl={t}s; no peer warm_ttl_sec events captured yet"),
             );
         }
         (None, _) => {
             report.assert(
-                format!("Drive {drive} chosen_ttl_sec emitted"),
+                format!("Drive {drive} warm_ttl_sec emitted"),
                 dev_mode,
                 if dev_mode {
-                    "no chosen_ttl_sec events found (expected — too short in --dev mode)"
+                    "no warm_ttl_sec events found (expected — too short in --dev mode)"
                         .to_string()
                 } else {
-                    "no chosen_ttl_sec events found in 24h log — adaptive TTL pathway not firing"
+                    "no warm_ttl_sec events found in 24h log — adaptive TTL pathway not firing \
+                     (post-2026-05-07 daemon required: pre-fix only emitted chosen_ttl_sec)"
                         .to_string()
                 },
             );
@@ -812,15 +900,29 @@ fn validate_phase6(log: &str, drive: char, dev_mode: bool, report: &mut Validati
     }
 }
 
-/// Map drive letter → most-recent observed `chosen_ttl_sec`.
-fn parse_chosen_ttls(log: &str) -> HashMap<char, u64> {
+/// Map drive letter → maximum observed value of the named TTL
+/// field across the whole log.
+///
+/// Replaces the pre-Phase-6-fix `parse_chosen_ttls` helper which
+/// kept the **latest** value per drive.  "Latest" was sensitive to
+/// when validation read the log relative to the synthetic-load
+/// window's EMA decay; "max across the soak" captures the peak
+/// adaptive bonus regardless of read timing.
+///
+/// `field_name` accepts any of the four TTL fields the post-fix
+/// daemon emits: `chosen_ttl_sec` (back-compat), `hot_ttl_sec`,
+/// `warm_ttl_sec`, `parked_ttl_sec`.  The assertion above uses
+/// `warm_ttl_sec` because it is the rate-sensitive edge present on
+/// every drive's events regardless of tier — see the inline
+/// rationale at the call site.
+fn parse_max_ttl_field(log: &str, field_name: &str) -> HashMap<char, u64> {
     let drive_re = Regex::new(r#"(?:letter|drive)=([A-Za-z])\b"#)
         .expect("drive regex compiles");
-    let ttl_re = Regex::new(r#"chosen_ttl_sec=(\d+)"#)
-        .expect("ttl regex compiles");
-    let mut latest: HashMap<char, u64> = HashMap::new();
+    let ttl_pat = format!(r#"\b{field_name}=(\d+)"#);
+    let ttl_re = Regex::new(&ttl_pat).expect("ttl field regex compiles");
+    let mut maxes: HashMap<char, u64> = HashMap::new();
     for line in log.lines() {
-        if !line.contains("chosen_ttl_sec") {
+        if !line.contains(field_name) {
             continue;
         }
         let drive = drive_re
@@ -833,10 +935,17 @@ fn parse_chosen_ttls(log: &str) -> HashMap<char, u64> {
             .and_then(|c| c.get(1))
             .and_then(|m| m.as_str().parse::<u64>().ok());
         if let (Some(d), Some(t)) = (drive, ttl) {
-            latest.insert(d, t);
+            maxes
+                .entry(d)
+                .and_modify(|cur| {
+                    if t > *cur {
+                        *cur = t;
+                    }
+                })
+                .or_insert(t);
         }
     }
-    latest
+    maxes
 }
 
 // ─────────────────────────────────────────────────────────────────────

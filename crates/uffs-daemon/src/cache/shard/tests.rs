@@ -307,6 +307,104 @@ fn decay_ema_first_call_returns_stored_value() {
     assert!((v - 5.0).abs() < 1e-9, "first call returned {v}");
 }
 
+/// Phase 6 fix regression test (2026-05-07 24-h soak finding).
+///
+/// Pre-fix: `decay_ema` only decayed an externally-seeded EMA — it
+/// never integrated `mark_query_at` bumps.  In production the EMA
+/// stayed at `0` regardless of search load, so the adaptive bonus
+/// formula in `crate::cache::policy::warm_ttl` never engaged.  The
+/// 24-h `min_tier="WARM"` Phase 6 soak captured `rate_qpm=0.0`
+/// across all 2882 `chosen_ttl_sec` events for the queried drive.
+///
+/// Post-fix: `decay_ema` integrates new queries via the standard
+/// half-life blend `new = decay·prev + (1-decay)·sample` where
+/// `sample = delta_queries / elapsed_secs`.  This test pins that
+/// behaviour deterministically:
+///
+/// 1. First `decay_ema` call seeds `last_decay_ms` / `last_decay_queries_total`
+///    and returns `0.0` (no rate yet).
+/// 2. Record 60 queries over the next 60 s window.
+/// 3. Second `decay_ema` call must return a **non-zero** EMA — the new rate of
+///    `1 q/s` blends into the EMA and lifts it above 0.
+///
+/// The exact post-blend value depends on the half-life formula
+/// (60 s ≈ 1 half-life, decay ≈ 0.5).  We assert a generous lower
+/// bound (≥ 0.4 q/s) so the test is robust against floating-point
+/// rounding without losing teeth: a regression that drops the
+/// integration entirely would emit `0.0` and fail decisively.
+#[test]
+fn decay_ema_integrates_new_queries_into_rate_estimate() {
+    let stats = DriveStats::new();
+
+    // Step 1: first call seeds tracking pair, returns 0 (no rate).
+    let t0_ms = 1_000_000_u64;
+    let v0 = stats.decay_ema(t0_ms);
+    assert!(
+        v0.abs() < 1e-9,
+        "first call must return 0 (no rate sample yet); got {v0}",
+    );
+
+    // Step 2: record 60 queries over a 60 s window — sustained
+    // 1 q/s.  We use `mark_query_at` because production callers
+    // do (so the test exercises the same code path); the
+    // timestamps don't matter for the EMA arithmetic, only the
+    // queries_total delta.
+    for i in 0_u64..60 {
+        stats.mark_query_at(t0_ms + i * 1000);
+    }
+    assert_eq!(stats.queries_total(), 60);
+
+    // Step 3: second call integrates 60 queries / 60 s = 1 q/s.
+    // EMA blend with prev=0, sample=1, decay=0.5 (one half-life)
+    // ⇒ new = 0.5·0 + 0.5·1 = 0.5 q/s.  Assert ≥ 0.4 q/s for
+    // float-rounding tolerance — a regression that drops the
+    // integration entirely would emit `0.0` and fail decisively.
+    let t1_ms = t0_ms + 60_000;
+    let v1 = stats.decay_ema(t1_ms);
+    assert!(
+        v1 >= 0.4,
+        "EMA must integrate new queries — expected ≥ 0.4 q/s after \
+         60 queries / 60s sustained sample; got {v1} q/s",
+    );
+
+    // Sanity-check the qpm convenience without re-calling
+    // `decay_ema` (a second call would introduce a second decay
+    // step that is the subject of `decay_ema_idle_run_only_decays`,
+    // not this test).  `decay_ema_qpm = decay_ema · 60` so the
+    // 1 q/s integrated rate must surface as ≥ 24 q/min when the
+    // raw read is ≥ 0.4.
+    assert!(
+        (v1 * 60.0) >= 24.0,
+        "qpm conversion must reflect integrated rate; got {} q/min",
+        v1 * 60.0,
+    );
+}
+
+/// Property: when **no** queries are recorded between calls,
+/// `decay_ema` is non-increasing — the integration term contributes
+/// `(1 - decay)·0 = 0`, so we fall back to pure decay.  This pins
+/// that the Phase-6 fix didn't accidentally turn the EMA into a
+/// random walk when delta_queries == 0.
+#[test]
+fn decay_ema_idle_run_only_decays() {
+    let stats = DriveStats::new();
+    // Seed a non-zero EMA + last_decay_ms so we're past the
+    // first-call short-circuit.
+    stats
+        .rate_ema_micro_per_s
+        .store(2_000_000, Ordering::Relaxed);
+    stats.last_decay_ms.store(1_000_000, Ordering::Relaxed);
+
+    // No mark_query_at calls — queries_total stays at 0.
+    let v_after_30s = stats.decay_ema(1_030_000);
+    let v_after_60s = stats.decay_ema(1_060_000);
+    let v_after_120s = stats.decay_ema(1_120_000);
+
+    assert!(v_after_30s <= 2.0, "30s decay: {v_after_30s} > 2.0");
+    assert!(v_after_60s < v_after_30s, "60s ≥ 30s — not decaying");
+    assert!(v_after_120s < v_after_60s, "120s ≥ 60s — not decaying");
+}
+
 /// `ShardState::FromStr` accepts every `Display` form and rejects
 /// unknown input.
 #[test]
