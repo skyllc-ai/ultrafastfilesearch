@@ -24,6 +24,15 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
+# Multi-target build so platform-gated query helpers (Windows-only direct-MFT
+# code paths) render alongside the cross-platform query API.  See
+# `uffs-time/Cargo.toml` for the rationale on `--cfg docsrs`.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
 [dependencies]
 # Internal crates
 uffs-polars.workspace = true

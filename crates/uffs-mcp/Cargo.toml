@@ -19,6 +19,15 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
+# Multi-target so the platform-gated transport stack (HTTP gateway is
+# cross-platform; MCP stdio plumbing has Windows-vs-Unix branches) renders
+# in docs.  See `uffs-time/Cargo.toml` for the rationale on `--cfg docsrs`.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
 [lib]
 name = "uffs_mcp"
 path = "src/lib.rs"
@@ -35,9 +44,9 @@ required-features = ["streamable-http"]
 [features]
 default = ["streamable-http"]
 streamable-http = [
-    "rmcp/transport-streamable-http-server",
-    "dep:axum",
-    "dep:tower-service",
+  "rmcp/transport-streamable-http-server",
+  "dep:axum",
+  "dep:tower-service",
 ]
 
 [dependencies]

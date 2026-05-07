@@ -23,6 +23,16 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Phase R6 of `release-automation-plan.md` step 3: docs.rs build configuration.
+# `all-features = true` ensures docs.rs renders the full public API surface.
+# `rustdoc-args = ["--cfg", "docsrs"]` enables the `docsrs` cfg so platform-
+# or feature-gated items can be doc-ifyed via `#[cfg_attr(docsrs, doc(cfg(...)))]`
+# without affecting local `cargo doc`.  Inert until the crate is actually
+# published — docs.rs reads it at build time.  See https://docs.rs/about/builds.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 
 [lints]

@@ -18,6 +18,15 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
+# Multi-target build so the Unix-domain-socket and Windows-named-pipe IPC
+# transports BOTH render in the docs.  See `uffs-time/Cargo.toml` for the
+# rationale on `--cfg docsrs`.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
 [features]
 # Default enables the async `UffsClient` (tokio-based) so existing
 # consumers (`uffs-daemon`, `uffs-mcp`) keep working with no change.

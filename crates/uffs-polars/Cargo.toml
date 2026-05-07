@@ -29,6 +29,14 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
+# `all-features = true` is acceptable here because all `[features]` below
+# are additive and pull non-conflicting polars feature flags.  See
+# `uffs-time/Cargo.toml` for the rationale on `--cfg docsrs`.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lib]
 name = "uffs_polars"
 path = "src/lib.rs"
@@ -44,7 +52,27 @@ test = false
 [dependencies]
 # ONLY Polars — all other dependencies provided by consuming crates.
 # Pinned to a specific commit on main. Bump via: just polars
-polars = { git = "https://github.com/pola-rs/polars", rev = "1e9a63b95923291cd8849d70d96b8cec4e96da6a", default-features = false, features = [
+#
+# `version = "0.53.0"` is REQUIRED in addition to `git/rev` so that
+# `cargo package` (invoked by release-plz `update`) can validate this
+# manifest.  Without `version =`, cargo refuses to package any crate
+# that has unversioned dependencies (path, git, or otherwise).
+#
+# Local-build semantics: cargo uses the git/rev source.  The `version`
+# field is a verification hint — cargo confirms the resolved git source
+# claims a Cargo.toml version that satisfies the requirement (`= 0.53.0`
+# matches the polars Cargo.toml at the pinned rev).
+#
+# Publish semantics (R8+ when `uffs-polars` ships to crates.io): cargo
+# strips the `git/rev` and emits only `polars = "0.53.0"`.  Consumers
+# installing `uffs-polars` from crates.io get crates.io polars 0.53.0,
+# NOT our pinned rev.  This is a known divergence — the rev pin exists
+# for deterministic in-workspace builds with the specific feature set
+# below; published consumers fall back to whatever 0.53.0 features
+# crates.io polars exposes.  R8 dress rehearsal will surface any
+# real-world incompatibility (most likely we'd flip to a published
+# polars version then or mark `uffs-polars` `publish = false`).
+polars = { git = "https://github.com/pola-rs/polars", rev = "1e9a63b95923291cd8849d70d96b8cec4e96da6a", version = "0.53.0", default-features = false, features = [
   # ===== Core =====
   "lazy",          # Lazy evaluation (query optimization)
   "new_streaming", # Streaming engine for large queries

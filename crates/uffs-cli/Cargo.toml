@@ -24,6 +24,14 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
+# Multi-target build so platform-gated CLI subcommands render in docs.
+# See `uffs-time/Cargo.toml` for the rationale on `--cfg docsrs`.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
 [[bin]]
 name = "uffs"
 path = "src/main.rs"
@@ -37,12 +45,18 @@ path = "src/main.rs"
 # Not using `.workspace = true` here: workspace inheritance cannot
 # override `default-features`, so we point at the path directly.  The
 # version is pinned by the workspace via path dependency resolution.
-uffs-client = { path = "../uffs-client", default-features = false }
+# `version = "0.5.90"` is required for `cargo package` validation —
+# see root `Cargo.toml`'s [workspace.dependencies] note for the full
+# rationale (R6 of `release-automation-plan.md`).
+uffs-client = { path = "../uffs-client", version = "0.5.90", default-features = false }
 
 # Canonical CSV / parity / legacy-footer writer.  Direct dep (not a
 # re-export chain through `uffs-client`) so the CLI and the daemon
 # hit the same `uffs_format::*` symbols without an indirection layer.
-uffs-format = { path = "../uffs-format" }
+# `version = "0.5.90"` is required for `cargo package` validation —
+# see root `Cargo.toml`'s [workspace.dependencies] note for the full
+# rationale (R6 of `release-automation-plan.md`).
+uffs-format = { path = "../uffs-format", version = "0.5.90" }
 
 # Error handling
 anyhow.workspace = true
@@ -91,4 +105,3 @@ winresource.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
-

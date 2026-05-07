@@ -532,6 +532,25 @@ polars:
     sed -i.bak "s|rev = \"${OLD_REV}\"|rev = \"${NEW_REV}\"|" crates/uffs-polars/Cargo.toml
     rm -f crates/uffs-polars/Cargo.toml.bak
     cargo update -p polars
+
+    # Per R6 publishability work (release-automation-plan §R6): the polars
+    # git dep ALSO carries `version = "X.Y.Z"` so `cargo package` (invoked
+    # by `release-plz update`) can validate this manifest.  After bumping
+    # the `rev`, the resolved polars version may have advanced — keep the
+    # `version =` field in lockstep with what cargo actually resolves to.
+    # Without this, when polars upstream lands a major-version bump, the
+    # next `release-plz update` (R3+ shadow / R4+ active) fails with
+    # `dependency "polars" does not specify a version` (or a version
+    # requirement mismatch).
+    RESOLVED_POLARS_VER=$(cargo tree -p uffs-polars --depth 1 --prefix none 2>/dev/null \
+        | awk '/^polars v/ {sub(/^v/, "", $2); print $2; exit}')
+    OLD_POLARS_VER=$(awk -F'"' '/^polars = \{/ {for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\.[0-9]+\.[0-9]+/) {print $i; exit}}' crates/uffs-polars/Cargo.toml)
+    if [ -n "${RESOLVED_POLARS_VER:-}" ] && [ -n "${OLD_POLARS_VER:-}" ] && [ "$OLD_POLARS_VER" != "$RESOLVED_POLARS_VER" ]; then
+        printf "   Polars version: %s -> %s\n" "$OLD_POLARS_VER" "$RESOLVED_POLARS_VER"
+        sed -i.bak "s|version = \"${OLD_POLARS_VER}\", default-features|version = \"${RESOLVED_POLARS_VER}\", default-features|" crates/uffs-polars/Cargo.toml
+        rm -f crates/uffs-polars/Cargo.toml.bak
+    fi
+
     printf "\033[0;34m🔨 Checking build...\033[0m\n"
     cargo check -p uffs-polars
     printf "\033[0;32m✅ Polars bumped to %s\033[0m\n" "${NEW_REV:0:12}"

@@ -114,21 +114,57 @@ semver_check = false
 pr_branch_prefix = "release-plz-"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Per-package overrides — DEFERRED to Phase R6
+# Per-package overrides (Phase R6 of release-automation-plan.md)
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# UFFS has 14 workspace members.  Some are publishable to crates.io
-# (`uffs-core`, `uffs-cli`, `uffs-mcp-server`, ...), some are internal
-# tools (`scripts/ci-pipeline`, `scripts/ci/version-orchestrator`).
-# Phase R6 will add `[[package]]` blocks here that:
+# UFFS has 17 workspace members.  Twelve are publishable to crates.io;
+# the rest are internal-only (one diagnostic crate + three CI tools +
+# one out-of-band fuzz harness in a separate workspace):
 #
-#   - flip `publish = true` for the 12 publishable members
-#   - set `release = false` on the internal tools (so release-plz
-#     ignores them entirely — they don't get version bumps, they
-#     don't appear in the changelog, they don't get tagged)
-#   - set per-crate `changelog_path` for any crate whose changelog
-#     should NOT live in the workspace-root `CHANGELOG.md`
+#   Publishable to crates.io (12):
+#     uffs-polars, uffs-security, uffs-text, uffs-time,
+#     uffs-mft, uffs-format, uffs-core, uffs-daemon, uffs-client,
+#     uffs-mcp, uffs-broker, uffs-cli
 #
-# For R3 (shadow mode) this granularity is unnecessary: we just want
-# release-plz to compute and report what it WOULD do at the workspace
-# level.  Per-package noise can wait for R6.
+#   Workspace-only diagnostic crate (1) — skipped by release-plz via
+#   crate-level `publish = false` in its own Cargo.toml:
+#     crates/uffs-diag         (uffs-diag)
+#     release-plz follows cargo's `package.publish = false` convention
+#     and excludes such packages from version-bump / changelog / tag
+#     operations entirely.  No `[[package]]` block needed here.
+#
+#   Internal tools (3) — `release = false` below (release-plz-specific
+#   exclusion; `cargo publish` is also blocked by their crate-level
+#   `publish = false`, but `release = false` is the surgical fix to
+#   keep them out of release-plz's per-package iteration):
+#     scripts/ci-pipeline      (uffs-ci-pipeline)
+#     scripts/ci/gen-hooks     (uffs-gen-hooks)
+#     scripts/ci/gen-workflow  (uffs-gen-workflow)
+#
+#   Out of band (1) — separate cargo workspace, release-plz never
+#   sees it; listed here for completeness:
+#     crates/uffs-mft/fuzz     (uffs-mft-fuzz)
+#
+# `release = false` tells release-plz to ignore the package entirely:
+# no version bump computation, no changelog entry, no tag, no PR.
+# This is the surgical fix per release-automation-plan.md §R6 step 2,
+# preferred over a workspace-level "exclude" that would obscure intent.
+#
+# `publish = true` per-package overrides are NOT set yet.  The
+# workspace-level `publish = false` above remains the active dormancy
+# layer until Phase R8 dress rehearsal.  When R8 flips a leaf crate
+# (likely `uffs-time`, the foundation crate with zero deps) to
+# `publish = true`, the override goes here as a per-package block —
+# explicit, auditable, reversible.
+
+[[package]]
+name = "uffs-ci-pipeline"
+release = false
+
+[[package]]
+name = "uffs-gen-hooks"
+release = false
+
+[[package]]
+name = "uffs-gen-workflow"
+release = false

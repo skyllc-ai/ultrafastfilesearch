@@ -66,14 +66,44 @@ categories = ["filesystem", "command-line-utilities"]
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.dependencies]
 # ───── Internal Crates ─────
-uffs-polars = { path = "crates/uffs-polars" }
-uffs-security = { path = "crates/uffs-security" }
-uffs-text = { path = "crates/uffs-text" }
-uffs-time = { path = "crates/uffs-time" }
-uffs-mft = { path = "crates/uffs-mft", features = ["zstd"] }
-uffs-format = { path = "crates/uffs-format" }
-uffs-core = { path = "crates/uffs-core" }
-uffs-client = { path = "crates/uffs-client" }
+# Internal crates carry an explicit `version =` requirement (in addition
+# to `path =`) for two reasons:
+#
+#   1. `cargo package` (invoked by release-plz `update` and `publish`)
+#      refuses to package any crate whose `[dependencies]` entries lack
+#      a version requirement, even if the entry resolves through a
+#      `path =`.  Without `version =` here, every consumer-side
+#      `<dep>.workspace = true` inherits an unversioned dep, and
+#      `cargo package` fails with `dependency "<name>" does not specify
+#      a version`.
+#
+#   2. When publishing to crates.io (R8+), cargo strips the `path =`
+#      and uses the registry resolution.  The published crate carries
+#      the `version =` requirement only — consumers who install us
+#      from crates.io get the matching registry version of each
+#      internal dep.  Within the workspace, cargo continues to use the
+#      `path =` and verifies the path-resolved crate's actual version
+#      satisfies the requirement.  Both modes work simultaneously.
+#
+# Maintenance: `build/update_all_versions.rs` already handles the
+# `version = "x.y.z"` substitution pattern in this file shape (see
+# Pattern 5 in that script), so a `just ship` bump keeps all 8 entries
+# in sync with `[workspace.package].version` automatically.  In R5
+# release-plz takes over this responsibility natively.
+#
+# Discovered: 2026-05-07 during R3 → R4 readiness assessment — the
+# R3 shadow workflow (`release-plz.yml`) silently produced empty
+# proposed-plan output for 12 days because `release-plz update`
+# failed at `cargo package` with this very error.  See
+# `release-automation-baseline.md` §10 for the diagnostic trail.
+uffs-polars = { path = "crates/uffs-polars", version = "0.5.90" }
+uffs-security = { path = "crates/uffs-security", version = "0.5.90" }
+uffs-text = { path = "crates/uffs-text", version = "0.5.90" }
+uffs-time = { path = "crates/uffs-time", version = "0.5.90" }
+uffs-mft = { path = "crates/uffs-mft", version = "0.5.90", features = ["zstd"] }
+uffs-format = { path = "crates/uffs-format", version = "0.5.90" }
+uffs-core = { path = "crates/uffs-core", version = "0.5.90" }
+uffs-client = { path = "crates/uffs-client", version = "0.5.90" }
 # NOTE: no `uffs-diag` workspace dependency alias on purpose.
 # It is a top-level diagnostic/tool crate, not a shared runtime dependency.
 
