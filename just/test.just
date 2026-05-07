@@ -235,6 +235,29 @@ gen-hooks:
 hooks-drift:
     @cargo run -q --release -p uffs-gen-hooks -- --check
 
+# Workflow structural drift detector (Phase 3 of
+# `docs/architecture/gates-manifest-plan.md`).
+#
+# Validates four structural properties of `.github/workflows/pr-fast.yml`
+# against the canonical `scripts/ci/gates.toml`:
+#   1. every pr-fast-tier gate has a corresponding job;
+#   2. each job's `if:` predicate is at least as permissive as the
+#      least-upper-bound of its folded gates' `gate_when` classes;
+#   3. every gate's resolved job-id is present in `required.needs:`,
+#      the bash `declare -A R=(...)` aggregator, AND
+#      `notify-failure.needs:` (the rename-bookkeeping failure mode
+#      that motivated the whole gate-manifest plan);
+#   4. the `required` job's `name:` is exactly `PR Fast CI / required`
+#      — the literal string in the repo's branch-protection rule.
+#
+# Read-only: never mutates the workflow file.  See plan §4.2 for the
+# full property specification + the rationale for the structural-
+# validator design (vs. the originally-planned YAML emitter).  Wired
+# into the pre-push hook (Bucket 1) and the
+# `pr-fast.yml::workflow-drift` job so any drift hard-blocks merge.
+workflow-drift:
+    @cargo run -q --release -p uffs-gen-workflow -- --check
+
 # Host-only on purpose — Windows (`lint-*-windows`) and Linux-in-Docker
 # (`lint-ci-linux`) are separate recipes.  They will be wired into this
 # sweep after their backlogs converge to zero (Phase W5 of the

@@ -4491,6 +4491,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "uffs-gen-workflow"
+version = "0.5.90"
+dependencies = [
+ "anyhow",
+ "clap",
+ "regex",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "uffs-mcp"
 version = "0.5.90"
 dependencies = [

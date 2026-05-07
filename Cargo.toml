@@ -36,9 +36,10 @@ members = [
   "crates/uffs-cli", # 🖥️  Command-line interface
   # NOTE: uffs-tui and uffs-gui have moved to the private uffs-products repo.
   # ── Tools ──
-  "crates/uffs-diag",     # 🔬 Retained workspace-only diagnostic tools (not shipped in dist/)
-  "scripts/ci-pipeline",  # 🛠️ Promoted CI pipeline driver (dev-flow-implementation-plan.md § 7)
-  "scripts/ci/gen-hooks", # 🧬 Gate-manifest hook generator (gates-manifest-plan.md Phase 2)
+  "crates/uffs-diag",        # 🔬 Retained workspace-only diagnostic tools (not shipped in dist/)
+  "scripts/ci-pipeline",     # 🛠️ Promoted CI pipeline driver (dev-flow-implementation-plan.md § 7)
+  "scripts/ci/gen-hooks",    # 🧬 Gate-manifest hook generator (gates-manifest-plan.md Phase 2)
+  "scripts/ci/gen-workflow", # 🧪 Gate-manifest workflow structural validator (gates-manifest-plan.md Phase 3)
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

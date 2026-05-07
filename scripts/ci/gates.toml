@@ -135,6 +135,49 @@ emitted hook matches what the manifest would produce.
 """
 
 [[gate]]
+id = "workflow-drift"
+label = "Workflow structural drift detector (gen-workflow --check)"
+command = [
+  "cargo",
+  "run",
+  "-q",
+  "--release",
+  "-p",
+  "uffs-gen-workflow",
+  "--",
+  "--check",
+]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "always"
+hard = true
+tool = "cargo"
+expected_runtime_secs = 2
+bucket = "bg"
+order = 27
+notes = """
+Phase 3 of `docs/architecture/gates-manifest-plan.md`.  Validates four
+structural properties of `.github/workflows/pr-fast.yml` against this
+manifest: (1) every pr-fast-tier gate has a corresponding job, (2) each
+job's `if:` predicate is at least as permissive as the LUB of its
+folded gates' `gate_when` classes, (3) every gate's resolved job-id is
+present in `required.needs:`, the bash `declare -A R=(...)`
+aggregator, AND `notify-failure.needs:`, and (4) the `required` job's
+`name:` is exactly `PR Fast CI / required` (the literal string in the
+repo's branch-protection rule).  See plan §4.2 for the full property
+specification and the rationale for the structural-validator design
+(vs. the originally-planned YAML emitter).
+
+Pairs with `gates-drift` and `hooks-drift`: each detector covers a
+different drift axis.  `gates-drift` ensures the manifest matches the
+gate-set of every consumer; `hooks-drift` ensures the on-disk pre-push
+hook matches what the generator would emit; `workflow-drift` ensures
+the structural properties of the per-gate jobs in `pr-fast.yml` are
+consistent with the manifest, including the rename-bookkeeping failure
+mode (`required.needs:` / aggregator table / `notify-failure.needs:`)
+that motivated the whole gate-manifest plan.
+"""
+
+[[gate]]
 id = "commit-subjects"
 label = "Conventional Commits subject validator"
 command = [

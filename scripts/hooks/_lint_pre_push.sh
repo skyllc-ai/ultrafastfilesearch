@@ -204,6 +204,7 @@ spawn_bg "fmt" cargo fmt --all -- --check
 spawn_bg "file-size" bash scripts/ci/check_file_size_policy.sh
 spawn_bg "gates-drift" bash scripts/ci/check_gates_drift.sh
 spawn_bg "hooks-drift" cargo run -q --release -p uffs-gen-hooks -- --check
+spawn_bg "workflow-drift" cargo run -q --release -p uffs-gen-workflow -- --check
 spawn_bg "commit-subjects" bash -c '
     set -euo pipefail
     [[ -z "${COMMIT_RANGES// /}" ]] && exit 0

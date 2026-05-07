@@ -21,7 +21,7 @@ UFFS - Ultra Fast File Search
 | 0 | Plan + schema design | ✅ landed (PR #139) |
 | 1 | Manifest + drift detector (no consumer changes) | ✅ landed (PR #140) |
 | 2 | Codegen for `_lint_pre_push.sh` | ✅ landed (PR #141) |
-| 3 | `pr-fast.yml` structural validator (revised from "codegen" — see §4.2 pivot) | 🟡 plan revision in flight |
+| 3 | `pr-fast.yml` structural validator (revised from "codegen" — see §4.2 pivot) | ✅ landed (PR #143) |
 | 3a (skipped) | `_lint_fast.sh` codegen | ⏭ deferred (marginal value; §Phase 3 scope notes) |
 | 3c (deferred) | gen-docs | ⏭ deferred (prose tables; §4.3 rationale) |
 
@@ -702,4 +702,5 @@ Other workflows are opaque to it.
 | 2026-05-06 | Phase 1 landed — manifest + drift detector + pre-push Bucket 1 wiring + `pr-fast.yml::gates-drift` job + `just gates-drift` recipe | #140 |
 | 2026-05-06 | Phase 2 landed — `scripts/ci/gen-hooks` Rust crate + auto-generated `_lint_pre_push.sh` + `hooks-drift` self-referential gate + `just gen-hooks` / `just hooks-drift` recipes + `pr-fast.yml::hooks-drift` job | #141 |
 | 2026-05-06 | **Phase 3 plan pivot** — §4.2 revised from "YAML emitter with markers" to "structural validator (`--check` only)".  Investigation during Phase 3 prep showed every per-gate job in `pr-fast.yml` is bespoke (eleven distinct shapes for ~thirteen gates); encoding all of that in TOML degenerates to YAML-in-TOML.  Structural validator retains every drift-protection guarantee at the same risk profile as Phase 1's `gates-drift`.  §4.3 (gen-docs) and §Phase 3a (`_lint_fast.sh` codegen) deferred for the same reasons (prose tables, marginal value).  This PR lands the plan revision; implementation lands in a follow-up PR. | TBD |
-| TBD | Phase 3 implementation lands (`gen-workflow` + `workflow-drift` gate + `pr-fast.yml::workflow-drift` job) | TBD |
+| 2026-05-06 | Phase 3 plan-revision PR landed | #142 |
+| 2026-05-06 | Phase 3 landed — `scripts/ci/gen-workflow` Rust crate (33 unit tests covering manifest schema, hand-rolled YAML extractor, four structural property checks with mutation tests) + hand-rolled YAML extractor (no `serde_yml` advisory exposure, zero new cargo-vet exemptions) + `workflow-drift` self-referential gate + `pr-fast.yml::workflow-drift` job + `just workflow-drift` / `just gen-workflow` recipes.  All three drift detectors (`gates-drift`, `hooks-drift`, `workflow-drift`) now run side-by-side in pre-push Bucket 1 + pr-fast CI, covering three orthogonal drift axes (gate-set / hook-content / workflow-structural). | #143 |
