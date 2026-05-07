@@ -127,6 +127,130 @@ for the operator-facing validation flow.
   the on-disk cleanup logic is exercised without ever touching the
   host's cache directory.
 
+### Added — Gates manifest Phase 3a: `_lint_fast.sh` codegen + `fast-drift` gate (PR #144)
+
+Phase 3a of [`docs/architecture/gates-manifest-plan.md`](docs/architecture/gates-manifest-plan.md).
+The pre-commit hook (`scripts/hooks/_lint_fast.sh`) is now generated
+from the canonical manifest by the same `gen-hooks` binary that
+already owned `_lint_pre_push.sh`; manual edits to the hook are
+caught by a paired drift detector that hard-blocks merge.
+
+- **EXTENDED `scripts/ci/gen-hooks/`** — `EmitTarget::PreCommit`
+  variant added alongside the existing `PrePush`.  One binary now
+  owns both hook files.  Modules:
+  * `src/emit.rs` — `render_dispatch_fast()` + four per-gate emit
+    shapes:
+    1. **always-on hard** (`file-size`) — unconditional `spawn`.
+    2. **always-on soft-skip** (`typos`, `reuse`) — `if command -v
+       $tool >/dev/null 2>&1; then spawn ...`.
+    3. **rust-or-no-staged** (`fmt`) — special predicate
+       `if has_staged_rs || ! has_any_staged; then` so manual `just
+       lint-fast` runs on a clean worktree are still useful as a
+       sanity pass.
+    4. **rust-staged group** (`lint-prod` / `lint-tests` / `lint-ci`)
+       — collapsed into a single `if has_staged_rs; then ... fi`
+       block (3 spawns instead of 3 separate guard blocks).
+    5. **bespoke `taplo`** — `if has_staged_toml_nonvet && command
+       -v taplo; then`, with a `bash -c` invocation rewritten from
+       the manifest's `{{STAGED_TOML}}` placeholder into a literal
+       command-substitution over `$STAGED_TOML_NONVET`.
+    6. **bespoke `vet-fmt`** — `if has_staged_vet && command -v
+       cargo-vet; then` (the `command -v cargo-vet` guard is at the
+       dispatch level because at pre-commit a missing `cargo-vet` is
+       a soft-skip; the upstream pre-push `vet` gate is the hard
+       backstop).
+  * `src/main.rs` — new `--target {pre-push,pre-commit}` flag
+    (default `pre-push` for back-compat with the existing
+    `hooks-drift` gate).  `--check` failure messages name the right
+    `just` recipe per target.
+  * `templates/preamble_fast.sh` + `templates/footer_fast.sh` —
+    embedded scaffolding for `_lint_fast.sh`: colors, staged-file
+    inventory, `has_staged_*` helpers, `spawn` helper, wait loop,
+    per-job report, optional-tool hint, failure dump.  Pure bash;
+    no per-gate knowledge.
+- **NEW manifest gate `fast-drift`** — self-referential gate at
+  `tiers = ["pre-push", "pr-fast"]`, `bucket = "bg"`, `gate_when =
+  "always"`, `hard = true`, order 28 (next to `workflow-drift`'s 27
+  in Bucket 1).  Sibling of `hooks-drift` for the pre-commit tier
+  — same binary, different `--target`.  Lives in pre-push + pr-fast
+  (NOT pre-commit) so the validator's compile cost doesn't break
+  the T1 sub-2 s budget; pre-push catches the drift before it
+  reaches the remote.
+- **NEW `pr-fast.yml::fast-drift` job** — mirror of `hooks-drift`'s
+  shape (cache shared with `sanity`).  Wired into `required.needs:`,
+  the bash R=() aggregator, AND `notify-failure.needs:` (otherwise
+  it would itself fail Property 3 of `workflow-drift` on first run).
+- **NEW `just gen-fast`** + **`just fast-drift`** recipes — manual
+  entry points for the pre-commit hook generator and its drift
+  detector.  Mirrors the `just gen-hooks` / `just hooks-drift` /
+  `just gen-workflow` / `just workflow-drift` recipe shape.
+- **REGENERATED `scripts/hooks/_lint_fast.sh`** — first-time
+  `gen-hooks --target pre-commit` output.  AUTO-GENERATED banner +
+  embedded preamble + manifest-driven dispatch + embedded footer.
+  The legacy hand-written inline dispatch comments are now stored
+  in `gates.toml` `notes` (single source of truth, surfaced by
+  `gen-hooks --verbose`).  Behavior is preserved at the spawn level:
+  every gate fires on the same predicate as before, in the same
+  parallel-fan-out shape.
+- **REGENERATED `scripts/hooks/_lint_pre_push.sh`** — picks up the
+  new `fast-drift` gate as a Bucket-1 entry alongside `gates-drift`,
+  `hooks-drift`, `workflow-drift` (4 drift detectors covering 4
+  orthogonal drift axes: gate-set / pre-push-hook-content /
+  workflow-structural / pre-commit-hook-content).
+- **MODIFIED `docs/architecture/gates-manifest-plan.md`** — Status
+  table updated (Phase 3a ✅ landed); §9 action log entry appended.
+
+Tests (32 total in `gen-hooks`, 10 new):
+- **All four `emit_fast` shapes** — `fast_dispatch_emits_all_six_shapes`
+  asserts every gate (file-size, fmt, typos, reuse, taplo, vet-fmt,
+  lint-ci/prod/tests) renders with the right predicate + spawn label
+  + manifest-order sort within the rust-staged block.
+- **Single rust-staged block** — `fast_dispatch_emits_exactly_one_rust_staged_block`
+  guards against a buggy refactor that loses the `emitted_rust_block`
+  flag (would emit three separate `if has_staged_rs; then` blocks
+  instead of one).
+- **Consumer-name override** — `fast_dispatch_honours_pre_commit_consumer_override`
+  asserts the `fmt` → `fmt-check` legacy rename is preserved at
+  emit time.
+- **Fmt's wider predicate** — `fast_emit_fmt_spans_no_staged_branch`
+  verifies the `|| ! has_any_staged` clause survives any future
+  refactor of the fmt special case.
+- **Empty rust-staged group** — `fast_emit_rust_staged_block_is_empty_when_no_rust_gates`
+  edge case: a manifest with `fmt` but no other `rust_changed`
+  gates must NOT emit a dangling `if has_staged_rs; then ... fi`
+  block.
+- **Idempotency** — `pre_commit_render_is_idempotent` asserts two
+  consecutive `EmitTarget::PreCommit.render(&m)` calls return
+  byte-identical strings (plan §4.4 contract).
+- **Render distinctness** — `pre_commit_and_pre_push_render_distinct_files`
+  asserts the same manifest emits two materially different bash
+  files (no template leak between targets).
+- **Default output paths + tier strings** — `emit_target_default_output_paths_are_distinct`
+  guards against a refactor that aliases the two targets' output
+  paths or tier names.
+- **`{{STAGED_TOML}}` placeholder is rewritten** — covered inside
+  `fast_dispatch_emits_all_six_shapes`; a leak would be caught by
+  the assertion that the literal placeholder string is absent from
+  the emitted dispatch.
+
+Verification:
+- `cargo test -p uffs-gen-hooks` — 32 / 32 unit tests pass.
+- `cargo clippy -p uffs-gen-hooks --bins --tests -- -D pedantic -D
+  nursery -D cargo -W unwrap_used -W expect_used -W
+  missing_docs_in_private_items -D warnings` — exit 0, **zero
+  per-item suppressions in non-test code**.
+- `cargo run -q --release -p uffs-gen-hooks -- --target pre-commit
+  --check` — exit 0 against the regenerated `_lint_fast.sh`.
+- `cargo run -q --release -p uffs-gen-hooks -- --check` — exit 0
+  against the regenerated `_lint_pre_push.sh`.
+- `bash scripts/ci/check_gates_drift.sh` — 23 gates matched.
+- `cargo run -q --release -p uffs-gen-workflow -- --check` —
+  exit 0 (workflow-drift sees the new `fast-drift` job).
+- `actionlint .github/workflows/pr-fast.yml` — exit 0.
+- `bash -n scripts/hooks/_lint_fast.sh` + `shellcheck
+  scripts/hooks/_lint_fast.sh` — both exit 0.
+- `just lint-pre-push` — full 23-gate sweep green.
+
 ### Added — Gates manifest Phase 3: `gen-workflow` structural validator + `workflow-drift` gate (PR #143)
 
 Phase 3 of [`docs/architecture/gates-manifest-plan.md`](docs/architecture/gates-manifest-plan.md).

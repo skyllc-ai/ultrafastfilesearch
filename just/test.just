@@ -258,6 +258,38 @@ hooks-drift:
 workflow-drift:
     @cargo run -q --release -p uffs-gen-workflow -- --check
 
+# Regenerate the pre-commit hook from the canonical gates manifest
+# (Phase 3a of `docs/architecture/gates-manifest-plan.md`).
+#
+# Same `gen-hooks` binary as the pre-push generator; `--target
+# pre-commit` selects the `_lint_fast.sh` template + dispatch shape.
+# Use this recipe whenever you change a `tier="pre-commit"` gate in
+# the manifest; the on-disk hook carries an AUTO-GENERATED banner and
+# any manual edits will be overwritten on the next regen.
+#
+# Idempotency contract (plan §4.4): running this twice in a row
+# leaves the file byte-identical; the `fast-drift` recipe below is
+# the CI-side check that enforces the same property.
+gen-fast:
+    @cargo run -q --release -p uffs-gen-hooks -- --target pre-commit
+
+# Pre-commit hook codegen drift detector (Phase 3a of
+# `docs/architecture/gates-manifest-plan.md`).
+#
+# Verifies that the on-disk `scripts/hooks/_lint_fast.sh` matches
+# what `gen-hooks --target pre-commit` would produce from the
+# canonical `scripts/ci/gates.toml`.  Sibling of `hooks-drift` for
+# the pre-commit tier — same binary, different `--target`.  Wired
+# into the pre-push hook (Bucket 1) and the `pr-fast.yml::fast-drift`
+# job so manifest / emitted-hook divergence hard-blocks merge.
+#
+# NOT wired into the pre-commit hook itself (would compile the
+# validator on every commit and break the T1 sub-2 s budget); the
+# pre-push gate is the right place to catch the drift before it
+# reaches the remote.
+fast-drift:
+    @cargo run -q --release -p uffs-gen-hooks -- --target pre-commit --check
+
 # Host-only on purpose — Windows (`lint-*-windows`) and Linux-in-Docker
 # (`lint-ci-linux`) are separate recipes.  They will be wired into this
 # sweep after their backlogs converge to zero (Phase W5 of the

@@ -178,6 +178,44 @@ that motivated the whole gate-manifest plan.
 """
 
 [[gate]]
+id = "fast-drift"
+label = "Pre-commit hook codegen drift detector (gen-hooks --target pre-commit --check)"
+command = [
+  "cargo",
+  "run",
+  "-q",
+  "--release",
+  "-p",
+  "uffs-gen-hooks",
+  "--",
+  "--target",
+  "pre-commit",
+  "--check",
+]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "always"
+hard = true
+tool = "cargo"
+expected_runtime_secs = 2
+bucket = "bg"
+order = 28
+notes = """
+Phase 3a of `docs/architecture/gates-manifest-plan.md`.  Verifies that
+the on-disk `scripts/hooks/_lint_fast.sh` is byte-for-byte equal to
+what `gen-hooks --target pre-commit` would emit from this manifest.
+A manual edit to the pre-commit hook (or a manifest change without a
+regen) hard-fails this gate at pre-push and CI.
+
+Sibling of `hooks-drift` for the pre-commit tier.  Same `gen-hooks`
+binary, same `--check` semantics, different `--target` (and therefore
+different output-path).  Lives in the pre-push + pr-fast tiers (NOT
+pre-commit) — running the pre-commit drift detector inside the
+pre-commit hook itself would compile the validator on every commit
+and add unwanted latency to T1 (~sub-2 s budget); pre-push is the
+right place to catch the drift before it reaches the remote.
+"""
+
+[[gate]]
 id = "commit-subjects"
 label = "Conventional Commits subject validator"
 command = [

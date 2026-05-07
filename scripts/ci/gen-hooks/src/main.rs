@@ -3,18 +3,22 @@
 //
 // gen-hooks — gate-manifest hook generator.
 //
-// Phase 2 of `docs/architecture/gates-manifest-plan.md`.  Reads
-// `scripts/ci/gates.toml` and emits `scripts/hooks/_lint_pre_push.sh`
-// so the hook content is never hand-maintained.  See `manifest.rs`
-// for the schema model and `emit.rs` for the template + per-gate
-// emission logic.
+// Phase 2/3a of `docs/architecture/gates-manifest-plan.md`.  Reads
+// `scripts/ci/gates.toml` and emits one of two hook files depending
+// on `--target`:
+//   * `pre-push`   → `scripts/hooks/_lint_pre_push.sh` (Phase 2)
+//   * `pre-commit` → `scripts/hooks/_lint_fast.sh`     (Phase 3a)
 //
-// USAGE: gen-hooks [--check] [--tier <tier>] [--verbose]
+// Both targets share the manifest reader, validator, and verbose
+// dump; they differ only in the embedded preamble/footer templates
+// and the dispatch generator (see `emit.rs`).
+//
+// USAGE: gen-hooks [--check] [--target {pre-push|pre-commit}] [--verbose]
 //
 // EXIT:
 //   0  emit succeeded (or no-op with --check)
 //   1  diff detected (with --check)
-//   2  schema error (manifest invalid)
+//   2  schema error (manifest invalid) or unknown target
 
 /// Per-target hook emission — turns a parsed manifest into the bash
 /// text of `_lint_pre_push.sh`.
@@ -31,6 +35,16 @@ use clap::Parser;
 use crate::emit::EmitTarget;
 use crate::manifest::Manifest;
 
+/// CLI-side spelling of [`EmitTarget::PrePush`].  Kept as a
+/// string-typed `clap` arg (rather than a derive on the emit-side
+/// enum) so adding a new target only touches `emit.rs` and the
+/// `match` in `run`; the stringly-typed parse keeps clap's
+/// value-parser story simple.
+const TARGET_PRE_PUSH: &str = "pre-push";
+/// CLI-side spelling of [`EmitTarget::PreCommit`].  Sibling of
+/// [`TARGET_PRE_PUSH`].
+const TARGET_PRE_COMMIT: &str = "pre-commit";
+
 /// CLI arguments for `gen-hooks`.  Flags follow the pattern set by
 /// `scripts/ci-pipeline` and the rest of the workspace's internal
 /// tools.  See the file-level doc-comment for exit-code semantics.
@@ -46,11 +60,13 @@ struct Args {
     #[arg(long)]
     check: bool,
 
-    /// Restrict emit to one tier.  Currently only `pre-push` is
-    /// supported (Phase 2 scope).  `pre-commit` is hand-written and
-    /// reserved for Phase 3.
-    #[arg(long, default_value = "pre-push")]
-    tier: String,
+    /// Which hook file to emit.  `pre-push` writes
+    /// `scripts/hooks/_lint_pre_push.sh`; `pre-commit` writes
+    /// `scripts/hooks/_lint_fast.sh`.  Defaults to `pre-push` for
+    /// backwards compatibility with Phase-2 invocations and the
+    /// existing `hooks-drift` gate.
+    #[arg(long, default_value = TARGET_PRE_PUSH)]
+    target: String,
 
     /// Print per-gate emit decisions to stderr.
     #[arg(long, short)]
@@ -88,13 +104,13 @@ fn main() -> ExitCode {
 /// "diff detected in --check mode" (1).  Schema errors propagate up
 /// to `main`, which maps them to exit code `2`.
 fn run(args: &Args) -> Result<ExitCode> {
-    if args.tier != "pre-push" {
-        anyhow::bail!(
-            "tier `{}` not supported in Phase 2.  Only `pre-push` is generated; \
-             `_lint_fast.sh` (pre-commit) is hand-written until Phase 3.",
-            args.tier
-        );
-    }
+    let target = match args.target.as_str() {
+        TARGET_PRE_PUSH => EmitTarget::PrePush,
+        TARGET_PRE_COMMIT => EmitTarget::PreCommit,
+        other => anyhow::bail!(
+            "unknown --target `{other}`; expected one of `{TARGET_PRE_PUSH}` or `{TARGET_PRE_COMMIT}`",
+        ),
+    };
 
     let manifest_path = args
         .manifest
@@ -103,7 +119,7 @@ fn run(args: &Args) -> Result<ExitCode> {
     let output_path = args
         .output
         .clone()
-        .unwrap_or_else(|| PathBuf::from("scripts/hooks/_lint_pre_push.sh"));
+        .unwrap_or_else(|| PathBuf::from(target.default_output_path()));
 
     let manifest_text = std::fs::read_to_string(&manifest_path)
         .with_context(|| format!("reading manifest at {}", manifest_path.display()))?;
@@ -114,10 +130,9 @@ fn run(args: &Args) -> Result<ExitCode> {
         .with_context(|| format!("validating manifest at {}", manifest_path.display()))?;
 
     if args.verbose {
-        emit_verbose_dump(&manifest, &manifest_path, &args.tier);
+        emit_verbose_dump(&manifest, &manifest_path, target.tier());
     }
 
-    let target = EmitTarget::PrePush;
     let emitted = target.render(&manifest);
 
     if args.check {
@@ -129,13 +144,18 @@ fn run(args: &Args) -> Result<ExitCode> {
             }
             return Ok(ExitCode::SUCCESS);
         }
+        let recipe = match target {
+            EmitTarget::PrePush => "just gen-hooks",
+            EmitTarget::PreCommit => "just gen-fast",
+        };
         eprintln!(
             "gen-hooks: --check FAILED — {} is out of sync with the manifest.\n\
              \n\
-             Regenerate it with:\n    just gen-hooks\n\
+             Regenerate it with:\n    {recipe}\n\
              \n\
-             (Or run `cargo run -p uffs-gen-hooks --` directly.)",
-            output_path.display()
+             (Or run `cargo run -p uffs-gen-hooks -- --target {tier}` directly.)",
+            output_path.display(),
+            tier = target.tier(),
         );
         return Ok(ExitCode::from(1));
     }

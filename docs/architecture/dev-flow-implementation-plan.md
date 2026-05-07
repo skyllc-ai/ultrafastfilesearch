@@ -1059,14 +1059,42 @@ Long-term direction: replace the hand-maintained correspondence between
 by all three.  Deferred — documented here so future-us knows the target
 shape.
 
-> **2026-05-06 update**: this stretch goal now has its own
-> implementation plan at
-> [`docs/architecture/gates-manifest-plan.md`](gates-manifest-plan.md).
-> That doc owns the schema spec, generator interface, golden-file
-> verification strategy, per-phase migration order (3 phases), risk
-> analysis, and rollback strategy.  Phase 1 (manifest + drift
-> detector, no consumer changes) is the first concrete step.  The
-> sketch below is preserved as the original problem statement.
+> **2026-05-07 update**: §2.7's executable contract is shipped.
+> The gates-manifest plan
+> ([`docs/architecture/gates-manifest-plan.md`](gates-manifest-plan.md))
+> landed in five phases:
+>
+> | Phase | What | PR |
+> |---|---|---|
+> | 0 | Plan + schema design | #139 |
+> | 1 | Manifest + drift detector (no consumer changes) | #140 |
+> | 2 | `_lint_pre_push.sh` codegen | #141 |
+> | 3 | `pr-fast.yml` **structural validator** (revised from "codegen" — see plan §4.2 pivot rationale) | #143 (plan-pivot in #142) |
+> | 3a | `_lint_fast.sh` codegen | #144 |
+>
+> Four drift detectors now run side-by-side in pre-push Bucket 1 +
+> pr-fast CI, covering four orthogonal drift axes:
+>
+> - `gates-drift`    — gate-set mismatch (Phase 1)
+> - `hooks-drift`    — pre-push hook content (Phase 2)
+> - `workflow-drift` — `pr-fast.yml` structural (Phase 3)
+> - `fast-drift`     — pre-commit hook content (Phase 3a)
+>
+> Adding, renaming, or removing a gate is now a single edit to
+> `scripts/ci/gates.toml` followed by `just gen-hooks` /
+> `just gen-fast`; the workflow YAML still hand-owns its bespoke
+> per-job shape (eleven distinct shapes for ~thirteen pr-fast-tier
+> gates) but `workflow-drift` enforces structural alignment with
+> the manifest.
+>
+> **Phase 3c (`gen-docs`, prose tables in this doc + CONTRIBUTING.md)
+> remains deferred** per plan §4.3 rationale — the four executable
+> drift detectors above already catch every dangerous failure
+> mode; what remains is low-stakes editorial drift in prose
+> tables, which the plan judges as not worth the codegen
+> infrastructure.
+>
+> The sketch below is preserved as the original problem statement.
 
 ```toml
 # gates.toml (proposed, not yet implemented)

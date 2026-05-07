@@ -263,6 +263,30 @@ jobs:
       - run: cargo run -q --release -p uffs-gen-workflow -- --check
 
   # ─────────────────────────────────────────────────────────────────────
+  # fast-drift — Phase 3a of `docs/architecture/gates-manifest-plan.md`.
+  # Verifies the on-disk `scripts/hooks/_lint_fast.sh` is byte-for-byte
+  # equal to what `gen-hooks --target pre-commit` would emit from the
+  # canonical `scripts/ci/gates.toml`.  Sibling of `hooks-drift` for
+  # the pre-commit tier — same binary, different `--target`.  Cache
+  # key shared with `sanity` so the gen-hooks binary build piggybacks
+  # on the existing rust-cache.
+  # ─────────────────────────────────────────────────────────────────────
+  fast-drift:
+    name: Pre-commit hook codegen drift
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: pr-fast-sanity
+          save-if: 'false'
+      - run: cargo run -q --release -p uffs-gen-hooks -- --target pre-commit --check
+
+  # ─────────────────────────────────────────────────────────────────────
   # fmt — rustfmt check.  Gates on rust_changed (pure TOML / config /
   # docs edits don't need rustfmt).
   # ─────────────────────────────────────────────────────────────────────
@@ -556,6 +580,7 @@ jobs:
       - gates-drift
       - hooks-drift
       - workflow-drift
+      - fast-drift
       - fmt
       - sanity
       - clippy
@@ -580,6 +605,7 @@ jobs:
             [gates-drift]='${{ needs.gates-drift.result }}'
             [hooks-drift]='${{ needs.hooks-drift.result }}'
             [workflow-drift]='${{ needs.workflow-drift.result }}'
+            [fast-drift]='${{ needs.fast-drift.result }}'
             [fmt]='${{ needs.fmt.result }}'
             [sanity]='${{ needs.sanity.result }}'
             [clippy]='${{ needs.clippy.result }}'
@@ -611,7 +637,7 @@ jobs:
   notify-failure:
     name: 🔔 Notify on Failure
     runs-on: ubuntu-latest
-    needs: [classify, file-size, gates-drift, hooks-drift, workflow-drift, fmt, sanity, clippy, docs, test-build, tests, security, windows-lint, required]
+    needs: [classify, file-size, gates-drift, hooks-drift, workflow-drift, fast-drift, fmt, sanity, clippy, docs, test-build, tests, security, windows-lint, required]
     if: failure() && github.event_name != 'pull_request'
     permissions:
       contents: read
