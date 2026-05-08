@@ -28,11 +28,11 @@ use crate::context::{
 };
 use crate::exec::{execute_command, execute_parallel_with_env, execute_step_with_tracking};
 use crate::git_ops::{count_unpushed_commits, git_commit, git_push};
-use crate::version::{get_current_version, increment_version, update_polars_git};
+use crate::version::{get_current_version, update_polars_git};
 use crate::workflow::{
     ALL_STEPS, STEP_CLEAN_ARTIFACTS, STEP_COVERAGE_TESTS, STEP_FORMAT_CHECK, STEP_FORMAT_CODE,
     STEP_GIT_COMMIT, STEP_GIT_PUSH, STEP_PARALLEL_VALIDATION, STEP_TOOLCHAIN_SYNC,
-    STEP_UPDATE_POLARS, STEP_VERSION_INCREMENT, WorkflowPhase, WorkflowState,
+    STEP_UPDATE_POLARS, WorkflowPhase, WorkflowState,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -304,35 +304,33 @@ pub(crate) async fn run_enhanced_phase2(
     state: &mut WorkflowState,
     ctx: &PipelineContext,
 ) -> Result<()> {
-    println!(
-        "{}",
-        "📦 PHASE 2: Version Increment + Release PR".blue().bold()
-    );
+    println!("{}", "📦 PHASE 2: Commit + Push".blue().bold());
 
-    // Step 07: Version increment
-    execute_step_with_tracking(state, STEP_VERSION_INCREMENT, || async {
-        increment_version().await
-    })
-    .await?;
-
-    if !state.version_incremented {
-        state.version_incremented = true;
-        let new_version = get_current_version().context("Failed to get updated version")?;
-        state.current_version = new_version;
+    // R5 (2026-05-08): Phase 2 no longer bumps the workspace version.
+    // release-plz drives version bumps on `main` via the release-PR
+    // flow (see `release-automation-plan.md` §R5).  The local ship
+    // pipeline just commits whatever the dev staged and pushes the
+    // working branch.  WorkflowState's `current_version` is read
+    // from the unchanged `Cargo.toml` so the resume banner still
+    // reports the right number.
+    let current_version =
+        get_current_version().context("Failed to read workspace version from Cargo.toml")?;
+    if state.current_version != current_version {
+        state.current_version = current_version;
         state.save()?;
     }
 
-    // Step 10: Git commit (signed version-bump commit on the working
-    // branch).
+    // Step 10: Git commit (signed commit on the working branch).
     execute_step_with_tracking(state, STEP_GIT_COMMIT, || async { git_commit(ctx).await }).await?;
 
-    // Step 11: Git push -- opens release/vX.Y.Z PR with auto-merge
-    // queued.
+    // Step 11: Git push -- opens / updates the working-branch PR.
     //
-    // Binaries are NOT built here.  Once the PR merges to main,
-    // `auto-tag-release.yml` tags the commit and invokes
-    // `release.yml`, which produces the reproducible cross-platform
-    // binaries on GitHub-hosted runners.
+    // Binaries are NOT built here.  When the PR merges to `main` and
+    // a release-PR (opened by release-plz) is subsequently merged,
+    // release-plz creates the `vX.Y.Z` tag and dispatches
+    // `release.yml` to produce the reproducible cross-platform
+    // binaries on GitHub-hosted runners (R5 bridge in
+    // `.github/workflows/release-plz.yml`).
     //
     // Phase 6 resumable-push fix (docs/architecture/dev-flow.md §
     // 5.1 / dev-flow-implementation-plan.md § 6.3): if the developer

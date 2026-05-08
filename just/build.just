@@ -6,15 +6,13 @@ version:
     @printf "\033[0;34m📋 Current version:\033[0m\n"
     @cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "uffs-cli") | .version'
 
-# Increment version.
-version-bump:
-    @printf "\033[0;34m📈 Incrementing version...\033[0m\n"
-    @if [ -f "./build/update_all_versions.rs" ]; then \
-        ./build/update_all_versions.rs patch; \
-    else \
-        printf "\033[1;33mVersion script not found, using manual increment...\033[0m\n"; \
-        echo "Manual version increment needed"; \
-    fi
+# `version-bump` recipe retired in Phase R5 (2026-05-08).  Workspace
+# version bumps are now produced by release-plz on `main` via the
+# release-PR flow described in `release-automation-plan.md` §R5.
+# Override locally is no longer supported — a `feat:`, `fix:`, `perf:`,
+# or `security:` commit on `main` triggers release-plz to open a
+# release-PR with the next version computed from the conventional-
+# commit history.
 
 # Build dev binary.
 build:

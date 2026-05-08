@@ -361,7 +361,7 @@ on `main` at branch-open time.
 - `.github/workflows/dependabot-review.yml` — dep-tree growth annotation
 - `.github/workflows/dependabot-auto-merge.yml` — patch-level auto-merge gate
 - `.github/workflows/cargo-vet-refresh.yml` — weekly imports refresh
-- `.github/workflows/auto-tag-release.yml` — tagging bridge
+- `.github/workflows/release-plz.yml` — release-PR generator + tag creator + `release.yml` dispatch bridge (post-R5; the pre-R5 `auto-tag-release.yml` shim was retired in `release-automation-plan.md` §R5)
 - `just/analysis.just` — `just geiger` / `just geiger-summary` recipes
 
 ### External

@@ -40,25 +40,32 @@ pub(crate) const STEP_COVERAGE_TESTS: &str = "04-coverage-tests";
 pub(crate) const STEP_PARALLEL_VALIDATION: &str = "05-parallel-validation";
 /// Verify `cargo fmt` produces zero diff (idempotency check).
 pub(crate) const STEP_FORMAT_CHECK: &str = "06-format-check";
-/// Bump the workspace `[package].version` in root `Cargo.toml`.
-pub(crate) const STEP_VERSION_INCREMENT: &str = "07-version-increment";
-// Steps 08 (build-release) and 09 (deploy-binary) were removed: `just
-// ship` no longer produces binaries locally.  The release branch PR
-// (step 11) lands the version bump on main; `auto-tag-release.yml`
-// then tags the commit and invokes `release.yml`, which builds +
-// publishes from GitHub Actions.  Step numbering is preserved to keep
-// in-flight resumable-ship state files compatible with older pipeline
-// runs.
-/// Create the `chore: development vX.Y.Z ...` release commit.
+// Step 07 (version-increment), 08 (build-release), and 09
+// (deploy-binary) were removed in successive phases.  Step numbering
+// is preserved to keep in-flight resumable-ship state files compatible
+// with older pipeline runs.
+//
+// Phase R5 (2026-05-08) retired step 07: workspace version bumps now
+// happen on `main` via release-plz's release-PR flow (see
+// `release-automation-plan.md` §R5).  The local ship pipeline no
+// longer mutates `Cargo.toml` between commit phases.
+//
+// Earlier retirements: steps 08 + 09 were removed when `just ship`
+// stopped producing binaries locally; the release branch PR (step 11)
+// lands changes on main; release-plz then tags the commit and
+// dispatches `release.yml`, which builds + publishes from GitHub
+// Actions.
+/// Create the signed working-branch commit (release-PRs land via
+/// release-plz post-R5; this commit is whatever the developer staged).
 pub(crate) const STEP_GIT_COMMIT: &str = "10-git-commit";
-/// Push the release branch and open the release PR (branch-protection
+/// Push the working branch and open the PR (branch-protection
 /// compatible; does not push directly to `main`).
 pub(crate) const STEP_GIT_PUSH: &str = "11-git-push";
 
 /// Canonical ordered list of resumable pipeline steps.  Indexing into
 /// this array preserves the 00..11 numbering embedded in each step id
-/// even when intermediate steps (08-build-release, 09-deploy-binary)
-/// are retired.
+/// even when intermediate steps (07-version-increment,
+/// 08-build-release, 09-deploy-binary) are retired.
 pub(crate) const ALL_STEPS: &[&str] = &[
     STEP_UPDATE_POLARS,
     STEP_CLEAN_ARTIFACTS,
@@ -66,7 +73,6 @@ pub(crate) const ALL_STEPS: &[&str] = &[
     STEP_COVERAGE_TESTS,
     STEP_PARALLEL_VALIDATION,
     STEP_FORMAT_CHECK,
-    STEP_VERSION_INCREMENT,
     STEP_GIT_COMMIT,
     STEP_GIT_PUSH,
 ];

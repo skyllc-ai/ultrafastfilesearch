@@ -45,11 +45,25 @@
 #     (cccf4f111) — enumerated all 12 publishables with proposed
 #     bumps + changelog drafts.
 #
-#   • R4 (this PR): flips `release-plz update` (shadow) → the
-#     official `release-plz/action@v0` in default mode (release-pr +
-#     release).  Adds `contents: write` and `pull-requests: write`
-#     permissions.  Drops the manual diff-capture and "verify no git
-#     mutation" guard that were specific to shadow mode.
+#   • R4 (PR #148, 2026-05-08): flipped `release-plz update`
+#     (shadow) → the official `release-plz/action@v0` in default
+#     mode (release-pr + release).  Added `contents: write` and
+#     `pull-requests: write` permissions.  Dropped the manual
+#     diff-capture and "verify no git mutation" guard that were
+#     specific to shadow mode.
+#
+#   • R5 (this PR): retired the bespoke `auto-tag-release.yml` and
+#     `build/update_all_versions.rs` driver.  release-plz is now
+#     the sole tag-creator on `main`.  This file gains:
+#       (a) `git_release_enable = false` in `release-plz.toml` (the
+#           config doc lives there) — release-plz creates only the
+#           git tag, not the GitHub Release;
+#       (b) an explicit `gh workflow run release.yml` step after
+#           the `release` action so the freshly-created tag actually
+#           triggers the binary build + GitHub Release upload.
+#           That step works around the GITHUB_TOKEN anti-loop policy
+#           in code without needing a GitHub App / PAT (Workarounds
+#           A/B below — we landed Option C in code).
 #
 # Publishing dormancy (UNCHANGED from R3 → R6 — see plan §6):
 #
@@ -107,7 +121,7 @@
 #   We mirror that structure here.  Both jobs are nearly identical
 #   apart from the `command:` value and per-job `permissions:`.
 #
-# ─── Downstream workflow trigger limitation (DOCUMENTED, not blocked) ───
+# ─── Downstream workflow trigger bridge (R5 — IMPLEMENTED) ───
 #
 # When release-plz creates a tag (`vX.Y.Z`) using the default
 # `GITHUB_TOKEN`, the resulting tag push DOES NOT trigger
@@ -115,22 +129,42 @@
 # GitHub's anti-loop design — actions triggered by GITHUB_TOKEN can
 # create refs but those refs don't fire downstream workflows.
 #
-# Workarounds, in order of preference (deferred to a follow-up PR):
+# Through R4 this was a documented limitation worked around by the
+# bespoke `auto-tag-release.yml` flow (which fired on `push: main`
+# and dispatched `release.yml` itself, sidestepping the tag-push
+# trigger entirely).  R5 deletes that bespoke flow and replaces it
+# with an in-line equivalent below: the `release-plz-release` job
+# captures release-plz's `releases` output and, when a tag was just
+# created, calls `gh workflow run release.yml` with the same
+# `version` / `commit_sha` / `triggered_by` inputs the bespoke flow
+# used.  `gh workflow run` accepts GITHUB_TOKEN auth (no GitHub App
+# / PAT needed) because `workflow_dispatch` events are explicitly
+# carved out of the anti-loop policy — see
+# https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow .
 #
-#   A. GitHub App token — the canonical fix per release-plz docs.
-#      Requires creating a GitHub App, installing it on the repo,
-#      and storing `APP_ID` + `APP_PRIVATE_KEY` as secrets.  This is
-#      what the release-plz repo itself uses.
+# Workaround alternatives still on the shelf if this approach ever
+# breaks (kept for archaeology):
+#
+#   A. GitHub App token — the canonical release-plz pattern.  Used
+#      by the release-plz repo itself.  Adds an `APP_ID` /
+#      `APP_PRIVATE_KEY` secret pair that release-plz uses for all
+#      its git/API operations; the App-pushed tag fires push:tags
+#      naturally, no bridge step needed.  Migrate to this if the
+#      bridge ever needs to run as a non-default identity.
 #   B. Personal Access Token (PAT) stored as `RELEASE_PLZ_TOKEN`
-#      secret — simpler but ties release authority to a person.
+#      secret — same effect as A but ties release authority to a
+#      person.  Last-resort fallback if App creation is blocked.
 #   C. `release.yml` adds an `on: workflow_run` trigger that fires
-#      after this workflow completes — fully automatic but requires
-#      `release.yml` changes outside R4 scope.
+#      after this workflow completes — alternative implementation
+#      of the same bridge.  Rejected for R5 because `workflow_run`
+#      runs in the default-branch context (not the tag context) and
+#      the input plumbing (version / commit_sha) becomes more
+#      brittle than `gh workflow run -f`.
 #
-# For R4, the maintainer manually pushes the tag (or pushes their
-# own Cargo.toml + CHANGELOG bump for the first release) — that's a
-# user-driven push, NOT a GITHUB_TOKEN push, so `release.yml` fires
-# normally.  The R4.5 / R5 follow-up PR sets up Option A.
+# Manual-tag escape hatch is unaffected: the maintainer pushing a
+# `vX.Y.Z` tag from a local checkout is a user-driven push, fires
+# `release.yml` via `push: tags: [v*]` exactly as before.  Useful
+# for emergency re-cuts when release-plz is unavailable.
 #
 # References:
 #
@@ -229,7 +263,9 @@ jobs:
           # anyway, but keeping the env clean documents intent.
 
   # ────────────────────────────────────────────────────────────────
-  # Release job — creates tag + GitHub Release on release-PR merge.
+  # Release job — creates the workspace tag on release-PR merge,
+  # then dispatches `release.yml` to build binaries + publish the
+  # GitHub Release page (R5 bridge replacing `auto-tag-release.yml`).
   # ────────────────────────────────────────────────────────────────
   release-plz-release:
     name: Release-plz / release
@@ -238,9 +274,13 @@ jobs:
 
     if: github.repository_owner == 'skyllc-ai'
 
-    # Tag push only — no PR operations from this job.
     permissions:
+      # Tag push (release-plz) + workflow_dispatch of release.yml
+      # (the bridge step at the bottom).  No `pull-requests` scope
+      # needed — the release-PR was already merged before this job
+      # ran; this job only operates on `main` post-merge.
       contents: write
+      actions: write
 
     steps:
       - name: Checkout repository (full history for tag analysis)
@@ -262,6 +302,7 @@ jobs:
         # release PR — release-plz detects this internally.  So this
         # job runs on every push but only does work when the PR
         # actually merged.
+        id: release-plz
         uses: release-plz/action@1528104d2ca23787631a1c1f022abb64b34c1e11 # v0.5.128
         with:
           command: release
@@ -272,3 +313,47 @@ jobs:
           # comment block at the top of this file.  Adding this env
           # var is the SECOND of TWO layers that must change to
           # enable publishing; both flip in R8.
+
+      # ─── R5 bridge: dispatch release.yml after release-plz tags ───
+      #
+      # release-plz/action outputs `releases_created` (boolean) and
+      # `releases` (JSON array of `{tag, version, package}`).  In
+      # workspace-style mode (`git_tag_name = "v{{ version }}"`,
+      # release-plz.toml R4) all 12 publishable crates share one
+      # tag, so `releases` always carries at most one entry that
+      # matters; we take `.[0].tag` as canonical.
+      #
+      # `gh workflow run` triggers `release.yml` via
+      # `workflow_dispatch`, which is carved out of the GITHUB_TOKEN
+      # anti-loop policy that prevents `push: tags: [v*]` from
+      # firing on a release-plz-pushed tag.  See R5 header block
+      # above for the policy reference and rationale.
+      #
+      # Inputs match `auto-tag-release.yml`'s pre-R5 dispatch shape
+      # exactly so `release.yml` does not change at the cutover.
+      # If `release.yml`'s input contract ever evolves, update this
+      # step AND the dispatch in lockstep.
+      - name: Dispatch release.yml for binary build + GitHub Release
+        if: ${{ steps.release-plz.outputs.releases_created == 'true' }}
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASES_JSON: ${{ steps.release-plz.outputs.releases }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # `releases` is a JSON array; `.[0].tag` is the workspace tag.
+          # `jq` is preinstalled on ubuntu-latest runners.
+          tag=$(jq -r '.[0].tag' <<<"$RELEASES_JSON")
+          if [[ -z "$tag" || "$tag" == "null" ]]; then
+            echo "::error title=R5 bridge::release-plz reported releases_created=true but the releases output had no .[0].tag entry.  Refusing to dispatch release.yml."
+            echo "releases output (raw):"
+            echo "$RELEASES_JSON"
+            exit 1
+          fi
+          echo "::notice title=R5 bridge::release-plz tagged $tag at $COMMIT_SHA — dispatching release.yml."
+          gh workflow run release.yml \
+            --ref main \
+            -f version="$tag" \
+            -f commit_sha="$COMMIT_SHA" \
+            -f triggered_by="release-plz[$tag]"

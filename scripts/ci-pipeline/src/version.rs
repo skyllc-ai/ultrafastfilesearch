@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 //
-//! Version discovery + bump helpers for the UFFS ship pipeline.
+//! Version discovery + Polars dep-pin helpers for the UFFS ship pipeline.
 //!
 //! * [`get_current_version`] — read `[workspace.package].version` out of the
 //!   root `Cargo.toml` (simple whole-file scan).
 //! * [`extract_version_from_cargo_toml`] — same, but strict: only considers the
 //!   `[workspace.package]` section.
-//! * [`increment_version`] — shell out to the `./build/update_all_versions.rs`
-//!   rust-script that actually rewrites the Cargo.toml in place.
-//! * [`version_bump`] — tracked-step wrapper around [`increment_version`] that
-//!   threads through the pipeline's logging / timeout conventions.
 //! * [`update_polars_git`] — pin the polars git dep to the latest upstream
 //!   `main` HEAD (or honour the `rev = "..."` override if present).
-
-use std::path::Path;
+//!
+//! Phase R5 (2026-05-08) removed the `increment_version` / `version_bump`
+//! helpers and the `./build/update_all_versions.rs` rust-script they
+//! shelled out to.  Workspace version bumps are now produced by
+//! `release-plz` on `main` via the release-PR flow described in
+//! `release-automation-plan.md` §R5.
 
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use tokio::process::Command;
 
 use crate::context::PipelineContext;
-use crate::exec::execute_command;
 
 /// Read the workspace root `Cargo.toml` and return the first
 /// `version = "..."` string found.  Used by the push step to build
@@ -74,56 +73,6 @@ pub(crate) fn extract_version_from_cargo_toml(content: &str) -> Result<String> {
         }
     }
     bail!("Version extraction failed - no version found in [workspace.package]")
-}
-
-/// Parse the current `[workspace.package].version`, bump the patch
-/// component, and rewrite `Cargo.toml` in place.  Separated from
-/// [`version_bump`] so it can be called directly from the workflow
-/// state machine without involving a subprocess.
-///
-/// # Errors
-///
-/// Returns an error if the `./build/update_all_versions.rs` helper
-/// cannot be spawned, or if it exits with a non-zero status.
-pub(crate) async fn increment_version() -> Result<()> {
-    println!("📈 Incrementing version...");
-    let output = Command::new("./build/update_all_versions.rs")
-        .arg("patch")
-        .output()
-        .await
-        .context("Failed to execute version update script")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("Version bump failed: {stderr}");
-    }
-    println!("✅ Version incremented successfully");
-    Ok(())
-}
-
-/// Bump the workspace `[package].version` in root `Cargo.toml`.
-/// Runs the shared [`increment_version`] helper under the usual
-/// logging and timeout wrapping.
-///
-/// # Errors
-///
-/// Propagates any failure from the wrapped [`execute_command`]
-/// subprocess.  Fails fast if the helper script is missing.
-pub(crate) async fn version_bump(ctx: &PipelineContext) -> Result<()> {
-    println!("{}", "📈 Incrementing version...".blue());
-    let script_path = Path::new("./build/update_all_versions.rs");
-    if script_path.exists() {
-        execute_command(
-            "Version increment",
-            "./build/update_all_versions.rs",
-            &["patch"],
-            ctx,
-        )
-        .await?;
-    } else {
-        println!("{}", "⚠️  Version script not found".yellow());
-        bail!("Version bump failed - ./build/update_all_versions.rs not found");
-    }
-    Ok(())
 }
 
 /// Update Polars git dependencies to the latest commit on `main`.
