@@ -167,15 +167,20 @@ commit_parsers = [
   # ── Security (scope-based catch) ──────────────────────────────
   # Map `fix(security):` and `chore(security):` to the dedicated
   # ### Security section.  Mirrors how the existing CHANGELOG
-  # already groups supply-chain hardening commits.
+  # already groups supply-chain hardening commits, and aligns with
+  # the commit-msg hook + commitlint workflow which only accept the
+  # 11 standard CC types (`security` is NOT a top-level type — see
+  # `CONTRIBUTING.md` → "Commit message conventions").
+  #
+  # The historical carve-out for top-level `security:` / `security(<scope>):`
+  # subjects (PRs #31, #33, #34 — see `release-automation-baseline.md` §4)
+  # was retired in 2026-05-08; those three early commits remain in the
+  # historical CHANGELOG but no future commit can use that prefix because
+  # the local commit-msg hook rejects it.  See
+  # `docs/architecture/release-automation-plan.md` deviation log entry
+  # for the convergence rationale.
   { message = "^fix\\(security\\)", group = "Security" },
   { message = "^chore\\(security\\)", group = "Security" },
-  # Tolerate the non-standard `security:` / `security(<scope>):`
-  # prefix that recent merges have used (PRs #31, #33, #34 — see
-  # `release-automation-baseline.md` §4).  Phase R1b decides
-  # whether to keep this exception or migrate those commits to
-  # `chore(security):`.
-  { message = "^security(\\([a-z0-9-]+\\))?:", group = "Security" },
 
   # ── Standard CC types → Keep-a-Changelog sections ─────────────
   { message = "^feat", group = "Added" },

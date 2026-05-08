@@ -136,12 +136,22 @@ git_release_name = "v{{ version }}"
 # version-bump preview, producing churn and noise in the PR list.
 #
 # The regex below matches the "release-worthy" subset of Conventional
-# Commits — exactly the set that `cliff.toml`'s `commit_parsers` maps to
-# changelog sections (Added / Fixed / Performance / Security / Breaking).
-# All other types (`chore`, `docs`, `test`, `build`, `ci`, `refactor`,
+# Commits — exactly the set that `cliff.toml`'s `commit_parsers` maps
+# to changelog sections (Added / Fixed / Performance / Breaking).  All
+# other types (`chore`, `docs`, `test`, `build`, `ci`, `refactor`,
 # `style`, `revert`) are skipped as both changelog entries (cliff.toml)
 # AND release-trigger commits (here).  Single source of truth for the
 # suppression list.
+#
+# Security work uses the conventional CC encoding rather than a
+# top-level `security:` type:
+#   • `fix(security): foo`   → patch bump, ### Security changelog row
+#   • `chore(security): foo` → no bump, ### Security changelog row
+# `cliff.toml` has dedicated `^fix\(security\)` and `^chore\(security\)`
+# parsers that route both to the Security section, so dropping the
+# top-level `security:` alternation here does not regress changelog
+# coverage.  See `CONTRIBUTING.md` → "Commit message conventions"
+# (security commits paragraph) for the rationale.
 #
 # Format note: release-plz applies this regex per-commit to commits since
 # the last release.  If ANY commit in the window matches, a release is
@@ -154,7 +164,7 @@ git_release_name = "v{{ version }}"
 # the release-automation refactor itself doesn't trigger phantom
 # release PRs while it's still in flight.  After R4+R5 land, those
 # commits stop being typical anyway.
-release_commits = "^(feat|fix|perf|security)(\\(.+\\))?:"
+release_commits = "^(feat|fix|perf)(\\(.+\\))?:"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Release-PR-gated tag creation (post-R4 deviation fix)

@@ -187,6 +187,13 @@ UFFS is migrating to [Conventional Commits](https://www.conventionalcommits.org/
 - `chore: bump dependabot grouping window to weekly` — no release
 - `docs(architecture): clarify pipeline stage naming` — no release
 
+**Security commits** use the conventional encoding rather than a top-level `security:` type:
+
+- `fix(security): patch FNV-1a pipe hash for empty inputs` — patch bump, appears under **### Security** in the changelog (the `security` *scope* triggers the dedicated section via `cliff.toml`'s `^fix\(security\)` parser).
+- `chore(security): refresh cargo-vet imports` — no bump, also routes to **### Security**.
+
+Top-level `security:` is **not** an allowed type — the local `commit-msg` hook (`scripts/ci/check_commit_subjects.sh`) and the commitlint workflow both reject it, and `release-plz`'s `release_commits` filter no longer includes it as of 2026-05-08.  Historical merges that used `security:` (PRs #31, #33, #34, all pre-hook-installation) remain in the changelog and are documented in `release-automation-baseline.md` §4.
+
 **Scopes** (optional, in parentheses after type): prefer the crate name or a short area tag.  Examples: `mft`, `cli`, `core`, `security`, `polars`, `ci`, `build`, `architecture`.  Omit the scope if the change is workspace-wide.
 
 **If in doubt**, use `chore:` — it never triggers a release.  If a PR genuinely has both a fix and a feature, split it into two PRs.
