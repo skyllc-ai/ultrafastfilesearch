@@ -24,6 +24,15 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Phase R6→R8 deviation row 5 — polars-subtree publishability deferred.
+# This crate has a direct `uffs-polars.workspace = true` dep and uses
+# polars types extensively (~28 import sites).  Until polars upstream
+# publishes a release with the nightly-API patches our git/rev pin
+# carries, `cargo package` (and therefore release-plz) hard-fails.  See
+# `crates/uffs-polars/Cargo.toml` and the deviation log row 5 in
+# `docs/architecture/release-automation-plan.md`.
+publish = false
+
 # Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
 # Multi-target build so `#[cfg(windows)]` MFT readers and `#[cfg(unix)]`
 # offline Parquet helpers BOTH render in docs.  See `uffs-time/Cargo.toml`

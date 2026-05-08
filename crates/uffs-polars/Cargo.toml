@@ -29,6 +29,23 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Phase R6→R8 deviation row 5 — polars-subtree publishability deferred.
+# This crate carries the polars `git/rev` pin
+# (`https://github.com/pola-rs/polars`, rev `1e9a63b9...`) whose
+# polars-arrow declares `chrono ^0.4.42`, while crates.io polars-arrow
+# 0.53.0 declares `chrono <=0.4.41`.  These are mutually exclusive: no
+# chrono version satisfies both, so `cargo package` (which simulates
+# crates.io publishing by stripping git rev info) hard-fails.  Path B-i
+# (drop the git rev, use crates.io polars 0.53.0 directly) was probed
+# on 2026-05-08 and rejected: crates.io polars 0.53.0 has accumulated
+# multiple nightly-rust-API regressions (std::simd::LaneCount in
+# polars-arrow's bitmap.rs, core::unicode::Cased in polars-ops's
+# case.rs, …) that the git rev was actively patching.  Until polars
+# upstream publishes a release with those patches, this crate cannot
+# ship to crates.io.  See `docs/architecture/release-automation-plan.md`
+# deviation log row 5 for the full trail.
+publish = false
+
 # Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
 # `all-features = true` is acceptable here because all `[features]` below
 # are additive and pull non-conflicting polars feature flags.  See
