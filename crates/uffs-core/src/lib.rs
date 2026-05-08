@@ -110,10 +110,18 @@ pub use path_resolver::{
 pub use query::MftQuery;
 pub use slot_pool::{DriveLoadEstimate, SlotPool, compute_load_budget, estimate_drive_cost};
 pub use tree::{TreeColumn, add_tree_columns, apply_directory_treesize};
-// Re-export commonly used types
-pub use uffs_mft::FileFlags;
-pub use uffs_polars::{DataFrame, IntoLazy, LazyFrame, col, columns, lit};
-// `CaseFold` lives on `ParkedBody.fold` and `DriveCompactIndex.fold` —
-// re-exported here so downstream crates (uffs-daemon, uffs-cli, tests)
-// that touch those types don't need a direct `uffs-text` dependency.
+// `CaseFold` is the only cross-crate re-export here: it lives on
+// `ParkedBody.fold` / `DriveCompactIndex.fold` and is re-exported so
+// downstream crates (uffs-daemon, uffs-cli, tests) that touch those
+// types don't need a direct `uffs-text` dependency.
+//
+// Polars types (`DataFrame`, `LazyFrame`, `IntoLazy`, `col`, `lit`,
+// `columns`) and `uffs_mft::FileFlags` were re-exported here until
+// 2026-05-08 but are NOT anymore — both blocks were dead code (zero
+// downstream consumers, verified via repo-wide grep before deletion).
+// Consumers that need polars types or `FileFlags` must depend on
+// `uffs-polars` / `uffs-mft` directly.  This keeps the polars-tainted
+// dep graph explicit and avoids transitive re-publishing of polars
+// APIs through `uffs-core` — see `release-automation-plan.md`
+// deviation log row "R6 → R8 publishability resolution (Path A)".
 pub use uffs_text::case_fold::CaseFold;
