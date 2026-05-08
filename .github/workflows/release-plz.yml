@@ -2,9 +2,85 @@
 # SPDX-License-Identifier: MPL-2.0
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Release-plz — ACTIVE MODE
+# Release-plz — DEFERRED (manual-only, 2026-05-08)
 #
-# Phase R4 of `docs/architecture/release-automation-plan.md`.
+# Phase R4 of `docs/architecture/release-automation-plan.md`, currently
+# dormant pending an upstream-polars compat release.  See the DEFERRAL
+# NOTICE below for the full root-cause and re-enable trail.
+#
+# ─── DEFERRAL NOTICE (2026-05-08) ───────────────────────────────────────
+#
+# The `push: branches: [main]` auto-trigger is commented out below.  The
+# workflow runs ONLY on `workflow_dispatch` (manual `gh workflow run`
+# from the maintainer).  Reason:
+#
+#   release-plz `git_only = true` mode hardcodes
+#       cargo package --allow-dirty --workspace
+#   in `release_plz_core/src/next_ver.rs::run_cargo_package` (verified
+#   on 2026-05-08 against release-plz v0.3.157, the version this
+#   workflow pins via the action).  That step packages EVERY workspace
+#   member regardless of `[[package]] release = false` or Cargo
+#   `publish = false` flags.  When it runs against `uffs-polars`,
+#   cargo strips the polars git rev for publish-form simulation,
+#   falls back to crates.io polars-arrow 0.53.0 which constrains
+#   `chrono <= 0.4.41`, and that conflicts with the workspace lock
+#   at `chrono 0.4.44` (transitively required by `chrono-tz 0.10.4`).
+#   The conflict has no Cargo-side resolution — verified failure on
+#   workflow run 25583934251 (commit d3a1adc1d, R6 → R8 Path A merged).
+#
+#   PR #155 (R6 → R8 Path A) flipped the polars-tainted subtree to
+#   `publish = false` + `release = false` thinking that would tell
+#   release-plz to skip them.  It does — for the *release* step (no
+#   PR / version bump / tag / changelog).  But it does NOT skip the
+#   `cargo package --workspace` step, which is hardcoded in
+#   release-plz's git_only-mode pipeline.
+#
+# Two structural fixes were investigated but not pursued:
+#
+#   (a) Move `crates/uffs-polars` from `[workspace] members` to
+#       `[workspace] exclude`.  Removes it from `cargo metadata
+#       --workspace`, which is what release-plz iterates.  But cargo
+#       treats excluded paths as standalone packages — `uffs-polars`
+#       can no longer inherit the 9 fields it gets via
+#       `.workspace = true` (version, edition, rust-version, license,
+#       repository, authors, readme, keywords, categories) plus
+#       `[lints] workspace = true`.  Inlining those values is a
+#       permanent maintenance burden until uffs-polars goes back to
+#       a member.  Rejected pending a clearer return-on-cost.
+#
+#   (b) Replace `release-plz/action` with a manual CLI invocation
+#       that wraps the cargo step ourselves.  Out of scope for the
+#       current release-automation refactor cycle (R5 just finished;
+#       R6/R7 already in flight).
+#
+# Until polars upstream ships a release that no longer needs the git
+# rev pin (i.e. the nightly-rust API regressions the rev was patching
+# land in a published version), this workflow stays manual-only and
+# version bumps continue via `just ship` — the existing manual flow
+# that has worked since v0.5.0.  The `just ship` flow:
+#
+#   1. uses the in-tree `build/update_all_versions.rs` driver to
+#      bump every Cargo.toml's `version =` field (or `version.workspace
+#      = true` consumers via the workspace.package.version source);
+#   2. regenerates CHANGELOG.md via `git cliff` (configured by
+#      `cliff.toml`);
+#   3. opens a `chore: release vX.Y.Z` PR by hand;
+#   4. once merged, the maintainer pushes a signed `vX.Y.Z` tag
+#      which fires `release.yml` to build + upload binaries.
+#
+# Re-enable when the chrono conflict goes away:
+#
+#   1. Verify `cargo package -p uffs-polars --allow-dirty` succeeds
+#      locally (it should once polars upstream ships).
+#   2. Uncomment the `push: branches: [main]` block below.
+#   3. Optionally reverse the `publish = false` flips in the polars-
+#      tainted subtree if R8 dress-rehearsal is ready (8 crates —
+#      see `docs/architecture/release-automation-plan.md` §8
+#      deviation log row "R6 → R8 publishability resolution").
+#   4. Rename this workflow back to "🚀 Release-plz (active)".
+#
+# Refs: PR #155 (R6→R8 Path A), workflow run 25583934251 (failure
+#       evidence), `release-automation-plan.md` §8 deviation log.
 #
 # What this does:
 #
@@ -174,13 +250,22 @@
 #   • https://release-plz.ieni.dev/docs/usage/release
 #   • https://github.com/release-plz/release-plz/blob/main/.github/workflows/release-plz.yml
 
-name: "🚀 Release-plz (active)"
+name: "💤 Release-plz (deferred — manual-only)"
 
 on:
-  push:
-    branches: [main]
-  # Allow ad-hoc inspection without waiting for a real merge.  Useful
-  # while iterating on `release-plz.toml` or `cliff.toml`.
+  # ─── push trigger DISABLED 2026-05-08 — see DEFERRAL NOTICE above ───
+  # Workflow run 25583934251 on commit d3a1adc1d (R6 → R8 Path A merged)
+  # confirmed that release-plz's hardcoded `cargo package --workspace`
+  # trips the polars-arrow chrono ≤0.4.41 vs workspace 0.4.44 conflict
+  # regardless of `release = false` / `publish = false` flags.  Until
+  # polars upstream ships a chrono-compatible release this workflow is
+  # manual-only.  Uncomment the `push:` block below to re-enable.
+  # push:
+  #   branches: [main]
+  # Manual `gh workflow run release-plz.yml` for the maintainer to spot-
+  # check what release-plz proposes (e.g. on a temporary branch where
+  # the polars rev is updated, ahead of formally re-enabling the push
+  # trigger).
   workflow_dispatch:
 
 # Default to ZERO permissions; each job grants only what it needs.
