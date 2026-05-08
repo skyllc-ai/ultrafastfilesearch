@@ -288,3 +288,116 @@ Plus a belt-and-suspenders verification step at the end of the workflow that ass
 - **Does NOT add `[[package]]` per-crate config**.  Workspace defaults only.  R6 adds per-crate `publish = true` overrides for the 13 publishable members.
 - **Does NOT install `cargo-semver-checks`**.  Disabled via `semver_check = false`.  R6 enables it as part of the metadata audit.
 - **Does NOT add a schedule trigger**.  Push-to-main + workflow_dispatch is sufficient — scheduled re-runs of the same history would produce no new observations.
+
+## 10. R3.5 + R6 addendum — `version = ` requirements + crates.io metadata audit (2026-05-07)
+
+Captured at the close of Phase R6 (PR `feat/release-auto-r6-publishability`).
+
+### Trigger: silent shadow-mode failure
+
+R3 landed on 2026-04-25 and was expected to start producing meaningful per-merge `release-plz update` summaries within the next 1–2 weeks.  After 12 days the workflow had run successfully on every push to `main` but **every summary was empty**: `release-plz proposed no version bump and no changelog entry`.
+
+A local reproduction surfaced the root cause:
+
+```
+$ release-plz update --config release-plz.toml
+[ERROR] failed to determine next versions
+Caused by:
+    failed to verify manifest at .../crates/uffs-broker/Cargo.toml
+Caused by:
+    dependency `uffs-security` does not specify a version
+```
+
+`release-plz update` invokes `cargo package` per crate (to validate that the manifest can produce a tarball acceptable to crates.io).  Cargo refuses to package any crate whose `[dependencies]` entries lack a `version =` requirement, even when the entry resolves through a `path =`.  All 8 of UFFS's internal `[workspace.dependencies]` aliases were `path =` only, plus 2 direct path-deps in `crates/uffs-cli/Cargo.toml`, plus the polars git pin in `crates/uffs-polars/Cargo.toml`.
+
+Inside the workflow the failure was swallowed by `tee /tmp/release-plz-output.log` — the `if` chain in `.github/workflows/release-plz.yml` captured the non-zero exit but the empty diff meant the summary's "no proposed changes" branch fired, masking the diagnostic from any reviewer who didn't expand the step log.
+
+### Fix (R3.5, bundled into the R6 PR)
+
+`Cargo.toml` (workspace root):
+
+```diff
+ [workspace.dependencies]
+-uffs-polars = { path = "crates/uffs-polars" }
+-uffs-security = { path = "crates/uffs-security" }
+-uffs-text = { path = "crates/uffs-text" }
+-uffs-time = { path = "crates/uffs-time" }
+-uffs-mft = { path = "crates/uffs-mft", features = ["zstd"] }
+-uffs-format = { path = "crates/uffs-format" }
+-uffs-core = { path = "crates/uffs-core" }
+-uffs-client = { path = "crates/uffs-client" }
++uffs-polars = { path = "crates/uffs-polars", version = "0.5.90" }
++uffs-security = { path = "crates/uffs-security", version = "0.5.90" }
++uffs-text = { path = "crates/uffs-text", version = "0.5.90" }
++uffs-time = { path = "crates/uffs-time", version = "0.5.90" }
++uffs-mft = { path = "crates/uffs-mft", version = "0.5.90", features = ["zstd"] }
++uffs-format = { path = "crates/uffs-format", version = "0.5.90" }
++uffs-core = { path = "crates/uffs-core", version = "0.5.90" }
++uffs-client = { path = "crates/uffs-client", version = "0.5.90" }
+```
+
+`crates/uffs-polars/Cargo.toml`:
+
+```diff
+-polars = { git = "...", rev = "1e9a63b9...", default-features = false, features = [...] }
++polars = { git = "...", rev = "1e9a63b9...", version = "0.53.0", default-features = false, features = [...] }
+```
+
+`crates/uffs-cli/Cargo.toml`:
+
+```diff
+-uffs-client = { path = "../uffs-client", default-features = false }
+-uffs-format = { path = "../uffs-format" }
++uffs-client = { path = "../uffs-client", version = "0.5.90", default-features = false }
++uffs-format = { path = "../uffs-format", version = "0.5.90" }
+```
+
+`just/test.just` (`polars` recipe): added a post-`cargo update` step that re-derives the polars version from `cargo tree` output and edits the `version =` field in lockstep with the new `rev =`, so future polars major-version bumps don't drift the version requirement.
+
+### Validation
+
+Local re-run after the fix:
+
+```
+$ release-plz update --config release-plz.toml
+* `uffs-polars`: 0.5.90
+* `uffs-security`: 0.5.90
+* `uffs-text`: 0.5.90
+* `uffs-time`: 0.5.90
+* `uffs-mft`: 0.5.90
+* `uffs-format`: 0.5.90
+* `uffs-core`: 0.5.90
+* `uffs-client`: 0.5.90
+* `uffs-daemon`: 0.5.90
+* `uffs-mcp`: 0.5.90
+* `uffs-broker`: 0.5.90
+* `uffs-cli`: 0.5.90
+```
+
+12 publishable crates enumerated cleanly (no errors; uffs-diag excluded by its own `publish = false`; uffs-ci-pipeline / uffs-gen-hooks / uffs-gen-workflow excluded by their `release = false` blocks added in this PR).
+
+### R6 deliverables in this PR
+
+1. `[package.metadata.docs.rs]` blocks added to all 12 publishable crates.  Three platform tiers:
+    - **Single-target Linux**: `uffs-time`, `uffs-text`, `uffs-format`, `uffs-polars` (no platform-gated items).
+    - **Multi-target Linux + Windows**: `uffs-mft`, `uffs-core`, `uffs-daemon`, `uffs-client`, `uffs-cli`, `uffs-mcp` (all carry `#[cfg(windows)]` / `#[cfg(unix)]` divergent code paths).
+    - **Multi-target Linux + Windows + macOS**: `uffs-security` (Keychain on macOS, DACL on Windows, flock on Unix — three distinct surfaces).
+    - **Windows-only**: `uffs-broker` (`default-target = "x86_64-pc-windows-msvc"` because the entire crate is a Windows handle broker).
+2. `crates/uffs-diag/Cargo.toml` — explicit `publish = false` (per plan §R6 step 2).  Belt-and-suspenders: blocks both release-plz and any local `cargo publish -p uffs-diag` from a developer machine.
+3. `release-plz.toml` per-package overrides — `[[package]] release = false` for `uffs-ci-pipeline`, `uffs-gen-hooks`, `uffs-gen-workflow`.  These are internal CI tools (already `publish = false` at the crate level); the `release = false` is the surgical fix per plan §R6 step 2 to keep them out of release-plz's per-package iteration.
+4. `.github/workflows/crates-io-dry-run.yml` — weekly + workflow_dispatch scheduled job that runs `cargo publish --dry-run -p <crate>` for every publishable crate and posts a per-crate status table to the workflow summary.  Currently runs in **ADVISORY mode** (`FAIL_ON_DRY_RUN_ERROR=false`) because two known-expected failure classes exist:
+    - **Crate-name reservations not yet pushed** (R6 step 6, deferred): every dry-run fails with `no matching package named uffs-X found` until 0.0.0 stub versions are reserved on crates.io from a throwaway external workspace.
+    - **polars / chrono publishability gap**: `uffs-polars` (and any crate that transitively depends on it) fails with `failed to select a version for chrono`.  Our git-pinned polars rev uses different feature ergonomics than the published `polars = "0.53.0"`; the published-form resolution pulls a `chrono-tz` chain that conflicts with our workspace `chrono` pin.  Resolution is R8 dress rehearsal scope — either flip `uffs-polars` to `publish = false` (cascades to its transitive dependents), or align chrono with crates.io polars expectations.
+5. `docs/publishing.md` — DORMANT runbook covering: pre-publish checklist (per go-live decision), per-release checklist (every release post-R9), yank decisions log, post-publish smoke checks, manual fallback ordering (when release-plz is broken), and an OIDC/trusted-publisher section to be filled in during R7.
+
+### What R6 deliberately does NOT do
+
+- **Does NOT reserve crate names on crates.io**.  Plan §R6 step 6 explicitly mandates that reservations happen from a *throwaway* external workspace, not the UFFS repo, so the UFFS repo never carries a `publish = true` state.  The reservation operation is documented in `docs/publishing.md`'s pre-publish checklist as a prerequisite for R8.
+- **Does NOT install `cargo-semver-checks`**.  Plan §R6 mentions this as part of the metadata audit; deferred to a follow-up because the CI integration is non-trivial (semver-checks needs a baseline crate to compare against, and we don't have a published v0 yet).
+- **Does NOT add OIDC trusted-publisher scaffolding**.  Plan §R7 scope.
+- **Does NOT flip the workspace-level `publish = false`** in `release-plz.toml`.  Plan §R8 scope.
+- **Does NOT enable `FAIL_ON_DRY_RUN_ERROR=true`** in the dry-run workflow.  Toggled only when crate-name reservations and the polars-chrono gap are both resolved (post-R6 + post-R8).
+
+### Forward-compat assertion
+
+When R5 deletes `build/update_all_versions.rs`, the `version = "0.5.90"` strings added in this PR will need to be kept in sync with `[workspace.package].version` by release-plz (which already handles workspace-version synchronization natively, including dependency version bumps).  No manual coordination required: release-plz reads `[workspace.package].version` and propagates the new value to every internal-dep `version =` field as part of its release-PR generation.  Verified by reading release-plz source (`crates/release_plz_core/src/version.rs`).

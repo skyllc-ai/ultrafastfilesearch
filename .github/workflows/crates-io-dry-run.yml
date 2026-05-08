@@ -1,0 +1,272 @@
+# SPDX-FileCopyright (c) 2025-2026 SKY, LLC.
+# SPDX-License-Identifier: MPL-2.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# crates.io dry-run — Phase R6 of `release-automation-plan.md` step 4
+#
+# What this does:
+#
+#   Runs `cargo publish --dry-run -p <crate>` for every workspace member
+#   that is publishable (i.e. doesn't have `publish = false` set in its
+#   Cargo.toml).  A successful dry-run for a crate proves that its
+#   metadata (`description`, `keywords`, `categories`, `readme`, `license`,
+#   docs.rs config, dependency version requirements) is acceptable to
+#   crates.io's manifest validator AND that all of its registry-form
+#   dependencies resolve.
+#
+# Why advisory (workflow always exits 0):
+#
+#   In the R6→R7 timeframe, several KNOWN-EXPECTED failures exist:
+#
+#     1. Internal crate name reservations not yet pushed.  Until
+#        `uffs-polars`, `uffs-security`, `uffs-text`, etc. are reserved on
+#        crates.io with stub 0.0.0 versions (R6 step 6, deliberately
+#        deferred to keep this PR scope-bounded), every published-form
+#        dependency on a workspace member fails with "no matching package
+#        named `uffs-X` found".  E.g. `cargo publish --dry-run -p
+#        uffs-broker` fails because `uffs-security = "0.5.90"` can't
+#        resolve.
+#
+#     2. polars git-pin vs crates.io version-feature mismatch.  The
+#        `uffs-polars` facade pins polars to a specific git rev for
+#        feature-set determinism (see `crates/uffs-polars/Cargo.toml`
+#        comment block).  When `cargo publish` strips the git source and
+#        emits `polars = "0.53.0"` for crates.io resolution, the registry
+#        polars 0.53.0's transitive `chrono-tz` constraints conflict with
+#        our workspace-pinned `chrono`.  This is a real publishability
+#        blocker that R8 (dress rehearsal) will resolve — likely by
+#        either flipping uffs-polars to `publish = false` or aligning
+#        the chrono pin with crates.io polars expectations.
+#
+#   For these reasons the workflow currently runs in OBSERVE mode: it
+#   still loops every publishable crate, captures per-crate success or
+#   failure, and posts a full per-crate status table to the workflow
+#   summary, but it does NOT fail the job.  When crate-name reservations
+#   are pushed and the polars/chrono issue is resolved, flip
+#   `FAIL_ON_DRY_RUN_ERROR=true` in the env block below to convert
+#   advisory mode into a hard gate.
+#
+# Why scheduled + workflow_dispatch:
+#
+#   Weekly schedule catches metadata drift introduced by upstream
+#   ecosystem changes (a new version of `chrono` lands that's
+#   incompatible with our pin, an upstream crate name lookup gets
+#   blocked by an account suspension, etc.).  workflow_dispatch lets
+#   maintainers trigger ad-hoc validation while iterating on Cargo.toml
+#   edits during R6/R7/R8 hardening.  No `push:` trigger because the
+#   dry-run takes ~5-15 minutes and the metadata-relevant changes are
+#   rare; weekly cadence is sufficient signal.
+#
+# References:
+#
+#   • plan §R6 step 4 — workflow specification
+#   • plan §R6 step 6 — crate name reservation prerequisite
+#   • plan §R8     — dress rehearsal that will resolve known failures
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: "📦 crates.io dry-run"
+
+on:
+  schedule:
+    # Mondays 06:00 UTC — chosen to land before maintainers' typical
+    # work-week start so any drift surfaced over the weekend is visible
+    # in the workflow summary by the time someone looks.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+# Read-only by design.  The dry-run never writes; the workflow's
+# inability to write to the registry IS the safety guarantee.
+permissions:
+  contents: read
+
+# Serialise concurrent runs on the same ref so two close-together
+# triggers don't fight over the runner cache.  cancel-in-progress
+# is false because each run captures observation-valuable state.
+concurrency:
+  group: crates-io-dry-run-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dry-run:
+    name: cargo publish --dry-run (workspace)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Skip on forks (fork PRs can't write to the workflow summary in
+    # the source repo and would produce noisy permission-denied runs).
+    if: github.repository_owner == 'skyllc-ai'
+
+    env:
+      # Flip to `true` once R6 step 6 (crate name reservations) and
+      # R8 (polars/chrono resolution) are both complete.  In that
+      # state the dry-run becomes a hard gate that catches metadata
+      # regressions immediately rather than leaving them in a
+      # silent-summary state.
+      FAIL_ON_DRY_RUN_ERROR: 'false'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Default GITHUB_TOKEN is fine for read-only checkout.  The
+          # workflow's `permissions: contents: read` already restricts
+          # write capability; explicit `persist-credentials: false`
+          # makes the no-write contract auditable from the workflow.
+          persist-credentials: false
+
+      - name: Install pinned nightly (from rust-toolchain.toml)
+        # `rustup show` reads `rust-toolchain.toml` and installs the
+        # exact channel + components pinned there.  Matches the
+        # convention used by the rest of UFFS's CI workflows
+        # (release-plz.yml, cargo-vet-refresh.yml, pr-fast.yml).
+        run: rustup show
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          # Dedicated cache key — dry-run's compile output is small
+          # (per-crate package verifications) and disjoint from the
+          # main CI compile, so a separate key prevents the two from
+          # evicting each other.
+          shared-key: crates-io-dry-run
+
+      - name: Enumerate publishable crates
+        id: enumerate
+        run: |
+          set -euo pipefail
+          # `cargo metadata` produces full workspace metadata including
+          # each package's `publish` field.  Per cargo docs:
+          #   - `publish = false` serialises as `"publish": []`
+          #   - `publish = true` (or unset) serialises as `"publish": null`
+          #   - `publish = ["registry"]` serialises as a non-empty array
+          # The jq filter `.publish != []` keeps unset (null) AND
+          # explicit registry lists, dropping only `publish = false`.
+          mapfile -t CRATES < <(
+              cargo metadata --no-deps --format-version 1 \
+                | jq -r '.packages[]
+                          | select(.publish != [])
+                          | .name'
+          )
+          # Multiline outputs require a heredoc-style delimiter in
+          # GitHub Actions to preserve newlines through $GITHUB_OUTPUT.
+          {
+            echo "crates<<EOF_CRATES_LIST"
+            printf '%s\n' "${CRATES[@]}"
+            echo "EOF_CRATES_LIST"
+          } >> "$GITHUB_OUTPUT"
+          echo "Enumerated ${#CRATES[@]} publishable crate(s):"
+          printf '  - %s\n' "${CRATES[@]}"
+
+      - name: Dry-run publish each crate
+        id: dry_run
+        env:
+          CRATES: ${{ steps.enumerate.outputs.crates }}
+        run: |
+          set -uo pipefail
+          # Track results in a TSV temp file so the summary step can
+          # render them as a table without re-running cargo.
+          RESULTS_TSV="${RUNNER_TEMP:-/tmp}/dry-run-results.tsv"
+          : > "$RESULTS_TSV"
+
+          ANY_FAILED=0
+          while IFS= read -r crate; do
+            [ -z "$crate" ] && continue
+            echo "::group::cargo publish --dry-run -p $crate"
+            # `--allow-dirty` is required because release-plz never
+            # reaches this workflow (it's a separate scheduled run);
+            # the working tree may have unrelated edits in CI checkouts
+            # if/when other workflows queue up.  Empirically the dirty
+            # state in CI is always the checked-out commit's tree, so
+            # `--allow-dirty` is safe.
+            #
+            # `--no-verify` is intentionally OMITTED.  We want the
+            # full per-crate compile to surface metadata-vs-source
+            # mismatches (e.g. a `[lib]` rename that breaks doc-test
+            # discovery on docs.rs).  Yes this is slow; the weekly
+            # cadence absorbs the cost.
+            if cargo publish --dry-run -p "$crate" --allow-dirty 2>&1; then
+              echo "$crate	OK" >> "$RESULTS_TSV"
+              echo "::endgroup::"
+            else
+              # Capture exit code 0|1; non-zero means dry-run failed
+              # (metadata invalid, dep can't resolve, build failed).
+              echo "$crate	FAIL" >> "$RESULTS_TSV"
+              echo "::warning title=dry-run failed::$crate failed cargo publish --dry-run"
+              echo "::endgroup::"
+              ANY_FAILED=1
+            fi
+          done <<< "$CRATES"
+
+          {
+            echo "results_tsv<<EOF_RESULTS"
+            cat "$RESULTS_TSV"
+            echo "EOF_RESULTS"
+            echo "any_failed=$ANY_FAILED"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post summary
+        if: always()
+        env:
+          MARKER: "<!-- crates-io-dry-run-managed -->"
+          ANY_FAILED: ${{ steps.dry_run.outputs.any_failed }}
+          RESULTS: ${{ steps.dry_run.outputs.results_tsv }}
+        run: |
+          set -euo pipefail
+          {
+            echo "${MARKER}"
+            echo "## crates.io dry-run results"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Commit | \`${GITHUB_SHA}\` |"
+            echo "| Triggered by | \`${GITHUB_EVENT_NAME}\` |"
+            echo "| Any failures | \`${ANY_FAILED}\` |"
+            echo "| Mode | \`$(if [ "$FAIL_ON_DRY_RUN_ERROR" = "true" ]; then echo "GATE"; else echo "ADVISORY"; fi)\` |"
+            echo ""
+            echo "### Per-crate dry-run status"
+            echo ""
+            echo "| Crate | Status |"
+            echo "|---|---|"
+            # Sort so the table is stable across runs even if cargo
+            # metadata changes its iteration order.
+            printf '%s\n' "${RESULTS}" | sort | while IFS=$'\t' read -r crate status; do
+              [ -z "$crate" ] && continue
+              icon="✅"
+              [ "$status" = "FAIL" ] && icon="❌"
+              echo "| \`${crate}\` | ${icon} ${status} |"
+            done
+            echo ""
+            if [ "$ANY_FAILED" = "1" ]; then
+              echo "### Known-expected failures (R6/R7 timeframe)"
+              echo ""
+              echo "Until **plan §R6 step 6** (crate name reservations on"
+              echo "crates.io) and **§R8** (polars/chrono resolution) land,"
+              echo "the following classes of failure are expected and do"
+              echo "NOT indicate a regression:"
+              echo ""
+              echo "- \`no matching package named \\\`uffs-X\\\` found\` —"
+              echo "  fixed by R6 step 6 (publish stub 0.0.0 versions)."
+              echo "- \`failed to select a version for \\\`chrono\\\`\` on"
+              echo "  \`uffs-polars\` and downstream — fixed by R8."
+              echo ""
+              echo "Failures of unrelated metadata (missing description,"
+              echo "invalid category slug, readme path resolution, etc.)"
+              echo "ARE actionable and should be fixed in the next PR."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail job if dry-run errors and FAIL_ON_DRY_RUN_ERROR=true
+        if: always()
+        env:
+          ANY_FAILED: ${{ steps.dry_run.outputs.any_failed }}
+        run: |
+          set -euo pipefail
+          if [ "$FAIL_ON_DRY_RUN_ERROR" = "true" ] && [ "$ANY_FAILED" = "1" ]; then
+            echo "::error::At least one crate failed cargo publish --dry-run; FAIL_ON_DRY_RUN_ERROR is set, failing job."
+            exit 1
+          fi
+          if [ "$ANY_FAILED" = "1" ]; then
+            echo "::notice::At least one crate failed cargo publish --dry-run; running in ADVISORY mode (FAIL_ON_DRY_RUN_ERROR=false), so exiting 0.  See workflow summary for the per-crate table and the known-expected-failures explainer."
+          else
+            echo "::notice::All publishable crates passed cargo publish --dry-run."
+          fi

@@ -20,6 +20,20 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
+# Multi-target build so the platform-specific items (`#[cfg(target_os = "macos")]`
+# Keychain helpers, `#[cfg(windows)]` DACL helpers, `#[cfg(unix)]` flock
+# helpers) all show up in the rendered docs.  See `uffs-time/Cargo.toml`
+# for the rationale on `--cfg docsrs`.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "x86_64-pc-windows-msvc",
+  "x86_64-apple-darwin",
+]
+
 [dependencies]
 # Logging
 tracing.workspace = true

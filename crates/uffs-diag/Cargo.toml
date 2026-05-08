@@ -30,6 +30,28 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Phase R6 of `release-automation-plan.md` step 2: explicit `publish = false`
+# at the crate level (NOT just at `release-plz.toml`).  Belt-and-suspenders:
+# - `release-plz.toml::publish = false` blocks the release-plz workflow from
+#   ever calling `cargo publish` for this crate.
+# - This `publish = false` blocks LOCAL `cargo publish -p uffs-diag` from a
+#   developer's machine even if they bypass release-plz.
+#
+# Rationale: `uffs-diag` is a workspace-only diagnostic toolchain.  Its
+# binaries (`analyze_mft_parents`, `dump_mft_records`, `compare_raw_mft`,
+# `compare_scan_parity`, `inspect_mft_record_flow`, …) operate on raw MFT
+# snapshots and Parquet exports — they're internal correctness-validation
+# instruments, not user-facing tools.  Shipping them to crates.io would
+# (a) clutter the crates.io namespace, (b) bind us to API stability we
+# don't owe consumers, and (c) leak diagnostic dependencies (`uffs-polars`
+# git pin) into a published crate where they'd be a compatibility footgun.
+#
+# Per workspace-layout in root `Cargo.toml::[workspace.members]`, this is
+# explicitly tagged "Retained workspace-only diagnostic tools (not shipped
+# in dist/)".  The `publish = false` here makes that retention contract
+# enforceable at `cargo publish` time, not just by convention.
+publish = false
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Binaries
 # ─────────────────────────────────────────────────────────────────────────────
@@ -99,4 +121,3 @@ uffs-polars.workspace = true
 # ─────────────────────────────────────────────────────────────────────────────
 [lints]
 workspace = true
-

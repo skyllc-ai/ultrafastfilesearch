@@ -19,6 +19,18 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
+# `uffs-broker` is a Windows-elevated handle broker; on non-Windows the
+# binary's `main()` short-circuits.  Override `default-target` to the MSVC
+# triple so docs.rs renders the Windows API integration that's the entire
+# point of this crate.  See `uffs-time/Cargo.toml` for the rationale on
+# `--cfg docsrs`.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-pc-windows-msvc"]
+default-target = "x86_64-pc-windows-msvc"
+
 [[bin]]
 name = "uffs-broker"
 path = "src/main.rs"
