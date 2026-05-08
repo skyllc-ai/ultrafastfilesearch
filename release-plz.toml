@@ -157,6 +157,65 @@ git_release_name = "v{{ version }}"
 release_commits = "^(feat|fix|perf|security)(\\(.+\\))?:"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Release-PR-gated tag creation (post-R4 deviation fix)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Default release-plz behaviour: `release-plz release` tries to release
+# (create the git tag, optionally publish to crates.io) on EVERY commit
+# that lands on `main`.  This default fits "publish library crates as
+# soon as you commit them" workflows but does NOT fit UFFS, which:
+#
+#   1. Has a separate workflow (`release.yml`, dispatched by
+#      `auto-tag-release.yml` while the bespoke flow is still active
+#      pre-R5) that already creates the `vX.Y.Z` tag.  Two tag-creators
+#      racing for the same ref is the failure mode that surfaced on the
+#      v0.5.91 bootstrap merge — release-plz computed a synthetic local
+#      "release commit" with a regenerated CHANGELOG and tried to tag
+#      that local SHA, while `release.yml` had already created the tag
+#      at the real merge SHA.  GitHub returned 422; release-plz failed.
+#
+#   2. Gates releases through a release-PR review step regardless of
+#      who creates the PR (release-plz vs. the maintainer's `just ship`
+#      driver).  release-plz's "publish on every commit" default is the
+#      exact opposite of that intent — it would release every push to
+#      main even when no maintainer reviewed a release PR.
+#
+# `release_always = false` flips the gate: `release-plz release` only
+# fires when the latest commit on `main` is the merge of a PR whose
+# branch starts with `pr_branch_prefix` (set above to `release-plz-`).
+# release-plz checks this via the GitHub commits-associated-with-PR
+# API; if the merge isn't from a `release-plz-*` PR, the `release` job
+# exits cleanly without trying to tag.
+#
+# Coexistence semantics during the R4 → R5 transition window:
+#
+#   • Maintainer runs `just ship` → bumps version on a `release/vX.Y.Z`
+#     branch → opens PR → squash-merges to `main`.  The merge commit is
+#     associated with a `release/*` PR, NOT `release-plz-*`.
+#     release-plz `release` job NO-OPS (clean exit).
+#     `auto-tag-release.yml` detects the Cargo.toml version diff and
+#     dispatches `release.yml`, which creates the tag + builds binaries.
+#     Single tag-creator, no race. ✓
+#
+#   • release-plz opens its own release PR (any push to `main` after
+#     this fix lands will trigger `release-plz-pr` to open
+#     `release-plz-vX.Y.Z`) → maintainer reviews + merges → release-plz
+#     `release` fires on that merge (because the PR branch starts with
+#     `release-plz-`) → creates the tag.  Single tag-creator, no race.
+#
+# Steady-state (post-R5) semantics:
+#
+#   `auto-tag-release.yml` + the bespoke `update_all_versions.rs`
+#   driver are deleted in R5.  The `release-plz-*` branch path is the
+#   only path; `release_always = false` continues to gate correctly
+#   without modification.  This setting is permanent — not a
+#   transition-only workaround.
+#
+# Reference: https://release-plz.ieni.dev/docs/config (search for
+# `release_always`).
+release_always = false
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Changelog generation
 # ─────────────────────────────────────────────────────────────────────────────
 
