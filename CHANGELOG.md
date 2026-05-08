@@ -578,9 +578,32 @@ L1 zigbuild) now ✅; §8 acceptance items all checked.
   into a red required check rather than the documented advisory
   warning.
 
-## [0.5.91] - 2026-04-25
+## [0.5.92] - 2026-05-08
+
+> **Note on the v0.5.91 gap.**  v0.5.91 was prepared and tagged but never
+> reached a published GitHub Release: the `release.yml` finalize step hit
+> a server-side `pre_receive Repository rule violations found ... Cannot
+> create ref due to creations being restricted` rejection, and after the
+> partial release was deleted, the tag name became permanently locked by
+> GitHub's *immutable releases* feature (the pre-receive hook refuses any
+> future ref creation under that name even after a clean delete).  The
+> public release sequence therefore jumps `v0.5.90 → v0.5.92`; all
+> intended v0.5.91 changes are rolled forward into this release.
 
 ### Fixed
+- **release-plz active-mode race with the bespoke `auto-tag-release.yml`
+  flow.**  Without `release_always = false`, the `release-plz release`
+  job ran on every push to `main` and competed with `auto-tag-release.yml`
+  to create the same `v*` tag, producing duplicate workflow runs and
+  occasional failed tag pushes during the R4 transition.  Setting
+  `release_always = false` in `release-plz.toml` gates tag creation
+  through `release-plz-*` PR merges only, so the bespoke flow remains
+  the sole tag source until R5 retires it.  See
+  `docs/architecture/release-automation-plan.md §R4` for the full
+  rationale and the deviations log entry "R4 release-job race".
+  (R4 active mode, PR #151)
+
+### Carried over from the unreleased v0.5.91
 - **macOS arm64 release binaries SIGKILLed at launch** under macOS 26+
   (`SIGKILL (Code Signature Invalid)` / `namespace=CODESIGNING` /
   `"Taskgated Invalid Signature"`).  `[profile.release].strip = "symbols"`
