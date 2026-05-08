@@ -553,9 +553,15 @@ impl UffsClientSync {
                     self.cached_status = Some(DaemonStatus::Ready);
                     return Ok(());
                 }
-                // Loading/refreshing or daemon restarting — retry.
-                Ok(_) | Err(ClientError::Io(_) | ClientError::ConnectionClosed) => {}
-                Err(other) => return Err(other),
+                // Any non-Ready outcome (Loading status, I/O error,
+                // connection closed, RPC timeout, transient protocol
+                // error) keeps polling.  Mirrors the async sibling at
+                // `connect.rs::await_ready` (`PollOutcome::OtherError`).
+                // Pinned by the
+                // `await_ready_retries_on_protocol_error_until_deadline`
+                // regression test — see its docstring for the
+                // 2026-05-07 Phase 7 soak background.
+                _ => {}
             }
             std::thread::sleep(poll_interval);
             poll_interval = (poll_interval * 2).min(core::time::Duration::from_secs(2));
