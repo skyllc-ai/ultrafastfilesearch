@@ -16,35 +16,39 @@
 #
 # Why advisory (workflow always exits 0):
 #
-#   In the R6→R7 timeframe, several KNOWN-EXPECTED failures exist:
+#   In the R6→R7 timeframe, ONE KNOWN-EXPECTED failure remains:
 #
 #     1. Internal crate name reservations not yet pushed.  Until
-#        `uffs-polars`, `uffs-security`, `uffs-text`, etc. are reserved on
-#        crates.io with stub 0.0.0 versions (R6 step 6, deliberately
-#        deferred to keep this PR scope-bounded), every published-form
-#        dependency on a workspace member fails with "no matching package
-#        named `uffs-X` found".  E.g. `cargo publish --dry-run -p
-#        uffs-broker` fails because `uffs-security = "0.5.90"` can't
-#        resolve.
+#        `uffs-time`, `uffs-text`, `uffs-security`, `uffs-broker` are
+#        reserved on crates.io with stub 0.0.0 versions (R6 step 6,
+#        deliberately deferred to keep this PR scope-bounded), every
+#        published-form dependency on a workspace member fails with
+#        "no matching package named `uffs-X` found".  E.g.
+#        `cargo publish --dry-run -p uffs-broker` fails because
+#        `uffs-security = "0.5.92"` can't resolve.
 #
-#     2. polars git-pin vs crates.io version-feature mismatch.  The
-#        `uffs-polars` facade pins polars to a specific git rev for
-#        feature-set determinism (see `crates/uffs-polars/Cargo.toml`
-#        comment block).  When `cargo publish` strips the git source and
-#        emits `polars = "0.53.0"` for crates.io resolution, the registry
-#        polars 0.53.0's transitive `chrono-tz` constraints conflict with
-#        our workspace-pinned `chrono`.  This is a real publishability
-#        blocker that R8 (dress rehearsal) will resolve — likely by
-#        either flipping uffs-polars to `publish = false` or aligning
-#        the chrono pin with crates.io polars expectations.
+#   FORMERLY-LISTED failure 2 (polars git-pin vs crates.io chrono
+#   mismatch) is RESOLVED as of 2026-05-08 via Path A — the 8 polars-
+#   tainted crates (`uffs-polars`, `uffs-mft`, `uffs-format`, `uffs-core`,
+#   `uffs-daemon`, `uffs-client`, `uffs-mcp`, `uffs-cli`) now carry
+#   `publish = false` so this workflow's enumeration step (jq filter
+#   `.publish != []`, see "Enumerate publishable crates" step) skips
+#   them entirely.  Only the 4 polars-free crates above are dry-run.
+#   See deviation log row "R6 → R8 publishability resolution (Path A)"
+#   in `docs/architecture/release-automation-plan.md` for the full
+#   trail; that resolution row also documents how to re-enable the 8
+#   when polars upstream publishes a nightly-API-compatible release.
 #
 #   For these reasons the workflow currently runs in OBSERVE mode: it
 #   still loops every publishable crate, captures per-crate success or
 #   failure, and posts a full per-crate status table to the workflow
-#   summary, but it does NOT fail the job.  When crate-name reservations
-#   are pushed and the polars/chrono issue is resolved, flip
+#   summary, but it does NOT fail the job.  When crate-name
+#   reservations are pushed (R6 step 6 follow-up), flip
 #   `FAIL_ON_DRY_RUN_ERROR=true` in the env block below to convert
-#   advisory mode into a hard gate.
+#   advisory mode into a hard gate.  When the polars subtree comes
+#   back online (deviation row resolution above), the 8 crates re-join
+#   the enumerated set automatically (no workflow change needed; the
+#   jq filter handles it).
 #
 # Why scheduled + workflow_dispatch:
 #
@@ -246,8 +250,10 @@ jobs:
               echo ""
               echo "- \`no matching package named \\\`uffs-X\\\` found\` —"
               echo "  fixed by R6 step 6 (publish stub 0.0.0 versions)."
-              echo "- \`failed to select a version for \\\`chrono\\\`\` on"
-              echo "  \`uffs-polars\` and downstream — fixed by R8."
+              echo "- (Formerly: \`failed to select a version for \\\`chrono\\\`\` on"
+              echo "  \`uffs-polars\` and downstream — RESOLVED 2026-05-08"
+              echo "  via Path A; the 8 polars-tainted crates now skip"
+              echo "  this workflow via \`publish = false\`.)"
               echo ""
               echo "Failures of unrelated metadata (missing description,"
               echo "invalid category slug, readme path resolution, etc.)"

@@ -19,6 +19,16 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Phase R6→R8 deviation row 5 — polars-subtree publishability deferred.
+# This crate inherits polars transitively via
+# `uffs-client → uffs-format → uffs-mft → uffs-polars`; no direct
+# polars references in code.  `cargo package` resolves the full dep
+# tree, so this crate hard-fails until polars upstream publishes a
+# release with the nightly-API patches our git/rev pin carries.  See
+# `crates/uffs-polars/Cargo.toml` and the deviation log row 5 in
+# `docs/architecture/release-automation-plan.md`.
+publish = false
+
 # Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
 # Multi-target so the platform-gated transport stack (HTTP gateway is
 # cross-platform; MCP stdio plumbing has Windows-vs-Unix branches) renders

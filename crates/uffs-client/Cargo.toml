@@ -18,6 +18,19 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Phase R6→R8 deviation row 5 — polars-subtree publishability deferred.
+# Despite the "thin-client invariant: zero polars" intent above, this
+# crate's dep tree includes `uffs-format → uffs-mft → uffs-polars` for
+# the shared CSV formatter.  `cargo package` resolves the full dep
+# tree, so this crate inherits the polars-subtree publishability
+# problem until polars upstream publishes a release with the nightly-
+# API patches our git/rev pin carries.  See
+# `crates/uffs-polars/Cargo.toml` and the deviation log row 5 in
+# `docs/architecture/release-automation-plan.md`.  (A future R9+ RFC
+# could move `len_to_u16` and `parity_attributes` into a polars-free
+# foundation crate to break this transitive chain.)
+publish = false
+
 # Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
 # Multi-target build so the Unix-domain-socket and Windows-named-pipe IPC
 # transports BOTH render in the docs.  See `uffs-time/Cargo.toml` for the

@@ -408,11 +408,22 @@ release = false
 name = "uffs-gen-workflow"
 release = false
 
-# ─── Publishable crates (R4) ─ all share the workspace-root CHANGELOG.md ─
+# ─── Publishable crates (R4) ─ share the workspace-root CHANGELOG.md ─
 #
 # Order matches the workspace dep graph (leaves → roots) so the file
 # scans top-down in dependency order, not alphabetic.  Mirrors the
 # layering documented in `docs/architecture/engine/`.
+#
+# Phase R6→R8 deviation row 5 (2026-05-08): the 8 polars-tainted
+# crates below carry `release = false` instead of `changelog_path` so
+# release-plz skips them entirely — they cannot ship to crates.io
+# while polars upstream's published 0.53.0 release lacks the nightly-
+# API patches that our in-workspace polars `git/rev` pin carries.  The
+# 4 polars-free crates (`uffs-time`, `uffs-text`, `uffs-security`,
+# `uffs-broker`) remain release-eligible.  Re-enable the 8 (flip
+# `release = false` back to `changelog_path = "CHANGELOG.md"`) when
+# polars publishes a compatible release on crates.io.  See the
+# deviation log in `docs/architecture/release-automation-plan.md`.
 
 [[package]]
 name = "uffs-time"
@@ -428,31 +439,31 @@ changelog_path = "CHANGELOG.md"
 
 [[package]]
 name = "uffs-polars"
-changelog_path = "CHANGELOG.md"
+release = false
 
 [[package]]
 name = "uffs-mft"
-changelog_path = "CHANGELOG.md"
+release = false
 
 [[package]]
 name = "uffs-format"
-changelog_path = "CHANGELOG.md"
+release = false
 
 [[package]]
 name = "uffs-core"
-changelog_path = "CHANGELOG.md"
+release = false
 
 [[package]]
 name = "uffs-client"
-changelog_path = "CHANGELOG.md"
+release = false
 
 [[package]]
 name = "uffs-mcp"
-changelog_path = "CHANGELOG.md"
+release = false
 
 [[package]]
 name = "uffs-daemon"
-changelog_path = "CHANGELOG.md"
+release = false
 
 [[package]]
 name = "uffs-broker"
@@ -460,4 +471,4 @@ changelog_path = "CHANGELOG.md"
 
 [[package]]
 name = "uffs-cli"
-changelog_path = "CHANGELOG.md"
+release = false

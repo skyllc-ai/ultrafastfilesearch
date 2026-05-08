@@ -31,6 +31,17 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Phase R6→R8 deviation row 5 — polars-subtree publishability deferred.
+# This crate has zero direct polars references in code (the "thin-client
+# invariant" comment above is faithful) but its dep tree includes
+# `uffs-mft → uffs-polars` for cross-crate helpers (`len_to_u16`,
+# `StandardInfo::parity_attributes`).  `cargo package` resolves the full
+# dep tree, so this crate inherits uffs-polars's publishability problem
+# until polars upstream publishes a release with the nightly-API
+# patches.  See `crates/uffs-polars/Cargo.toml` and the deviation log
+# row 5 in `docs/architecture/release-automation-plan.md`.
+publish = false
+
 # Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
 # See `uffs-time/Cargo.toml` for the full rationale.
 [package.metadata.docs.rs]
