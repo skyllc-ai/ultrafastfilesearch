@@ -578,7 +578,7 @@ L1 zigbuild) now ✅; §8 acceptance items all checked.
   into a red required check rather than the documented advisory
   warning.
 
-## [0.5.90] - 2026-04-25
+## [0.5.91] - 2026-04-25
 
 ### Fixed
 - **macOS arm64 release binaries SIGKILLed at launch** under macOS 26+
