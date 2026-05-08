@@ -2,80 +2,145 @@
 # SPDX-License-Identifier: MPL-2.0
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Release-plz — SHADOW MODE
+# Release-plz — ACTIVE MODE
 #
-# Phase R3 of `docs/architecture/release-automation-plan.md`.
+# Phase R4 of `docs/architecture/release-automation-plan.md`.
 #
 # What this does:
 #
 #   On every push to `main` (and on `workflow_dispatch` for ad-hoc
-#   inspection), this workflow installs `release-plz` and runs
-#   `release-plz update` against the workspace.  That command is
-#   LOCAL-ONLY by design — it modifies `Cargo.toml` and `CHANGELOG.md`
-#   files in the runner's checkout but never pushes, opens PRs, creates
-#   tags, or publishes.  We then capture `git diff` and `git status`
-#   and post them to the workflow run summary so a human reviewer can
-#   see what release-plz WOULD do if we flipped active mode.
+#   inspection), this workflow runs the official `release-plz/action`
+#   in its default two-step mode:
 #
-# Why "update", not "release-pr --dry-run":
+#     1. release-pr — open or update a release PR titled
+#                     `chore: release vX.Y.Z` containing the proposed
+#                     workspace version bump and the regenerated
+#                     CHANGELOG.md entries.  Idempotent: if the PR
+#                     already exists with the same plan, no-op.
 #
-#   Release-plz CLI has multiple subcommands:
+#     2. release    — runs ONLY when the head commit is the squash-
+#                     merge of the release PR (release-plz detects
+#                     this by inspecting the commit subject + the
+#                     `pr_branch_prefix = "release-plz-"` marker
+#                     from `release-plz.toml`).  In that case it
+#                     creates the `vX.Y.Z` git tag and the matching
+#                     GitHub Release.  Tag push triggers
+#                     `release.yml` which builds + uploads the
+#                     platform binaries, CHECKSUMS, SBOMs.
 #
-#     • `update`      — local-only file edits, no network beyond crates.io
-#                        registry queries; never opens PR / pushes / tags.
-#     • `release-pr`  — runs `update` THEN opens / updates a PR via the
-#                        GitHub API.  Has a `--dry-run` flag but the dry-run
-#                        story has changed across versions and producing a
-#                        clean SUCCESS exit with informational output is
-#                        non-trivial.
-#     • `release`     — publishes packages + creates tags + GitHub Release.
-#                        Requires `CARGO_REGISTRY_TOKEN`.
+#   The same workflow handles both phases — release-plz routes
+#   internally based on the head-commit shape.
 #
-#   `update` is the clean shadow-mode primitive: it's explicitly local-only,
-#   needs no special flags, and produces a stable success exit when
-#   release-plz successfully computes the plan.  The diff IS the dry-run
-#   output.  This is the same approach orhun's blog post recommends.
+# Phase history:
 #
-# Why advisory (workflow always green):
+#   • R3 (PR #67, 2026-04-25): this workflow ran `release-plz update`
+#     in SHADOW mode (local-only file edits, no git/GitHub state
+#     change, advisory only).  Sat dormant for 13 days because
+#     internal path deps lacked `version =`, breaking `cargo package`
+#     inside release-plz and silencing the proposed plan.
 #
-#   The whole point of R3 is observation without blast radius.  If the
-#   shadow run ever turns the workflow red, that's a SIGNAL — usually
-#   that the release-plz config or `cliff.toml` is broken — but it must
-#   not block other CI.  This workflow has no `needs:` dependents and is
-#   not in the branch-protection required-checks list.
+#   • R3.5 + R6 (PR #145, 2026-05-07): added explicit `version =`
+#     to internal deps, restoring the shadow-mode plan.  First
+#     successful shadow run on `main` was workflow run 25528382935
+#     (cccf4f111) — enumerated all 12 publishables with proposed
+#     bumps + changelog drafts.
+#
+#   • R4 (this PR): flips `release-plz update` (shadow) → the
+#     official `release-plz/action@v0` in default mode (release-pr +
+#     release).  Adds `contents: write` and `pull-requests: write`
+#     permissions.  Drops the manual diff-capture and "verify no git
+#     mutation" guard that were specific to shadow mode.
+#
+# Publishing dormancy (UNCHANGED from R3 → R6 — see plan §6):
+#
+#   `cargo publish` does NOT run from this workflow because:
+#
+#     1. `release-plz.toml` workspace `publish = false` (first layer).
+#     2. No `CARGO_REGISTRY_TOKEN` env var passed to the action
+#        (second layer).  release-plz.action documents that without
+#        this token it skips publishing entirely and only does the
+#        PR / tag / Release operations.
+#
+#   These two layers stay in place through R7 (OIDC scaffolding) and
+#   only flip in R8 (publishing dress rehearsal for `uffs-time`).
 #
 # Why no schedule trigger:
 #
-#   The workflow runs on `push: main`, which is the trigger that matters
-#   (each merge produces a new commit history that release-plz analyses).
-#   A scheduled run would just re-process the same history with no new
-#   data, wasting compute.
+#   The workflow runs on `push: main`, which is the trigger that
+#   matters (each merge produces commits that release-plz analyses).
+#   A scheduled run would re-process the same history with no new
+#   data, wasting compute and producing duplicate PR comments.
 #
-# Phase R3 → R4 transition:
+# Why `release-plz/action` and not the manual CLI:
 #
-#   When we flip to active mode, this workflow becomes a TWO-job workflow
-#   per release-plz docs:
+#   The action handles two pieces of book-keeping the manual CLI
+#   doesn't:
 #
-#     1. release-plz-pr   (command: release-pr) — opens / updates the
-#                          release PR.  Needs `contents: write` and
-#                          `pull-requests: write`.
-#     2. release-plz-release (command: release) — runs after the release
-#                          PR merges; creates the tag.  The existing
-#                          `release.yml` then catches the tag push and
-#                          uploads binaries.
+#     1. Detection of "is this push the merge of the release PR?" —
+#        needed to decide between `release-pr` and `release`.  The
+#        action checks the head-commit subject and the previous
+#        release PR's merged state via the GitHub API.  Doing this
+#        manually would require ~30 lines of bash.
 #
-#   The R3 → R4 diff is small: change `command: update` (run via raw
-#   shell) to `command: release-pr` / `release` (via the official
-#   action), elevate permissions, add the GITHUB_TOKEN env, fork into
-#   the two-job structure.  `release-plz.toml` itself does not change.
+#     2. Idempotency: if the same proposed plan is pushed twice
+#        (e.g. CI retry), the action no-ops instead of opening a
+#        duplicate PR or creating a duplicate tag.
+#
+#   The R3 shadow workflow used the manual CLI because shadow mode
+#   only needed `release-plz update` (no PR / tag / API operations),
+#   and the action's overhead wasn't justified.
+#
+# Two-job structure (matches release-plz's own recommended workflow):
+#
+#   release-plz/action does NOT have a single "do both" command —
+#   the action's `command:` input takes EITHER `release-pr` OR
+#   `release`, never both at once.  release-plz docs and the
+#   release-plz repo's OWN release-plz.yml use TWO separate jobs:
+#
+#     1. release-plz-pr   (command: release-pr) — runs on every push,
+#                          opens or updates the release PR.
+#     2. release-plz-release (command: release) — runs on every push,
+#                          but no-ops unless HEAD is the merge of the
+#                          release PR (release-plz detects this
+#                          internally; non-merge runs exit cleanly).
+#
+#   We mirror that structure here.  Both jobs are nearly identical
+#   apart from the `command:` value and per-job `permissions:`.
+#
+# ─── Downstream workflow trigger limitation (DOCUMENTED, not blocked) ───
+#
+# When release-plz creates a tag (`vX.Y.Z`) using the default
+# `GITHUB_TOKEN`, the resulting tag push DOES NOT trigger
+# `release.yml` (which has `on: push: tags: [v*]`).  This is by
+# GitHub's anti-loop design — actions triggered by GITHUB_TOKEN can
+# create refs but those refs don't fire downstream workflows.
+#
+# Workarounds, in order of preference (deferred to a follow-up PR):
+#
+#   A. GitHub App token — the canonical fix per release-plz docs.
+#      Requires creating a GitHub App, installing it on the repo,
+#      and storing `APP_ID` + `APP_PRIVATE_KEY` as secrets.  This is
+#      what the release-plz repo itself uses.
+#   B. Personal Access Token (PAT) stored as `RELEASE_PLZ_TOKEN`
+#      secret — simpler but ties release authority to a person.
+#   C. `release.yml` adds an `on: workflow_run` trigger that fires
+#      after this workflow completes — fully automatic but requires
+#      `release.yml` changes outside R4 scope.
+#
+# For R4, the maintainer manually pushes the tag (or pushes their
+# own Cargo.toml + CHANGELOG bump for the first release) — that's a
+# user-driven push, NOT a GITHUB_TOKEN push, so `release.yml` fires
+# normally.  The R4.5 / R5 follow-up PR sets up Option A.
 #
 # References:
 #
-#   • plan §R3 (this phase) and §R4 (active-mode follow-up)
-#   • https://release-plz.ieni.dev/docs/usage/update (the shadow command)
-#   • https://release-plz.ieni.dev/docs/github/quickstart (R4 reference)
+#   • plan §R4
+#   • https://release-plz.ieni.dev/docs/github/quickstart
+#   • https://release-plz.ieni.dev/docs/usage/release-pr
+#   • https://release-plz.ieni.dev/docs/usage/release
+#   • https://github.com/release-plz/release-plz/blob/main/.github/workflows/release-plz.yml
 
-name: "🔮 Release-plz (shadow)"
+name: "🚀 Release-plz (active)"
 
 on:
   push:
@@ -84,25 +149,16 @@ on:
   # while iterating on `release-plz.toml` or `cliff.toml`.
   workflow_dispatch:
 
-# Read-only by design.  The shadow run never writes; the workflow's
-# inability to write IS the third layer of dormancy after `publish =
-# false` in `release-plz.toml` and the missing CARGO_REGISTRY_TOKEN.
-permissions:
-  contents: read
-  pull-requests: read
-
-# Serialise runs on the same ref so two close-together merges don't
-# fight over the runner's cache and produce confusing interleaved
-# logs.  `cancel-in-progress: false` because each run is observation-
-# valuable on its own — we want the FULL history of shadow runs, not
-# just the latest.
-concurrency:
-  group: release-plz-shadow-${{ github.ref }}
-  cancel-in-progress: false
+# Default to ZERO permissions; each job grants only what it needs.
+# Matches the release-plz repo's own workflow shape.
+permissions: {}
 
 jobs:
-  shadow:
-    name: Release-plz shadow plan
+  # ────────────────────────────────────────────────────────────────
+  # Release PR job — opens/updates the release PR on every push.
+  # ────────────────────────────────────────────────────────────────
+  release-plz-pr:
+    name: Release-plz / release-pr
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -110,6 +166,21 @@ jobs:
     # produce noisy "permission denied" runs).  Matches the convention
     # release-plz docs recommend.
     if: github.repository_owner == 'skyllc-ai'
+
+    # Push branch + open/update PR.  Granted at job level so the
+    # release job below can run with a tighter (no pull-requests)
+    # permission set.
+    permissions:
+      contents: write
+      pull-requests: write
+
+    # Serialise PR-job runs on the same ref so two close-together
+    # merges don't race on opening / updating the release PR.
+    # `cancel-in-progress: false` because each push deserves a
+    # complete plan refresh.
+    concurrency:
+      group: release-plz-pr-${{ github.ref }}
+      cancel-in-progress: false
 
     steps:
       - name: Checkout repository (full history for tag analysis)
@@ -119,149 +190,85 @@ jobs:
           # tag (`vX.Y.Z`) and walk forward to determine the proposed
           # version bump.  Shallow clones break this analysis.
           fetch-depth: 0
-          # The shadow workflow makes no commits; explicitly disable
-          # credential persistence so even an accidental `git push`
-          # in a future edit can't escape.
+          # The action handles its own auth via the `GITHUB_TOKEN` env
+          # var below — no need to persist credentials in the local
+          # checkout.  Matches release-plz's own workflow shape.
           persist-credentials: false
 
       - name: Install pinned nightly (from rust-toolchain.toml)
-        # `rustup show` reads `rust-toolchain.toml` and installs the
-        # exact channel + components pinned there.  This matches the
-        # convention used by the rest of UFFS's CI workflows
-        # (cargo-vet-refresh.yml, pr-fast.yml, tier-2.yml, ...).
+        # release-plz internally invokes `cargo package` in worktrees
+        # checked out to past tags, so the toolchain must match what
+        # the rest of CI uses.  `rustup show` reads
+        # `rust-toolchain.toml` and installs the exact channel +
+        # components pinned there.
         run: rustup show
 
       - name: Cache cargo dependencies
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          # Dedicated cache key — release-plz's compile is small and
-          # disjoint from the main CI compile, so a separate key
-          # prevents the two from evicting each other.
-          shared-key: release-plz-shadow
+          # Dedicated cache key — separate from R3 shadow cache so
+          # the cache effects of active mode (which compiles different
+          # things during `cargo package` per-tag worktrees) don't
+          # interfere with any leftover shadow cache.
+          shared-key: release-plz-active-pr
 
-      - name: Install release-plz CLI
-        uses: taiki-e/install-action@dfc84ffb7254b048a0a843316ff5a2714dcdc7bd # v2
+      - name: Run release-plz release-pr
+        # Pinned to commit SHA of the v0.5.128 tag (resolved 2026-05-08)
+        # for supply-chain hygiene.  Bump alongside other action pins
+        # via the standard Dependabot or manual-refresh process.
+        uses: release-plz/action@1528104d2ca23787631a1c1f022abb64b34c1e11 # v0.5.128
         with:
-          # `release-plz` is in taiki-e/install-action's tool manifest;
-          # it installs a pre-built binary in seconds rather than
-          # compiling from source.
-          tool: release-plz
-
-      - name: Run release-plz update (local-only — no push, no PR)
-        id: run
-        run: |
-          set -euo pipefail
-          echo "::group::release-plz update output"
-          # The `update` subcommand is documented as local-only:
-          # it edits Cargo.toml and CHANGELOG.md in place but
-          # performs no git operations and no GitHub API calls.
-          # Captured to a logfile so the diff step can include it
-          # in the workflow summary even on success.
-          if release-plz update --config release-plz.toml 2>&1 | tee /tmp/release-plz-output.log; then
-            echo "release_plz_status=ok" >> "$GITHUB_OUTPUT"
-          else
-            # Capture the exit code but don't fail the job — shadow
-            # mode is advisory.  A red shadow workflow blocks
-            # observation of the next merge, which defeats the point.
-            echo "release_plz_status=failed" >> "$GITHUB_OUTPUT"
-            echo "::warning::release-plz update exited non-zero — see logs"
-          fi
-          echo "::endgroup::"
-
-      - name: Capture proposed changes and post to workflow summary
-        if: always()
+          command: release-pr
+          config: release-plz.toml
         env:
-          # Make the marker text easy to find in the summary tab and
-          # in any future cross-run diffing tooling.
-          MARKER: "<!-- release-plz-shadow-managed -->"
-          STATUS: ${{ steps.run.outputs.release_plz_status }}
-        run: |
-          set -euo pipefail
-          {
-            echo "${MARKER}"
-            echo "## Release-plz shadow run"
-            echo ""
-            echo "| Field | Value |"
-            echo "|---|---|"
-            echo "| Commit | \`${GITHUB_SHA}\` |"
-            echo "| Triggered by | \`${GITHUB_EVENT_NAME}\` |"
-            echo "| release-plz status | \`${STATUS}\` |"
-            echo ""
-            echo "### What release-plz would change"
-            echo ""
+          # `contents: write` + `pull-requests: write` granted at job
+          # level; release-plz reads this token to push the release-PR
+          # branch and open / update the PR.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # NO `CARGO_REGISTRY_TOKEN` — `release-pr` doesn't publish
+          # anyway, but keeping the env clean documents intent.
 
-            if git diff --quiet HEAD --; then
-              echo "_release-plz proposed **no version bump and no changelog entry**._"
-              echo ""
-              echo "Possible reasons:"
-              echo ""
-              echo "- No new commits since the last tag"
-              echo "  (\`$(git describe --tags --abbrev=0 2>/dev/null || echo 'no tags')\`)."
-              echo "- All commits since the last tag are SUPPRESSED types"
-              echo "  (\`chore:\`, \`docs:\`, \`test:\`, \`build:\`, \`ci:\`,"
-              echo "  \`refactor:\`, \`style:\`, \`revert:\`)."
-              echo "- The release-plz \`update\` step failed; check the"
-              echo "  step log above for diagnostics."
-            else
-              echo "<details><summary>Proposed file diff (click to expand)</summary>"
-              echo ""
-              echo '```diff'
-              # Cap diff at 500 lines per file so a runaway changelog
-              # rewrite can't overflow the summary's 1MiB limit.  The
-              # full diff is still in the artifact / job log.
-              git diff HEAD -- | head -n 5000
-              echo '```'
-              echo ""
-              echo "</details>"
-              echo ""
-              echo "**Files touched**:"
-              echo ""
-              echo '```'
-              git status --short
-              echo '```'
-            fi
+  # ────────────────────────────────────────────────────────────────
+  # Release job — creates tag + GitHub Release on release-PR merge.
+  # ────────────────────────────────────────────────────────────────
+  release-plz-release:
+    name: Release-plz / release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
-            echo ""
-            echo "### release-plz CLI output (last 100 lines)"
-            echo ""
-            echo '```'
-            tail -n 100 /tmp/release-plz-output.log 2>/dev/null \
-              || echo "(no output captured)"
-            echo '```'
+    if: github.repository_owner == 'skyllc-ai'
 
-            echo ""
-            echo "---"
-            echo ""
-            echo "_This is Phase R3 SHADOW mode — release-plz is observing only._"
-            echo "_No PR was opened, no tag was created, no package was published._"
-            echo "_See \`docs/architecture/release-automation-plan.md\` Phase R3 for context._"
-          } >> "$GITHUB_STEP_SUMMARY"
+    # Tag push only — no PR operations from this job.
+    permissions:
+      contents: write
 
-      # Belt-and-suspenders: explicitly assert no git refs were created
-      # and no commits were made.  If a future edit accidentally adds
-      # a `git commit` or `git push`, this step turns red and surfaces
-      # the regression immediately.
-      - name: Verify no git state was mutated
-        if: always()
-        run: |
-          set -euo pipefail
-          # The runner's HEAD must still be the checked-out SHA.
-          actual=$(git rev-parse HEAD)
-          expected="${GITHUB_SHA}"
-          if [ "${actual}" != "${expected}" ]; then
-            echo "::error::Shadow run mutated git HEAD (was ${expected}, now ${actual})"
-            echo "::error::This is a contract violation — shadow mode must not commit."
-            exit 1
-          fi
-          # No new tags created.
-          new_tags=$(git tag --contains HEAD | grep -v '^$' || true)
-          # The currently-checked-out commit MAY be tagged (e.g. on a
-          # tag-push event), but the shadow workflow itself should not
-          # have created any tags.  We can't easily distinguish "tag
-          # was here before checkout" from "shadow created tag" without
-          # snapshotting the tag list at the start of the job; for now
-          # we just emit the list as a diagnostic.
-          if [ -n "${new_tags}" ]; then
-            echo "::notice::Tags pointing at HEAD: ${new_tags}"
-          fi
-          echo "✅ Git state unchanged — shadow contract honoured"
+    steps:
+      - name: Checkout repository (full history for tag analysis)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned nightly (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: release-plz-active-release
+
+      - name: Run release-plz release
+        # `command: release` no-ops if HEAD is not the merge of the
+        # release PR — release-plz detects this internally.  So this
+        # job runs on every push but only does work when the PR
+        # actually merged.
+        uses: release-plz/action@1528104d2ca23787631a1c1f022abb64b34c1e11 # v0.5.128
+        with:
+          command: release
+          config: release-plz.toml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # NO `CARGO_REGISTRY_TOKEN` — see "Publishing dormancy"
+          # comment block at the top of this file.  Adding this env
+          # var is the SECOND of TWO layers that must change to
+          # enable publishing; both flip in R8.
