@@ -3,7 +3,7 @@
 #
 # release-plz workspace configuration for UFFS.
 #
-# Phase R3 of `docs/architecture/release-automation-plan.md`.
+# Phase R4 (active mode) of `docs/architecture/release-automation-plan.md`.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # What this file does
@@ -15,19 +15,146 @@
 # `cliff.toml` at the workspace root (Phase R2), pointed at via
 # `changelog_config` below.
 #
-# In Phase R3 we run release-plz in SHADOW mode: the workflow at
-# `.github/workflows/release-plz.yml` invokes `release-plz update` (a
-# LOCAL-ONLY command — it edits the runner's checkout but never pushes,
-# opens PRs, creates tags, or publishes) and reports the resulting
-# `git diff` to the workflow summary.  No production state changes.
+# Phase history:
 #
-# In Phase R4 we'll keep this config IDENTICAL and only flip the workflow
-# command from `update` (shadow) to `release-pr` + `release` (active),
-# adding the necessary write-permission tokens.  The structural decisions
-# encoded here — `publish = false`, `git_*_enable = true`, the cliff.toml
-# pointer — survive the cutover unchanged.
+#   • R3 (shipped 2026-04-25, PR #67): release-plz wired up in SHADOW mode.
+#     The workflow invoked `release-plz update` (local-only, never pushes /
+#     opens PRs / creates tags) and posted the proposed `git diff` to the
+#     workflow summary.  No production state changes.
+#
+#   • R3.5 + R6 (shipped 2026-05-07, PR #145): added explicit `version =`
+#     to internal path deps so `cargo package` succeeds inside release-plz,
+#     plus `[package.metadata.docs.rs]` blocks on the 12 publishable crates
+#     and a scheduled `cargo publish --dry-run --workspace` advisory CI lane.
+#
+#   • R4 (this commit): flips the workflow from `release-plz update`
+#     (shadow / local-only) to `release-plz release-pr` + `release-plz
+#     release` (active mode — opens release PRs, creates tags + GitHub
+#     Releases on merge of those PRs).  Publishing to crates.io stays
+#     dormant (workspace `publish = false` + missing CARGO_REGISTRY_TOKEN,
+#     unchanged from R3).  Settled-pre-execution decisions for R4:
+#
+#       - WORKSPACE-STYLE TAGS — single `v{{ version }}` tag per release
+#         (override of release-plz's default `{{ package }}-v{{ version }}`).
+#         Honors UFFS as one product (12 publishable crates moving in
+#         lockstep, sharing `[workspace.package].version`) and keeps the
+#         existing `release.yml` `on: push: tags: [v*]` trigger working
+#         with zero migration.
+#
+#       - WORKSPACE-STYLE CHANGELOG — all 12 publishable crates point at
+#         the workspace-root `CHANGELOG.md` via per-package `changelog_path`
+#         overrides.  Per-crate crates.io detail pages will link back to
+#         this single file.  Same pattern `cargo` and `rustls` use for
+#         their workspaces.
+#
+#       - GIT_ONLY BASELINE — UFFS is unpublished through R8, so the
+#         crates.io registry has no version data to diff against.  We tell
+#         release-plz to use git tags (`v0.5.x` series) as the baseline
+#         instead.  Flips back to registry mode in R8 once at least one
+#         crate is on crates.io.
+#
+#       - RELEASE_COMMITS FILTER — only `feat:`, `fix:`, `perf:`, and
+#         `security:` commit subjects trigger a release PR.  `chore`,
+#         `ci`, `build`, `docs`, `refactor`, `test`, `style`, `revert`
+#         are silently ignored even when they land on `main`.  Mirrors
+#         the suppression list in `cliff.toml`'s `commit_parsers`.
 
 [workspace]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Versioning baseline (R4 — active mode)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# UFFS is not yet published to crates.io (workspace `publish = false`,
+# Phase R8/R9 territory).  release-plz's default behaviour — query the
+# crates.io registry for the latest published version of each package and
+# diff HEAD against it — produces no useful baseline because the registry
+# has nothing to return.  Symptoms in shadow CI runs (PR #145 commit
+# cccf4f111, run 25528382935):
+#
+#   WARN Package `uffs-polars@*.*.*` not found
+#   WARN Package `uffs-security@*.*.*` not found
+#   ... (12 crates, all "not found")
+#
+# `git_only = true` flips release-plz into a tag-based baseline mode: it
+# scans `git tag` output for tags matching `git_tag_name` (set below to
+# `v{{ version }}` to match the existing UFFS tag scheme), picks the
+# latest semver-ordered tag, checks out that tag's worktree, and uses its
+# Cargo.toml + file content as the baseline.  Required while crates.io is
+# empty.
+#
+# Forward-compat note for R8:
+#
+#   When R8 publishes the first crate to crates.io, `git_only = true` and
+#   `publish = true` cannot both be true on the same package — release-plz
+#   refuses that combination by design (see release-plz docs §git_only).
+#   The R8 PR will either (a) flip `git_only = false` workspace-wide once
+#   ≥1 crate is published, or (b) carry per-package `git_only` overrides
+#   for the remaining unpublished crates during the staggered rollout.
+git_only = true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tag & GitHub Release naming (R4 — workspace style)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# release-plz's default for multi-package workspaces is
+# `{{ package }}-v{{ version }}` — one tag per crate per release.  For
+# UFFS that would produce 12 tags per cut (`uffs-cli-v0.5.91`,
+# `uffs-core-v0.5.91`, ...) and break the existing `release.yml` workflow
+# whose `on: push: tags: [v*]` trigger expects exactly one tag per
+# release.
+#
+# Override to a single workspace tag.  Honors:
+#
+#   • UFFS is one product, not 12 independently-released crates — the
+#     workspace-level `[workspace.package].version` is the single source of
+#     truth, all 12 publishable crates share it (R3.5 fix in PR #145).
+#
+#   • The existing `release.yml` (`auto-tag-release.yml` predecessor)
+#     watches for `v*` tag pushes and uploads platform binaries +
+#     CHECKSUMS + SBOMs.  Switching to per-crate tags would require
+#     updating `release.yml`'s trigger filter AND its asset upload logic
+#     to deduplicate the 12 per-crate tag pushes that all want to upload
+#     the same binaries.
+#
+#   • The existing CHANGELOG.md uses `## [0.5.71]` per-version sections,
+#     not per-crate-per-version.  Single tag matches single CHANGELOG.
+#
+# Same pattern in production: `cargo` (one tag, one CHANGELOG, multi-crate
+# workspace) and `rustls` (same shape).  Diverges from `tokio` (per-crate
+# tags, per-crate CHANGELOG) because UFFS releases lockstep, tokio doesn't.
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Release-trigger filter (R4)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Restrict which commit subjects trigger a release-PR refresh.  Without
+# this, every push to `main` (including `chore:`, `docs:`, `ci:`,
+# `build:` housekeeping) would re-open the release PR with a fresh
+# version-bump preview, producing churn and noise in the PR list.
+#
+# The regex below matches the "release-worthy" subset of Conventional
+# Commits — exactly the set that `cliff.toml`'s `commit_parsers` maps to
+# changelog sections (Added / Fixed / Performance / Security / Breaking).
+# All other types (`chore`, `docs`, `test`, `build`, `ci`, `refactor`,
+# `style`, `revert`) are skipped as both changelog entries (cliff.toml)
+# AND release-trigger commits (here).  Single source of truth for the
+# suppression list.
+#
+# Format note: release-plz applies this regex per-commit to commits since
+# the last release.  If ANY commit in the window matches, a release is
+# proposed; if NONE match, no PR is opened.  This is a tighter filter
+# than cliff.toml's parsers — those decide if a commit appears in the
+# changelog, this decides if a release PR exists at all.
+#
+# Branch protection note: the regex INTENTIONALLY excludes the
+# `^build(\(release-automation\))?:` infra commits (R0 through R6) so
+# the release-automation refactor itself doesn't trigger phantom
+# release PRs while it's still in flight.  After R4+R5 land, those
+# commits stop being typical anyway.
+release_commits = "^(feat|fix|perf|security)(\\(.+\\))?:"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Changelog generation
@@ -114,14 +241,16 @@ semver_check = false
 pr_branch_prefix = "release-plz-"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Per-package overrides (Phase R6 of release-automation-plan.md)
+# Per-package overrides (Phases R6 + R4 of release-automation-plan.md)
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # UFFS has 17 workspace members.  Twelve are publishable to crates.io;
 # the rest are internal-only (one diagnostic crate + three CI tools +
 # one out-of-band fuzz harness in a separate workspace):
 #
-#   Publishable to crates.io (12):
+#   Publishable to crates.io (12) — `changelog_path` override below
+#   points each at the workspace-root CHANGELOG.md (R4 workspace-style
+#   changelog decision):
 #     uffs-polars, uffs-security, uffs-text, uffs-time,
 #     uffs-mft, uffs-format, uffs-core, uffs-daemon, uffs-client,
 #     uffs-mcp, uffs-broker, uffs-cli
@@ -150,12 +279,23 @@ pr_branch_prefix = "release-plz-"
 # This is the surgical fix per release-automation-plan.md §R6 step 2,
 # preferred over a workspace-level "exclude" that would obscure intent.
 #
+# `changelog_path = "CHANGELOG.md"` (R4) — `changelog_path` cannot be
+# set at workspace level (release-plz docs explicitly forbid it), so
+# each of the 12 publishable crates gets its own `[[package]]` block
+# with the same value pointing at the workspace-root file.  Path is
+# relative to the root Cargo.toml.  When release-plz writes per-crate
+# changelog entries, all 12 land in the same file — under the same
+# `## [{{ version }}] - {{ date }}` section since UFFS releases all
+# crates lockstep at one shared workspace version.
+#
 # `publish = true` per-package overrides are NOT set yet.  The
 # workspace-level `publish = false` above remains the active dormancy
 # layer until Phase R8 dress rehearsal.  When R8 flips a leaf crate
 # (likely `uffs-time`, the foundation crate with zero deps) to
 # `publish = true`, the override goes here as a per-package block —
 # explicit, auditable, reversible.
+
+# ─── Internal CI tools (R6) ─ release-plz skips these entirely ──────
 
 [[package]]
 name = "uffs-ci-pipeline"
@@ -168,3 +308,57 @@ release = false
 [[package]]
 name = "uffs-gen-workflow"
 release = false
+
+# ─── Publishable crates (R4) ─ all share the workspace-root CHANGELOG.md ─
+#
+# Order matches the workspace dep graph (leaves → roots) so the file
+# scans top-down in dependency order, not alphabetic.  Mirrors the
+# layering documented in `docs/architecture/engine/`.
+
+[[package]]
+name = "uffs-time"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "uffs-text"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "uffs-security"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "uffs-polars"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "uffs-mft"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "uffs-format"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "uffs-core"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "uffs-client"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "uffs-mcp"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "uffs-daemon"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "uffs-broker"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "uffs-cli"
+changelog_path = "CHANGELOG.md"

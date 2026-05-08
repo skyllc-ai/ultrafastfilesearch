@@ -401,3 +401,122 @@ $ release-plz update --config release-plz.toml
 ### Forward-compat assertion
 
 When R5 deletes `build/update_all_versions.rs`, the `version = "0.5.90"` strings added in this PR will need to be kept in sync with `[workspace.package].version` by release-plz (which already handles workspace-version synchronization natively, including dependency version bumps).  No manual coordination required: release-plz reads `[workspace.package].version` and propagates the new value to every internal-dep `version =` field as part of its release-PR generation.  Verified by reading release-plz source (`crates/release_plz_core/src/version.rs`).
+
+## 11. R4 addendum — release-plz active mode + workspace-style decisions (2026-05-08)
+
+Captured at the close of Phase R4 (PR `feat/release-auto-r4-active-mode`).
+
+### Decisions settled before R4 opened
+
+The R3 addendum (§9) flagged two structural decisions deferred to the R4 PR opening: per-crate vs flattened CHANGELOG.md, and per-crate vs workspace tag scheme.  Both are settled WORKSPACE-STYLE in this R4 PR.  Recorded here for the durability of the rationale.
+
+#### D1.  Single workspace tag (`v{{ version }}`), not per-crate tags
+
+**Default release-plz behaviour for multi-package workspaces**: `{{ package }}-v{{ version }}` per crate.  For UFFS that produces 12 tags per release (`uffs-cli-v0.5.91`, `uffs-core-v0.5.91`, …).
+
+**Override**: workspace-level `git_tag_name = "v{{ version }}"` (and matching `git_release_name`) in `release-plz.toml`.  Single tag per cut.
+
+**Rationale**:
+
+1. UFFS is one product, not 12 independent crates.  All 12 publishable crates share `[workspace.package].version` (R3.5).  Per-crate tags would imply independent release cadences — a property UFFS doesn't have and isn't pursuing.
+2. The existing `release.yml` workflow uses `on: push: tags: [v*]` — the v0.5.90 series.  Per-crate tags would require re-architecting `release.yml`'s trigger filter AND its asset-upload logic to deduplicate the 12 simultaneous tag pushes.
+3. The existing `CHANGELOG.md` uses `## [0.5.71] - 2026-04-19` per-version sections, not per-crate-per-version.  Single tag aligns with single CHANGELOG.
+
+**Ecosystem precedent**: matches `cargo` (one tag, one CHANGELOG, multi-crate workspace) and `rustls` (same shape).  Diverges from `tokio` (per-crate tags + per-crate CHANGELOG) because UFFS releases lockstep, tokio doesn't.
+
+**Reversibility**: low cost.  If we ever need per-crate tags (e.g. R5+ era when one crate needs an out-of-band security fix), flip `git_tag_name` back to default + update `release.yml`'s trigger filter in the same PR.
+
+#### D2.  Single workspace-root CHANGELOG.md, not per-crate CHANGELOGs
+
+**Default release-plz behaviour**: each crate gets its own `<crate>/CHANGELOG.md` written by release-plz.
+
+**Override**: 12 per-package `[[package]]` blocks in `release-plz.toml` with `changelog_path = "CHANGELOG.md"` (relative to workspace root).  All 12 publishable crates write to the same workspace-root `CHANGELOG.md`.  `changelog_path` cannot be set at workspace level — release-plz docs explicitly forbid it ("This field cannot be set in the [workspace] section").
+
+**Rationale**:
+
+1. UFFS has had a single hand-maintained `CHANGELOG.md` since v0.4.x.  Splitting into 12 per-crate files would scatter user-facing release notes across the workspace and require crates.io detail pages to point at different files per crate.
+2. Per-crate CHANGELOGs make sense when crates have independent release cadences — `tokio`'s pattern.  UFFS doesn't.
+3. The cliff.toml template (R2) renders per-version sections (`## [0.5.91]`) with subsections grouped by type (Added / Fixed / Performance / Security / Breaking).  When release-plz iterates the 12 publishable crates and asks git-cliff to render each crate's slice, all 12 produce the same `## [0.5.91]` block (template is package-agnostic).  release-plz writes the same content 12 times to the same file — idempotent in practice.
+
+**Trade-off acknowledged**: per-crate crates.io detail pages will link to the workspace-root CHANGELOG (covering all 12 crates' history) rather than a crate-specific changelog.  This is the pattern `polars`, `cargo`, and `rustls` use, so it's familiar to crates.io readers.
+
+**Reversibility**: medium cost.  Removing 12 `[[package]]` blocks reverts to per-crate CHANGELOGs, but the per-crate files would not auto-populate from history — release-plz only writes new entries going forward.  Would require either (a) hand-curating 12 per-crate CHANGELOGs at split time, or (b) accepting empty per-crate CHANGELOGs that grow only post-split.
+
+### Decisions settled at the same time
+
+#### D3.  `git_only = true` workspace baseline
+
+**Why**: UFFS is unpublished through R8.  release-plz's default behaviour queries crates.io for the previous published version per crate.  With nothing published, that's empty → release-plz silently treats every crate as "initial release" and proposes no bump even when the conventional-commit history would warrant one.  Symptom in CI: PR #145 merge ran `release-plz update` on `cccf4f111`, run [25528382935](https://github.com/skyllc-ai/UltraFastFileSearch/actions/runs/25528382935) — proposed `next version is 0.5.90` for all 12 crates despite ≥1 `fix(daemon):` commit since v0.5.90.
+
+**Override**: `git_only = true` workspace-level.  release-plz uses git tags as the baseline instead of crates.io.
+
+**Forward-compat note for R8**: `git_only = true` and `publish = true` cannot both be true on the same package — release-plz refuses that combination by design.  When R8 publishes the first crate, the R8 PR will either flip `git_only = false` workspace-wide (once ≥1 crate is published) OR carry per-package `git_only` overrides for the remaining unpublished crates during the staggered rollout.
+
+#### D4.  `release_commits` regex filter
+
+**Why**: every push to `main` (including `chore:`, `docs:`, `ci:`, `build:` housekeeping) would re-open the release PR with a fresh version-bump preview, producing churn and noise in the PR list.
+
+**Override**: `release_commits = "^(feat|fix|perf|security)(\\(.+\\))?:"` workspace-level.
+
+**Single source of truth**: this regex matches the same set of commit types that `cliff.toml`'s `commit_parsers` maps to changelog sections (Added / Fixed / Performance / Security / Breaking).  All other types (`chore`, `docs`, `test`, `build`, `ci`, `refactor`, `style`, `revert`) are skipped as both changelog entries (cliff.toml) AND release-trigger commits (here).
+
+**Branch protection note**: the regex INTENTIONALLY excludes the `^build(\(release-automation\))?:` infra commits (R0 through R6) so the release-automation refactor itself doesn't trigger phantom release PRs while it's still in flight.  After R4+R5 land, those commits stop being typical anyway.
+
+#### D5.  Two-job workflow structure
+
+**Why**: `release-plz/action` does NOT have a single "do both" command.  The action's `command:` input takes EITHER `release-pr` OR `release`, never both at once.  release-plz docs and the release-plz repo's [own release-plz.yml](https://github.com/release-plz/release-plz/blob/main/.github/workflows/release-plz.yml) use TWO separate jobs.
+
+**Implementation**: `.github/workflows/release-plz.yml` ships with two parallel jobs:
+- `release-plz-pr` (`command: release-pr`, `permissions: { contents: write, pull-requests: write }`) — runs on every push, opens or updates the release PR.
+- `release-plz-release` (`command: release`, `permissions: { contents: write }`) — runs on every push, no-ops unless HEAD is the merge of the release PR.
+
+#### D6.  Default `GITHUB_TOKEN`, not GitHub App / PAT (DOCUMENTED LIMITATION)
+
+**Why minimal infra**: R4 ships with workflow-provided `GITHUB_TOKEN`, NOT a GitHub App or PAT.  Zero new secrets, zero new infra.
+
+**Cost**: tags created by release-plz via `GITHUB_TOKEN` do NOT trigger downstream workflows (per GitHub's anti-loop policy).  `release.yml` (`on: push: tags: [v*]`) won't auto-fire after release-plz creates a tag.
+
+**Workaround for the bootstrap**: maintainer manually pushes the v0.5.91 bootstrap tag — that's a user-driven push, NOT a GITHUB_TOKEN push, so `release.yml` fires normally.
+
+**Workaround for steady-state**: a follow-up PR (informally "R4.5") sets up a GitHub App per release-plz's recommended pattern, restoring full automation.  Three options ranked in `release-plz.yml`'s header comment:
+- **A. GitHub App** (canonical fix per release-plz docs).  Requires `APP_ID` + `APP_PRIVATE_KEY` secrets, app installation on the repo.  ~30 minutes of one-time setup.
+- **B. PAT** stored as `RELEASE_PLZ_TOKEN` secret.  Simpler but ties release authority to a person.
+- **C. `release.yml` adds `on: workflow_run` trigger**.  Fully automatic but requires `release.yml` changes outside R4 scope.
+
+Option A is recommended.  Tracked but not blocked by R4 itself.
+
+### Maintainer bootstrap procedure (out of scope for R4 PR, scoped here for clarity)
+
+The R4 PR does NOT bump any crate version.  The first release-plz active-mode run on `main` after R4 lands will propose `no version bump` for all 12 crates because release-plz's `git_only` baseline check fails on the v0.5.90 worktree (which predates the R3.5 fix).  This is a self-healing transient — once a fresh tag exists, future runs work normally.
+
+To bootstrap v0.5.91 manually:
+
+1. From a fresh `git checkout main && git pull` on a clean working tree:
+   ```bash
+   git checkout -b chore/bootstrap-v0.5.91
+   ```
+2. Bump `[workspace.package].version` from `0.5.90` to `0.5.91` in the **workspace root `Cargo.toml`** (one line change).  All 12 publishable crates inherit via `version.workspace = true`.
+3. Add a `## [0.5.91] - <today>` block to `CHANGELOG.md` near the top (above the existing `## [0.5.90]` block).  Hand-curate sections (Added / Fixed / Performance) summarizing changes since v0.5.90 — git-cliff can preview the auto-generated content via:
+   ```bash
+   git cliff --config cliff.toml --unreleased --tag v0.5.91
+   ```
+4. `cargo update -w` to refresh `Cargo.lock`.
+5. `cargo check --workspace --all-targets` to confirm nothing broke.
+6. Commit + open PR + merge through normal review.
+7. After PR merges, locally fetch the merged `main` and tag it:
+   ```bash
+   git fetch origin main && git checkout main && git pull --ff-only
+   git tag -s -m "Release v0.5.91" v0.5.91
+   git push origin v0.5.91
+   ```
+   The tag push (user-driven, not GITHUB_TOKEN) triggers `release.yml`.
+8. Wait for `release.yml` to complete and produce the GitHub Release with binaries.
+9. From this point on, future `feat:` / `fix:` merges auto-trigger the `release-plz-pr` job, opening the release PR for v0.5.92 automatically.  Maintainer reviews + merges → `release-plz-release` creates the v0.5.92 tag.  **But note D6**: until R4.5 lands, the v0.5.92 tag won't auto-trigger `release.yml` — maintainer pushes the tag manually OR re-runs `release.yml` with `workflow_dispatch`.
+
+### What R4 deliberately does NOT do
+
+- **Does NOT bump any crate version**.  Bootstrap is out-of-band.
+- **Does NOT delete `auto-tag-release.yml`**.  R5 scope (after ≥2 R4-flow releases bake in).
+- **Does NOT set up a GitHub App / PAT**.  R4.5 follow-up.
+- **Does NOT publish anything to crates.io**.  Workspace `publish = false` + missing `CARGO_REGISTRY_TOKEN` are unchanged from R3 → R6.
+- **Does NOT modify `release.yml`**.  The downstream binary-build workflow stays exactly as-is; the trigger contract is preserved.
