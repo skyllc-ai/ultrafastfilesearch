@@ -197,28 +197,29 @@ release_commits = "^(feat|fix|perf)(\\(.+\\))?:"
 # API; if the merge isn't from a `release-plz-*` PR, the `release` job
 # exits cleanly without trying to tag.
 #
-# Steady-state (post-R5, 2026-05-08) semantics:
+# Coexistence semantics during the R4 → R5 transition window:
 #
-#   release-plz opens its own release PR (any `feat:`/`fix:`/`perf:`/
-#   `security:` push to `main` triggers `release-plz-pr` to open
-#   `release-plz-vX.Y.Z`) → maintainer reviews + merges → release-plz
-#   `release` job fires on that merge (because the PR branch starts
-#   with `release-plz-`) → creates the workspace tag → bridges to
-#   `release.yml` via `gh workflow run` (see the bridge step in
-#   `.github/workflows/release-plz.yml`).  Single tag-creator, no race.
+#   • Maintainer runs `just ship` → bumps version on a `release/vX.Y.Z`
+#     branch → opens PR → squash-merges to `main`.  The merge commit is
+#     associated with a `release/*` PR, NOT `release-plz-*`.
+#     release-plz `release` job NO-OPS (clean exit).
+#     `auto-tag-release.yml` detects the Cargo.toml version diff and
+#     dispatches `release.yml`, which creates the tag + builds binaries.
+#     Single tag-creator, no race. ✓
 #
-#   The pre-R5 bespoke `auto-tag-release.yml` + `update_all_versions.rs`
-#   driver was retired in R5.  Manual-tag escape hatch (maintainer
-#   pushing a `vX.Y.Z` tag from a local checkout) is unaffected: the
-#   user-driven tag push fires `release.yml` directly via its
-#   `on: push: tags: [v*]` trigger, with no race because release-plz
-#   only fires on `release-plz-*` PR merges.
+#   • release-plz opens its own release PR (any push to `main` after
+#     this fix lands will trigger `release-plz-pr` to open
+#     `release-plz-vX.Y.Z`) → maintainer reviews + merges → release-plz
+#     `release` fires on that merge (because the PR branch starts with
+#     `release-plz-`) → creates the tag.  Single tag-creator, no race.
 #
-#   `release_always = false` is permanent — not a transition-only
-#   workaround.  Without it, any push to `main` (including non-release
-#   commits) would still produce a successful `release-plz release`
-#   no-op, but the gate documents intent and prevents accidental tag
-#   creation if the conventions ever drift.
+# Steady-state (post-R5) semantics:
+#
+#   `auto-tag-release.yml` + the bespoke `update_all_versions.rs`
+#   driver are deleted in R5.  The `release-plz-*` branch path is the
+#   only path; `release_always = false` continues to gate correctly
+#   without modification.  This setting is permanent — not a
+#   transition-only workaround.
 #
 # Reference: https://release-plz.ieni.dev/docs/config (search for
 # `release_always`).
@@ -271,48 +272,17 @@ changelog_update = true
 # remains `false` until R8 dress rehearsal.
 publish = false
 
-# `git_tag_enable = true` — release-plz creates the workspace tag
-# `v{{ version }}` after the release-PR squash-merges.  This is what
-# replaces the bespoke `auto-tag-release.yml` flow deleted in R5.
+# Phase R3 leaves these on so when R4 flips active mode, release-plz
+# already knows to create the tag and the GitHub Release.  The existing
+# `release.yml` workflow watches for the tag push and uploads binaries /
+# signs them — no `release.yml` change at the R4 cutover.
 #
-# `git_release_enable = false` (R5, 2026-05-08, was `true` through R4):
-# release-plz does NOT create the GitHub Release.  Rationale:
-#
-#   `release.yml` ships a release-notes file (`release-notes.md`)
-#   that wraps the CHANGELOG entry with binary checksums, SBOM index,
-#   build-provenance attestation links, and platform-specific install
-#   guidance — all generated mid-build by the `release-preparation`
-#   job and persisted as a job artifact.  softprops/action-gh-release
-#   then publishes the GitHub Release with `body_path: release-notes.md`
-#   + `generate_release_notes: true` (the auto "What's Changed"
-#   section linking back to merged PRs).
-#
-#   If release-plz also creates the GitHub Release (with
-#   `git_release_enable = true`), softprops finds an existing release
-#   for the same tag and UPDATES it — replacing release-plz's
-#   CHANGELOG-derived body with `release-notes.md`.  Two sources
-#   competing for one Release body, with the order-dependent winner
-#   being a footgun: a maintainer reading release-plz's nicely-
-#   formatted CHANGELOG body would only see it for ~30 seconds before
-#   release.yml overwrites it.
-#
-#   Disabling release-plz's Release creation makes the contract
-#   explicit: release-plz owns the TAG (and writes CHANGELOG.md
-#   itself via `changelog_update = true`), `release.yml` owns the
-#   GITHUB RELEASE PAGE (body + assets).  Neither steps on the other.
-#
-#   Trade-off: the tag is created with no Release object until
-#   `release.yml` finishes (~10–15 min build).  In the gap a user
-#   following the tag URL on GitHub gets a 404.  Acceptable because
-#   tags only land via release-plz-merged PRs, and the operator
-#   following such a merge expects the Release to appear shortly.
-#
-#   The R5 PR's `release-plz.yml` adds an explicit `gh workflow run
-#   release.yml` dispatch step right after the `release` action, so
-#   the gap window is bounded by the build duration only — not by
-#   any human reaction time.
+# In SHADOW mode (R3) these are MOOT because we only invoke `release-plz
+# update`, which produces local file edits and never touches git refs or
+# the GitHub API.  Setting them now means R3 → R4 is a single workflow
+# diff, not a config-and-workflow combined diff.
+git_release_enable = true
 git_tag_enable = true
-git_release_enable = false
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Behavior toggles

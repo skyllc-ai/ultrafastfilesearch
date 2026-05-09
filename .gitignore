@@ -34,23 +34,25 @@ target/
 # =============================================================================
 # Build artifacts & generated binaries
 # =============================================================================
-# `build/` holds generated artifacts (workflow state, logs) — keep out of git.
-# Phase R5 (2026-05-08) removed the `build/update_all_versions.rs` carve-out
-# alongside the rust-script itself, restoring the blanket ignore established
-# pre-R0.  release-plz now drives workspace version bumps on `main` via the
-# release-PR flow described in `release-automation-plan.md` §R5.
-build/
+# `build/` holds generated artifacts (workflow state, logs) that must stay
+# out of git, EXCEPT the bespoke version-bump rust-script which is invoked
+# by `just ship` (see `just/build.just`, `just/dev.just`,
+# `scripts/ci-pipeline/src/version.rs`).  That script is the single source of
+# truth for workspace version bumps until release-plz takes over in Phase R5
+# of `docs/architecture/release-automation-plan.md` — at which point the
+# script is deleted and this exception line goes with it.
+build/*
+!build/update_all_versions.rs
 *.rlib
 *.bin
 # `*.bin` is meant to keep transient generated blobs out of git, but the
 # workspace contains three INTENTIONAL committed binary assets that must
 # remain tracked.  Without these carve-outs, release-plz aborts with
 # "the working directory has uncommitted changes" because it sees these
-# files as both committed AND gitignored.  Found during R3 release-plz
-# shadow-mode validation; see `docs/architecture/release-automation-plan.md`
-# Phase R3.  (The pre-R5 example was a carve-out for
-# `build/update_all_versions.rs`; that script was deleted in R5
-# alongside the carve-out, leaving only the `*.bin` carve-outs below.)
+# files as both committed AND gitignored — the same R0-pattern issue
+# the `!build/update_all_versions.rs` exception above resolves.  Found
+# during R3 release-plz shadow-mode validation; see
+# `docs/architecture/release-automation-plan.md` Phase R3.
 #
 # Upcase tables: `upcase_default.bin` is embedded via `include_bytes!`
 # in `crates/uffs-text/src/case_fold.rs` (compile-time dependency).

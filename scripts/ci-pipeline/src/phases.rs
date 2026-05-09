@@ -12,11 +12,9 @@
 //!
 //! * [`phase1_optimized`] — thin orchestrator: [`phase1_prime`] →
 //!   [`phase1_tests`] → [`phase1_fanout_validation`].
-//! * [`phase2_optimized`] — commit + push in a straight line (used by `just
-//!   phase2-ship`, separate from the resumable `run_enhanced_phase2` that
-//!   [`crate::ship`] drives).  R5 (2026-05-08) removed the version-bump step
-//!   from this lane; release-plz now drives version bumps on `main` via the
-//!   release-PR flow.
+//! * [`phase2_optimized`] — version bump + commit + push in a straight line
+//!   (used by `just phase2-ship`, separate from the resumable
+//!   `run_enhanced_phase2` that [`crate::ship`] drives).
 //! * [`coverage_data_exists`] / [`coverage_report_command`] — the
 //!   `coverage-report` subcommand primitives; referenced from both
 //!   `phase1_tests` and the CLI dispatch.
@@ -27,7 +25,7 @@ use colored::Colorize;
 use crate::context::{PipelineContext, get_cargo_target_dir};
 use crate::exec::{execute_command, execute_parallel_with_env};
 use crate::git_ops::{git_commit, git_push};
-use crate::version::get_current_version;
+use crate::version::{get_current_version, version_bump};
 use crate::workflow::WorkflowState;
 
 /// Return `true` if a previous `cargo llvm-cov` run left behind
@@ -248,48 +246,44 @@ pub(crate) async fn phase1_optimized(ctx: &PipelineContext) -> Result<()> {
 // Phase 2 (explicit ship lane — non-resumable counterpart)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Phase 2: Explicit ship lane (commit → push).  Used by the
-/// standalone `just phase2-ship` recipe.  The resumable equivalent
-/// lives in [`crate::ship::run_enhanced_phase2`] and is the one
-/// `run_ship_pipeline` calls.
-///
-/// R5 (2026-05-08) removed the version-bump step from this lane.
-/// release-plz drives workspace version bumps on `main` via the
-/// release-PR flow described in `release-automation-plan.md` §R5.
+/// Phase 2: Explicit ship lane (version bump → commit → push).  Used
+/// by the standalone `just phase2-ship` recipe.  The resumable
+/// equivalent lives in [`crate::ship::run_enhanced_phase2`] and is
+/// the one `run_ship_pipeline` calls.
 ///
 /// # Errors
 ///
-/// Propagates any failure from [`get_current_version`], [`git_commit`],
-/// or [`git_push`].  The workflow-state mutation will also fail if
-/// the state file cannot be written.
+/// Propagates any failure from [`version_bump`], [`git_commit`], or
+/// [`git_push`].  The workflow-state mutation will also fail if the
+/// state file cannot be written.
 pub(crate) async fn phase2_optimized(ctx: &PipelineContext) -> Result<()> {
     println!("{}", "🚀 PHASE 2: Explicit Ship Lane".blue().bold());
 
-    // Sync workflow state with the workspace version read from the
-    // unchanged `Cargo.toml` (no bump performed locally post-R5).
-    let mut state = WorkflowState::load().context("Failed to load workflow state")?;
-    let current_version =
-        get_current_version().context("Failed to read workspace version from Cargo.toml")?;
-    if state.current_version != current_version {
-        state.current_version = current_version;
-        state.save().context("Failed to save workflow state")?;
-        println!(
-            "✅ Workflow state synced with workspace version: {}",
-            state.current_version
-        );
-    }
+    // Step 1: Version increment
+    version_bump(ctx).await?;
 
-    // Step 1: Git commit (signed commit on the working branch).
+    // Update workflow state with new version
+    let mut state = WorkflowState::load().context("Failed to load workflow state")?;
+    let new_version = get_current_version().context("Failed to get updated version")?;
+    state.current_version = new_version;
+    state.version_incremented = true;
+    state.save().context("Failed to save workflow state")?;
+    println!(
+        "✅ Workflow state updated with new version: {}",
+        state.current_version
+    );
+
+    // Step 2: Git commit (signed version-bump commit on the working
+    // branch).
     git_commit(ctx).await?;
 
-    // Step 2: Git push -- opens / updates the working-branch PR.
+    // Step 3: Git push -- opens release/vX.Y.Z PR with auto-merge
+    // queued.
     //
-    // Binaries are NOT built here.  When the PR merges to `main` and
-    // a release-PR (opened by release-plz) is subsequently merged,
-    // release-plz creates the `vX.Y.Z` tag and dispatches
-    // `release.yml` to produce the reproducible cross-platform
-    // binaries on GitHub-hosted runners (R5 bridge in
-    // `.github/workflows/release-plz.yml`).
+    // Binaries are NOT built here.  Once the PR merges to main,
+    // `auto-tag-release.yml` tags the commit and invokes
+    // `release.yml`, which produces the reproducible cross-platform
+    // binaries on GitHub-hosted runners.
     git_push(ctx).await?;
 
     println!(

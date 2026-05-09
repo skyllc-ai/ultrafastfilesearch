@@ -5,14 +5,11 @@
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2025-2026 SKY, LLC.
 #
-# Phase 7 promotion of the original `scripts/ci/ci-pipeline.rs`
-# rust-script to a proper Cargo workspace binary.  The deprecation
-# shim that re-execed into this crate was retired in Phase R5 of
-# `docs/architecture/release-automation-plan.md` (2026-05-08); see
+# Phase 7 promotion of `scripts/ci/ci-pipeline.rs` from a standalone
+# `rust-script` to a proper Cargo workspace binary.  See
 # `docs/architecture/dev-flow-implementation-plan.md` § 7 for the
-# original Phase 7 rationale (kill stale rust-script caches, get
-# inline-doc IDE support, inherit workspace-wide tooling like
-# `cargo nextest` / `cargo deny`).
+# rationale (kill stale rust-script caches, get inline-doc IDE support,
+# inherit workspace-wide tooling like `cargo nextest`/`cargo deny`).
 #
 # NOTE ON LINTS: This crate intentionally does NOT opt into
 # `[lints] workspace = true`.  The workspace lints are calibrated for

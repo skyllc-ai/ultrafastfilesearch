@@ -28,8 +28,8 @@
 #   schedule.  Both restore the cache (resetting its access-time so
 #   LRU/TTL eviction stops counting against it) and re-save it (so any
 #   newer dep code lands in the cache).  When `release.yml` next runs
-#   the cache is fresh on `refs/heads/main` and prefix-fallback
-#   restores it.
+#   on a tag-dispatch from `auto-tag-release.yml`, the cache is fresh
+#   on `refs/heads/main` and prefix-fallback restores it.
 #
 #   Why not extend `release.yml` to also trigger on main pushes:
 #
@@ -41,19 +41,6 @@
 #     which would have to be carefully gated.  A separate workflow
 #     keeps the contract clean: `release.yml` ships releases,
 #     `release-cache-warm.yml` keeps its caches hot.
-#
-# Skip-on-release-bump short-circuit (R5, 2026-05-08):
-#
-#   When a push to `main` ALSO bumps `[workspace.package].version` in
-#   `Cargo.toml`, `release.yml` fires on the same commit and rebuilds
-#   from a freshly-restored cache, then re-saves it at job end.  In
-#   that case running the warm matrix in parallel is pure waste:
-#   release.yml's save will overwrite anything the warm job emits,
-#   and they compete for the same cache key.  The `detect-release-bump`
-#   job below diffs `[workspace.package].version` between `HEAD` and
-#   `HEAD~1`; if the version changed, the `warm` matrix is skipped
-#   (~165 runner-minutes saved per release cycle: ~45 min Linux +
-#   ~45 min macOS + ~75 min Windows).
 #
 # Cost calibration:
 #
@@ -122,56 +109,11 @@ env:
   RUSTC_WRAPPER: ""
 
 jobs:
-  detect-release-bump:
-    # Cheap (~5s) gate that diffs `[workspace.package].version` between
-    # `HEAD` and `HEAD~1` to decide whether `release.yml` is also
-    # firing on this push.  If it is, the warm matrix is skipped
-    # because release.yml's own cache save would overwrite ours.
-    # Pure docs / scripts / CHANGELOG-only commits never reach this
-    # job (they don't match the `paths:` filter), so the only commits
-    # we see touch `Cargo.toml`, `Cargo.lock`, `crates/**`,
-    # `rust-toolchain.toml`, or `.cargo/config.toml`.
-    name: 🔍 Detect release-version bump
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    outputs:
-      is_release_bump: ${{ steps.diff.outputs.is_release_bump }}
-    steps:
-      - name: Checkout (HEAD + HEAD~1 for version diff)
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 2
-
-      - name: Diff [workspace.package].version
-        id: diff
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Same awk extraction `auto-tag-release.yml` uses (kept intentionally
-          # identical so the two workflows agree on "this is a release commit").
-          # Anchored to `[workspace.package]` so dep-table `version = "x"`
-          # entries cannot false-positive.
-          extract() {
-            awk '/^\[workspace\.package\]/{f=1; next} f && /^\[/{f=0} f && /^version[[:space:]]*=/{print; exit}' "$1"
-          }
-          curr=$(extract Cargo.toml || true)
-          prev=$(git show HEAD~1:Cargo.toml 2>/dev/null | awk '/^\[workspace\.package\]/{f=1; next} f && /^\[/{f=0} f && /^version[[:space:]]*=/{print; exit}' || true)
-          echo "prev=$prev"
-          echo "curr=$curr"
-          if [[ -n "$prev" && -n "$curr" && "$prev" != "$curr" ]]; then
-            echo "is_release_bump=true"  >> "$GITHUB_OUTPUT"
-            echo "::notice title=Cache-warm short-circuit::[workspace.package].version changed ($prev → $curr); release.yml is firing on this commit and will refresh the cache itself.  Skipping the warm matrix to save ~165 runner-minutes."
-          else
-            echo "is_release_bump=false" >> "$GITHUB_OUTPUT"
-          fi
-
   warm:
     # Mirrors `release.yml::build-release-binaries`'s matrix exactly.
     # If you add or change a target there, change it here too —
     # otherwise the new target's cache will not be warmed and its
     # release runs will pay the cold-build tax.
-    needs: detect-release-bump
-    if: needs.detect-release-bump.outputs.is_release_bump != 'true'
     name: 🔥 Warm ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}

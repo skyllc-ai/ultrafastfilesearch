@@ -214,10 +214,9 @@ filter_commits = true
 # closest to the section header).
 sort_commits = "newest"
 
-# Tag pattern that maps git tags to release sections.  Matches the
-# `vX.Y.Z` workspace tags emitted by release-plz (Phase R4 active mode,
-# 2026-05-08; sole tag emitter post-R5 — the bespoke
-# `auto-tag-release.yml` was retired in R5).  Anchored both ends so
+# Tag pattern that maps git tags to release sections.  Must match
+# what `auto-tag-release.yml` emits (`v0.5.71`, `v0.5.72`, …) and
+# what release-plz will emit in Phase R4.  Anchored both ends so
 # stray tags like `v0.5.71-rc1` don't mistakenly anchor a release.
 tag_pattern = "v[0-9]+\\.[0-9]+\\.[0-9]+"
 

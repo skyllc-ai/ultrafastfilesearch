@@ -2170,16 +2170,9 @@ Post-retrofit verification (2026-04-23):
       (49 lines) that prints a deprecation notice and re-execs
       `cargo run -q --release -p uffs-ci-pipeline -- "$@"`.  Verified
       executable via `rust-script scripts/ci/ci-pipeline.rs --help`.
-      Marked `REMOVE-AFTER: v0.5.73` in the header.  **Retired in
-      Phase R5 of `release-automation-plan.md`** (2026-05-08); the
-      `REMOVE-AFTER` marker was satisfied at v0.5.92.
-- [x] Real-world bake-in on a live `just ship` run.  Met by the
-      v0.5.85 → v0.5.92 release sequence (every release after the
-      Phase 7 promotion shipped through the new
-      `cargo run -q --release -p uffs-ci-pipeline -- ship` invocation
-      in `just/workflow.just`).  Documented here for completeness;
-      the Phase 7 dashboard section ticks fully closed alongside the
-      R5 retirement of the deprecation shim.
+      Marked `REMOVE-AFTER: v0.5.73` in the header.
+- [ ] Real-world bake-in on a live `just ship` run.  Deferred to
+      the next release cycle.
 
 **Notes**:
 - The new crate intentionally does **not** opt into

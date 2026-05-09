@@ -46,10 +46,10 @@ single accidental flip that can leak.
 | Phase | What it adds | Status |
 |---|---|---|
 | R3   | Shadow-mode `release-plz update` workflow                     | ✅ landed |
-| R3.5 | `version = ` requirements on internal & polars deps           | ✅ landed (PR #145) |
-| R4   | Active-mode release-PR generator                              | 🟡 active (PR #148; bake-in pending first release-plz-driven release) |
-| R5   | Retire bespoke `build/update_all_versions.rs` tooling         | ✅ landed (this PR) |
-| R6   | Per-crate metadata + dry-run CI workflow                      | ✅ landed (PR #145) |
+| R3.5 | `version = ` requirements on internal & polars deps (this PR) | 🟡 in progress |
+| R4   | Active-mode release-PR generator                              | ⬜ pending |
+| R5   | Retire bespoke `build/update_all_versions.rs` tooling         | ⬜ pending |
+| R6   | Per-crate metadata + dry-run CI workflow (this PR's R6 work)  | 🟡 in progress |
 | R6 step 6 | Crate-name reservations on crates.io                     | ⬜ deferred |
 | R7   | OIDC trusted-publishing scaffolding (`if: false` gated)       | ⬜ pending |
 | R8   | Dress rehearsal — publish `uffs-time` (foundation crate)      | ⬜ pending |
