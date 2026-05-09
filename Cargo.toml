@@ -46,7 +46,7 @@ members = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.5.93"
+version = "0.5.94"
 edition = "2024"
 # MSRV: Pure Rust code compiles on stable 1.91+ (Duration::from_mins),
 # but Polars is built with features = ["nightly", "simd"] which requires
@@ -96,14 +96,14 @@ categories = ["filesystem", "command-line-utilities"]
 # proposed-plan output for 12 days because `release-plz update`
 # failed at `cargo package` with this very error.  See
 # `release-automation-baseline.md` §10 for the diagnostic trail.
-uffs-polars = { path = "crates/uffs-polars", version = "0.5.93" }
-uffs-security = { path = "crates/uffs-security", version = "0.5.93" }
-uffs-text = { path = "crates/uffs-text", version = "0.5.93" }
-uffs-time = { path = "crates/uffs-time", version = "0.5.93" }
-uffs-mft = { path = "crates/uffs-mft", version = "0.5.93", features = ["zstd"] }
-uffs-format = { path = "crates/uffs-format", version = "0.5.93" }
-uffs-core = { path = "crates/uffs-core", version = "0.5.93" }
-uffs-client = { path = "crates/uffs-client", version = "0.5.93" }
+uffs-polars = { path = "crates/uffs-polars", version = "0.5.94" }
+uffs-security = { path = "crates/uffs-security", version = "0.5.94" }
+uffs-text = { path = "crates/uffs-text", version = "0.5.94" }
+uffs-time = { path = "crates/uffs-time", version = "0.5.94" }
+uffs-mft = { path = "crates/uffs-mft", version = "0.5.94", features = ["zstd"] }
+uffs-format = { path = "crates/uffs-format", version = "0.5.94" }
+uffs-core = { path = "crates/uffs-core", version = "0.5.94" }
+uffs-client = { path = "crates/uffs-client", version = "0.5.94" }
 # NOTE: no `uffs-diag` workspace dependency alias on purpose.
 # It is a top-level diagnostic/tool crate, not a shared runtime dependency.
 
