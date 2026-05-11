@@ -30,7 +30,7 @@
     reason = "small one-shot CLI bitmap summary; SIMD-accelerated `bytecount` would be overkill for an interactive diagnostic and would add a dependency"
 )]
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
 // ============================================================================
 // Bitmap Diagnostic Command

@@ -25,7 +25,7 @@ const BROKER_PIPE_NAME: &str = r"\\.\pipe\uffs-broker";
 /// Check if the Access Broker is available (pipe exists).
 #[cfg(windows)]
 pub(crate) fn broker_available() -> bool {
-    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::ffi::OsStrExt as _;
 
     use windows::Win32::Storage::FileSystem::GetFileAttributesW;
     use windows::core::PCWSTR;
@@ -51,7 +51,7 @@ pub(crate) fn broker_available() -> bool {
 /// The handle is already duplicated into our process by the broker.
 #[cfg(windows)]
 pub(crate) fn request_volume_handle(drive_letter: char) -> anyhow::Result<u64> {
-    use std::io::{Read, Write};
+    use std::io::{Read as _, Write as _};
 
     // Connect to broker pipe
     let pipe_path = std::path::Path::new(BROKER_PIPE_NAME);

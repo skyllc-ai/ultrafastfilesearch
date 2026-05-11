@@ -28,7 +28,7 @@ use anyhow as _;
 use axum as _;
 use clap as _;
 use dirs_next as _;
-use rmcp::{ClientHandler, ServiceExt};
+use rmcp::{ClientHandler, ServiceExt as _};
 use schemars as _;
 use serde as _;
 use thiserror as _;

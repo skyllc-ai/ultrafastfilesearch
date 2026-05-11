@@ -215,7 +215,7 @@ async fn shutdown_signal() {
 mod tests {
     use axum::body::Body;
     use axum::http::{Request, header};
-    use tower_service::Service;
+    use tower_service::Service as _;
 
     use super::*;
 

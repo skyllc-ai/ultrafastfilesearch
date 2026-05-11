@@ -169,7 +169,7 @@ impl MftReader {
         let iocp = IoCompletionPort::new(0)?;
         if let Err(err) = iocp.associate(handle, 0) {
             // SAFETY: handle was successfully opened by open_overlapped_handle
-            unsafe { CloseHandle(handle) }.ok();
+            _ = unsafe { CloseHandle(handle) };
             return Err(err);
         }
 
@@ -198,7 +198,7 @@ impl MftReader {
             )
         } {
             // SAFETY: handle opened above, no further use.
-            unsafe { CloseHandle(handle) }.ok();
+            _ = unsafe { CloseHandle(handle) };
             return Err(err);
         }
 
@@ -213,7 +213,7 @@ impl MftReader {
                 Ok(None) => continue,
                 Err(err) => {
                     // SAFETY: handle opened above, no further use.
-                    unsafe { CloseHandle(handle) }.ok();
+                    _ = unsafe { CloseHandle(handle) };
                     return Err(err);
                 }
             };
@@ -231,7 +231,7 @@ impl MftReader {
                 }
                 Err(err) => {
                     // SAFETY: handle opened above, no further use.
-                    unsafe { CloseHandle(handle) }.ok();
+                    _ = unsafe { CloseHandle(handle) };
                     return Err(err);
                 }
             }
@@ -256,7 +256,7 @@ impl MftReader {
                     }
                     Err(err) => {
                         // SAFETY: handle opened above, no further use.
-                        unsafe { CloseHandle(handle) }.ok();
+                        _ = unsafe { CloseHandle(handle) };
                         return Err(err);
                     }
                 }
@@ -270,7 +270,7 @@ impl MftReader {
 
         // Close the overlapped handle before writing the file
         // SAFETY: handle was opened by open_overlapped_handle and is no longer needed
-        unsafe { CloseHandle(handle) }.ok();
+        _ = unsafe { CloseHandle(handle) };
 
         writer.write_to_file(path)
     }

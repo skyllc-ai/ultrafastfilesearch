@@ -3,7 +3,7 @@
 
 //! Pattern, name, and extension matching for `MftQuery`.
 
-use uffs_polars::{Expr, NamedFrom, PlSmallStr, Series, col, lit};
+use uffs_polars::{Expr, NamedFrom as _, PlSmallStr, Series, col, lit};
 
 use super::MftQuery;
 use crate::compiled_pattern::compile_pattern;

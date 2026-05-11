@@ -48,7 +48,7 @@
 //! ```
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read as _, Write as _};
 use std::path::Path;
 
 use crate::error::{MftError, Result};

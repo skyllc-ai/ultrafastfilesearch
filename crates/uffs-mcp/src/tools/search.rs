@@ -3,9 +3,9 @@
 
 //! `uffs_search` tool — file search across all indexed NTFS drives.
 
-use core::fmt::Write;
+use core::fmt::Write as _;
 
-use rmcp::model::{AnnotateAble, CallToolResult, Content, RawContent, RawResource};
+use rmcp::model::{AnnotateAble as _, CallToolResult, Content, RawContent, RawResource};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use uffs_client::connect::UffsClient;
@@ -499,14 +499,13 @@ struct FormatContext<'a> {
 fn format_text_output(ctx: &FormatContext<'_>) -> String {
     let mut output = String::new();
     if ctx.page_rows.is_empty() {
-        write!(
+        _ = write!(
             output,
             "0 matches ({} scanned in {}ms)\n\n",
             ctx.records_scanned, ctx.duration_ms,
-        )
-        .ok();
+        );
     } else {
-        write!(
+        _ = write!(
             output,
             "Showing {}-{} of {} matches ({} scanned in {}ms)\n\n",
             ctx.offset + 1,
@@ -514,11 +513,10 @@ fn format_text_output(ctx: &FormatContext<'_>) -> String {
             ctx.total_count,
             ctx.records_scanned,
             ctx.duration_ms,
-        )
-        .ok();
+        );
     }
     for warning in ctx.warnings {
-        writeln!(output, "⚠ {warning}").ok();
+        _ = writeln!(output, "⚠ {warning}");
     }
 
     if ctx.page_rows.is_empty() {
@@ -527,15 +525,15 @@ fn format_text_output(ctx: &FormatContext<'_>) -> String {
         // Build projection-aware markdown table.
         let header: Vec<&str> = ctx.projection.iter().map(|col| col_header(col)).collect();
         let separator: Vec<&str> = header.iter().map(|_| "------").collect();
-        writeln!(output, "| {} |", header.join(" | ")).ok();
-        writeln!(output, "| {} |", separator.join(" | ")).ok();
+        _ = writeln!(output, "| {} |", header.join(" | "));
+        _ = writeln!(output, "| {} |", separator.join(" | "));
         for row in ctx.page_rows {
             let cells: Vec<String> = ctx
                 .projection
                 .iter()
                 .map(|col| col_value(col, row))
                 .collect();
-            writeln!(output, "| {} |", cells.join(" | ")).ok();
+            _ = writeln!(output, "| {} |", cells.join(" | "));
         }
         if ctx.has_more {
             // When total matches vastly exceed the page limit, the agent
@@ -543,21 +541,19 @@ fn format_text_output(ctx: &FormatContext<'_>) -> String {
             // paging through hundreds of rows.
             let limit_u64 = u64::from(ctx.effective_limit);
             if ctx.total_count > limit_u64.saturating_mul(AGGREGATE_HINT_FACTOR) {
-                write!(
+                _ = write!(
                     output,
                     "\n⚠ {} total matches — far more than the {limit_u64}-row page. \
                      Consider using `uffs_aggregate` (e.g. preset `duplicates`, \
                      `by_extension`, `by_type`) to summarise large result sets \
                      instead of paging through them.\n",
                     ctx.total_count,
-                )
-                .ok();
+                );
             } else if let Some(cursor) = &ctx.next_cursor {
-                write!(
+                _ = write!(
                     output,
                     "\n(More results available. Pass `cursor: \"{cursor}\"` to fetch the next page.)\n",
-                )
-                .ok();
+                );
             }
         }
     }
@@ -633,7 +629,7 @@ pub fn percent_encode_path(path: &str) -> String {
                 // Percent-encode multi-byte UTF-8 chars byte-by-byte.
                 let mut buf = [0_u8; 4];
                 for byte in ch.encode_utf8(&mut buf).bytes() {
-                    write!(encoded, "%{byte:02X}").ok();
+                    _ = write!(encoded, "%{byte:02X}");
                 }
             }
         }

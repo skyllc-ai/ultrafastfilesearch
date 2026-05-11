@@ -537,7 +537,7 @@ impl MftReader {
                 {
                     // SAFETY: `overlapped_handle` was opened by `open_overlapped_handle`
                     // and is closed exactly once here.
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
+                    _ = unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) };
                 };
 
                 result?
@@ -614,7 +614,7 @@ impl MftReader {
                 {
                     // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
                     // no longer used after the read completes, and is closed exactly once.
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
+                    _ = unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) };
                 };
 
                 result?
@@ -663,7 +663,7 @@ impl MftReader {
                 {
                     // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
                     // no longer used after the read completes, and is closed exactly once.
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
+                    _ = unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) };
                 };
 
                 result?
@@ -693,7 +693,7 @@ impl MftReader {
                 {
                     // SAFETY: `overlapped_handle` came from `open_overlapped_handle`, is
                     // no longer used after the read completes, and is closed exactly once.
-                    unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) }.ok();
+                    _ = unsafe { windows::Win32::Foundation::CloseHandle(overlapped_handle) };
                 };
 
                 match result {
@@ -887,7 +887,7 @@ impl MftReader {
                 {
                     // SAFETY: `mft_handle` from `open_mft_read_handle`, closed
                     // exactly once after the read completes.
-                    unsafe { windows::Win32::Foundation::CloseHandle(mft_handle) }.ok();
+                    _ = unsafe { windows::Win32::Foundation::CloseHandle(mft_handle) };
                 };
                 return result;
             }
@@ -917,7 +917,7 @@ impl MftReader {
         {
             // SAFETY: `unbuf_handle` from `open_unbuffered_handle`, closed
             // exactly once after the read completes.
-            unsafe { windows::Win32::Foundation::CloseHandle(unbuf_handle) }.ok();
+            _ = unsafe { windows::Win32::Foundation::CloseHandle(unbuf_handle) };
         };
         result
     }

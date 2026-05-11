@@ -14,7 +14,7 @@
 //! | macOS/Linux | `std::os::unix::net::UnixStream`                   |
 //! | Windows     | Named pipe via `std::fs::OpenOptions` (no Winsock) |
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead as _, BufReader, Read, Write};
 
 use crate::daemon_ctl::{find_daemon_exe, pid_file_path, socket_path};
 use crate::daemon_spawn::{ElevationPolicy, resolve_elevation_policy, spawn_daemon};

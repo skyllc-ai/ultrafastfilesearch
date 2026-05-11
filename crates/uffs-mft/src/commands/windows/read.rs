@@ -15,7 +15,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use tracing::{info, warn};
 use uffs_mft::MftReader;
 

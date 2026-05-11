@@ -12,7 +12,7 @@ use core::time::Duration;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use parity::{write_legacy_drive_footer, write_parity};
 use serde_json::Value;
 

@@ -186,7 +186,7 @@ pub fn verify_daemon_after_connect_strict_at(
 pub fn keepalive_send_blocking(sock_path: &std::path::Path) {
     #[cfg(unix)]
     {
-        use std::io::Write;
+        use std::io::Write as _;
         use std::os::unix::net::UnixStream;
         if let Ok(mut stream) = UnixStream::connect(sock_path) {
             let msg = r#"{"jsonrpc":"2.0","id":0,"method":"keepalive"}"#;
@@ -198,7 +198,7 @@ pub fn keepalive_send_blocking(sock_path: &std::path::Path) {
     #[cfg(windows)]
     {
         use std::fs::OpenOptions;
-        use std::io::Write;
+        use std::io::Write as _;
 
         // `sock_path` is unused on Windows — the pipe name is derived
         // from the current user's SID — but we keep the parameter for

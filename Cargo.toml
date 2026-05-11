@@ -417,6 +417,7 @@ mem_forget = "deny"                   # Avoid mem::forget
 missing_assert_message = "deny"       # Add messages to assertions
 missing_asserts_for_indexing = "deny" # Assert before indexing
 try_err = "deny"                      # Use ? instead of try!
+unused_result_ok = "deny"             # Don't call .ok() just to discard — use `_ = expr;`
 unwrap_in_result = "deny"             # No unwrap/expect inside Result-returning fns
 
 # ───── Memory & allocation ─────
@@ -500,6 +501,7 @@ print_stdout = "deny" # Use proper logging instead (clippy.toml allows in tests)
 use_debug = "deny"    # Avoid Debug in production
 
 # ───── Portability ─────
+host_endian_bytes = "deny"    # Forbid to_ne_bytes/from_ne_bytes — UFFS reads little-endian NTFS on hosts of varying endianness
 std_instead_of_alloc = "deny" # Use alloc when std not needed
 std_instead_of_core = "deny"  # Use core when std not needed
 
@@ -507,9 +509,10 @@ std_instead_of_core = "deny"  # Use core when std not needed
 tests_outside_test_module = "deny" # Keep tests in test modules
 
 # ───── Unused / dead code ─────
-unused_async = "deny"    # Remove unused async
-unused_peekable = "deny" # Remove unused peekable
-unused_rounding = "deny" # Remove unused rounding
+unused_async = "deny"       # Remove unused async
+unused_peekable = "deny"    # Remove unused peekable
+unused_rounding = "deny"    # Remove unused rounding
+unused_trait_names = "deny" # Drop `use Trait;` imports whose methods are never used through that import
 
 # ───── Exceptions ─────
 # External deps (polars, tokio ecosystem) pull transitive version conflicts

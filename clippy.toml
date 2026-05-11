@@ -12,6 +12,22 @@
 #     all welcome because a test that doesn't crash on failure is useless.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── MSRV ─────────────────────────────────────────────────────────────────────
+# Pin Clippy's MSRV awareness to the workspace MSRV in [workspace.package]
+# (Cargo.toml).  Affects ~80 MSRV-aware lints — notably `incompatible_msrv`,
+# `manual_div_ceil`, `manual_hash_one`, `legacy_numeric_constants`,
+# `cloned_instead_of_copied`, `assigning_clones`, `manual_let_else`,
+# `option_if_let_else`, `cast_abs_to_unsigned`, `manual_repeat_n`.
+#
+# Setting it here (not just relying on the Cargo.toml fallback) ensures the
+# same lints fire under `cargo xwin clippy` and `cargo zigbuild clippy`,
+# which historically do not always pick up `rust-version` reliably.
+msrv = "1.91"
+
+# Apply MSRV-aware lints inside test code too — tests are real code that
+# also has to compile on the MSRV; we don't get a free pass there.
+check-incompatible-msrv-in-tests = true
+
 # ── Test code relaxations ────────────────────────────────────────────────────
 # These allow restriction lints to fire only in production code while letting
 # test code use idiomatic Rust test patterns (unwrap, expect, panic, dbg!).

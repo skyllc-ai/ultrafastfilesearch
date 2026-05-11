@@ -40,8 +40,8 @@ use std::collections::HashSet;
 use std::env;
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use uffs_polars::{BooleanChunked, DataFrame, SerReader, UInt64Chunked};
+use anyhow::{Context as _, Result};
+use uffs_polars::{BooleanChunked, DataFrame, SerReader as _, UInt64Chunked};
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();

@@ -55,7 +55,7 @@ use windows as _;
 #[cfg(unix)]
 mod unix_tests {
     use core::time::Duration;
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufRead as _, BufReader, Write as _};
     use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
     use std::process::Command;

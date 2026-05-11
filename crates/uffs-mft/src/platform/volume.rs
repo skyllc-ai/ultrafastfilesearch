@@ -18,7 +18,7 @@ use windows::Win32::Storage::FileSystem::{
 };
 use windows::Win32::System::Ioctl::{FSCTL_GET_NTFS_VOLUME_DATA, NTFS_VOLUME_DATA_BUFFER};
 use windows::core::PCWSTR;
-use zerocopy::FromBytes;
+use zerocopy::FromBytes as _;
 
 use super::bitmap::MftBitmap;
 use super::extents::{MftExtent, get_retrieval_pointers};
@@ -885,7 +885,7 @@ impl Drop for VolumeHandle {
         if !self.handle.is_invalid() {
             // SAFETY: `VolumeHandle` owns this valid handle and closes it once
             // during drop after all safe borrows have ended.
-            unsafe { CloseHandle(self.handle) }.ok();
+            _ = unsafe { CloseHandle(self.handle) };
         }
     }
 }
@@ -899,7 +899,7 @@ impl Drop for HandleGuard {
         if !self.0.is_invalid() {
             // SAFETY: `HandleGuard` exclusively owns this valid handle and drops
             // it exactly once when the guard is destroyed.
-            unsafe { CloseHandle(self.0) }.ok();
+            _ = unsafe { CloseHandle(self.0) };
         }
     }
 }
@@ -993,7 +993,7 @@ fn enable_privilege_with_token(token: HANDLE, luid: windows::Win32::Foundation::
     let result = unsafe { AdjustTokenPrivileges(token, false, Some(&raw const tp), 0, None, None) };
 
     // SAFETY: `token` was opened by the caller and is closed exactly once.
-    unsafe { CloseHandle(token) }.ok();
+    _ = unsafe { CloseHandle(token) };
 
     match result {
         Ok(()) => tracing::info!("✅ SeBackupPrivilege enabled"),
@@ -1009,7 +1009,7 @@ fn enable_privilege_with_token(token: HANDLE, luid: windows::Win32::Foundation::
 fn unsafe_close_token(token: HANDLE) {
     // SAFETY: caller passes a token returned from
     // `open_current_process_token` that has not yet been closed.
-    unsafe { CloseHandle(token) }.ok();
+    _ = unsafe { CloseHandle(token) };
 }
 
 #[cfg(test)]

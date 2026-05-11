@@ -145,7 +145,7 @@ impl MftReader {
         accessed_vec: Vec<i64>,
         flags_vec: Vec<u16>,
     ) -> Result<DataFrame> {
-        use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
+        use uffs_polars::{DataType, IntoColumn as _, NamedFrom as _, Series, TimeUnit};
 
         let columns = vec![
             Series::new("frs".into(), frs_vec).into_column(),
@@ -206,7 +206,7 @@ impl MftReader {
         is_virtual_vec: Vec<bool>,
         flags_vec: Vec<u32>,
     ) -> Result<DataFrame> {
-        use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
+        use uffs_polars::{DataType, IntoColumn as _, NamedFrom as _, Series, TimeUnit};
 
         let columns = vec![
             // Core identifiers
@@ -275,7 +275,7 @@ impl MftReader {
     pub(super) fn build_dataframe_from_columns(
         columns: crate::parse::ParsedColumns,
     ) -> Result<DataFrame> {
-        use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
+        use uffs_polars::{DataType, IntoColumn as _, NamedFrom as _, Series, TimeUnit};
 
         let polars_columns = vec![
             // Core identifiers

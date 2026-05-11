@@ -31,7 +31,7 @@
 use std::io;
 
 use aes_gcm::aead::generic_array::GenericArray;
-use aes_gcm::{AeadInPlace, Aes256Gcm, KeyInit, Nonce};
+use aes_gcm::{AeadInPlace as _, Aes256Gcm, KeyInit as _, Nonce};
 
 // ────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -111,7 +111,7 @@ pub fn detect_format(data: &[u8]) -> CacheFormat {
 ///
 /// Returns an error if encryption fails (should not happen with valid key).
 pub fn encrypt_cache(plaintext: &[u8], key: &[u8; 32]) -> io::Result<Vec<u8>> {
-    use rand::Rng;
+    use rand::Rng as _;
 
     let plaintext_len = plaintext.len() as u64; // usize→u64 lossless on 64-bit
 

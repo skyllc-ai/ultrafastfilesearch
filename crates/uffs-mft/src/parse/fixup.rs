@@ -5,7 +5,7 @@
 
 use core::mem::size_of;
 
-use zerocopy::FromBytes;
+use zerocopy::FromBytes as _;
 
 use crate::ntfs::{FILE_RECORD_MAGIC, MultiSectorHeader, SECTOR_SIZE};
 

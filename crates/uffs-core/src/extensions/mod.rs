@@ -28,7 +28,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use uffs_polars::{DataFrame, Expr, IntoLazy, col, lit};
+use uffs_polars::{DataFrame, Expr, IntoLazy as _, col, lit};
 
 use crate::error::Result;
 

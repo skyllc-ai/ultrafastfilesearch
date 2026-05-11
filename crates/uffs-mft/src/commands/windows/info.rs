@@ -28,7 +28,7 @@
     reason = "info commands run a configure -> query -> format -> print pipeline that is most readable inline"
 )]
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use tracing::info;
 use uffs_mft::MftReader;
 
@@ -714,7 +714,7 @@ pub(crate) async fn cmd_drives() -> Result<()> {
 )]
 fn get_volume_label(drive: char) -> Option<String> {
     use std::ffi::OsString;
-    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::ffi::OsStringExt as _;
 
     use windows::Win32::Storage::FileSystem::GetVolumeInformationW;
     use windows::core::PCWSTR;

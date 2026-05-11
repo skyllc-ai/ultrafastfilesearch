@@ -12,7 +12,7 @@
 //! Search execution: query dispatch, profile construction, and drive info.
 
 use core::sync::atomic::Ordering;
-use std::io::Write;
+use std::io::Write as _;
 use std::time::Instant;
 
 use uffs_client::protocol::response::{

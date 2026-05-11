@@ -7,7 +7,7 @@
 //! candidate duplicate groups. Optionally verifies via first-bytes
 //! comparison or full SHA-256 hash.
 
-use core::hash::{Hash, Hasher};
+use core::hash::{Hash, Hasher as _};
 use std::collections::HashMap;
 
 use super::accumulators::StatsAccumulator;

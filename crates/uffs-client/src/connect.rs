@@ -16,7 +16,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 
 use crate::connect_logging::{log_connect_attempt, log_connect_error, log_spawn_details};
 use crate::daemon_ctl::{

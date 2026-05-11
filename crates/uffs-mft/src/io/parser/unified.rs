@@ -9,7 +9,7 @@
 
 use core::mem::size_of;
 
-use zerocopy::FromBytes;
+use zerocopy::FromBytes as _;
 
 use crate::index::{
     ChildInfo, IndexNameRef, IndexStreamInfo, InternalStreamInfo, MftIndex, NO_ENTRY, SizeInfo,

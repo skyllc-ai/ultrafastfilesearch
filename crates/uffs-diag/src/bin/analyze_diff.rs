@@ -63,8 +63,10 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use uffs_polars::{Column, CsvReadOptions, DataFrame, IntoSeries, SerReader, StringChunked};
+use anyhow::{Context as _, Result};
+use uffs_polars::{
+    Column, CsvReadOptions, DataFrame, IntoSeries as _, SerReader as _, StringChunked,
+};
 
 /// Loads a CSV file into a Polars `DataFrame`.
 ///

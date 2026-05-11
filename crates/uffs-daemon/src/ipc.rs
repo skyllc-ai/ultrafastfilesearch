@@ -9,7 +9,7 @@
 use alloc::sync::Arc;
 use std::path::PathBuf;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use uffs_client::protocol::{ERR_PARSE, RpcErrorResponse, RpcRequest};
 
 use crate::events::{EventReceiver, event_to_json_line};
@@ -72,7 +72,7 @@ impl IpcServer {
         reason = "security boundary — must stay separate"
     )]
     fn verify_peer_credentials(stream: &tokio::net::UnixStream) -> bool {
-        use std::os::unix::io::AsRawFd;
+        use std::os::unix::io::AsRawFd as _;
 
         let fd = stream.as_raw_fd();
 

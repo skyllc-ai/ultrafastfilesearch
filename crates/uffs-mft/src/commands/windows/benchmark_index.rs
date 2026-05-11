@@ -38,7 +38,7 @@
     reason = "benchmark commands are inherently linear: configure → run → format → print, kept in one place for readability"
 )]
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use tracing::warn;
 use uffs_mft::MftReader;
 
@@ -697,11 +697,11 @@ pub(crate) async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> 
     // Close overlapped handles
     for handle in handles {
         #[expect(unsafe_code, reason = "required for windows ffi call to CloseHandle")]
-        // SAFETY: each `handle` was returned by `open_overlapped_handle` above
-        // and not used after this point; `CloseHandle` is the documented
-        // counterpart for `CreateFileW`-derived volume handles.
-        unsafe {
-            windows::Win32::Foundation::CloseHandle(handle).ok();
+        {
+            // SAFETY: each `handle` was returned by `open_overlapped_handle` above
+            // and not used after this point; `CloseHandle` is the documented
+            // counterpart for `CreateFileW`-derived volume handles.
+            _ = unsafe { windows::Win32::Foundation::CloseHandle(handle) };
         }
     }
 

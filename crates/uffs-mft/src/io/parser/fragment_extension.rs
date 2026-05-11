@@ -7,7 +7,7 @@
 use core::mem::size_of;
 
 use smallvec::SmallVec;
-use zerocopy::FromBytes;
+use zerocopy::FromBytes as _;
 
 use crate::index::{
     ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, NO_ENTRY, SizeInfo, frs_to_usize,

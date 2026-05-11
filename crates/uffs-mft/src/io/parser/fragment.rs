@@ -7,7 +7,7 @@
 use core::mem::size_of;
 
 use smallvec::SmallVec;
-use zerocopy::FromBytes;
+use zerocopy::FromBytes as _;
 
 #[expect(
     deprecated,

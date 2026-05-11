@@ -11,7 +11,7 @@ mod operations;
 
 use std::path::Path;
 
-use uffs_polars::{DataFrame, IntoLazy, LazyFrame};
+use uffs_polars::{DataFrame, IntoLazy as _, LazyFrame};
 
 use crate::error::Result;
 

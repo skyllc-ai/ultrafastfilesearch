@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use uffs_polars::{DataFrame, ParquetReader, ParquetWriter, SerReader};
+use uffs_polars::{DataFrame, ParquetReader, ParquetWriter, SerReader as _};
 
 use super::MftReader;
 use crate::error::{MftError, Result};

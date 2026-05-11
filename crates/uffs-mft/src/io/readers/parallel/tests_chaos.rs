@@ -370,7 +370,7 @@ fn sorted_sha256(lines: &[String]) -> String {
 /// This matches `scripts/verify_parity.rs:1229-1236` exactly.
 #[cfg(test)]
 fn sha256_for_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
-    use sha2::{Digest, Sha256};
+    use sha2::{Digest as _, Sha256};
     let mut hasher = Sha256::new();
     for line in lines {
         hasher.update(line.as_bytes());
@@ -446,7 +446,7 @@ mod chaos_integration_tests {
     )]
     fn test_chaos_order_d_drive() {
         use std::fs::File;
-        use std::io::{BufRead, BufReader};
+        use std::io::{BufRead as _, BufReader};
         const EXPECTED_SORTED_SHA: &str =
             "028356d4c9298ca8ef790229f4d4270ea29827ad155051e01181181fa34a531e";
 

@@ -94,7 +94,7 @@ impl Drop for IoCompletionPort {
         if !self.handle.is_invalid() {
             // SAFETY: `self.handle` was created by `CreateIoCompletionPort` and is
             // closed exactly once during drop after `is_invalid()` checked validity.
-            unsafe { CloseHandle(self.handle) }.ok();
+            _ = unsafe { CloseHandle(self.handle) };
         }
     }
 }

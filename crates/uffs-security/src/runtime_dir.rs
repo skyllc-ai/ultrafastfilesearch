@@ -276,7 +276,7 @@ fn parse_pid_dir_entry(entry_result: io::Result<std::fs::DirEntry>) -> Option<(P
 mod unix_impl {
     use std::fs::OpenOptions;
     use std::io;
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::OpenOptionsExt as _;
     use std::path::Path;
 
     use super::{RuntimeDir, RuntimeFile, sweep_pid_directories};
@@ -363,8 +363,8 @@ mod windows_impl {
     use std::ffi::OsStr;
     use std::fs::File;
     use std::io;
-    use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::FromRawHandle;
+    use std::os::windows::ffi::OsStrExt as _;
+    use std::os::windows::io::FromRawHandle as _;
     use std::path::Path;
 
     use windows::Win32::Foundation::CloseHandle;

@@ -613,12 +613,12 @@ impl LifecycleManager {
         reason = "nonce generation — clarity over inlining"
     )]
     fn generate_nonce() -> String {
-        use rand::Rng;
+        use rand::Rng as _;
         let mut nonce_bytes = [0_u8; 8];
         rand::rng().fill_bytes(&mut nonce_bytes);
         let mut nonce_str = String::with_capacity(16_usize);
         for byte in &nonce_bytes {
-            use core::fmt::Write;
+            use core::fmt::Write as _;
             let _ignore = write!(nonce_str, "{byte:02x}");
         }
         nonce_str

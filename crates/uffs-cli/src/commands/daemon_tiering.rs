@@ -10,7 +10,7 @@
 //! (`status_drives` table) will land their CLI shims in this same
 //! file when the corresponding daemon RPCs come online.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use uffs_client::connect_sync::UffsClientSync;
 use uffs_client::protocol::response::{
     DEFAULT_PRELOAD_PIN_MINUTES, DriveTierStatus, ForgetParams, HibernateParams, PreloadParams,

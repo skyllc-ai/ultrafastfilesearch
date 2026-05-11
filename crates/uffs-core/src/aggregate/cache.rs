@@ -226,7 +226,7 @@ impl AggregateCache {
 /// This is a simple hash function for cache keying — not cryptographic.
 #[must_use]
 pub fn hash_specs(specs_key: &str) -> u64 {
-    use core::hash::{Hash, Hasher};
+    use core::hash::{Hash as _, Hasher as _};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     specs_key.hash(&mut hasher);
     hasher.finish()

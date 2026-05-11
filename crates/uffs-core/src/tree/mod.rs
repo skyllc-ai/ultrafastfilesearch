@@ -96,7 +96,7 @@ pub fn add_tree_columns(df: &DataFrame, columns: &[TreeColumn]) -> Result<DataFr
 /// Returns an error if required columns are missing or the transformation
 /// fails.
 pub fn apply_directory_treesize(df: &DataFrame) -> Result<DataFrame> {
-    use uffs_polars::{IntoLazy, col, lit, when};
+    use uffs_polars::{IntoLazy as _, col, lit, when};
 
     // Baseline-compatible output: apply treesize to ALL directories, including
     // reparse points. ADS entries keep the stream-specific size (not the

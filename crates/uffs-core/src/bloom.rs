@@ -52,7 +52,7 @@
 //! - [`Bloom::estimated_fpr`] — analytic FPR estimate for a given load factor;
 //!   used by tests and the `shard.bloom.decision` telemetry.
 
-use core::hash::Hasher;
+use core::hash::Hasher as _;
 
 use rustc_hash::FxHasher;
 

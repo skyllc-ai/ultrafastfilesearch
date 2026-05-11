@@ -6,7 +6,7 @@
 //! These formatters produce compact summaries alongside structured JSON,
 //! giving LLMs context without requiring them to parse raw data.
 
-use core::fmt::Write;
+use core::fmt::Write as _;
 
 /// Format aggregate results as a compact human-readable summary.
 #[must_use]
@@ -19,31 +19,29 @@ pub fn format_aggregate_summary(results: &[uffs_client::protocol::AggregateResul
         match result.kind.as_str() {
             "count" => {
                 let val = result.value.unwrap_or(0);
-                writeln!(out, "• {label}: {val}").ok();
+                _ = writeln!(out, "• {label}: {val}");
             }
             "missing" => {
                 let val = result.value.unwrap_or(0);
-                writeln!(out, "• {label}: {val} records with missing value").ok();
+                _ = writeln!(out, "• {label}: {val} records with missing value");
             }
             "distinct" => {
                 let val = result.value.unwrap_or(0);
-                writeln!(out, "• {label}: {val} distinct values").ok();
+                _ = writeln!(out, "• {label}: {val} distinct values");
             }
             "stats" => {
                 if let Some(stats) = &result.stats {
-                    writeln!(
+                    _ = writeln!(
                         out,
                         "• {label}: count={} sum={} min={} max={} avg={:.1}",
                         stats.count, stats.sum, stats.min, stats.max, stats.avg
-                    )
-                    .ok();
+                    );
                     if stats.waste_bytes > 0 {
-                        writeln!(
+                        _ = writeln!(
                             out,
                             "  waste: {} bytes ({:.1}%)",
                             stats.waste_bytes, stats.waste_pct
-                        )
-                        .ok();
+                        );
                     }
                 }
             }
@@ -51,13 +49,12 @@ pub fn format_aggregate_summary(results: &[uffs_client::protocol::AggregateResul
                 format_bucket_summary(&mut out, label, result);
             }
             _ => {
-                writeln!(
+                _ = writeln!(
                     out,
                     "• {label}: (kind={}, {} buckets)",
                     result.kind,
                     result.buckets.len()
-                )
-                .ok();
+                );
             }
         }
     }
@@ -75,14 +72,13 @@ fn format_bucket_summary(
     label: &str,
     result: &uffs_client::protocol::AggregateResultWire,
 ) {
-    writeln!(out, "• {label} ({} buckets):", result.buckets.len()).ok();
+    _ = writeln!(out, "• {label} ({} buckets):", result.buckets.len());
     for bucket in result.buckets.iter().take(10) {
-        writeln!(
+        _ = writeln!(
             out,
             "    {:<30} count={:<8} bytes={}",
             bucket.key, bucket.count, bucket.total_bytes
-        )
-        .ok();
+        );
         // Sample rows (top-hits), max 3 per bucket.
         let max_samples = 3;
         for sr in bucket.sample_rows.iter().take(max_samples) {
@@ -92,42 +88,41 @@ fn format_bucket_summary(
                 .get("size")
                 .and_then(|val| val.parse::<u64>().ok())
                 .map_or(String::new(), |n| format!(" ({n} B)"));
-            writeln!(out, "      → {name}{size}").ok();
+            _ = writeln!(out, "      → {name}{size}");
         }
         let remaining = bucket.sample_rows.len().saturating_sub(max_samples);
         if remaining > 0 {
-            writeln!(out, "      ... and {remaining} more").ok();
+            _ = writeln!(out, "      ... and {remaining} more");
         }
         // Nested sub-aggregation buckets.
         for sub in bucket.sub_buckets.iter().take(5) {
-            writeln!(
+            _ = writeln!(
                 out,
                 "      ├─ {:<26} count={:<8} bytes={}",
                 sub.key, sub.count, sub.total_bytes
-            )
-            .ok();
+            );
         }
         let sub_rest = bucket.sub_buckets.len().saturating_sub(5);
         if sub_rest > 0 {
-            writeln!(out, "      ... and {sub_rest} more sub-buckets").ok();
+            _ = writeln!(out, "      ... and {sub_rest} more sub-buckets");
         }
     }
     if result.buckets.len() > 10 {
-        writeln!(out, "    ... and {} more", result.buckets.len() - 10).ok();
+        _ = writeln!(out, "    ... and {} more", result.buckets.len() - 10);
     }
     if let Some(other) = result.other_count
         && other > 0
     {
-        writeln!(out, "    (+ {other} in other groups)").ok();
+        _ = writeln!(out, "    (+ {other} in other groups)");
     }
     if result.values_complete == Some(false) {
-        writeln!(out, "    [truncated — not all values shown]").ok();
+        _ = writeln!(out, "    [truncated — not all values shown]");
     }
     if result.exact == Some(false) {
-        writeln!(out, "    [approximate — not all records scanned]").ok();
+        _ = writeln!(out, "    [approximate — not all records scanned]");
     }
     if let Some(cursor) = &result.next_cursor {
-        writeln!(out, "    [next_cursor: {cursor}]").ok();
+        _ = writeln!(out, "    [next_cursor: {cursor}]");
     }
 }
 

@@ -3,7 +3,7 @@
 
 //! `uffs_aggregate` tool — server-side aggregation summaries.
 
-use core::fmt::Write;
+use core::fmt::Write as _;
 
 use rmcp::model::{CallToolResult, Content};
 use schemars::JsonSchema;
@@ -188,12 +188,11 @@ pub async fn run(
         let omitted = full_json_len.saturating_sub(truncated.len());
         let mut out = preamble;
         out.push_str(truncated);
-        write!(
+        _ = write!(
             out,
             "\n... (truncated — {omitted} of {full_json_len} chars omitted. \
              Use more specific pattern, type_filter, or drives to narrow results.)"
-        )
-        .ok();
+        );
         out.push_str(suffix);
         out
     };

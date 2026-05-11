@@ -22,7 +22,7 @@
 use std::env;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use uffs_mft::{LoadRawOptions, RawMftData, load_raw_mft};
 
 /// Local copy of `FileRecordSegmentHeader` so this binary can run on

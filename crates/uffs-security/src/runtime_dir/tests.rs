@@ -13,12 +13,12 @@
 //! * `mmap_read_only` round-trip covered against the real default impl on
 //!   whichever platform is running the test.
 
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 
 use tempfile::TempDir;
 
 use super::test_fake::TestRuntimeDir;
-use super::{DefaultRuntimeDir, RuntimeDir, mmap_read_only};
+use super::{DefaultRuntimeDir, RuntimeDir as _, mmap_read_only};
 
 // ─────────────────────────────────────────────────────────────────────
 // `create_owner_only` — happy path + duplicate-create rejection.
@@ -76,7 +76,7 @@ fn create_owner_only_rejects_existing_file() {
 #[cfg(unix)]
 #[test]
 fn create_owner_only_sets_0600_on_unix() {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::PermissionsExt as _;
 
     let tmp = TempDir::new().expect("tempdir");
     let path = tmp.path().join("perms.live");

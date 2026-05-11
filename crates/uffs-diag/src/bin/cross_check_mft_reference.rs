@@ -35,10 +35,10 @@
 use std::env;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use uffs_polars::{
-    BooleanChunked, CsvParseOptions, CsvReadOptions, DataFrame, DataFrameJoinOps, DataType,
-    JoinArgs, JoinType, SerReader,
+    BooleanChunked, CsvParseOptions, CsvReadOptions, DataFrame, DataFrameJoinOps as _, DataType,
+    JoinArgs, JoinType, SerReader as _,
 };
 
 fn main() -> Result<()> {

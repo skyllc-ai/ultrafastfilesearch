@@ -37,7 +37,7 @@
     reason = "slices into the local 1\u{a0}MiB buffer; sizes are clamped via `min(BUFFER_SIZE)` and `min(chunk_size)` above"
 )]
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
 use crate::display::char_or_dot;
 

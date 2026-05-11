@@ -42,7 +42,7 @@
 use anyhow::Result;
 use bitflags as _;
 use bytemuck as _;
-use clap::Parser;
+use clap::Parser as _;
 // Dev-dependencies (used in benchmarks and tests only)
 #[cfg(test)]
 use criterion as _;

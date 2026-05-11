@@ -18,7 +18,7 @@
 //! `fn` items in another rendering pass, and we want
 //! `--no-deps -- -D rustdoc::broken-intra-doc-links` to stay clean.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use uffs_client::connect_sync::UffsClientSync;
 
 /// `uffs daemon load` — resolve `--mft-file` / `--data-dir` /

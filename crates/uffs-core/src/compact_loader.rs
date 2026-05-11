@@ -356,7 +356,7 @@ fn load_mft_index_from_file(
 /// than being inlined.
 #[cfg(windows)]
 fn load_mft_index_live(drive_letter: char, no_cache: bool) -> anyhow::Result<MftIndex> {
-    use anyhow::Context;
+    use anyhow::Context as _;
 
     let read_index = async {
         let reader = uffs_mft::MftReader::open(drive_letter)

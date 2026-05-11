@@ -28,11 +28,11 @@
 
 use std::env;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read as _};
 use std::path::Path;
 use std::time::Instant;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context as _, Result, bail};
 
 /// Header size in bytes (matches `uffs-mft::raw`).
 const HEADER_SIZE: usize = 64;

@@ -6,7 +6,7 @@
 use alloc::sync::Arc;
 
 use tokio::task::JoinSet;
-use uffs_polars::{DataFrame, IntoLazy, col, lit};
+use uffs_polars::{DataFrame, IntoLazy as _, col, lit};
 
 use super::{DriveReadResult, MultiDriveMftReader, drive_reader_budget};
 use crate::error::{MftError, Result};

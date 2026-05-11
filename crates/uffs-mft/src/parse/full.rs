@@ -4,7 +4,7 @@
 //! Standard MFT record parsing for base and extension records.
 
 use tracing::debug;
-use zerocopy::FromBytes;
+use zerocopy::FromBytes as _;
 
 use super::{
     ExtensionAttributes, ParseResult, ParsedRecord, PrimaryNameTracker, parse_data_attribute_full,

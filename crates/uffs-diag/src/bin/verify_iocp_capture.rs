@@ -44,12 +44,12 @@
 )]
 
 use std::env;
-use std::io::Write;
+use std::io::Write as _;
 use std::path::Path;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
-use sha2::{Digest, Sha256};
+use anyhow::{Context as _, Result};
+use sha2::{Digest as _, Sha256};
 use uffs_mft::raw::{LoadRawOptions, load_raw_mft};
 use uffs_mft::raw_iocp::load_iocp_capture;
 

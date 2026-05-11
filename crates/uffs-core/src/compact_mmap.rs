@@ -55,7 +55,7 @@
 use alloc::sync::Arc;
 use core::mem::{align_of, size_of};
 use std::fs::File;
-use std::io::{self, Seek, SeekFrom, Write};
+use std::io::{self, Seek as _, SeekFrom, Write as _};
 
 use memmap2::Mmap;
 

@@ -3,7 +3,7 @@
 
 //! Helpers for parsing core NTFS attributes from MFT record bytes.
 
-use zerocopy::FromBytes;
+use zerocopy::FromBytes as _;
 
 use crate::index::nonneg_to_u64;
 use crate::ntfs::{ExtendedStandardInfo, NameInfo, StreamInfo};

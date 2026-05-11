@@ -337,7 +337,7 @@ fn test_to_expr_suffix_set_empty() {
 
 #[test]
 fn test_suffix_case_insensitive_integration() -> TestResult {
-    use uffs_polars::{Column, DataFrame, IntoLazy};
+    use uffs_polars::{Column, DataFrame, IntoLazy as _};
 
     // Create test DataFrame with various filenames
     let names = vec![
@@ -369,7 +369,7 @@ fn test_suffix_case_insensitive_integration() -> TestResult {
 
 #[test]
 fn test_suffix_case_sensitive_integration() -> TestResult {
-    use uffs_polars::{Column, DataFrame, IntoLazy};
+    use uffs_polars::{Column, DataFrame, IntoLazy as _};
 
     let input_names = vec![
         "file.TXT",
@@ -401,7 +401,7 @@ fn test_suffix_case_sensitive_integration() -> TestResult {
 
 #[test]
 fn test_dollar_prefix_files_matched() -> TestResult {
-    use uffs_polars::{Column, DataFrame, IntoLazy};
+    use uffs_polars::{Column, DataFrame, IntoLazy as _};
 
     let input_names = vec![
         "$MFT",
@@ -445,7 +445,7 @@ fn test_dollar_prefix_files_matched() -> TestResult {
 
 #[test]
 fn test_null_values_not_filtered() -> TestResult {
-    use uffs_polars::{Column, DataFrame, IntoLazy};
+    use uffs_polars::{Column, DataFrame, IntoLazy as _};
 
     // Create test DataFrame with null values
     let input_names: Vec<Option<&str>> = vec![

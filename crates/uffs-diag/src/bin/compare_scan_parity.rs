@@ -74,13 +74,13 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::File;
-use std::io::Write;
+use std::io::Write as _;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use rayon::prelude::*;
 use uffs_diag::parity::stats::{ComparisonResults, FieldStats};
-use uffs_polars::{CsvReadOptions, DataFrame, SerReader, StringChunked};
+use uffs_polars::{CsvReadOptions, DataFrame, SerReader as _, StringChunked};
 
 // ============================================================================
 // Column Name Mappings (reference output <-> Rust)
@@ -241,7 +241,7 @@ fn get_bool_value(df: &DataFrame, col: &str, idx: usize) -> Option<bool> {
     })
 }
 
-use uffs_polars::IntoSeries;
+use uffs_polars::IntoSeries as _;
 
 /// Compare numeric field and update stats
 fn compare_numeric_field(

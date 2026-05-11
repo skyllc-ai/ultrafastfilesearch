@@ -180,7 +180,7 @@ fn write_parity_row(
 
 /// Append a `u64` value to a string buffer without allocation.
 fn push_u64(buf: &mut String, value: u64) {
-    use core::fmt::Write;
+    use core::fmt::Write as _;
     let _ok = write!(buf, "{value}");
 }
 
@@ -197,7 +197,7 @@ fn push_u64(buf: &mut String, value: u64) {
 /// Created/Modified/Accessed` combination that
 /// `RequestHandler::try_pack_csv_blob` now pre-formats (v0.5.64+).
 fn append_datetime_tz(buf: &mut String, filetime: i64, tz_offset_secs: i32) {
-    use core::fmt::Write;
+    use core::fmt::Write as _;
     let local_ft = uffs_time::filetime_with_tz_bias(filetime, tz_offset_secs);
     if let Some((year, month, day, hour, minute, second)) =
         uffs_time::filetime_to_calendar(local_ft)

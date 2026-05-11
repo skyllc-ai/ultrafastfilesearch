@@ -7,7 +7,7 @@
 
 use std::io::Write;
 
-use uffs_polars::{DataFrame, SerWriter};
+use uffs_polars::{DataFrame, SerWriter as _};
 
 use crate::error::{CoreError, Result};
 

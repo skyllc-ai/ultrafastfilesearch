@@ -9,7 +9,7 @@
 //! - **MCP Stdio Sessions**: active `uffs mcp run` processes (one per AI host)
 
 #[cfg(feature = "mcp-http-probe")]
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use uffs_client::connect_sync::UffsClientSync;
 use uffs_client::protocol::response::{DaemonStatus, ShardTier};
 
@@ -491,14 +491,12 @@ fn resolve_parent_name(ppid: u32) -> Option<String> {
 /// build drops `ws2_32.dll` from the Windows CLI binary.
 #[cfg(feature = "mcp-http-probe")]
 fn http_get_json(bind: &str, port: u16, path: &str) -> Result<serde_json::Value> {
-    use std::io::{Read, Write};
+    use std::io::{Read as _, Write as _};
 
     let addr = format!("{bind}:{port}");
     let mut stream =
         std::net::TcpStream::connect(&addr).with_context(|| format!("connect to {addr}"))?;
-    stream
-        .set_read_timeout(Some(core::time::Duration::from_secs(5)))
-        .ok();
+    _ = stream.set_read_timeout(Some(core::time::Duration::from_secs(5)));
 
     let request = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
     stream.write_all(request.as_bytes())?;

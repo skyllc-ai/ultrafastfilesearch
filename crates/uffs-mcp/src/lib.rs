@@ -136,8 +136,8 @@ pub mod tools;
 use core::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::Context;
-use rmcp::ServiceExt;
+use anyhow::Context as _;
+use rmcp::ServiceExt as _;
 #[cfg(feature = "streamable-http")]
 use tower_service as _;
 use tracing::info;

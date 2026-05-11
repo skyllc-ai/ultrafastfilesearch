@@ -30,7 +30,7 @@
 
 use alloc::sync::Arc;
 
-use futures::{FutureExt, StreamExt};
+use futures::{FutureExt as _, StreamExt as _};
 
 use super::{InFlightLoad, InFlightPromotes, IndexManager};
 use crate::cache::unix_now_ms;

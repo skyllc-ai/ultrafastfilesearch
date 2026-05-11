@@ -67,7 +67,7 @@ impl FileReader for DaemonFileReader<'_> {
         drive_ordinal: u8,
         count: u32,
     ) -> std::io::Result<Vec<u8>> {
-        use std::io::Read;
+        use std::io::Read as _;
         let path = self
             .resolve_path(record_idx, drive_ordinal)
             .ok_or_else(|| {

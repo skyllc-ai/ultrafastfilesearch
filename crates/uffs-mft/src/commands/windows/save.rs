@@ -48,7 +48,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use tracing::info;
 
 use super::shared::drive_type_label;

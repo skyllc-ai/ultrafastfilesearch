@@ -22,7 +22,7 @@ use alloc::sync::Arc;
 use core::mem::size_of;
 
 use tempfile::TempDir;
-use uffs_security::runtime_dir::{DefaultRuntimeDir, RuntimeDir, mmap_read_only};
+use uffs_security::runtime_dir::{DefaultRuntimeDir, RuntimeDir as _, mmap_read_only};
 
 use super::{PAGE_SIZE, RuntimeLayout, load_from_runtime, write_runtime_layout};
 use crate::compact::CompactRecord;

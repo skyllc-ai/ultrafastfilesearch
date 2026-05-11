@@ -3,7 +3,7 @@
 
 //! `uffs_drives` tool — list all indexed NTFS drives.
 
-use core::fmt::Write;
+use core::fmt::Write as _;
 
 use rmcp::model::{CallToolResult, Content};
 use uffs_client::connect::UffsClient;
@@ -36,14 +36,13 @@ pub async fn run(client: &mut UffsClient) -> Result<CallToolResult, BridgeError>
     };
 
     let mut output = String::new();
-    write!(output, "Loaded {} drive(s):\n\n", response.drives.len()).ok();
+    _ = write!(output, "Loaded {} drive(s):\n\n", response.drives.len());
     for drive in &response.drives {
-        writeln!(
+        _ = writeln!(
             output,
             "  {}:  {:>10} records  ({})",
             drive.letter, drive.records, drive.source
-        )
-        .ok();
+        );
     }
 
     let mut result = CallToolResult::success(vec![Content::text(output)]);

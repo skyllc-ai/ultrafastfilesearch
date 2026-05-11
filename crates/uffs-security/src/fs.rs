@@ -38,7 +38,7 @@ pub fn create_secure_dir(path: &Path) -> io::Result<()> {
 
     #[cfg(unix)]
     return {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
     };
 
@@ -65,7 +65,7 @@ pub fn create_secure_dir(path: &Path) -> io::Result<()> {
 pub fn set_file_permissions_owner_only(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     return {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
     };
 
@@ -129,7 +129,7 @@ fn win_clear_readonly(path: &Path) -> io::Result<()> {
 /// `OsStr`, and we only append a single null terminator.
 #[cfg(windows)]
 fn path_to_wide(path: &Path) -> Vec<u16> {
-    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::ffi::OsStrExt as _;
     path.as_os_str().encode_wide().chain(Some(0_u16)).collect()
 }
 
@@ -210,7 +210,7 @@ fn win_set_owner_only_acl(path: &Path) -> bool {
 ///
 /// Returns an error if writing, syncing, or renaming fails.
 pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
-    use std::io::Write;
+    use std::io::Write as _;
 
     let tmp_path = path.with_extension("uffs.tmp");
 
@@ -242,7 +242,7 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
 ///
 /// Returns an error if overwriting, syncing, or removal fails.
 pub fn secure_remove(path: &Path) -> io::Result<()> {
-    use std::io::{Seek, SeekFrom, Write};
+    use std::io::{Seek as _, SeekFrom, Write as _};
 
     /// Size of the zero-fill buffer for secure wipe.
     const ZERO_BUF_SIZE: usize = 64 * 1024;
@@ -328,7 +328,7 @@ impl FileLock {
         kind: LockKind,
         timeout: core::time::Duration,
     ) -> io::Result<Self> {
-        use std::os::unix::io::AsRawFd;
+        use std::os::unix::io::AsRawFd as _;
 
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -390,7 +390,7 @@ impl FileLock {
         kind: LockKind,
         timeout: core::time::Duration,
     ) -> io::Result<Self> {
-        use std::os::windows::io::AsRawHandle;
+        use std::os::windows::io::AsRawHandle as _;
 
         /// Windows error code for lock contention.
         const ERROR_LOCK_VIOLATION: i32 = 33;

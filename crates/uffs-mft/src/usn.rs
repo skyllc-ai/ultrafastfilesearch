@@ -222,7 +222,7 @@ mod windows_impl {
     use core::mem::size_of;
     use core::ptr;
     use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::ffi::OsStrExt as _;
 
     use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE};
     use windows::Win32::Storage::FileSystem::{
@@ -655,7 +655,7 @@ mod windows_impl {
     /// after statements in the caller — required by
     /// `clippy::items_after_statements`.
     fn scan_attribute_list_extensions(data: &[u8], base_frs: u64, out: &mut Vec<u64>) {
-        use zerocopy::FromBytes;
+        use zerocopy::FromBytes as _;
 
         use crate::ntfs::{
             AttributeListEntry, AttributeRecordHeader, AttributeType, FileRecordSegmentHeader,

@@ -493,7 +493,7 @@ impl MftIndex {
     #[expect(clippy::min_ident_chars, reason = "'n' for count is idiomatic")]
     #[expect(clippy::too_many_lines, reason = "stats display has many fields")]
     pub fn display_stats(&self) {
-        use std::io::Write;
+        use std::io::Write as _;
 
         use super::types::u64_to_f64;
 
@@ -534,84 +534,73 @@ impl MftIndex {
             result.chars().rev().collect()
         };
 
-        writeln!(out, "{sep}").ok();
-        writeln!(out, "                    ENHANCED MFT STATISTICS").ok();
-        writeln!(out, "{sep}\n").ok();
+        _ = writeln!(out, "{sep}");
+        _ = writeln!(out, "                    ENHANCED MFT STATISTICS");
+        _ = writeln!(out, "{sep}\n");
 
         // Basic counts
-        writeln!(out, "📊 RECORD COUNTS").ok();
-        writeln!(
+        _ = writeln!(out, "📊 RECORD COUNTS");
+        _ = writeln!(
             out,
             "  Total records:        {}",
             format_number(u64::from(self.stats.record_count))
-        )
-        .ok();
-        writeln!(
+        );
+        _ = writeln!(
             out,
             "  Directories:          {}",
             format_number(u64::from(self.stats.dir_count))
-        )
-        .ok();
-        writeln!(
+        );
+        _ = writeln!(
             out,
             "  Files:                {}\n",
             format_number(u64::from(self.stats.file_count))
-        )
-        .ok();
+        );
 
         // Byte counters
-        writeln!(out, "💾 SIZE METRICS").ok();
-        writeln!(
+        _ = writeln!(out, "💾 SIZE METRICS");
+        _ = writeln!(
             out,
             "  Total bytes:          {}",
             format_size(self.stats.total_bytes)
-        )
-        .ok();
-        writeln!(
+        );
+        _ = writeln!(
             out,
             "  Directory bytes:      {}",
             format_size(self.stats.dir_bytes)
-        )
-        .ok();
-        writeln!(
+        );
+        _ = writeln!(
             out,
             "  Hidden bytes:         {}",
             format_size(self.stats.hidden_bytes)
-        )
-        .ok();
-        writeln!(
+        );
+        _ = writeln!(
             out,
             "  System bytes:         {}",
             format_size(self.stats.system_bytes)
-        )
-        .ok();
-        writeln!(
+        );
+        _ = writeln!(
             out,
             "  Compressed bytes:     {}",
             format_size(self.stats.compressed_bytes)
-        )
-        .ok();
-        writeln!(
+        );
+        _ = writeln!(
             out,
             "  Encrypted bytes:      {}",
             format_size(self.stats.encrypted_bytes)
-        )
-        .ok();
-        writeln!(
+        );
+        _ = writeln!(
             out,
             "  Sparse bytes:         {}",
             format_size(self.stats.sparse_bytes)
-        )
-        .ok();
-        writeln!(
+        );
+        _ = writeln!(
             out,
             "  Reparse bytes:        {}\n",
             format_size(self.stats.reparse_bytes)
-        )
-        .ok();
+        );
 
         // Size distribution
-        writeln!(out, "📏 SIZE DISTRIBUTION").ok();
+        _ = writeln!(out, "📏 SIZE DISTRIBUTION");
         let bucket_names = [
             "0-1 KB",
             "1-10 KB",
@@ -627,56 +616,53 @@ impl MftIndex {
                 self.stats.size_bucket_counts.get(i),
                 self.stats.size_bucket_bytes.get(i),
             ) {
-                writeln!(
+                _ = writeln!(
                     out,
                     "  {:15} {:>10} files  ({:>10})",
                     name,
                     format_number(u64::from(count)),
                     format_size(bytes)
-                )
-                .ok();
+                );
             }
         }
-        writeln!(out).ok();
+        _ = writeln!(out);
 
         // Top extensions by count
-        writeln!(out, "🏆 TOP EXTENSIONS BY COUNT").ok();
+        _ = writeln!(out, "🏆 TOP EXTENSIONS BY COUNT");
         let top_by_count = self.extensions.top_by_count(10);
         if top_by_count.is_empty() {
-            writeln!(out, "  (no extensions)").ok();
+            _ = writeln!(out, "  (no extensions)");
         } else {
             for (_ext_id, ext, count, bytes) in &top_by_count {
-                writeln!(
+                _ = writeln!(
                     out,
                     "  {:15} {:>10} files  ({:>10})",
                     ext,
                     format_number(u64::from(*count)),
                     format_size(*bytes)
-                )
-                .ok();
+                );
             }
         }
-        writeln!(out).ok();
+        _ = writeln!(out);
 
         // Top extensions by bytes
-        writeln!(out, "🏆 TOP EXTENSIONS BY SIZE").ok();
+        _ = writeln!(out, "🏆 TOP EXTENSIONS BY SIZE");
         let top_by_bytes = self.extensions.top_by_bytes(10);
         if top_by_bytes.is_empty() {
-            writeln!(out, "  (no extensions)").ok();
+            _ = writeln!(out, "  (no extensions)");
         } else {
             for (_ext_id, ext, bytes, count) in &top_by_bytes {
-                writeln!(
+                _ = writeln!(
                     out,
                     "  {:15} {:>10} files  ({:>10})",
                     ext,
                     format_number(u64::from(*count)),
                     format_size(*bytes)
-                )
-                .ok();
+                );
             }
         }
 
-        writeln!(out, "\n{sep}").ok();
+        _ = writeln!(out, "\n{sep}");
     }
 
     /// Get the name string for a link.

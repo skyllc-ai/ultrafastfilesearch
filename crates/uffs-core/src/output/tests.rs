@@ -566,7 +566,7 @@ fn write_display_rows_emits_name_length_and_path_length() {
 /// as `8225-01-17` or similar and the test fails immediately.
 #[test]
 fn test_write_datetime_column_formats_filetime_as_2026() {
-    use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
+    use uffs_polars::{DataType, IntoColumn as _, NamedFrom as _, Series, TimeUnit};
 
     // 2026-01-20 00:00:00 UTC as raw FILETIME.
     // Unix seconds: 1_768_867_200 (2026-01-20).  Convert to 100-ns ticks
@@ -673,7 +673,7 @@ fn write_display_rows_parallel_matches_sequential() {
 /// emit an empty field, never decompose to `1601-01-01`.
 #[test]
 fn test_write_datetime_column_zero_filetime_is_empty() {
-    use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
+    use uffs_polars::{DataType, IntoColumn as _, NamedFrom as _, Series, TimeUnit};
 
     let ts_column = Series::new("modified".into(), vec![0_i64])
         .cast(&DataType::Datetime(TimeUnit::Microseconds, None))

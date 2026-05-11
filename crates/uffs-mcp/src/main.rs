@@ -30,7 +30,7 @@ use tracing_appender as _;
 
 mod process;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
 
 /// UFFS MCP server — bridges AI agents to the UFFS daemon via the

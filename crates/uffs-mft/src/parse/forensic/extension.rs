@@ -3,7 +3,7 @@
 
 //! Extension-record forensic parsing for merge-oriented handling.
 
-use zerocopy::FromBytes;
+use zerocopy::FromBytes as _;
 
 use super::super::{
     ExtensionAttributes, ParseResult, parse_data_attribute_full, parse_file_name_full,

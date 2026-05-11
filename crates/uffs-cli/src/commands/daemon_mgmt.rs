@@ -3,7 +3,7 @@
 
 //! `uffs daemon {status|stop|kill|restart}` subcommand handlers.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use uffs_client::connect_sync::UffsClientSync;
 use uffs_client::daemon_ctl::{pid_file_path, socket_path};
 use uffs_client::protocol::response::{DaemonStatus, DriveInfo, ShardTier};

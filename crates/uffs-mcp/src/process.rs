@@ -125,7 +125,7 @@ pub(crate) fn kill_process_on_port(port: u16, skip_pid: u32) {
 
 /// Minimal HTTP GET — no external deps needed.
 pub(crate) async fn reqwest_lite_get(raw_url: &str) -> Result<String> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     let stripped = raw_url.strip_prefix("http://").unwrap_or(raw_url);
     let (host_port, rel_path) = stripped.split_once('/').unwrap_or((stripped, ""));
     let abs_path = format!("/{rel_path}");

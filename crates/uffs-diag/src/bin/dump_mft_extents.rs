@@ -39,7 +39,7 @@
 use std::env;
 
 #[cfg(windows)]
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 #[cfg(windows)]
 use uffs_mft::{MftExtent, VolumeHandle};
 

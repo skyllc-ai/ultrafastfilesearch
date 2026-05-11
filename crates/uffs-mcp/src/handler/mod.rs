@@ -16,9 +16,9 @@ use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use rmcp::model::{
-    AnnotateAble, CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult,
-    Implementation, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
-    ListToolsResult, PaginatedRequestParams, RawResource, RawResourceTemplate,
+    AnnotateAble as _, CallToolRequestParams, CallToolResult, GetPromptRequestParams,
+    GetPromptResult, Implementation, ListPromptsResult, ListResourceTemplatesResult,
+    ListResourcesResult, ListToolsResult, PaginatedRequestParams, RawResource, RawResourceTemplate,
     ReadResourceRequestParams, ReadResourceResult, ResourceContents, ServerCapabilities,
     ServerInfo,
 };

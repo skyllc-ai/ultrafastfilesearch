@@ -37,7 +37,7 @@
 //! analyzeMFT, MFT2CSV, and ntfstool.
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read as _, Write as _};
 use std::path::Path;
 
 use crate::error::{MftError, Result};
@@ -371,7 +371,7 @@ fn detect_record_size_from_first_record(data: &[u8]) -> u32 {
     reason = "path rebinding from P to &Path is idiomatic"
 )]
 pub fn load_raw_mft<P: AsRef<Path>>(path: P, options: &LoadRawOptions) -> Result<RawMftData> {
-    use std::io::{Seek, SeekFrom};
+    use std::io::{Seek as _, SeekFrom};
 
     let path = path.as_ref();
     let file = File::open(path)?;

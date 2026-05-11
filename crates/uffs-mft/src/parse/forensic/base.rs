@@ -3,7 +3,7 @@
 
 //! Base-record forensic parsing after record-header validation.
 
-use zerocopy::FromBytes;
+use zerocopy::FromBytes as _;
 
 use super::super::{
     ParseResult, ParsedRecord, PrimaryNameTracker, parse_data_attribute_full, parse_file_name_full,

@@ -325,7 +325,7 @@ impl DuplicateVerifier {
     /// Reads the entire file for each member, computes SHA-256, and
     /// compares all hashes. All members must hash identically.
     fn verify_sha256(&mut self, group: &DuplicateGroup, reader: &dyn FileReader) -> VerifyOutcome {
-        use sha2::{Digest, Sha256};
+        use sha2::{Digest as _, Sha256};
 
         let mut reference_hash: Option<[u8; 32]> = None;
 

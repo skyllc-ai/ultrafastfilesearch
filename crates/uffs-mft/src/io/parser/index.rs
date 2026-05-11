@@ -28,7 +28,7 @@
 use core::mem::size_of;
 
 use smallvec::SmallVec;
-use zerocopy::FromBytes;
+use zerocopy::FromBytes as _;
 
 use super::index_extension::parse_extension_to_index;
 use crate::index::{len_to_u16, nonneg_to_u64, u32_as_usize};

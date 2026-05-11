@@ -40,7 +40,7 @@
 use core::mem::size_of;
 
 use smallvec::SmallVec;
-use zerocopy::FromBytes;
+use zerocopy::FromBytes as _;
 
 use super::direct_index_extension::parse_extension_to_index;
 use super::index_helpers::{

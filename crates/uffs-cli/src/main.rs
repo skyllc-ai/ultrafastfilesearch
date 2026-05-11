@@ -14,7 +14,7 @@
     reason = "CLI entry point functions are called once from main"
 )]
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 #[cfg(test)]
 use assert_cmd as _;
 

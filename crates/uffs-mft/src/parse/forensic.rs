@@ -8,7 +8,7 @@ mod extension;
 
 use base::parse_base_record;
 use extension::parse_extension_record;
-use zerocopy::FromBytes;
+use zerocopy::FromBytes as _;
 
 use super::{ParseOptions, ParseResult, ParsedRecord};
 

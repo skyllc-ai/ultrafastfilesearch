@@ -7,7 +7,7 @@
 //! standalone `uffsmcp` binary.  This module simply exec's / spawns
 //! `uffsmcp` with the right arguments, keeping `uffs` thin.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
 /// Execute an MCP management action by forwarding raw args to `uffsmcp`.
 ///

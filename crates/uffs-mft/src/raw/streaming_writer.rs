@@ -6,7 +6,7 @@
 //! Extracted from `raw.rs` to keep it under the 800 LOC threshold.
 
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Write as _};
 use std::path::Path;
 
 use super::{FLAG_COMPRESSED, HEADER_SIZE, RawMftHeader, SaveRawOptions, VERSION};
@@ -180,7 +180,7 @@ impl StreamingRawMftWriter {
     ///
     /// Returns an error if flushing or seeking fails.
     pub fn finish(mut self) -> Result<RawMftHeader> {
-        use std::io::{Seek, SeekFrom};
+        use std::io::{Seek as _, SeekFrom};
 
         let original_size = self.bytes_written;
         let record_count = original_size / u64::from(self.record_size);

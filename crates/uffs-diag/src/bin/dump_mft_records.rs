@@ -26,7 +26,7 @@
 use std::env;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use uffs_mft::parse::{MftRecordMerger, ParseResult, parse_record_full};
 use uffs_mft::raw::{LoadRawOptions, load_raw_mft};
 // This binary intentionally pulls in uffs_polars via the uffs-diag crate

@@ -44,7 +44,7 @@ impl MftIndex {
         reason = "DataFrame construction has many columns"
     )]
     pub fn to_dataframe(&self) -> crate::Result<uffs_polars::DataFrame> {
-        use uffs_polars::{DataType, IntoColumn, NamedFrom, Series, TimeUnit};
+        use uffs_polars::{DataType, IntoColumn as _, NamedFrom as _, Series, TimeUnit};
         let n = self.records.len();
         // Pre-allocate all column vectors (35 columns in v5)
         let (mut frs, mut seq, mut lsn, mut parent, mut name, mut ns) = (

@@ -37,7 +37,7 @@
 mod glob;
 
 pub use glob::{GlobKind, classify_glob, compile_pattern};
-use uffs_polars::{Expr, NamedFrom, PlSmallStr, Series, col, lit};
+use uffs_polars::{Expr, NamedFrom as _, PlSmallStr, Series, col, lit};
 
 // ============================================================================
 // CompiledPattern - The Pattern IR

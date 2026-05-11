@@ -43,7 +43,7 @@
 use core::mem::size_of;
 
 use smallvec::SmallVec;
-use zerocopy::FromBytes;
+use zerocopy::FromBytes as _;
 
 use super::index_helpers::{add_link_to_index, add_stream_to_index};
 use crate::index::{frs_to_usize, len_to_u16, len_to_u32, nonneg_to_u64, u32_as_usize};

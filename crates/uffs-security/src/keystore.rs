@@ -71,7 +71,7 @@ pub fn get_cache_key() -> io::Result<[u8; KEY_SIZE]> {
 /// after multiple regeneration attempts).
 #[cfg(target_os = "macos")]
 fn keychain_key() -> io::Result<[u8; KEY_SIZE]> {
-    use rand::Rng;
+    use rand::Rng as _;
     use security_framework::passwords::{
         delete_generic_password, get_generic_password, set_generic_password,
     };
@@ -138,7 +138,7 @@ fn keychain_key() -> io::Result<[u8; KEY_SIZE]> {
 /// Returns an error if DPAPI access or file I/O fails.
 #[cfg(target_os = "windows")]
 pub fn get_cache_key() -> io::Result<[u8; KEY_SIZE]> {
-    use rand::Rng;
+    use rand::Rng as _;
     let key_path = dpapi_key_path()?;
 
     // Try to read and decrypt existing DPAPI blob
@@ -372,7 +372,7 @@ pub fn get_cache_key() -> io::Result<[u8; KEY_SIZE]> {
 /// Returns an error if filesystem access or key generation fails.
 #[cfg(not(target_os = "windows"))]
 fn file_based_key() -> io::Result<[u8; KEY_SIZE]> {
-    use rand::Rng;
+    use rand::Rng as _;
 
     let base = dirs_next::data_local_dir().ok_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, "cannot determine local data dir")

@@ -953,7 +953,7 @@ pub(crate) fn spawn_pressure_subscriber(
 /// Returns `!` because both arms terminate the process.
 fn force_exit_with_watchdog() -> ! {
     tracing::info!("Spawning shutdown watchdog (5s grace period)");
-    std::thread::Builder::new()
+    _ = std::thread::Builder::new()
         .name("shutdown-watchdog".into())
         .spawn(|| {
             std::thread::sleep(core::time::Duration::from_secs(5));
@@ -972,8 +972,7 @@ fn force_exit_with_watchdog() -> ! {
             )]
             let _: () = eprintln!("[CATASTROPHE] {msg}");
             std::process::abort();
-        })
-        .ok(); // best-effort; if thread spawn fails, exit may still work
+        }); // best-effort; if thread spawn fails, exit may still work
 
     // Force-exit the process.  The Windows IPC server uses
     // `std::os::windows::net::UnixListener` with `spawn_blocking(accept)`

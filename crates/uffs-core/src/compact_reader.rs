@@ -9,7 +9,7 @@
 //! file without loading the entire `MftIndex`.
 
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Extra fields from a full `FileRecord` not present in `CompactRecord`.
