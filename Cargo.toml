@@ -458,6 +458,7 @@ unreadable_literal = "deny"         # Use underscores in large literals
 equatable_if_let = "deny"       # Use == instead of if let for equality
 if_then_some_else_none = "deny" # Use bool::then instead
 manual_assert = "deny"          # Use assert! macro
+non_zero_suggestions = "deny"   # Prefer NonZeroXX::new(x)? over .unwrap() — composes with unwrap_used
 manual_instant_elapsed = "deny" # Use Instant::elapsed()
 manual_is_ascii_check = "deny"  # Use is_ascii methods
 manual_let_else = "deny"        # Use let-else syntax
@@ -494,6 +495,7 @@ unneeded_field_pattern = "deny"            # Remove unneeded field patterns
 # ───── Filesystem ─────
 doc_include_without_cfg = "deny" # Wrap doc includes in #[cfg(doc)] to avoid wasting compile time
 filetype_is_file = "deny"        # Detect is_file() misuse — returns false for symlinks
+large_include_file = "deny"      # Cap accidental megabyte-sized include_bytes!/include_str! sites (see clippy.toml `max-include-file-size`)
 
 # ───── Output discipline ─────
 print_stderr = "deny" # Use proper logging instead (clippy.toml allows in tests)
@@ -538,6 +540,7 @@ unused_qualifications = "deny"     # Remove unnecessary path qualifications — 
 # ───── Code hygiene ─────
 elided_lifetimes_in_paths = "warn"      # Make lifetime annotations explicit in type paths
 explicit_outlives_requirements = "warn" # Remove redundant where T: 'a bounds
+single_use_lifetimes = "warn"           # Detect `fn foo<'a>(x: &'a T)` where 'a is used exactly once — sibling of already-deny unused_lifetimes
 unreachable_pub = "warn"                # Catch pub items not reachable from crate root
 variant_size_differences = "warn"       # Warn about enum variant size differences
 
@@ -550,6 +553,8 @@ invalid_codeblock_attributes = "warn" # Valid code block attributes
 invalid_html_tags = "warn"            # Valid HTML in docs
 invalid_rust_codeblocks = "warn"      # Valid Rust in doc code blocks
 bare_urls = "warn"                    # Use proper markdown links
+unescaped_backticks = "warn"          # Catch `…` backtick mismatch in doc comments (stable since 1.78)
+redundant_explicit_links = "warn"     # Detect `[Foo](Foo)`-style links where intra-doc link suffices
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Cargo Profiles

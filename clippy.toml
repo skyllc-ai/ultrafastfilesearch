@@ -70,3 +70,18 @@ suppress-restriction-lint-in-const = true
 # Catches struct initializers where fields are in a different order than the
 # struct definition.  Clippy's own repo enables this.
 check-inconsistent-struct-field-initializers = true
+
+# ── Bundled-asset size cap ────────────────────────────────────────────────────
+# Companion to `large_include_file = "deny"` in Cargo.toml.  The only legitimate
+# in-binary asset today is the 128 KB `$UpCase` table in
+# `uffs-text/src/case_fold.rs`; 200 000 bytes (≈ 195 KiB) gives that file
+# generous headroom while still catching accidental megabyte-sized assets.
+max-include-file-size = 200_000
+
+# ── Lint-suppressing comment positions ───────────────────────────────────────
+# Let a `// allow: <reason>` comment above a statement or above an attribute
+# silence `uninlined_format_args` and similar style nits without forcing a
+# scoped `#[expect]` for one-line cases.  Removes a small but constant noise
+# floor without weakening the real signal.
+accept-comment-above-statement = true
+accept-comment-above-attributes = true
