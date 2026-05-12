@@ -259,7 +259,7 @@ required) promoted to a **hard gate at pre-push + pr-fast** via
 `pr-fast.yml::security` job's step list.  Added to
 `just install-dev-tools` so contributors onboard with the binary
 required by the gate.  See
-[CLIPPY_POSTURE.md §12 entry for 2026-05-12 `cargo-machete`](../dev/architecture/code_clean/CLIPPY_POSTURE.md#12--decisions-log)
+[the §12 Decisions Log entry for 2026-05-12 `cargo-machete` in `code-quality/lint-posture.md`](code-quality/lint-posture.md#12--decisions-log)
 for the full decision-log record.
 
 `cargo-udeps` stays at Tier 2 weekly as the authoritative

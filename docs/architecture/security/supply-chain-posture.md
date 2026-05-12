@@ -16,8 +16,10 @@ Status as of **2026-05-12** · Maintainer: `@githubrobbi` · Review cadence: mon
   (display name kept stable to preserve check-run history).  Added to
   `just install-dev-tools` so contributors onboard with the binary
   required by the gate.  Workspace was clean against `cargo machete
-  --skip-target-dir` at adoption.  See CLIPPY_POSTURE.md §12 entry for
-  2026-05-12 `cargo-machete` for the full decision-log record.
+  --skip-target-dir` at adoption.  See
+  [`../code-quality/lint-posture.md` §12 entry for 2026-05-12
+  `cargo-machete`](../code-quality/lint-posture.md#12--decisions-log)
+  for the full decision-log record.
 - 2026-05-12 — **Four-layer cargo-vet audit-discipline policy** (PR #172).
   Closes the lazy-bump anti-pattern PR #166 introduced and PR #170
   manually undid.  Four defenses now compose to make `cargo vet
