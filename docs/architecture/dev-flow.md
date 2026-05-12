@@ -165,6 +165,7 @@ and `.github/workflows/tier-2.yml` (all as of commit `185ed8825`).
 | `miri` (UB check, narrow deep-dive) | — | — | — | ✅ (4 tests) |
 | `cargo careful` (UB check, broad std-debug-asserts) | — | — | — | ✅ (`uffs-security` + `uffs-mft`) |
 | `cargo mutants` (test-quality, advisory) | — | — | — | ✅ (`uffs-security`, ~198 mutations) |
+| `cargo +1.91 check` (MSRV verification) | — | — | — | ✅ (`--all-features` + `--no-default-features`) |
 | cargo-vet imports refresh | — | — | — | weekly PR |
 
 **Key**: ✅ = gate runs here; — = not in this tier; **❌ bold** = gap where
@@ -359,7 +360,7 @@ transient failure, single-digit per week.
 | Advisory (`continue-on-error: true`) | does not block | red ❌ on job, ✅ workflow | yes if transient |
 | Tier 2 weekly | does not block PRs | `ci-failure-tier-2` issue auto-opened | yes if transient |
 
-### 4.7 GAP 7 — MSRV is declared but never verified (🟠 MEDIUM, OPEN)
+### 4.7 GAP 7 — MSRV is declared but never verified (✅ CLOSED 2026-05-12)
 
 **Evidence**: The workspace declares `rust-version = "1.91"` in
 `Cargo.toml` and `msrv = "1.91"` in `clippy.toml`, and the
@@ -393,7 +394,9 @@ mutants).  MSRV verification was on the candidate list but was
 deprioritised because no first-publish baseline existed yet to
 protect.  The cost-benefit was understood but the work was deferred.
 
-**Proposed fix** (R3-06 candidate): Add a Tier 2 weekly `msrv` job:
+**Resolution**: Closed 2026-05-12 via R3-06 (PR landing this entry).
+The weekly `msrv` job sits in `tier-2.yml` between `mutants` and
+`tier-2-summary`:
 
 ```yaml
 msrv:
@@ -402,16 +405,21 @@ msrv:
   timeout-minutes: 15
   steps:
     - uses: actions/checkout@<sha>
-    - run: rustup toolchain install 1.91 --profile minimal --no-self-update
+    - run: |
+        rustup toolchain install 1.91 --profile minimal --no-self-update
+        rustup default 1.91
     - uses: Swatinem/rust-cache@<sha>
-      with: { shared-key: tier-2-msrv }
+      with: { shared-key: tier-2-msrv, cache-on-failure: 'true' }
     - run: cargo +1.91 check --workspace --locked --all-features
     - run: cargo +1.91 check --workspace --locked --no-default-features
 ```
 
-Runtime cost: ~5–10 min warm.  Catches the entire class of
-bugs above for the cost of one weekly compile-only check.  Promote
-to a hard pre-publish gate (release-time, alongside
+Wired into `tier-2-summary.needs` and the success-check as a **hard
+gate** (not advisory like `mutants`) since MSRV regressions have a
+binary correctness signal: either the 1.91 compiler accepts the
+workspace or it doesn't.  Also added to `notify-failure.needs` so a
+regression opens the rolling `ci-failure-tier-2` issue.  Promote to
+a hard pre-publish gate (release-time, alongside
 `cargo-semver-checks`) once R8 lands the first crates.io publish.
 
 ### 4.8 GAP 8 — Fuzz harness exists but never runs (🟠 MEDIUM, OPEN)

@@ -522,10 +522,100 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
 
+  # ───────────────────────────────────────────────────────────────────
+  # MSRV verification — the workspace's `rust-version = "1.91"` claim
+  # is independently checked against the stable 1.91 toolchain
+  #
+  # The workspace declares MSRV in three places:
+  #   * `Cargo.toml::workspace.package.rust-version = "1.91"` — the
+  #     contract surface (what downstream consumers see).
+  #   * `clippy.toml::msrv = "1.91"` — activates ~80 MSRV-aware Clippy
+  #     lints including `clippy::incompatible_msrv`.
+  #   * `rust-toolchain.toml` — pins **nightly**, not 1.91 stable.
+  #     Every dev build and every other CI build runs against nightly.
+  #
+  # `clippy::incompatible_msrv` only fires for APIs explicitly attributed
+  # with `#[stable(since = ...)]` after 1.91.  It is known to under-cover:
+  #
+  #   * New trait impls on existing types (the trait was added pre-1.91
+  #     but the impl is post-1.91).
+  #   * Deref coercion / lifetime elision rule changes that affect
+  #     borrow-check behaviour without changing API signatures.
+  #   * New `const fn` qualifications on previously non-const APIs.
+  #   * Inference / specialisation improvements that compile pre-1.91
+  #     code differently on a newer toolchain.
+  #
+  # Without this job a PR can introduce code that compiles cleanly on
+  # the pinned nightly, passes every gate in every tier, and silently
+  # fails for any downstream consumer on the claimed MSRV.  Theoretical
+  # pre-publish; direct SemVer breach for any patch / minor release
+  # post-R8.
+  #
+  # Why this is a **hard** gate (not advisory like mutants):
+  #
+  #   MSRV regressions have a binary correctness signal — either the
+  #   1.91 compiler accepts the workspace or it doesn't.  No
+  #   triage-required "missed mutations" baseline.  Any failure here
+  #   means the rust-version claim in Cargo.toml is lying to crates.io
+  #   consumers, which is a SemVer issue worth blocking the weekly
+  #   summary on.
+  #
+  # Why both `--all-features` and `--no-default-features`:
+  #
+  #   `--all-features` catches MSRV violations in optional code paths
+  #   (e.g. `uffs-client::async`, `uffs-mcp::streamable-http`).
+  #   `--no-default-features` catches accidental MSRV reliance on a
+  #   default-feature crate's pre-1.91 polyfill.  Together they bound
+  #   the feature combination space without running `cargo-hack`'s
+  #   full N² matrix (that's `tier-2.yml::hack`'s job).
+  #
+  # Tier R3-06 of `docs/architecture/code-quality/lint-posture.md`.
+  msrv:
+    name: Tier 2 / MSRV (1.91 stable)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install stable 1.91 toolchain (NOT the pinned nightly)
+        # `--profile minimal` installs rustc + cargo + rust-std without
+        # rustfmt / clippy / rust-docs / etc. — we only need the
+        # compile-only `cargo check` capability here.  `--no-self-update`
+        # avoids rustup's own update churn on cached runners.
+        run: |
+          rustup toolchain install 1.91 --profile minimal --no-self-update
+          rustup default 1.91
+          rustc --version
+          cargo --version
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          # Dedicated cache key — the 1.91 stable target-dir layout is
+          # binary-incompatible with the nightly-pinned target-dir
+          # every other Tier 2 job uses, so a shared cache would
+          # invalidate one or the other on each run.
+          shared-key: tier-2-msrv
+          cache-on-failure: 'true'
+
+      - name: Check workspace with --all-features (MSRV)
+        # `--locked` per §2.8 so we evaluate the same resolved crate
+        # graph as the rest of the workspace.  `cargo check` is enough
+        # to catch MSRV violations — we don't need the full compile
+        # since any MSRV breach surfaces during type-checking.
+        run: cargo +1.91 check --workspace --locked --all-features
+
+      - name: Check workspace with --no-default-features (MSRV)
+        # The complementary case: catches accidental MSRV reliance on
+        # a default-feature crate's pre-1.91 polyfill that would mask
+        # the regression in the `--all-features` run.
+        run: cargo +1.91 check --workspace --locked --no-default-features
+
   tier-2-summary:
     name: Tier 2 / Summary
     runs-on: ubuntu-latest
-    needs: [file-size-policy, coverage, build-validation, udeps, hack, miri, careful, mutants]
+    needs: [file-size-policy, coverage, build-validation, udeps, hack, miri, careful, mutants, msrv]
     if: always()
     timeout-minutes: 5
     steps:
@@ -545,7 +635,8 @@ jobs:
                 "${{ needs.udeps.result }}" == "success" && \
                 "${{ needs.hack.result }}" == "success" && \
                 "${{ needs.miri.result }}" == "success" && \
-                "${{ needs.careful.result }}" == "success" ]]; then
+                "${{ needs.careful.result }}" == "success" && \
+                "${{ needs.msrv.result }}" == "success" ]]; then
             echo "✅ All Tier 2 nightly checks passed!"
           else
             echo "❌ Some Tier 2 nightly checks failed - review above"
@@ -585,6 +676,7 @@ jobs:
               echo "| Miri | ✅ |"
               echo "| cargo-careful | ✅ |"
               echo "| cargo-mutants (uffs-security) | ${mutants_cell} |"
+              echo "| MSRV (1.91 stable) | ✅ |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ═══════════════════════════════════════════════════════════════════════════
@@ -599,7 +691,7 @@ jobs:
     # issue.  Once mutants is promoted from advisory to a hard gate
     # (see the `Check pipeline success` step's comment in the
     # tier-2-summary job), add it here too.
-    needs: [file-size-policy, coverage, build-validation, udeps, hack, miri, careful]
+    needs: [file-size-policy, coverage, build-validation, udeps, hack, miri, careful, msrv]
     if: failure()
     # §2.8: every job caps its runtime.  Cheap notifier — 2 min is
     # generous for a single API call round-trip + JSON formatting.
