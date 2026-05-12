@@ -119,15 +119,42 @@ jobs:
           echo "🏷️ Tag: $VERSION"
           echo "🚀 Triggered by: ${{ inputs.triggered_by || 'tag-push' }}"
 
-      - name: Check if tag already exists (workflow_dispatch only)
+      - name: Check if tag or release already exists (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.validate.outputs.tag }}
         run: |
-          if git tag -l | grep -q "^${{ steps.validate.outputs.tag }}$"; then
-            echo "❌ Tag ${{ steps.validate.outputs.tag }} already exists"
+          # Guard 1 — git tag.  The release workflow creates the tag via
+          # action-gh-release's REST path; a colliding tag would be
+          # silently treated as "already created" and the build would
+          # publish over the existing one.
+          if git tag -l | grep -q "^${TAG}$"; then
+            echo "::error title=Tag ${TAG} already exists::A git tag for ${TAG} already exists.  Bump the version in Cargo.toml + CHANGELOG.md and re-dispatch."
             exit 1
           fi
-          echo "✅ Tag is available"
+
+          # Guard 2 — GitHub release row.  Since 2025-Q4 GitHub publishes
+          # releases as immutable by default.  When a release row exists
+          # for $TAG but the git tag has been rolled back (e.g. a previous
+          # release attempt failed AFTER the release was created but
+          # BEFORE artifacts uploaded, then the tag was manually deleted),
+          # action-gh-release tries to UPDATE the existing row's
+          # target_commitish and GitHub rejects with:
+          #
+          #   Validation Failed: target_commitish cannot be changed when
+          #   release is immutable
+          #
+          # The remedy is to bump the version, not to retry.  Surfacing
+          # that here gives a clear error instead of the cryptic one from
+          # action-gh-release.  See issue #150 / run 25549839464.
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::error title=Release ${TAG} already published::A release for ${TAG} already exists on GitHub and is immutable.  GitHub does not allow re-publishing the same version.  Bump the version in Cargo.toml + CHANGELOG.md and re-dispatch."
+            exit 1
+          fi
+
+          echo "✅ Tag and release are both available for ${TAG}"
 
       - name: Validate commit_sha is ancestor of main (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch' && inputs.commit_sha != ''
