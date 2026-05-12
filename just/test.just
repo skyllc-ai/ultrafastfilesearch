@@ -341,7 +341,7 @@ taplo-fmt *ARGS:
 install-dev-tools:
     #!/usr/bin/env bash
     set -euo pipefail
-    printf "\033[0;34m📦 Installing dev tools (typos-cli, taplo-cli, cargo-xwin)...\033[0m\n"
+    printf "\033[0;34m📦 Installing dev tools (typos-cli, taplo-cli, cargo-machete, cargo-xwin)...\033[0m\n"
     if ! command -v typos >/dev/null 2>&1; then
         cargo install --locked typos-cli
     else
@@ -351,6 +351,17 @@ install-dev-tools:
         cargo install --locked taplo-cli
     else
         printf "   \033[0;32m✓\033[0m taplo already installed\n"
+    fi
+    # cargo-machete is required by the pre-push / pr-fast `machete` gate
+    # (Tier R3 of `docs/dev/architecture/code_clean/CLIPPY_POSTURE.md`).
+    # Sub-second AST-based unused-dependency detector — complements
+    # cargo-udeps (Tier 2 weekly, multi-minute, nightly-only) with a
+    # cheap pre-push check that catches the common case before PR opens.
+    # ~3 MB binary; binstall takes <5 s when cargo-binstall is present.
+    if ! command -v cargo-machete >/dev/null 2>&1; then
+        cargo install --locked cargo-machete
+    else
+        printf "   \033[0;32m✓\033[0m cargo-machete already installed\n"
     fi
     # cargo-xwin is required by the pre-commit / pre-push `lint-ci-windows`
     # gate (Phase W5.6).  Optional on Windows hosts (where `cargo clippy`

@@ -150,6 +150,7 @@ and `.github/workflows/tier-2.yml` (all as of commit `185ed8825`).
 | rustdoc `-Dwarnings` | — | ✅ | ✅ | — |
 | `cargo deny check` | — | ✅ | ✅ | — |
 | **`cargo vet check --locked`** | — | **❌** | ✅ | — |
+| `cargo machete` (unused-dep static check) | — | ✅ | ✅ | — |
 | test COMPILE (`nextest --no-run`) | — | ✅ | ✅ (test-build) | — |
 | test EXECUTE (`nextest run`) | — | **❌** | ✅ | via coverage |
 | **`cargo test --doc`** | — | **❌** | ✅ | — |
@@ -244,17 +245,27 @@ as actual tests) is CI-only at `ci.yml:268`.
 
 **Fix**: Add a mandatory gate `doc-tests` alongside `rustdoc`.
 
-### 4.4 GAP 4 — unused-dependency detection is weekly-only (🟢 LOW)
+### 4.4 GAP 4 — unused-dependency detection is weekly-only (✅ CLOSED 2026-05-12)
 
-**Evidence**: `cargo udeps` runs only in `tier-2.yml:166-191`.  A PR that
-removes the last use of a workspace dep accumulates cruft until the next
-Monday's Tier 2 run.
+**Original evidence**: `cargo udeps` runs only in `tier-2.yml:166-191`.
+A PR that removes the last use of a workspace dep accumulated cruft
+until the next Monday's Tier 2 run.
 
-**Fast alternative**: `cargo machete` is 5–10× faster than `cargo-udeps`
-(static analysis vs rebuild-with-RUSTC_WRAPPER).  Already in
-`dev.just:118`'s `update-tools` tool list.
+**Resolution**: `cargo machete` (sub-second AST-based unused-dep
+detector — static-analysis sibling of `cargo-udeps`, no nightly
+required) promoted to a **hard gate at pre-push + pr-fast** via
+`scripts/ci/gates.toml [[gate]] id = "machete"` and the
+`pr-fast.yml::security` job's step list.  Added to
+`just install-dev-tools` so contributors onboard with the binary
+required by the gate.  See
+[CLIPPY_POSTURE.md §12 entry for 2026-05-12 `cargo-machete`](../dev/architecture/code_clean/CLIPPY_POSTURE.md#12--decisions-log)
+for the full decision-log record.
 
-**Recommendation**: Add `cargo machete` as an optional pre-push gate.
+`cargo-udeps` stays at Tier 2 weekly as the authoritative
+compile-driven check — it catches deps used only behind `#[cfg]`
+gates that machete's static grep misses.  The two are complementary,
+not redundant: machete is the fast inner-loop check, udeps is the
+thorough weekly sweep.
 
 ### 4.5 GAP 5 — CodeQL is intentionally CI-only (🟢 LEAVE)
 

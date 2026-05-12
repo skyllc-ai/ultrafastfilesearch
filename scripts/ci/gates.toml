@@ -516,6 +516,41 @@ the gate is hard on `main`.  pr-fast bundles this into the existing
 """
 
 [[gate]]
+id = "machete"
+label = "cargo-machete unused-dep check"
+command = ["cargo", "machete", "--skip-target-dir"]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "code_changed"
+hard = true
+tool = "cargo-machete"
+expected_runtime_secs = 1
+bucket = "bg"
+order = 47
+consumer_names = { "pr-fast" = "security" }
+notes = """
+Fast AST-based unused-dependency detector.  Greps source for
+`use <crate>` / `<crate>::path` patterns and cross-references the
+`[dependencies]` / `[dev-dependencies]` / `[build-dependencies]`
+sections in every workspace `Cargo.toml`.
+
+Complementary to `cargo-udeps` (Tier 2 weekly) which actually
+compiles the workspace to detect unused deps — `udeps` is more
+accurate (catches deps used only behind `#[cfg]` that machete's
+static grep misses) but multi-minute and nightly-only.  machete
+runs sub-second on stable, fits the pre-push budget cleanly.
+
+Gate fires on any code change (rust / dep / infra) because either
+class can flip machete's verdict: removing the last `use foo` from
+a `.rs` file or adding `foo = "..."` to a `Cargo.toml` without a
+consumer both produce a new finding.
+
+HARD-FAIL with install hint when missing (`cargo install
+cargo-machete` or `cargo binstall cargo-machete`; ~3 MB binary,
+sub-second build via binstall).  pr-fast bundles into the existing
+`security` job alongside `vet` + `deny` + `vet-audit-discipline`.
+"""
+
+[[gate]]
 id = "deny"
 label = "cargo deny check"
 command = ["cargo", "deny", "check", "--hide-inclusion-graph"]

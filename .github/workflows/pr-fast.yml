@@ -485,11 +485,16 @@ jobs:
       - run: cargo nextest run --workspace --all-features --lib --tests --profile ci --locked
 
   # ─────────────────────────────────────────────────────────────────────
-  # security — cargo-deny + cargo-vet.  Re-runs vet here (also runs in
-  # sanity when dep changed) because external observers (branch
-  # protection history, search tooling, audit trails) expect a
-  # distinct "Security" check in the check-runs list.  Cheap on warm
-  # cache (~10 s).
+  # security — cargo-deny + cargo-vet + cargo-vet audit-discipline +
+  # cargo-machete.  Bundles every supply-chain-hygiene check into a
+  # single Linux job.  Re-runs `vet` here (also runs in `sanity` when
+  # dep changed) because external observers (branch protection
+  # history, search tooling, audit trails) expect a distinct "Security"
+  # check in the check-runs list.  Display name kept stable as
+  # "Security (deny + vet)" to preserve historical check-run identity
+  # across additions to the job (audit-discipline landed in PR #172,
+  # cargo-machete in this PR — both bundled without renaming).
+  # Cheap on warm cache (~10 s wall).
   # ─────────────────────────────────────────────────────────────────────
   security:
     name: Security (deny + vet)
@@ -516,7 +521,7 @@ jobs:
 
       - uses: taiki-e/install-action@dfc84ffb7254b048a0a843316ff5a2714dcdc7bd # v2
         with:
-          tool: cargo-deny,cargo-vet
+          tool: cargo-deny,cargo-vet,cargo-machete
 
       - name: cargo deny check
         # cargo-deny does not accept --locked; it reads Cargo.lock directly.
@@ -536,6 +541,19 @@ jobs:
         # bypass: CI is hard on `main`.
         if: needs.classify.outputs.dep == 'true'
         run: bash scripts/ci/check_vet_audit_discipline.sh ci
+
+      - name: cargo-machete unused-dep check
+        # Fast (~1 s) AST-based unused-dependency detector.  Complements
+        # `cargo-udeps` in Tier 2 weekly (which actually compiles to
+        # detect, more accurate but multi-minute, nightly-only).
+        # cargo-machete catches the common case — a `[dependencies]`
+        # entry whose crate is no longer `use`d anywhere — at PR time
+        # instead of a week later.  `--skip-target-dir` mirrors the
+        # local `just/analysis_ci.just::machete` recipe so identical
+        # output is reproducible on both surfaces.  pr-fast bundles
+        # into this `security` job (same `code_changed` predicate as
+        # the deny + vet pair) to keep the job graph narrow.
+        run: cargo machete --skip-target-dir
 
   # ─────────────────────────────────────────────────────────────────────
   # windows-lint — native Windows clippy gate on `windows-latest`.
