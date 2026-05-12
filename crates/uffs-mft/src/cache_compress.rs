@@ -18,7 +18,6 @@ use crate::index::usize_to_f64;
 /// # Errors
 ///
 /// Returns an I/O error if compression fails.
-#[cfg(feature = "zstd")]
 pub fn compress_zstd_mt(data: &[u8], level: i32) -> std::io::Result<Vec<u8>> {
     let mut encoder = zstd::Encoder::new(Vec::new(), level)?;
     let workers_usize = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
@@ -36,7 +35,6 @@ pub fn compress_zstd_mt(data: &[u8], level: i32) -> std::io::Result<Vec<u8>> {
 /// # Errors
 ///
 /// Returns an I/O error if encoder initialisation fails.
-#[cfg(feature = "zstd")]
 pub fn new_zstd_mt_encoder(level: i32) -> std::io::Result<zstd::Encoder<'static, Vec<u8>>> {
     let mut encoder = zstd::Encoder::new(Vec::new(), level)?;
     let workers_usize = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
@@ -54,7 +52,6 @@ pub fn new_zstd_mt_encoder(level: i32) -> std::io::Result<zstd::Encoder<'static,
 /// # Errors
 ///
 /// Returns an I/O error if compression, encryption, or file writing fails.
-#[cfg(feature = "zstd")]
 pub fn compress_encrypt_write_streaming<F>(
     write_fn: F,
     path: &Path,
@@ -117,7 +114,6 @@ where
 ///
 /// Returns an I/O error if any step fails. Since this is typically called
 /// from a background thread, callers should log but not propagate errors.
-#[cfg(feature = "zstd")]
 pub fn compress_encrypt_write(
     serialized: Vec<u8>,
     path: &Path,

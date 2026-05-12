@@ -1697,17 +1697,28 @@ Known feature flags in the workspace (as of this plan):
 
 | Crate | Feature | Purpose | Default? |
 |---|---|---|---|
-| `uffs-mft` | `zstd` | zstd compression for archived MFT records | Yes (per workspace dep in root `Cargo.toml`) |
-| `uffs-client` | `async` | Async client API (tokio) | No — sync path is default |
+| `uffs-client` | `async` | Async client API (tokio) | Yes — `uffs-cli` overrides with `default-features = false` to drop tokio from the hot-path binary |
+| `uffs-mcp` | `streamable-http` | HTTP gateway transport (axum + tower + rmcp HTTP transport).  Required by the `uffs-mcp-http` binary | Yes |
+| `uffs-cli` | `mcp-http-probe` | Active `/status` probe for the HTTP MCP gateway in `system-status` output | No (off by default to keep the CLI binary lean) |
 
-For each feature flag, the crate should have a brief docs paragraph:
+> **2026-05-12**: the `uffs-mft.zstd` feature was retired.  The flag was
+> declared optional with `default = ["zstd"]` but every workspace
+> consumer pinned `features = ["zstd"]` and recent code paths added
+> uses of `zstd::` / `crate::cache::compress_zstd_mt` without
+> `#[cfg(feature = "zstd")]` gating.  `cargo hack --workspace
+> --each-feature` surfaced three un-gated sites; the rest of the
+> codebase carried ~26 cfg-gates that never fired in practice.  The
+> feature was promoted to a hard dependency to match reality.  See PR
+> on the `refactor/uffs-mft-retire-vestigial-zstd-feature` branch.
+
+For each remaining feature flag, the crate should have a brief docs paragraph:
 
 ```rust
 //! ## Feature flags
 //!
-//! - `zstd` (default): enables zstd compression of archived MFT
-//!   records.  Disabling reduces binary size by ~200KB but requires
-//!   external decompression for archives.
+//! - `async` (default): enables the tokio-based `UffsClient`.
+//!   Disabling drops the tokio dependency and `ws2_32.dll` (Windows)
+//!   from the call-site binary.
 ```
 
 Audit once in R6.  Add rustdoc-level feature docs to each crate

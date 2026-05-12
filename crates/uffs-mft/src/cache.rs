@@ -51,7 +51,6 @@ pub use cache_dataframe::load_or_build_dataframe_cached;
 /// policy.
 #[path = "cache_compress.rs"]
 mod cache_compress;
-#[cfg(feature = "zstd")]
 pub use cache_compress::{
     compress_encrypt_write, compress_encrypt_write_streaming, compress_zstd_mt, new_zstd_mt_encoder,
 };
@@ -360,7 +359,6 @@ pub fn save_to_cache(
 /// Returns an error only if serialization or directory creation fails.
 /// Background compression/encryption/write errors are logged but not
 /// propagated (best-effort save).
-#[cfg(feature = "zstd")]
 pub fn save_to_cache_background(
     index: &MftIndex,
     drive: char,

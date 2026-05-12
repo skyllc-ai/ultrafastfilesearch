@@ -257,19 +257,11 @@ fn prepare_write_data<'a>(
 ) -> Result<(u32, u64, alloc::borrow::Cow<'a, [u8]>)> {
     use alloc::borrow::Cow;
 
-    #[cfg(feature = "zstd")]
     if options.compress {
         let compressed = zstd::encode_all(data, options.compression_level)
             .map_err(|err| MftError::Io(std::io::Error::other(err)))?;
         let compressed_size = compressed.len() as u64;
         return Ok((FLAG_COMPRESSED, compressed_size, Cow::Owned(compressed)));
-    }
-
-    #[cfg(not(feature = "zstd"))]
-    if options.compress {
-        return Err(MftError::InvalidData(
-            "zstd feature not enabled for compression".into(),
-        ));
     }
 
     Ok((0_u32, 0_u64, Cow::Borrowed(data)))
@@ -404,17 +396,8 @@ pub fn load_raw_mft<P: AsRef<Path>>(path: P, options: &LoadRawOptions) -> Result
 
         // Decompress if needed
         let data = if header.is_compressed() {
-            #[cfg(feature = "zstd")]
-            {
-                zstd::decode_all(&*compressed_data)
-                    .map_err(|err| MftError::Io(std::io::Error::other(err)))?
-            }
-            #[cfg(not(feature = "zstd"))]
-            {
-                return Err(MftError::InvalidData(
-                    "zstd feature not enabled for decompression".into(),
-                ));
-            }
+            zstd::decode_all(&*compressed_data)
+                .map_err(|err| MftError::Io(std::io::Error::other(err)))?
         } else {
             compressed_data
         };

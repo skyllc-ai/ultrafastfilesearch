@@ -362,7 +362,6 @@ impl IocpCaptureWriter {
         }
 
         // Write chunk data (optionally compressed)
-        #[cfg(feature = "zstd")]
         if self.compress {
             let mut encoder = zstd::stream::Encoder::new(&mut writer, self.compression_level)?;
             for (_, data) in &self.chunks {
@@ -373,11 +372,6 @@ impl IocpCaptureWriter {
             for (_, data) in &self.chunks {
                 writer.write_all(data)?;
             }
-        }
-
-        #[cfg(not(feature = "zstd"))]
-        for (_, data) in &self.chunks {
-            writer.write_all(data)?;
         }
 
         writer.flush()?;
@@ -455,20 +449,11 @@ pub fn load_iocp_capture<P: AsRef<Path>>(file_path: P) -> Result<IocpCaptureData
     drop(reader); // release file handle early
 
     let data = if header.is_compressed() {
-        #[cfg(feature = "zstd")]
-        {
-            let mut data = Vec::with_capacity(crate::index::frs_to_usize(header.total_data_size));
-            let cursor = std::io::Cursor::new(&compressed);
-            let mut decoder = zstd::stream::Decoder::new(cursor)?;
-            decoder.read_to_end(&mut data)?;
-            data
-        }
-        #[cfg(not(feature = "zstd"))]
-        {
-            return Err(MftError::InvalidData(
-                "IOCP capture is compressed but zstd feature is disabled".into(),
-            ));
-        }
+        let mut data = Vec::with_capacity(crate::index::frs_to_usize(header.total_data_size));
+        let cursor = std::io::Cursor::new(&compressed);
+        let mut decoder = zstd::stream::Decoder::new(cursor)?;
+        decoder.read_to_end(&mut data)?;
+        data
     } else {
         compressed
     };

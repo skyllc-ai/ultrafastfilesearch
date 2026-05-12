@@ -52,8 +52,6 @@ use uffs_text as _;
 #[cfg(windows)]
 use windows as _;
 use zerocopy as _;
-
-#[cfg(feature = "zstd")]
 extern crate zstd as _;
 
 // ═══════════════════════════════════════════════════════════════════════════

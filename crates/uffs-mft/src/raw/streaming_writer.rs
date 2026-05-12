@@ -40,15 +40,11 @@ pub struct StreamingRawMftWriter {
     bytes_written: u64,
     /// Whether compression is enabled.
     compress: bool,
-    /// Compression level (if compressing).
-    #[expect(dead_code, reason = "used only when zstd feature is enabled")]
-    compression_level: i32,
     /// Volume letter (e.g., 'C', 'D').
     volume_letter: char,
     /// Whether raw compatibility mode is enabled (no header).
     raw_compat: bool,
     /// Zstd encoder (if compressing).
-    #[cfg(feature = "zstd")]
     encoder: Option<zstd::stream::Encoder<'static, BufWriter<File>>>,
 }
 
@@ -81,10 +77,8 @@ impl StreamingRawMftWriter {
                 record_size,
                 bytes_written: 0,
                 compress: false, // Raw compat mode doesn't support compression
-                compression_level: options.compression_level,
                 volume_letter: options.volume_letter,
                 raw_compat: true,
-                #[cfg(feature = "zstd")]
                 encoder: None,
             });
         }
@@ -101,7 +95,6 @@ impl StreamingRawMftWriter {
         };
         writer.write_all(&placeholder_header.to_bytes())?;
 
-        #[cfg(feature = "zstd")]
         if options.compress {
             // For compressed output, we need to use a zstd encoder
             // Flush the header first, then create encoder for the data portion
@@ -126,7 +119,6 @@ impl StreamingRawMftWriter {
                 record_size,
                 bytes_written: 0,
                 compress: true,
-                compression_level: options.compression_level,
                 volume_letter: options.volume_letter,
                 raw_compat: false,
                 encoder: Some(encoder),
@@ -139,10 +131,8 @@ impl StreamingRawMftWriter {
             record_size,
             bytes_written: 0,
             compress: options.compress,
-            compression_level: options.compression_level,
             volume_letter: options.volume_letter,
             raw_compat: false,
-            #[cfg(feature = "zstd")]
             encoder: None,
         })
     }
@@ -157,7 +147,6 @@ impl StreamingRawMftWriter {
     ///
     /// Returns an error if writing fails.
     pub fn write_chunk(&mut self, data: &[u8]) -> Result<()> {
-        #[cfg(feature = "zstd")]
         if let Some(ref mut encoder) = self.encoder {
             encoder
                 .write_all(data)
@@ -200,7 +189,6 @@ impl StreamingRawMftWriter {
             });
         }
 
-        #[cfg(feature = "zstd")]
         let compressed_size = if let Some(encoder) = self.encoder.take() {
             let mut zstd_writer = encoder
                 .finish()
@@ -215,9 +203,6 @@ impl StreamingRawMftWriter {
         } else {
             0
         };
-
-        #[cfg(not(feature = "zstd"))]
-        let compressed_size = 0_u64;
 
         // Create final header
         let header = RawMftHeader {
@@ -246,7 +231,6 @@ impl StreamingRawMftWriter {
 
         // For compressed files, reopen the file and update the header
         // The zstd encoder has already closed the file, so we reopen it
-        #[cfg(feature = "zstd")]
         if self.compress {
             use std::fs::OpenOptions;
 

@@ -85,7 +85,6 @@ fn save_load_uncompressed() -> TestResult {
     Ok(())
 }
 
-#[cfg(feature = "zstd")]
 #[test]
 fn save_load_compressed() -> TestResult {
     let temp_dir = std::env::temp_dir();

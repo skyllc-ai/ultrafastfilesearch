@@ -100,7 +100,7 @@ uffs-polars = { path = "crates/uffs-polars", version = "0.5.94" }
 uffs-security = { path = "crates/uffs-security", version = "0.5.94" }
 uffs-text = { path = "crates/uffs-text", version = "0.5.94" }
 uffs-time = { path = "crates/uffs-time", version = "0.5.94" }
-uffs-mft = { path = "crates/uffs-mft", version = "0.5.94", features = ["zstd"] }
+uffs-mft = { path = "crates/uffs-mft", version = "0.5.94" }
 uffs-format = { path = "crates/uffs-format", version = "0.5.94" }
 uffs-core = { path = "crates/uffs-core", version = "0.5.94" }
 uffs-client = { path = "crates/uffs-client", version = "0.5.94" }
