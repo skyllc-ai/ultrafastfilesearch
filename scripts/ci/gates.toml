@@ -484,6 +484,38 @@ the trigger doesn't fire.  pr-fast's `security` job bundles vet + deny.
 """
 
 [[gate]]
+id = "vet-audit-discipline"
+label = "cargo-vet exemption-audit discipline"
+command = ["bash", "scripts/ci/check_vet_audit_discipline.sh", "pre-push"]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "dep_changed"
+hard = true
+tool = "bash"
+expected_runtime_secs = 1
+bucket = "bg"
+order = 45
+consumer_names = { "pr-fast" = "security" }
+notes = """
+Four-layer cargo-vet audit-discipline policy (Layer 1 + Layer 4 — see
+`docs/architecture/security/supply-chain-posture.md` §"Mandating
+audits over blanket bumps").  Hard-fails any `[[exemptions.<crate>]]`
+version-bump in the pushed range that is not paired with BOTH (A) a
+matching `[[audits.<crate>]]` delta block in `supply-chain/audits.toml`
+AND (B) a `Vet-Reviewed-Diff: <crate>@<old>-><new>` commit trailer in
+the same range.
+
+Closes the lazy-bump anti-pattern that PR #166 introduced (and PR #170
+manually undid).  The companion `just vet-bump <crate>` recipe (Layer
+2) emits the exact commands an operator needs to run; the
+`supply-chain/` CODEOWNERS line (Layer 3) routes the resulting PR to
+a human reviewer.
+
+Bypass: `BYPASS_VET_AUDIT_DISCIPLINE=1 git push`.  CI has no bypass —
+the gate is hard on `main`.  pr-fast bundles this into the existing
+`security` job alongside `vet` and `deny`.
+"""
+
+[[gate]]
 id = "deny"
 label = "cargo deny check"
 command = ["cargo", "deny", "check", "--hide-inclusion-graph"]
