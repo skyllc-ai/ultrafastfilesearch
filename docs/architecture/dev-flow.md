@@ -162,7 +162,8 @@ and `.github/workflows/tier-2.yml` (all as of commit `185ed8825`).
 | `cargo llvm-cov` | — | — | — | ✅ |
 | `cargo udeps` | — | — | — | ✅ |
 | `cargo hack --each-feature` (feature matrix) | — | — | — | ✅ |
-| `miri` (UB check) | — | — | — | ✅ (4 tests) |
+| `miri` (UB check, narrow deep-dive) | — | — | — | ✅ (4 tests) |
+| `cargo careful` (UB check, broad std-debug-asserts) | — | — | — | ✅ (`uffs-security` + `uffs-mft`) |
 | `cargo mutants` (test-quality, advisory) | — | — | — | ✅ (`uffs-security`, ~198 mutations) |
 | cargo-vet imports refresh | — | — | — | weekly PR |
 

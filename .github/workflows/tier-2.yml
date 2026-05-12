@@ -308,6 +308,112 @@ jobs:
           cargo miri test --locked -p uffs-mft raw::tests::raw_compat_mode -- --exact
 
   # ───────────────────────────────────────────────────────────────────
+  # cargo-careful — broad std-debug-assertion coverage that complements
+  # Miri's narrow deep-dive
+  #
+  # `cargo-careful` rebuilds the standard library with extra debug
+  # assertions enabled (slice / iterator / integer-overflow checks that
+  # the regular debug build glosses over) and runs the workspace tests
+  # against that augmented std.  Catches UB in std-using code paths
+  # that Miri can't reach because Miri is too slow for the broad test
+  # surface — Miri stays focused on the four raw-persistence tests
+  # above; `careful` widens the lens to every test in
+  # `uffs-security` + `uffs-mft`, the two crates whose unsafe-density
+  # makes them the highest-value UB-detection targets in the
+  # workspace.
+  #
+  # Why scoped to those two crates (not `--workspace`):
+  #
+  #   * `uffs-security` — cryptography, keystore, keying material
+  #     handling.  Any UB here is a security-critical defect; cargo-
+  #     careful's overflow / bounds checks are exactly the right
+  #     instrument.
+  #   * `uffs-mft` — raw NTFS Master File Table parsing, byte-slice
+  #     reinterpretation, FFI-shaped struct layout.  The crate is
+  #     deliberately `unsafe`-heavy (alignment-sensitive structural
+  #     deserialisation) and the highest-risk UB target in the
+  #     codebase.
+  #   * Other crates — `uffs-core`, `uffs-daemon`, `uffs-cli`,
+  #     `uffs-mcp`, etc. — are mostly safe Rust with minimal raw
+  #     pointer / byte-slice manipulation.  Pre-push clippy +
+  #     pr-fast tests already provide adequate coverage for them;
+  #     adding them to cargo-careful would inflate runtime ~3x for
+  #     marginal added signal.  Extend the `-p <crate>` list below
+  #     if a future crate gains substantial `unsafe` density.
+  #
+  # Why `--all-features` is OMITTED:
+  #
+  #   The default feature set is what production binaries ship; that
+  #   is what we want to harden.  Non-default features (e.g.
+  #   `uffs-cli::mcp-http-probe`) are exercised by `tier-2.yml::hack`
+  #   under cargo-hack and don't need duplicate UB-detection coverage
+  #   here.
+  #
+  # Tier R3-03 of `docs/architecture/code-quality/lint-posture.md`.
+  careful:
+    name: Tier 2 / cargo-careful
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Free up disk space
+        # Same prelude as miri — std rebuild plus per-crate test
+        # compile produces several GB of artifacts and the
+        # ubuntu-latest runner image ships with only ~14 GB free
+        # after the default toolchain install.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install pinned nightly (from rust-toolchain.toml)
+        # `rust-toolchain.toml` already pins a known-good nightly
+        # plus `rust-src` (needed for `-Zbuild-std` which cargo-
+        # careful uses internally).  `rustup show` installs the
+        # pinned channel + components.
+        run: rustup show
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          # Dedicated cache key — cargo-careful's `-Zbuild-std`
+          # rebuild produces a distinct sysroot / target-dir layout
+          # from the regular workspace build, so sharing miri's
+          # cache key would invalidate one or both on each run.
+          shared-key: tier-2-careful
+          cache-on-failure: 'true'
+
+      - name: Install cargo-careful
+        uses: taiki-e/install-action@dfc84ffb7254b048a0a843316ff5a2714dcdc7bd # v2
+        with:
+          tool: cargo-careful
+
+      - name: Run cargo-careful test (uffs-security, uffs-mft)
+        # `cargo careful test` internally invokes `cargo +nightly
+        # test -Zbuild-std=std,panic_abort
+        #   -Zbuild-std-features=debug-refcell,debug-assertions,...`
+        # producing a std with substantially more runtime checks.
+        # The augmented std catches:
+        #   - slice/iterator bounds violations (Vec::get_unchecked
+        #     misuse, etc.)
+        #   - integer overflow on operations the regular debug build
+        #     glosses over (mostly Pow* / shr / cast paths)
+        #   - misuse of `RefCell` borrow rules in cases regular
+        #     `RefCell::borrow*` panics miss
+        #   - some `slice::from_raw_parts` invariant violations
+        # — none of which a regular `cargo test` will flag, and many
+        # of which Miri can't reach because Miri's interpretation
+        # cost limits it to narrow test scopes (see the four-test
+        # miri job above).
+        #
+        # `--locked` per §2.8 so the same resolved crate graph as the
+        # rest of the workspace is used.
+        run: |
+          cargo careful test --locked -p uffs-security
+          cargo careful test --locked -p uffs-mft
+
+  # ───────────────────────────────────────────────────────────────────
   # cargo-mutants — test-suite quality measurement on safety-critical
   # paths
   #
@@ -419,7 +525,7 @@ jobs:
   tier-2-summary:
     name: Tier 2 / Summary
     runs-on: ubuntu-latest
-    needs: [file-size-policy, coverage, build-validation, udeps, hack, miri, mutants]
+    needs: [file-size-policy, coverage, build-validation, udeps, hack, miri, careful, mutants]
     if: always()
     timeout-minutes: 5
     steps:
@@ -438,7 +544,8 @@ jobs:
                 "${{ needs.build-validation.result }}" == "success" && \
                 "${{ needs.udeps.result }}" == "success" && \
                 "${{ needs.hack.result }}" == "success" && \
-                "${{ needs.miri.result }}" == "success" ]]; then
+                "${{ needs.miri.result }}" == "success" && \
+                "${{ needs.careful.result }}" == "success" ]]; then
             echo "✅ All Tier 2 nightly checks passed!"
           else
             echo "❌ Some Tier 2 nightly checks failed - review above"
@@ -476,6 +583,7 @@ jobs:
               echo "| cargo-udeps | ✅ |"
               echo "| cargo-hack feature matrix | ✅ |"
               echo "| Miri | ✅ |"
+              echo "| cargo-careful | ✅ |"
               echo "| cargo-mutants (uffs-security) | ${mutants_cell} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -491,7 +599,7 @@ jobs:
     # issue.  Once mutants is promoted from advisory to a hard gate
     # (see the `Check pipeline success` step's comment in the
     # tier-2-summary job), add it here too.
-    needs: [file-size-policy, coverage, build-validation, udeps, hack, miri]
+    needs: [file-size-policy, coverage, build-validation, udeps, hack, miri, careful]
     if: failure()
     # §2.8: every job caps its runtime.  Cheap notifier — 2 min is
     # generous for a single API call round-trip + JSON formatting.
