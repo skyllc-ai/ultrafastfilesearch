@@ -1701,15 +1701,26 @@ Known feature flags in the workspace (as of this plan):
 | `uffs-mcp` | `streamable-http` | HTTP gateway transport (axum + tower + rmcp HTTP transport).  Required by the `uffs-mcp-http` binary | Yes |
 | `uffs-cli` | `mcp-http-probe` | Active `/status` probe for the HTTP MCP gateway in `system-status` output | No (off by default to keep the CLI binary lean) |
 
-> **2026-05-12**: the `uffs-mft.zstd` feature was retired.  The flag was
-> declared optional with `default = ["zstd"]` but every workspace
-> consumer pinned `features = ["zstd"]` and recent code paths added
-> uses of `zstd::` / `crate::cache::compress_zstd_mt` without
-> `#[cfg(feature = "zstd")]` gating.  `cargo hack --workspace
-> --each-feature` surfaced three un-gated sites; the rest of the
-> codebase carried ~26 cfg-gates that never fired in practice.  The
-> feature was promoted to a hard dependency to match reality.  See PR
-> on the `refactor/uffs-mft-retire-vestigial-zstd-feature` branch.
+> **2026-05-12**: the `uffs-mft.zstd` feature was retired (PR #175).
+> The flag was declared optional with `default = ["zstd"]` but every
+> workspace consumer pinned `features = ["zstd"]` and recent code
+> paths added uses of `zstd::` / `crate::cache::compress_zstd_mt`
+> without `#[cfg(feature = "zstd")]` gating.  `cargo hack --workspace
+> --each-feature` (now wired into `tier-2.yml::hack` via PR #177)
+> surfaced three un-gated sites; the rest of the codebase carried
+> ~26 cfg-gates that never fired in practice.  The feature was
+> promoted to a hard dependency to match reality.
+
+> **2026-05-12**: `cargo-semver-checks check-release` joined this
+> workflow as a second pre-publish guard (Tier R3-05).  Runs against
+> the same enumerated publishable-crate set as the `cargo publish
+> --dry-run` step, but answers a different question — "does the
+> current API match SemVer expectations vs the latest crates.io
+> release?" instead of "would crates.io accept this package?".  Pre-
+> R8 the guard is informational (no baseline to compare against);
+> post-R8 (first publish lands), flip `FAIL_ON_SEMVER_BREAK=true` in
+> `crates-io-dry-run.yml` to convert it to a hard gate that catches
+> non-major-version bumps containing breaking changes.
 
 For each remaining feature flag, the crate should have a brief docs paragraph:
 
