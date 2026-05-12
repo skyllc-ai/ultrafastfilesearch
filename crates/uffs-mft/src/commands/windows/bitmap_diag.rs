@@ -13,7 +13,6 @@
 )]
 #![expect(
     clippy::float_arithmetic,
-    clippy::cast_precision_loss,
     clippy::default_numeric_fallback,
     reason = "percent / fraction calculations convert integer counters into f64 for human-readable display"
 )]
@@ -31,6 +30,7 @@
 )]
 
 use anyhow::{Context as _, Result};
+use uffs_mft::{bytes_to_mb_f64, u64_to_f64, usize_to_f64, usize_to_u64};
 
 // ============================================================================
 // Bitmap Diagnostic Command
@@ -61,7 +61,7 @@ pub(crate) async fn cmd_bitmap_diag(drive: char, show_samples: bool) -> Result<(
     println!(
         "   MFT valid data length: {} bytes ({:.2} MB)",
         mft_size,
-        mft_size as f64 / 1024.0 / 1024.0
+        bytes_to_mb_f64(mft_size)
     );
     println!("   Bytes per record: {record_size}");
     println!("   Total records (from size): {total_records_from_size}");
@@ -76,7 +76,8 @@ pub(crate) async fn cmd_bitmap_diag(drive: char, show_samples: bool) -> Result<(
             let bitmap_record_count = bitmap.record_count();
             let in_use_count = bitmap.count_in_use();
             let free_count = bitmap_record_count.saturating_sub(in_use_count);
-            let utilization = (in_use_count as f64 / bitmap_record_count as f64) * 100.0;
+            let utilization =
+                (usize_to_f64(in_use_count) / usize_to_f64(bitmap_record_count)) * 100.0;
 
             println!("   ✅ Bitmap retrieved successfully");
             println!("   Bitmap size: {bitmap_bytes} bytes");
@@ -97,17 +98,17 @@ pub(crate) async fn cmd_bitmap_diag(drive: char, show_samples: bool) -> Result<(
             println!(
                 "   Bytes with all bits set (0xFF): {} ({:.1}%)",
                 all_ff_bytes,
-                (all_ff_bytes as f64 / bitmap_bytes as f64) * 100.0
+                (usize_to_f64(all_ff_bytes) / usize_to_f64(bitmap_bytes)) * 100.0
             );
             println!(
                 "   Bytes with no bits set (0x00): {} ({:.1}%)",
                 all_00_bytes,
-                (all_00_bytes as f64 / bitmap_bytes as f64) * 100.0
+                (usize_to_f64(all_00_bytes) / usize_to_f64(bitmap_bytes)) * 100.0
             );
             println!(
                 "   Mixed bytes: {} ({:.1}%)",
                 mixed_bytes,
-                (mixed_bytes as f64 / bitmap_bytes as f64) * 100.0
+                (usize_to_f64(mixed_bytes) / usize_to_f64(bitmap_bytes)) * 100.0
             );
             println!();
 
@@ -122,7 +123,7 @@ pub(crate) async fn cmd_bitmap_diag(drive: char, show_samples: bool) -> Result<(
                 println!(
                     "   ✅ Bitmap shows {} free records ({:.1}% free)",
                     free_count,
-                    (free_count as f64 / bitmap_record_count as f64) * 100.0
+                    (usize_to_f64(free_count) / usize_to_f64(bitmap_record_count)) * 100.0
                 );
             }
             println!();
@@ -181,7 +182,7 @@ pub(crate) async fn cmd_bitmap_diag(drive: char, show_samples: bool) -> Result<(
                 println!("   Checking records {}-{}:", mid, mid + 15);
                 print!("   ");
                 for frs in mid..(mid + 16).min(bitmap_record_count) {
-                    let in_use = bitmap.is_record_in_use(frs as u64);
+                    let in_use = bitmap.is_record_in_use(usize_to_u64(frs));
                     print!("{}: {} ", frs, if in_use { "✓" } else { "✗" });
                 }
                 println!();
@@ -195,7 +196,7 @@ pub(crate) async fn cmd_bitmap_diag(drive: char, show_samples: bool) -> Result<(
                 );
                 print!("   ");
                 for frs in last_start..bitmap_record_count {
-                    let in_use = bitmap.is_record_in_use(frs as u64);
+                    let in_use = bitmap.is_record_in_use(usize_to_u64(frs));
                     print!("{}: {} ", frs, if in_use { "✓" } else { "✗" });
                 }
                 println!();
@@ -224,7 +225,7 @@ pub(crate) async fn cmd_bitmap_diag(drive: char, show_samples: bool) -> Result<(
                     skip_end,
                     skipped,
                     range_size,
-                    (skipped as f64 / range_size as f64) * 100.0
+                    (u64_to_f64(skipped) / u64_to_f64(range_size)) * 100.0
                 );
             }
             println!();

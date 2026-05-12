@@ -13,12 +13,8 @@
 )]
 #![expect(
     clippy::float_arithmetic,
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap,
     clippy::default_numeric_fallback,
-    reason = "byte / rate calculations convert integer counters into f64 for human-readable display; LCN/byte-offset casts are bounded by NTFS volume size"
+    reason = "byte / rate calculations divide f64 helpers for human-readable MB/s display"
 )]
 #![expect(
     clippy::redundant_type_annotations,
@@ -38,6 +34,7 @@
 )]
 
 use anyhow::{Context as _, Result};
+use uffs_mft::{bytes_to_mb_f64, frs_to_usize, millis_to_u64, u32_as_usize, usize_to_u64};
 
 use crate::display::char_or_dot;
 
@@ -116,7 +113,7 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     // Benchmark: Read MFT with 1MB synchronous reads
     // =========================================================================
     const BUFFER_SIZE: usize = 1024 * 1024; // 1 MB buffer (matches the reference benchmark layout)
-    let sector_size = vol_data.bytes_per_sector as usize;
+    let sector_size = u32_as_usize(vol_data.bytes_per_sector);
     let bytes_per_cluster = vol_data.bytes_per_cluster;
 
     // Allocate sector-aligned buffer (AlignedBuffer uses SECTOR_SIZE internally)
@@ -140,8 +137,17 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
             continue;
         }
 
-        // Calculate byte offset and size for this extent
-        let extent_byte_offset = (extent.lcn as u64) * u64::from(bytes_per_cluster);
+        // Calculate byte offset and size for this extent.
+        //
+        // NTFS exposes `LcnPosition` (extent LCN) as `i64` on the FFI side
+        // even though valid extents are non-negative; the sign-loss cast
+        // here is bounded by upstream extent-map validation.
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "NTFS extents come from MftExtentMap which rejects negative LCNs upstream"
+        )]
+        let lcn_u64 = extent.lcn as u64;
+        let extent_byte_offset = lcn_u64 * u64::from(bytes_per_cluster);
         let extent_byte_size = extent.cluster_count * u64::from(bytes_per_cluster);
 
         // Don't read beyond MFT valid data length
@@ -152,13 +158,22 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
             break;
         }
 
-        // Seek to extent start
+        // Seek to extent start.
+        //
+        // Win32 `SetFilePointerEx` takes the offset as `i64`; NTFS volume
+        // sizes never exceed `i64::MAX`, so the wrap below cannot occur in
+        // practice — the per-site `cast_possible_wrap` expect documents
+        // that contract.
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "SetFilePointerEx accepts i64; NTFS volume offsets never exceed i64::MAX"
+        )]
+        let signed_offset = extent_byte_offset as i64;
         // SAFETY: `raw_handle` is a live volume handle owned by `vol_data`'s
-        // `VolumeHandle` and `extent_byte_offset` is bounded by the MFT extent
+        // `VolumeHandle` and `signed_offset` is bounded by the MFT extent
         // returned by Windows; the cast to `i64` is safe because volume sizes
         // never exceed `i64::MAX`.
-        let seek_result =
-            unsafe { SetFilePointerEx(raw_handle, extent_byte_offset as i64, None, FILE_BEGIN) };
+        let seek_result = unsafe { SetFilePointerEx(raw_handle, signed_offset, None, FILE_BEGIN) };
         if seek_result.is_err() {
             anyhow::bail!(
                 "Failed to seek to offset {} for extent at LCN {}",
@@ -170,7 +185,7 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
         // Read extent in 1MB chunks
         let mut extent_offset: u64 = 0;
         while extent_offset < extent_bytes_to_read {
-            let chunk_size = ((extent_bytes_to_read - extent_offset) as usize).min(BUFFER_SIZE);
+            let chunk_size = frs_to_usize(extent_bytes_to_read - extent_offset).min(BUFFER_SIZE);
             // Round up to sector boundary for FILE_FLAG_NO_BUFFERING
             let aligned_chunk_size = chunk_size.div_ceil(sector_size) * sector_size;
 
@@ -207,12 +222,12 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
             }
 
             // Update last 4 bytes (always keep the most recent)
-            let actual_bytes = (bytes_read as usize).min(chunk_size);
+            let actual_bytes = u32_as_usize(bytes_read).min(chunk_size);
             if actual_bytes >= 4 {
                 last_4_bytes.copy_from_slice(&buf_slice[actual_bytes - 4..actual_bytes]);
             }
 
-            total_bytes_read += actual_bytes as u64;
+            total_bytes_read += usize_to_u64(actual_bytes);
             extent_offset += u64::from(bytes_read);
 
             // Stop if we've read enough
@@ -228,12 +243,12 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
 
     // Stop timing
     let elapsed = start_time.elapsed();
-    let elapsed_ms = elapsed.as_millis() as u64;
+    let elapsed_ms = millis_to_u64(elapsed.as_millis());
     let elapsed_secs = elapsed.as_secs_f64();
 
     // Calculate throughput
     let read_speed_mb_s = if elapsed_secs > 0.0 {
-        (total_bytes_read as f64 / (1024.0 * 1024.0)) / elapsed_secs
+        bytes_to_mb_f64(total_bytes_read) / elapsed_secs
     } else {
         0.0
     };

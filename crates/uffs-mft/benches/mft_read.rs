@@ -82,10 +82,6 @@ mod windows_benches {
         clippy::shadow_reuse,
         reason = "criterion `bench_with_input(... |b, &input| ...)` deliberately re-binds the input ref inside the closure; the shadow is part of the closure's destructuring contract"
     )]
-    #![expect(
-        clippy::cast_possible_wrap,
-        reason = "synthetic test data: `i as i64` produces deterministic counter columns; bench inputs are bounded (<= 1_000_000) so wrap cannot occur"
-    )]
 
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group};
     use uffs_mft::{AlignedBuffer, ParsedColumns};
@@ -133,17 +129,23 @@ mod windows_benches {
         let mut cols = ParsedColumns::with_capacity(count);
 
         for i in 0..count {
-            cols.frs.push(i as u64);
-            cols.parent_frs
-                .push(if i > 0 { (i / 10) as u64 } else { 5 });
+            let row_frs = uffs_mft::usize_to_u64(i);
+            // Synthetic bench inputs are bounded (<= 1_000_000) so the
+            // `try_from` fallback is unreachable in practice; the typed
+            // conversion avoids the `cast_possible_wrap` blanket and the
+            // unwrap mirrors criterion's bounded-input convention.
+            let row_offset_i64 = i64::try_from(i).unwrap_or(i64::MAX);
+            cols.frs.push(row_frs);
+            cols.parent_frs.push(if i > 0 { row_frs / 10 } else { 5 });
             cols.name.push(format!("file_{i}.txt"));
-            cols.size.push((i * 1024) as u64);
+            cols.size.push(row_frs * 1024);
             cols.allocated_size
-                .push(((i * 1024).div_ceil(4096) * 4096) as u64);
-            cols.created.push(1_700_000_000_000_i64 + i as i64);
-            cols.modified.push(1_700_000_000_000_i64 + i as i64);
-            cols.accessed.push(1_700_000_000_000_i64 + i as i64);
-            cols.mft_changed.push(1_700_000_000_000_i64 + i as i64);
+                .push((row_frs * 1024).div_ceil(4096) * 4096);
+            cols.created.push(1_700_000_000_000_i64 + row_offset_i64);
+            cols.modified.push(1_700_000_000_000_i64 + row_offset_i64);
+            cols.accessed.push(1_700_000_000_000_i64 + row_offset_i64);
+            cols.mft_changed
+                .push(1_700_000_000_000_i64 + row_offset_i64);
             cols.is_directory.push(i % 10 == 0);
             cols.name_count.push(1);
             cols.stream_count.push(1);

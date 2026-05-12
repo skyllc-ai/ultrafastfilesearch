@@ -13,11 +13,8 @@
 )]
 #![expect(
     clippy::float_arithmetic,
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
     clippy::default_numeric_fallback,
-    reason = "throughput rates (MB/s, rec/s) are computed from integer counters into f64 for human-readable display"
+    reason = "throughput rates (MB/s, rec/s) divide f64 helpers for human-readable display"
 )]
 #![expect(
     clippy::min_ident_chars,
@@ -32,6 +29,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
 use tracing::{info, warn};
+use uffs_mft::{f64_to_u64, millis_to_u64, u32_as_usize, u64_to_f64, usize_to_f64, usize_to_u64};
 
 use super::shared::pause_between_benchmark_runs;
 use crate::display::format_number_commas;
@@ -78,7 +76,7 @@ pub(crate) async fn cmd_bench(
         .with_mode(mode)
         .with_merge_extensions(full);
 
-    let mut results: Vec<BenchmarkResult> = Vec::with_capacity(runs as usize);
+    let mut results: Vec<BenchmarkResult> = Vec::with_capacity(u32_as_usize(runs));
 
     for run in 1..=runs {
         if !json && runs > 1 {
@@ -142,7 +140,7 @@ fn average_results(results: &[uffs_mft::BenchmarkResult]) -> Result<uffs_mft::Be
     let Some(first) = results.first() else {
         anyhow::bail!("no benchmark results were collected");
     };
-    let n = results.len() as u64;
+    let n = usize_to_u64(results.len());
 
     let avg_timings = uffs_mft::PhaseTimings {
         open_ms: results.iter().map(|r| r.timings.open_ms).sum::<u64>() / n,
@@ -164,9 +162,9 @@ fn average_results(results: &[uffs_mft::BenchmarkResult]) -> Result<uffs_mft::Be
     };
 
     let avg_throughput: f64 =
-        results.iter().map(|r| r.throughput_mb_s).sum::<f64>() / results.len() as f64;
+        results.iter().map(|r| r.throughput_mb_s).sum::<f64>() / usize_to_f64(results.len());
     let avg_records_per_sec: f64 =
-        results.iter().map(|r| r.records_per_sec).sum::<f64>() / results.len() as f64;
+        results.iter().map(|r| r.records_per_sec).sum::<f64>() / usize_to_f64(results.len());
 
     Ok(uffs_mft::BenchmarkResult {
         timings: avg_timings,
@@ -202,7 +200,7 @@ fn print_benchmark_result(result: &uffs_mft::BenchmarkResult, runs: u32) {
         format_number_commas(c.total_records)
     );
     if let Some(in_use) = c.in_use_records {
-        let skip_pct = (in_use as f64 / c.total_records as f64).mul_add(-100.0, 100.0);
+        let skip_pct = (u64_to_f64(in_use) / u64_to_f64(c.total_records)).mul_add(-100.0, 100.0);
         println!(
             "   In-Use Records:   {} ({:.1}% skipped)",
             format_number_commas(in_use),
@@ -250,12 +248,12 @@ fn print_benchmark_result(result: &uffs_mft::BenchmarkResult, runs: u32) {
     println!("🚀 THROUGHPUT");
     println!(
         "   Records/sec:      {}",
-        format_number_commas(result.records_per_sec as u64)
+        format_number_commas(f64_to_u64(result.records_per_sec))
     );
     println!("   MB/sec:           {:.1}", result.throughput_mb_s);
     println!(
         "   Records Parsed:   {}",
-        format_number_commas(result.records_parsed as u64)
+        format_number_commas(usize_to_u64(result.records_parsed))
     );
     println!();
 
@@ -409,7 +407,7 @@ pub(crate) async fn cmd_bench_all(
                 println!("  ✅ Drive {drive}:");
                 println!(
                     "     Records:     {}",
-                    format_number_commas(result.records_parsed as u64)
+                    format_number_commas(usize_to_u64(result.records_parsed))
                 );
                 println!("     Total time:  {} ms", result.timings.total_ms);
                 println!("     Throughput:  {:.1} MB/s", result.throughput_mb_s);
@@ -425,7 +423,7 @@ pub(crate) async fn cmd_bench_all(
         }
     }
 
-    let total_time_ms = total_start.elapsed().as_millis() as u64;
+    let total_time_ms = millis_to_u64(total_start.elapsed().as_millis());
 
     // Build full report
     let report = FullBenchmarkReport {
@@ -457,7 +455,7 @@ pub(crate) async fn cmd_bench_all(
     println!(
         "  ⏱️  Total time:         {} ms ({:.1} sec)",
         total_time_ms,
-        total_time_ms as f64 / 1000.0
+        u64_to_f64(total_time_ms) / 1000.0
     );
     println!("  📄 Results saved to:   {}", output_path.display());
     println!();
@@ -489,7 +487,7 @@ async fn benchmark_single_drive(
         .with_context(|| format!("Failed to open drive {drive}:"))?
         .with_merge_extensions(full);
 
-    let mut results: Vec<uffs_mft::BenchmarkResult> = Vec::with_capacity(runs as usize);
+    let mut results: Vec<uffs_mft::BenchmarkResult> = Vec::with_capacity(u32_as_usize(runs));
 
     for run in 1..=runs {
         if runs > 1 {

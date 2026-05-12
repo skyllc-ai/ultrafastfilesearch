@@ -7,18 +7,10 @@
 //! Both functions are `impl MftReader` methods that require a live volume
 //! handle.
 //!
-//! **Module-scoped cast justification:** All `as usize` casts in this file
-//! convert NTFS disk offsets / read sizes (`u64`) into `usize` indices for
-//! buffer slicing.  On every supported target `usize ≥ 64 bits`, so these
-//! conversions are lossless.  The underlying values are also physically bounded
-//! by the volume size (`u64`) which is the only addressable range.
-#![cfg_attr(
-    windows,
-    expect(
-        clippy::cast_possible_truncation,
-        reason = "NTFS disk-offset / read-size (u64 -> usize) casts are lossless on supported 64-bit targets"
-    )
-)]
+//! All `as usize` casts in this file go through the centralized
+//! `frs_to_usize` / `u32_as_usize` / `usize_to_u64` helpers so the NTFS
+//! disk-offset and record-size domain invariants stay encoded at the call
+//! site instead of in a module-scoped lint suppression.
 
 #[cfg(windows)]
 use std::path::Path;
@@ -30,6 +22,8 @@ use tracing::{debug, info};
 use super::MftReader;
 #[cfg(windows)]
 use crate::error::{MftError, Result};
+#[cfg(windows)]
+use crate::index::frs_to_usize;
 
 #[cfg(windows)]
 impl MftReader {
@@ -79,7 +73,7 @@ impl MftReader {
 
         let mut writer = StreamingRawMftWriter::new(path, record_size, options)?;
         let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = bounded(2);
-        let handle_ptr = vol_handle.raw_handle().0 as usize;
+        let handle_ptr = vol_handle.raw_handle().0.expose_provenance();
         let record_size_copy = record_size;
 
         let reader_handle = thread::spawn(move || -> Result<()> {
@@ -141,7 +135,7 @@ impl MftReader {
 
         let vol_handle = self.require_handle()?;
         let record_size = vol_handle.file_record_size();
-        let concurrency = options.concurrency as usize;
+        let concurrency = usize::from(options.concurrency);
 
         let (chunks, chunk_size) = plan_iocp_capture_chunks(vol_handle, self.volume, record_size);
         let num_chunks = chunks.len();
@@ -178,7 +172,7 @@ impl MftReader {
             .iter()
             .map(|chunk| chunk.record_count * u64::from(record_size))
             .max()
-            .unwrap_or(chunk_size as u64) as usize;
+            .map_or(chunk_size, frs_to_usize);
 
         // Don't sort chunks - we want to capture IOCP completion order
         let mut pending_chunks: VecDeque<crate::io::ReadChunk> = chunks.into_iter().collect();
@@ -424,17 +418,17 @@ fn record_completed_chunk(
     record_size: u32,
     writer: &mut crate::raw_iocp::IocpCaptureWriter,
 ) -> Result<()> {
-    use crate::io::SECTOR_SIZE;
+    use crate::io::SECTOR_SIZE_U64;
 
     let chunk = &op.chunk;
     let read_size = chunk.record_count * u64::from(record_size);
-    let aligned_offset = (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
-    let offset_adjustment = (chunk.disk_offset - aligned_offset) as usize;
+    let aligned_offset = (chunk.disk_offset / SECTOR_SIZE_U64) * SECTOR_SIZE_U64;
+    let offset_adjustment = frs_to_usize(chunk.disk_offset - aligned_offset);
 
     let data = op
         .buffer
         .as_slice()
-        .get(offset_adjustment..offset_adjustment + read_size as usize)
+        .get(offset_adjustment..offset_adjustment + frs_to_usize(read_size))
         .ok_or_else(|| {
             MftError::Io(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
@@ -483,18 +477,19 @@ unsafe fn issue_overlapped_read(
     use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
     use windows::Win32::Storage::FileSystem::ReadFile;
 
-    use crate::io::{AlignedBuffer, OverlappedRead, SECTOR_SIZE};
+    use crate::io::{AlignedBuffer, OverlappedRead, SECTOR_SIZE, SECTOR_SIZE_U64};
 
     let buffer = AlignedBuffer::new(buffer_size);
     let mut op: Pin<Box<OverlappedRead>> =
         Box::pin(OverlappedRead::new(buffer, chunk, record_size, slot_idx));
 
-    let aligned_offset = (op.chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
+    let aligned_offset = (op.chunk.disk_offset / SECTOR_SIZE_U64) * SECTOR_SIZE_U64;
     op.set_offset(aligned_offset);
 
     let read_size = op.chunk.record_count * u64::from(record_size);
-    let offset_adjustment = (op.chunk.disk_offset - aligned_offset) as usize;
-    let aligned_size = (read_size as usize + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
+    let offset_adjustment = frs_to_usize(op.chunk.disk_offset - aligned_offset);
+    let aligned_size =
+        (frs_to_usize(read_size) + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
 
     // SAFETY: `op` is a pinned Box with this thread as the sole writer; the
     // overlapped raw pointer is consumed before the second mutable reborrow.
@@ -547,17 +542,22 @@ fn streaming_capture_read_loop(
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
-    use crate::io::{AlignedBuffer, SECTOR_SIZE};
+    use crate::io::{AlignedBuffer, SECTOR_SIZE, SECTOR_SIZE_U64};
 
-    let handle = HANDLE(handle_ptr as *mut core::ffi::c_void);
+    // `handle_ptr` was produced by `expose_provenance()` on the original
+    // `HANDLE`'s raw pointer; round-trip via `with_exposed_provenance_mut`
+    // to recover the Win32 handle on the worker thread.
+    let handle = HANDLE(core::ptr::with_exposed_provenance_mut::<core::ffi::c_void>(
+        handle_ptr,
+    ));
     let mut buffer = AlignedBuffer::new(chunk_size + SECTOR_SIZE);
 
     for chunk in chunks {
         let read_size = chunk.record_count * u64::from(record_size);
-        let aligned_offset = (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
-        let offset_adjustment = (chunk.disk_offset - aligned_offset) as usize;
+        let aligned_offset = (chunk.disk_offset / SECTOR_SIZE_U64) * SECTOR_SIZE_U64;
+        let offset_adjustment = frs_to_usize(chunk.disk_offset - aligned_offset);
         let aligned_size =
-            (read_size as usize + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
+            (frs_to_usize(read_size) + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
 
         if buffer.len() < aligned_size {
             buffer = AlignedBuffer::new(aligned_size);
@@ -595,7 +595,7 @@ fn streaming_capture_read_loop(
             return Err(MftError::Io(std::io::Error::last_os_error()));
         }
 
-        let actual_size = read_size as usize;
+        let actual_size = frs_to_usize(read_size);
         let data_slice = buffer
             .as_slice()
             .get(offset_adjustment..offset_adjustment + actual_size)

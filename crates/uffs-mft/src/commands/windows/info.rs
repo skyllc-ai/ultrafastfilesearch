@@ -13,7 +13,6 @@
 )]
 #![expect(
     clippy::float_arithmetic,
-    clippy::cast_precision_loss,
     clippy::default_numeric_fallback,
     reason = "byte/percent calculations convert integer counters into f64 for human-readable display"
 )]
@@ -30,7 +29,7 @@
 
 use anyhow::{Context as _, Result};
 use tracing::info;
-use uffs_mft::MftReader;
+use uffs_mft::{MftReader, bytes_to_mb_f64, u64_to_f64, usize_to_u64};
 
 use super::shared::drive_type_label;
 use crate::display::{format_bytes, format_duration, format_number_commas, truncate_string};
@@ -73,17 +72,18 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
     // Calculate derived metrics
     let record_count =
         vol_data.mft_valid_data_length / u64::from(vol_data.bytes_per_file_record_segment);
-    let mft_size_mb = vol_data.mft_valid_data_length as f64 / (1024.0 * 1024.0);
+    let mft_size_mb = bytes_to_mb_f64(vol_data.mft_valid_data_length);
     let volume_size_bytes = vol_data.total_clusters * u64::from(vol_data.bytes_per_cluster);
-    let volume_size_gb = volume_size_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    let volume_size_gb = u64_to_f64(volume_size_bytes) / (1024.0_f64 * 1024.0_f64 * 1024.0_f64);
     let free_space_bytes = vol_data.free_clusters * u64::from(vol_data.bytes_per_cluster);
     let used_space_bytes = volume_size_bytes.saturating_sub(free_space_bytes);
     let free_percentage = if volume_size_bytes > 0 {
-        (free_space_bytes as f64 / volume_size_bytes as f64) * 100.0
+        (u64_to_f64(free_space_bytes) / u64_to_f64(volume_size_bytes)) * 100.0
     } else {
         0.0
     };
-    let mft_percentage = (vol_data.mft_valid_data_length as f64 / volume_size_bytes as f64) * 100.0;
+    let mft_percentage =
+        (u64_to_f64(vol_data.mft_valid_data_length) / u64_to_f64(volume_size_bytes)) * 100.0;
 
     // Log detailed metrics
     info!(
@@ -151,9 +151,9 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
     let mut free_records = 0_u64;
     let mut utilization = 0.0_f64;
     if let Ok(bitmap) = handle.get_mft_bitmap() {
-        in_use_records = bitmap.count_in_use() as u64;
+        in_use_records = usize_to_u64(bitmap.count_in_use());
         free_records = record_count.saturating_sub(in_use_records);
-        utilization = (in_use_records as f64 / record_count as f64) * 100.0;
+        utilization = (u64_to_f64(in_use_records) / u64_to_f64(record_count)) * 100.0;
 
         info!(
             drive = %drive_upper,
@@ -281,7 +281,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
             .ok()
             .and_then(|c| c.bool().ok())
             .map_or(0, |b| u64::from(b.sum().unwrap_or(0)));
-        let file_count = total_parsed as u64 - dir_count;
+        let file_count = usize_to_u64(total_parsed) - dir_count;
 
         // Helper closure to count bool columns
         let count_bool = |name: &str| -> u64 {
@@ -374,7 +374,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
 
         let slack_space = total_allocated_size.saturating_sub(total_file_size);
         let slack_percentage = if total_allocated_size > 0 {
-            (slack_space as f64 / total_allocated_size as f64) * 100.0
+            (u64_to_f64(slack_space) / u64_to_f64(total_allocated_size)) * 100.0
         } else {
             0.0
         };
@@ -382,7 +382,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
         println!("📊 FILE SYSTEM STATISTICS");
         println!(
             "  Parsed records:       {}",
-            format_number_commas(total_parsed as u64)
+            format_number_commas(usize_to_u64(total_parsed))
         );
         println!(
             "  Directories:          {}",
@@ -596,7 +596,7 @@ pub(crate) async fn cmd_drives() -> Result<()> {
                 let free_space = vol_data.free_clusters * u64::from(vol_data.bytes_per_cluster);
                 let used_space = total_size.saturating_sub(free_space);
                 let used_pct = if total_size > 0 {
-                    (used_space as f64 / total_size as f64) * 100.0
+                    (u64_to_f64(used_space) / u64_to_f64(total_size)) * 100.0
                 } else {
                     0.0
                 };
@@ -675,7 +675,7 @@ pub(crate) async fn cmd_drives() -> Result<()> {
         let total_mft: u64 = drive_infos.iter().map(|d| d.mft_size).sum();
         let total_records: u64 = drive_infos.iter().map(|d| d.mft_records).sum();
         let total_used_pct = if total_size > 0 {
-            (total_used as f64 / total_size as f64) * 100.0
+            (u64_to_f64(total_used) / u64_to_f64(total_size)) * 100.0
         } else {
             0.0
         };

@@ -19,11 +19,8 @@
 )]
 #![expect(
     clippy::float_arithmetic,
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
     clippy::default_numeric_fallback,
-    reason = "throughput rates (MB/s, rec/s) are computed from integer counters into f64 for human-readable display"
+    reason = "throughput rates (MB/s, rec/s) divide f64 helpers for human-readable display"
 )]
 #![expect(
     clippy::min_ident_chars,
@@ -40,7 +37,7 @@
 
 use anyhow::{Context as _, Result};
 use tracing::warn;
-use uffs_mft::MftReader;
+use uffs_mft::{MftReader, bytes_to_mb_f64, f64_to_u64, millis_to_u64, u64_to_f64, usize_to_u64};
 
 /// Converts a byte to a printable ASCII character or '.' for non-printable.
 #[cfg(windows)]
@@ -97,19 +94,19 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
         .with_context(|| format!("Failed to read MFT from {drive_upper}:"))?;
 
     let elapsed = start_time.elapsed();
-    let elapsed_ms = elapsed.as_millis() as u64;
+    let elapsed_ms = millis_to_u64(elapsed.as_millis());
     let elapsed_secs = elapsed.as_secs_f64();
 
     // =========================================================================
     // Calculate statistics from DataFrame
     // =========================================================================
-    let total_entries = df.height() as u64;
+    let total_entries = usize_to_u64(df.height());
 
     // Count files vs directories using the is_directory column
     let is_dir_col = df.column("is_directory").ok().and_then(|c| c.bool().ok());
 
     let (files_count, dirs_count) = is_dir_col.map_or((total_entries, 0), |col| {
-        let dirs: u64 = col.into_iter().filter(|v| v.unwrap_or(false)).count() as u64;
+        let dirs = usize_to_u64(col.into_iter().filter(|v| v.unwrap_or(false)).count());
         let files = total_entries.saturating_sub(dirs);
         (files, dirs)
     });
@@ -128,19 +125,19 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
     // Print benchmark results using the historical layout
     // =========================================================================
     let mft_read_speed = if elapsed_secs > 0.0 {
-        (mft_size as f64 / (1024.0 * 1024.0)) / elapsed_secs
+        bytes_to_mb_f64(mft_size) / elapsed_secs
     } else {
         0.0
     };
 
     let records_per_sec = if elapsed_secs > 0.0 {
-        (mft_capacity as f64 / elapsed_secs) as u64
+        f64_to_u64(u64_to_f64(mft_capacity) / elapsed_secs)
     } else {
         0
     };
 
     let entries_per_sec = if elapsed_secs > 0.0 {
-        (total_entries as f64 / elapsed_secs) as u64
+        f64_to_u64(u64_to_f64(total_entries) / elapsed_secs)
     } else {
         0
     };
@@ -333,16 +330,16 @@ pub(crate) async fn cmd_benchmark_index_lean(
         .with_context(|| format!("Failed to read MFT from {drive_upper}:"))?;
 
     let elapsed = start_time.elapsed();
-    let elapsed_ms = elapsed.as_millis() as u64;
+    let elapsed_ms = millis_to_u64(elapsed.as_millis());
     let elapsed_secs = elapsed.as_secs_f64();
 
     // =========================================================================
     // Calculate statistics from MftIndex
     // =========================================================================
-    let total_entries = index.records.len() as u64;
+    let total_entries = usize_to_u64(index.records.len());
 
     // Count files vs directories
-    let dirs_count = index.records.iter().filter(|r| r.is_directory()).count() as u64;
+    let dirs_count = usize_to_u64(index.records.iter().filter(|r| r.is_directory()).count());
     let files_count = total_entries.saturating_sub(dirs_count);
 
     // =========================================================================
@@ -402,19 +399,19 @@ pub(crate) async fn cmd_benchmark_index_lean(
     // Print Benchmark Results
     // =========================================================================
     let mft_read_speed = if elapsed_secs > 0.0 {
-        (mft_size as f64 / (1024.0 * 1024.0)) / elapsed_secs
+        bytes_to_mb_f64(mft_size) / elapsed_secs
     } else {
         0.0
     };
 
     let records_per_sec = if elapsed_secs > 0.0 {
-        (mft_capacity as f64 / elapsed_secs) as u64
+        f64_to_u64(u64_to_f64(mft_capacity) / elapsed_secs)
     } else {
         0
     };
 
     let entries_per_sec = if elapsed_secs > 0.0 {
-        (total_entries as f64 / elapsed_secs) as u64
+        f64_to_u64(u64_to_f64(total_entries) / elapsed_secs)
     } else {
         0
     };
@@ -506,7 +503,7 @@ pub(crate) async fn cmd_benchmark_tree(
                 .with_context(|| format!("Failed to read MFT from {drive_upper}:"))?
         }
     };
-    let load_ms = load_start.elapsed().as_millis() as u64;
+    let load_ms = millis_to_u64(load_start.elapsed().as_millis());
     println!("Index loaded in {load_ms} ms");
     println!();
 
@@ -536,7 +533,7 @@ pub(crate) async fn cmd_benchmark_tree(
         // Time the tree metrics computation
         let tree_start = Instant::now();
         index.compute_tree_metrics();
-        let tree_ms = tree_start.elapsed().as_millis() as u64;
+        let tree_ms = millis_to_u64(tree_start.elapsed().as_millis());
         times_ms.push(tree_ms);
 
         println!("  Iteration {}: {} ms", i + 1, tree_ms);
@@ -547,7 +544,7 @@ pub(crate) async fn cmd_benchmark_tree(
     let max_ms = *times_ms.iter().max().unwrap_or(&0);
     let sum_ms: u64 = times_ms.iter().sum();
     let avg_ms = if iterations > 0 {
-        sum_ms / iterations as u64
+        sum_ms / usize_to_u64(iterations)
     } else {
         0
     };
@@ -574,7 +571,7 @@ pub(crate) async fn cmd_benchmark_tree(
     println!();
 
     // Calculate throughput
-    let entries_per_sec = (total_entries as u64 * 1000)
+    let entries_per_sec = (usize_to_u64(total_entries) * 1000)
         .checked_div(avg_ms)
         .unwrap_or(0);
 
@@ -671,7 +668,7 @@ pub(crate) async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> 
             drive,
             drive_type,
             total_records,
-            mft_size as f64 / (1024.0 * 1024.0)
+            bytes_to_mb_f64(mft_size)
         );
 
         let state = prepare_volume_state(drive, overlapped_handle, extent_map, bitmap, drive_type);
@@ -718,9 +715,9 @@ pub(crate) async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> 
     for index in &indices {
         let files = index.records.iter().filter(|r| !r.is_directory()).count();
         let dirs = index.records.iter().filter(|r| r.is_directory()).count();
-        total_records += index.len() as u64;
-        total_files += files as u64;
-        total_dirs += dirs as u64;
+        total_records += usize_to_u64(index.len());
+        total_files += usize_to_u64(files);
+        total_dirs += usize_to_u64(dirs);
 
         println!(
             "  {}: {} records ({} files, {} dirs)",

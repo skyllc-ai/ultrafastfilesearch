@@ -23,9 +23,7 @@
 )]
 #![expect(
     clippy::float_arithmetic,
-    clippy::cast_precision_loss,
-    clippy::default_numeric_fallback,
-    reason = "byte/rate calculations convert integer counters into f64 for human-readable display"
+    reason = "byte/rate calculations divide f64 helpers for human-readable MB / MB/s display"
 )]
 #![expect(
     clippy::min_ident_chars,
@@ -39,6 +37,7 @@
 use std::path::Path;
 
 use anyhow::Result;
+use uffs_mft::{bytes_to_mb_f64, u64_to_f64, usize_to_u64};
 
 use crate::display::format_number;
 
@@ -88,7 +87,7 @@ pub(crate) async fn cmd_index_save(drive: char, output: &Path) -> Result<()> {
     println!(
         "✅ Saved to {}: {:.1} MB in {:.3}s",
         output.display(),
-        file_size as f64 / (1024.0 * 1024.0),
+        bytes_to_mb_f64(file_size),
         save_time.as_secs_f64()
     );
 
@@ -132,14 +131,11 @@ pub(crate) async fn cmd_index_load(input: &Path) -> Result<()> {
     println!("  Children:         {}", header.children_count);
     println!();
     println!("=== Performance ===");
-    println!(
-        "  File Size:        {:.1} MB",
-        file_size as f64 / (1024.0 * 1024.0)
-    );
+    println!("  File Size:        {:.1} MB", bytes_to_mb_f64(file_size));
     println!("  Load Time:        {:.3}s", load_time.as_secs_f64());
     println!(
         "  Throughput:       {:.1} MB/s",
-        (file_size as f64 / (1024.0 * 1024.0)) / load_time.as_secs_f64()
+        bytes_to_mb_f64(file_size) / load_time.as_secs_f64()
     );
 
     // Count files vs directories
@@ -294,7 +290,7 @@ pub(crate) async fn cmd_cache_get(drive: char, force: bool, ttl: Option<u64>) ->
     println!(
         "💾 Cached to: {} ({:.1} MB)",
         cache_path.display(),
-        file_size as f64 / (1024.0 * 1024.0)
+        bytes_to_mb_f64(file_size)
     );
 
     if usn_journal_id != 0 {
@@ -590,7 +586,7 @@ async fn do_full_index_build(drive: char) -> Result<()> {
     println!(
         "💾 Cached to: {} ({:.1} MB)",
         cache_path.display(),
-        file_size as f64 / (1024.0 * 1024.0)
+        bytes_to_mb_f64(file_size)
     );
 
     if usn_journal_id != 0 {
@@ -679,18 +675,18 @@ pub(crate) async fn cmd_index_all(
     let mut total_entries = 0_u64;
 
     for index in &indices {
-        let files = index.file_count() as u64;
-        let dirs = index.dir_count() as u64;
+        let files = usize_to_u64(index.file_count());
+        let dirs = usize_to_u64(index.dir_count());
         total_files += files;
         total_dirs += dirs;
-        total_entries += index.len() as u64;
+        total_entries += usize_to_u64(index.len());
 
         println!(
             "  {}:  {:>10} files  {:>8} dirs  {:>10} total",
             index.volume,
             format_number(files),
             format_number(dirs),
-            format_number(index.len() as u64),
+            format_number(usize_to_u64(index.len())),
         );
     }
 
@@ -706,7 +702,7 @@ pub(crate) async fn cmd_index_all(
 
     // Performance stats
     let elapsed_secs = read_time.as_secs_f64();
-    let entries_per_sec = total_entries as f64 / elapsed_secs;
+    let entries_per_sec = u64_to_f64(total_entries) / elapsed_secs;
 
     println!("=== Performance ===");
     println!("Time: {elapsed_secs:.3}s");

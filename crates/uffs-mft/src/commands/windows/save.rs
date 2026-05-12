@@ -15,10 +15,8 @@
 )]
 #![expect(
     clippy::float_arithmetic,
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
     clippy::default_numeric_fallback,
-    reason = "byte / utilization calculations convert integer counters into f64 for human-readable display"
+    reason = "byte / utilization calculations divide f64 helpers for human-readable percentage display"
 )]
 #![expect(
     clippy::min_ident_chars,
@@ -50,6 +48,7 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result};
 use tracing::info;
+use uffs_mft::{u64_to_f64, usize_to_u64};
 
 use super::shared::drive_type_label;
 use crate::display::{clean_path_for_display, format_bytes, format_duration, format_number_commas};
@@ -116,8 +115,8 @@ pub(crate) async fn cmd_save(
     // Bitmap analysis
     let (in_use_records, utilization) =
         handle.get_mft_bitmap().map_or((0_u64, 0.0_f64), |bitmap| {
-            let in_use = bitmap.count_in_use() as u64;
-            let pct = (in_use as f64 / record_count as f64) * 100.0;
+            let in_use = usize_to_u64(bitmap.count_in_use());
+            let pct = (u64_to_f64(in_use) / u64_to_f64(record_count)) * 100.0;
             (in_use, pct)
         });
     let free_records = record_count.saturating_sub(in_use_records);
@@ -187,9 +186,8 @@ pub(crate) async fn cmd_save(
             clippy::float_arithmetic,
             reason = "floating-point needed for compression ratio calculation"
         )]
-        let ratio = uffs_mft::u64_to_f64(header.compressed_size)
-            / uffs_mft::u64_to_f64(header.original_size)
-            * 100.0_f64;
+        let ratio =
+            u64_to_f64(header.compressed_size) / u64_to_f64(header.original_size) * 100.0_f64;
         println!("  Compression ratio:    {ratio:.1}%");
         #[expect(
             clippy::float_arithmetic,
@@ -260,7 +258,17 @@ async fn cmd_save_iocp(
         compress,
         compression_level,
         volume_letter: drive_upper,
-        concurrency: concurrency as u8,
+        // IOCP concurrency is bounded by the CLI parser (max 255); the
+        // narrowing cast is documented at the use site rather than via a
+        // module blanket.
+        concurrency: {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "CLI parser bounds `concurrency` to 0..=255 before reaching this path"
+            )]
+            let value = concurrency as u8;
+            value
+        },
         reserved_allocated_bytes: reserved_alloc,
     };
 
@@ -367,7 +375,7 @@ async fn cmd_save_upcase(drive: char, output: &Path) -> Result<()> {
     println!("💾 $UpCase table saved");
     println!(
         "  Size:   {} ({} entries)",
-        format_bytes(upcase::UPCASE_SIZE_BYTES as u64),
+        format_bytes(usize_to_u64(upcase::UPCASE_SIZE_BYTES)),
         format_number_commas(65_536)
     );
     println!("  NTFS:   {}.{}", header.ntfs_major, header.ntfs_minor);
