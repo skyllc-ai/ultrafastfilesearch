@@ -161,6 +161,7 @@ and `.github/workflows/tier-2.yml` (all as of commit `185ed8825`).
 | CodeQL Rust SAST | — | — | `codeql.yml` on PR | — |
 | `cargo llvm-cov` | — | — | — | ✅ |
 | `cargo udeps` | — | — | — | ✅ |
+| `cargo hack --each-feature` (feature matrix) | — | — | — | ✅ |
 | `miri` (UB check) | — | — | — | ✅ (4 tests) |
 | cargo-vet imports refresh | — | — | — | weekly PR |
 
