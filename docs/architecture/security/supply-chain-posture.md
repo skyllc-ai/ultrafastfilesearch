@@ -6,7 +6,19 @@
 Status as of **2026-05-12** · Maintainer: `@githubrobbi` · Review cadence: monthly
 
 **Changelog**:
-- 2026-05-12 — **Four-layer cargo-vet audit-discipline policy** (this PR).
+- 2026-05-12 — **`cargo-machete` promoted to pre-push + pr-fast hard gate**.
+  Sub-second AST-based unused-dependency detector, complementary to the
+  existing weekly `cargo-udeps` check (compile-driven, nightly-only,
+  multi-minute).  Closes `dev-flow.md §4.4 GAP 4` — unused-dep
+  detection was previously weekly-only.  Wired via `[[gate]] id =
+  "machete"` in `scripts/ci/gates.toml`, regenerated `_lint_pre_push.sh`,
+  and bundled into `pr-fast.yml`'s existing `security` job step list
+  (display name kept stable to preserve check-run history).  Added to
+  `just install-dev-tools` so contributors onboard with the binary
+  required by the gate.  Workspace was clean against `cargo machete
+  --skip-target-dir` at adoption.  See CLIPPY_POSTURE.md §12 entry for
+  2026-05-12 `cargo-machete` for the full decision-log record.
+- 2026-05-12 — **Four-layer cargo-vet audit-discipline policy** (PR #172).
   Closes the lazy-bump anti-pattern PR #166 introduced and PR #170
   manually undid.  Four defenses now compose to make `cargo vet
   regenerate exemptions` the wrong-by-default answer to a patch-bump
@@ -93,6 +105,8 @@ control lands or a deferred item is promoted.
 | Lockfile pinning | Committed `Cargo.lock` | Every resolved crate-version frozen across devs / CI / releases | Always | **Yes** — `cargo vet check --locked` would fail any drift |
 | Audit trail | `cargo-vet check --locked` | Every resolved crate-version must have import / own audit / exemption | Every PR | **Yes** — `pr-fast.yml` security job |
 | Audit discipline | `scripts/ci/check_vet_audit_discipline.sh` | Every exemption version-bump must have a matching delta audit AND a `Vet-Reviewed-Diff:` commit trailer | Every push touching `supply-chain/config.toml` | **Yes** — pre-push hook + `pr-fast.yml::security` |
+| Unused-dep hygiene (static) | `cargo-machete` | Every `[dependencies]` / `[dev-dependencies]` / `[build-dependencies]` entry must be `use`d somewhere in the workspace | Every code-changed push / PR | **Yes** — pre-push hook + `pr-fast.yml::security` (Tier R3-01, landed 2026-05-12) |
+| Unused-dep hygiene (compiled) | `cargo-udeps` | Same scope as machete but compiles to detect — catches `#[cfg]`-gated false-negatives machete's grep misses | Weekly | **Yes** (advisory) — `tier-2.yml::udeps` |
 | Import refresh | `cargo-vet-refresh.yml` | Weekly `cargo vet regenerate imports` → PR | Mondays 08:00 UTC | GitHub schedules |
 | Structural audit | `cargo-geiger` via `just geiger` | unsafe / build.rs / proc-macro footprint | On-demand (monthly) | No |
 | Semantic SAST | `codeql.yml` (Rust, public preview) | Dataflow-based bug patterns (path / SQL / regex injection, crypto misuse, unvalidated redirects) | PR + Tuesdays 06:30 UTC | Informational (not a required gate yet) |
