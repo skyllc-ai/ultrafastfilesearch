@@ -166,6 +166,7 @@ and `.github/workflows/tier-2.yml` (all as of commit `185ed8825`).
 | `cargo careful` (UB check, broad std-debug-asserts) | — | — | — | ✅ (`uffs-security` + `uffs-mft`) |
 | `cargo mutants` (test-quality, advisory) | — | — | — | ✅ (`uffs-security`, ~198 mutations) |
 | `cargo +1.91 check` (MSRV verification) | — | — | — | ✅ (`--all-features` + `--no-default-features`) |
+| `cargo fuzz` (advers-input parsers, advisory) | — | — | — | ✅ (`uffs-mft`, 15 min/target) |
 | cargo-vet imports refresh | — | — | — | weekly PR |
 
 **Key**: ✅ = gate runs here; — = not in this tier; **❌ bold** = gap where
@@ -422,7 +423,7 @@ regression opens the rolling `ci-failure-tier-2` issue.  Promote to
 a hard pre-publish gate (release-time, alongside
 `cargo-semver-checks`) once R8 lands the first crates.io publish.
 
-### 4.8 GAP 8 — Fuzz harness exists but never runs (🟠 MEDIUM, OPEN)
+### 4.8 GAP 8 — Fuzz harness exists but never runs (✅ CLOSED 2026-05-12)
 
 **Evidence**: `crates/uffs-mft/fuzz/fuzz_targets/` carries two
 real libfuzzer-sys harnesses:
@@ -465,38 +466,65 @@ automation.  The manual-run phase never produced a corpus seed
 commit, so any new contributor opening the repo today wouldn't
 know the harnesses were ever exercised.
 
-**Proposed fix** (R3-07 candidate): Schedule a periodic fuzz job in
-Tier 2 (weekly) with a time budget instead of a run-count budget:
+**Resolution**: Closed 2026-05-12 via R3-07 (PR landing this entry).
+The weekly `fuzz` job sits in `tier-2.yml` between `msrv` and
+`tier-2-summary`:
 
 ```yaml
 fuzz:
   name: Tier 2 / cargo-fuzz (uffs-mft)
   runs-on: ubuntu-latest
   timeout-minutes: 60
-  continue-on-error: true   # advisory rollout, like mutants
+  continue-on-error: true   # advisory rollout, same posture as mutants
   steps:
     - uses: actions/checkout@<sha>
-    - run: rustup toolchain install nightly --profile minimal --no-self-update
+    - run: rustup show          # pinned nightly from rust-toolchain.toml
+    - uses: Swatinem/rust-cache@<sha>
+      with:
+        shared-key: tier-2-fuzz
+        workspaces: "crates/uffs-mft/fuzz -> target"
     - uses: taiki-e/install-action@<sha>
       with: { tool: cargo-fuzz }
     - run: |
         cd crates/uffs-mft
-        # 15 min per target = 30 min total, well under timeout.
-        cargo +nightly fuzz run fuzz_apply_fixup -- -max_total_time=900
         cargo +nightly fuzz run fuzz_parse_record -- -max_total_time=900
+    - if: always()
+      run: |
+        cd crates/uffs-mft
+        cargo +nightly fuzz run fuzz_apply_fixup -- -max_total_time=900
     - uses: actions/upload-artifact@<sha>
-      if: failure()  # only when a crash is found
+      if: always()
       with:
-        name: fuzz-crashes-${{ github.run_id }}
-        path: crates/uffs-mft/fuzz/artifacts/
+        name: cargo-fuzz-output-${{ github.run_id }}
+        path: |
+          crates/uffs-mft/fuzz/artifacts/
+          crates/uffs-mft/fuzz/corpus/
         retention-days: 90
 ```
 
-Long-term: persist the corpus across runs (separate artifact stream,
-`actions/cache` with a corpus-versioned key) so each weekly run
-builds on the last instead of restarting from zero coverage.
-GitHub OSS-Fuzz integration is the next tier beyond that if the
-project scales to that point.
+**Advisory rollout** (same posture as `cargo-mutants`): the
+harnesses have been committed since 2026-04-24 but have never run.
+No corpus seed exists, so the first run starts from zero coverage
+and may find immediate crashes from uninitialised edge cases the
+existing test suite doesn't reach.  `continue-on-error: true` plus
+deliberate omission from `tier-2-summary`'s required-set check and
+from `notify-failure.needs` mean those crashes surface in the
+weekly summary + artifact upload without blocking the workflow.
+Once a corpus baseline is established and known crashes are triaged
+(either fixed or marked as expected via `crashes/` filtering), a
+follow-up PR can promote to hard-fail-on-regression.
+
+**Time-budget choice**: `-max_total_time=900` (15 min per target)
+keeps the wall-clock predictable.  A run-count budget (`-runs=N`)
+would vary wildly based on how quickly libfuzzer finds new
+coverage — fast on day 1 (no corpus), slow on day 30 (saturated
+corpus).
+
+**Long-term**: persist the corpus across runs via `actions/cache`
+with a corpus-versioned key so each weekly run builds on the last
+instead of restarting from zero coverage.  GitHub OSS-Fuzz
+integration is the next tier beyond that if the project scales to
+that point.
 
 ---
 

@@ -612,10 +612,146 @@ jobs:
         # the regression in the `--all-features` run.
         run: cargo +1.91 check --workspace --locked --no-default-features
 
+  # ───────────────────────────────────────────────────────────────────
+  # cargo-fuzz — adversarial-input testing for security-relevant
+  # untrusted-byte parsers in `uffs-mft`
+  #
+  # `cargo fuzz` generates random / mutated byte sequences and feeds
+  # them to libfuzzer-sys harnesses that exercise public APIs.  This
+  # is the complement to Miri (UB on known inputs), cargo-careful
+  # (broad UB coverage on known inputs), and cargo-mutants (test-
+  # suite quality on known inputs) — fuzz generates *unknown*
+  # adversarial inputs that test the parser's robustness to
+  # malformed on-disk data.
+  #
+  # Harnesses live in `crates/uffs-mft/fuzz/fuzz_targets/`:
+  #
+  #   * `fuzz_parse_record` — fuzzes `uffs_mft::parse::parse_record`,
+  #     `parse_record_full`, and `parse_record_zero_alloc` with
+  #     various FRS values.  The entry point for raw MFT record
+  #     deserialisation.
+  #   * `fuzz_apply_fixup` — fuzzes `uffs_mft::parse::apply_fixup`,
+  #     which handles untrusted NTFS Update Sequence Array bytes
+  #     (security-critical: malformed fixup data could cause buffer
+  #     overflows in a less-safe implementation).
+  #
+  # Why scoped to `uffs-mft` (and not `uffs-security` / others):
+  #
+  #   `uffs-mft` is the workspace's primary attack surface for
+  #   untrusted on-disk bytes — every NTFS MFT record we parse came
+  #   from an external filesystem image.  `uffs-security` doesn't
+  #   parse untrusted external bytes; its inputs are bounded by the
+  #   keystore / runtime-dir privilege APIs (covered by cargo-mutants
+  #   for test-suite quality).  Other workspace crates either
+  #   consume already-parsed values (`uffs-core`) or wrap I/O around
+  #   `uffs-mft` (`uffs-daemon`, `uffs-cli`).
+  #
+  # Why advisory (job allowed to fail without breaking the workflow):
+  #
+  #   The harnesses have been committed since 2026-04-24 but have
+  #   never run.  No corpus seed exists — the first run starts from
+  #   zero coverage and may find immediate crashes (uninitialised
+  #   edge cases that exercise behaviour the existing test suite
+  #   doesn't reach).  Advisory rollout means those crashes surface
+  #   in the weekly summary + artifact upload without blocking the
+  #   workflow conclusion.  Once a corpus baseline is established
+  #   and known crashes are triaged (either fixed or marked as
+  #   expected via `crashes/` filtering), a follow-up PR can
+  #   promote the gate to hard-fail-on-regression.
+  #
+  # Why time-budget (not run-count budget):
+  #
+  #   `cargo fuzz run -- -max_total_time=900` (15 min per target) is
+  #   deterministic about wall-clock cost (30 min for both targets,
+  #   well under the 60-min job timeout).  A run-count budget
+  #   (`-runs=N`) would vary wildly depending on how quickly
+  #   libfuzzer finds new coverage — fast on day 1 (no corpus), slow
+  #   on day 30 (saturated corpus).  Time-budget keeps the Tier 2
+  #   wall-clock predictable.
+  #
+  # Long-term: persist the corpus across runs via
+  # `actions/cache@<sha>` with a corpus-versioned key, so each
+  # weekly run builds on the last instead of restarting from zero
+  # coverage.  OSS-Fuzz integration is the next tier beyond that
+  # if the project scales there.
+  #
+  # Tier R3-07 of `docs/architecture/code-quality/lint-posture.md`.
+  fuzz:
+    name: Tier 2 / cargo-fuzz (uffs-mft)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Advisory in the initial rollout — see header comment.  Promote
+    # to a hard gate via a follow-up PR once a corpus baseline is
+    # established and known crashes are triaged.
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install pinned nightly (from rust-toolchain.toml)
+        # `cargo-fuzz` requires nightly because `libfuzzer-sys` uses
+        # unstable features.  `rust-toolchain.toml` already pins a
+        # known-good nightly; `rustup show` installs the pinned
+        # channel + components without overriding it.
+        run: rustup show
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          # Dedicated cache key — the fuzz crate has its own
+          # `[workspace] members = ["."]` and a separate target-dir
+          # layout (libfuzzer-sys instrumentation + sanitizer
+          # builds), so sharing keys with miri / careful / msrv would
+          # invalidate one or both on each run.  The cwd hint
+          # ensures the cache scopes to the fuzz subdirectory.
+          shared-key: tier-2-fuzz
+          workspaces: "crates/uffs-mft/fuzz -> target"
+          cache-on-failure: 'true'
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@dfc84ffb7254b048a0a843316ff5a2714dcdc7bd # v2
+        with:
+          tool: cargo-fuzz
+
+      - name: Run cargo-fuzz fuzz_parse_record (15 min budget)
+        # `-max_total_time=900` caps each target at 15 min wall-
+        # clock.  Both targets together fit comfortably in the
+        # 60-min job timeout.  No corpus seed yet — the very first
+        # run starts from random bytes and discovers coverage
+        # organically.
+        run: |
+          cd crates/uffs-mft
+          cargo +nightly fuzz run fuzz_parse_record -- -max_total_time=900
+
+      - name: Run cargo-fuzz fuzz_apply_fixup (15 min budget)
+        # Same shape as above.  `if: always()` so a crash in the
+        # first target still lets the second target run — advisory
+        # rollout values coverage over fail-fast.
+        if: always()
+        run: |
+          cd crates/uffs-mft
+          cargo +nightly fuzz run fuzz_apply_fixup -- -max_total_time=900
+
+      - name: Upload fuzz artifacts (crashes + corpus)
+        # Keep both `crashes/` (any reproducer libfuzzer found) and
+        # `corpus/` (the inputs that built coverage) for 90 days.
+        # `corpus/` is the seed for subsequent runs — once we
+        # promote to a hard gate we'll switch this to
+        # `actions/cache` so each run builds on the last.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cargo-fuzz-output-${{ github.run_id }}
+          path: |
+            crates/uffs-mft/fuzz/artifacts/
+            crates/uffs-mft/fuzz/corpus/
+          retention-days: 90
+          if-no-files-found: warn
+
   tier-2-summary:
     name: Tier 2 / Summary
     runs-on: ubuntu-latest
-    needs: [file-size-policy, coverage, build-validation, udeps, hack, miri, careful, mutants, msrv]
+    needs: [file-size-policy, coverage, build-validation, udeps, hack, miri, careful, mutants, msrv, fuzz]
     if: always()
     timeout-minutes: 5
     steps:
@@ -663,6 +799,12 @@ jobs:
           else
             mutants_cell="⚠️ ${mutants_status} (advisory)"
           fi
+          fuzz_status="${{ needs.fuzz.result }}"
+          if [[ "$fuzz_status" == "success" ]]; then
+            fuzz_cell="✅"
+          else
+            fuzz_cell="⚠️ ${fuzz_status} (advisory)"
+          fi
           {
               echo "## ✅ UFFS Tier 2 Nightly CI Passed"
               echo ""
@@ -677,6 +819,7 @@ jobs:
               echo "| cargo-careful | ✅ |"
               echo "| cargo-mutants (uffs-security) | ${mutants_cell} |"
               echo "| MSRV (1.91 stable) | ✅ |"
+              echo "| cargo-fuzz (uffs-mft) | ${fuzz_cell} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ═══════════════════════════════════════════════════════════════════════════
@@ -686,11 +829,13 @@ jobs:
   notify-failure:
     name: 🔔 Notify on Failure
     runs-on: ubuntu-latest
-    # `mutants` intentionally OMITTED from this needs-list so an
-    # advisory cargo-mutants miss does NOT open a Tier 2 failure
-    # issue.  Once mutants is promoted from advisory to a hard gate
-    # (see the `Check pipeline success` step's comment in the
-    # tier-2-summary job), add it here too.
+    # `mutants` and `fuzz` intentionally OMITTED from this needs-list
+    # so an advisory cargo-mutants miss or cargo-fuzz crash does NOT
+    # open a Tier 2 failure issue.  Both jobs carry `continue-on-
+    # error: true` (advisory initial rollout; see header comments in
+    # each job definition).  Once either is promoted from advisory
+    # to a hard gate (see the `Check pipeline success` step's comment
+    # in the tier-2-summary job), add it here too.
     needs: [file-size-policy, coverage, build-validation, udeps, hack, miri, careful, msrv]
     if: failure()
     # §2.8: every job caps its runtime.  Cheap notifier — 2 min is
