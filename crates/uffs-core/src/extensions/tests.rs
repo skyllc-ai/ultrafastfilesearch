@@ -9,7 +9,7 @@ use super::*;
 type TestResult = core::result::Result<(), Box<dyn core::error::Error>>;
 
 #[test]
-fn test_parse_single_extension() {
+fn parse_single_extension() {
     let filter = ExtensionFilter::parse("jpg").unwrap();
     assert!(filter.matches("photo.jpg"));
     assert!(filter.matches("PHOTO.JPG"));
@@ -17,7 +17,7 @@ fn test_parse_single_extension() {
 }
 
 #[test]
-fn test_parse_multiple_extensions() {
+fn parse_multiple_extensions() {
     let filter = ExtensionFilter::parse("jpg,png,gif").unwrap();
     assert!(filter.matches("photo.jpg"));
     assert!(filter.matches("image.png"));
@@ -26,14 +26,14 @@ fn test_parse_multiple_extensions() {
 }
 
 #[test]
-fn test_parse_with_dots() {
+fn parse_with_dots() {
     let filter = ExtensionFilter::parse(".jpg,.png").unwrap();
     assert!(filter.matches("photo.jpg"));
     assert!(filter.matches("image.png"));
 }
 
 #[test]
-fn test_pictures_collection() {
+fn pictures_collection() {
     let filter = ExtensionFilter::parse("pictures").unwrap();
     assert!(filter.matches("photo.jpg"));
     assert!(filter.matches("image.png"));
@@ -42,7 +42,7 @@ fn test_pictures_collection() {
 }
 
 #[test]
-fn test_documents_collection() {
+fn documents_collection() {
     let filter = ExtensionFilter::parse("documents").unwrap();
     assert!(filter.matches("report.pdf"));
     assert!(filter.matches("letter.docx"));
@@ -51,7 +51,7 @@ fn test_documents_collection() {
 }
 
 #[test]
-fn test_mixed_collection_and_extensions() {
+fn mixed_collection_and_extensions() {
     let filter = ExtensionFilter::parse("pictures,mp4,pdf").unwrap();
     assert!(filter.matches("photo.jpg"));
     assert!(filter.matches("video.mp4"));
@@ -60,13 +60,13 @@ fn test_mixed_collection_and_extensions() {
 }
 
 #[test]
-fn test_empty_error() {
+fn empty_error() {
     ExtensionFilter::parse("").unwrap_err();
     ExtensionFilter::parse("   ").unwrap_err();
 }
 
 #[test]
-fn test_to_regex() {
+fn to_regex() {
     let filter = ExtensionFilter::parse("jpg,png").unwrap();
     let regex = filter.to_regex();
     assert!(regex.contains("jpg"));
@@ -76,7 +76,7 @@ fn test_to_regex() {
 }
 
 #[test]
-fn test_no_extension_file() {
+fn no_extension_file() {
     let filter = ExtensionFilter::parse("txt").unwrap();
     assert!(!filter.matches("README"));
     assert!(!filter.matches("Makefile"));
@@ -102,7 +102,7 @@ fn create_ext_test_df() -> DataFrame {
 }
 
 #[test]
-fn test_extension_index_build() -> TestResult {
+fn extension_index_build() -> TestResult {
     let df = create_ext_test_df();
     let index = ExtensionIndex::build(&df)?;
 
@@ -112,7 +112,7 @@ fn test_extension_index_build() -> TestResult {
 }
 
 #[test]
-fn test_extension_index_get() -> TestResult {
+fn extension_index_get() -> TestResult {
     let df = create_ext_test_df();
     let index = ExtensionIndex::build(&df)?;
 
@@ -131,7 +131,7 @@ fn test_extension_index_get() -> TestResult {
 }
 
 #[test]
-fn test_extension_index_case_insensitive() -> TestResult {
+fn extension_index_case_insensitive() -> TestResult {
     let df = create_ext_test_df();
     let index = ExtensionIndex::build(&df)?;
 
@@ -143,7 +143,7 @@ fn test_extension_index_case_insensitive() -> TestResult {
 }
 
 #[test]
-fn test_extension_index_stats() -> TestResult {
+fn extension_index_stats() -> TestResult {
     let df = create_ext_test_df();
     let index = ExtensionIndex::build(&df)?;
 
@@ -156,7 +156,7 @@ fn test_extension_index_stats() -> TestResult {
 }
 
 #[test]
-fn test_extension_index_hidden_files() -> TestResult {
+fn extension_index_hidden_files() -> TestResult {
     let df = DataFrame::new_infer_height(vec![
         Column::new("frs".into(), &[1_u64, 2, 3]),
         Column::new("name".into(), &[".gitignore", ".bashrc", "file.txt"]),
@@ -176,7 +176,7 @@ fn test_extension_index_hidden_files() -> TestResult {
 // =========================================================================
 
 #[test]
-fn test_add_ext_column() -> TestResult {
+fn add_ext_column_works() -> TestResult {
     let df = DataFrame::new_infer_height(vec![
         Column::new("frs".into(), &[1_u64, 2, 3, 4, 5]),
         Column::new("name".into(), &[
@@ -205,7 +205,7 @@ fn test_add_ext_column() -> TestResult {
 }
 
 #[test]
-fn test_has_ext_column() -> TestResult {
+fn has_ext_column_works() -> TestResult {
     let df_without = DataFrame::new_infer_height(vec![
         Column::new("frs".into(), &[1_u64]),
         Column::new("name".into(), &["file.txt"]),
@@ -220,7 +220,7 @@ fn test_has_ext_column() -> TestResult {
 }
 
 #[test]
-fn test_ext_expr_lowercase() -> TestResult {
+fn ext_expr_lowercase() -> TestResult {
     let df = DataFrame::new_infer_height(vec![
         Column::new("frs".into(), &[1_u64, 2]),
         Column::new("name".into(), &["Photo.JPG", "Document.TXT"]),

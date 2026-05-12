@@ -108,14 +108,14 @@ mod tests {
     };
 
     #[test]
-    fn test_filetime_conversion() {
+    fn filetime_conversion() {
         let filetime: i64 = 133_485_408_000_000_000;
         let unix_micros = filetime_to_unix_micros(filetime);
         assert_eq!(unix_micros, 1_704_067_200_000_000);
     }
 
     #[test]
-    fn test_filetime_to_calendar_post_1970() {
+    fn filetime_to_calendar_post_1970() {
         // 2024-01-01 00:00:00 UTC
         let filetime: i64 = 133_485_408_000_000_000;
         let cal = filetime_to_calendar(filetime);
@@ -123,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn test_filetime_to_calendar_pre_1970() {
+    fn filetime_to_calendar_pre_1970() {
         // 1959-12-02 03:45:50 UTC — the exact case from the parity baseline.
         // From Dec 2, 1959 00:00:00 to Jan 1, 1970 00:00:00:
         //   1960-1969 = 10 years = 7*365 + 3*366 = 3653 days
@@ -137,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    fn test_filetime_to_calendar_zero_is_none() {
+    fn filetime_to_calendar_zero_is_none() {
         assert_eq!(filetime_to_calendar(0), None);
     }
 
@@ -146,19 +146,19 @@ mod tests {
     // ═══════════════════════════════════════════════════════════════════════
 
     #[test]
-    fn test_filetime_to_unix_micros_zero_returns_zero() {
+    fn filetime_to_unix_micros_zero_returns_zero() {
         // FILETIME 0 means "unset" — must map to 0, not a 1601 date.
         assert_eq!(filetime_to_unix_micros(0), 0);
     }
 
     #[test]
-    fn test_filetime_to_unix_micros_unix_epoch() {
+    fn filetime_to_unix_micros_unix_epoch() {
         // FILETIME at the exact Unix epoch (1970-01-01 00:00:00).
         assert_eq!(filetime_to_unix_micros(FILETIME_UNIX_DIFF), 0);
     }
 
     #[test]
-    fn test_filetime_to_unix_micros_pre_1970() {
+    fn filetime_to_unix_micros_pre_1970() {
         // 1960-01-01 00:00:00 — 10 years before Unix epoch.
         // Leap years 1960,1964,1968 → 3*366 + 7*365 = 3653 days.
         let ft_1960 = FILETIME_UNIX_DIFF - 3653 * 86400 * FILETIME_TICKS_PER_SECOND;
@@ -168,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn test_filetime_to_unix_micros_filetime_epoch() {
+    fn filetime_to_unix_micros_filetime_epoch() {
         // FILETIME = 1 (one 100ns tick after 1601-01-01 00:00:00).
         // Should produce a large negative Unix µs (roughly -11644473600 seconds).
         let us = filetime_to_unix_micros(1);
@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn test_filetime_to_unix_micros_y2k() {
+    fn filetime_to_unix_micros_y2k() {
         // 2000-01-01 00:00:00 — 30 years, well-known reference.
         let expected_us: i64 = 946_684_800_000_000;
         let ft = FILETIME_UNIX_DIFF + expected_us * FILETIME_TICKS_PER_MICROSECOND;
@@ -187,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn test_filetime_to_unix_micros_roundtrip_with_calendar() {
+    fn filetime_to_unix_micros_roundtrip_with_calendar() {
         // Verify that filetime → unix_micros and filetime → calendar agree.
         let ft_2024: i64 = 133_485_408_000_000_000; // 2024-01-01 00:00:00
         let us = filetime_to_unix_micros(ft_2024);
@@ -204,7 +204,7 @@ mod tests {
     // ═══════════════════════════════════════════════════════════════════════
 
     #[test]
-    fn test_filetime_to_calendar_leap_day_2000() {
+    fn filetime_to_calendar_leap_day_2000() {
         // 2000-02-29 12:00:00 — Feb 29 in a century leap year.
         let unix_secs: i64 = 951_825_600; // 2000-02-29 12:00:00 UTC
         let ft = unix_secs * FILETIME_TICKS_PER_SECOND + FILETIME_UNIX_DIFF;
@@ -212,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn test_filetime_to_calendar_leap_day_2024() {
+    fn filetime_to_calendar_leap_day_2024() {
         // 2024-02-29 23:59:59 — last second of a leap day.
         let unix_secs: i64 = 1_709_251_199; // 2024-02-29 23:59:59 UTC
         let ft = unix_secs * FILETIME_TICKS_PER_SECOND + FILETIME_UNIX_DIFF;
@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn test_filetime_to_calendar_non_leap_1900() {
+    fn filetime_to_calendar_non_leap_1900() {
         // 1900-02-28 — 1900 is NOT a leap year (divisible by 100 but not 400).
         let unix_secs: i64 = -2_203_977_600; // 1900-02-28 00:00:00 UTC
         let ft = unix_secs * FILETIME_TICKS_PER_SECOND + FILETIME_UNIX_DIFF;
@@ -228,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn test_filetime_to_calendar_year_boundary() {
+    fn filetime_to_calendar_year_boundary() {
         // 1999-12-31 23:59:59 → 2000-01-01 00:00:00 boundary
         let ft_dec31 = (946_684_799_i64) * FILETIME_TICKS_PER_SECOND + FILETIME_UNIX_DIFF;
         let ft_jan01 = (946_684_800_i64) * FILETIME_TICKS_PER_SECOND + FILETIME_UNIX_DIFF;
@@ -240,14 +240,14 @@ mod tests {
     }
 
     #[test]
-    fn test_filetime_to_calendar_filetime_epoch_itself() {
+    fn filetime_to_calendar_filetime_epoch_itself() {
         // FILETIME = 1 tick → 1601-01-01 00:00:00 (essentially).
         let cal = filetime_to_calendar(1);
         assert_eq!(cal, Some((1601, 1, 1, 0, 0, 0)));
     }
 
     #[test]
-    fn test_filetime_to_calendar_midnight_exact() {
+    fn filetime_to_calendar_midnight_exact() {
         // Exactly midnight — time components must all be zero.
         let ft = 86400_i64 * FILETIME_TICKS_PER_SECOND; // day 1 since 1601
         let cal = filetime_to_calendar(ft);
@@ -261,13 +261,13 @@ mod tests {
     // ═══════════════════════════════════════════════════════════════════════
 
     #[test]
-    fn test_filetime_with_tz_bias_zero_no_change() {
+    fn filetime_with_tz_bias_zero_no_change() {
         let ft: i64 = 133_485_408_000_000_000;
         assert_eq!(filetime_with_tz_bias(ft, 0), ft);
     }
 
     #[test]
-    fn test_filetime_with_tz_bias_positive_east() {
+    fn filetime_with_tz_bias_positive_east() {
         // UTC+5 (e.g. Yekaterinburg) — 5 hours ahead.
         let ft: i64 = 133_485_408_000_000_000; // 2024-01-01 00:00:00 UTC
         let biased = filetime_with_tz_bias(ft, 5 * 3600);
@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn test_filetime_with_tz_bias_negative_west() {
+    fn filetime_with_tz_bias_negative_west() {
         // UTC-8 (US Pacific) — 8 hours behind.
         let ft: i64 = 133_485_408_000_000_000; // 2024-01-01 00:00:00 UTC
         let biased = filetime_with_tz_bias(ft, -8 * 3600);
@@ -290,7 +290,7 @@ mod tests {
     }
 
     #[test]
-    fn test_filetime_with_tz_bias_half_hour() {
+    fn filetime_with_tz_bias_half_hour() {
         // UTC+5:30 (India) — non-integer hour offset.
         let ft: i64 = 133_485_408_000_000_000; // 2024-01-01 00:00:00 UTC
         let biased = filetime_with_tz_bias(ft, 5 * 3600 + 1800);
@@ -303,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn test_filetime_with_tz_bias_symmetric_round_trip() {
+    fn filetime_with_tz_bias_symmetric_round_trip() {
         // Reversing a bias must recover the original FILETIME exactly.
         let base = FILETIME_UNIX_DIFF;
         let shifted = filetime_with_tz_bias(base, 3600);

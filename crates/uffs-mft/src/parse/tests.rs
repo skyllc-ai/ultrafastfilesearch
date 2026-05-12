@@ -159,7 +159,7 @@ fn create_test_record_with_attributes(
 }
 
 #[test]
-fn test_apply_fixup_valid_record() {
+fn apply_fixup_valid_record() {
     let mut data = create_test_record(5, true, false);
 
     // Before fixup, sector ends have check value
@@ -175,7 +175,7 @@ fn test_apply_fixup_valid_record() {
 }
 
 #[test]
-fn test_apply_fixup_invalid_magic() {
+fn apply_fixup_invalid_magic() {
     let mut data = vec![0_u8; 1024];
     data[0..4].copy_from_slice(b"BAAD"); // Invalid magic
 
@@ -184,7 +184,7 @@ fn test_apply_fixup_invalid_magic() {
 }
 
 #[test]
-fn test_apply_fixup_buffer_too_small() {
+fn apply_fixup_buffer_too_small() {
     let mut data = vec![0_u8; 10]; // Too small for header
 
     let result = apply_fixup(&mut data);
@@ -192,7 +192,7 @@ fn test_apply_fixup_buffer_too_small() {
 }
 
 #[test]
-fn test_apply_fixup_corrupted_check_value() {
+fn apply_fixup_corrupted_check_value() {
     let mut data = create_test_record(5, true, false);
 
     // Corrupt the check value at first sector end
@@ -203,7 +203,7 @@ fn test_apply_fixup_corrupted_check_value() {
 }
 
 #[test]
-fn test_apply_fixup_valid_record_on_unaligned_slice() {
+fn apply_fixup_valid_record_on_unaligned_slice() {
     let record = create_test_record(5, true, false);
     let mut storage = vec![0_u8; record.len() + 1];
     storage[1..].copy_from_slice(&record);
@@ -215,7 +215,7 @@ fn test_apply_fixup_valid_record_on_unaligned_slice() {
 }
 
 #[test]
-fn test_parse_standard_info_full_reads_unaligned_v30_payload() {
+fn parse_standard_info_full_reads_unaligned_v30_payload() {
     let attr_offset = 1_usize;
     let value_offset = 24_u16;
     let si_offset = attr_offset + usize::from(value_offset);
@@ -251,7 +251,7 @@ fn test_parse_standard_info_full_reads_unaligned_v30_payload() {
 }
 
 #[test]
-fn test_parse_file_name_full_reads_unaligned_payload() {
+fn parse_file_name_full_reads_unaligned_payload() {
     let attr_offset = 1_usize;
     let value_offset = 24_u16;
     let fn_offset = attr_offset + usize::from(value_offset);
@@ -298,7 +298,7 @@ fn test_parse_file_name_full_reads_unaligned_payload() {
 }
 
 #[test]
-fn test_parse_record_forensic_reads_unaligned_record_slice() {
+fn parse_record_forensic_reads_unaligned_record_slice() {
     let record = create_test_record(5, true, false);
     let mut storage = vec![0_u8; record.len() + 1];
     storage[1..].copy_from_slice(&record);
@@ -314,7 +314,7 @@ fn test_parse_record_forensic_reads_unaligned_record_slice() {
 }
 
 #[test]
-fn test_parse_record_forensic_reads_unaligned_extension_record_slice() {
+fn parse_record_forensic_reads_unaligned_extension_record_slice() {
     let extension_frs = 88_u64;
     let base_frs = 77_u64;
     let base_file_reference = (9_u64 << 48_u32) | base_frs;
@@ -353,7 +353,7 @@ fn test_parse_record_forensic_reads_unaligned_extension_record_slice() {
 }
 
 #[test]
-fn test_parse_record_forensic_reads_unaligned_resident_reparse_tag() {
+fn parse_record_forensic_reads_unaligned_resident_reparse_tag() {
     let frs = 91_u64;
     let reparse_attr = create_resident_attribute(
         AttributeType::ReparsePoint,
@@ -377,7 +377,7 @@ fn test_parse_record_forensic_reads_unaligned_resident_reparse_tag() {
 }
 
 #[test]
-fn test_create_placeholder_record() {
+fn create_placeholder_record_works() {
     let record = create_placeholder_record(12345);
 
     assert_eq!(record.frs, 12345);
@@ -390,7 +390,7 @@ fn test_create_placeholder_record() {
 }
 
 #[test]
-fn test_parse_result_variants() {
+fn parse_result_variants() {
     // Test ParseResult enum
     let base = ParseResult::Base(create_placeholder_record(1));
     assert!(matches!(base, ParseResult::Base(_)));
@@ -410,7 +410,7 @@ fn test_parse_result_variants() {
 }
 
 #[test]
-fn test_parse_options_default() {
+fn parse_options_default() {
     let opts = ParseOptions::default();
     assert!(!opts.include_deleted);
     assert!(!opts.include_corrupt);
@@ -418,7 +418,7 @@ fn test_parse_options_default() {
 }
 
 #[test]
-fn test_parse_options_forensic() {
+fn parse_options_forensic() {
     let opts = ParseOptions::FORENSIC;
     assert!(opts.include_deleted);
     assert!(opts.include_corrupt);
@@ -427,7 +427,7 @@ fn test_parse_options_forensic() {
 }
 
 #[test]
-fn test_parsed_record_default() {
+fn parsed_record_default() {
     let record = ParsedRecord::default();
     assert_eq!(record.frs, 0);
     assert_eq!(record.sequence_number, 0);
@@ -438,14 +438,14 @@ fn test_parsed_record_default() {
 }
 
 #[test]
-fn test_add_missing_parent_placeholders_empty() {
+fn add_missing_parent_placeholders_empty() {
     let mut records: Vec<ParsedRecord> = Vec::new();
     let added = add_missing_parent_placeholders_to_vec(&mut records);
     assert_eq!(added, 0);
 }
 
 #[test]
-fn test_add_missing_parent_placeholders_no_missing() {
+fn add_missing_parent_placeholders_no_missing() {
     let mut records = vec![
         {
             let mut r = create_placeholder_record(5);
@@ -464,7 +464,7 @@ fn test_add_missing_parent_placeholders_no_missing() {
 }
 
 #[test]
-fn test_add_missing_parent_placeholders_with_missing() {
+fn add_missing_parent_placeholders_with_missing() {
     let mut records = vec![{
         let mut r = create_placeholder_record(100);
         r.parent_frs = 50; // References non-existent parent
@@ -555,7 +555,7 @@ mod proptest_tests {
 /// Test that extension records with `$FILE_NAME` are properly merged into
 /// base records that have no `$FILE_NAME` attribute.
 #[test]
-fn test_extension_merge_with_empty_base_name() {
+fn extension_merge_with_empty_base_name() {
     // Simulate the case where base record has no $FILE_NAME
     // and extension record has the $FILE_NAME
 
@@ -632,7 +632,7 @@ fn test_extension_merge_with_empty_base_name() {
 /// Test that extension records are merged even when processed before base
 /// record
 #[test]
-fn test_extension_before_base_merge() {
+fn extension_before_base_merge() {
     let mut record_merger = MftRecordMerger::with_capacity(10);
 
     // Add extension record FIRST (before base record)

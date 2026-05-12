@@ -588,7 +588,7 @@ mod tests {
     /// The formula is: `delta(v, i, n) = floor(v*(i+1)/n) - floor(v*i/n)`
     /// This ensures the sum of all deltas equals the original value exactly.
     #[test]
-    fn test_delta_sum_equals_original() {
+    fn delta_sum_equals_original() {
         let test_cases: &[(u64, u32)] = &[
             (0, 1),
             (1, 1),
@@ -616,7 +616,7 @@ mod tests {
 
     /// Tests specific delta values to ensure reference parity.
     #[test]
-    fn test_delta_specific_values() {
+    fn delta_specific_values() {
         assert_eq!(delta(5, 0, 2), 2, "First link of 5/2 should get 2");
         assert_eq!(delta(5, 1, 2), 3, "Second link of 5/2 should get 3");
 
@@ -638,7 +638,7 @@ mod tests {
 
     /// Tests the `compute_name_info` helper function.
     #[test]
-    fn test_compute_name_info_helper() {
+    fn compute_name_info_helper() {
         assert_eq!(
             compute_name_info(0, 2),
             1,
@@ -675,7 +675,7 @@ mod tests {
     /// Tests that the combined transformation + delta gives correct
     /// distribution.
     #[test]
-    fn test_transformed_delta_distribution() {
+    fn transformed_delta_distribution() {
         let value: u64 = 5;
         let name_count: u32 = 2;
 
@@ -693,7 +693,7 @@ mod tests {
 
     /// Tests edge cases for the delta function.
     #[test]
-    fn test_delta_edge_cases() {
+    fn delta_edge_cases() {
         assert_eq!(delta(100, 0, 1), 100);
         assert_eq!(delta(0, 0, 2), 0);
         assert_eq!(delta(0, 1, 2), 0);

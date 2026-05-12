@@ -8,7 +8,7 @@ use uffs_polars::{Column, DataFrame};
 use super::*;
 
 #[test]
-fn test_parse_column() {
+fn parse_column() {
     assert_eq!(OutputColumn::parse("path"), Some(OutputColumn::Path));
     assert_eq!(OutputColumn::parse("PATH"), Some(OutputColumn::Path));
     assert_eq!(OutputColumn::parse("size"), Some(OutputColumn::Size));
@@ -16,13 +16,13 @@ fn test_parse_column() {
 }
 
 #[test]
-fn test_parse_columns_all() {
+fn parse_columns_all() {
     assert!(OutputConfig::parse_columns("all").is_none());
     assert!(OutputConfig::parse_columns("ALL").is_none());
 }
 
 #[test]
-fn test_parse_columns_list() {
+fn parse_columns_list() {
     let cols = OutputConfig::parse_columns("path,name,size").expect("should parse");
     assert_eq!(cols.len(), 3);
     assert_eq!(cols.first(), Some(&OutputColumn::Path));
@@ -31,7 +31,7 @@ fn test_parse_columns_list() {
 }
 
 #[test]
-fn test_parse_columns_with_spaces() {
+fn parse_columns_with_spaces() {
     // "Name,Size,Path Only" — the exact failing case from CLI validation test 22
     let cols = OutputConfig::parse_columns("Name,Size,Path Only").expect("should parse");
     assert_eq!(cols.len(), 3);
@@ -41,7 +41,7 @@ fn test_parse_columns_with_spaces() {
 }
 
 #[test]
-fn test_parse_columns_size_on_disk() {
+fn parse_columns_size_on_disk() {
     let cols =
         OutputConfig::parse_columns("Name,Size on Disk,Directory Flag").expect("should parse");
     assert_eq!(cols.len(), 3);
@@ -51,7 +51,7 @@ fn test_parse_columns_size_on_disk() {
 }
 
 #[test]
-fn test_parse_separator_special() {
+fn parse_separator_special() {
     // Original values
     assert_eq!(OutputConfig::parse_separator("TAB"), "\t");
     assert_eq!(OutputConfig::parse_separator("tab"), "\t");
@@ -67,7 +67,7 @@ fn test_parse_separator_special() {
 }
 
 #[test]
-fn test_parse_column_aliases() {
+fn parse_column_aliases() {
     // Short aliases for legacy compatibility
     assert_eq!(OutputColumn::parse("r"), Some(OutputColumn::ReadOnly));
     assert_eq!(OutputColumn::parse("a"), Some(OutputColumn::Archive));
@@ -125,7 +125,7 @@ fn test_parse_column_aliases() {
 }
 
 #[test]
-fn test_output_config_builder() {
+fn output_config_builder() {
     let config = OutputConfig::new()
         .with_columns("path,name")
         .with_separator(";")
@@ -143,14 +143,14 @@ fn test_output_config_builder() {
 }
 
 #[test]
-fn test_df_column_mapping() {
+fn df_column_mapping() {
     assert_eq!(OutputColumn::Path.df_column(), "path");
     assert_eq!(OutputColumn::SizeOnDisk.df_column(), "allocated_size");
     assert_eq!(OutputColumn::AttributeValue.df_column(), "flags");
 }
 
 #[test]
-fn test_display_name() {
+fn display_name() {
     assert_eq!(OutputColumn::Path.display_name(), "Path");
     assert_eq!(OutputColumn::SizeOnDisk.display_name(), "Size on Disk");
     assert_eq!(
@@ -160,7 +160,7 @@ fn test_display_name() {
 }
 
 #[test]
-fn test_needs_descendants() {
+fn needs_descendants() {
     let config_no_desc = OutputConfig::new().with_columns("path,name,size");
     assert!(!config_no_desc.needs_descendants());
 
@@ -173,7 +173,7 @@ fn test_needs_descendants() {
 }
 
 #[test]
-fn test_add_descendants_column() {
+fn add_descendants_column_works() {
     // Create a test DataFrame with directory structure:
     // root (5) -> Users (100) -> john (101) -> file.txt (102)
     //                         -> Documents (103) -> doc.pdf (104)
@@ -211,7 +211,7 @@ fn test_add_descendants_column() {
 }
 
 #[test]
-fn test_write_preserves_header_spacing_and_missing_column_defaults() {
+fn write_preserves_header_spacing_and_missing_column_defaults() {
     let df = DataFrame::new_infer_height(vec![
         Column::new("path".into(), &["C:\\Temp\\file.txt"]),
         Column::new("name".into(), &["file.txt"]),
@@ -236,7 +236,7 @@ fn test_write_preserves_header_spacing_and_missing_column_defaults() {
 }
 
 #[test]
-fn test_write_preserves_null_and_boolean_value_formatting() {
+fn write_preserves_null_and_boolean_value_formatting() {
     let df = DataFrame::new_infer_height(vec![
         Column::new("name".into(), &[Some("alpha"), None, Some("beta")]),
         Column::new("size".into(), &[Some(42_u64), None, Some(0_u64)]),
@@ -261,7 +261,7 @@ fn test_write_preserves_null_and_boolean_value_formatting() {
 }
 
 #[test]
-fn test_parity_compat_directory_formatting() {
+fn parity_compat_directory_formatting() {
     use crate::search::backend::DisplayRow;
 
     let file_row = DisplayRow::new(
@@ -370,7 +370,7 @@ fn test_parity_compat_directory_formatting() {
 /// backslash in parity mode. Root's path is already `G:\` — appending `\` would
 /// produce `G:\\` which mismatches the legacy baseline.
 #[test]
-fn test_parity_root_no_double_trailing_backslash() {
+fn parity_root_no_double_trailing_backslash() {
     use crate::search::backend::DisplayRow;
 
     let root_row = DisplayRow::new(
@@ -565,7 +565,7 @@ fn write_display_rows_emits_name_length_and_path_length() {
 /// someone re-introduces the Unix-micros interpretation, this renders
 /// as `8225-01-17` or similar and the test fails immediately.
 #[test]
-fn test_write_datetime_column_formats_filetime_as_2026() {
+fn write_datetime_column_formats_filetime_as_2026() {
     use uffs_polars::{DataType, IntoColumn as _, NamedFrom as _, Series, TimeUnit};
 
     // 2026-01-20 00:00:00 UTC as raw FILETIME.
@@ -672,7 +672,7 @@ fn write_display_rows_parallel_matches_sequential() {
 /// Zero FILETIME is the NTFS sentinel for "unset" — the formatter must
 /// emit an empty field, never decompose to `1601-01-01`.
 #[test]
-fn test_write_datetime_column_zero_filetime_is_empty() {
+fn write_datetime_column_zero_filetime_is_empty() {
     use uffs_polars::{DataType, IntoColumn as _, NamedFrom as _, Series, TimeUnit};
 
     let ts_column = Series::new("modified".into(), vec![0_i64])

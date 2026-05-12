@@ -231,10 +231,10 @@ jobs:
           # compressed raw test uses foreign-function calls that Miri does not support.
           # --locked per §2.8 so miri evaluates the same resolved crate
           # graph as the rest of the workspace.
-          cargo miri test --locked -p uffs-mft raw::tests::test_header_roundtrip -- --exact
-          cargo miri test --locked -p uffs-mft raw::tests::test_load_header_only -- --exact
-          cargo miri test --locked -p uffs-mft raw::tests::test_save_load_uncompressed -- --exact
-          cargo miri test --locked -p uffs-mft raw::tests::test_raw_compat_mode -- --exact
+          cargo miri test --locked -p uffs-mft raw::tests::header_roundtrip -- --exact
+          cargo miri test --locked -p uffs-mft raw::tests::load_header_only -- --exact
+          cargo miri test --locked -p uffs-mft raw::tests::save_load_uncompressed -- --exact
+          cargo miri test --locked -p uffs-mft raw::tests::raw_compat_mode -- --exact
 
   tier-2-summary:
     name: Tier 2 / Summary

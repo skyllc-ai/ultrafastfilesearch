@@ -6,7 +6,7 @@
 use super::*;
 
 #[test]
-fn test_compute_tree_metrics_simple() {
+fn compute_tree_metrics_simple() {
     let mut index = MftIndex::new('C');
 
     // Create a simple tree:
@@ -110,7 +110,7 @@ fn test_compute_tree_metrics_simple() {
 }
 
 #[test]
-fn test_compute_tree_metrics_deep_tree() {
+fn compute_tree_metrics_deep_tree() {
     let mut index = MftIndex::new('C');
 
     // Create a deep tree:
@@ -202,7 +202,7 @@ fn test_compute_tree_metrics_deep_tree() {
 }
 
 #[test]
-fn test_compute_tree_metrics_empty() {
+fn compute_tree_metrics_empty() {
     let mut index = MftIndex::new('C');
 
     // Empty index should not crash
@@ -212,7 +212,7 @@ fn test_compute_tree_metrics_empty() {
 }
 
 #[test]
-fn test_compute_tree_metrics_performance() {
+fn compute_tree_metrics_performance() {
     use std::time::Instant;
 
     let mut index = MftIndex::new('C');

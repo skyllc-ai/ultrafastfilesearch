@@ -81,7 +81,7 @@ fn large_sample_rows() -> Vec<serde_json::Value> {
 // ===================================================================
 
 #[test]
-fn test_write_native_csv_uses_columns_without_legacy_footer() -> TestResult {
+fn write_native_csv_uses_columns_without_legacy_footer() -> TestResult {
     let path = temp_output_path("csv");
     let rows = sample_rows();
 
@@ -109,7 +109,7 @@ fn test_write_native_csv_uses_columns_without_legacy_footer() -> TestResult {
 }
 
 #[test]
-fn test_write_native_custom_file_appends_legacy_drive_footer() -> TestResult {
+fn write_native_custom_file_appends_legacy_drive_footer() -> TestResult {
     let path = temp_output_path("txt");
     let rows = sample_rows();
 
@@ -147,7 +147,7 @@ fn test_write_native_custom_file_appends_legacy_drive_footer() -> TestResult {
 }
 
 #[test]
-fn test_write_native_json_file_has_no_footer() -> TestResult {
+fn write_native_json_file_has_no_footer() -> TestResult {
     let path = temp_output_path("json");
     let rows = sample_rows();
 
@@ -180,7 +180,7 @@ fn test_write_native_json_file_has_no_footer() -> TestResult {
 // ===================================================================
 
 #[test]
-fn test_legacy_footer_includes_fast_scan_message_for_full_scan_pattern() -> TestResult {
+fn legacy_footer_includes_fast_scan_message_for_full_scan_pattern() -> TestResult {
     let path = temp_output_path("txt");
     let rows = sample_rows();
 
@@ -209,7 +209,7 @@ fn test_legacy_footer_includes_fast_scan_message_for_full_scan_pattern() -> Test
 }
 
 #[test]
-fn test_legacy_footer_includes_fast_scan_for_transformed_pattern() -> TestResult {
+fn legacy_footer_includes_fast_scan_for_transformed_pattern() -> TestResult {
     let path = temp_output_path("txt");
     let rows = sample_rows();
 
@@ -238,7 +238,7 @@ fn test_legacy_footer_includes_fast_scan_for_transformed_pattern() -> TestResult
 }
 
 #[test]
-fn test_legacy_footer_omits_fast_scan_for_real_regex_pattern() -> TestResult {
+fn legacy_footer_omits_fast_scan_for_real_regex_pattern() -> TestResult {
     let path = temp_output_path("txt");
     let rows = sample_rows();
 
@@ -267,7 +267,7 @@ fn test_legacy_footer_omits_fast_scan_for_real_regex_pattern() -> TestResult {
 }
 
 #[test]
-fn test_legacy_footer_omits_fast_scan_message_when_many_results() -> TestResult {
+fn legacy_footer_omits_fast_scan_message_when_many_results() -> TestResult {
     let path = temp_output_path("txt");
     let rows = large_sample_rows();
 

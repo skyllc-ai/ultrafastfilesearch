@@ -13,49 +13,49 @@ type TestResult = Result<(), Box<dyn core::error::Error>>;
 // ============================================================================
 
 #[test]
-fn test_classify_any() {
+fn classify_any() {
     assert!(matches!(classify_glob("*"), GlobKind::Any));
 }
 
 #[test]
-fn test_classify_exact() {
+fn classify_exact() {
     let kind = classify_glob("readme.txt");
     assert!(matches!(kind, GlobKind::Exact(val) if val == "readme.txt"));
 }
 
 #[test]
-fn test_classify_prefix() {
+fn classify_prefix() {
     let kind = classify_glob("foo*");
     assert!(matches!(kind, GlobKind::Prefix(val) if val == "foo"));
 }
 
 #[test]
-fn test_classify_suffix() {
+fn classify_suffix() {
     let kind = classify_glob("*bar");
     assert!(matches!(kind, GlobKind::Suffix(val) if val == "bar"));
 }
 
 #[test]
-fn test_classify_extension() {
+fn classify_extension() {
     let kind = classify_glob("*.txt");
     assert!(matches!(kind, GlobKind::Extension(val) if val == "txt"));
 }
 
 #[test]
-fn test_classify_extension_multi_part() {
+fn classify_extension_multi_part() {
     // *.tar.gz should be Suffix, not Extension (has multiple dots)
     let kind = classify_glob("*.tar.gz");
     assert!(matches!(kind, GlobKind::Suffix(val) if val == ".tar.gz"));
 }
 
 #[test]
-fn test_classify_contains() {
+fn classify_contains() {
     let kind = classify_glob("*needle*");
     assert!(matches!(kind, GlobKind::Contains(val) if val == "needle"));
 }
 
 #[test]
-fn test_classify_prefix_suffix() {
+fn classify_prefix_suffix() {
     let kind = classify_glob("foo*bar");
     assert!(
         matches!(kind, GlobKind::PrefixSuffix { prefix, suffix } if prefix == "foo" && suffix == "bar")
@@ -63,7 +63,7 @@ fn test_classify_prefix_suffix() {
 }
 
 #[test]
-fn test_classify_prefix_suffix_with_extension() {
+fn classify_prefix_suffix_with_extension() {
     let kind = classify_glob("foo*.txt");
     assert!(
         matches!(kind, GlobKind::PrefixSuffix { prefix, suffix } if prefix == "foo" && suffix == ".txt")
@@ -71,25 +71,25 @@ fn test_classify_prefix_suffix_with_extension() {
 }
 
 #[test]
-fn test_classify_complex_question_mark() {
+fn classify_complex_question_mark() {
     let kind = classify_glob("file?.txt");
     assert!(matches!(kind, GlobKind::Complex(_)));
 }
 
 #[test]
-fn test_classify_complex_bracket() {
+fn classify_complex_bracket() {
     let kind = classify_glob("[abc]*");
     assert!(matches!(kind, GlobKind::Complex(_)));
 }
 
 #[test]
-fn test_classify_complex_double_star() {
+fn classify_complex_double_star() {
     let kind = classify_glob("**/*.rs");
     assert!(matches!(kind, GlobKind::Complex(_)));
 }
 
 #[test]
-fn test_classify_complex_multiple_stars() {
+fn classify_complex_multiple_stars() {
     let kind = classify_glob("a*b*c");
     assert!(matches!(kind, GlobKind::Complex(_)));
 }
@@ -99,7 +99,7 @@ fn test_classify_complex_multiple_stars() {
 // ============================================================================
 
 #[test]
-fn test_compile_literal() -> TestResult {
+fn compile_literal() -> TestResult {
     let parsed = ParsedPattern::parse("readme")?;
     let compiled = compile_pattern(&parsed)?;
     assert!(matches!(compiled, CompiledPattern::Contains(val) if val == "readme"));
@@ -107,7 +107,7 @@ fn test_compile_literal() -> TestResult {
 }
 
 #[test]
-fn test_compile_glob_any() -> TestResult {
+fn compile_glob_any() -> TestResult {
     let parsed = ParsedPattern::parse("*")?;
     let compiled = compile_pattern(&parsed)?;
     assert!(matches!(compiled, CompiledPattern::Any));
@@ -115,7 +115,7 @@ fn test_compile_glob_any() -> TestResult {
 }
 
 #[test]
-fn test_compile_glob_prefix() -> TestResult {
+fn compile_glob_prefix() -> TestResult {
     let parsed = ParsedPattern::parse("foo*")?;
     let compiled = compile_pattern(&parsed)?;
     assert!(matches!(compiled, CompiledPattern::Prefix(val) if val == "foo"));
@@ -123,7 +123,7 @@ fn test_compile_glob_prefix() -> TestResult {
 }
 
 #[test]
-fn test_compile_glob_suffix() -> TestResult {
+fn compile_glob_suffix() -> TestResult {
     let parsed = ParsedPattern::parse("*bar")?;
     let compiled = compile_pattern(&parsed)?;
     assert!(matches!(compiled, CompiledPattern::Suffix(val) if val == "bar"));
@@ -131,7 +131,7 @@ fn test_compile_glob_suffix() -> TestResult {
 }
 
 #[test]
-fn test_compile_glob_extension() -> TestResult {
+fn compile_glob_extension() -> TestResult {
     let parsed = ParsedPattern::parse("*.txt")?;
     let compiled = compile_pattern(&parsed)?;
     // Extension becomes Suffix with the dot
@@ -140,7 +140,7 @@ fn test_compile_glob_extension() -> TestResult {
 }
 
 #[test]
-fn test_compile_glob_contains() -> TestResult {
+fn compile_glob_contains() -> TestResult {
     let parsed = ParsedPattern::parse("*needle*")?;
     let compiled = compile_pattern(&parsed)?;
     assert!(matches!(compiled, CompiledPattern::Contains(val) if val == "needle"));
@@ -148,7 +148,7 @@ fn test_compile_glob_contains() -> TestResult {
 }
 
 #[test]
-fn test_compile_glob_prefix_suffix() -> TestResult {
+fn compile_glob_prefix_suffix() -> TestResult {
     let parsed = ParsedPattern::parse("foo*bar")?;
     let compiled = compile_pattern(&parsed)?;
     assert!(
@@ -158,7 +158,7 @@ fn test_compile_glob_prefix_suffix() -> TestResult {
 }
 
 #[test]
-fn test_compile_glob_complex() -> TestResult {
+fn compile_glob_complex() -> TestResult {
     let parsed = ParsedPattern::parse("file?.txt")?;
     let compiled = compile_pattern(&parsed)?;
     assert!(matches!(compiled, CompiledPattern::Regex {
@@ -169,7 +169,7 @@ fn test_compile_glob_complex() -> TestResult {
 }
 
 #[test]
-fn test_compile_regex() -> TestResult {
+fn compile_regex() -> TestResult {
     let parsed = ParsedPattern::parse(r">.*\.log$")?;
     let compiled = compile_pattern(&parsed)?;
     assert!(matches!(compiled, CompiledPattern::Regex {
@@ -180,7 +180,7 @@ fn test_compile_regex() -> TestResult {
 }
 
 #[test]
-fn test_compile_exact_no_wildcards() -> TestResult {
+fn compile_exact_no_wildcards() -> TestResult {
     let parsed = ParsedPattern::parse("README.md")?;
     // This is detected as Literal by ParsedPattern, so becomes Contains
     let compiled = compile_pattern(&parsed)?;
@@ -193,7 +193,7 @@ fn test_compile_exact_no_wildcards() -> TestResult {
 // ============================================================================
 
 #[test]
-fn test_to_expr_any() {
+fn to_expr_any() {
     let pattern = CompiledPattern::Any;
     let expr = pattern.to_expr("name", true);
     // Should produce lit(true)
@@ -202,7 +202,7 @@ fn test_to_expr_any() {
 }
 
 #[test]
-fn test_to_expr_exact() {
+fn to_expr_exact() {
     let pattern = CompiledPattern::Exact("README.md".to_owned());
     let expr = pattern.to_expr("name", true);
     let expr_str = format!("{expr:?}");
@@ -214,7 +214,7 @@ fn test_to_expr_exact() {
 }
 
 #[test]
-fn test_to_expr_prefix() {
+fn to_expr_prefix() {
     let pattern = CompiledPattern::Prefix("foo".to_owned());
     let expr = pattern.to_expr("name", true);
     let expr_str = format!("{expr:?}");
@@ -225,7 +225,7 @@ fn test_to_expr_prefix() {
 }
 
 #[test]
-fn test_to_expr_suffix() {
+fn to_expr_suffix() {
     let pattern = CompiledPattern::Suffix(".txt".to_owned());
     let expr = pattern.to_expr("name", true);
     let expr_str = format!("{expr:?}");
@@ -236,7 +236,7 @@ fn test_to_expr_suffix() {
 }
 
 #[test]
-fn test_to_expr_contains() {
+fn to_expr_contains() {
     let pattern = CompiledPattern::Contains("needle".to_owned());
     let expr = pattern.to_expr("name", true);
     let expr_str = format!("{expr:?}");
@@ -247,7 +247,7 @@ fn test_to_expr_contains() {
 }
 
 #[test]
-fn test_to_expr_prefix_suffix() {
+fn to_expr_prefix_suffix() {
     let pattern = CompiledPattern::PrefixSuffix {
         prefix: "foo".to_owned(),
         suffix: "bar".to_owned(),
@@ -261,7 +261,7 @@ fn test_to_expr_prefix_suffix() {
 }
 
 #[test]
-fn test_to_expr_exact_set() {
+fn to_expr_exact_set() {
     let pattern = CompiledPattern::ExactSet(vec!["README.md".to_owned(), "LICENSE".to_owned()]);
     let expr = pattern.to_expr("name", true);
     let expr_str = format!("{expr:?}");
@@ -272,7 +272,7 @@ fn test_to_expr_exact_set() {
 }
 
 #[test]
-fn test_to_expr_contains_any() {
+fn to_expr_contains_any() {
     let pattern = CompiledPattern::ContainsAny(vec!["foo".to_owned(), "bar".to_owned()]);
     let expr = pattern.to_expr("name", true);
     let expr_str = format!("{expr:?}");
@@ -283,7 +283,7 @@ fn test_to_expr_contains_any() {
 }
 
 #[test]
-fn test_to_expr_suffix_set() {
+fn to_expr_suffix_set() {
     let pattern = CompiledPattern::SuffixSet(vec![".txt".to_owned(), ".md".to_owned()]);
     let expr = pattern.to_expr("name", true);
     let expr_str = format!("{expr:?}");
@@ -294,7 +294,7 @@ fn test_to_expr_suffix_set() {
 }
 
 #[test]
-fn test_to_expr_regex() {
+fn to_expr_regex() {
     let pattern = CompiledPattern::Regex {
         pattern: r".*\.log$".to_owned(),
         anchored: false,
@@ -308,7 +308,7 @@ fn test_to_expr_regex() {
 }
 
 #[test]
-fn test_to_expr_case_insensitive() {
+fn to_expr_case_insensitive() {
     let pattern = CompiledPattern::Suffix(".TXT".to_owned());
     let expr = pattern.to_expr("name", false);
     let expr_str = format!("{expr:?}");
@@ -320,7 +320,7 @@ fn test_to_expr_case_insensitive() {
 }
 
 #[test]
-fn test_to_expr_suffix_set_empty() {
+fn to_expr_suffix_set_empty() {
     let pattern = CompiledPattern::SuffixSet(vec![]);
     let expr = pattern.to_expr("name", true);
     let expr_str = format!("{expr:?}");
@@ -336,7 +336,7 @@ fn test_to_expr_suffix_set_empty() {
 // ============================================================================
 
 #[test]
-fn test_suffix_case_insensitive_integration() -> TestResult {
+fn suffix_case_insensitive_integration() -> TestResult {
     use uffs_polars::{Column, DataFrame, IntoLazy as _};
 
     // Create test DataFrame with various filenames
@@ -368,7 +368,7 @@ fn test_suffix_case_insensitive_integration() -> TestResult {
 }
 
 #[test]
-fn test_suffix_case_sensitive_integration() -> TestResult {
+fn suffix_case_sensitive_integration() -> TestResult {
     use uffs_polars::{Column, DataFrame, IntoLazy as _};
 
     let input_names = vec![
@@ -400,7 +400,7 @@ fn test_suffix_case_sensitive_integration() -> TestResult {
 }
 
 #[test]
-fn test_dollar_prefix_files_matched() -> TestResult {
+fn dollar_prefix_files_matched() -> TestResult {
     use uffs_polars::{Column, DataFrame, IntoLazy as _};
 
     let input_names = vec![
@@ -444,7 +444,7 @@ fn test_dollar_prefix_files_matched() -> TestResult {
 }
 
 #[test]
-fn test_null_values_not_filtered() -> TestResult {
+fn null_values_not_filtered() -> TestResult {
     use uffs_polars::{Column, DataFrame, IntoLazy as _};
 
     // Create test DataFrame with null values

@@ -579,7 +579,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pipelined_reader_creation() {
+    fn pipelined_reader_creation() {
         // Expected chunk sizes must track `DriveType::optimal_chunk_size`
         // in `crates/uffs-mft/src/platform/system.rs`.  The previous
         // hardcoded `64 * 1024` was stale from an early prototype; the

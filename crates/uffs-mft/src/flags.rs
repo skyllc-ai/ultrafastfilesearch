@@ -150,14 +150,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_directory_flag() {
+    fn directory_flag() {
         let flags = FileFlags::DIRECTORY;
         assert!(flags.is_directory());
         assert!(!flags.is_file());
     }
 
     #[test]
-    fn test_combined_flags() {
+    fn combined_flags() {
         let flags = FileFlags::HIDDEN | FileFlags::SYSTEM | FileFlags::DIRECTORY;
         assert!(flags.is_directory());
         assert!(flags.is_hidden());
@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_flags() {
+    fn raw_flags() {
         assert_eq!(raw_flags::DIRECTORY, 0x0010);
         assert_eq!(raw_flags::HIDDEN, 0x0002);
     }

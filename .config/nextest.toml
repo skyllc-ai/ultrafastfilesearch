@@ -55,8 +55,9 @@ store-failure-output = true
 # Usage: cargo nextest run --profile pre-push-smoke --locked
 #
 # Selection is a denylist expressed in nextest's filterset language:
-#   - Exclude the validation suite (`test_validate_*`) — heavy integration,
-#     runs in the CI `ci` profile.
+#   - Exclude the validation suite (`validate_*`) — heavy integration,
+#     runs in the CI `ci` profile.  (Pre-2026-05 these were named
+#     `test_validate_*`; renamed workspace-wide for clippy::redundant_test_prefix.)
 #   - Exclude the entire `uffs-client` package — its shmem tests serialise
 #     globally via `threads-required = num-cpus` and would dominate wall-time.
 #   - Everything else: unit tests across all remaining crates.
@@ -79,7 +80,7 @@ status-level = "fail"
 final-status-level = "flaky"
 
 default-filter = """
-    not test(/^test_validate/)
+    not test(/^validate/)
   & not package(uffs-client)
 """
 
@@ -103,7 +104,7 @@ final-status-level = "all"
 # ---------------------------------------------------------------------------
 # Integration / validation tests are heavyweight (disk I/O, large DataFrames).
 [[profile.default.overrides]]
-filter = 'test(/^test_validate/)'
+filter = 'test(/^validate/)'
 threads-required = 2
 slow-timeout = { period = "300s", terminate-after = 2 }
 

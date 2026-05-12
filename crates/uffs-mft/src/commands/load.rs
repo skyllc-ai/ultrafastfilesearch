@@ -732,13 +732,13 @@ mod tests {
     use super::required_output_path;
 
     #[test]
-    fn test_required_output_path_accepts_validated_path() {
+    fn required_output_path_accepts_validated_path() {
         let path = Path::new("out.parquet");
         assert_eq!(required_output_path(Some(path)).ok(), Some(path));
     }
 
     #[test]
-    fn test_required_output_path_rejects_missing_output() {
+    fn required_output_path_rejects_missing_output() {
         let missing_output_error = required_output_path(None).err();
         assert!(matches!(
             missing_output_error,

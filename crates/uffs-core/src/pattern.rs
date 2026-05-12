@@ -190,7 +190,7 @@ mod tests {
     type TestResult = core::result::Result<(), Box<dyn core::error::Error>>;
 
     #[test]
-    fn test_simple_glob_pattern() -> TestResult {
+    fn simple_glob_pattern() -> TestResult {
         let parsed = ParsedPattern::parse("*.txt")?;
         assert_eq!(parsed.drive(), None);
         assert_eq!(parsed.pattern(), "*.txt");
@@ -199,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn test_drive_prefix_lowercase() -> TestResult {
+    fn drive_prefix_lowercase() -> TestResult {
         let parsed = ParsedPattern::parse("c:/pro*")?;
         assert_eq!(parsed.drive(), Some('C'));
         assert_eq!(parsed.pattern(), "/pro*");
@@ -208,7 +208,7 @@ mod tests {
     }
 
     #[test]
-    fn test_drive_prefix_uppercase() -> TestResult {
+    fn drive_prefix_uppercase() -> TestResult {
         let parsed = ParsedPattern::parse("D:\\Users\\*")?;
         assert_eq!(parsed.drive(), Some('D'));
         assert_eq!(parsed.pattern(), "\\Users\\*");
@@ -217,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_drive_with_leading_slash() -> TestResult {
+    fn no_drive_with_leading_slash() -> TestResult {
         let parsed = ParsedPattern::parse("/pro*.txt")?;
         assert_eq!(parsed.drive(), None);
         assert_eq!(parsed.pattern(), "/pro*.txt");
@@ -226,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn test_regex_pattern() -> TestResult {
+    fn regex_pattern() -> TestResult {
         let parsed = ParsedPattern::parse(r">C:\\Temp.*\.txt")?;
         assert_eq!(parsed.drive(), Some('C'));
         assert_eq!(parsed.pattern_type(), PatternType::Regex);
@@ -235,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn test_regex_pattern_with_quotes() -> TestResult {
+    fn regex_pattern_with_quotes() -> TestResult {
         let parsed = ParsedPattern::parse(r#">"C:\\Temp.*""#)?;
         assert_eq!(parsed.pattern_type(), PatternType::Regex);
         assert_eq!(parsed.drive(), Some('C'));
@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn test_literal_pattern() -> TestResult {
+    fn literal_pattern() -> TestResult {
         let parsed = ParsedPattern::parse("readme")?;
         assert_eq!(parsed.drive(), None);
         assert_eq!(parsed.pattern(), "readme");
@@ -252,19 +252,19 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_pattern_error() {
+    fn empty_pattern_error() {
         let result = ParsedPattern::parse("");
         result.unwrap_err();
     }
 
     #[test]
-    fn test_whitespace_only_error() {
+    fn whitespace_only_error() {
         let result = ParsedPattern::parse("   ");
         result.unwrap_err();
     }
 
     #[test]
-    fn test_to_regex_glob() -> TestResult {
+    fn to_regex_glob() -> TestResult {
         let parsed = ParsedPattern::parse("*.rs")?;
         let regex = parsed.to_regex()?;
         assert!(regex.starts_with('^'));
@@ -273,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn test_to_regex_literal() -> TestResult {
+    fn to_regex_literal() -> TestResult {
         let parsed = ParsedPattern::parse("main")?;
         let regex = parsed.to_regex()?;
         assert!(regex.contains("main"));
@@ -282,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn test_case_sensitivity() -> TestResult {
+    fn case_sensitivity() -> TestResult {
         let parsed = ParsedPattern::parse("*.txt")?.with_case_sensitive(true);
         assert!(parsed.is_case_sensitive());
 
@@ -292,14 +292,14 @@ mod tests {
     }
 
     #[test]
-    fn test_drive_override() -> TestResult {
+    fn drive_override() -> TestResult {
         let parsed = ParsedPattern::parse("*.txt")?.with_drive(Some('E'));
         assert_eq!(parsed.drive(), Some('E'));
         Ok(())
     }
 
     #[test]
-    fn test_double_star_glob() -> TestResult {
+    fn double_star_glob() -> TestResult {
         let parsed = ParsedPattern::parse("**\\Users\\**")?;
         assert_eq!(parsed.pattern_type(), PatternType::Glob);
         assert!(parsed.pattern().contains("**"));
@@ -307,14 +307,14 @@ mod tests {
     }
 
     #[test]
-    fn test_question_mark_glob() -> TestResult {
+    fn question_mark_glob() -> TestResult {
         let parsed = ParsedPattern::parse("file?.txt")?;
         assert_eq!(parsed.pattern_type(), PatternType::Glob);
         Ok(())
     }
 
     #[test]
-    fn test_bracket_glob() -> TestResult {
+    fn bracket_glob() -> TestResult {
         let parsed = ParsedPattern::parse("[abc].txt")?;
         assert_eq!(parsed.pattern_type(), PatternType::Glob);
         Ok(())
@@ -325,7 +325,7 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_backslash_path_detection() -> TestResult {
+    fn backslash_path_detection() -> TestResult {
         let parsed = ParsedPattern::parse("\\Users\\*")?;
         assert!(
             parsed.is_path_pattern(),
@@ -335,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn test_forward_slash_path_detection() -> TestResult {
+    fn forward_slash_path_detection() -> TestResult {
         let parsed = ParsedPattern::parse("Users/foo/*")?;
         assert!(
             parsed.is_path_pattern(),
@@ -345,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn test_literal_always_path_aware() -> TestResult {
+    fn literal_always_path_aware() -> TestResult {
         let parsed = ParsedPattern::parse("nice")?;
         assert_eq!(parsed.pattern_type(), PatternType::Literal);
         assert!(
@@ -356,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_glob_not_path_aware() -> TestResult {
+    fn simple_glob_not_path_aware() -> TestResult {
         let parsed = ParsedPattern::parse("*.txt")?;
         assert!(
             !parsed.is_path_pattern(),
@@ -366,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn test_glob_with_backslash_is_path_aware() -> TestResult {
+    fn glob_with_backslash_is_path_aware() -> TestResult {
         let parsed = ParsedPattern::parse("**\\Users\\**\\AppData\\**")?;
         assert!(
             parsed.is_path_pattern(),
@@ -376,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn test_leading_slash_not_path_aware() -> TestResult {
+    fn leading_slash_not_path_aware() -> TestResult {
         // Leading slash is a glob prefix, not a path separator between components
         let parsed = ParsedPattern::parse("/pro*")?;
         assert!(
@@ -387,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn test_drive_prefix_with_path() -> TestResult {
+    fn drive_prefix_with_path() -> TestResult {
         let parsed = ParsedPattern::parse("C:\\Windows\\*")?;
         assert_eq!(parsed.drive(), Some('C'));
         assert!(
@@ -398,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn test_regex_with_path_separators() -> TestResult {
+    fn regex_with_path_separators() -> TestResult {
         let parsed = ParsedPattern::parse(r">C:\\TemP.*\.txt")?;
         assert_eq!(parsed.pattern_type(), PatternType::Regex);
         assert!(
@@ -413,7 +413,7 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_forward_slash_normalized_in_path_pattern() -> TestResult {
+    fn forward_slash_normalized_in_path_pattern() -> TestResult {
         let parsed = ParsedPattern::parse("Users/foo/bar/*")?;
         assert!(
             parsed.pattern().contains('\\'),
@@ -427,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn test_forward_slash_not_normalized_in_non_path_glob() -> TestResult {
+    fn forward_slash_not_normalized_in_non_path_glob() -> TestResult {
         // /pro* has leading slash only — not path-aware, no normalization
         let parsed = ParsedPattern::parse("/pro*")?;
         assert_eq!(

@@ -71,7 +71,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_args_prints_top_level_help() {
+    fn no_args_prints_top_level_help() {
         assert_success("no_args_help", &[], &[
             "uffs - Ultra Fast File Search",
             "USAGE:",
@@ -79,7 +79,7 @@ mod tests {
     }
 
     #[test]
-    fn test_help_flag_prints_examples() {
+    fn help_flag_prints_examples() {
         assert_success("help_flag", &["--help"], &[
             "Search is the default action",
             "uffs '*.txt'",
@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn test_version_flag_prints_binary_version() {
+    fn version_flag_prints_binary_version() {
         assert_success("version_flag", &["--version"], &[
             "uffs",
             env!("CARGO_PKG_VERSION"),
@@ -104,7 +104,7 @@ mod tests {
     // Stats subcommand validation is still client-side.
 
     #[test]
-    fn test_stats_rejects_non_numeric_top() {
+    fn stats_rejects_non_numeric_top() {
         assert_failure(
             "stats_invalid_top",
             &["stats", "saved.parquet", "--top", "abc"],
@@ -118,7 +118,7 @@ mod tests {
     // We keep smoke tests that don't require a running daemon.
 
     #[test]
-    fn test_name_only_accepts_plain_literal() {
+    fn name_only_accepts_plain_literal() {
         // Should not error with "--name-only cannot be used with path
         // patterns". The command will fail because no daemon is running,
         // but the validation error should not appear.
@@ -136,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn test_name_only_accepts_glob_pattern() {
+    fn name_only_accepts_glob_pattern() {
         let output = run_cli("name_only_glob", &[
             "*.txt",
             "--name-only",
@@ -151,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn test_name_only_accepts_regex_with_backslash_escapes() {
+    fn name_only_accepts_regex_with_backslash_escapes() {
         let output = run_cli("name_only_regex", &[
             r">.*\.(jpg|png)",
             "--name-only",

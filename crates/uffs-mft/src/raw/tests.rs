@@ -8,7 +8,7 @@ use super::*;
 type TestResult = core::result::Result<(), Box<dyn core::error::Error>>;
 
 #[test]
-fn test_header_roundtrip() -> TestResult {
+fn header_roundtrip() -> TestResult {
     let header = RawMftHeader {
         version: VERSION,
         flags: FLAG_COMPRESSED,
@@ -35,7 +35,7 @@ fn test_header_roundtrip() -> TestResult {
 }
 
 #[test]
-fn test_header_invalid_magic() {
+fn header_invalid_magic() {
     let mut bytes = [0_u8; HEADER_SIZE];
     bytes[0..8].copy_from_slice(b"INVALID!");
 
@@ -48,7 +48,7 @@ fn test_header_invalid_magic() {
     clippy::indexing_slicing,
     reason = "test code with known valid indices"
 )]
-fn test_save_load_uncompressed() -> TestResult {
+fn save_load_uncompressed() -> TestResult {
     let temp_dir = std::env::temp_dir();
     let path = temp_dir.join("test_mft_uncompressed.raw");
 
@@ -87,7 +87,7 @@ fn test_save_load_uncompressed() -> TestResult {
 
 #[cfg(feature = "zstd")]
 #[test]
-fn test_save_load_compressed() -> TestResult {
+fn save_load_compressed() -> TestResult {
     let temp_dir = std::env::temp_dir();
     let path = temp_dir.join("test_mft_compressed.raw");
 
@@ -118,7 +118,7 @@ fn test_save_load_compressed() -> TestResult {
 }
 
 #[test]
-fn test_load_header_only() -> TestResult {
+fn load_header_only() -> TestResult {
     let temp_dir = std::env::temp_dir();
     let path = temp_dir.join("test_mft_header_only.raw");
 
@@ -147,7 +147,7 @@ fn test_load_header_only() -> TestResult {
     clippy::indexing_slicing,
     reason = "test code with known valid indices"
 )]
-fn test_iter_records() {
+fn iter_records() {
     let header = RawMftHeader {
         version: VERSION,
         flags: 0,
@@ -169,7 +169,7 @@ fn test_iter_records() {
 }
 
 #[test]
-fn test_volume_letter_preserved() -> TestResult {
+fn volume_letter_preserved() -> TestResult {
     let temp_dir = std::env::temp_dir();
     let path = temp_dir.join("test_mft_volume_letter.raw");
 
@@ -198,7 +198,7 @@ fn test_volume_letter_preserved() -> TestResult {
     clippy::indexing_slicing,
     reason = "test code with known valid indices"
 )]
-fn test_raw_compat_mode() -> TestResult {
+fn raw_compat_mode() -> TestResult {
     let temp_dir = std::env::temp_dir();
     let path = temp_dir.join("test_mft_raw_compat.raw");
 
@@ -238,7 +238,7 @@ fn test_raw_compat_mode() -> TestResult {
     clippy::indexing_slicing,
     reason = "test code with known valid indices"
 )]
-fn test_load_raw_ntfs_format() -> TestResult {
+fn load_raw_ntfs_format() -> TestResult {
     let temp_dir = std::env::temp_dir();
     let path = temp_dir.join("test_mft_raw_ntfs.raw");
 

@@ -509,6 +509,7 @@ std_instead_of_core = "deny"  # Use core when std not needed
 
 # ───── Testing hygiene ─────
 tests_outside_test_module = "deny" # Keep tests in test modules
+redundant_test_prefix = "deny"     # `fn test_foo` redundant inside `mod tests` — bare `fn foo`
 
 # ───── Unused / dead code ─────
 unused_async = "deny"       # Remove unused async
