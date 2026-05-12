@@ -578,7 +578,7 @@ L1 zigbuild) now ✅; §8 acceptance items all checked.
   into a red required check rather than the documented advisory
   warning.
 
-## [0.5.94] - 2026-05-08
+## [0.5.95] - 2026-05-08
 
 > **Note on the v0.5.91 gap.**  v0.5.91 was prepared and tagged but never
 > reached a published GitHub Release: the `release.yml` finalize step hit
@@ -587,7 +587,7 @@ L1 zigbuild) now ✅; §8 acceptance items all checked.
 > partial release was deleted, the tag name became permanently locked by
 > GitHub's *immutable releases* feature (the pre-receive hook refuses any
 > future ref creation under that name even after a clean delete).  The
-> public release sequence therefore jumps `v0.5.90 → v0.5.94`; all
+> public release sequence therefore jumps `v0.5.90 → v0.5.95`; all
 > intended v0.5.91 changes are rolled forward into this release.
 
 ### Fixed
