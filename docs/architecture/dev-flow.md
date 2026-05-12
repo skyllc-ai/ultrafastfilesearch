@@ -274,6 +274,59 @@ downloading the CodeQL CLI + the Rust extractor (~400 MB).  Not worth it
 — clippy (`--pedantic --nursery --cargo`) plus weekly miri covers ~80% of
 what CodeQL would catch for this codebase.  This gate stays where it is.
 
+### 4.6 GAP 6 — Transient infra failures had no recovery path (✅ CLOSED 2026-05-12)
+
+**Original evidence**: GitHub Actions' "Set up job" phase downloads
+every `uses: <action>@<sha>` tarball from `codeload.github.com`
+before any of our YAML steps run.  When `codeload.github.com` rate-
+limits the runner's IP (HTTP 429 / `Too Many Requests`), the runner
+exhausts its 3 built-in retries (with 10 s and 12 s exponential
+backoff) and then fails the entire job.  No per-step retry action
+(`nick-fields/retry@v3` or similar) can help — the failure happens
+*before* any step gets a chance to execute.
+
+Observed on PR #175 (zstd retire-vestige) and PR #174 (cargo-machete)
+on 2026-05-12: CodeQL's "Set up job" 429'd while downloading the
+`github/codeql-action` tarball; the analyse job died.  Same
+infrastructure issue could hit pr-fast.yml or tier-2.yml and would
+appear as a "real" CI failure, blocking merge until a maintainer
+manually clicked "Re-run failed jobs".
+
+**Resolution**: Two-layer hardening landed in this PR:
+
+- **Layer A** — `continue-on-error: true` on `codeql.yml::analyze`.
+  Codifies the workflow's own docstring (which already said *"the
+  check is NOT wired into branch protection"*) at the workflow-
+  engine level.  CodeQL job failures still show as ❌ in the PR's
+  check-runs panel, but the workflow conclusion is `success` so
+  branch protection / auto-merge are not affected.
+
+- **Layer B** — new `auto-rerun-transient.yml` watcher.  Triggers
+  on `workflow_run` completion of the three main workflows
+  (`PR Fast CI`, `🔍 CodeQL (Rust SAST)`, `🌙 UFFS Tier 2 Nightly
+  CI`).  For each completed run with `run_attempt < 2` (loop
+  prevention), it inspects the logs of every failed job; if any
+  log matches a transient-infra regex (`429` / `ECONNRESET` /
+  `EAI_AGAIN` / `runner has lost contact` / `No space left on
+  device` / etc.) it calls `POST /actions/runs/<id>/rerun-failed-
+  jobs` to re-execute exactly the failed jobs once.  Persistent
+  failures (real compile / test errors) do not match the regex and
+  stay red.
+
+**Bounded retry**: `run_attempt < 2` enforces *exactly one*
+auto-rerun per run.  If the rerun also fails with a transient
+signature, the second attempt (`run_attempt = 2`) is *not*
+re-retried — a human investigates.  Worst-case overhead: ~30 s per
+transient failure, single-digit per week.
+
+**Policy classification** added by this PR:
+
+| Job kind | Branch protection | Failure visibility | Auto-rerun? |
+|---|---|---|---|
+| Required (pr-fast.yml `required` aggregator) | blocks merge | red ❌ until fixed | yes if transient |
+| Advisory (`continue-on-error: true`) | does not block | red ❌ on job, ✅ workflow | yes if transient |
+| Tier 2 weekly | does not block PRs | `ci-failure-tier-2` issue auto-opened | yes if transient |
+
 ---
 
 ## 5. Known Bugs in the Current Flow
