@@ -1,6 +1,12 @@
 
 # cargo-vet audits file
 
+[[audits.assert_cmd]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-run"
+delta = "2.2.1 -> 2.2.2"
+notes = "Delta audit reviewed via cargo vet diff. Replaces the silent exemption bump from PR #166 (which was a supply-chain #[allow] — see docs/architecture/security/supply-chain-posture.md). Changes: (1) #[track_caller] attributes on assert/failure/success paths + replacement of `.unwrap_or_else(AssertError::panic)` chains with explicit `match` blocks so caller location is preserved through panic; (2) edition-2024 idiom updates (Self::Variant / Self {..}); (3) include-list path normalization in Cargo.toml (/build.rs etc.); (4) internal lints.clippy config tightening. No semantic changes to assertion logic, no new unsafe, no new network/FS access paths. assert_cmd is test-only (safe-to-run)."
+
 [[audits.colored]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -48,6 +54,12 @@ Delta audit (Apr 2026, v0.5.71):
   nightly-only cfg-gated feature flag addition; inert on stable toolchains.
   No runtime behavior change.
 - No unsafe additions, no API changes, no new ambient capabilities."""
+
+[[audits.tokio]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.52.2 -> 1.52.3"
+notes = "Delta audit reviewed via cargo vet diff. Replaces the silent exemption bump from PR #166 (which was a supply-chain #[allow]). Changes scoped to src/sync/mpsc/* and src/sync/rwlock.rs, implementing four documented upstream bug-fix PRs per tokio 1.52.3 release notes (May 2026): tokio#8062 fix mpsc len() underflow; tokio#8074 return TryRecvError::Empty from try_recv() when mpsc closed with outstanding permits; tokio#8075 notify receivers in mpsc OwnedPermit::release() by reusing non-owned Permit Drop impl; tokio#8076 reject RwLock::new max_readers==0 (prevents div-by-zero in semaphore fast path). Companion tests in tests/sync_mpsc.rs + tests/sync_rwlock.rs. No feature additions, no new unsafe, no public API signature changes."
 
 [[trusted.h2]]
 criteria = "safe-to-deploy"

@@ -147,7 +147,7 @@ version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.assert_cmd]]
-version = "2.2.2"
+version = "2.2.1"
 criteria = "safe-to-run"
 
 [[exemptions.async-channel]]
@@ -1179,7 +1179,7 @@ version = "1.11.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio]]
-version = "1.52.3"
+version = "1.52.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio-macros]]
