@@ -44,6 +44,6 @@ machete:
     #!/usr/bin/env bash
     printf "\033[0;34m🔪 Checking for unused dependencies...\033[0m\n"
     if ! command -v cargo-machete >/dev/null 2>&1; then printf "\033[1;33m⚠️  cargo-machete not installed. Run 'just setup' first.\033[0m\n"; exit 1; fi
-    cargo machete --skip-target-dir
+    cargo-machete --skip-target-dir
     printf "\033[0;32m✅ Dependency check complete!\033[0m\n"
 

@@ -553,7 +553,17 @@ jobs:
         # output is reproducible on both surfaces.  pr-fast bundles
         # into this `security` job (same `code_changed` predicate as
         # the deny + vet pair) to keep the job graph narrow.
-        run: cargo machete --skip-target-dir
+        #
+        # Invocation form: `cargo-machete` (direct binary) rather
+        # than `cargo machete` (cargo subcommand dispatch).  cargo
+        # 1.97-nightly + cargo-machete v0.9.1 interact badly when
+        # invoked via the cargo subcommand wrapper — cargo passes
+        # the subcommand name `machete` as argv[1], and cargo-
+        # machete's gumdrop CLI parser treats it as a positional
+        # path and stops parsing flags (so `--skip-target-dir` lands
+        # as a second path).  See `scripts/ci/gates.toml::machete`
+        # for the full reproduction notes.
+        run: cargo-machete --skip-target-dir
 
   # ─────────────────────────────────────────────────────────────────────
   # windows-lint — native Windows clippy gate on `windows-latest`.

@@ -224,7 +224,7 @@ if (( DEP_CHANGED )); then
     spawn_bg "vet" cargo vet check --locked
 fi
 spawn_bg "vet-audit-discipline" bash scripts/ci/check_vet_audit_discipline.sh pre-push
-spawn_bg "machete" cargo machete --skip-target-dir
+spawn_bg "machete" cargo-machete --skip-target-dir
 command -v typos >/dev/null 2>&1 && spawn_bg "typos" typos .
 command -v reuse >/dev/null 2>&1 && spawn_bg "reuse" reuse lint --quiet
 

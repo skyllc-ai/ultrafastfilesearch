@@ -518,7 +518,7 @@ the gate is hard on `main`.  pr-fast bundles this into the existing
 [[gate]]
 id = "machete"
 label = "cargo-machete unused-dep check"
-command = ["cargo", "machete", "--skip-target-dir"]
+command = ["cargo-machete", "--skip-target-dir"]
 tiers = ["pre-push", "pr-fast"]
 gate_when = "code_changed"
 hard = true
@@ -548,6 +548,22 @@ HARD-FAIL with install hint when missing (`cargo install
 cargo-machete` or `cargo binstall cargo-machete`; ~3 MB binary,
 sub-second build via binstall).  pr-fast bundles into the existing
 `security` job alongside `vet` + `deny` + `vet-audit-discipline`.
+
+Invocation form: `cargo-machete` (direct binary) rather than
+`cargo machete` (cargo subcommand dispatch).  Background: cargo
+1.97-nightly + cargo-machete v0.9.1 interact badly when invoked
+via the cargo subcommand wrapper — cargo passes the subcommand
+name `machete` as argv[1], and cargo-machete's gumdrop CLI parser
+treats that leading positional as a path and stops parsing flags
+(so `--skip-target-dir` lands as a second path).  The failure mode
+is silent under `cargo machete --skip-target-dir` in a developer
+terminal (works fine via shell PATH resolution) but reproduces in
+the git pre-push hook context, breaking `just ship-fresh` on the
+2026-05-12 release attempt of v0.5.95.  Direct binary invocation
+bypasses the cargo dispatch entirely — argv becomes
+`["cargo-machete", "--skip-target-dir"]` and `--skip-target-dir`
+is correctly recognised as a flag.  Both forms work in normal
+terminals; the direct form is the form that always works.
 """
 
 [[gate]]
