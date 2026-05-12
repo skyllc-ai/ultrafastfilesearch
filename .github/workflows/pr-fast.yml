@@ -501,6 +501,13 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # The audit-discipline step below needs the merge-base with
+          # the PR target branch to compute the diff range; the
+          # default shallow checkout (depth=1) drops that history.
+          # Full history is cheap on UFFS (~5 MB) and future-proofs
+          # other security-adjacent work (CodeQL, supply-chain
+          # forensics) that needs commit ancestry.
+          fetch-depth: 0
 
       - run: rustup show
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -517,6 +524,18 @@ jobs:
 
       - name: cargo vet check --locked
         run: cargo vet check --locked
+
+      - name: cargo-vet audit-discipline (no lazy exemption bumps)
+        # Layer 1 + Layer 4 of the four-layer audit-discipline policy
+        # documented in `docs/architecture/security/supply-chain-posture.md`
+        # §"Mandating audits over blanket bumps".  Hard-fails any PR
+        # whose diff bumps a `[[exemptions.<crate>]]` version without
+        # both (A) a matching delta audit in `supply-chain/audits.toml`
+        # AND (B) a `Vet-Reviewed-Diff:` commit trailer in the same
+        # range.  Cheap (~1 s, pure-bash parser).  No `--locked`-style
+        # bypass: CI is hard on `main`.
+        if: needs.classify.outputs.dep == 'true'
+        run: bash scripts/ci/check_vet_audit_discipline.sh ci
 
   # ─────────────────────────────────────────────────────────────────────
   # windows-lint — native Windows clippy gate on `windows-latest`.

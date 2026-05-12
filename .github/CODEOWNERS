@@ -24,3 +24,11 @@ LICENSE                             @githubrobbi
 Cargo.toml                          @githubrobbi
 Cargo.lock                          @githubrobbi
 justfile                            @githubrobbi
+
+# Supply-chain ledger — cargo-vet audits, exemptions, imports.
+# Layer 3 of the four-layer audit-discipline policy (see
+# docs/architecture/security/supply-chain-posture.md §"Mandating
+# audits over blanket bumps").  Every PR touching this directory
+# requires explicit @githubrobbi review, regardless of which other
+# CODEOWNERS line it matches.
+supply-chain/                       @githubrobbi
