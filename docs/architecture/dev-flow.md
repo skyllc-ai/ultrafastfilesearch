@@ -163,6 +163,7 @@ and `.github/workflows/tier-2.yml` (all as of commit `185ed8825`).
 | `cargo udeps` | — | — | — | ✅ |
 | `cargo hack --each-feature` (feature matrix) | — | — | — | ✅ |
 | `miri` (UB check) | — | — | — | ✅ (4 tests) |
+| `cargo mutants` (test-quality, advisory) | — | — | — | ✅ (`uffs-security`, ~198 mutations) |
 | cargo-vet imports refresh | — | — | — | weekly PR |
 
 **Key**: ✅ = gate runs here; — = not in this tier; **❌ bold** = gap where
