@@ -25,7 +25,7 @@ fn create_test_df() -> Result<DataFrame, uffs_polars::PolarsError> {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn test_resolve_path() -> TestResult {
+fn resolve_path() -> TestResult {
     let df = create_test_df()?;
     let mut resolver = PathResolver::build(&df, 'C')?;
 
@@ -35,7 +35,7 @@ fn test_resolve_path() -> TestResult {
 }
 
 #[test]
-fn test_path_caching() -> TestResult {
+fn path_caching() -> TestResult {
     let df = create_test_df()?;
     let mut resolver = PathResolver::build(&df, 'C')?;
 
@@ -53,7 +53,7 @@ fn test_path_caching() -> TestResult {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn test_fast_resolve_path() -> TestResult {
+fn fast_resolve_path() -> TestResult {
     let df = create_test_df()?;
     let resolver = FastPathResolver::build(&df, 'C')?;
 
@@ -63,7 +63,7 @@ fn test_fast_resolve_path() -> TestResult {
 }
 
 #[test]
-fn test_fast_resolve_root() -> TestResult {
+fn fast_resolve_root() -> TestResult {
     let df = create_test_df()?;
     let resolver = FastPathResolver::build(&df, 'C')?;
 
@@ -74,7 +74,7 @@ fn test_fast_resolve_root() -> TestResult {
 }
 
 #[test]
-fn test_fast_resolve_cached() -> TestResult {
+fn fast_resolve_cached() -> TestResult {
     let df = create_test_df()?;
     let mut resolver = FastPathResolver::build(&df, 'C')?;
 
@@ -93,7 +93,7 @@ fn test_fast_resolve_cached() -> TestResult {
 }
 
 #[test]
-fn test_fast_resolve_missing_frs() -> TestResult {
+fn fast_resolve_missing_frs() -> TestResult {
     let df = create_test_df()?;
     let resolver = FastPathResolver::build(&df, 'C')?;
 
@@ -104,7 +104,7 @@ fn test_fast_resolve_missing_frs() -> TestResult {
 }
 
 #[test]
-fn test_fast_add_path_column() -> TestResult {
+fn fast_add_path_column() -> TestResult {
     let df = create_test_df()?;
     let mut resolver = FastPathResolver::build(&df, 'C')?;
 
@@ -120,7 +120,7 @@ fn test_fast_add_path_column() -> TestResult {
 }
 
 #[test]
-fn test_fast_resolver_stats() -> TestResult {
+fn fast_resolver_stats() -> TestResult {
     let df = create_test_df()?;
     let resolver = FastPathResolver::build(&df, 'C')?;
 
@@ -136,7 +136,7 @@ fn test_fast_resolver_stats() -> TestResult {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn test_name_arena() {
+fn name_arena() {
     let mut arena = NameArena::with_capacity(100);
 
     let (off1, len1) = arena.add("hello");
@@ -148,7 +148,7 @@ fn test_name_arena() {
 }
 
 #[test]
-fn test_name_arena_empty() {
+fn name_arena_empty() {
     let arena = NameArena::with_capacity(100);
     assert!(arena.is_empty());
     assert_eq!(arena.len(), 0);
@@ -159,7 +159,7 @@ fn test_name_arena_empty() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn test_fast_add_path_column_parallel() -> TestResult {
+fn fast_add_path_column_parallel() -> TestResult {
     let df = create_test_df()?;
     let resolver = FastPathResolver::build(&df, 'C')?;
 
@@ -178,7 +178,7 @@ fn test_fast_add_path_column_parallel() -> TestResult {
 }
 
 #[test]
-fn test_fast_add_path_column_auto() -> TestResult {
+fn fast_add_path_column_auto() -> TestResult {
     let df = create_test_df()?;
     let mut resolver = FastPathResolver::build(&df, 'C')?;
 
@@ -194,7 +194,7 @@ fn test_fast_add_path_column_auto() -> TestResult {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn test_add_path_only_column() -> TestResult {
+fn add_path_only_column_works() -> TestResult {
     // Create a DataFrame with path column
     let df = DataFrame::new_infer_height(vec![Column::new("path".into(), &[
         "G:\\",

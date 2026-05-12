@@ -29,14 +29,14 @@ fn write_i64_le(buffer: &mut [u8], offset: usize, value: i64) {
 // zero-dep `uffs-time` crate.  See `crates/uffs-time/src/lib.rs::tests`.
 
 #[test]
-fn test_file_reference_extraction() {
+fn file_reference_extraction() {
     let file_ref: u64 = (7_u64 << 48) | 0x3039;
     assert_eq!(file_reference_to_frs(file_ref), 12345);
     assert_eq!(file_reference_to_sequence(file_ref), 7);
 }
 
 #[test]
-fn test_attribute_type_from_u32() {
+fn attribute_type_from_u32() {
     assert_eq!(
         AttributeType::from_u32(0x10),
         Some(AttributeType::StandardInformation)
@@ -51,7 +51,7 @@ fn test_attribute_type_from_u32() {
 }
 
 #[test]
-fn test_file_record_flags() {
+fn file_record_flags() {
     let header = FileRecordSegmentHeader {
         multi_sector_header: MultiSectorHeader {
             magic: FILE_RECORD_MAGIC,
@@ -77,7 +77,7 @@ fn test_file_record_flags() {
 }
 
 #[test]
-fn test_fixup_file_record_applies_usa_from_safe_header_decode() {
+fn fixup_file_record_applies_usa_from_safe_header_decode() {
     let mut record = vec![0_u8; 1024];
     let usa_offset = 0x30;
     let check_value = 0xABCD;
@@ -105,7 +105,7 @@ fn test_fixup_file_record_applies_usa_from_safe_header_decode() {
 }
 
 #[test]
-fn test_attribute_iterator_reads_resident_attribute_value() {
+fn attribute_iterator_reads_resident_attribute_value() {
     let mut record = vec![0_u8; 96];
     let record_len = crate::len_to_u32(record.len());
     let first_attribute_offset = size_of::<FileRecordSegmentHeader>();
@@ -151,7 +151,7 @@ fn test_attribute_iterator_reads_resident_attribute_value() {
 }
 
 #[test]
-fn test_non_resident_attribute_helpers_decode_mapping_pairs() {
+fn non_resident_attribute_helpers_decode_mapping_pairs() {
     let mut attr =
         vec![0_u8; size_of::<AttributeRecordHeader>() + size_of::<NonResidentAttributeData>() + 4];
     let attr_len = crate::len_to_u32(attr.len());

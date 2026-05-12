@@ -115,14 +115,14 @@ fn build_index_query_fixture() -> Result<MftIndex, TestError> {
 }
 
 #[test]
-fn test_pattern_any() {
+fn pattern_any() {
     let pattern = compile_index_pattern("*").unwrap();
     assert!(pattern.matches("anything", true, fold()));
     assert!(pattern.matches("", true, fold()));
 }
 
 #[test]
-fn test_pattern_exact() {
+fn pattern_exact() {
     let pattern = compile_index_pattern("foo.txt").unwrap();
     assert!(pattern.matches("foo.txt", true, fold()));
     assert!(!pattern.matches("FOO.TXT", true, fold()));
@@ -131,7 +131,7 @@ fn test_pattern_exact() {
 }
 
 #[test]
-fn test_pattern_prefix() {
+fn pattern_prefix() {
     let pattern = compile_index_pattern("foo*").unwrap();
     assert!(pattern.matches("foo", true, fold()));
     assert!(pattern.matches("foobar", true, fold()));
@@ -140,7 +140,7 @@ fn test_pattern_prefix() {
 }
 
 #[test]
-fn test_pattern_suffix() {
+fn pattern_suffix() {
     let pattern = compile_index_pattern("*.txt").unwrap();
     assert!(pattern.matches("foo.txt", true, fold()));
     assert!(pattern.matches(".txt", true, fold()));
@@ -149,7 +149,7 @@ fn test_pattern_suffix() {
 }
 
 #[test]
-fn test_pattern_contains() {
+fn pattern_contains() {
     let pattern = compile_index_pattern("*needle*").unwrap();
     assert!(pattern.matches("needle", true, fold()));
     assert!(pattern.matches("haystackneedlehaystack", true, fold()));
@@ -158,7 +158,7 @@ fn test_pattern_contains() {
 }
 
 #[test]
-fn test_pattern_prefix_suffix() {
+fn pattern_prefix_suffix() {
     let pattern = compile_index_pattern("foo*bar").unwrap();
     assert!(pattern.matches("foobar", true, fold()));
     assert!(pattern.matches("foo123bar", true, fold()));
@@ -167,7 +167,7 @@ fn test_pattern_prefix_suffix() {
 }
 
 #[test]
-fn test_extensions() {
+fn extensions() {
     let pattern = compile_extensions(&["rs", "toml"]);
     assert!(pattern.matches("main.rs", true, fold()));
     assert!(pattern.matches("Cargo.toml", true, fold()));
@@ -176,7 +176,7 @@ fn test_extensions() {
 }
 
 #[test]
-fn test_extension_index_integration() {
+fn extension_index_integration() {
     let mut index = MftIndex::new('C');
     let root_name_offset = index.add_name(".");
     let root = index.get_or_create(ROOT_FRS);
@@ -226,7 +226,7 @@ fn test_extension_index_integration() {
 }
 
 #[test]
-fn test_index_query_count_applies_record_filters() -> TestResult {
+fn index_query_count_applies_record_filters() -> TestResult {
     let index = build_index_query_fixture()?;
 
     assert_eq!(
@@ -239,7 +239,7 @@ fn test_index_query_count_applies_record_filters() -> TestResult {
 }
 
 #[test]
-fn test_index_query_collect_respects_name_and_stream_expansion_toggles() -> TestResult {
+fn index_query_collect_respects_name_and_stream_expansion_toggles() -> TestResult {
     let index = build_index_query_fixture()?;
 
     let expanded = IndexQuery::new(&index)
@@ -316,7 +316,7 @@ fn test_index_query_collect_respects_name_and_stream_expansion_toggles() -> Test
 }
 
 #[test]
-fn test_index_query_collect_resolves_paths_for_hard_links_and_ads() -> TestResult {
+fn index_query_collect_resolves_paths_for_hard_links_and_ads() -> TestResult {
     let index = build_index_query_fixture()?;
 
     let results = IndexQuery::new(&index)
@@ -339,7 +339,7 @@ fn test_index_query_collect_resolves_paths_for_hard_links_and_ads() -> TestResul
 }
 
 #[test]
-fn test_index_query_collect_any_pattern_matches_full_scan_results() -> TestResult {
+fn index_query_collect_any_pattern_matches_full_scan_results() -> TestResult {
     let index = build_index_query_fixture()?;
 
     let mut no_pattern: Vec<_> = IndexQuery::new(&index)
@@ -365,7 +365,7 @@ fn test_index_query_collect_any_pattern_matches_full_scan_results() -> TestResul
 }
 
 #[test]
-fn test_query_mode_from_str() {
+fn query_mode_from_str() {
     assert_eq!(QueryMode::from_str_opt("auto"), Some(QueryMode::Auto));
     assert_eq!(QueryMode::from_str_opt("hybrid"), Some(QueryMode::Auto));
     assert_eq!(
@@ -389,14 +389,14 @@ fn test_query_mode_from_str() {
 }
 
 #[test]
-fn test_query_mode_display() {
+fn query_mode_display() {
     assert_eq!(QueryMode::Auto.to_string(), "auto");
     assert_eq!(QueryMode::ForceIndex.to_string(), "index");
     assert_eq!(QueryMode::ForceDataFrame.to_string(), "dataframe");
 }
 
 #[test]
-fn test_query_features_requires_dataframe() {
+fn query_features_requires_dataframe() {
     let empty = QueryFeatures::empty();
     assert!(!empty.requires_dataframe());
 
@@ -418,7 +418,7 @@ fn test_query_features_requires_dataframe() {
 }
 
 #[test]
-fn test_analyze_pattern_complexity() {
+fn analyze_pattern_complexity_works() {
     let any = compile_index_pattern("*").unwrap();
     assert_eq!(analyze_pattern_complexity(&any), QueryComplexity::Simple);
 
@@ -437,7 +437,7 @@ fn test_analyze_pattern_complexity() {
 // =========================================================================
 
 #[test]
-fn test_or_first_match() {
+fn or_first_match() {
     let parsed = crate::pattern::ParsedPattern::parse("*.txt|*.log").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
     assert!(
@@ -447,7 +447,7 @@ fn test_or_first_match() {
 }
 
 #[test]
-fn test_or_second_match() {
+fn or_second_match() {
     let parsed = crate::pattern::ParsedPattern::parse("*.txt|*.log").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
     assert!(
@@ -457,7 +457,7 @@ fn test_or_second_match() {
 }
 
 #[test]
-fn test_or_no_match() {
+fn or_no_match() {
     let parsed = crate::pattern::ParsedPattern::parse("*.txt|*.log").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
     assert!(
@@ -467,7 +467,7 @@ fn test_or_no_match() {
 }
 
 #[test]
-fn test_or_both_match() {
+fn or_both_match() {
     let parsed = crate::pattern::ParsedPattern::parse("foo*|*bar").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
     assert!(
@@ -477,7 +477,7 @@ fn test_or_both_match() {
 }
 
 #[test]
-fn test_or_multi_alternatives() {
+fn or_multi_alternatives() {
     let parsed = crate::pattern::ParsedPattern::parse("nice|cool|awesome").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
     assert!(
@@ -491,7 +491,7 @@ fn test_or_multi_alternatives() {
 }
 
 #[test]
-fn test_or_pattern_is_simple_complexity() {
+fn or_pattern_is_simple_complexity() {
     let parsed = crate::pattern::ParsedPattern::parse("*.txt|*.log").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
     assert_eq!(
@@ -505,7 +505,7 @@ fn test_or_pattern_is_simple_complexity() {
 // =========================================================================
 
 #[test]
-fn test_case_insensitive_default() {
+fn case_insensitive_default() {
     let pattern = compile_index_pattern("nice").unwrap();
     assert!(
         pattern.matches("Nice", false, fold()),
@@ -514,7 +514,7 @@ fn test_case_insensitive_default() {
 }
 
 #[test]
-fn test_case_insensitive_upper() {
+fn case_insensitive_upper() {
     let pattern = compile_index_pattern("nice").unwrap();
     assert!(
         pattern.matches("NICE", false, fold()),
@@ -523,7 +523,7 @@ fn test_case_insensitive_upper() {
 }
 
 #[test]
-fn test_case_sensitive_mismatch() {
+fn case_sensitive_mismatch() {
     let pattern = compile_index_pattern("nice").unwrap();
     assert!(
         !pattern.matches("Nice", true, fold()),
@@ -532,7 +532,7 @@ fn test_case_sensitive_mismatch() {
 }
 
 #[test]
-fn test_case_sensitive_exact() {
+fn case_sensitive_exact() {
     let pattern = compile_index_pattern("nice").unwrap();
     assert!(
         pattern.matches("nice", true, fold()),
@@ -541,7 +541,7 @@ fn test_case_sensitive_exact() {
 }
 
 #[test]
-fn test_case_insensitive_glob_suffix() {
+fn case_insensitive_glob_suffix() {
     let pattern = compile_index_pattern("*.TXT").unwrap();
     assert!(
         pattern.matches("file.txt", false, fold()),
@@ -550,7 +550,7 @@ fn test_case_insensitive_glob_suffix() {
 }
 
 #[test]
-fn test_case_sensitive_glob_suffix() {
+fn case_sensitive_glob_suffix() {
     let pattern = compile_index_pattern("*.TXT").unwrap();
     assert!(
         !pattern.matches("file.txt", true, fold()),
@@ -563,7 +563,7 @@ fn test_case_sensitive_glob_suffix() {
 // =========================================================================
 
 #[test]
-fn test_literal_substring_match() {
+fn literal_substring_match() {
     // Literal patterns go through compile_parsed_pattern which converts to Contains
     let parsed = crate::pattern::ParsedPattern::parse("nice").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
@@ -582,7 +582,7 @@ fn test_literal_substring_match() {
 }
 
 #[test]
-fn test_literal_no_substring_match() {
+fn literal_no_substring_match() {
     let parsed = crate::pattern::ParsedPattern::parse("nice").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
     assert!(
@@ -596,7 +596,7 @@ fn test_literal_no_substring_match() {
 // =========================================================================
 
 #[test]
-fn test_any_matches_everything() {
+fn any_matches_everything() {
     let pattern = compile_index_pattern("*").unwrap();
     assert!(pattern.matches("anything.txt", false, fold()));
     assert!(pattern.matches("", false, fold()));
@@ -604,7 +604,7 @@ fn test_any_matches_everything() {
 }
 
 #[test]
-fn test_prefix_match() {
+fn prefix_match() {
     let pattern = compile_index_pattern("foo*").unwrap();
     assert!(pattern.matches("foobar", false, fold()));
     assert!(pattern.matches("FOO", false, fold()));
@@ -612,7 +612,7 @@ fn test_prefix_match() {
 }
 
 #[test]
-fn test_suffix_match() {
+fn suffix_match() {
     let pattern = compile_index_pattern("*.rs").unwrap();
     assert!(pattern.matches("main.rs", false, fold()));
     assert!(pattern.matches("MAIN.RS", false, fold()));
@@ -620,7 +620,7 @@ fn test_suffix_match() {
 }
 
 #[test]
-fn test_contains_match() {
+fn contains_match() {
     let pattern = compile_index_pattern("*needle*").unwrap();
     assert!(pattern.matches("hayneedlehay", false, fold()));
     assert!(pattern.matches("NEEDLE", false, fold()));
@@ -628,7 +628,7 @@ fn test_contains_match() {
 }
 
 #[test]
-fn test_regex_match() {
+fn regex_match() {
     let parsed = crate::pattern::ParsedPattern::parse(r">file\d+\.txt").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
     assert!(pattern.matches("file123.txt", false, fold()));
@@ -644,7 +644,7 @@ fn test_regex_match() {
 // =========================================================================
 
 #[test]
-fn test_regex_rejects_extension_appearing_mid_filename() {
+fn regex_rejects_extension_appearing_mid_filename() {
     // "icon.png.vir" should NOT match — the file ends with .vir, not .png
     let parsed = crate::pattern::ParsedPattern::parse(r">.*\.(jpg|png|heic)").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
@@ -655,7 +655,7 @@ fn test_regex_rejects_extension_appearing_mid_filename() {
 }
 
 #[test]
-fn test_regex_rejects_ads_entries() {
+fn regex_rejects_ads_entries() {
     // ADS entries like "photo.png:com.dropbox.attrs" should NOT match
     let parsed = crate::pattern::ParsedPattern::parse(r">.*\.(jpg|png|heic)").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
@@ -666,7 +666,7 @@ fn test_regex_rejects_ads_entries() {
 }
 
 #[test]
-fn test_regex_matches_correct_extensions() {
+fn regex_matches_correct_extensions() {
     let parsed = crate::pattern::ParsedPattern::parse(r">.*\.(jpg|png|heic)").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
 
@@ -681,7 +681,7 @@ fn test_regex_matches_correct_extensions() {
 }
 
 #[test]
-fn test_regex_with_explicit_dollar_anchor_not_doubled() {
+fn regex_with_explicit_dollar_anchor_not_doubled() {
     // If the user already wrote $, we should not double it
     let parsed = crate::pattern::ParsedPattern::parse(r">.*\.txt$").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
@@ -691,7 +691,7 @@ fn test_regex_with_explicit_dollar_anchor_not_doubled() {
 }
 
 #[test]
-fn test_regex_single_extension() {
+fn regex_single_extension() {
     let parsed = crate::pattern::ParsedPattern::parse(r">.*\.txt").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
 
@@ -702,7 +702,7 @@ fn test_regex_single_extension() {
 }
 
 #[test]
-fn test_regex_path_prefix_with_extension() {
+fn regex_path_prefix_with_extension() {
     // Regex with path prefix: only match .jpg files under C:\Users
     let parsed = crate::pattern::ParsedPattern::parse(r">C:\\Users\\.*\.(jpg|png|heic)").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
@@ -720,7 +720,7 @@ fn test_regex_path_prefix_with_extension() {
 }
 
 #[test]
-fn test_regex_digit_pattern_still_anchored() {
+fn regex_digit_pattern_still_anchored() {
     // Non-extension regex should also be end-anchored
     let parsed = crate::pattern::ParsedPattern::parse(r">file\d+\.txt").unwrap();
     let pattern = compile_parsed_pattern(&parsed).unwrap();
@@ -731,7 +731,7 @@ fn test_regex_digit_pattern_still_anchored() {
 }
 
 #[test]
-fn test_invalid_regex_returns_error() {
+fn invalid_regex_returns_error() {
     let parsed = crate::pattern::ParsedPattern::parse(">[invalid(regex");
     assert!(
         parsed.is_ok(),

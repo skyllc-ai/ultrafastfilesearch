@@ -235,7 +235,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extent_map_contiguous() {
+    fn extent_map_contiguous() {
         let map = MftExtentMap::contiguous(100, 1024 * 1024, 4096, 1024);
 
         assert_eq!(map.physical_offset(0), Some(409_600));
@@ -244,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extent_map_fragmented() {
+    fn extent_map_fragmented() {
         let extents = vec![
             MftExtent {
                 vcn: 0,

@@ -179,7 +179,7 @@ mod unix_tests {
     /// D2/D3 integration tests — all run against one daemon instance.
     #[test]
     #[ignore = "requires pre-built daemon binary — run with --ignored"]
-    fn test_daemon_ipc_all_methods() {
+    fn daemon_ipc_all_methods() {
         let exe = daemon_exe();
         let Some(mut daemon) = start_daemon(&exe, &[]) else {
             return;
@@ -281,7 +281,7 @@ mod unix_tests {
     /// search.
     #[test]
     #[ignore = "requires pre-built daemon binary — run with --ignored"]
-    fn test_real_data_search() {
+    fn real_data_search() {
         let exe = daemon_exe();
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -372,7 +372,7 @@ mod unix_tests {
     /// D3.5.4: Benchmark — measure client round-trip latency (target <15ms).
     #[test]
     #[ignore = "requires pre-built daemon binary — run with --ignored"]
-    fn test_benchmark_round_trip_latency() {
+    fn benchmark_round_trip_latency() {
         let exe = daemon_exe();
         let Some(mut daemon) = start_daemon(&exe, &[]) else {
             return;
@@ -433,7 +433,7 @@ mod unix_tests {
     /// D2.7.4: Concurrent clients — 3 connections, interleaved queries.
     #[test]
     #[ignore = "requires pre-built daemon binary — run with --ignored"]
-    fn test_concurrent_clients() {
+    fn concurrent_clients() {
         let exe = daemon_exe();
         let Some(mut daemon) = start_daemon(&exe, &[]) else {
             return;

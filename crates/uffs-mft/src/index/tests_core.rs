@@ -8,7 +8,7 @@ use core::mem::size_of;
 use super::*;
 
 #[test]
-fn test_standard_info_flags() {
+fn standard_info_flags() {
     let mut info = StandardInfo::default();
     assert!(!info.is_directory());
 
@@ -20,7 +20,7 @@ fn test_standard_info_flags() {
 }
 
 #[test]
-fn test_file_record_size() {
+fn file_record_size() {
     // Verify compact size - should be reasonably compact (<= 240 bytes)
     // Version 4 added: sequence_number (2), namespace (1), reserved (1),
     // fn_created/modified/accessed/mft_changed (4 × 8 = 32) = 36 bytes extra
@@ -36,7 +36,7 @@ fn test_file_record_size() {
 }
 
 #[test]
-fn test_index_basic_operations() {
+fn index_basic_operations() {
     let mut index = MftIndex::new('C');
 
     // Add a record
@@ -53,13 +53,13 @@ fn test_index_basic_operations() {
 }
 
 #[test]
-fn test_index_name_ref_size() {
+fn index_name_ref_size() {
     // Verify IndexNameRef is exactly 8 bytes (no padding)
     assert_eq!(size_of::<IndexNameRef>(), 8);
 }
 
 #[test]
-fn test_index_name_ref_bit_packing() {
+fn index_name_ref_bit_packing() {
     // Test bit-packing correctness
     let name_ref = IndexNameRef::new(100, 255, true, 1234);
 
@@ -76,7 +76,7 @@ fn test_index_name_ref_bit_packing() {
 }
 
 #[test]
-fn test_names_buffer() {
+fn names_buffer() {
     let mut index = MftIndex::new('C');
 
     let offset1 = index.add_name("test.txt");
@@ -90,7 +90,7 @@ fn test_names_buffer() {
 }
 
 #[test]
-fn test_cmp_ascii_case_insensitive() {
+fn cmp_ascii_case_insensitive_works() {
     use core::cmp::Ordering;
 
     // Equal strings (different case)

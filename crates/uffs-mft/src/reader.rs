@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     #[cfg(windows)]
-    fn test_open_valid_volume() {
+    fn open_valid_volume() {
         let result = MftReader::open('C');
         // This will fail without admin privileges, but should not panic
         assert!(result.is_ok() || matches!(result, Err(MftError::InsufficientPrivileges)));
@@ -534,13 +534,13 @@ mod tests {
 
     #[test]
     #[cfg(not(windows))]
-    fn test_platform_not_supported() {
+    fn platform_not_supported() {
         let result = MftReader::open('C');
         assert!(matches!(result, Err(MftError::PlatformNotSupported)));
     }
 
     #[test]
-    fn test_progress_percentage() {
+    fn progress_percentage() {
         let progress = MftProgress {
             records_read: 50,
             total_records: Some(100),
@@ -551,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn test_progress_speed() {
+    fn progress_speed() {
         let progress = MftProgress {
             records_read: 1000,
             total_records: None,
@@ -562,20 +562,20 @@ mod tests {
     }
 
     #[test]
-    fn test_multi_drive_reader_new() {
+    fn multi_drive_reader_new() {
         let reader = MultiDriveMftReader::new(vec!['c', 'd', 'e']);
         assert_eq!(reader.drives(), &['C', 'D', 'E']);
     }
 
     #[test]
-    fn test_multi_drive_reader_empty() {
+    fn multi_drive_reader_empty() {
         let reader = MultiDriveMftReader::new(vec![]);
         assert!(reader.drives().is_empty());
     }
 
     #[tokio::test]
     #[cfg(not(windows))]
-    async fn test_multi_drive_platform_not_supported() {
+    async fn multi_drive_platform_not_supported() {
         let reader = MultiDriveMftReader::new(vec!['C', 'D']);
         let result = reader.read_all().await;
         assert!(matches!(result, Err(MftError::PlatformNotSupported)));
@@ -583,7 +583,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(not(windows))]
-    async fn test_multi_drive_index_platform_not_supported() {
+    async fn multi_drive_index_platform_not_supported() {
         let reader = MultiDriveMftReader::new(vec!['C', 'D']);
         let result = reader.read_all_index().await;
         assert!(matches!(result, Err(MftError::PlatformNotSupported)));
@@ -591,7 +591,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(not(windows))]
-    async fn test_multi_drive_index_cached_platform_not_supported() {
+    async fn multi_drive_index_cached_platform_not_supported() {
         let reader = MultiDriveMftReader::new(vec!['C', 'D']);
         let result = reader.read_all_index_cached(3600).await;
         assert!(matches!(result, Err(MftError::PlatformNotSupported)));
@@ -605,7 +605,7 @@ mod tests {
     /// allowing the I/O layer to use optimal settings based on drive type.
     #[test]
     #[cfg(windows)]
-    fn test_mft_reader_uses_none_defaults() {
+    fn mft_reader_uses_none_defaults() {
         // This test requires admin privileges, so we check if we can open
         let reader = match MftReader::open('C') {
             Ok(opened) => opened,
@@ -638,7 +638,7 @@ mod tests {
     /// Test that `MftReader` builder methods correctly set values
     #[test]
     #[cfg(windows)]
-    fn test_mft_reader_builder_overrides() {
+    fn mft_reader_builder_overrides() {
         let reader = match MftReader::open('C') {
             Ok(opened) => opened,
             Err(MftError::InsufficientPrivileges) => return,
@@ -662,7 +662,7 @@ mod tests {
     /// Test that `MftReadMode::Auto` is the default
     #[test]
     #[cfg(windows)]
-    fn test_mft_reader_default_mode_is_auto() {
+    fn mft_reader_default_mode_is_auto() {
         let reader = match MftReader::open('C') {
             Ok(opened) => opened,
             Err(MftError::InsufficientPrivileges) => return,
@@ -679,7 +679,7 @@ mod tests {
     /// Test that all boolean defaults are set for optimal performance
     #[test]
     #[cfg(windows)]
-    fn test_mft_reader_boolean_defaults() {
+    fn mft_reader_boolean_defaults() {
         let reader = match MftReader::open('C') {
             Ok(opened) => opened,
             Err(MftError::InsufficientPrivileges) => return,

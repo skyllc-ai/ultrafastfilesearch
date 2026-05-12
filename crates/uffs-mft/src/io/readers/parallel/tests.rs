@@ -10,7 +10,7 @@
 use super::*;
 
 #[test]
-fn test_parallel_mft_reader_uses_optimal_chunk_size() {
+fn parallel_mft_reader_uses_optimal_chunk_size() {
     use crate::platform::DriveType;
 
     let extent_map = MftExtentMap::contiguous(100, 1024 * 1024, 4096, 1024);
@@ -49,7 +49,7 @@ fn test_parallel_mft_reader_uses_optimal_chunk_size() {
 }
 
 #[test]
-fn test_drive_type_stored_in_reader() {
+fn drive_type_stored_in_reader() {
     use crate::platform::DriveType;
 
     let extent_map = MftExtentMap::contiguous(100, 1024 * 1024, 4096, 1024);
@@ -69,7 +69,7 @@ fn test_drive_type_stored_in_reader() {
 }
 
 #[test]
-fn test_optimal_defaults_when_none_passed() {
+fn optimal_defaults_when_none_passed() {
     use crate::platform::DriveType;
 
     fn resolve_concurrency(user_value: Option<usize>, drive_type: DriveType) -> usize {
@@ -100,7 +100,7 @@ fn test_optimal_defaults_when_none_passed() {
 }
 
 #[test]
-fn test_parallel_parsing_auto_detection() {
+fn parallel_parsing_auto_detection() {
     use crate::platform::DriveType;
 
     fn resolve_parallel_parse(user_value: Option<bool>, drive_type: DriveType) -> bool {

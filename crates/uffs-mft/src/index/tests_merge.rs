@@ -9,7 +9,7 @@ use super::*;
 /// Test that extension records processed before base records in the same
 /// fragment preserve extension names.
 #[test]
-fn test_extension_before_base_in_same_fragment() {
+fn extension_before_base_in_same_fragment() {
     let mut fragment = MftIndexFragment::with_capacity(10);
 
     let name2_ref = push_fragment_name(&mut fragment, "name2.txt");
@@ -87,7 +87,7 @@ fn test_extension_before_base_in_same_fragment() {
 /// Test that cross-fragment merge correctly handles extension-only
 /// placeholders.
 #[test]
-fn test_cross_fragment_merge_extension_placeholder() {
+fn cross_fragment_merge_extension_placeholder() {
     let mut fragment_a = MftIndexFragment::with_capacity(10);
     let ext_name_ref = push_fragment_name(&mut fragment_a, "hardlink.txt");
 
@@ -128,7 +128,7 @@ fn test_cross_fragment_merge_extension_placeholder() {
 
 /// Test that cross-fragment merge keeps all extension names.
 #[test]
-fn test_cross_fragment_merge_multiple_extension_names() {
+fn cross_fragment_merge_multiple_extension_names() {
     let mut fragment_a = MftIndexFragment::with_capacity(10);
     let ext_hardlink_b = push_fragment_name(&mut fragment_a, "hardlink_b.txt");
     let ext_hardlink_c = push_fragment_name(&mut fragment_a, "hardlink_c.txt");
@@ -176,7 +176,7 @@ fn test_cross_fragment_merge_multiple_extension_names() {
 
 /// Test that cross-fragment merge works when the base record comes first.
 #[test]
-fn test_cross_fragment_merge_base_first() {
+fn cross_fragment_merge_base_first() {
     let mut fragment_a = MftIndexFragment::with_capacity(10);
     let base_original = push_fragment_name(&mut fragment_a, "original_a.txt");
 
@@ -225,7 +225,7 @@ fn test_cross_fragment_merge_base_first() {
 /// Test that `rebuild_children_from_names()` rebuilds child lists from parent
 /// references.
 #[test]
-fn test_rebuild_children_from_names_basic() {
+fn rebuild_children_from_names_basic() {
     let mut index = MftIndex::new('C');
 
     let root_frs = 5_u64;
@@ -280,7 +280,7 @@ fn test_rebuild_children_from_names_basic() {
 
 /// Test that `rebuild_children_from_names()` handles hard links correctly.
 #[test]
-fn test_rebuild_children_from_names_hardlinks() {
+fn rebuild_children_from_names_hardlinks() {
     let mut index = MftIndex::new('C');
 
     let dir1_frs = 100_u64;
@@ -339,7 +339,7 @@ fn test_rebuild_children_from_names_hardlinks() {
 
 /// Test that `rebuild_children_from_names()` skips self-referencing root.
 #[test]
-fn test_rebuild_children_from_names_skips_root_self_reference() {
+fn rebuild_children_from_names_skips_root_self_reference() {
     let mut index = MftIndex::new('C');
 
     let root_frs = 5_u64;
@@ -359,7 +359,7 @@ fn test_rebuild_children_from_names_skips_root_self_reference() {
 
 /// Test that tree metrics correctly handles empty directories.
 #[test]
-fn test_tree_metrics_empty_directory_descendants() {
+fn tree_metrics_empty_directory_descendants() {
     let mut index = MftIndex::new('C');
 
     let root_frs = 5_u64;
@@ -386,7 +386,7 @@ fn test_tree_metrics_empty_directory_descendants() {
 
 /// Test that tree metrics correctly handles directories with internal streams.
 #[test]
-fn test_tree_metrics_internal_streams_two_channel() {
+fn tree_metrics_internal_streams_two_channel() {
     let mut index = MftIndex::new('C');
 
     let root_frs = 5_u64;

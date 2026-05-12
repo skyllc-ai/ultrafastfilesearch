@@ -591,7 +591,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_merge_adjacent_chunks_contiguous() {
+    fn merge_adjacent_chunks_contiguous() {
         let chunks = vec![
             ReadChunk {
                 disk_offset: 0,
@@ -617,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_adjacent_chunks_non_contiguous_disk() {
+    fn merge_adjacent_chunks_non_contiguous_disk() {
         let chunks = vec![
             ReadChunk {
                 disk_offset: 1_000_000_000,
@@ -648,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_adjacent_chunks_gap_too_large() {
+    fn merge_adjacent_chunks_gap_too_large() {
         let chunks = vec![
             ReadChunk {
                 disk_offset: 0,

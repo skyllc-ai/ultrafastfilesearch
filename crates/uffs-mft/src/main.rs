@@ -191,7 +191,7 @@ mod tests {
     use super::{classify_binary_task_error, ctrl_c_listener_error, shutdown_requested_error};
 
     #[tokio::test]
-    async fn test_classify_binary_task_error_maps_cancelled_joins() {
+    async fn classify_binary_task_error_maps_cancelled_joins() {
         let handle = tokio::spawn(async {
             core::future::pending::<()>().await;
         });
@@ -212,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn test_shutdown_requested_error_is_cancelled() {
+    fn shutdown_requested_error_is_cancelled() {
         let error = shutdown_requested_error("uffs_mft");
 
         assert!(matches!(error, uffs_mft::MftError::Cancelled {
@@ -222,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ctrl_c_listener_error_is_wait_failed() {
+    fn ctrl_c_listener_error_is_wait_failed() {
         let error =
             ctrl_c_listener_error("uffs_mft", &std::io::Error::other("listener unavailable"));
 

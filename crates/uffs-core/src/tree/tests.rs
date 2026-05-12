@@ -30,7 +30,7 @@ fn create_test_df() -> DataFrame {
 }
 
 #[test]
-fn test_tree_column_parse() {
+fn tree_column_parse() {
     assert_eq!(
         TreeColumn::parse("descendants"),
         Some(TreeColumn::Descendants)
@@ -46,7 +46,7 @@ fn test_tree_column_parse() {
 }
 
 #[test]
-fn test_tree_index_from_dataframe() {
+fn tree_index_from_dataframe() {
     let df = create_test_df();
     let tree = TreeIndex::from_dataframe(&df).unwrap();
 
@@ -58,7 +58,7 @@ fn test_tree_index_from_dataframe() {
 }
 
 #[test]
-fn test_descendants_count() {
+fn descendants_count() {
     let df = create_test_df();
     let mut tree = TreeIndex::from_dataframe(&df).unwrap();
 
@@ -75,7 +75,7 @@ fn test_descendants_count() {
 }
 
 #[test]
-fn test_treesize() {
+fn treesize() {
     let df = create_test_df();
     let mut tree = TreeIndex::from_dataframe(&df).unwrap();
 
@@ -92,7 +92,7 @@ fn test_treesize() {
 }
 
 #[test]
-fn test_tree_allocated() {
+fn tree_allocated() {
     let df = create_test_df();
     let mut tree = TreeIndex::from_dataframe(&df).unwrap();
 
@@ -103,7 +103,7 @@ fn test_tree_allocated() {
 }
 
 #[test]
-fn test_bulkiness() {
+fn bulkiness() {
     let df = create_test_df();
     let mut tree = TreeIndex::from_dataframe(&df).unwrap();
 
@@ -129,7 +129,7 @@ fn test_bulkiness() {
 }
 
 #[test]
-fn test_bulkiness_with_many_small_files() {
+fn bulkiness_with_many_small_files() {
     // Create a directory with many small files to test bulkiness filtering
     // parent (frs=1) with 10 small files (100 bytes each) and 1 large file (10000
     // bytes)
@@ -163,7 +163,7 @@ fn test_bulkiness_with_many_small_files() {
 }
 
 #[test]
-fn test_add_tree_columns() {
+fn add_tree_columns_works() {
     let df = create_test_df();
     let result = add_tree_columns(&df, &[TreeColumn::Descendants, TreeColumn::TreeSize]).unwrap();
 
@@ -178,7 +178,7 @@ fn test_add_tree_columns() {
 }
 
 #[test]
-fn test_add_tree_columns_empty() {
+fn add_tree_columns_empty() {
     let df = create_test_df();
     let result = add_tree_columns(&df, &[]).unwrap();
 
@@ -187,7 +187,7 @@ fn test_add_tree_columns_empty() {
 }
 
 #[test]
-fn test_memoization() {
+fn memoization() {
     let df = create_test_df();
     let mut tree = TreeIndex::from_dataframe(&df).unwrap();
 

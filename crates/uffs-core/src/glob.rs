@@ -98,42 +98,42 @@ mod tests {
     type TestResult = core::result::Result<(), Box<dyn core::error::Error>>;
 
     #[test]
-    fn test_simple_extension() -> TestResult {
+    fn simple_extension() -> TestResult {
         let regex = glob_to_regex("*.rs")?;
         assert_eq!(regex, "^[^/\\\\]*\\.rs$");
         Ok(())
     }
 
     #[test]
-    fn test_double_star() -> TestResult {
+    fn double_star() -> TestResult {
         let regex = glob_to_regex("**/*.rs")?;
         assert_eq!(regex, "^.*/[^/\\\\]*\\.rs$");
         Ok(())
     }
 
     #[test]
-    fn test_question_mark() -> TestResult {
+    fn question_mark() -> TestResult {
         let regex = glob_to_regex("file?.txt")?;
         assert_eq!(regex, "^file[^/\\\\]\\.txt$");
         Ok(())
     }
 
     #[test]
-    fn test_character_class() -> TestResult {
+    fn character_class() -> TestResult {
         let regex = glob_to_regex("[abc].txt")?;
         assert_eq!(regex, "^[abc]\\.txt$");
         Ok(())
     }
 
     #[test]
-    fn test_negated_class() -> TestResult {
+    fn negated_class() -> TestResult {
         let regex = glob_to_regex("[!abc].txt")?;
         assert_eq!(regex, "^[^abc]\\.txt$");
         Ok(())
     }
 
     #[test]
-    fn test_unclosed_bracket() {
+    fn unclosed_bracket() {
         let result = glob_to_regex("[abc");
         result.unwrap_err();
     }

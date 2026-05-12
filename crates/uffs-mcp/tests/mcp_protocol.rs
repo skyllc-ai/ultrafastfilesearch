@@ -62,7 +62,7 @@ async fn setup_client() -> rmcp::service::RunningService<rmcp::RoleClient, impl 
 // ── tools/list ──────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn test_mcp_tools_list() {
+async fn mcp_tools_list() {
     let client = setup_client().await;
     let tools = client.list_tools(None).await.unwrap();
 
@@ -82,7 +82,7 @@ async fn test_mcp_tools_list() {
 // ── resources/list ──────────────────────────────────────────────────
 
 #[tokio::test]
-async fn test_mcp_resources_list() {
+async fn mcp_resources_list() {
     let client = setup_client().await;
     let resources = client.list_resources(None).await.unwrap();
 
@@ -118,7 +118,7 @@ fn extract_text(rc: &rmcp::model::ResourceContents) -> &str {
 }
 
 #[tokio::test]
-async fn test_mcp_read_schema_fields() {
+async fn mcp_read_schema_fields() {
     let client = setup_client().await;
     let result = client
         .read_resource(rmcp::model::ReadResourceRequestParams::new(
@@ -142,7 +142,7 @@ async fn test_mcp_read_schema_fields() {
 }
 
 #[tokio::test]
-async fn test_mcp_read_schema_search() {
+async fn mcp_read_schema_search() {
     let client = setup_client().await;
     let result = client
         .read_resource(rmcp::model::ReadResourceRequestParams::new(
@@ -163,7 +163,7 @@ async fn test_mcp_read_schema_search() {
 }
 
 #[tokio::test]
-async fn test_mcp_read_aggregate_presets() {
+async fn mcp_read_aggregate_presets() {
     let client = setup_client().await;
     let result = client
         .read_resource(rmcp::model::ReadResourceRequestParams::new(
@@ -187,7 +187,7 @@ async fn test_mcp_read_aggregate_presets() {
 // ── resources/templates ──────────────────────────────────────────────
 
 #[tokio::test]
-async fn test_mcp_resource_templates_list() {
+async fn mcp_resource_templates_list() {
     let client = setup_client().await;
     let templates = client.list_resource_templates(None).await.unwrap();
 
@@ -212,7 +212,7 @@ async fn test_mcp_resource_templates_list() {
 // ── prompts/list ────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn test_mcp_prompts_list() {
+async fn mcp_prompts_list() {
     let client = setup_client().await;
     let prompts = client.list_prompts(None).await.unwrap();
 
@@ -233,7 +233,7 @@ async fn test_mcp_prompts_list() {
 // ── get_prompt ──────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn test_mcp_get_prompt_find_large_files() {
+async fn mcp_get_prompt_find_large_files() {
     let client = setup_client().await;
 
     let result = client
@@ -253,7 +253,7 @@ async fn test_mcp_get_prompt_find_large_files() {
 }
 
 #[tokio::test]
-async fn test_mcp_get_prompt_unknown_returns_error() {
+async fn mcp_get_prompt_unknown_returns_error() {
     let client = setup_client().await;
 
     let result = client
@@ -268,7 +268,7 @@ async fn test_mcp_get_prompt_unknown_returns_error() {
 // ── call_tool with unknown name ─────────────────────────────────────
 
 #[tokio::test]
-async fn test_mcp_call_unknown_tool_returns_error() {
+async fn mcp_call_unknown_tool_returns_error() {
     let client = setup_client().await;
 
     let result = client
@@ -305,7 +305,7 @@ async fn test_mcp_call_unknown_tool_returns_error() {
 /// }
 /// ```
 #[test]
-fn test_claude_desktop_config_example() {
+fn claude_desktop_config_example() {
     // This is a documentation test — verifies the config JSON is valid
     let config = r#"{
         "mcpServers": {
@@ -333,7 +333,7 @@ fn test_claude_desktop_config_example() {
 /// }
 /// ```
 #[test]
-fn test_cursor_windsurf_config_example() {
+fn cursor_windsurf_config_example() {
     let config = r#"{
         "uffs": {
             "command": "uffs-mcp"

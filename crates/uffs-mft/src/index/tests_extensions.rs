@@ -6,7 +6,7 @@
 use super::*;
 
 #[test]
-fn test_extension_table_interning() {
+fn extension_table_interning() {
     let mut table = ExtensionTable::new();
 
     // Test empty extension
@@ -38,7 +38,7 @@ fn test_extension_table_interning() {
 }
 
 #[test]
-fn test_extension_table_record_file() {
+fn extension_table_record_file() {
     let mut table = ExtensionTable::new();
 
     let txt_id = table.intern("txt");
@@ -61,7 +61,7 @@ fn test_extension_table_record_file() {
 }
 
 #[test]
-fn test_intern_extension() {
+fn intern_extension() {
     let mut index = MftIndex::new('C');
 
     // Test basic extension extraction
@@ -78,7 +78,7 @@ fn test_intern_extension() {
     clippy::indexing_slicing,
     reason = "test code with known valid indices"
 )]
-fn test_extension_table_serialization() {
+fn extension_table_serialization() {
     // Create an index with some extensions
     let mut index = MftIndex::new('C');
 
@@ -153,7 +153,7 @@ fn test_extension_table_serialization() {
 }
 
 #[test]
-fn test_extension_index_build() {
+fn extension_index_build() {
     let mut index = MftIndex::new('C');
 
     // Add files with different extensions
@@ -233,7 +233,7 @@ fn test_extension_index_build() {
     clippy::indexing_slicing,
     reason = "test code with known valid indices"
 )]
-fn test_extension_index_with_hard_links() {
+fn extension_index_with_hard_links() {
     let mut index = MftIndex::new('C');
 
     // Create a file with multiple hard links with different extensions
@@ -286,7 +286,7 @@ fn test_extension_index_with_hard_links() {
 }
 
 #[test]
-fn test_extension_index_empty() {
+fn extension_index_empty() {
     let mut index = MftIndex::new('C');
 
     // Build on empty index
@@ -307,7 +307,7 @@ fn test_extension_index_empty() {
 }
 
 #[test]
-fn test_size_bucket_assignment() {
+fn size_bucket_assignment() {
     // Test bucket boundaries
     assert_eq!(MftStats::size_bucket(0), 0); // 0 bytes → bucket 0
     assert_eq!(MftStats::size_bucket(512), 0); // 512 bytes → bucket 0
@@ -343,7 +343,7 @@ fn test_size_bucket_assignment() {
     clippy::indexing_slicing,
     reason = "test code with known valid indices"
 )]
-fn test_extension_table_top_by_bytes() {
+fn extension_table_top_by_bytes() {
     let mut index = MftIndex::new('C');
 
     // Add files with different extensions and sizes
@@ -398,7 +398,7 @@ fn test_extension_table_top_by_bytes() {
     clippy::indexing_slicing,
     reason = "test code with known valid indices"
 )]
-fn test_extension_table_top_by_count() {
+fn extension_table_top_by_count() {
     let mut index = MftIndex::new('C');
 
     // Add files with different extensions
@@ -446,7 +446,7 @@ fn test_extension_table_top_by_count() {
 }
 
 #[test]
-fn test_byte_tracking_accuracy() {
+fn byte_tracking_accuracy() {
     let mut index = MftIndex::new('C');
 
     // Add files with different sizes and attributes
@@ -534,7 +534,7 @@ fn test_byte_tracking_accuracy() {
 }
 
 #[test]
-fn test_extension_index_performance() {
+fn extension_index_performance() {
     use std::time::Instant;
 
     let mut index = MftIndex::new('C');

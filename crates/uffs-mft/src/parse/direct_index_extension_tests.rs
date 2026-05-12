@@ -53,7 +53,7 @@ fn merge_dir_index(
 }
 
 #[test]
-fn test_dir_index_extension_before_base_snapshot_restore() {
+fn dir_index_extension_before_base_snapshot_restore() {
     // Scenario: IOCP delivers extension record before base record
     // Extension has dir_index_size=4096, base has dir_index_size=8192
     // Result should be cumulative: 4096 + 8192 = 12288
@@ -94,7 +94,7 @@ fn test_dir_index_extension_before_base_snapshot_restore() {
 }
 
 #[test]
-fn test_dir_index_base_before_extension_snapshot_restore() {
+fn dir_index_base_before_extension_snapshot_restore() {
     // Scenario: Base record arrives before extension (normal case)
     // Base has dir_index_size=8192, extension has dir_index_size=4096
     // Result should be cumulative: 8192 + 4096 = 12288
@@ -121,7 +121,7 @@ fn test_dir_index_base_before_extension_snapshot_restore() {
 }
 
 #[test]
-fn test_dir_index_multiple_extensions_snapshot_restore() {
+fn dir_index_multiple_extensions_snapshot_restore() {
     // Scenario: Multiple extension records all arrive before base
     // All should accumulate properly using saturating_add
 
@@ -154,7 +154,7 @@ fn test_dir_index_multiple_extensions_snapshot_restore() {
 }
 
 #[test]
-fn test_dir_index_zero_extension_values() {
+fn dir_index_zero_extension_values() {
     // Scenario: Extension has zero dir_index (branch not taken in actual code,
     // but verify the logic handles it correctly)
 
@@ -178,7 +178,7 @@ fn test_dir_index_zero_extension_values() {
 }
 
 #[test]
-fn test_dir_index_saturating_add_no_overflow() {
+fn dir_index_saturating_add_no_overflow() {
     // Verify saturating_add prevents overflow
 
     let mut index = MftIndex::new('C');
@@ -204,7 +204,7 @@ fn test_dir_index_saturating_add_no_overflow() {
 }
 
 #[test]
-fn test_dir_index_regression_old_unconditional_add_bug() {
+fn dir_index_regression_old_unconditional_add_bug() {
     // This test demonstrates the bug that was fixed
     // OLD CODE (buggy): Always used += , losing data when extension arrives first
     // NEW CODE (correct): Uses snapshot/restore pattern

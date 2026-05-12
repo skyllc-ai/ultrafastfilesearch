@@ -6,7 +6,7 @@
 use super::*;
 
 #[test]
-fn test_display_stats() {
+fn display_stats() {
     // Create a simple index with some files
     let mut index = MftIndex::new('C');
 
@@ -49,7 +49,7 @@ fn test_display_stats() {
     clippy::indexing_slicing,
     reason = "test code with known valid indices"
 )]
-fn test_extension_index_query_performance() {
+fn extension_index_query_performance() {
     use std::time::Instant;
 
     // Create index with 10K files across 10 extensions
@@ -110,7 +110,7 @@ fn test_extension_index_query_performance() {
 /// Run with: `cargo test --release -- test_full_postprocessing_performance
 /// --nocapture`
 #[test]
-fn test_full_postprocessing_performance() {
+fn full_postprocessing_performance() {
     use std::time::Instant;
 
     // Create a realistic index with 100K files

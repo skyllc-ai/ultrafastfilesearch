@@ -18,7 +18,7 @@ fn write_u64(bytes: &mut [u8], offset: usize, value: u64) {
 }
 
 #[test]
-fn test_deserialize_rejects_record_count_that_is_too_large() {
+fn deserialize_rejects_record_count_that_is_too_large() {
     let mut data = empty_serialized_index();
     write_u64(&mut data, RECORD_COUNT_OFFSET, u64::MAX);
 
@@ -29,7 +29,7 @@ fn test_deserialize_rejects_record_count_that_is_too_large() {
 }
 
 #[test]
-fn test_deserialize_rejects_names_size_beyond_remaining_bytes() {
+fn deserialize_rejects_names_size_beyond_remaining_bytes() {
     let mut data = empty_serialized_index();
     // Use a size larger than remaining bytes after header+frs_to_idx+records.
     write_u64(&mut data, NAMES_SIZE_OFFSET, 9999);
@@ -41,7 +41,7 @@ fn test_deserialize_rejects_names_size_beyond_remaining_bytes() {
 }
 
 #[test]
-fn test_deserialize_rejects_links_count_beyond_remaining_bytes() {
+fn deserialize_rejects_links_count_beyond_remaining_bytes() {
     let mut data = empty_serialized_index();
     write_u64(&mut data, LINKS_COUNT_OFFSET, 1);
 

@@ -21,7 +21,7 @@ fn create_test_df() -> core::result::Result<DataFrame, uffs_polars::PolarsError>
 }
 
 #[test]
-fn test_files_only() -> TestResult {
+fn files_only() -> TestResult {
     let df = create_test_df()?;
     let result = MftQuery::new(df).files_only().collect()?;
     assert_eq!(result.height(), 2); // file.txt and main.rs
@@ -29,7 +29,7 @@ fn test_files_only() -> TestResult {
 }
 
 #[test]
-fn test_directories_only() -> TestResult {
+fn directories_only() -> TestResult {
     let df = create_test_df()?;
     let result = MftQuery::new(df).directories_only().collect()?;
     assert_eq!(result.height(), 2); // root and src
@@ -37,7 +37,7 @@ fn test_directories_only() -> TestResult {
 }
 
 #[test]
-fn test_min_size() -> TestResult {
+fn min_size() -> TestResult {
     let df = create_test_df()?;
     let result = MftQuery::new(df).min_size(1500).collect()?;
     assert_eq!(result.height(), 1); // only main.rs (2048)
@@ -45,7 +45,7 @@ fn test_min_size() -> TestResult {
 }
 
 #[test]
-fn test_limit() -> TestResult {
+fn limit() -> TestResult {
     let df = create_test_df()?;
     let result = MftQuery::new(df).limit(2).collect()?;
     assert_eq!(result.height(), 2);
@@ -53,7 +53,7 @@ fn test_limit() -> TestResult {
 }
 
 #[test]
-fn test_chained_filters() -> TestResult {
+fn chained_filters() -> TestResult {
     let df = create_test_df()?;
     let result = MftQuery::new(df)
         .files_only()
@@ -94,7 +94,7 @@ fn create_pattern_test_df() -> core::result::Result<DataFrame, uffs_polars::Pola
 }
 
 #[test]
-fn test_pattern_suffix() -> TestResult {
+fn pattern_suffix() -> TestResult {
     use crate::pattern::ParsedPattern;
 
     let df = create_pattern_test_df()?;
@@ -106,7 +106,7 @@ fn test_pattern_suffix() -> TestResult {
 }
 
 #[test]
-fn test_pattern_prefix() -> TestResult {
+fn pattern_prefix() -> TestResult {
     use crate::pattern::ParsedPattern;
 
     let df = create_pattern_test_df()?;
@@ -118,7 +118,7 @@ fn test_pattern_prefix() -> TestResult {
 }
 
 #[test]
-fn test_pattern_contains() -> TestResult {
+fn pattern_contains() -> TestResult {
     use crate::pattern::ParsedPattern;
 
     let df = create_pattern_test_df()?;
@@ -130,7 +130,7 @@ fn test_pattern_contains() -> TestResult {
 }
 
 #[test]
-fn test_extension_filter_optimized() -> TestResult {
+fn extension_filter_optimized() -> TestResult {
     let df = create_pattern_test_df()?;
     let filter = crate::extensions::ExtensionFilter::parse("rs,txt")?;
     let result = MftQuery::new(df).extension_filter(&filter).collect()?;
@@ -140,7 +140,7 @@ fn test_extension_filter_optimized() -> TestResult {
 }
 
 #[test]
-fn test_extension_filter_fast() -> TestResult {
+fn extension_filter_fast() -> TestResult {
     let df = create_pattern_test_df()?;
     let df_with_ext = crate::extensions::add_ext_column(df)?;
     let filter = crate::extensions::ExtensionFilter::parse("rs,txt")?;
@@ -153,7 +153,7 @@ fn test_extension_filter_fast() -> TestResult {
 }
 
 #[test]
-fn test_extension_filter_single() -> TestResult {
+fn extension_filter_single() -> TestResult {
     let df = create_pattern_test_df()?;
     let filter = crate::extensions::ExtensionFilter::parse("jpg")?;
     let result = MftQuery::new(df).extension_filter(&filter).collect()?;
@@ -163,7 +163,7 @@ fn test_extension_filter_single() -> TestResult {
 }
 
 #[test]
-fn test_max_size() -> TestResult {
+fn max_size() -> TestResult {
     let df = create_test_df()?;
     let result = MftQuery::new(df).max_size(1500).collect()?;
     // Should include: root (0), file.txt (1024), src (0) = 3 items
@@ -172,7 +172,7 @@ fn test_max_size() -> TestResult {
 }
 
 #[test]
-fn test_sort_by_size_descending() -> TestResult {
+fn sort_by_size_descending() -> TestResult {
     let df = create_test_df()?;
     let result = MftQuery::new(df)
         .files_only()
@@ -186,7 +186,7 @@ fn test_sort_by_size_descending() -> TestResult {
 }
 
 #[test]
-fn test_sort_by_size_ascending() -> TestResult {
+fn sort_by_size_ascending() -> TestResult {
     let df = create_test_df()?;
     let result = MftQuery::new(df)
         .files_only()
@@ -200,7 +200,7 @@ fn test_sort_by_size_ascending() -> TestResult {
 }
 
 #[test]
-fn test_hide_system() -> TestResult {
+fn hide_system() -> TestResult {
     // Create df with NTFS system files ($ prefix and low FRS)
     let df = DataFrame::new_infer_height(vec![
         Column::new("frs".into(), &[0_u64, 5, 16, 100]),
@@ -219,7 +219,7 @@ fn test_hide_system() -> TestResult {
 }
 
 #[test]
-fn test_query_mode_from_str() {
+fn query_mode_from_str() {
     use crate::index_search::QueryMode;
     assert!(matches!(
         QueryMode::from_str_opt("auto"),
@@ -237,7 +237,7 @@ fn test_query_mode_from_str() {
 }
 
 #[test]
-fn test_empty_dataframe() -> TestResult {
+fn empty_dataframe() -> TestResult {
     let df = DataFrame::new_infer_height(vec![
         Column::new("frs".into(), Vec::<u64>::new()),
         Column::new("name".into(), Vec::<&str>::new()),
@@ -253,7 +253,7 @@ fn test_empty_dataframe() -> TestResult {
 }
 
 #[test]
-fn test_combined_size_filters() -> TestResult {
+fn combined_size_filters() -> TestResult {
     let df = create_test_df()?;
     let result = MftQuery::new(df).min_size(500).max_size(1500).collect()?;
     // Should include file.txt (1024) only

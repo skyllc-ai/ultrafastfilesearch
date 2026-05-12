@@ -87,7 +87,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_aligned_buffer() {
+    fn aligned_buffer() {
         let buffer = AlignedBuffer::new(1024);
         assert_eq!(buffer.len(), 1024);
 
@@ -96,7 +96,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aligned_buffer_write() {
+    fn aligned_buffer_write() {
         let mut buffer = AlignedBuffer::new(512);
         buffer.as_mut_slice()[0] = 0x42;
         assert_eq!(buffer.as_slice()[0], 0x42);

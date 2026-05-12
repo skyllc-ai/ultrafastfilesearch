@@ -646,14 +646,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_drive_letter_accepts_letter_colon_and_whitespace_variants() {
+    fn parse_drive_letter_accepts_letter_colon_and_whitespace_variants() {
         assert_eq!(parse_drive_letter("c"), Ok('C'));
         assert_eq!(parse_drive_letter("C:"), Ok('C'));
         assert_eq!(parse_drive_letter(" d: "), Ok('D'));
     }
 
     #[test]
-    fn test_parse_drive_letter_rejects_invalid_values() {
+    fn parse_drive_letter_rejects_invalid_values() {
         parse_drive_letter("").unwrap_err();
         parse_drive_letter("12").unwrap_err();
         parse_drive_letter("1:").unwrap_err();
@@ -661,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_cli_args_basic_search() {
+    fn from_cli_args_basic_search() {
         let args: Vec<String> = [
             "*.rs",
             "--drive",
@@ -688,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_cli_args_sugar_begins_with() {
+    fn from_cli_args_sugar_begins_with() {
         let args: Vec<String> = ["--begins-with", "report"]
             .iter()
             .map(ToString::to_string)
@@ -698,7 +698,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_cli_args_sugar_between() {
+    fn from_cli_args_sugar_between() {
         let args: Vec<String> = ["*", "--between", "2026-01-01,2026-03-31"]
             .iter()
             .map(ToString::to_string)

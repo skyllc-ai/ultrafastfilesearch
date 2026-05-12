@@ -53,13 +53,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_volume_root_path() {
+    fn volume_root_path_works() {
         assert_eq!(volume_root_path('c'), PathBuf::from("C:\\"));
         assert_eq!(volume_root_path('D'), PathBuf::from("D:\\"));
     }
 
     #[test]
-    fn test_is_elevated() {
+    fn is_elevated_works() {
         // Just verify it doesn't panic.  Bind with `_unused` so the must_use
         // result is consumed without us losing the annotation; the prefix
         // signals "intentionally unused" without triggering
@@ -68,7 +68,7 @@ mod tests {
     }
 
     #[test]
-    fn test_nvme_optimal_settings() {
+    fn nvme_optimal_settings() {
         let drive_type = DriveType::Nvme;
 
         assert_eq!(drive_type.optimal_concurrency(), 32);
@@ -80,7 +80,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ssd_optimal_settings() {
+    fn ssd_optimal_settings() {
         let drive_type = DriveType::Ssd;
 
         assert_eq!(drive_type.optimal_concurrency(), 8);
@@ -92,7 +92,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hdd_optimal_settings() {
+    fn hdd_optimal_settings() {
         let drive_type = DriveType::Hdd;
 
         assert_eq!(drive_type.optimal_concurrency(), 4);
@@ -104,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hdd_extent_aware_concurrency() {
+    fn hdd_extent_aware_concurrency() {
         assert_eq!(DriveType::optimal_concurrency_for_hdd(62), 2);
         assert_eq!(DriveType::optimal_concurrency_for_hdd(100), 2);
         assert_eq!(DriveType::optimal_concurrency_for_hdd(51), 2);
@@ -120,7 +120,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unknown_optimal_settings() {
+    fn unknown_optimal_settings() {
         let drive_type = DriveType::Unknown;
 
         assert_eq!(drive_type.optimal_concurrency(), 4);
@@ -132,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn test_optimal_settings_are_reasonable() {
+    fn optimal_settings_are_reasonable() {
         let nvme = DriveType::Nvme;
         let ssd = DriveType::Ssd;
         let hdd = DriveType::Hdd;

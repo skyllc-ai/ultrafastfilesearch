@@ -6,7 +6,7 @@
 use super::*;
 
 #[test]
-fn test_sort_directory_children_basic() {
+fn sort_directory_children_basic() {
     let mut index = MftIndex::new('C');
 
     // Create a directory (FRS 100)
@@ -76,7 +76,7 @@ fn test_sort_directory_children_basic() {
 }
 
 #[test]
-fn test_sort_directory_children_empty() {
+fn sort_directory_children_empty() {
     let mut index = MftIndex::new('C');
 
     // Create a directory with no children
@@ -93,7 +93,7 @@ fn test_sort_directory_children_empty() {
 }
 
 #[test]
-fn test_sort_directory_children_single_child() {
+fn sort_directory_children_single_child() {
     let mut index = MftIndex::new('C');
 
     // Create a directory with one child
@@ -134,7 +134,7 @@ fn test_sort_directory_children_single_child() {
 }
 
 #[test]
-fn test_sort_directory_children_performance() {
+fn sort_directory_children_performance() {
     use std::time::Instant;
 
     let mut index = MftIndex::new('C');
