@@ -2,15 +2,6 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Bulk IOCP reader path for `ParallelMftReader`.
-//!
-//! **Module-scoped cast justification:** `as usize` / `as u32` casts convert
-//! NTFS disk offsets (`u64`) and record sizes (`u32`) into `usize` / `u32`
-//! respectively.  `usize` ≥ 32 bits on every supported target; NTFS disk
-//! offsets are physically bounded by the volume size (≤ 2⁶⁴ bytes).
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
-)]
 
 use core::sync::atomic::AtomicUsize;
 
@@ -76,8 +67,8 @@ impl ParallelMftReader {
     where
         F: Fn(u64, u64),
     {
-        let record_size = self.extent_map.bytes_per_record as usize;
-        let total_records = self.extent_map.total_records() as usize;
+        let record_size = u32_as_usize(self.extent_map.bytes_per_record);
+        let total_records = frs_to_usize(self.extent_map.total_records());
         let total_bytes = total_records * record_size;
 
         info!(
@@ -235,16 +226,17 @@ fn plan_bulk_iocp_chunks(
     let mut sorted_chunks: Vec<ReadChunk> = generate_read_chunks(extent_map, bitmap, chunk_size);
     sorted_chunks.sort_by_key(|chunk| chunk.disk_offset);
 
+    let record_size_u64 = usize_to_u64(record_size);
     let bytes_to_read: u64 = sorted_chunks
         .iter()
         .map(|chunk| {
             let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
-            effective_records * record_size as u64
+            effective_records * record_size_u64
         })
         .sum();
 
     let savings_pct = if total_bytes > 0 {
-        100 - (bytes_to_read * 100 / total_bytes as u64)
+        100 - (bytes_to_read * 100 / usize_to_u64(total_bytes))
     } else {
         0
     };
@@ -302,25 +294,25 @@ unsafe fn queue_bulk_iocp_reads(
         reason = "OVERLAPPED structs must be kept alive until IOCP completes; this Vec is the lifetime owner"
     )]
     let mut operations: Vec<Pin<Box<BulkOverlappedRead>>> =
-        Vec::with_capacity((bytes_to_read as usize / io_chunk_size) + sorted_chunks.len());
+        Vec::with_capacity((frs_to_usize(bytes_to_read) / io_chunk_size) + sorted_chunks.len());
     let mut pending_count = 0_usize;
 
     for chunk in sorted_chunks {
-        let skip_begin_bytes = chunk.skip_begin as usize * record_size;
+        let skip_begin_bytes = frs_to_usize(chunk.skip_begin) * record_size;
         let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
         if effective_records == 0 {
             continue;
         }
 
-        let effective_bytes = effective_records as usize * record_size;
-        let chunk_disk_offset = chunk.disk_offset + skip_begin_bytes as u64;
-        let chunk_buffer_offset = chunk.start_frs as usize * record_size + skip_begin_bytes;
+        let effective_bytes = frs_to_usize(effective_records) * record_size;
+        let chunk_disk_offset = chunk.disk_offset + usize_to_u64(skip_begin_bytes);
+        let chunk_buffer_offset = frs_to_usize(chunk.start_frs) * record_size + skip_begin_bytes;
 
         let mut offset_within_chunk = 0_usize;
         while offset_within_chunk < effective_bytes {
             let remaining = effective_bytes - offset_within_chunk;
             let io_size = remaining.min(io_chunk_size);
-            let disk_offset = chunk_disk_offset + offset_within_chunk as u64;
+            let disk_offset = chunk_disk_offset + usize_to_u64(offset_within_chunk);
             let buffer_offset = chunk_buffer_offset + offset_within_chunk;
 
             // SAFETY: caller holds the live overlapped handle; `mft_buffer`
@@ -369,8 +361,7 @@ unsafe fn queue_one_bulk_read(
         overlapped: unsafe { core::mem::zeroed() },
     });
 
-    op.overlapped.Anonymous.Anonymous.Offset = (disk_offset & 0xFFFF_FFFF) as u32;
-    op.overlapped.Anonymous.Anonymous.OffsetHigh = (disk_offset >> 32_u32) as u32;
+    set_overlapped_offset(&mut op.overlapped, disk_offset);
 
     // SAFETY: `buffer_offset` is computed from `chunk.start_frs *
     // record_size` and was bounded by upstream chunk validation to stay
@@ -424,9 +415,20 @@ fn drain_bulk_iocp_completions(
 
     let bytes_read_total = Arc::new(AtomicU64::new(0));
     let completed = Arc::new(AtomicUsize::new(0));
-    let error_flag = Arc::new(AtomicUsize::new(0));
+    // Win32 error codes are `u32`; storing as `AtomicU32` keeps the i32
+    // reinterpret for `from_raw_os_error` an exact bit-pattern cast.
+    let error_flag: Arc<core::sync::atomic::AtomicU32> =
+        Arc::new(core::sync::atomic::AtomicU32::new(0));
 
-    let iocp_handle_raw = SendHandle(iocp.raw_handle().0 as isize);
+    // The IOCP HANDLE is `!Send`; ferry it across worker boundaries as the raw
+    // pointer address via `expose_provenance` / `with_exposed_provenance_mut`,
+    // wrapped in `SendHandle` so the kernel-managed pointer satisfies `Send` /
+    // `Sync`.  The orchestrator owns the IoCompletionPort for the full drain.
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "Win32 HANDLE address fits in isize on every supported 64-bit target"
+    )]
+    let iocp_handle_raw = SendHandle(iocp.raw_handle().0.expose_provenance() as isize);
 
     let mut workers = Vec::with_capacity(num_workers);
     for _ in 0..num_workers {
@@ -439,7 +441,13 @@ fn drain_bulk_iocp_completions(
         workers.push(std::thread::spawn(move || {
             // `iocp_handle_raw` was constructed from a live IOCP handle
             // owned by the orchestrator and outlives every worker.
-            let iocp_handle = HANDLE(handle_raw.0 as *mut core::ffi::c_void);
+            #[expect(
+                clippy::cast_sign_loss,
+                reason = "isize -> usize round-trip preserves the original Win32 HANDLE address"
+            )]
+            let iocp_handle = HANDLE(core::ptr::with_exposed_provenance_mut::<core::ffi::c_void>(
+                handle_raw.0 as usize,
+            ));
             bulk_iocp_drain_loop(iocp_handle, pending, &bytes_read, &completed_count, &error);
         }));
     }
@@ -457,7 +465,7 @@ fn drain_bulk_iocp_completions(
         // bit pattern as `i32` for `from_raw_os_error`.
         #[expect(
             clippy::cast_possible_wrap,
-            reason = "Win32 error code stored as u32; from_raw_os_error takes i32"
+            reason = "Win32 error code stored as u32; from_raw_os_error takes i32 with matching bit pattern"
         )]
         return Err(MftError::Io(std::io::Error::from_raw_os_error(
             error_code as i32,
@@ -481,7 +489,7 @@ fn bulk_iocp_drain_loop(
     pending: usize,
     bytes_read: &Arc<AtomicU64>,
     completed_count: &Arc<AtomicUsize>,
-    error: &Arc<AtomicUsize>,
+    error: &Arc<core::sync::atomic::AtomicU32>,
 ) {
     use windows::Win32::Foundation::GetLastError;
     use windows::Win32::System::IO::GetQueuedCompletionStatus;
@@ -528,7 +536,7 @@ fn bulk_iocp_drain_loop(
             continue;
         }
 
-        error.store(last_error.0 as usize, Ordering::Release);
+        error.store(last_error.0, Ordering::Release);
         break;
     }
 }
@@ -606,10 +614,10 @@ fn parse_bulk_chunk_to_results(
     let records_in_chunk = chunk.len() / record_size;
 
     for i in 0..records_in_chunk {
-        let frs = start_frs + i;
+        let frs = usize_to_u64(start_frs + i);
 
         if let Some(bm) = bitmap
-            && !bm.is_record_in_use(frs as u64)
+            && !bm.is_record_in_use(frs)
         {
             continue;
         }
@@ -623,7 +631,7 @@ fn parse_bulk_chunk_to_results(
             continue;
         }
 
-        let parsed = parse_record_full(record_slice, frs as u64);
+        let parsed = parse_record_full(record_slice, frs);
         if !matches!(parsed, ParseResult::Skip) {
             results.push(parsed);
         }
@@ -645,10 +653,10 @@ fn parse_bulk_chunk_to_records(
     let records_in_chunk = chunk.len() / record_size;
 
     for i in 0..records_in_chunk {
-        let frs = start_frs + i;
+        let frs = usize_to_u64(start_frs + i);
 
         if let Some(bm) = bitmap
-            && !bm.is_record_in_use(frs as u64)
+            && !bm.is_record_in_use(frs)
         {
             continue;
         }
@@ -662,7 +670,7 @@ fn parse_bulk_chunk_to_records(
             continue;
         }
 
-        if let Some(record) = parse_record(record_slice, frs as u64) {
+        if let Some(record) = parse_record(record_slice, frs) {
             records.push(record);
         }
     }

@@ -2,16 +2,31 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Shared IOCP primitives.
-//!
-//! **Module-scoped cast justification:** `as u32` cast here converts the
-//! u64 overlapped offset low bits to u32 per Win32 OVERLAPPED struct layout;
-//! the high 32 bits are stored separately in `OffsetHigh`.
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "Win32 OVERLAPPED low-32 / high-32 offset split is the documented struct layout"
-)]
 
 use super::super::prelude::{AlignedBuffer, HANDLE, MftError, ReadChunk, Result};
+
+/// Write a `u64` byte offset into a Win32 `OVERLAPPED` struct's
+/// `Offset` / `OffsetHigh` fields.
+///
+/// The Win32 `OVERLAPPED` ABI splits the 64-bit file offset into a
+/// low-half `u32` (`Offset`) and a high-half `u32` (`OffsetHigh`).  The
+/// low-half narrowing cast is intentional and exact — it reproduces the
+/// bit pattern of the original `u64` byte-for-byte across the two
+/// fields.  The high-half cast is provably lossless because the right
+/// shift by 32 guarantees the value fits in `u32`.
+pub(crate) const fn set_overlapped_offset(
+    overlapped: &mut windows::Win32::System::IO::OVERLAPPED,
+    offset: u64,
+) {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Win32 OVERLAPPED ABI: the canonical low-half is the lower 32 bits of the u64 offset"
+    )]
+    let low = offset as u32;
+    let high = (offset >> 32_u32) as u32;
+    overlapped.Anonymous.Anonymous.Offset = low;
+    overlapped.Anonymous.Anonymous.OffsetHigh = high;
+}
 
 /// I/O Completion Port wrapper for Windows async I/O.
 ///
@@ -141,8 +156,7 @@ impl OverlappedRead {
 
     /// Sets the file offset for the overlapped read.
     pub const fn set_offset(&mut self, offset: u64) {
-        self.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-        self.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32_u32) as u32;
+        set_overlapped_offset(&mut self.overlapped, offset);
     }
 
     /// Gets a mutable pointer to the OVERLAPPED structure.

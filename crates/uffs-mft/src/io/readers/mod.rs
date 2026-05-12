@@ -25,10 +25,14 @@ mod prelude {
     pub(super) use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
     pub(super) use super::zero_copy::parse_buffer_zero_copy_inner;
+    pub(super) use crate::index::{
+        frs_to_usize, millis_to_u64, nanos_to_u64, u32_as_usize, usize_to_u64,
+    };
     pub(super) use crate::io::{
         AlignedBuffer, MftExtentMap, MftRecordMerger, ParseResult, ParsedColumns, ParsedRecord,
-        ReadChunk, SECTOR_SIZE, apply_fixup, generate_precise_read_chunks, generate_read_chunks,
-        parse_record, parse_record_full, parse_record_zero_alloc, process_record,
+        ReadChunk, SECTOR_SIZE, SECTOR_SIZE_U64, apply_fixup, generate_precise_read_chunks,
+        generate_read_chunks, parse_record, parse_record_full, parse_record_zero_alloc,
+        process_record,
     };
     pub(super) use crate::platform::VolumeHandle;
     pub(super) use crate::{MftError, Result};

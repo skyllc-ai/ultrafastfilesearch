@@ -96,6 +96,37 @@ pub fn micros_to_i64(us: u128) -> i64 {
     i64::try_from(us).unwrap_or(i64::MAX)
 }
 
+/// Convert a `u128` nanosecond count (e.g. from `Duration::as_nanos()`) to
+/// `u64`.
+///
+/// Saturates at `u64::MAX` (~584 years of nanoseconds) instead of truncating.
+/// Used wherever per-phase elapsed time is reported as a `u64` ns counter.
+#[inline]
+#[must_use]
+pub fn nanos_to_u64(ns: u128) -> u64 {
+    u64::try_from(ns).unwrap_or(u64::MAX)
+}
+
+/// Convert a `u128` millisecond count (e.g. from `Duration::as_millis()`) to
+/// `u64`.
+///
+/// Saturates at `u64::MAX` (~584 million years) instead of truncating.
+#[inline]
+#[must_use]
+pub fn millis_to_u64(ms: u128) -> u64 {
+    u64::try_from(ms).unwrap_or(u64::MAX)
+}
+
+/// Convert a `usize` to `u64`.
+///
+/// On every supported target (`usize` ≤ 64 bits) this is a lossless widening.
+/// On hypothetical >64-bit targets it saturates at `u64::MAX`.
+#[inline]
+#[must_use]
+pub fn usize_to_u64(val: usize) -> u64 {
+    u64::try_from(val).unwrap_or(u64::MAX)
+}
+
 /// Convert bytes (`u64`) to megabytes as `f64` for display purposes.
 ///
 /// Precision loss beyond 2^53 bytes (~8 PB) is acceptable for human display.

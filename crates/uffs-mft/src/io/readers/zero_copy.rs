@@ -2,14 +2,6 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Shared zero-copy buffer parsing helpers.
-//!
-//! **Module-scoped cast justification:** `as usize` casts here convert NTFS
-//! on-disk record sizes (`u32`) into `usize` for buffer slicing.  `usize` is
-//! ≥ 32 bits on every supported target.
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS record-size (u32 -> usize) casts are lossless on supported 32/64-bit targets"
-)]
 
 use super::prelude::*;
 
@@ -23,9 +15,9 @@ pub(super) fn parse_buffer_zero_copy_inner(
     record_size: u32,
     merge_extensions: bool,
 ) -> Vec<ParseResult> {
-    let skip_begin = chunk.skip_begin as usize;
-    let effective_count = chunk.effective_record_count() as usize;
-    let record_size_usize = record_size as usize;
+    let skip_begin = frs_to_usize(chunk.skip_begin);
+    let effective_count = frs_to_usize(chunk.effective_record_count());
+    let record_size_usize = u32_as_usize(record_size);
     let start_frs = chunk.start_frs;
 
     let mut results = Vec::with_capacity(effective_count);
@@ -36,7 +28,7 @@ pub(super) fn parse_buffer_zero_copy_inner(
             break;
         }
 
-        let frs = start_frs + skip_begin as u64 + i as u64;
+        let frs = start_frs + usize_to_u64(skip_begin) + usize_to_u64(i);
 
         let Some(record_slice) = buffer_slice.get_mut(offset..offset + record_size_usize) else {
             break;

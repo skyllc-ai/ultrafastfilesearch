@@ -39,7 +39,7 @@ pub use self::metadata::{
 pub use self::records::{
     AttributeIterator, AttributeRecordHeader, AttributeRef, AttributeType, FILE_RECORD_MAGIC,
     FileRecordFlags, FileRecordSegmentHeader, INDX_RECORD_MAGIC, MultiSectorHeader,
-    NonResidentAttributeData, ResidentAttributeData, SECTOR_SIZE, apply_usa_fixup,
+    NonResidentAttributeData, ResidentAttributeData, SECTOR_SIZE, SECTOR_SIZE_U64, apply_usa_fixup,
     fixup_file_record,
 };
 

@@ -14,7 +14,7 @@
 /// The module name `prelude` is exempt from `clippy::wildcard_imports`.
 mod prelude {
     pub(super) use super::super::prelude::*;
-    pub(super) use super::shared::{IoCompletionPort, OverlappedRead};
+    pub(super) use super::shared::{IoCompletionPort, OverlappedRead, set_overlapped_offset};
 }
 
 mod multi_volume;
@@ -23,4 +23,5 @@ mod shared;
 
 pub use multi_volume::{MultiVolumeIoOp, MultiVolumeIocpReader, VolumeState, prepare_volume_state};
 pub use reader::IocpMftReader;
+pub(crate) use shared::set_overlapped_offset;
 pub use shared::{IoCompletionPort, OverlappedRead};

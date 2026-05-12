@@ -172,8 +172,8 @@ pub use flags::FileFlags;
 pub use index::{
     ChildInfo, FileRecord, IndexBuildTiming, IndexNameRef, IndexStreamInfo, LinkInfo, MftIndex,
     NO_ENTRY, ROOT_FRS, SizeInfo, StandardInfo, UsnApplyStats, bytes_to_mb_f64, f64_to_u64,
-    f64_to_usize, frs_to_usize, len_to_u16, len_to_u32, micros_to_i64, nonneg_to_u64, u32_as_usize,
-    u32_to_f64, u64_to_f64, usize_to_f64,
+    f64_to_usize, frs_to_usize, len_to_u16, len_to_u32, micros_to_i64, millis_to_u64, nanos_to_u64,
+    nonneg_to_u64, u32_as_usize, u32_to_f64, u64_to_f64, usize_to_f64, usize_to_u64,
 };
 // Re-export I/O types for advanced usage
 #[cfg(windows)]

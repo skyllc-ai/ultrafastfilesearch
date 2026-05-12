@@ -2,16 +2,6 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Sliding-window IOCP reader path.
-//!
-//! **Module-scoped cast justification:** `as usize` / `as u32` casts convert
-//! NTFS disk offsets (`u64`) and record sizes (`u32`) into `usize` / `u32`
-//! for buffer slicing and Win32 `OVERLAPPED` high/low offset split.  `usize`
-//! ≥ 32 bits on every supported target; NTFS disk offsets are physically
-//! bounded by the volume size (≤ 2⁶⁴ bytes).
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS disk-offset / record-size / OVERLAPPED offset-split casts are lossless"
-)]
 
 use super::prelude::*;
 
@@ -72,8 +62,8 @@ impl ParallelMftReader {
             op: IoOp,
         }
 
-        let record_size = self.extent_map.bytes_per_record as usize;
-        let total_records = self.extent_map.total_records() as usize;
+        let record_size = u32_as_usize(self.extent_map.bytes_per_record);
+        let total_records = frs_to_usize(self.extent_map.total_records());
         let total_bytes = total_records * record_size;
 
         // Use adaptive concurrency and I/O size based on drive type (M2 optimization)
@@ -116,7 +106,7 @@ impl ParallelMftReader {
         let mut total_skipped_records = 0_u64;
 
         for chunk in &sorted_chunks {
-            let skip_begin_bytes = chunk.skip_begin as usize * record_size;
+            let skip_begin_bytes = frs_to_usize(chunk.skip_begin) * record_size;
             let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
 
             // Log chunks with non-zero skips
@@ -144,13 +134,14 @@ impl ParallelMftReader {
                 continue;
             }
 
-            let chunk_bytes = effective_records as usize * record_size;
+            let chunk_bytes = frs_to_usize(effective_records) * record_size;
             let mut offset_within_chunk = 0_usize;
 
             while offset_within_chunk < chunk_bytes {
                 let io_size = core::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
-                let disk_offset =
-                    chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
+                let disk_offset = chunk.disk_offset
+                    + usize_to_u64(skip_begin_bytes)
+                    + usize_to_u64(offset_within_chunk);
 
                 io_ops.push_back(IoOp {
                     disk_offset,
@@ -225,8 +216,7 @@ impl ParallelMftReader {
                 // SAFETY: The pinned allocation remains in place while the I/O is in
                 // flight; this only projects a mutable reference without moving it.
                 let op_mut = unsafe { in_flight_op.as_mut().get_unchecked_mut() };
-                op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32_u32) as u32;
+                set_overlapped_offset(&mut op_mut.overlapped, offset);
 
                 // Issue read
                 let overlapped_ptr = &raw mut op_mut.overlapped;
@@ -319,7 +309,10 @@ impl ParallelMftReader {
 
                 // Copy data to final buffer
                 let dest_offset = op_mut.op.buffer_offset;
-                let Some(src_slice) = op_mut.buffer.as_slice().get(..bytes_transferred as usize)
+                let Some(src_slice) = op_mut
+                    .buffer
+                    .as_slice()
+                    .get(..u32_as_usize(bytes_transferred))
                 else {
                     return Err(MftError::Io(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
@@ -328,7 +321,7 @@ impl ParallelMftReader {
                 };
                 let Some(dest_slice) = mft_buffer
                     .as_mut_slice()
-                    .get_mut(dest_offset..dest_offset + bytes_transferred as usize)
+                    .get_mut(dest_offset..dest_offset + u32_as_usize(bytes_transferred))
                 else {
                     return Err(MftError::Io(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
@@ -366,9 +359,7 @@ impl ParallelMftReader {
                     // SAFETY: The pinned allocation remains in place while the I/O
                     // is in flight; this only projects a mutable reference.
                     let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
-                    new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                    new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
-                        (offset >> 32_u32) as u32;
+                    set_overlapped_offset(&mut new_op_mut.overlapped, offset);
 
                     let new_overlapped_ptr = &raw mut new_op_mut.overlapped;
                     let read_size = new_op_mut.op.size;
@@ -445,10 +436,10 @@ impl ParallelMftReader {
                     let records_in_chunk = chunk.len() / record_size;
 
                     for i in 0..records_in_chunk {
-                        let frs = start_frs + i;
+                        let frs = usize_to_u64(start_frs + i);
 
                         if let Some(bm) = bitmap_ref
-                            && !bm.is_record_in_use(frs as u64)
+                            && !bm.is_record_in_use(frs)
                         {
                             skipped += 1;
                             processed += 1;
@@ -466,7 +457,7 @@ impl ParallelMftReader {
                             continue;
                         }
 
-                        let parsed = parse_record_full(record_slice, frs as u64);
+                        let parsed = parse_record_full(record_slice, frs);
                         match &parsed {
                             ParseResult::Skip => skipped += 1,
                             ParseResult::Base(_) | ParseResult::Extension(_) => {
@@ -507,10 +498,10 @@ impl ParallelMftReader {
                     let records_in_chunk = chunk.len() / record_size;
 
                     for i in 0..records_in_chunk {
-                        let frs = start_frs + i;
+                        let frs = usize_to_u64(start_frs + i);
 
                         if let Some(bm) = bitmap_ref
-                            && !bm.is_record_in_use(frs as u64)
+                            && !bm.is_record_in_use(frs)
                         {
                             skipped += 1;
                             processed += 1;
@@ -528,7 +519,7 @@ impl ParallelMftReader {
                             continue;
                         }
 
-                        if let Some(record) = parse_record(record_slice, frs as u64) {
+                        if let Some(record) = parse_record(record_slice, frs) {
                             records.push(record);
                         } else {
                             skipped += 1;

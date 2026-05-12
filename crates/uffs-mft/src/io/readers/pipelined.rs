@@ -2,15 +2,6 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Pipelined reader implementation.
-//!
-//! **Module-scoped cast justification:** `as usize` casts here convert NTFS
-//! disk offsets / read sizes (`u64`) and record sizes (`u32`) into `usize` for
-//! buffer slicing.  `usize` is ≥ 32 bits on every supported target; the u64
-//! values are physically bounded by the volume size (≤ 2⁶⁴ bytes).
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
-)]
 
 use super::prelude::*;
 
@@ -126,7 +117,7 @@ impl PipelinedMftReader {
             .sum();
 
         let estimated_records = self.bitmap.as_ref().map_or_else(
-            || self.extent_map.total_records() as usize,
+            || frs_to_usize(self.extent_map.total_records()),
             crate::platform::MftBitmap::count_in_use,
         );
 
@@ -142,7 +133,7 @@ impl PipelinedMftReader {
             .iter()
             .map(|chunk| chunk.record_count * u64::from(record_size))
             .max()
-            .unwrap_or(self.chunk_size as u64) as usize;
+            .map_or(self.chunk_size, frs_to_usize);
 
         let (reader_handle, rx) = spawn_pipelined_reader(
             handle,
@@ -168,7 +159,7 @@ impl PipelinedMftReader {
                 record_size: chunk_record_size,
             } = read_buffer;
 
-            bytes_read_total += bytes_read as u64;
+            bytes_read_total += usize_to_u64(bytes_read);
             parse_buffer_into_merger(
                 buffer.as_mut_slice(),
                 bytes_read,
@@ -287,7 +278,7 @@ impl PipelinedMftReader {
             .sum();
 
         let estimated_records = self.bitmap.as_ref().map_or_else(
-            || self.extent_map.total_records() as usize,
+            || frs_to_usize(self.extent_map.total_records()),
             crate::platform::MftBitmap::count_in_use,
         );
 
@@ -304,7 +295,7 @@ impl PipelinedMftReader {
             .iter()
             .map(|chunk| chunk.record_count * u64::from(record_size))
             .max()
-            .unwrap_or(self.chunk_size as u64) as usize;
+            .map_or(self.chunk_size, frs_to_usize);
 
         Some(PipelinedReadPlan {
             chunks,
@@ -363,7 +354,7 @@ where
 
     while let Ok(result) = rx.recv() {
         let read_buffer = result?;
-        bytes_read_total += read_buffer.bytes_read as u64;
+        bytes_read_total += usize_to_u64(read_buffer.bytes_read);
         all_buffers.push(read_buffer);
 
         if let Some(ref mut cb) = progress_callback {
@@ -421,9 +412,10 @@ fn read_chunk_into_buffer_static(
     let read_size = chunk.record_count * u64::from(record_size);
 
     // Align to sector boundary
-    let aligned_offset = (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
-    let offset_adjustment = (chunk.disk_offset - aligned_offset) as usize;
-    let aligned_size = (read_size as usize + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
+    let aligned_offset = (chunk.disk_offset / SECTOR_SIZE_U64) * SECTOR_SIZE_U64;
+    let offset_adjustment = frs_to_usize(chunk.disk_offset - aligned_offset);
+    let aligned_size =
+        (frs_to_usize(read_size) + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
 
     // Resize buffer if needed
     if buffer.len() < aligned_size {
@@ -465,7 +457,7 @@ fn read_chunk_into_buffer_static(
         return Err(MftError::Io(std::io::Error::last_os_error()));
     }
 
-    Ok(bytes_read as usize)
+    Ok(u32_as_usize(bytes_read))
 }
 
 /// Spawn the pipelined reader thread.
@@ -494,7 +486,11 @@ fn spawn_pipelined_reader(
     // `HANDLE` is not `Send`; ferry the raw pointer as `usize` and rebuild on
     // the worker side.  The pointer remains valid because the orchestrator
     // owns the underlying `VolumeHandle` for the duration of this call.
-    let handle_raw = handle.0 as usize;
+    // SAFETY-NOTE: handle.0 is `*mut c_void`; we serialise it as `usize` purely
+    // for cross-thread transport because `HANDLE` is `!Send`. The pointer is
+    // reconstructed on the worker thread and the underlying handle remains
+    // owned by the orchestrator for the full lifetime of this call.
+    let handle_raw = handle.0.expose_provenance();
 
     let join = thread::spawn(move || {
         let thread_handle = HANDLE(handle_raw as *mut core::ffi::c_void);
@@ -546,9 +542,9 @@ fn parse_buffer_into_merger(
     merge_extensions: bool,
     merger: &mut MftRecordMerger,
 ) {
-    let skip_begin = chunk.skip_begin as usize;
-    let effective_count = chunk.effective_record_count() as usize;
-    let record_size_usize = chunk_record_size as usize;
+    let skip_begin = frs_to_usize(chunk.skip_begin);
+    let effective_count = frs_to_usize(chunk.effective_record_count());
+    let record_size_usize = u32_as_usize(chunk_record_size);
 
     for i in 0..effective_count {
         let offset = (skip_begin + i) * record_size_usize;
@@ -560,7 +556,7 @@ fn parse_buffer_into_merger(
             break;
         }
 
-        let frs = chunk.start_frs + skip_begin as u64 + i as u64;
+        let frs = chunk.start_frs + usize_to_u64(skip_begin) + usize_to_u64(i);
 
         if !apply_fixup(record_slice) {
             continue;

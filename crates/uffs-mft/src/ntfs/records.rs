@@ -18,6 +18,13 @@ pub const INDX_RECORD_MAGIC: u32 = 0x5844_4E49;
 /// Sector size (standard for NTFS).
 pub const SECTOR_SIZE: usize = 512;
 
+/// Sector size as `u64` for byte-offset arithmetic.
+///
+/// NTFS disk offsets are tracked as `u64`; aliasing the same compile-time
+/// constant in the wider integer type avoids `as u64` truncation casts at
+/// every alignment site without introducing runtime conversion.
+pub const SECTOR_SIZE_U64: u64 = 512;
+
 /// Multi-sector header present at the start of FILE and INDX records.
 ///
 /// Contains the Update Sequence Array (USA) used for sector-level

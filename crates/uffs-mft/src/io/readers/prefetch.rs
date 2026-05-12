@@ -2,15 +2,6 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Prefetch reader implementation.
-//!
-//! **Module-scoped cast justification:** `as usize` casts here convert NTFS
-//! disk offsets / read sizes (`u64`) and record sizes (`u32`) into `usize` for
-//! buffer slicing.  `usize` is ≥ 32 bits on every supported target; the u64
-//! values are physically bounded by the volume size (≤ 2⁶⁴ bytes).
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
-)]
 
 use super::prelude::*;
 
@@ -89,7 +80,7 @@ impl PrefetchMftReader {
 
         // Estimate capacity
         let estimated_records = self.bitmap.as_ref().map_or_else(
-            || self.extent_map.total_records() as usize,
+            || frs_to_usize(self.extent_map.total_records()),
             crate::platform::MftBitmap::count_in_use,
         );
 
@@ -105,11 +96,13 @@ impl PrefetchMftReader {
         let mut bytes_read_total: u64 = 0;
 
         // Pre-allocate two buffers for double-buffering
-        let max_chunk_size = chunks
-            .iter()
-            .map(|chunk| chunk.record_count * u64::from(record_size))
-            .max()
-            .unwrap_or(self.chunk_size as u64) as usize;
+        let max_chunk_size = frs_to_usize(
+            chunks
+                .iter()
+                .map(|chunk| chunk.record_count * u64::from(record_size))
+                .max()
+                .unwrap_or_else(|| usize_to_u64(self.chunk_size)),
+        );
 
         let mut buffer_a = AlignedBuffer::new(max_chunk_size + SECTOR_SIZE);
         let mut buffer_b = AlignedBuffer::new(max_chunk_size + SECTOR_SIZE);
@@ -125,12 +118,12 @@ impl PrefetchMftReader {
             };
 
             let bytes_read = Self::read_chunk_into_buffer(handle, &chunk, record_size, buffer)?;
-            bytes_read_total += bytes_read as u64;
+            bytes_read_total += usize_to_u64(bytes_read);
 
             // Process records from buffer using zero-copy in-place fixup
-            let skip_begin = chunk.skip_begin as usize;
-            let effective_count = chunk.effective_record_count() as usize;
-            let record_size_usize = record_size as usize;
+            let skip_begin = frs_to_usize(chunk.skip_begin);
+            let effective_count = frs_to_usize(chunk.effective_record_count());
+            let record_size_usize = u32_as_usize(record_size);
             let buffer_slice = buffer.as_mut_slice();
 
             for i in 0..effective_count {
@@ -144,7 +137,7 @@ impl PrefetchMftReader {
                     break;
                 };
 
-                let frs = chunk.start_frs + skip_begin as u64 + i as u64;
+                let frs = chunk.start_frs + usize_to_u64(skip_begin) + usize_to_u64(i);
 
                 // Apply fixup in-place on the shared buffer (zero-copy)
                 if !apply_fixup(record_slice) {
@@ -194,10 +187,10 @@ impl PrefetchMftReader {
         let read_size = chunk.record_count * u64::from(record_size);
 
         // Align to sector boundary
-        let aligned_offset = (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
-        let offset_adjustment = (chunk.disk_offset - aligned_offset) as usize;
+        let aligned_offset = (chunk.disk_offset / SECTOR_SIZE_U64) * SECTOR_SIZE_U64;
+        let offset_adjustment = frs_to_usize(chunk.disk_offset - aligned_offset);
         let aligned_size =
-            (read_size as usize + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
+            (frs_to_usize(read_size) + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
 
         // Resize buffer if needed
         if buffer.len() < aligned_size {
@@ -230,6 +223,6 @@ impl PrefetchMftReader {
         // out-parameter.
         unsafe { ReadFile(handle, Some(read_slice), Some(&raw mut bytes_read), None) }?;
 
-        Ok(bytes_read as usize)
+        Ok(u32_as_usize(bytes_read))
     }
 }

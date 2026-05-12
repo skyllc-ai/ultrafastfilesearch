@@ -6,10 +6,6 @@
 //! Windows-only: requires HANDLE.
 
 #![cfg(windows)]
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
-)]
 
 use super::prelude::*;
 
@@ -36,10 +32,10 @@ impl ParallelMftReader {
         let read_size = chunk.record_count * u64::from(record_size);
 
         // Align to sector boundary
-        let aligned_offset = (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
-        let offset_adjustment = (chunk.disk_offset - aligned_offset) as usize;
+        let aligned_offset = (chunk.disk_offset / SECTOR_SIZE_U64) * SECTOR_SIZE_U64;
+        let offset_adjustment = frs_to_usize(chunk.disk_offset - aligned_offset);
         let aligned_size =
-            (read_size as usize + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
+            (frs_to_usize(read_size) + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
 
         // M1 8.4: Reuse buffer, only reallocate if needed
         let mut buffer = self.buffer.borrow_mut();
@@ -74,7 +70,7 @@ impl ParallelMftReader {
         unsafe { ReadFile(handle, Some(read_slice), Some(&raw mut bytes_read), None) }?;
 
         // Extract the actual data (accounting for alignment offset)
-        let actual_size = (bytes_read as usize).saturating_sub(offset_adjustment);
+        let actual_size = u32_as_usize(bytes_read).saturating_sub(offset_adjustment);
         let data = buffer
             .as_slice()
             .get(offset_adjustment..offset_adjustment + actual_size)

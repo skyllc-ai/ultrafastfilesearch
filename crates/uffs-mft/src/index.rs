@@ -54,7 +54,8 @@ pub(crate) use self::types::cmp_ascii_case_insensitive;
 pub use self::types::{
     FileRecord, IndexNameRef, IndexStreamInfo, InternalStreamInfo, LinkInfo, NO_ENTRY, ROOT_FRS,
     SizeInfo, bytes_to_mb_f64, f64_to_u64, f64_to_usize, frs_to_usize, len_to_u16, len_to_u32,
-    micros_to_i64, nonneg_to_u64, u32_as_usize, u32_to_f64, u64_to_f64, usize_to_f64,
+    micros_to_i64, millis_to_u64, nanos_to_u64, nonneg_to_u64, u32_as_usize, u32_to_f64,
+    u64_to_f64, usize_to_f64, usize_to_u64,
 };
 pub use self::usn::UsnApplyStats;
 

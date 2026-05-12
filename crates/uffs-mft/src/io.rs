@@ -13,7 +13,7 @@
 //! Available on all platforms for offline MFT processing (chaos mode, testing).
 //! Live MFT access via HANDLE is Windows-only and gated per-function.
 
-pub use crate::ntfs::SECTOR_SIZE;
+pub use crate::ntfs::{SECTOR_SIZE, SECTOR_SIZE_U64};
 
 mod aligned_buffer;
 mod chunking;

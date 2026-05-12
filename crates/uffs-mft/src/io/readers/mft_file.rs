@@ -7,16 +7,13 @@
 //! byte `record_size` → FRS 1, etc.
 
 #![cfg(windows)]
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS record-size / byte-offset casts are lossless on supported 32/64-bit targets"
-)]
 
 use tracing::{debug, info, warn};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
 use crate::error::Result;
+use crate::index::{frs_to_usize, u32_as_usize, usize_to_u64};
 use crate::io::AlignedBuffer;
 use crate::parse::{MftRecordMerger, ParsedRecord, apply_fixup, parse_record_full};
 
@@ -48,7 +45,7 @@ pub(crate) fn read_mft_from_file_handle(
     record_size: u32,
     total_records: u64,
 ) -> Result<Vec<ParsedRecord>> {
-    let record_size_usize = record_size as usize;
+    let record_size_usize = u32_as_usize(record_size);
     let total_bytes = total_records * u64::from(record_size);
     let chunk_records = MFT_FILE_CHUNK_SIZE / record_size_usize;
     let chunk_bytes = chunk_records * record_size_usize;
@@ -60,7 +57,7 @@ pub(crate) fn read_mft_from_file_handle(
         "📖 Starting $MFT file-based read (write-protect fallback)"
     );
 
-    let mut merger = MftRecordMerger::with_capacity(total_records as usize);
+    let mut merger = MftRecordMerger::with_capacity(frs_to_usize(total_records));
     let mut buffer = AlignedBuffer::new(chunk_bytes + 512); // pad for alignment
     let mut file_offset: u64 = 0;
     let mut frs: u64 = 0;
@@ -75,7 +72,7 @@ pub(crate) fn read_mft_from_file_handle(
 
     while frs < total_records {
         let remaining = total_records - frs;
-        let records_this_chunk = remaining.min(chunk_records as u64) as usize;
+        let records_this_chunk = frs_to_usize(remaining.min(usize_to_u64(chunk_records)));
         let read_size = records_this_chunk * record_size_usize;
 
         if buffer.len() < read_size {
@@ -97,9 +94,9 @@ pub(crate) fn read_mft_from_file_handle(
             &mut merger,
         );
 
-        frs += actual_records as u64;
-        file_offset += actual_bytes as u64;
-        bytes_read_total += actual_bytes as u64;
+        frs += usize_to_u64(actual_records);
+        file_offset += usize_to_u64(actual_bytes);
+        bytes_read_total += usize_to_u64(actual_bytes);
         chunks_read += 1;
 
         if actual_bytes < read_size {
@@ -176,7 +173,7 @@ unsafe fn read_one_chunk(
         ));
     }
 
-    Ok(bytes_read as usize)
+    Ok(u32_as_usize(bytes_read))
 }
 
 /// Apply NTFS fixup to each record slice in `buffer` and feed the parsed
@@ -197,7 +194,7 @@ fn parse_chunk_records(
             break;
         };
         if apply_fixup(record_slice) {
-            merger.add_result(parse_record_full(record_slice, base_frs + i as u64));
+            merger.add_result(parse_record_full(record_slice, base_frs + usize_to_u64(i)));
         }
     }
 }

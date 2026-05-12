@@ -2,27 +2,15 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Parallel reader implementations and strategy entrypoints.
-//!
-//! **Module-scoped cast justification:** `as usize` / `as u32` casts convert
-//! NTFS disk offsets (`u64`) and record sizes (`u32`) into `usize` / `u32`
-//! for buffer slicing.  `usize` ≥ 32 bits on every supported target; NTFS
-//! disk offsets are physically bounded by the volume size (≤ 2⁶⁴ bytes).
-#![cfg_attr(
-    windows,
-    expect(
-        clippy::cast_possible_truncation,
-        reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
-    )
-)]
 
 /// Re-exports the readers-wide prelude plus parallel-only items
-/// (`IoCompletionPort`, `ParallelMftReader`, `ReadParseTiming`) so that
-/// parallel's child reader paths can write `impl ParallelMftReader` and
-/// reference the timing struct directly. The module name `prelude` is
-/// exempt from `clippy::wildcard_imports`.
+/// (`IoCompletionPort`, `set_overlapped_offset`, `ParallelMftReader`,
+/// `ReadParseTiming`) so that parallel's child reader paths can write
+/// `impl ParallelMftReader` and reference the timing struct directly.
+/// The module name `prelude` is exempt from `clippy::wildcard_imports`.
 #[cfg(windows)]
 mod prelude {
-    pub(super) use super::super::iocp::IoCompletionPort;
+    pub(super) use super::super::iocp::{IoCompletionPort, set_overlapped_offset};
     pub(super) use super::super::prelude::*;
     pub(super) use super::{ParallelMftReader, ReadParseTiming};
 }
@@ -392,7 +380,7 @@ impl ParallelMftReader {
         info!(num_chunks = chunks.len(), "Generated read chunks");
 
         let estimated_records = self.bitmap.as_ref().map_or_else(
-            || self.extent_map.total_records() as usize,
+            || frs_to_usize(self.extent_map.total_records()),
             crate::platform::MftBitmap::count_in_use,
         );
         info!(estimated_records, "Estimated record count");
@@ -429,9 +417,9 @@ impl ParallelMftReader {
         let combined = chunk_data
             .par_iter_mut()
             .fold(ChunkStats::default, |mut acc, (chunk, data)| {
-                let record_size_bytes = record_size as usize;
-                let skip_begin = chunk.skip_begin as usize;
-                let effective_count = chunk.effective_record_count() as usize;
+                let record_size_bytes = u32_as_usize(record_size);
+                let skip_begin = frs_to_usize(chunk.skip_begin);
+                let effective_count = frs_to_usize(chunk.effective_record_count());
 
                 if chunk.skip_begin > 0 || chunk.skip_end > 0 {
                     debug!(
@@ -453,7 +441,7 @@ impl ParallelMftReader {
                         break;
                     };
 
-                    let frs = chunk.start_frs + skip_begin as u64 + i as u64;
+                    let frs = chunk.start_frs + usize_to_u64(skip_begin) + usize_to_u64(i);
 
                     if !apply_fixup(record_slice) {
                         acc.skipped += 1;
@@ -508,9 +496,9 @@ impl ParallelMftReader {
         let combined = chunk_data
             .par_iter_mut()
             .fold(LegacyStats::default, |mut acc, (chunk, data)| {
-                let record_size_bytes = record_size as usize;
-                let skip_begin = chunk.skip_begin as usize;
-                let effective_count = chunk.effective_record_count() as usize;
+                let record_size_bytes = u32_as_usize(record_size);
+                let skip_begin = frs_to_usize(chunk.skip_begin);
+                let effective_count = frs_to_usize(chunk.effective_record_count());
 
                 acc.records.reserve(effective_count);
 
@@ -521,7 +509,7 @@ impl ParallelMftReader {
                         break;
                     };
 
-                    let frs = chunk.start_frs + skip_begin as u64 + i as u64;
+                    let frs = chunk.start_frs + usize_to_u64(skip_begin) + usize_to_u64(i);
 
                     if !apply_fixup(record_slice) {
                         acc.skipped += 1;

@@ -2,15 +2,6 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Multi-volume IOCP reader.
-//!
-//! **Module-scoped cast justification:** `as usize` / `as u32` casts convert
-//! NTFS disk offsets (`u64`) and record sizes (`u32`) into `usize` / `u32`
-//! respectively.  `usize` ≥ 32 bits on every supported target; NTFS disk
-//! offsets are physically bounded by the volume size (≤ 2⁶⁴ bytes).
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
-)]
 
 use super::prelude::*;
 
@@ -110,7 +101,7 @@ impl MultiVolumeIocpReader {
     pub fn read_all_volumes(&mut self) -> Result<Vec<crate::index::MftIndex>> {
         use core::pin::Pin;
 
-        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError, HANDLE};
+        use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
         use windows::Win32::Storage::FileSystem::ReadFile;
         use windows::Win32::System::IO::GetQueuedCompletionStatus;
 
@@ -121,10 +112,9 @@ impl MultiVolumeIocpReader {
             op: MultiVolumeIoOp,
         }
 
-        let record_size = self
-            .volumes
-            .first()
-            .map_or(1024_usize, |vol| vol.extent_map.bytes_per_record as usize);
+        let record_size = self.volumes.first().map_or(1024_usize, |vol| {
+            u32_as_usize(vol.extent_map.bytes_per_record)
+        });
 
         // Create single IOCP for all volumes
         let iocp = IoCompletionPort::new(0)?;
@@ -174,20 +164,11 @@ impl MultiVolumeIocpReader {
                         .unwrap_or_else(|| AlignedBuffer::new(vol.io_chunk_size));
 
                     let mut in_flight_op = Box::pin(InFlightOp {
-                        overlapped: windows::Win32::System::IO::OVERLAPPED {
-                            Anonymous: windows::Win32::System::IO::OVERLAPPED_0 {
-                                Anonymous: windows::Win32::System::IO::OVERLAPPED_0_0 {
-                                    Offset: (op.disk_offset & 0xFFFF_FFFF) as u32,
-                                    OffsetHigh: (op.disk_offset >> 32) as u32,
-                                },
-                            },
-                            hEvent: HANDLE::default(),
-                            Internal: 0,
-                            InternalHigh: 0,
-                        },
+                        overlapped: windows::Win32::System::IO::OVERLAPPED::default(),
                         buffer,
                         op: op.clone(),
                     });
+                    set_overlapped_offset(&mut in_flight_op.overlapped, op.disk_offset);
 
                     let overlapped_ptr = core::ptr::addr_of_mut!(in_flight_op.overlapped);
                     let buffer_ptr = in_flight_op.buffer.as_mut_slice().as_mut_ptr();
@@ -311,7 +292,7 @@ impl MultiVolumeIocpReader {
             let Some(buffer_slice) = completed_op
                 .buffer
                 .as_slice()
-                .get(..bytes_transferred as usize)
+                .get(..u32_as_usize(bytes_transferred))
             else {
                 // Unreachable: bytes_transferred ≤ allocated buffer size.
                 return Err(MftError::Io(std::io::Error::new(
@@ -319,7 +300,7 @@ impl MultiVolumeIocpReader {
                     "multi-volume completion reported more bytes than buffer size",
                 )));
             };
-            let records_in_buffer = bytes_transferred as usize / record_size;
+            let records_in_buffer = u32_as_usize(bytes_transferred) / record_size;
             let start_frs = completed_op.op.start_frs;
 
             for (current_frs, record_idx) in (start_frs..).zip(0..records_in_buffer) {
@@ -345,20 +326,11 @@ impl MultiVolumeIocpReader {
                     .unwrap_or_else(|| AlignedBuffer::new(vol.io_chunk_size));
 
                 let mut new_in_flight = Box::pin(InFlightOp {
-                    overlapped: windows::Win32::System::IO::OVERLAPPED {
-                        Anonymous: windows::Win32::System::IO::OVERLAPPED_0 {
-                            Anonymous: windows::Win32::System::IO::OVERLAPPED_0_0 {
-                                Offset: (next_op.disk_offset & 0xFFFF_FFFF) as u32,
-                                OffsetHigh: (next_op.disk_offset >> 32) as u32,
-                            },
-                        },
-                        hEvent: HANDLE::default(),
-                        Internal: 0,
-                        InternalHigh: 0,
-                    },
+                    overlapped: windows::Win32::System::IO::OVERLAPPED::default(),
                     buffer,
                     op: next_op.clone(),
                 });
+                set_overlapped_offset(&mut new_in_flight.overlapped, next_op.disk_offset);
 
                 let next_overlapped_ptr = core::ptr::addr_of_mut!(new_in_flight.overlapped);
                 let buffer_ptr = new_in_flight.buffer.as_mut_slice().as_mut_ptr();
@@ -448,8 +420,8 @@ pub fn prepare_volume_state(
     bitmap: Option<crate::platform::MftBitmap>,
     drive_type: crate::platform::DriveType,
 ) -> VolumeState {
-    let record_size = extent_map.bytes_per_record as usize;
-    let total_records = extent_map.total_records() as usize;
+    let record_size = u32_as_usize(extent_map.bytes_per_record);
+    let total_records = frs_to_usize(extent_map.total_records());
     // For HDD, use extent-aware concurrency (fragmentation affects optimal value)
     let max_concurrency = if matches!(drive_type, crate::platform::DriveType::Hdd) {
         crate::platform::DriveType::optimal_concurrency_for_hdd(extent_map.extent_count())
@@ -466,20 +438,21 @@ pub fn prepare_volume_state(
     let mut io_queue = alloc::collections::VecDeque::new();
 
     for chunk in &sorted_chunks {
-        let skip_begin_bytes = chunk.skip_begin as usize * record_size;
+        let skip_begin_bytes = frs_to_usize(chunk.skip_begin) * record_size;
         let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
         if effective_records == 0 {
             continue;
         }
 
-        let chunk_bytes = effective_records as usize * record_size;
+        let chunk_bytes = frs_to_usize(effective_records) * record_size;
         let mut offset_within_chunk = 0_usize;
         let mut frs_offset = 0_u64;
 
         while offset_within_chunk < chunk_bytes {
             let io_size = core::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
-            let disk_offset =
-                chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
+            let disk_offset = chunk.disk_offset
+                + usize_to_u64(skip_begin_bytes)
+                + usize_to_u64(offset_within_chunk);
 
             io_queue.push_back(MultiVolumeIoOp {
                 disk_offset,
@@ -488,7 +461,7 @@ pub fn prepare_volume_state(
             });
 
             offset_within_chunk += io_size;
-            frs_offset += (io_size / record_size) as u64;
+            frs_offset += usize_to_u64(io_size / record_size);
         }
     }
 

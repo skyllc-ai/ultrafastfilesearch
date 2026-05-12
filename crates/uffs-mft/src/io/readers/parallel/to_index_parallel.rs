@@ -2,16 +2,6 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Parallel direct-to-index reader path.
-//!
-//! **Module-scoped cast justification:** `as usize` / `as u32` casts convert
-//! NTFS disk offsets (`u64`) and record sizes (`u32`) into `usize` / `u32`
-//! for buffer slicing and Win32 `OVERLAPPED` high/low offset split.  `usize`
-//! ≥ 32 bits on every supported target; NTFS disk offsets are physically
-//! bounded by the volume size (≤ 2⁶⁴ bytes).
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS disk-offset / record-size / OVERLAPPED offset-split casts are lossless"
-)]
 
 use super::prelude::*;
 
@@ -122,8 +112,8 @@ impl ParallelMftReader {
 
         use crate::index::MftIndex;
 
-        let record_size = self.extent_map.bytes_per_record as usize;
-        let total_records = self.extent_map.total_records() as usize;
+        let record_size = u32_as_usize(self.extent_map.bytes_per_record);
+        let total_records = frs_to_usize(self.extent_map.total_records());
 
         // Use provided values or adaptive defaults
         // For HDD, use extent-aware concurrency (fragmentation affects optimal value)
@@ -199,19 +189,19 @@ impl ParallelMftReader {
         let mut io_ops: VecDeque<IoOp> = VecDeque::new();
 
         for chunk in &sorted_chunks {
-            let skip_begin_bytes = chunk.skip_begin as usize * record_size;
+            let skip_begin_bytes = frs_to_usize(chunk.skip_begin) * record_size;
             let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
             if effective_records == 0 {
                 continue;
             }
 
-            let chunk_bytes = effective_records as usize * record_size;
+            let chunk_bytes = frs_to_usize(effective_records) * record_size;
 
             if use_direct_chunk_io {
                 // NVMe/SSD: Use chunk directly as one I/O operation (no splitting)
                 // This minimizes syscall overhead since there's no seek penalty
                 io_ops.push_back(IoOp {
-                    disk_offset: chunk.disk_offset + skip_begin_bytes as u64,
+                    disk_offset: chunk.disk_offset + usize_to_u64(skip_begin_bytes),
                     size: chunk_bytes,
                     start_frs: chunk.start_frs + chunk.skip_begin,
                 });
@@ -223,8 +213,9 @@ impl ParallelMftReader {
                 while offset_within_chunk < chunk_bytes {
                     let io_size = core::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
                     let records_in_io = io_size / record_size;
-                    let disk_offset =
-                        chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
+                    let disk_offset = chunk.disk_offset
+                        + usize_to_u64(skip_begin_bytes)
+                        + usize_to_u64(offset_within_chunk);
 
                     io_ops.push_back(IoOp {
                         disk_offset,
@@ -233,7 +224,7 @@ impl ParallelMftReader {
                     });
 
                     offset_within_chunk += io_size;
-                    frs_offset += records_in_io as u64;
+                    frs_offset += usize_to_u64(records_in_io);
                 }
             }
         }
@@ -245,7 +236,7 @@ impl ParallelMftReader {
             .map_or(total_records, crate::platform::MftBitmap::count_in_use);
 
         // Calculate total bytes to read and max I/O size for buffer allocation
-        let total_bytes_to_read: u64 = io_ops.iter().map(|op| op.size as u64).sum();
+        let total_bytes_to_read: u64 = io_ops.iter().map(|op| usize_to_u64(op.size)).sum();
         let max_io_size = io_ops
             .iter()
             .map(|op| op.size)
@@ -290,7 +281,7 @@ impl ParallelMftReader {
                 // Use `mut buffer` to apply fixup in-place (zero-copy optimization)
                 while let Ok(Some((mut buffer, start_frs, record_count))) = worker_rx.recv() {
                     for i in 0..record_count {
-                        let frs = start_frs + i as u64;
+                        let frs = start_frs + usize_to_u64(i);
 
                         // Check bitmap
                         if let Some(bm) = &worker_bitmap
@@ -374,8 +365,7 @@ impl ParallelMftReader {
                 // SAFETY: The pinned allocation remains in place while the I/O is in
                 // flight; this only projects a mutable reference without moving it.
                 let op_mut = unsafe { in_flight_op.as_mut().get_unchecked_mut() };
-                op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32_u32) as u32;
+                set_overlapped_offset(&mut op_mut.overlapped, offset);
 
                 let overlapped_ptr = &raw mut op_mut.overlapped;
                 let read_size = op_mut.op.size;
@@ -464,7 +454,10 @@ impl ParallelMftReader {
                 let op_mut = unsafe { completed_op.as_mut().get_unchecked_mut() };
 
                 // Send buffer to workers (copy the data)
-                let Some(buffer_slice) = op_mut.buffer.as_slice().get(..bytes_transferred as usize)
+                let Some(buffer_slice) = op_mut
+                    .buffer
+                    .as_slice()
+                    .get(..u32_as_usize(bytes_transferred))
                 else {
                     // Unreachable: bytes_transferred ≤ allocated buffer size.
                     drop(tx);
@@ -475,7 +468,7 @@ impl ParallelMftReader {
                 };
                 let buffer_data = buffer_slice.to_vec();
                 let start_frs = op_mut.op.start_frs;
-                let record_count = bytes_transferred as usize / record_size;
+                let record_count = u32_as_usize(bytes_transferred) / record_size;
 
                 if tx
                     .send(Some((buffer_data, start_frs, record_count)))
@@ -510,9 +503,7 @@ impl ParallelMftReader {
                     // SAFETY: The pinned allocation remains in place while the I/O
                     // is in flight; this only projects a mutable reference.
                     let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
-                    new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                    new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
-                        (offset >> 32_u32) as u32;
+                    set_overlapped_offset(&mut new_op_mut.overlapped, offset);
 
                     let new_overlapped_ptr = &raw mut new_op_mut.overlapped;
                     let read_size = new_op_mut.op.size;

@@ -4,20 +4,17 @@
 //! Live MFT read/export command handlers.
 //!
 //! These commands print human-readable progress to stdout and convert
-//! `usize` byte counters into `f64` for MB/s rate display; the lint
-//! exemptions below capture those CLI-specific patterns.
-#![expect(
-    clippy::float_arithmetic,
-    clippy::cast_precision_loss,
-    clippy::default_numeric_fallback,
-    reason = "byte / rate calculations convert integer counters into f64 for human-readable display"
-)]
+//! `usize` byte counters into `f64` for MB/s rate display.  The integer
+//! to `f64` conversions go through the `bytes_to_mb_f64` / `u64_to_f64`
+//! helpers (which carry their own targeted `cast_precision_loss` expects)
+//! and the float arithmetic for display rates carries scoped expects at
+//! the use site.
 
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
 use tracing::{info, warn};
-use uffs_mft::MftReader;
+use uffs_mft::{MftReader, bytes_to_mb_f64, usize_to_f64};
 
 use crate::display::{format_bytes, format_duration, format_number_commas};
 use crate::progress::spinner;
@@ -60,7 +57,7 @@ pub(crate) async fn cmd_read(
     let file_size = save_dataframe_with_logging(&mut df, &output)?;
 
     let total_elapsed = start_time.elapsed();
-    let file_size_mb = file_size as f64 / (1024.0 * 1024.0);
+    let file_size_mb = bytes_to_mb_f64(file_size);
     info!(
         drive = %drive_upper,
         records = record_count,
@@ -71,7 +68,7 @@ pub(crate) async fn cmd_read(
 
     pb.finish_with_message(format!(
         "✅ Exported {} records to {} ({}) in {}",
-        format_number_commas(record_count as u64),
+        format_number_commas(uffs_mft::usize_to_u64(record_count)),
         output.display(),
         format_bytes(file_size),
         format_duration(total_elapsed)
@@ -161,10 +158,15 @@ fn read_records_with_logging(reader: &MftReader) -> Result<(uffs_polars::DataFra
 
     let record_count = df.height();
     let read_elapsed = read_start.elapsed();
-    let records_per_sec = if read_elapsed.as_secs_f64() > 0.0 {
-        record_count as f64 / read_elapsed.as_secs_f64()
+    let records_per_sec = if read_elapsed.as_secs_f64() > 0.0_f64 {
+        #[expect(
+            clippy::float_arithmetic,
+            reason = "display-only records-per-second rate"
+        )]
+        let rate = usize_to_f64(record_count) / read_elapsed.as_secs_f64();
+        rate
     } else {
-        0.0
+        0.0_f64
     };
 
     info!(
@@ -192,7 +194,7 @@ fn save_dataframe_with_logging(
     MftReader::save_parquet(df, output).with_context(|| "Failed to save Parquet")?;
 
     let file_size = std::fs::metadata(output).map_or(0, |metadata| metadata.len());
-    let file_size_mb = file_size as f64 / (1024.0 * 1024.0);
+    let file_size_mb = bytes_to_mb_f64(file_size);
     info!(
         output = %output.display(),
         file_size_mb = format!("{:.2}", file_size_mb),

@@ -6,19 +6,6 @@
 //! Windows-only: requires HANDLE.
 
 #![cfg(windows)]
-// Module-scoped pedantic allows with prose justification.  All
-// `cast_possible_truncation` hits in this file fall into two domain-bounded
-// categories:
-//   1. `Duration::as_nanos() as u64` — 584 years of nanoseconds fit in u64; timing values measured
-//      here are sub-second in practice.
-//   2. `u32 / u64 -> usize` for on-disk NTFS record counts and byte offsets — usize is ≥ 32 bits on
-//      every supported target, and u64 values come from the NTFS MFT which is physically bounded by
-//      the disk size (≤ 2⁶⁴ bytes but practically always < 2⁶⁴ records).
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "timing (u128 ns -> u64) and NTFS record-count (u32/u64 -> usize) casts are \
-              provably lossless given the domain bounds; see module header"
-)]
 
 use super::prelude::*;
 
@@ -83,7 +70,7 @@ impl ParallelMftReader {
         info!(num_chunks = chunks.len(), "Generated read chunks");
 
         let estimated_records = self.bitmap.as_ref().map_or_else(
-            || self.extent_map.total_records() as usize,
+            || frs_to_usize(self.extent_map.total_records()),
             crate::platform::MftBitmap::count_in_use,
         );
         let record_size = self.extent_map.bytes_per_record;
@@ -98,7 +85,7 @@ impl ParallelMftReader {
             self.parse_legacy_timed(&mut chunk_data, record_size)
         };
 
-        let wall_ns = wall_start.elapsed().as_nanos() as u64;
+        let wall_ns = nanos_to_u64(wall_start.elapsed().as_nanos());
         let timing = ReadParseTiming {
             io_ns,
             parse_ns,
@@ -156,7 +143,7 @@ impl ParallelMftReader {
                 }
             }
         }
-        let io_ns = io_start.elapsed().as_nanos() as u64;
+        let io_ns = nanos_to_u64(io_start.elapsed().as_nanos());
 
         info!(
             chunks_read = chunk_data.len(),
@@ -188,9 +175,9 @@ impl ParallelMftReader {
         let combined = chunk_data
             .par_iter_mut()
             .fold(ChunkStats::default, |mut acc, (chunk, data)| {
-                let record_size_bytes = record_size as usize;
-                let skip_begin = chunk.skip_begin as usize;
-                let effective_count = chunk.effective_record_count() as usize;
+                let record_size_bytes = u32_as_usize(record_size);
+                let skip_begin = frs_to_usize(chunk.skip_begin);
+                let effective_count = frs_to_usize(chunk.effective_record_count());
 
                 acc.results.reserve(effective_count);
 
@@ -201,7 +188,7 @@ impl ParallelMftReader {
                         break;
                     };
 
-                    let frs = chunk.start_frs + skip_begin as u64 + i as u64;
+                    let frs = chunk.start_frs + usize_to_u64(skip_begin) + usize_to_u64(i);
 
                     if !apply_fixup(record_slice) {
                         acc.skipped += 1;
@@ -231,7 +218,7 @@ impl ParallelMftReader {
         self.skipped_records
             .fetch_add(combined.skipped, Ordering::Relaxed);
 
-        let parse_ns = parse_start.elapsed().as_nanos() as u64;
+        let parse_ns = nanos_to_u64(parse_start.elapsed().as_nanos());
         info!(
             parse_results = combined.results.len(),
             parse_ms = parse_ns / 1_000_000,
@@ -244,7 +231,7 @@ impl ParallelMftReader {
             merger.add_result(result);
         }
         let records = merger.merge();
-        let merge_ns = merge_start.elapsed().as_nanos() as u64;
+        let merge_ns = nanos_to_u64(merge_start.elapsed().as_nanos());
 
         info!(
             records = records.len(),
@@ -275,9 +262,9 @@ impl ParallelMftReader {
         let combined = chunk_data
             .par_iter_mut()
             .fold(LegacyStats::default, |mut acc, (chunk, data)| {
-                let record_size_bytes = record_size as usize;
-                let skip_begin = chunk.skip_begin as usize;
-                let effective_count = chunk.effective_record_count() as usize;
+                let record_size_bytes = u32_as_usize(record_size);
+                let skip_begin = frs_to_usize(chunk.skip_begin);
+                let effective_count = frs_to_usize(chunk.effective_record_count());
 
                 acc.records.reserve(effective_count);
 
@@ -288,7 +275,7 @@ impl ParallelMftReader {
                         break;
                     };
 
-                    let frs = chunk.start_frs + skip_begin as u64 + i as u64;
+                    let frs = chunk.start_frs + usize_to_u64(skip_begin) + usize_to_u64(i);
 
                     if !apply_fixup(record_slice) {
                         acc.skipped += 1;
@@ -316,7 +303,7 @@ impl ParallelMftReader {
         self.skipped_records
             .fetch_add(combined.skipped, Ordering::Relaxed);
 
-        let parse_ns = parse_start.elapsed().as_nanos() as u64;
+        let parse_ns = nanos_to_u64(parse_start.elapsed().as_nanos());
         info!(
             records = combined.records.len(),
             parse_ms = parse_ns / 1_000_000,

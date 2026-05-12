@@ -6,10 +6,6 @@
 //! Windows-only: requires HANDLE.
 
 #![cfg(windows)]
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
-)]
 
 use super::prelude::*;
 
@@ -133,7 +129,7 @@ impl ParallelMftReader {
         info!(num_chunks = chunks.len(), "Generated read chunks");
 
         let estimated_records = self.bitmap.as_ref().map_or_else(
-            || self.extent_map.total_records() as usize,
+            || frs_to_usize(self.extent_map.total_records()),
             crate::platform::MftBitmap::count_in_use,
         );
         info!(estimated_records, "Estimated record count");
@@ -205,7 +201,7 @@ impl ParallelMftReader {
             match self.read_chunk(handle, &chunk, record_size) {
                 Ok(data) => {
                     consecutive_failures = 0;
-                    total_bytes_read += data.len() as u64;
+                    total_bytes_read += usize_to_u64(data.len());
                     if let Some(cb) = progress_callback {
                         cb(total_bytes_read, total_bytes_to_read);
                     }
@@ -249,9 +245,9 @@ impl ParallelMftReader {
         let combined = chunk_data
             .par_iter()
             .fold(ChunkStats::default, |mut acc, (chunk, data)| {
-                let record_size_bytes = record_size as usize;
-                let skip_begin = chunk.skip_begin as usize;
-                let effective_count = chunk.effective_record_count() as usize;
+                let record_size_bytes = u32_as_usize(record_size);
+                let skip_begin = frs_to_usize(chunk.skip_begin);
+                let effective_count = frs_to_usize(chunk.effective_record_count());
 
                 acc.results.reserve(effective_count);
 
@@ -261,7 +257,7 @@ impl ParallelMftReader {
                         break;
                     };
 
-                    let frs = chunk.start_frs + skip_begin as u64 + i as u64;
+                    let frs = chunk.start_frs + usize_to_u64(skip_begin) + usize_to_u64(i);
 
                     let result = parse_record_zero_alloc(record_data, frs);
                     if matches!(result, ParseResult::Skip) {
@@ -321,9 +317,9 @@ impl ParallelMftReader {
                     ..Default::default()
                 },
                 |mut acc, (chunk, data)| {
-                    let record_size_bytes = record_size as usize;
-                    let skip_begin = chunk.skip_begin as usize;
-                    let effective_count = chunk.effective_record_count() as usize;
+                    let record_size_bytes = u32_as_usize(record_size);
+                    let skip_begin = frs_to_usize(chunk.skip_begin);
+                    let effective_count = frs_to_usize(chunk.effective_record_count());
 
                     acc.columns.reserve(effective_count);
 
@@ -333,7 +329,7 @@ impl ParallelMftReader {
                             break;
                         };
 
-                        let frs = chunk.start_frs + skip_begin as u64 + i as u64;
+                        let frs = chunk.start_frs + usize_to_u64(skip_begin) + usize_to_u64(i);
 
                         match parse_record_zero_alloc(record_data, frs) {
                             ParseResult::Base(record) => {

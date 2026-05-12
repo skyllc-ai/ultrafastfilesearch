@@ -3,14 +3,10 @@
 
 //! Basic record and batch readers.
 //!
-//! **Module-scoped cast justification:** `as usize` casts here convert NTFS
-//! disk offsets / read sizes (`u64`) and record sizes (`u32`) into `usize` for
-//! buffer slicing.  `usize` is ≥ 32 bits on every supported target; the u64
-//! values are physically bounded by the volume size (≤ 2⁶⁴ bytes).
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
-)]
+//! All `as`-style integer conversions in this module use the typed helpers
+//! (`u32_as_usize`, `frs_to_usize`) and the `SECTOR_SIZE_U64` constant so the
+//! NTFS disk-offset / record-size casts retain their domain bounds without a
+//! module-level lint suppression.
 
 use super::prelude::*;
 
@@ -50,7 +46,7 @@ impl MftRecordReader {
         );
 
         // Allocate buffer for one record (rounded up to sector boundary)
-        let buffer_size = (record_size as usize).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
+        let buffer_size = u32_as_usize(record_size).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
         let buffer = AlignedBuffer::new(buffer_size);
 
         Self {
@@ -72,7 +68,7 @@ impl MftRecordReader {
         let record_size = extent_map.bytes_per_record;
 
         // Allocate buffer for one record (rounded up to sector boundary)
-        let buffer_size = (record_size as usize).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
+        let buffer_size = u32_as_usize(record_size).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
         let buffer = AlignedBuffer::new(buffer_size);
 
         Self {
@@ -122,8 +118,8 @@ impl MftRecordReader {
                 })?;
 
         // Align to sector boundary
-        let aligned_offset = (record_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
-        let offset_within_sector = (record_offset - aligned_offset) as usize;
+        let aligned_offset = (record_offset / SECTOR_SIZE_U64) * SECTOR_SIZE_U64;
+        let offset_within_sector = frs_to_usize(record_offset - aligned_offset);
 
         // Seek to the aligned offset
         let mut new_position = 0_i64;
@@ -151,7 +147,7 @@ impl MftRecordReader {
             )
         }?;
 
-        if (bytes_read as usize) < self.record_size as usize + offset_within_sector {
+        if u32_as_usize(bytes_read) < u32_as_usize(self.record_size) + offset_within_sector {
             return Err(MftError::RecordRead {
                 frs,
                 reason: format!(
@@ -164,7 +160,7 @@ impl MftRecordReader {
         // Return the record data (accounting for sector alignment offset)
         self.buffer
             .as_slice()
-            .get(offset_within_sector..offset_within_sector + self.record_size as usize)
+            .get(offset_within_sector..offset_within_sector + u32_as_usize(self.record_size))
             .ok_or_else(|| MftError::RecordRead {
                 frs,
                 reason: format!(
@@ -238,7 +234,7 @@ impl BatchMftReader {
         let record_size = extent_map.bytes_per_record;
 
         // Round block size to cluster boundary
-        let cluster_size = bytes_per_cluster as usize;
+        let cluster_size = u32_as_usize(bytes_per_cluster);
         let read_block_size = block_size.div_ceil(cluster_size) * cluster_size;
 
         let buffer = AlignedBuffer::new(read_block_size);
@@ -255,7 +251,7 @@ impl BatchMftReader {
     /// Returns the number of records that fit in one read block.
     #[must_use]
     pub const fn records_per_block(&self) -> usize {
-        self.read_block_size / self.record_size as usize
+        self.read_block_size / u32_as_usize(self.record_size)
     }
 
     /// Returns the extent map.
@@ -304,9 +300,9 @@ impl BatchMftReader {
 
         // Calculate how many records we can read
         let total_records = self.extent_map.total_records();
-        let max_records = (total_records - start_frs) as usize;
+        let max_records = frs_to_usize(total_records - start_frs);
         let records_to_read = max_records.min(self.records_per_block());
-        let bytes_to_read = records_to_read * self.record_size as usize;
+        let bytes_to_read = records_to_read * u32_as_usize(self.record_size);
 
         // Seek to the aligned offset
         let mut new_position = 0_i64;
@@ -336,14 +332,14 @@ impl BatchMftReader {
         unsafe { ReadFile(handle, Some(read_slice), Some(&raw mut bytes_read), None) }?;
 
         // Calculate offset within buffer for the first record
-        let offset_in_buffer = (start_offset - aligned_offset) as usize;
-        let usable_bytes = (bytes_read as usize).saturating_sub(offset_in_buffer);
-        let records_read = usable_bytes / self.record_size as usize;
+        let offset_in_buffer = frs_to_usize(start_offset - aligned_offset);
+        let usable_bytes = u32_as_usize(bytes_read).saturating_sub(offset_in_buffer);
+        let records_read = usable_bytes / u32_as_usize(self.record_size);
 
         let batch = self
             .buffer
             .as_slice()
-            .get(offset_in_buffer..offset_in_buffer + records_read * self.record_size as usize)
+            .get(offset_in_buffer..offset_in_buffer + records_read * u32_as_usize(self.record_size))
             .ok_or_else(|| {
                 MftError::Io(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
@@ -365,7 +361,7 @@ impl BatchMftReader {
     /// The record data slice, or `None` if the index is out of bounds.
     #[must_use]
     pub fn extract_record<'a>(&self, batch_buffer: &'a [u8], index: usize) -> Option<&'a [u8]> {
-        let record_size = self.record_size as usize;
+        let record_size = u32_as_usize(self.record_size);
         let start = index * record_size;
         let end = start + record_size;
         batch_buffer.get(start..end)

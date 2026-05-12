@@ -18,17 +18,12 @@
     reason = "intentional user-facing CLI USN journal output: stdout for primary output, stderr for journal-unavailable diagnostics"
 )]
 #![expect(
-    clippy::float_arithmetic,
-    clippy::cast_precision_loss,
-    clippy::default_numeric_fallback,
-    reason = "byte/MB conversion of USN journal sizes uses f64 for human-readable display"
-)]
-#![expect(
     clippy::min_ident_chars,
     reason = "short identifiers used for printf-style indices in CLI output"
 )]
 
 use anyhow::Result;
+use uffs_mft::bytes_to_mb_f64;
 
 use crate::display::format_usn_reason;
 
@@ -50,11 +45,11 @@ pub(crate) async fn cmd_usn_info(drive: char) -> Result<()> {
             println!("  Max USN:          {}", info.max_usn);
             println!(
                 "  Max Size:         {:.1} MB",
-                info.max_size as f64 / (1024.0 * 1024.0)
+                bytes_to_mb_f64(info.max_size)
             );
             println!(
                 "  Alloc Delta:      {:.1} MB",
-                info.allocation_delta as f64 / (1024.0 * 1024.0)
+                bytes_to_mb_f64(info.allocation_delta)
             );
             println!();
             println!(

@@ -6,15 +6,6 @@
 //! Windows-only: requires IOCP and HANDLE.
 
 #![cfg(windows)]
-// Module-scoped cast justification: `as usize` / `as u32` casts convert
-// NTFS disk offsets (u64) and record sizes (u32) into usize / u32 for buffer
-// slicing and Win32 OVERLAPPED high/low offset split.  usize ≥ 32 bits on
-// every supported target; NTFS disk offsets are physically bounded by the
-// volume size (≤ 2⁶⁴ bytes).
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS disk-offset / record-size / OVERLAPPED offset-split casts are lossless"
-)]
 
 use super::prelude::*;
 
@@ -131,8 +122,8 @@ impl ParallelMftReader {
         }
 
         debug!("[PARITY_TRACE] to_index.rs: read_all_sliding_window_iocp_to_index ENTER");
-        let record_size = self.extent_map.bytes_per_record as usize;
-        let total_records = self.extent_map.total_records() as usize;
+        let record_size = u32_as_usize(self.extent_map.bytes_per_record);
+        let total_records = frs_to_usize(self.extent_map.total_records());
         debug!(
             record_size,
             total_records, "[PARITY_TRACE] to_index.rs: config"
@@ -195,19 +186,19 @@ impl ParallelMftReader {
         let mut io_ops: VecDeque<IoOp> = VecDeque::new();
 
         for chunk in &sorted_chunks {
-            let skip_begin_bytes = chunk.skip_begin as usize * record_size;
+            let skip_begin_bytes = frs_to_usize(chunk.skip_begin) * record_size;
             let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
             if effective_records == 0 {
                 continue;
             }
 
-            let chunk_bytes = effective_records as usize * record_size;
+            let chunk_bytes = frs_to_usize(effective_records) * record_size;
 
             if use_direct_chunk_io {
                 // NVMe/SSD: Use chunk directly as one I/O operation (no splitting)
                 // This minimizes syscall overhead since there's no seek penalty
                 io_ops.push_back(IoOp {
-                    disk_offset: chunk.disk_offset + skip_begin_bytes as u64,
+                    disk_offset: chunk.disk_offset + usize_to_u64(skip_begin_bytes),
                     size: chunk_bytes,
                     start_frs: chunk.start_frs + chunk.skip_begin,
                 });
@@ -219,8 +210,9 @@ impl ParallelMftReader {
                 while offset_within_chunk < chunk_bytes {
                     let io_size = core::cmp::min(io_chunk_size, chunk_bytes - offset_within_chunk);
                     let records_in_io = io_size / record_size;
-                    let disk_offset =
-                        chunk.disk_offset + skip_begin_bytes as u64 + offset_within_chunk as u64;
+                    let disk_offset = chunk.disk_offset
+                        + usize_to_u64(skip_begin_bytes)
+                        + usize_to_u64(offset_within_chunk);
 
                     io_ops.push_back(IoOp {
                         disk_offset,
@@ -229,7 +221,7 @@ impl ParallelMftReader {
                     });
 
                     offset_within_chunk += io_size;
-                    frs_offset += records_in_io as u64;
+                    frs_offset += usize_to_u64(records_in_io);
                 }
             }
         }
@@ -238,13 +230,13 @@ impl ParallelMftReader {
         let (estimated_records, max_frs) = self.bitmap.as_ref().map_or_else(
             || {
                 // No bitmap: use total records as both count and max FRS
-                (total_records, total_records.saturating_sub(1) as u64)
+                (total_records, usize_to_u64(total_records.saturating_sub(1)))
             },
             |bitmap| (bitmap.count_in_use(), bitmap.max_frs_in_use()),
         );
 
         // Calculate total bytes to read and max I/O size for buffer allocation
-        let total_bytes_to_read: u64 = io_ops.iter().map(|op| op.size as u64).sum();
+        let total_bytes_to_read: u64 = io_ops.iter().map(|op| usize_to_u64(op.size)).sum();
         let max_io_size = io_ops
             .iter()
             .map(|op| op.size)
@@ -302,8 +294,7 @@ impl ParallelMftReader {
                 // SAFETY: The pinned allocation remains in place while the I/O is in
                 // flight; this only projects a mutable reference without moving it.
                 let op_mut = unsafe { in_flight_op.as_mut().get_unchecked_mut() };
-                op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                op_mut.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32_u32) as u32;
+                set_overlapped_offset(&mut op_mut.overlapped, offset);
 
                 let overlapped_ptr = &raw mut op_mut.overlapped;
                 let read_size = op_mut.op.size;
@@ -373,7 +364,7 @@ impl ParallelMftReader {
                 )
             };
 
-            total_wait_time_ns += wait_start.elapsed().as_nanos() as u64;
+            total_wait_time_ns += nanos_to_u64(wait_start.elapsed().as_nanos());
 
             if result.is_err() {
                 // SAFETY: `GetLastError` reads the calling thread's last-error slot
@@ -440,7 +431,7 @@ impl ParallelMftReader {
                 let Some(buffer_slice) = op_mut
                     .buffer
                     .as_mut_slice()
-                    .get_mut(..bytes_transferred as usize)
+                    .get_mut(..u32_as_usize(bytes_transferred))
                 else {
                     // Unreachable: completion bytes_transferred ≤ allocated buffer size.
                     return Err(MftError::Io(std::io::Error::new(
@@ -448,10 +439,10 @@ impl ParallelMftReader {
                         "to-index completion reported more bytes than buffer size",
                     )));
                 };
-                let records_in_buffer = bytes_transferred as usize / record_size;
+                let records_in_buffer = u32_as_usize(bytes_transferred) / record_size;
 
                 for i in 0..records_in_buffer {
-                    let frs = op_mut.op.start_frs + i as u64;
+                    let frs = op_mut.op.start_frs + usize_to_u64(i);
                     let offset = i * record_size;
 
                     // Check bitmap
@@ -498,7 +489,7 @@ impl ParallelMftReader {
                     }
                 }
 
-                total_parse_time_ns += parse_start.elapsed().as_nanos() as u64;
+                total_parse_time_ns += nanos_to_u64(parse_start.elapsed().as_nanos());
 
                 bytes_read_total += u64::from(bytes_transferred);
                 completed_count += 1;
@@ -526,9 +517,7 @@ impl ParallelMftReader {
                     // SAFETY: The pinned allocation remains in place while the I/O
                     // is in flight; this only projects a mutable reference.
                     let new_op_mut = unsafe { new_in_flight.as_mut().get_unchecked_mut() };
-                    new_op_mut.overlapped.Anonymous.Anonymous.Offset = offset as u32;
-                    new_op_mut.overlapped.Anonymous.Anonymous.OffsetHigh =
-                        (offset >> 32_u32) as u32;
+                    set_overlapped_offset(&mut new_op_mut.overlapped, offset);
 
                     let new_overlapped_ptr = &raw mut new_op_mut.overlapped;
                     let read_size = new_op_mut.op.size;
@@ -568,7 +557,7 @@ impl ParallelMftReader {
             }
         }
 
-        let total_ms = read_start.elapsed().as_millis() as u64;
+        let total_ms = millis_to_u64(read_start.elapsed().as_millis());
         let wait_ms = total_wait_time_ns / 1_000_000;
         let parse_ms = total_parse_time_ns / 1_000_000;
 

@@ -6,10 +6,6 @@
 //! Windows-only: requires HANDLE.
 
 #![cfg(windows)]
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
-)]
 
 use super::prelude::*;
 
@@ -61,8 +57,8 @@ impl ParallelMftReader {
     where
         F: Fn(u64, u64),
     {
-        let record_size = self.extent_map.bytes_per_record as usize;
-        let total_records = self.extent_map.total_records() as usize;
+        let record_size = u32_as_usize(self.extent_map.bytes_per_record);
+        let total_records = frs_to_usize(self.extent_map.total_records());
         let total_bytes = total_records * record_size;
 
         info!(
@@ -171,10 +167,10 @@ impl ParallelMftReader {
                 let records_in_chunk = chunk.len() / record_size;
 
                 for i in 0..records_in_chunk {
-                    let frs = start_frs + i;
+                    let frs = usize_to_u64(start_frs + i);
 
                     if let Some(bm) = bitmap_ref
-                        && !bm.is_record_in_use(frs as u64)
+                        && !bm.is_record_in_use(frs)
                     {
                         skipped += 1;
                         processed += 1;
@@ -192,7 +188,7 @@ impl ParallelMftReader {
                         continue;
                     }
 
-                    let result = parse_record_full(record_slice, frs as u64);
+                    let result = parse_record_full(record_slice, frs);
                     if matches!(result, ParseResult::Skip) {
                         skipped += 1;
                     } else {
@@ -252,10 +248,10 @@ impl ParallelMftReader {
                 let records_in_chunk = chunk.len() / record_size;
 
                 for i in 0..records_in_chunk {
-                    let frs = start_frs + i;
+                    let frs = usize_to_u64(start_frs + i);
 
                     if let Some(bm) = bitmap_ref
-                        && !bm.is_record_in_use(frs as u64)
+                        && !bm.is_record_in_use(frs)
                     {
                         skipped += 1;
                         processed += 1;
@@ -273,7 +269,7 @@ impl ParallelMftReader {
                         continue;
                     }
 
-                    if let Some(record) = parse_record(record_slice, frs as u64) {
+                    if let Some(record) = parse_record(record_slice, frs) {
                         records.push(record);
                     } else {
                         skipped += 1;
@@ -320,17 +316,18 @@ fn plan_bulk_chunks(
     let mut sorted_chunks = generate_read_chunks(extent_map, bitmap, chunk_size);
     sorted_chunks.sort_by_key(|chunk| chunk.disk_offset);
 
+    let record_size_u64 = usize_to_u64(record_size);
     let bytes_to_read: u64 = sorted_chunks
         .iter()
         .map(|chunk| {
             let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
-            effective_records * record_size as u64
+            effective_records * record_size_u64
         })
         .sum();
 
     let total_mb = total_bytes / (1024 * 1024);
     let read_mb = bytes_to_read / (1024 * 1024);
-    let savings_pct = 100 - (bytes_to_read * 100 / total_bytes as u64);
+    let savings_pct = 100 - (bytes_to_read * 100 / usize_to_u64(total_bytes));
 
     info!(
         chunks = sorted_chunks.len(),
@@ -365,16 +362,16 @@ where
     let mut bytes_read_total: u64 = 0;
 
     for chunk in sorted_chunks {
-        let skip_begin_bytes = chunk.skip_begin as usize * record_size;
+        let skip_begin_bytes = frs_to_usize(chunk.skip_begin) * record_size;
         let effective_records = chunk.record_count - chunk.skip_begin - chunk.skip_end;
 
         if effective_records == 0 {
             continue;
         }
 
-        let effective_bytes = effective_records as usize * record_size;
-        let disk_offset = chunk.disk_offset + skip_begin_bytes as u64;
-        let buffer_offset = chunk.start_frs as usize * record_size + skip_begin_bytes;
+        let effective_bytes = frs_to_usize(effective_records) * record_size;
+        let disk_offset = chunk.disk_offset + usize_to_u64(skip_begin_bytes);
+        let buffer_offset = frs_to_usize(chunk.start_frs) * record_size + skip_begin_bytes;
 
         let mut new_pos: i64 = 0;
         // SAFETY: `handle` is live and `new_pos` is valid writable storage

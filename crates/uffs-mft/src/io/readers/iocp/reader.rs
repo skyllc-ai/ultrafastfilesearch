@@ -2,15 +2,6 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Single-volume IOCP reader.
-//!
-//! **Module-scoped cast justification:** `as usize` / `as u32` casts convert
-//! NTFS disk offsets (`u64`) and record sizes (`u32`) into `usize` / `u32`
-//! respectively.  `usize` ≥ 32 bits on every supported target; NTFS disk
-//! offsets are physically bounded by the volume size (≤ 2⁶⁴ bytes).
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "NTFS disk-offset / record-size casts are lossless on supported 32/64-bit targets"
-)]
 
 use super::prelude::*;
 
@@ -125,7 +116,7 @@ impl IocpMftReader {
             .sum();
 
         let estimated_records = self.bitmap.as_ref().map_or_else(
-            || self.extent_map.total_records() as usize,
+            || frs_to_usize(self.extent_map.total_records()),
             crate::platform::MftBitmap::count_in_use,
         );
 
@@ -144,11 +135,13 @@ impl IocpMftReader {
         let mut all_results: Vec<ParseResult> = Vec::with_capacity(estimated_records);
         let mut bytes_read_total: u64 = 0;
 
-        let max_chunk_size = chunks
-            .iter()
-            .map(|chunk| chunk.record_count * u64::from(record_size))
-            .max()
-            .unwrap_or(self.chunk_size as u64) as usize;
+        let max_chunk_size = frs_to_usize(
+            chunks
+                .iter()
+                .map(|chunk| chunk.record_count * u64::from(record_size))
+                .max()
+                .unwrap_or_else(|| usize_to_u64(self.chunk_size)),
+        );
 
         // Sort chunks by disk_offset (LCN order) to minimise seek time on HDD.
         let mut sorted_chunks: Vec<ReadChunk> = chunks;
@@ -238,7 +231,7 @@ impl IocpMftReader {
         // SAFETY: the `Pin<Box<_>>` is still pinned in this scope; we only
         // project a mutable reference without moving the allocation.
         let op_mut = unsafe { op.as_mut().get_unchecked_mut() };
-        op_mut.bytes_read = bytes_transferred as usize;
+        op_mut.bytes_read = u32_as_usize(bytes_transferred);
 
         let results = parse_buffer_zero_copy_inner(
             op_mut.buffer.as_mut_slice(),
@@ -348,9 +341,10 @@ unsafe fn iocp_issue_replacement_read(
     use windows::Win32::Storage::FileSystem::ReadFile;
 
     let read_size = chunk.record_count * u64::from(record_size);
-    let aligned_offset = (chunk.disk_offset / SECTOR_SIZE as u64) * SECTOR_SIZE as u64;
-    let offset_adjustment = (chunk.disk_offset - aligned_offset) as usize;
-    let aligned_size = (read_size as usize + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
+    let aligned_offset = (chunk.disk_offset / SECTOR_SIZE_U64) * SECTOR_SIZE_U64;
+    let offset_adjustment = frs_to_usize(chunk.disk_offset - aligned_offset);
+    let aligned_size =
+        (frs_to_usize(read_size) + offset_adjustment).div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
 
     if buffer.len() < aligned_size {
         buffer = AlignedBuffer::new(aligned_size);
