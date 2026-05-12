@@ -2,17 +2,32 @@
 # SPDX-License-Identifier: MPL-2.0
 
 # ─────────────────────────────────────────────────────────────────────────────
-# crates.io dry-run — Phase R6 of `release-automation-plan.md` step 4
+# crates.io pre-publish guards — Phase R6 of `release-automation-plan.md`
+# step 4, extended with `cargo-semver-checks` in Tier R3-05 of
+# `docs/dev/architecture/code_clean/CLIPPY_POSTURE.md`.
 #
 # What this does:
 #
-#   Runs `cargo publish --dry-run -p <crate>` for every workspace member
-#   that is publishable (i.e. doesn't have `publish = false` set in its
-#   Cargo.toml).  A successful dry-run for a crate proves that its
-#   metadata (`description`, `keywords`, `categories`, `readme`, `license`,
-#   docs.rs config, dependency version requirements) is acceptable to
-#   crates.io's manifest validator AND that all of its registry-form
-#   dependencies resolve.
+#   Two independent pre-publish guards run against every workspace
+#   member that is publishable (i.e. doesn't have `publish = false`
+#   set in its Cargo.toml):
+#
+#     1. `cargo semver-checks check-release -p <crate>` — diffs the
+#        crate's current rustdoc JSON against the latest version on
+#        crates.io.  Surfaces SemVer-breaking changes (removed pub
+#        items, signature changes, new required generic params, etc.)
+#        that would require a major-version bump.  Returns success
+#        for crates that have never been published (nothing to
+#        compare against), so this guard is informational pre-R8 and
+#        activates automatically once the first publish lands.
+#
+#     2. `cargo publish --dry-run -p <crate>` — full per-crate
+#        compile + manifest validation against crates.io's accept
+#        rules.  A successful dry-run for a crate proves that its
+#        metadata (`description`, `keywords`, `categories`, `readme`,
+#        `license`, docs.rs config, dependency version requirements)
+#        is acceptable to crates.io's manifest validator AND that
+#        all of its registry-form dependencies resolve.
 #
 # Why advisory (workflow always exits 0):
 #
@@ -68,7 +83,7 @@
 #   • plan §R8     — dress rehearsal that will resolve known failures
 # ─────────────────────────────────────────────────────────────────────────────
 
-name: "📦 crates.io dry-run"
+name: "📦 crates.io dry-run + semver-checks"
 
 on:
   schedule:
@@ -107,6 +122,15 @@ jobs:
       # regressions immediately rather than leaving them in a
       # silent-summary state.
       FAIL_ON_DRY_RUN_ERROR: 'false'
+      # Flip to `true` once R8 dress-rehearsal lands (i.e. once at
+      # least one crate has a baseline version on crates.io to
+      # compare against).  Until then, cargo-semver-checks's
+      # `check-release` subcommand exits successfully for crates
+      # without a published baseline (nothing to compare against),
+      # so this flag is informational pre-R8 anyway — the gate
+      # activates automatically as soon as the first publish lands.
+      # Tier R3-05 of `docs/dev/architecture/code_clean/CLIPPY_POSTURE.md`.
+      FAIL_ON_SEMVER_BREAK: 'false'
 
     steps:
       - name: Checkout repository
@@ -161,6 +185,64 @@ jobs:
           echo "Enumerated ${#CRATES[@]} publishable crate(s):"
           printf '  - %s\n' "${CRATES[@]}"
 
+      - name: Install cargo-semver-checks
+        # Pinned to `taiki-e/install-action` (same convention as
+        # `cargo-deny`, `cargo-vet`, `cargo-machete`, `cargo-udeps`).
+        # Bundled with the rust-cache so the per-week binary fetch
+        # piggybacks on the workflow's existing cache key.
+        uses: taiki-e/install-action@dfc84ffb7254b048a0a843316ff5a2714dcdc7bd # v2
+        with:
+          tool: cargo-semver-checks
+
+      - name: Run cargo-semver-checks on publishable crates
+        id: semver
+        env:
+          CRATES: ${{ steps.enumerate.outputs.crates }}
+        run: |
+          set -uo pipefail
+          # Track per-crate results in a TSV; the summary step renders
+          # them as a table alongside the dry-run results without
+          # re-running cargo-semver-checks.
+          RESULTS_TSV="${RUNNER_TEMP:-/tmp}/semver-checks-results.tsv"
+          : > "$RESULTS_TSV"
+
+          ANY_FAILED=0
+          while IFS= read -r crate; do
+            [ -z "$crate" ] && continue
+            echo "::group::cargo semver-checks check-release -p $crate"
+            # `check-release` compares the current source against the
+            # latest version on crates.io for that crate.  For a
+            # crate that has never been published, it exits zero with
+            # a "no baseline to compare against" notice — which is
+            # exactly the right behaviour for the pre-R8 timeframe.
+            # Once the R8 dress-rehearsal lands and the first crate
+            # has a v0.0.0 (or whatever) on crates.io, subsequent
+            # runs will start producing real comparisons without any
+            # workflow edits.
+            #
+            # `--baseline-version` is intentionally OMITTED — we want
+            # whichever version is latest on crates.io.  When we move
+            # to R9 with an active publish cadence, we may revisit and
+            # pin to a specific stable baseline.  For now the default
+            # (latest-released) is the right starting point.
+            if cargo semver-checks check-release -p "$crate" 2>&1; then
+              echo "$crate	OK" >> "$RESULTS_TSV"
+              echo "::endgroup::"
+            else
+              echo "$crate	FAIL" >> "$RESULTS_TSV"
+              echo "::warning title=semver-break::$crate has a SemVer-breaking API change vs the latest crates.io release"
+              echo "::endgroup::"
+              ANY_FAILED=1
+            fi
+          done <<< "$CRATES"
+
+          {
+            echo "results_tsv<<EOF_RESULTS"
+            cat "$RESULTS_TSV"
+            echo "EOF_RESULTS"
+            echo "any_failed=$ANY_FAILED"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Dry-run publish each crate
         id: dry_run
         env:
@@ -212,36 +294,51 @@ jobs:
         if: always()
         env:
           MARKER: "<!-- crates-io-dry-run-managed -->"
-          ANY_FAILED: ${{ steps.dry_run.outputs.any_failed }}
-          RESULTS: ${{ steps.dry_run.outputs.results_tsv }}
+          DRY_RUN_ANY_FAILED: ${{ steps.dry_run.outputs.any_failed }}
+          DRY_RUN_RESULTS: ${{ steps.dry_run.outputs.results_tsv }}
+          SEMVER_ANY_FAILED: ${{ steps.semver.outputs.any_failed }}
+          SEMVER_RESULTS: ${{ steps.semver.outputs.results_tsv }}
         run: |
           set -euo pipefail
           {
             echo "${MARKER}"
-            echo "## crates.io dry-run results"
+            echo "## crates.io pre-publish guard results"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
             echo "| Commit | \`${GITHUB_SHA}\` |"
             echo "| Triggered by | \`${GITHUB_EVENT_NAME}\` |"
-            echo "| Any failures | \`${ANY_FAILED}\` |"
-            echo "| Mode | \`$(if [ "$FAIL_ON_DRY_RUN_ERROR" = "true" ]; then echo "GATE"; else echo "ADVISORY"; fi)\` |"
+            echo "| Dry-run any failures | \`${DRY_RUN_ANY_FAILED}\` |"
+            echo "| Dry-run mode | \`$(if [ "$FAIL_ON_DRY_RUN_ERROR" = "true" ]; then echo "GATE"; else echo "ADVISORY"; fi)\` |"
+            echo "| SemVer any breaks | \`${SEMVER_ANY_FAILED}\` |"
+            echo "| SemVer mode | \`$(if [ "$FAIL_ON_SEMVER_BREAK" = "true" ]; then echo "GATE"; else echo "ADVISORY"; fi)\` |"
             echo ""
-            echo "### Per-crate dry-run status"
+            echo "### Per-crate cargo-semver-checks status"
             echo ""
             echo "| Crate | Status |"
             echo "|---|---|"
             # Sort so the table is stable across runs even if cargo
             # metadata changes its iteration order.
-            printf '%s\n' "${RESULTS}" | sort | while IFS=$'\t' read -r crate status; do
+            printf '%s\n' "${SEMVER_RESULTS}" | sort | while IFS=$'\t' read -r crate status; do
               [ -z "$crate" ] && continue
               icon="✅"
               [ "$status" = "FAIL" ] && icon="❌"
               echo "| \`${crate}\` | ${icon} ${status} |"
             done
             echo ""
-            if [ "$ANY_FAILED" = "1" ]; then
-              echo "### Known-expected failures (R6/R7 timeframe)"
+            echo "### Per-crate cargo publish --dry-run status"
+            echo ""
+            echo "| Crate | Status |"
+            echo "|---|---|"
+            printf '%s\n' "${DRY_RUN_RESULTS}" | sort | while IFS=$'\t' read -r crate status; do
+              [ -z "$crate" ] && continue
+              icon="✅"
+              [ "$status" = "FAIL" ] && icon="❌"
+              echo "| \`${crate}\` | ${icon} ${status} |"
+            done
+            echo ""
+            if [ "$DRY_RUN_ANY_FAILED" = "1" ]; then
+              echo "### Known-expected dry-run failures (R6/R7 timeframe)"
               echo ""
               echo "Until **plan §R6 step 6** (crate name reservations on"
               echo "crates.io) and **§R8** (polars/chrono resolution) land,"
@@ -259,20 +356,45 @@ jobs:
               echo "invalid category slug, readme path resolution, etc.)"
               echo "ARE actionable and should be fixed in the next PR."
             fi
+            if [ "$SEMVER_ANY_FAILED" = "1" ]; then
+              echo ""
+              echo "### Pre-R8 cargo-semver-checks status"
+              echo ""
+              echo "Pre-R8 the gate runs in ADVISORY mode because no crate"
+              echo "has a baseline on crates.io to compare against —"
+              echo "\`cargo semver-checks check-release\` exits success"
+              echo "for un-published crates, so a non-success status"
+              echo "above indicates either an installation issue or a"
+              echo "rustdoc-JSON regression worth investigating."
+              echo ""
+              echo "Post-R8 (first publish lands), the gate becomes the"
+              echo "canonical check that catches a SemVer-breaking API"
+              echo "change shipped under a non-major version bump.  Flip"
+              echo "\`FAIL_ON_SEMVER_BREAK\` to \`true\` at that point."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Fail job if dry-run errors and FAIL_ON_DRY_RUN_ERROR=true
+      - name: Fail job if any pre-publish guard failed and its flag is set
         if: always()
         env:
-          ANY_FAILED: ${{ steps.dry_run.outputs.any_failed }}
+          DRY_RUN_ANY_FAILED: ${{ steps.dry_run.outputs.any_failed }}
+          SEMVER_ANY_FAILED: ${{ steps.semver.outputs.any_failed }}
         run: |
           set -euo pipefail
-          if [ "$FAIL_ON_DRY_RUN_ERROR" = "true" ] && [ "$ANY_FAILED" = "1" ]; then
+          fail=0
+          if [ "$FAIL_ON_DRY_RUN_ERROR" = "true" ] && [ "$DRY_RUN_ANY_FAILED" = "1" ]; then
             echo "::error::At least one crate failed cargo publish --dry-run; FAIL_ON_DRY_RUN_ERROR is set, failing job."
+            fail=1
+          fi
+          if [ "$FAIL_ON_SEMVER_BREAK" = "true" ] && [ "$SEMVER_ANY_FAILED" = "1" ]; then
+            echo "::error::At least one crate failed cargo semver-checks; FAIL_ON_SEMVER_BREAK is set, failing job."
+            fail=1
+          fi
+          if [ "$fail" = "1" ]; then
             exit 1
           fi
-          if [ "$ANY_FAILED" = "1" ]; then
-            echo "::notice::At least one crate failed cargo publish --dry-run; running in ADVISORY mode (FAIL_ON_DRY_RUN_ERROR=false), so exiting 0.  See workflow summary for the per-crate table and the known-expected-failures explainer."
+          if [ "$DRY_RUN_ANY_FAILED" = "1" ] || [ "$SEMVER_ANY_FAILED" = "1" ]; then
+            echo "::notice::At least one pre-publish guard reported a failure; running in ADVISORY mode (both FAIL_ON_* flags are 'false'), so exiting 0.  See workflow summary for the per-crate tables and the known-expected-failures explainer."
           else
-            echo "::notice::All publishable crates passed cargo publish --dry-run."
+            echo "::notice::All publishable crates passed both cargo publish --dry-run and cargo semver-checks."
           fi
