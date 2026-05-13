@@ -27,7 +27,7 @@ mod stats;
 mod status_drives;
 mod test_helpers;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 pub(crate) mod tiering_ops;
 mod transitions;
 mod wire_spec;

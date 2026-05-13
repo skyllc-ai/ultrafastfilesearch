@@ -42,6 +42,7 @@ use super::{
 
 mod basics;
 mod integration;
+mod save_log_message;
 mod thresholds;
 mod wrap_and_persistence;
 

@@ -722,8 +722,28 @@ fn run_phase6(cli: &Cli, drive: char) -> Result<bool> {
     };
 
     daemon.ensure_stopped()?;
+    // Phase 6 fix (2026-05-11 24-h soak finding):
+    //
+    // `shard.ttl=debug` filters the daemon's catch-all
+    // `below-ttl` event (see `crate::index::transitions::
+    // evaluate_idle_demote` arm `(None, _)`) — that event is
+    // emitted at TRACE.  During the synthetic-load window drive
+    // C sits in Warm/Hot with `idle_secs ≈ 0`, so the demote-eval
+    // ladder never reaches the DEBUG-level `idle-demote` /
+    // `min-tier-clamp` arms; the bonused `warm_ttl_sec` is
+    // computed every tick but never logged.  The post-EMA-fix
+    // 24-h soak captured `C.max_warm_ttl=300s` (the base) vs
+    // peers' `300s` — assertion (4) below failed not because the
+    // adaptive bonus didn't engage, but because the engagement
+    // was invisible at this log level.
+    //
+    // Bumping `shard.ttl` to TRACE makes the `below-ttl` event
+    // observable.  At ~8 drives × one event per 30-s controller
+    // tick × 24 h that's ~23 k extra lines (~3.5 MB), marginal
+    // against the existing 75 MB log volume the WARN
+    // journal-not-active spam already produces.
     let env = [
-        ("RUST_LOG", "uffs_daemon=info,shard.ttl=debug,shard.transition=info"),
+        ("RUST_LOG", "uffs_daemon=info,shard.ttl=trace,shard.transition=info"),
     ];
     let data_dir = preflight_data_dir(cli)?;
     daemon.start(&env, data_dir.as_deref())?;
@@ -1204,9 +1224,24 @@ fn validate_phase7(
     );
 
     // 4. Encrypted-cache refresh fired at least once (production only).
-    let save_re = Regex::new(r#"target=.?shard\.refresh|"shard\.refresh""#).unwrap();
-    let _save_count_target = log.lines().filter(|l| save_re.is_match(l)).count();
-    let save_pat_msg = Regex::new(r#"USN refresh tick|trigger_save|threshold.*save|encrypted cache refresh"#).unwrap();
+    //
+    // Phase 7 fix (2026-05-11 24-h soak finding): the pre-fix
+    // regex grew speculative patterns (`USN refresh tick`,
+    // `trigger_save`, `threshold.*save`, `encrypted cache
+    // refresh`) that the daemon never actually emits.  The real
+    // event lives in `crate::cache::journal_loop::process_tick`
+    // and is logged at INFO level with message:
+    //
+    //   "Journal poll: triggered background compact-cache save"
+    //
+    // (with structured fields `drive`, `reason`, `cursor`).  The
+    // 24-h Phase 7 log captured 11 such events across drives F /
+    // S — the save pipeline was healthy, the validator was just
+    // hunting for the wrong string.  Anchoring on
+    // `compact-cache save` matches the actual log shape while
+    // staying narrow enough that an unrelated message can't
+    // accidentally satisfy the assertion.
+    let save_pat_msg = Regex::new(r"compact-cache save").unwrap();
     let save_count = log.lines().filter(|l| save_pat_msg.is_match(l)).count();
     report.assert(
         "Encrypted-cache refresh fired during soak",

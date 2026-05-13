@@ -53,7 +53,13 @@ mod manager;
 mod registry;
 mod shard_ttl_events;
 mod tiering_ops;
-mod tracing_capture;
+// Exposed at `pub(crate)` so the shared `EventLog` / `CapturedEvent`
+// scaffold (already `pub(crate)`) can be imported from sibling test
+// modules such as `crate::cache::journal_loop::tests::save_log_message`
+// (Phase 7 soak-harness contract pin).  Other items in this module
+// remain private — only the `pub(crate)` ones in `tracing_capture`
+// become crate-wide reachable.
+pub(crate) mod tracing_capture;
 
 /// Build a synthetic drive with root + 1 dir + 5 files of varied
 /// sizes/extensions.

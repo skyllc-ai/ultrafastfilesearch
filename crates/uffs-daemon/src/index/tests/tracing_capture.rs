@@ -22,6 +22,10 @@
 //!   — Phase 5 G4 follow-up — pins the single-canonical-event
 //!   contract for the pressure-cascade demote path (no second
 //!   redundant event from `cascade_demote_one_step`).
+//! * `crate::cache::journal_loop::tests::compact_cache_save_log` — pins the
+//!   literal `"compact-cache save"` message text the Phase 7 24-h soak harness
+//!   greps for (visibility raised to `pub(crate)` in 2026-05-13 to share the
+//!   scaffold across crate-internal modules).
 //!
 //! Helpers are intentionally minimal — only the fields and methods
 //! the contract tests actually assert on are surfaced.  Sibling
@@ -39,18 +43,18 @@ use std::sync::{Arc, Mutex};
 
 /// One captured tracing event.
 #[derive(Debug, Clone)]
-pub(super) struct CapturedEvent {
-    pub(super) target: String,
-    pub(super) level: tracing::Level,
+pub(crate) struct CapturedEvent {
+    pub(crate) target: String,
+    pub(crate) level: tracing::Level,
     /// `(field_name, stringified_value)` pairs.
-    pub(super) fields: Vec<(String, String)>,
+    pub(crate) fields: Vec<(String, String)>,
 }
 
 impl CapturedEvent {
     /// String value of `field_name`, or `None` when the field was
     /// not present on this event.  Returns `&str` (not owned) so the
     /// test's `assert_eq!` reads naturally.
-    pub(super) fn field(&self, field_name: &str) -> Option<&str> {
+    pub(crate) fn field(&self, field_name: &str) -> Option<&str> {
         self.fields
             .iter()
             .find(|(name, _)| name == field_name)
@@ -61,7 +65,7 @@ impl CapturedEvent {
     /// regardless of its value.  Used for fields whose value is
     /// dynamic (e.g. `freed_mb` / `restored_mb`) and the test only
     /// pins the *presence*, not the magnitude.
-    pub(super) fn has_field(&self, field_name: &str) -> bool {
+    pub(crate) fn has_field(&self, field_name: &str) -> bool {
         self.fields.iter().any(|(name, _)| name == field_name)
     }
 }
@@ -70,10 +74,10 @@ impl CapturedEvent {
 /// `tracing::Subscriber` impl and the test asserts against the
 /// shared `Arc<Mutex<...>>`.
 #[derive(Default, Clone)]
-pub(super) struct EventLog(Arc<Mutex<Vec<CapturedEvent>>>);
+pub(crate) struct EventLog(Arc<Mutex<Vec<CapturedEvent>>>);
 
 impl EventLog {
-    pub(super) fn events(&self) -> Vec<CapturedEvent> {
+    pub(crate) fn events(&self) -> Vec<CapturedEvent> {
         self.0.lock().unwrap().clone()
     }
 }
