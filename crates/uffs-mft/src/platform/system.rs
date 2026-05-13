@@ -9,11 +9,15 @@ use core::mem::size_of;
 /// Narrow u32 size-of helper for Win32 FFI sizing parameters.
 ///
 /// Every struct passed here is a small fixed-size Win32 type
-/// (`TOKEN_ELEVATION`, `MEMORYSTATUSEX`, `StoragePropertyQuery`, etc.) whose
-/// size is provably well under `u32::MAX`.  A saturating cast keeps the
-/// function total without introducing an `#[expect]` per call site.
+/// (`TOKEN_ELEVATION`, `MEMORYSTATUSEX`, `StoragePropertyQuery`,
+/// `UsnJournalDataV0`, etc.) whose size is provably well under
+/// `u32::MAX`.  A saturating cast keeps the function total without
+/// introducing an `#[expect]` per call site.
+///
+/// `pub(crate)` so the matching Win32 FFI const sites in `usn` can
+/// reuse the single centralized expect rather than declaring their own.
 #[cfg(windows)]
-const fn u32_size_of<T>() -> u32 {
+pub(crate) const fn u32_size_of<T>() -> u32 {
     // Saturating truncation: Win32 structs are always < u32::MAX bytes, so this
     // branch is unreachable in practice.
     if size_of::<T>() > u32::MAX as usize {
@@ -27,6 +31,7 @@ const fn u32_size_of<T>() -> u32 {
         size
     }
 }
+
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
 

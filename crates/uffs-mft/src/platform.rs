@@ -30,6 +30,8 @@ pub use extents::MftExtent;
 pub use system::DriveType;
 // is_volume_read_only is available on all platforms (stub on non-Windows)
 pub use system::is_volume_read_only;
+#[cfg(windows)]
+pub(crate) use system::u32_size_of;
 // System memory query — available on all platforms
 pub use system::{SystemMemory, query_system_memory};
 #[cfg(windows)]

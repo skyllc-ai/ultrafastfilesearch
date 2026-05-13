@@ -219,7 +219,6 @@ pub use windows_impl::{query_usn_journal, read_targeted_frs_records, read_usn_jo
     reason = "FFI: Windows API calls (CreateFileW, DeviceIoControl, CloseHandle)"
 )]
 mod windows_impl {
-    use core::mem::size_of;
     use core::ptr;
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt as _;
@@ -235,6 +234,7 @@ mod windows_impl {
     use zerocopy::{FromBytes, Immutable, KnownLayout};
 
     use super::{UsnJournalInfo, UsnRecord};
+    use crate::platform::u32_size_of;
 
     /// Mirror of the Win32 `USN_JOURNAL_DATA_V0` struct populated by
     /// `FSCTL_QUERY_USN_JOURNAL`.  Field order and layout match the
@@ -310,17 +310,14 @@ mod windows_impl {
     }
 
     /// Size of a `UsnJournalDataV0` in bytes — always fits in `u32`.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "`UsnJournalDataV0` is a fixed-layout C struct of 56 bytes; the cast is compile-time bounded and required for the Win32 ioctl size argument"
-    )]
-    const USN_JOURNAL_DATA_V0_SIZE: u32 = size_of::<UsnJournalDataV0>() as u32;
+    ///
+    /// Routes the `usize -> u32` narrowing through the centralized
+    /// `u32_size_of` helper so the `cast_possible_truncation` expect
+    /// lives at one site (next to the Win32 FFI-sizing comment) rather
+    /// than at every Win32 ioctl const that needs the same bound.
+    const USN_JOURNAL_DATA_V0_SIZE: u32 = u32_size_of::<UsnJournalDataV0>();
     /// Size of a `ReadUsnJournalDataV0` in bytes — always fits in `u32`.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "`ReadUsnJournalDataV0` is a fixed-layout C struct of 40 bytes; the cast is compile-time bounded and required for the Win32 ioctl size argument"
-    )]
-    const READ_USN_JOURNAL_DATA_V0_SIZE: u32 = size_of::<ReadUsnJournalDataV0>() as u32;
+    const READ_USN_JOURNAL_DATA_V0_SIZE: u32 = u32_size_of::<ReadUsnJournalDataV0>();
 
     /// Open a `\\.\X:` volume handle with read access for USN-journal ioctls.
     fn open_volume_handle(volume: char) -> Result<HANDLE, std::io::Error> {
