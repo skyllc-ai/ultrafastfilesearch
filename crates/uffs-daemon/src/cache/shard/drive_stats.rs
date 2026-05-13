@@ -282,9 +282,6 @@ impl DriveStats {
     /// happens once per controller tick (every 30 s) inside
     /// `decay_ema`, so the search dispatch path remains branch-free.
     #[expect(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
         clippy::float_arithmetic,
         reason = "EMA arithmetic is intentionally floating-point and lossy; \
                   the values cast through u64 are fixed-point µ/s representations \
@@ -300,32 +297,37 @@ impl DriveStats {
             .last_decay_queries_total
             .swap(cur_queries, Ordering::Relaxed);
         let prev_ema_fixed = self.rate_ema_micro_per_s.load(Ordering::Relaxed);
+        // All `u64 -> f64` / `f64 -> u64` conversions below go through
+        // the centralized `uffs_mft::{u64_to_f64, f64_to_u64}` helpers
+        // (each of which carries the single documented
+        // `cast_precision_loss` / `cast_possible_truncation` /
+        // `cast_sign_loss` triplet).
         if prev_ms == 0 {
             // First call after construction: no elapsed window to
             // compute a rate sample over.  Initialise the
             // tracking pair (already done by the swaps above) and
             // return the stored EMA as-is.
-            return prev_ema_fixed as f64 / 1.0e6;
+            return uffs_mft::u64_to_f64(prev_ema_fixed) / 1.0e6_f64;
         }
         let elapsed_ms = now_ms.saturating_sub(prev_ms);
         // Half-life formula factored as `decay = exp(-half_lives · ln 2)`.
-        let half_lives = elapsed_ms as f64 / HALF_LIFE_MS as f64;
+        let half_lives = uffs_mft::u64_to_f64(elapsed_ms) / uffs_mft::u64_to_f64(HALF_LIFE_MS);
         let decay = (-half_lives * core::f64::consts::LN_2).exp();
-        let prev_ema = prev_ema_fixed as f64 / 1.0e6_f64;
+        let prev_ema = uffs_mft::u64_to_f64(prev_ema_fixed) / 1.0e6_f64;
         // Per-second rate over the elapsed window.  Floor the
         // denominator at 1 ms so very-fast successive ticks (a
         // status_drives RPC racing the demote tick on a hot drive)
         // don't divide by zero or produce a kHz-scale rate spike.
-        let elapsed_secs = (elapsed_ms.max(1) as f64) / 1000.0_f64;
+        let elapsed_secs = uffs_mft::u64_to_f64(elapsed_ms.max(1)) / 1000.0_f64;
         let delta_queries = cur_queries.saturating_sub(prev_queries);
-        let sample_rate = (delta_queries as f64) / elapsed_secs;
+        let sample_rate = uffs_mft::u64_to_f64(delta_queries) / elapsed_secs;
         // EMA blend: new = decay · prev + (1 - decay) · sample.
         // Express as a fused multiply-add (`mul_add`) so clippy's
         // `suboptimal_flops` pedantic gate is satisfied and the
         // arithmetic is also marginally more accurate (single
         // rounding instead of two).
         let new_ema = decay.mul_add(prev_ema, (1.0_f64 - decay) * sample_rate);
-        let new_fixed = (new_ema * 1.0e6_f64) as u64;
+        let new_fixed = uffs_mft::f64_to_u64(new_ema * 1.0e6_f64);
         self.rate_ema_micro_per_s
             .store(new_fixed, Ordering::Relaxed);
         new_ema
@@ -361,14 +363,13 @@ impl DriveStats {
 /// helper.
 #[cfg(test)]
 #[expect(
-    clippy::cast_precision_loss,
     clippy::float_arithmetic,
     reason = "test-only EMA read: float divide on a fixed-point store; \
               the precision loss is tolerated by the rate-estimator \
               semantics."
 )]
 pub(crate) fn drive_stats_ema_value(stats: &DriveStats) -> f64 {
-    stats.rate_ema_micro_per_s.load(Ordering::Relaxed) as f64 / 1.0e6
+    uffs_mft::u64_to_f64(stats.rate_ema_micro_per_s.load(Ordering::Relaxed)) / 1.0e6_f64
 }
 
 /// Serializable snapshot of a [`DriveStats`].
