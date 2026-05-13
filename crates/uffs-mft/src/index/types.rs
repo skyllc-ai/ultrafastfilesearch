@@ -79,9 +79,10 @@ pub const fn u32_as_usize(val: u32) -> usize {
 #[must_use]
 pub const fn nonneg_to_u64(val: i64) -> u64 {
     if val > 0 {
-        #[expect(clippy::cast_sign_loss, reason = "val > 0 guard makes this lossless")]
-        let result = val as u64;
-        result
+        // `val > 0` guard makes the reinterpret lossless;
+        // `i64::cast_unsigned` is the stable Rust 1.87 exact-bit-pattern
+        // converter that does not require a `cast_sign_loss` expect.
+        val.cast_unsigned()
     } else {
         0
     }

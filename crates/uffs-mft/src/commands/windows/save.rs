@@ -259,16 +259,9 @@ async fn cmd_save_iocp(
         compression_level,
         volume_letter: drive_upper,
         // IOCP concurrency is bounded by the CLI parser (max 255); the
-        // narrowing cast is documented at the use site rather than via a
-        // module blanket.
-        concurrency: {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "CLI parser bounds `concurrency` to 0..=255 before reaching this path"
-            )]
-            let value = concurrency as u8;
-            value
-        },
+        // saturating `try_from` fallback is unreachable for valid CLI
+        // input and replaces the previous truncating `as u8` cast.
+        concurrency: u8::try_from(concurrency).unwrap_or(u8::MAX),
         reserved_allocated_bytes: reserved_alloc,
     };
 

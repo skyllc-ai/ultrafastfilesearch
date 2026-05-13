@@ -139,14 +139,13 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
 
         // Calculate byte offset and size for this extent.
         //
-        // NTFS exposes `LcnPosition` (extent LCN) as `i64` on the FFI side
-        // even though valid extents are non-negative; the sign-loss cast
-        // here is bounded by upstream extent-map validation.
-        #[expect(
-            clippy::cast_sign_loss,
-            reason = "NTFS extents come from MftExtentMap which rejects negative LCNs upstream"
-        )]
-        let lcn_u64 = extent.lcn as u64;
+        // NTFS exposes `LcnPosition` (extent LCN) as `i64` on the FFI
+        // side even though valid extents are non-negative.  The
+        // `extent.lcn < 0` guard above filters sparse extents, so
+        // `i64::cast_unsigned` is the documented exact-bit-pattern
+        // reinterpret (Rust 1.87 stable) without a `cast_sign_loss`
+        // expect.
+        let lcn_u64 = extent.lcn.cast_unsigned();
         let extent_byte_offset = lcn_u64 * u64::from(bytes_per_cluster);
         let extent_byte_size = extent.cluster_count * u64::from(bytes_per_cluster);
 

@@ -214,13 +214,11 @@ impl VolumeHandle {
         let handle = match create_result {
             Ok(handle) => handle,
             Err(err) => {
-                // err.code().0 is an i32 holding an HRESULT; reinterpret as u32
-                // to compare against Win32 error codes (documented as u32).
-                #[expect(
-                    clippy::cast_sign_loss,
-                    reason = "HRESULT bit-pattern reinterpret for documented u32 error constants"
-                )]
-                let code_unsigned = err.code().0 as u32;
+                // `err.code().0` is an `i32` holding an HRESULT bit
+                // pattern; `i32::cast_unsigned` reinterprets the same
+                // bits as `u32` for comparison against documented Win32
+                // error constants (which Microsoft publishes as u32).
+                let code_unsigned = err.code().0.cast_unsigned();
                 if code_unsigned == 0x8007_0005 {
                     return Err(MftError::InsufficientPrivileges);
                 }
@@ -277,32 +275,30 @@ impl VolumeHandle {
         // (not available in NTFS_VOLUME_DATA_BUFFER).  Default to 0; callers
         // should use `query_ntfs_version()` if they need the actual version.
         //
-        // Every `i64 -> u64` cast below reinterprets an on-disk NTFS count
-        // (sector / cluster / LCN / length).  These fields are documented
-        // non-negative by the NTFS on-disk format and Microsoft's
-        // NTFS_VOLUME_DATA_BUFFER MSDN page, so the bit-level reinterpret is
-        // the correct and lossless conversion.
-        #[expect(
-            clippy::cast_sign_loss,
-            reason = "NTFS_VOLUME_DATA_BUFFER LARGE_INTEGER fields are non-negative by on-disk format spec"
-        )]
+        // Every `i64 -> u64` reinterpret below comes from an on-disk
+        // NTFS count (sector / cluster / LCN / length) that the NTFS
+        // on-disk format and Microsoft's `NTFS_VOLUME_DATA_BUFFER` MSDN
+        // page document as non-negative.  `i64::cast_unsigned` /
+        // `u64::cast_unsigned` are the stable Rust 1.87
+        // exact-bit-pattern converters that replace the previous
+        // `cast_sign_loss` expect.
         let volume_data = NtfsVolumeData {
-            volume_serial_number: buffer.VolumeSerialNumber as u64,
+            volume_serial_number: buffer.VolumeSerialNumber.cast_unsigned(),
             ntfs_major_version: 0,
             ntfs_minor_version: 0,
-            number_of_sectors: buffer.NumberSectors as u64,
-            total_clusters: buffer.TotalClusters as u64,
-            free_clusters: buffer.FreeClusters as u64,
-            total_reserved: buffer.TotalReserved as u64,
+            number_of_sectors: buffer.NumberSectors.cast_unsigned(),
+            total_clusters: buffer.TotalClusters.cast_unsigned(),
+            free_clusters: buffer.FreeClusters.cast_unsigned(),
+            total_reserved: buffer.TotalReserved.cast_unsigned(),
             bytes_per_sector: buffer.BytesPerSector,
             bytes_per_cluster: buffer.BytesPerCluster,
             bytes_per_file_record_segment: buffer.BytesPerFileRecordSegment,
             clusters_per_file_record_segment: buffer.ClustersPerFileRecordSegment,
-            mft_valid_data_length: buffer.MftValidDataLength as u64,
-            mft_start_lcn: buffer.MftStartLcn as u64,
-            mft2_start_lcn: buffer.Mft2StartLcn as u64,
-            mft_zone_start: buffer.MftZoneStart as u64,
-            mft_zone_end: buffer.MftZoneEnd as u64,
+            mft_valid_data_length: buffer.MftValidDataLength.cast_unsigned(),
+            mft_start_lcn: buffer.MftStartLcn.cast_unsigned(),
+            mft2_start_lcn: buffer.Mft2StartLcn.cast_unsigned(),
+            mft_zone_start: buffer.MftZoneStart.cast_unsigned(),
+            mft_zone_end: buffer.MftZoneEnd.cast_unsigned(),
         };
         Ok(volume_data)
     }
