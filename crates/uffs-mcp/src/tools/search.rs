@@ -613,7 +613,7 @@ fn col_value(col: &str, row: &uffs_client::protocol::response::SearchRow) -> Str
 /// Encodes backslashes, spaces, and other URI-unsafe characters while keeping
 /// drive letters and forward slashes readable.
 #[must_use]
-pub fn percent_encode_path(path: &str) -> String {
+pub(crate) fn percent_encode_path(path: &str) -> String {
     // Normalize backslashes to forward slashes for URI compatibility.
     let normalized = path.replace('\\', "/");
     // Percent-encode characters that aren't URI-safe path characters.

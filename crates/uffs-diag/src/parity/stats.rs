@@ -39,17 +39,6 @@ impl FieldStats {
         }
     }
 
-    /// Calculate the mean difference for mismatched values.
-    #[must_use]
-    #[expect(clippy::float_arithmetic, reason = "statistics require float division")]
-    pub fn mean_diff(&self) -> f64 {
-        if self.mismatches == 0 {
-            0.0_f64
-        } else {
-            self.sum_abs_diff / uffs_mft::u64_to_f64(self.mismatches)
-        }
-    }
-
     /// Merge another `FieldStats` into this one.
     #[expect(
         clippy::float_arithmetic,

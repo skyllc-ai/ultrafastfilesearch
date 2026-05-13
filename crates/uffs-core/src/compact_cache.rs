@@ -121,7 +121,7 @@ pub enum LoadCacheError {
 
 /// Convenience alias — [`LoadCacheError`] is the canonical failure
 /// type for compact-cache loads.
-pub type LoadCacheResult<T> = Result<T, LoadCacheError>;
+pub(crate) type LoadCacheResult<T> = Result<T, LoadCacheError>;
 
 /// Magic bytes for compact cache files.
 const COMPACT_MAGIC: &[u8; 8] = b"UFFSCOM\0";
@@ -413,7 +413,7 @@ pub fn serialize_compact(index: &DriveCompactIndex) -> Vec<u8> {
 /// # Errors
 ///
 /// Returns an error if any write fails.
-pub fn serialize_compact_to_writer<W: io::Write>(
+pub(crate) fn serialize_compact_to_writer<W: io::Write>(
     index: &DriveCompactIndex,
     writer: &mut W,
 ) -> io::Result<()> {

@@ -48,7 +48,7 @@ impl ParallelMftReader {
     ///
     /// Returns [`MftError::Io`] if any bulk `SetFilePointerEx`/`ReadFile`
     /// invocation fails; the Windows error code is forwarded.
-    pub fn read_all_bulk<F>(
+    pub(crate) fn read_all_bulk<F>(
         &self,
         handle: HANDLE,
         merge_extensions: bool,

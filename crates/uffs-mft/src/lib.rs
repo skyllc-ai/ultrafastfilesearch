@@ -129,7 +129,7 @@ pub mod flags;
 pub mod index;
 pub mod raw;
 pub mod raw_iocp;
-pub mod tree_metrics;
+pub(crate) mod tree_metrics;
 
 // Cross-platform modules (NTFS structures and parsing)
 pub mod ntfs; // NTFS structure definitions - cross-platform

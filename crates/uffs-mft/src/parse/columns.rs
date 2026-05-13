@@ -209,7 +209,7 @@ impl ParsedColumns {
     /// This is the default behavior for user-facing output, as users
     /// expect to see each hard link and ADS as separate entries.
     #[inline]
-    pub fn push_record_expanded(&mut self, record: &ParsedRecord) {
+    pub(crate) fn push_record_expanded(&mut self, record: &ParsedRecord) {
         // Get names to iterate over (use primary name if names is empty)
         let names: Vec<_> = if record.names.is_empty() {
             vec![NameInfo {

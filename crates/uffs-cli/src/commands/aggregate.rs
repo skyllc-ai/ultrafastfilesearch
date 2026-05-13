@@ -28,7 +28,7 @@ use super::{format_number, format_size};
 /// # Errors
 ///
 /// Returns an error if the operation fails.
-pub fn print_table_results(results: &[AggregateResultWire]) -> Result<()> {
+pub(crate) fn print_table_results(results: &[AggregateResultWire]) -> Result<()> {
     let mut stdout = std::io::stdout().lock();
 
     for result in results {
@@ -97,7 +97,7 @@ pub fn print_table_results(results: &[AggregateResultWire]) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error if the operation fails.
-pub fn print_csv_results(results: &[AggregateResultWire], tsv: bool) -> Result<()> {
+pub(crate) fn print_csv_results(results: &[AggregateResultWire], tsv: bool) -> Result<()> {
     let mut stdout = std::io::stdout().lock();
     let sep = if tsv { '\t' } else { ',' };
 
@@ -456,7 +456,7 @@ fn print_csv_duplicates(
 /// # Errors
 ///
 /// Returns an error if deserialization or output fails.
-pub fn print_table_results_raw(raw: &[serde_json::Value]) -> Result<()> {
+pub(crate) fn print_table_results_raw(raw: &[serde_json::Value]) -> Result<()> {
     let typed: Vec<AggregateResultWire> = raw
         .iter()
         .filter_map(|val| serde_json::from_value(val.clone()).ok())
@@ -469,7 +469,7 @@ pub fn print_table_results_raw(raw: &[serde_json::Value]) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error if deserialization or output fails.
-pub fn print_csv_results_raw(raw: &[serde_json::Value], tsv: bool) -> Result<()> {
+pub(crate) fn print_csv_results_raw(raw: &[serde_json::Value], tsv: bool) -> Result<()> {
     let typed: Vec<AggregateResultWire> = raw
         .iter()
         .filter_map(|val| serde_json::from_value(val.clone()).ok())

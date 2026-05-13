@@ -119,7 +119,7 @@ unsafe impl Sync for VolumeHandle {}
 
 /// NTFS volume data retrieved from `FSCTL_GET_NTFS_VOLUME_DATA`.
 #[derive(Debug, Clone, Copy)]
-pub struct NtfsVolumeData {
+pub(crate) struct NtfsVolumeData {
     /// Volume serial number.
     pub volume_serial_number: u64,
     /// NTFS major version (e.g. 3 for NTFS 3.1).
@@ -328,7 +328,7 @@ impl VolumeHandle {
     ///
     /// Returns `MftError::VolumeOpen` if `CreateFileW` fails.
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
-    pub fn open_overlapped_handle(&self) -> Result<HANDLE> {
+    pub(crate) fn open_overlapped_handle(&self) -> Result<HANDLE> {
         let volume = self.volume;
         let volume_path: Vec<u16> = format!("\\\\.\\{volume}:")
             .encode_utf16()
@@ -370,7 +370,7 @@ impl VolumeHandle {
     ///
     /// Returns `MftError::VolumeOpen` if `CreateFileW` fails.
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
-    pub fn open_mft_read_handle(&self) -> Result<HANDLE> {
+    pub(crate) fn open_mft_read_handle(&self) -> Result<HANDLE> {
         // Enable SeBackupPrivilege — required for $MFT access even as admin
         enable_backup_privilege();
 
@@ -416,7 +416,7 @@ impl VolumeHandle {
     ///
     /// Returns `MftError::VolumeOpen` if `CreateFileW` fails.
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
-    pub fn open_unbuffered_handle(&self) -> Result<HANDLE> {
+    pub(crate) fn open_unbuffered_handle(&self) -> Result<HANDLE> {
         let volume = self.volume;
         let volume_path: Vec<u16> = format!("\\\\.\\{volume}:")
             .encode_utf16()
@@ -458,7 +458,7 @@ impl VolumeHandle {
 
     /// Returns the estimated number of MFT records.
     #[must_use]
-    pub fn estimated_record_count(&self) -> u64 {
+    pub(crate) fn estimated_record_count(&self) -> u64 {
         self.volume_data.mft_valid_data_length
             / u64::from(self.volume_data.bytes_per_file_record_segment)
     }
@@ -472,7 +472,7 @@ impl VolumeHandle {
     /// returns fewer bytes than `size_of::<NtfsBootSector>()` or decoding
     /// the boot-sector layout fails.
     #[expect(unsafe_code, reason = "FFI: windows API to read the boot sector")]
-    pub fn read_boot_sector(&self) -> Result<NtfsBootSector> {
+    pub(crate) fn read_boot_sector(&self) -> Result<NtfsBootSector> {
         use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
         let mut new_position = 0_i64;
@@ -563,7 +563,7 @@ impl VolumeHandle {
     ///
     /// Returns [`MftError::Io`] if opening `\\.\<letter>:\$MFT::$BITMAP`,
     /// seeking to its extents, or reading bitmap bytes via `ReadFile` fails.
-    pub fn get_mft_bitmap(&self) -> Result<MftBitmap> {
+    pub(crate) fn get_mft_bitmap(&self) -> Result<MftBitmap> {
         self.get_mft_bitmap_internal(false)
     }
 
@@ -574,7 +574,7 @@ impl VolumeHandle {
     /// Same failure modes as [`Self::get_mft_bitmap`]; additionally emits
     /// diagnostic tracing for partial reads before falling back to an
     /// all-valid bitmap.
-    pub fn get_mft_bitmap_verbose(&self) -> Result<MftBitmap> {
+    pub(crate) fn get_mft_bitmap_verbose(&self) -> Result<MftBitmap> {
         self.get_mft_bitmap_internal(true)
     }
 

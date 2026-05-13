@@ -38,7 +38,7 @@ use super::{load_cached_index, save_to_cache_background};
 /// within a runtime" panics. By running all MFT reading and polars operations
 /// on a dedicated blocking thread, we avoid this issue.
 #[cfg(windows)]
-pub async fn load_or_build_dataframe_cached(
+pub(crate) async fn load_or_build_dataframe_cached(
     drive: char,
     ttl_seconds: u64,
 ) -> crate::Result<uffs_polars::DataFrame> {

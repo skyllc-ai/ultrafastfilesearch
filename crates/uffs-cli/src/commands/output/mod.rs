@@ -50,7 +50,7 @@ fn vb(row: &Value, key: &str) -> bool {
 }
 
 /// Context for legacy baseline-compatible footer formatting.
-pub struct CppFooterContext<'a> {
+pub(crate) struct CppFooterContext<'a> {
     /// Drive letters to include in the footer (e.g., `['C', 'D']`).
     pub output_targets: &'a [char],
     /// Original search pattern string.

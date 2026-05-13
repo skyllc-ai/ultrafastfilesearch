@@ -72,7 +72,7 @@ use memmap2::Mmap;
 /// `compact_cache::deserialize_compact` errors) so future callers can
 /// match on them in `Result` chains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MmapRegionError {
+pub(crate) enum MmapRegionError {
     /// `byte_offset + len * size_of::<T>()` overflows `usize`.
     Overflow,
     /// `byte_offset + len * size_of::<T>()` exceeds `mmap.len()`.
@@ -199,7 +199,7 @@ impl<T: bytemuck::Pod> ColumnStorage<T> {
     /// Production callers (`crate::compact_mmap::load_from_runtime`)
     /// receive a layout that page-aligns every column header, which
     /// satisfies any `T: Pod` alignment up to the page size.
-    pub fn from_mmap_region(
+    pub(crate) fn from_mmap_region(
         mmap: Arc<Mmap>,
         byte_offset: usize,
         len: usize,
@@ -307,7 +307,7 @@ impl<T: bytemuck::Pod> ColumnStorage<T> {
     ///
     /// Triggers a one-time `mmap → Vec` copy on the first call against
     /// an `Mmap`-backed column.  Subsequent calls are cheap.
-    pub fn as_mut_vec(&mut self) -> &mut Vec<T> {
+    pub(crate) fn as_mut_vec(&mut self) -> &mut Vec<T> {
         self.materialise_to_vec()
     }
 

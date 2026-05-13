@@ -48,7 +48,7 @@ pub struct McpStats {
 
 impl McpStats {
     /// Record a successful tool call.
-    pub fn record_tool_call(&self, tool_name: &str, latency_us: u64) {
+    pub(crate) fn record_tool_call(&self, tool_name: &str, latency_us: u64) {
         self.total_tool_calls.fetch_add(1, Ordering::Relaxed);
         self.total_tool_latency_us
             .fetch_add(latency_us, Ordering::Relaxed);
@@ -56,7 +56,7 @@ impl McpStats {
     }
 
     /// Record a failed tool call.
-    pub fn record_tool_error(&self, tool_name: &str, latency_us: u64) {
+    pub(crate) fn record_tool_error(&self, tool_name: &str, latency_us: u64) {
         self.total_tool_calls.fetch_add(1, Ordering::Relaxed);
         self.total_tool_errors.fetch_add(1, Ordering::Relaxed);
         self.total_tool_latency_us
@@ -65,29 +65,29 @@ impl McpStats {
     }
 
     /// Record a resource read.
-    pub fn record_resource_read(&self) {
+    pub(crate) fn record_resource_read(&self) {
         self.total_resource_reads.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record a prompt get.
-    pub fn record_prompt_get(&self) {
+    pub(crate) fn record_prompt_get(&self) {
         self.total_prompt_gets.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Increment session counters (HTTP gateway — session created).
-    pub fn session_started(&self) {
+    pub(crate) fn session_started(&self) {
         self.active_sessions.fetch_add(1, Ordering::Relaxed);
         self.total_sessions.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Decrement active session counter (HTTP gateway — session ended).
-    pub fn session_ended(&self) {
+    pub(crate) fn session_ended(&self) {
         self.active_sessions.fetch_sub(1, Ordering::Relaxed);
     }
 
     /// Average tool call latency in microseconds (0 if no calls).
     #[must_use]
-    pub fn avg_tool_latency_us(&self) -> u64 {
+    pub(crate) fn avg_tool_latency_us(&self) -> u64 {
         let total = self.total_tool_calls.load(Ordering::Relaxed);
         if total == 0 {
             return 0;
@@ -97,7 +97,7 @@ impl McpStats {
 
     /// Serialize stats to a JSON value for the `/status` endpoint.
     #[must_use]
-    pub fn to_json(&self) -> serde_json::Value {
+    pub(crate) fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "tool_calls": self.total_tool_calls.load(Ordering::Relaxed),
             "tool_errors": self.total_tool_errors.load(Ordering::Relaxed),

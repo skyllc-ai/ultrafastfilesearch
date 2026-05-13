@@ -42,7 +42,7 @@ use uffs_client::protocol::response::{
 ///   Already Cold:     (none)
 /// ```
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub fn daemon_hibernate(drives: &[char]) -> Result<()> {
+pub(crate) fn daemon_hibernate(drives: &[char]) -> Result<()> {
     let mut client = UffsClientSync::connect_raw()
         .map_err(|err| anyhow::anyhow!("Daemon is not running: {err}"))?;
 
@@ -104,7 +104,7 @@ pub fn daemon_hibernate(drives: &[char]) -> Result<()> {
 ///   Pin expires at:    1700001800000 (Unix-millis)
 /// ```
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub fn daemon_preload(drives: &[char], pin_minutes: Option<u32>) -> Result<()> {
+pub(crate) fn daemon_preload(drives: &[char], pin_minutes: Option<u32>) -> Result<()> {
     let mut client = UffsClientSync::connect_raw()
         .map_err(|err| anyhow::anyhow!("Daemon is not running: {err}"))?;
 
@@ -169,7 +169,7 @@ pub fn daemon_preload(drives: &[char], pin_minutes: Option<u32>) -> Result<()> {
 ///   Already absent:   (none)
 /// ```
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub fn daemon_forget(drives: &[char], force: bool) -> Result<()> {
+pub(crate) fn daemon_forget(drives: &[char], force: bool) -> Result<()> {
     let mut client = UffsClientSync::connect_raw()
         .map_err(|err| anyhow::anyhow!("Daemon is not running: {err}"))?;
 
@@ -251,7 +251,7 @@ pub fn daemon_forget(drives: &[char], force: bool) -> Result<()> {
 /// `crates/uffs-daemon/src/cache/registry.rs::promote_letter_to_hot`
 /// for the bump site (`if from_state == ShardState::Cold`).
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub fn daemon_status_drives() -> Result<()> {
+pub(crate) fn daemon_status_drives() -> Result<()> {
     // Read-only commands match `daemon status`'s graceful "daemon
     // down" rendering on connection failure — same stdout shape,
     // same exit 0 — so an operator pipeline like

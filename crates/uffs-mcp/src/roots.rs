@@ -44,7 +44,7 @@ pub struct RootsState {
 }
 
 /// Thread-safe handle to the roots state.
-pub type SharedRootsState = Arc<RwLock<RootsState>>;
+pub(crate) type SharedRootsState = Arc<RwLock<RootsState>>;
 
 /// Parse a `file://` URI into an NTFS-style path.
 ///
@@ -93,7 +93,7 @@ fn resolve_root(root: &rmcp::model::Root) -> RootScope {
 }
 
 /// Update the [`RootsState`] from a list of roots received from the client.
-pub fn update_roots_state(state: &mut RootsState, roots: &[rmcp::model::Root]) {
+pub(crate) fn update_roots_state(state: &mut RootsState, roots: &[rmcp::model::Root]) {
     state.advertised = true;
     state.roots.clear();
     state.warnings.clear();
@@ -121,7 +121,7 @@ pub fn update_roots_state(state: &mut RootsState, roots: &[rmcp::model::Root]) {
 ///
 /// Returns `None` if no roots have been advertised or all roots are unmappable.
 #[must_use]
-pub fn roots_scope(state: &RootsState) -> Option<(Vec<String>, Vec<String>, Vec<String>)> {
+pub(crate) fn roots_scope(state: &RootsState) -> Option<(Vec<String>, Vec<String>, Vec<String>)> {
     if !state.advertised || state.roots.is_empty() {
         return None;
     }
@@ -164,7 +164,7 @@ pub fn roots_scope(state: &RootsState) -> Option<(Vec<String>, Vec<String>, Vec<
 ///
 /// If a root points to a drive root (e.g. `C:`), no path predicate is
 /// injected — the drive filter alone is sufficient.
-pub fn apply_roots_scope(state: &RootsState, params: &mut SearchParams) {
+pub(crate) fn apply_roots_scope(state: &RootsState, params: &mut SearchParams) {
     let Some((drives, prefixes, _warnings)) = roots_scope(state) else {
         return;
     };

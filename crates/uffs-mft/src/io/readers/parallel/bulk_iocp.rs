@@ -58,7 +58,7 @@ impl ParallelMftReader {
         unsafe_code,
         reason = "FFI: dispatches to queue_bulk_iocp_reads (ReadFile) + drain_bulk_iocp_completions (GetQueuedCompletionStatus)"
     )]
-    pub fn read_all_bulk_iocp<F>(
+    pub(crate) fn read_all_bulk_iocp<F>(
         &self,
         overlapped_handle: HANDLE,
         merge_extensions: bool,

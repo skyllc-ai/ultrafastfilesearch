@@ -345,7 +345,7 @@ pub struct ExtendedStandardInfo {
 impl ExtendedStandardInfo {
     /// Creates from raw file attributes.
     #[must_use]
-    pub fn from_attributes(attrs: u32) -> Self {
+    pub(crate) fn from_attributes(attrs: u32) -> Self {
         Self {
             is_readonly: (attrs & 0x0001) != 0,
             is_hidden: (attrs & 0x0002) != 0,
@@ -375,7 +375,7 @@ impl ExtendedStandardInfo {
         clippy::missing_const_for_fn,
         reason = "can't be const due to if statements"
     )]
-    pub fn to_raw_flags(self) -> u32 {
+    pub(crate) fn to_raw_flags(self) -> u32 {
         let mut flags = 0_u32;
         if self.is_readonly {
             flags |= 0x0001;

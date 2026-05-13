@@ -128,7 +128,7 @@ pub fn parse_size(spec: &str) -> Result<u64, String> {
 
 /// Current time as a raw FILETIME (100-ns ticks since 1601-01-01).
 #[must_use]
-pub fn now_filetime() -> i64 {
+pub(crate) fn now_filetime() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |dur| {

@@ -77,7 +77,7 @@ impl SearchResult {
 
     /// Create a search result for a specific (name, stream) combination.
     #[must_use]
-    pub fn from_expanded(
+    pub(crate) fn from_expanded(
         record: &FileRecord,
         index: &MftIndex,
         name_idx: u16,
@@ -139,7 +139,7 @@ impl SearchResult {
 
     /// Create with resolved path.
     #[must_use]
-    pub fn with_path(mut self, path: String) -> Self {
+    pub(crate) fn with_path(mut self, path: String) -> Self {
         self.path = Some(path);
         self
     }

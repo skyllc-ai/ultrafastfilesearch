@@ -38,14 +38,14 @@ use crate::search::derived::extension_from_name;
 /// `search::sorting::PARALLEL_SORT_THRESHOLD` and
 /// `search::query::numeric_top_n::RESOLVE_CHUNK_SIZE` so the same
 /// hot-path crossover governs the whole query.
-pub const PARALLEL_WRITE_THRESHOLD: usize = 16_384;
+pub(crate) const PARALLEL_WRITE_THRESHOLD: usize = 16_384;
 
 /// Chunk size used by [`write_display_rows`]'s parallel formatter.
 ///
 /// Chosen so each chunk does ~2 ms of string-building work, well above
 /// rayon's per-task dispatch floor.  Larger chunks would underutilise
 /// workers; smaller chunks would waste time on scheduler overhead.
-pub const PARALLEL_WRITE_CHUNK: usize = 4096;
+pub(crate) const PARALLEL_WRITE_CHUNK: usize = 4096;
 
 /// Write `DisplayRow` results directly — **no `DataFrame` involved**.
 ///
@@ -70,7 +70,7 @@ pub const PARALLEL_WRITE_CHUNK: usize = 4096;
 /// # Errors
 ///
 /// Returns an error if the underlying writer fails.
-pub fn write_display_rows<W: Write>(
+pub(crate) fn write_display_rows<W: Write>(
     cfg: &OutputConfig,
     rows: &[DisplayRow],
     mut writer: W,
@@ -134,45 +134,45 @@ pub fn write_display_rows<W: Write>(
 }
 
 /// NTFS attribute flag constants for bit-testing `DisplayRow::flags`.
-pub mod attr {
+pub(crate) mod attr {
     /// Read-only.
-    pub const READONLY: u32 = 0x0001;
+    pub(crate) const READONLY: u32 = 0x0001;
     /// Hidden.
-    pub const HIDDEN: u32 = 0x0002;
+    pub(crate) const HIDDEN: u32 = 0x0002;
     /// System.
-    pub const SYSTEM: u32 = 0x0004;
+    pub(crate) const SYSTEM: u32 = 0x0004;
     /// Directory.
-    pub const DIRECTORY: u32 = 0x0010;
+    pub(crate) const DIRECTORY: u32 = 0x0010;
     /// Archive.
-    pub const ARCHIVE: u32 = 0x0020;
+    pub(crate) const ARCHIVE: u32 = 0x0020;
     /// Temporary.
-    pub const TEMPORARY: u32 = 0x0100;
+    pub(crate) const TEMPORARY: u32 = 0x0100;
     /// Sparse.
-    pub const SPARSE: u32 = 0x0200;
+    pub(crate) const SPARSE: u32 = 0x0200;
     /// Reparse point.
-    pub const REPARSE: u32 = 0x0400;
+    pub(crate) const REPARSE: u32 = 0x0400;
     /// Compressed.
-    pub const COMPRESSED: u32 = 0x0800;
+    pub(crate) const COMPRESSED: u32 = 0x0800;
     /// Offline.
-    pub const OFFLINE: u32 = 0x1000;
+    pub(crate) const OFFLINE: u32 = 0x1000;
     /// Not content indexed.
-    pub const NOT_INDEXED: u32 = 0x2000;
+    pub(crate) const NOT_INDEXED: u32 = 0x2000;
     /// Encrypted.
-    pub const ENCRYPTED: u32 = 0x4000;
+    pub(crate) const ENCRYPTED: u32 = 0x4000;
     /// Integrity stream.
-    pub const INTEGRITY: u32 = 0x8000;
+    pub(crate) const INTEGRITY: u32 = 0x8000;
     /// Virtual.
-    pub const VIRTUAL: u32 = 0x0001_0000;
+    pub(crate) const VIRTUAL: u32 = 0x0001_0000;
     /// No scrub data.
-    pub const NO_SCRUB: u32 = 0x0002_0000;
+    pub(crate) const NO_SCRUB: u32 = 0x0002_0000;
     /// Recall on open.
-    pub const RECALL_ON_OPEN: u32 = 0x0004_0000;
+    pub(crate) const RECALL_ON_OPEN: u32 = 0x0004_0000;
     /// Pinned.
-    pub const PINNED: u32 = 0x0008_0000;
+    pub(crate) const PINNED: u32 = 0x0008_0000;
     /// Unpinned.
-    pub const UNPINNED: u32 = 0x0010_0000;
+    pub(crate) const UNPINNED: u32 = 0x0010_0000;
     /// Recall on data access.
-    pub const RECALL_ON_DATA: u32 = 0x0040_0000;
+    pub(crate) const RECALL_ON_DATA: u32 = 0x0040_0000;
     /// Parity-compat mask — must match `StandardInfo::parity_attributes()`.
     ///
     /// Includes the 15 attribute bits the legacy baseline tracks:
@@ -182,7 +182,7 @@ pub mod attr {
     ///
     /// Note: excludes `TEMPORARY` (0x100) and `VIRTUAL` (0x10000) which are
     /// NOT part of the parity contract.
-    pub const PARITY_MASK: u32 = READONLY
+    pub(crate) const PARITY_MASK: u32 = READONLY
         | HIDDEN
         | SYSTEM
         | DIRECTORY
@@ -208,7 +208,7 @@ pub mod attr {
     reason = "exhaustive match over ~30 OutputColumn variants; each arm is 1–8 lines \
               of formatting — splitting would scatter the column→text dispatch table"
 )]
-pub fn write_display_row_columns(
+pub(crate) fn write_display_row_columns(
     buf: &mut String,
     itoa_buf: &mut itoa::Buffer,
     output_cols: &[OutputColumn],
@@ -355,7 +355,7 @@ pub fn write_display_row_columns(
 }
 
 /// Append a boolean flag test result.
-pub fn push_flag(buf: &mut String, cfg: &OutputConfig, flags: u32, mask: u32) {
+pub(crate) fn push_flag(buf: &mut String, cfg: &OutputConfig, flags: u32, mask: u32) {
     if flags & mask != 0 {
         buf.push_str(&cfg.pos);
     } else {
@@ -380,7 +380,7 @@ pub fn push_flag(buf: &mut String, cfg: &OutputConfig, flags: u32, mask: u32) {
 ///
 /// Regression-pinned by `append_datetime_native_*` in the `tests`
 /// submodule at `display_rows_tests.rs`.
-pub fn append_datetime_native(buf: &mut String, filetime: i64, tz_offset_secs: i32) {
+pub(crate) fn append_datetime_native(buf: &mut String, filetime: i64, tz_offset_secs: i32) {
     let local_ft = uffs_time::filetime_with_tz_bias(filetime, tz_offset_secs);
     if let Some((year, month, day, hour, minute, second)) =
         uffs_time::filetime_to_calendar(local_ft)

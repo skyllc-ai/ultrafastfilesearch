@@ -35,7 +35,7 @@ pub struct StatsAccumulator {
 impl StatsAccumulator {
     /// Create a new empty stats accumulator.
     #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             count: 0,
             sum: 0,
@@ -47,7 +47,7 @@ impl StatsAccumulator {
 
     /// Feed a value from a record.
     #[inline]
-    pub const fn feed_value(&mut self, value: u64, allocated: u64) {
+    pub(crate) const fn feed_value(&mut self, value: u64, allocated: u64) {
         self.count += 1;
         self.sum += value;
         if value < self.min {
@@ -60,7 +60,7 @@ impl StatsAccumulator {
     }
 
     /// Merge another accumulator into this one.
-    pub const fn merge(&mut self, other: &Self) {
+    pub(crate) const fn merge(&mut self, other: &Self) {
         self.count += other.count;
         self.sum += other.sum;
         if other.min < self.min {
@@ -74,7 +74,7 @@ impl StatsAccumulator {
 
     /// Compute the average value (returns 0 if count is 0).
     #[must_use]
-    pub fn avg(&self) -> f64 {
+    pub(crate) fn avg(&self) -> f64 {
         if self.count == 0 {
             0.0
         } else {
@@ -84,13 +84,13 @@ impl StatsAccumulator {
 
     /// Compute waste bytes: `sum_allocated - sum`.
     #[must_use]
-    pub const fn waste_bytes(&self) -> u64 {
+    pub(crate) const fn waste_bytes(&self) -> u64 {
         self.sum_allocated.saturating_sub(self.sum)
     }
 
     /// Compute waste percentage.
     #[must_use]
-    pub fn waste_pct(&self) -> f64 {
+    pub(crate) fn waste_pct(&self) -> f64 {
         if self.sum_allocated == 0 {
             0.0
         } else {
@@ -211,7 +211,7 @@ pub enum AccumulatorKind {
 impl GroupAccumulator {
     /// Create a new accumulator for the given aggregate kind.
     #[must_use]
-    pub fn from_kind(kind: &AggregateKind, label: Option<String>) -> Self {
+    pub(crate) fn from_kind(kind: &AggregateKind, label: Option<String>) -> Self {
         let (acc_kind, field) = match kind {
             AggregateKind::Count => (AccumulatorKind::Count { count: 0 }, None),
             AggregateKind::Stats { field, metrics } => (

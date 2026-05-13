@@ -16,7 +16,7 @@ use crate::commands::{daemon_load, daemon_tiering};
 /// # Errors
 ///
 /// Returns an error if the operation fails.
-pub fn daemon(action: &DaemonAction) -> Result<()> {
+pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
     match action {
         DaemonAction::Start {
             mft_file,

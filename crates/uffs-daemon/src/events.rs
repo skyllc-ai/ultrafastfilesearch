@@ -22,7 +22,7 @@ const EVENT_CHANNEL_CAPACITY: usize = 64;
 /// A daemon event pushed to all connected clients.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
-pub enum DaemonEvent {
+pub(crate) enum DaemonEvent {
     /// Emitted when the daemon process starts (before any drives load).
     DaemonStarting {
         /// Daemon process ID.
@@ -108,23 +108,23 @@ pub enum DaemonEvent {
 /// (internal) and `LifecycleHandle` (internal); each client connection
 /// subscribes via `sender.subscribe()`.
 #[must_use]
-pub fn event_channel() -> (EventSender, EventReceiver) {
+pub(crate) fn event_channel() -> (EventSender, EventReceiver) {
     let (tx, rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
     (EventSender(tx), rx)
 }
 
 /// Wrapper around `broadcast::Sender<DaemonEvent>` with convenience methods.
 #[derive(Clone, Debug)]
-pub struct EventSender(broadcast::Sender<DaemonEvent>);
+pub(crate) struct EventSender(broadcast::Sender<DaemonEvent>);
 
 /// Alias for the receiver half.
-pub type EventReceiver = broadcast::Receiver<DaemonEvent>;
+pub(crate) type EventReceiver = broadcast::Receiver<DaemonEvent>;
 
 impl EventSender {
     /// Emit an event to all connected clients. Never blocks or errors —
     /// if no receivers exist or the channel is full, the event is silently
     /// dropped.
-    pub fn emit(&self, event: DaemonEvent) {
+    pub(crate) fn emit(&self, event: DaemonEvent) {
         // Log at trace level so daemon logs capture every event too.
         tracing::trace!(?event, "📣 event emitted");
         let _ignore = self.0.send(event);
@@ -132,7 +132,7 @@ impl EventSender {
 
     /// Subscribe to the event stream (one subscription per client connection).
     #[must_use]
-    pub fn subscribe(&self) -> EventReceiver {
+    pub(crate) fn subscribe(&self) -> EventReceiver {
         self.0.subscribe()
     }
 }
@@ -144,7 +144,7 @@ impl EventSender {
 /// {"jsonrpc":"2.0","method":"daemon.drive_loaded","params":{...}}\n
 /// ```
 #[must_use]
-pub fn event_to_json_line(event: &DaemonEvent) -> Option<String> {
+pub(crate) fn event_to_json_line(event: &DaemonEvent) -> Option<String> {
     let method = match event {
         DaemonEvent::DaemonStarting { .. } => "daemon.starting",
         DaemonEvent::DriveLoaded { .. } => "daemon.drive_loaded",

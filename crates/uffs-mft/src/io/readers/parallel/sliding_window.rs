@@ -32,7 +32,7 @@ impl ParallelMftReader {
     ///
     /// Returns [`MftError::Io`] when any `ReadFile` or
     /// `GetQueuedCompletionStatus` in the sliding-window pipeline fails.
-    pub fn read_all_sliding_window_iocp<F>(
+    pub(crate) fn read_all_sliding_window_iocp<F>(
         &self,
         overlapped_handle: HANDLE,
         merge_extensions: bool,

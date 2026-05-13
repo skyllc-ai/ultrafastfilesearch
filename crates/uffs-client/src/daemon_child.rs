@@ -41,6 +41,7 @@ enum DaemonChildInner {
     },
     /// Opaque: the spawn path (e.g. `ShellExecuteW("runas")` on Windows)
     /// did not produce a pollable handle.  Liveness checks are a no-op.
+    #[cfg(windows)]
     Opaque,
 }
 
@@ -54,7 +55,7 @@ enum DaemonChildInner {
 /// previously-silent "uffsd died during startup" failure mode into an
 /// actionable error like
 /// `"Daemon exited with code 2 during startup — check uffsd.log"`.
-pub struct DaemonChildHandle {
+pub(crate) struct DaemonChildHandle {
     /// Platform-specific state (Win32 `HANDLE`, `std::process::Child`,
     /// or opaque) — see [`DaemonChildInner`] for the full story.
     inner: DaemonChildInner,
@@ -68,8 +69,9 @@ impl DaemonChildHandle {
     /// Construct an opaque handle — used by the UAC elevation path
     /// where `ShellExecuteW("runas")` hands off to the shell and never
     /// returns a usable PID / `HANDLE`.
+    #[cfg(windows)]
     #[must_use]
-    pub const fn opaque() -> Self {
+    pub(crate) const fn opaque() -> Self {
         Self {
             inner: DaemonChildInner::Opaque,
             pid: 0,
@@ -113,7 +115,7 @@ impl DaemonChildHandle {
 
     /// Returns the spawned daemon's PID, or `0` for [`Self::opaque`].
     #[must_use]
-    pub const fn pid(&self) -> u32 {
+    pub(crate) const fn pid(&self) -> u32 {
         self.pid
     }
 
@@ -136,7 +138,7 @@ impl DaemonChildHandle {
     /// are merely probing for early exit should treat poll errors as "still
     /// running" and keep retrying — the error path means we *don't know*,
     /// not that the child is dead.
-    pub fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
+    pub(crate) fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
         match &mut self.inner {
             #[cfg(windows)]
             DaemonChildInner::Windows { process_handle } => try_wait_windows(*process_handle),
@@ -159,6 +161,7 @@ impl DaemonChildHandle {
                     }
                 }
             }
+            #[cfg(windows)]
             DaemonChildInner::Opaque => Ok(None),
         }
     }
@@ -237,6 +240,7 @@ impl Drop for DaemonChildHandle {
                 // the daemon exits.  Not holding a reference keeps
                 // startup-time resource usage bounded.
             }
+            #[cfg(windows)]
             DaemonChildInner::Opaque => {}
         }
     }
@@ -252,6 +256,7 @@ mod tests {
     /// spawn path: no handle, no exit code, `try_wait` must be safe
     /// and return `Ok(None)` every time so the retry loop falls back
     /// to plain connect-timeout semantics.
+    #[cfg(windows)]
     #[test]
     fn opaque_handle_never_observes_exit() {
         let mut handle = DaemonChildHandle::opaque();

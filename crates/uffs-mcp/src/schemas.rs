@@ -14,7 +14,7 @@ use serde::Serialize;
 
 /// Structured output for `uffs_search`.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct SearchOutput {
+pub(crate) struct SearchOutput {
     /// Number of matching rows returned in this page.
     pub returned: usize,
     /// Total matching records (before limit/pagination).
@@ -42,7 +42,7 @@ pub struct SearchOutput {
 /// Mirrors every field from [`uffs_client::protocol::response::SearchRow`] so
 /// `structuredContent` exposes 100% of the data the CLI/API returns.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct SearchRowOutput {
+pub(crate) struct SearchRowOutput {
     /// Drive letter.
     pub drive: char,
     /// Filename.
@@ -80,7 +80,7 @@ pub struct SearchRowOutput {
 
 /// Structured output for `uffs_info`.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct InfoOutput {
+pub(crate) struct InfoOutput {
     /// Whether the path was found in the index.
     pub found: bool,
     /// Detailed file record (all NTFS columns).
@@ -93,7 +93,7 @@ pub struct InfoOutput {
 
 /// Structured output for `uffs_drives`.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct DrivesOutput {
+pub(crate) struct DrivesOutput {
     /// Number of loaded drives.
     pub count: usize,
     /// Per-drive details.
@@ -102,7 +102,7 @@ pub struct DrivesOutput {
 
 /// A single drive entry (structured).
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct DriveOutput {
+pub(crate) struct DriveOutput {
     /// Drive letter (e.g. 'C').
     pub letter: char,
     /// Number of records in the compact index.
@@ -115,7 +115,7 @@ pub struct DriveOutput {
 
 /// Structured output for `uffs_status`.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct StatusOutput {
+pub(crate) struct StatusOutput {
     /// Current daemon status object.
     pub status: serde_json::Value,
     /// Daemon uptime in seconds.
@@ -148,7 +148,7 @@ pub struct AggregateOutput {
 
 /// Structured output for `uffs_facet_values`.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct FacetValuesOutput {
+pub(crate) struct FacetValuesOutput {
     /// The field that was faceted.
     pub field: String,
     /// Aggregation result buckets.

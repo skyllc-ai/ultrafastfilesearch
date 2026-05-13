@@ -30,7 +30,7 @@ use super::prelude::*;
 /// │  └──────────────────────────────────────────────────┘          │
 /// └─────────────────────────────────────────────────────────────────┘
 /// ```
-pub struct IocpMftReader {
+pub(crate) struct IocpMftReader {
     /// Extent map for the MFT.
     extent_map: MftExtentMap,
     /// Optional bitmap for filtering in-use records.
@@ -44,7 +44,7 @@ pub struct IocpMftReader {
 impl IocpMftReader {
     /// Default concurrency (number of reads in flight).
     /// Higher values hide more latency but use more memory.
-    pub const DEFAULT_CONCURRENCY: usize = 8;
+    pub(crate) const DEFAULT_CONCURRENCY: usize = 8;
 
     /// Creates a new IOCP reader.
     #[must_use]
@@ -70,7 +70,7 @@ impl IocpMftReader {
 
     /// Sets the concurrency level (number of reads in flight).
     #[must_use]
-    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
+    pub(crate) fn with_concurrency(mut self, concurrency: usize) -> Self {
         self.concurrency = concurrency.max(1);
         self
     }
@@ -90,7 +90,7 @@ impl IocpMftReader {
         unsafe_code,
         reason = "FFI: dispatches to iocp_* helpers that submit ReadFile + drain GetQueuedCompletionStatus"
     )]
-    pub fn read_all_iocp<F>(
+    pub(crate) fn read_all_iocp<F>(
         &self,
         handle: HANDLE,
         merge_extensions: bool,

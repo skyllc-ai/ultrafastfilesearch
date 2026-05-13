@@ -108,7 +108,7 @@ impl MftIndex {
     ///
     /// Call after any mutation that changes index content (USN update,
     /// record merge, etc.) so downstream caches can detect staleness.
-    pub fn bump_epoch(&mut self) {
+    pub(crate) fn bump_epoch(&mut self) {
         self.build_epoch = current_epoch_micros();
     }
 
@@ -116,7 +116,7 @@ impl MftIndex {
     ///
     /// This is useful after deserializing an index from disk,
     /// or after merging fragments.
-    pub fn recompute_stats(&mut self) {
+    pub(crate) fn recompute_stats(&mut self) {
         /// System metafiles are FRS 0-15 (except root at FRS 5)
         const SYSTEM_METAFILE_MAX_FRS: u64 = 15;
         const ROOT_FRS_LOCAL: u64 = 5;
@@ -268,7 +268,7 @@ impl MftIndex {
     /// Call this once before the parse loop to eliminate the per-call
     /// `if frs_usize >= self.frs_to_idx.len()` branch in
     /// `get_or_create_unified`.
-    pub fn pre_size_frs_lookup(&mut self, total_records: usize) {
+    pub(crate) fn pre_size_frs_lookup(&mut self, total_records: usize) {
         // FRS numbers can be up to total_records (and sometimes slightly
         // beyond due to extension records referencing higher FRS values).
         // Over-allocate by 10% to cover most cases without any resize.
@@ -288,7 +288,7 @@ impl MftIndex {
         clippy::indexing_slicing,
         reason = "bounds checked: resize ensures frs_usize < len"
     )]
-    pub fn ensure_record(&mut self, frs: u64) -> u32 {
+    pub(crate) fn ensure_record(&mut self, frs: u64) -> u32 {
         let frs_usize = frs_to_usize(frs);
 
         if frs_usize >= self.frs_to_idx.len() {
@@ -452,7 +452,7 @@ impl MftIndex {
     /// Get a specific hard link by index (0 = `first_name`, 1+ = overflow
     /// links).
     #[must_use]
-    pub fn get_link_at<'a>(
+    pub(crate) fn get_link_at<'a>(
         &'a self,
         record: &'a FileRecord,
         name_idx: u16,
@@ -667,7 +667,7 @@ impl MftIndex {
 
     /// Get the name string for a link.
     #[must_use]
-    pub fn link_name(&self, link: &LinkInfo) -> &str {
+    pub(crate) fn link_name(&self, link: &LinkInfo) -> &str {
         self.get_name(link.name)
     }
 }

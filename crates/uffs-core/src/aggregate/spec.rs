@@ -27,7 +27,7 @@ impl AggregateSpec {
 
     /// Create a new aggregate spec with a label.
     #[must_use]
-    pub fn with_label(kind: AggregateKind, label: impl Into<String>) -> Self {
+    pub(crate) fn with_label(kind: AggregateKind, label: impl Into<String>) -> Self {
         Self {
             kind,
             label: Some(label.into()),
@@ -173,11 +173,11 @@ pub enum DuplicateVerify {
 
 /// Maximum allowed sample rows per bucket.
 /// Maximum number of sample rows per bucket.
-pub const MAX_SAMPLE_COUNT: u8 = 5;
+pub(crate) const MAX_SAMPLE_COUNT: u8 = 5;
 
 /// Default sample projection: the fields returned for each sample row
 /// when the caller doesn't specify a custom projection.
-pub const DEFAULT_PROJECTION: &[FieldId] = &[
+pub(crate) const DEFAULT_PROJECTION: &[FieldId] = &[
     FieldId::Name,
     FieldId::Size,
     FieldId::Modified,
@@ -255,7 +255,7 @@ impl TopHitsSpec {
     /// Return the effective projection — custom if non-empty, otherwise
     /// the default compact set.
     #[must_use]
-    pub fn effective_projection(&self) -> &[FieldId] {
+    pub(crate) fn effective_projection(&self) -> &[FieldId] {
         if self.projection.is_empty() {
             DEFAULT_PROJECTION
         } else {

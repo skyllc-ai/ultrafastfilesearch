@@ -67,7 +67,7 @@ impl PartialOrd for HeapEntry {
 /// branches (`Path` and `PathOnly`) emit rows in tree order with no
 /// separate sort or `path_resolve` phase, so they return `None`.
 #[must_use]
-pub fn collect_global_top_n<D: AsRef<DriveCompactIndex> + Sync>(
+pub(crate) fn collect_global_top_n<D: AsRef<DriveCompactIndex> + Sync>(
     drives: &[D],
     limit: usize,
     sort_column: FieldId,
@@ -168,7 +168,7 @@ pub(super) const fn passes_filter_mode(is_directory: bool, mode: FilterMode) -> 
 ///
 /// Uses `CaseFold::cmp_str` for zero-alloc, per-codepoint fold comparison.
 #[must_use]
-pub fn search_compact_drive_regex(
+pub(crate) fn search_compact_drive_regex(
     drive: &DriveCompactIndex,
     compiled_re: &regex::Regex,
     limit: usize,
@@ -315,7 +315,7 @@ fn collect_match_indices(
 
 /// Search a single drive's compact index (trigram + glob/substring).
 #[must_use]
-pub fn search_compact_drive(
+pub(crate) fn search_compact_drive(
     drive: &DriveCompactIndex,
     needle: &str,
     limit: usize,
@@ -460,7 +460,7 @@ fn expand_directory_descendants(drive: &DriveCompactIndex, indices: &mut Vec<u32
 
 /// Search a single drive using tree-based path traversal.
 #[must_use]
-pub fn search_compact_drive_tree(
+pub(crate) fn search_compact_drive_tree(
     drive: &DriveCompactIndex,
     pattern_lower: &str,
     limit: usize,

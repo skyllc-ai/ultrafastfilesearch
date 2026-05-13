@@ -40,7 +40,7 @@ use crate::path_trie::PathTrie;
 /// promote this to a per-drive policy knob; for Phase 4 every shard
 /// uses the same target so the headline "≤ 50 MB on a 7-drive idle
 /// box" math is reproducible.
-pub const SHARD_BLOOM_TARGET_FPR: f64 = 0.01;
+pub(crate) const SHARD_BLOOM_TARGET_FPR: f64 = 0.01;
 
 impl DriveCompactIndex {
     /// Build a bloom filter populated with every record's
@@ -62,7 +62,7 @@ impl DriveCompactIndex {
     /// the side of "miss" rather than indexing arbitrary bytes
     /// that wouldn't match the same string after fold-on-query.
     #[must_use]
-    pub fn build_bloom(&self) -> Bloom {
+    pub(crate) fn build_bloom(&self) -> Bloom {
         let n_items = self
             .records
             .len()
@@ -109,7 +109,7 @@ impl DriveCompactIndex {
     /// names slices through.  See [`PathTrie`] module docs for the
     /// memory layout and build-cost analysis.
     #[must_use]
-    pub fn build_path_trie(&self) -> PathTrie {
+    pub(crate) fn build_path_trie(&self) -> PathTrie {
         PathTrie::build(&self.records, &self.names)
     }
 

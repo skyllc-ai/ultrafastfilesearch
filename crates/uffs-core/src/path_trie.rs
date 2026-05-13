@@ -72,7 +72,7 @@ use crate::compact::CompactRecord;
 ///
 /// Mirrors the `u32::MAX` convention [`CompactRecord::parent_idx`]
 /// already uses on the records side.
-pub const NO_PARENT: u32 = u32::MAX;
+pub(crate) const NO_PARENT: u32 = u32::MAX;
 
 /// One node in the [`PathTrie`].
 ///
@@ -369,7 +369,7 @@ impl PathTrie {
 
     /// Borrow the CSR child-offsets slice.
     #[must_use]
-    pub fn child_offsets(&self) -> &[u32] {
+    pub(crate) fn child_offsets(&self) -> &[u32] {
         &self.child_offsets
     }
 

@@ -89,7 +89,7 @@ pub fn expand_attr_spec(spec: &str) -> String {
 /// Supports preset aliases: `system-files` → `hidden,system`,
 /// `user-files` → `!hidden,!system`.
 #[must_use]
-pub fn parse_attr_require(spec: &str) -> u32 {
+pub(crate) fn parse_attr_require(spec: &str) -> u32 {
     let mut bits = 0_u32;
     for raw_part in spec.split(',') {
         let lowered = raw_part.trim().to_ascii_lowercase();
@@ -110,7 +110,7 @@ pub fn parse_attr_require(spec: &str) -> u32 {
 ///
 /// Supports preset aliases: `user-files` → `!hidden,!system`.
 #[must_use]
-pub fn parse_attr_exclude(spec: &str) -> u32 {
+pub(crate) fn parse_attr_exclude(spec: &str) -> u32 {
     let mut bits = 0_u32;
     for raw_part in spec.split(',') {
         let lowered = raw_part.trim().to_ascii_lowercase();

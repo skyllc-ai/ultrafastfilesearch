@@ -19,7 +19,7 @@
 ///
 /// Designed to be read by LLM agents, not humans.  Teaches the agent
 /// how to use UFFS tools effectively in the fewest possible queries.
-pub const AGENT_INSTRUCTIONS: &str = "\
+pub(crate) const AGENT_INSTRUCTIONS: &str = "\
 UFFS — Ultra Fast File Search.  Indexes NTFS drives via the Master File \
 Table and serves sub-millisecond queries over millions of files.
 

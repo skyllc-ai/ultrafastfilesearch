@@ -600,7 +600,7 @@ impl FileRecord {
     /// attribute, including the first, producing correct-by-construction
     /// values that match the unified parser's expectations.
     #[must_use]
-    pub fn new_unified(frs: u64) -> Self {
+    pub(crate) fn new_unified(frs: u64) -> Self {
         Self {
             frs,
             forensic_flags: 0b10_0000, // bit 5: is_unified
@@ -692,7 +692,12 @@ impl FileRecord {
 
     /// Sets the forensic flags from parsed record fields.
     #[inline]
-    pub fn set_forensic_flags(&mut self, is_deleted: bool, is_corrupt: bool, is_extension: bool) {
+    pub(crate) fn set_forensic_flags(
+        &mut self,
+        is_deleted: bool,
+        is_corrupt: bool,
+        is_extension: bool,
+    ) {
         // Preserve bits 3-5 (has_default_data, has_i30_stream, is_unified)
         // when setting forensic bits
         self.forensic_flags = (self.forensic_flags & 0b11_1000)

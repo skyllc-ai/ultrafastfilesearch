@@ -28,7 +28,7 @@ impl SearchFilters {
 /// reuse across successive rows; pass a freshly `Vec::with_capacity`-
 /// allocated buffer once, reuse it per row.
 #[must_use]
-pub fn row_passes_filters(
+pub(crate) fn row_passes_filters(
     row: &DisplayRow,
     filters: &SearchFilters,
     fold: &uffs_text::case_fold::CaseFold,
@@ -126,7 +126,7 @@ pub fn row_passes_filters(
 }
 
 /// Apply extended search filters to display rows (in-place).
-pub fn apply_search_filters(rows: &mut Vec<DisplayRow>, filters: &SearchFilters) {
+pub(crate) fn apply_search_filters(rows: &mut Vec<DisplayRow>, filters: &SearchFilters) {
     if filters.is_empty() {
         return;
     }

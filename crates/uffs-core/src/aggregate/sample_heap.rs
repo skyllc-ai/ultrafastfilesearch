@@ -24,7 +24,7 @@ use crate::search::field::FieldId;
 /// Intentionally small (16 bytes) so that thousands of buckets × 5 entries
 /// each remain negligible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SampleEntry {
+pub(crate) struct SampleEntry {
     /// Sort key extracted from the record at scan time.
     pub sort_key: i64,
     /// Index of the record within the drive's `records` array.
@@ -131,7 +131,7 @@ pub struct SampleHeap {
 impl SampleHeap {
     /// Create a new sample heap from a [`TopHitsSpec`].
     #[must_use]
-    pub fn from_spec(spec: &TopHitsSpec) -> Self {
+    pub(crate) fn from_spec(spec: &TopHitsSpec) -> Self {
         let cap = spec.count.clamp(1, 5);
         Self {
             capacity: cap,
@@ -170,7 +170,7 @@ impl SampleHeap {
 
     /// Push a record into the heap, evicting if at capacity.
     #[inline]
-    pub fn push(&mut self, record: &CompactRecord, rec_idx: u32, drive_ordinal: u8) {
+    pub(crate) fn push(&mut self, record: &CompactRecord, rec_idx: u32, drive_ordinal: u8) {
         let sort_key = Self::extract_sort_key(self.sort_field, record);
         let entry = SampleEntry {
             sort_key,
@@ -224,7 +224,7 @@ impl SampleHeap {
     /// heaps must have been built from the same [`TopHitsSpec`] (same
     /// capacity, sort field, and sort direction); callers arrange this
     /// by constructing heaps from the same spec via [`Self::from_spec`].
-    pub fn merge(&mut self, other: &Self) {
+    pub(crate) fn merge(&mut self, other: &Self) {
         if self.sort_desc {
             for DescKey(entry) in &other.heap_desc {
                 self.push_entry(*entry);
@@ -256,7 +256,7 @@ impl SampleHeap {
     ///
     /// - `sort_desc=true`  → largest sort key first
     /// - `sort_desc=false` → smallest sort key first
-    pub fn drain_sorted(&mut self) -> Vec<SampleEntry> {
+    pub(crate) fn drain_sorted(&mut self) -> Vec<SampleEntry> {
         let mut entries: Vec<SampleEntry> = if self.sort_desc {
             self.heap_desc.drain().map(|DescKey(e)| e).collect()
         } else {

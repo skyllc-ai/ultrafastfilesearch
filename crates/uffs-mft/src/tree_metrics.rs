@@ -536,7 +536,7 @@ impl TreeTraversal<'_> {
 /// * `skip_orphans` - If true, skip orphan sweep for parity mode. Only records
 ///   reachable from ROOT via Win32-visible `FILE_NAME` edges are included in
 ///   tree aggregation.
-pub fn compute_tree_metrics(index: &mut MftIndex, debug: bool, skip_orphans: bool) {
+pub(crate) fn compute_tree_metrics(index: &mut MftIndex, debug: bool, skip_orphans: bool) {
     tracing::debug!(
         records = index.records.len(),
         skip_orphans,

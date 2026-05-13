@@ -166,7 +166,7 @@ impl RuntimeLayout {
 /// # Ok(())
 /// # }
 /// ```
-pub fn write_runtime_layout(
+pub(crate) fn write_runtime_layout(
     records_bytes: &[u8],
     names_bytes: &[u8],
     file: &mut File,
@@ -224,7 +224,7 @@ pub fn write_runtime_layout(
 /// [`write_runtime_layout`]'s page-alignment math (or a corrupted
 /// runtime file from a different daemon version) rather than user
 /// error, so the variant carries enough context to surface in logs.
-pub fn load_from_runtime(
+pub(crate) fn load_from_runtime(
     layout: RuntimeLayout,
     mmap: Arc<Mmap>,
 ) -> Result<(ColumnStorage<CompactRecord>, ColumnStorage<u8>), MmapRegionError> {

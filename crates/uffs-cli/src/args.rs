@@ -16,7 +16,7 @@ use std::path::PathBuf;
 /// # Errors
 ///
 /// Returns an error if the input is not a valid drive letter.
-pub fn parse_drive_letter(input: &str) -> Result<char, String> {
+pub(crate) fn parse_drive_letter(input: &str) -> Result<char, String> {
     let trimmed = input.trim();
     let letter_str = trimmed.strip_suffix(':').unwrap_or(trimmed);
 
@@ -55,7 +55,7 @@ pub enum Commands {
 }
 
 /// Actions for `uffs daemon` subcommand.
-pub enum DaemonAction {
+pub(crate) enum DaemonAction {
     /// Start the daemon.
     Start {
         /// Raw MFT file(s).
@@ -147,7 +147,7 @@ pub enum DaemonAction {
 /// # Errors
 ///
 /// Returns an error on invalid action or flags.
-pub fn parse_daemon_action(args: &[String]) -> Result<DaemonAction, anyhow::Error> {
+pub(crate) fn parse_daemon_action(args: &[String]) -> Result<DaemonAction, anyhow::Error> {
     let action = args.first().map_or("status", String::as_str);
     let rest = args.get(1..).unwrap_or_default();
     match action {
@@ -447,13 +447,13 @@ COMMON OPTIONS:
 
 /// Print help and exit.
 #[expect(clippy::print_stdout, reason = "intentional help output")]
-pub fn print_help() {
+pub(crate) fn print_help() {
     print!("{HELP}");
 }
 
 /// Print version and exit.
 #[expect(clippy::print_stdout, reason = "intentional version output")]
-pub fn print_version() {
+pub(crate) fn print_version() {
     println!("uffs {}", env!("CARGO_PKG_VERSION"));
 }
 
@@ -498,7 +498,7 @@ ACTIONS:
 
 /// Print daemon help.
 #[expect(clippy::print_stdout, reason = "intentional help output")]
-pub fn print_daemon_help() {
+pub(crate) fn print_daemon_help() {
     print!("{DAEMON_HELP}");
 }
 
@@ -519,7 +519,7 @@ OPTIONS:
 
 /// Print stats help.
 #[expect(clippy::print_stdout, reason = "intentional help output")]
-pub fn print_stats_help() {
+pub(crate) fn print_stats_help() {
     print!("{STATS_HELP}");
 }
 
@@ -543,7 +543,7 @@ OPTIONS:
 
 /// Print aggregate help.
 #[expect(clippy::print_stdout, reason = "intentional help output")]
-pub fn print_aggregate_help() {
+pub(crate) fn print_aggregate_help() {
     print!("{AGGREGATE_HELP}");
 }
 
@@ -556,6 +556,6 @@ USAGE:  uffs status
 
 /// Print status help.
 #[expect(clippy::print_stdout, reason = "intentional help output")]
-pub fn print_status_help() {
+pub(crate) fn print_status_help() {
     print!("{STATUS_HELP}");
 }

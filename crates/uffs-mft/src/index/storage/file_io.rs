@@ -37,7 +37,7 @@ impl MftIndex {
     /// # Errors
     ///
     /// Returns an error if compression, encryption, or file writing fails.
-    pub fn save_to_file(
+    pub(crate) fn save_to_file(
         &self,
         path: &std::path::Path,
         volume_serial: u64,
@@ -122,7 +122,7 @@ impl MftIndex {
         reason = "core::io::Error is not yet stable — see rust-lang/rust#103765. \
                   Remove this expect once `error_in_core` stabilises."
     )]
-    pub fn load_from_file(
+    pub(crate) fn load_from_file(
         path: &std::path::Path,
     ) -> Result<(Self, IndexHeader), Box<dyn core::error::Error>> {
         use uffs_security::crypto::{CacheFormat, decrypt_cache, detect_format};

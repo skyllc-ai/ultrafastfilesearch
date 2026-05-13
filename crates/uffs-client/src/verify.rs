@@ -18,7 +18,7 @@ use std::path::PathBuf;
 ///
 /// Returns `true` if verification passes or cannot be performed (graceful
 /// degradation — don't block the user if the OS API isn't available).
-pub fn verify_daemon_identity(pid: u32) -> bool {
+pub(crate) fn verify_daemon_identity(pid: u32) -> bool {
     let Some(daemon_path) = get_process_exe_path(pid) else {
         tracing::debug!(
             pid,
@@ -90,7 +90,7 @@ fn is_uffs_daemon_binary(path: &std::path::Path) -> bool {
 /// 4. Compares against the hash in the PID file
 ///
 /// Returns `true` if verification passes.
-pub fn verify_daemon_pid_file(pid_path: &std::path::Path) -> bool {
+pub(crate) fn verify_daemon_pid_file(pid_path: &std::path::Path) -> bool {
     let Ok(content) = std::fs::read_to_string(pid_path) else {
         return true; // no PID file = can't verify, allow
     };
@@ -245,7 +245,7 @@ fn get_process_exe_path(_pid: u32) -> Option<PathBuf> {
 /// (graceful degradation).
 /// macOS: verify via `codesign --verify --strict`.
 #[cfg(target_os = "macos")]
-pub fn verify_code_signature(exe_path: &std::path::Path) -> bool {
+pub(crate) fn verify_code_signature(exe_path: &std::path::Path) -> bool {
     let output = std::process::Command::new("codesign")
         .args(["--verify", "--strict", "--deep"])
         .arg(exe_path)
@@ -285,7 +285,7 @@ fn classify_codesign_output(exe_path: &std::path::Path, out: &std::process::Outp
 
 /// Windows: verify Authenticode signature via PowerShell.
 #[cfg(target_os = "windows")]
-pub fn verify_code_signature(exe_path: &std::path::Path) -> bool {
+pub(crate) fn verify_code_signature(exe_path: &std::path::Path) -> bool {
     let path_str = exe_path.to_string_lossy();
     let script = format!(
         "(Get-AuthenticodeSignature '{}').Status",
@@ -331,7 +331,7 @@ fn classify_authenticode_status(exe_path: &std::path::Path, status: &str) -> boo
 
 /// Linux + other platforms: no standard code signing mechanism.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub fn verify_code_signature(_exe_path: &std::path::Path) -> bool {
+pub(crate) fn verify_code_signature(_exe_path: &std::path::Path) -> bool {
     tracing::debug!("Code signature verification not available on this platform");
     true
 }

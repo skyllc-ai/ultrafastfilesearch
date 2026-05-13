@@ -366,7 +366,7 @@ impl FieldId {
     }
 
     /// Sortable fields in TUI cycle order.
-    pub const SORT_CYCLE: &'static [Self] = &[
+    pub(crate) const SORT_CYCLE: &'static [Self] = &[
         Self::Name,
         Self::Size,
         Self::SizeOnDisk,

@@ -8,7 +8,7 @@ use super::prelude::*;
 /// Per-volume state for multi-volume IOCP reading.
 #[cfg(windows)]
 #[derive(Debug)]
-pub struct VolumeState {
+pub(crate) struct VolumeState {
     /// Drive letter (e.g., 'C')
     pub drive_letter: char,
     /// Volume handle (opened with OVERLAPPED flag)
@@ -40,7 +40,7 @@ pub struct VolumeState {
 /// I/O operation for multi-volume reading.
 #[cfg(windows)]
 #[derive(Debug, Clone)]
-pub struct MultiVolumeIoOp {
+pub(crate) struct MultiVolumeIoOp {
     /// Disk offset to read from
     pub disk_offset: u64,
     /// Size of the read in bytes
@@ -61,7 +61,7 @@ pub struct MultiVolumeIoOp {
 /// - Reduced thread overhead
 /// - `NVMe` drives get high concurrency while HDDs get low concurrency
 #[cfg(windows)]
-pub struct MultiVolumeIocpReader {
+pub(crate) struct MultiVolumeIocpReader {
     /// Per-volume state, indexed by completion key
     volumes: Vec<VolumeState>,
 }
@@ -98,7 +98,7 @@ impl MultiVolumeIocpReader {
         clippy::cognitive_complexity,
         reason = "multi-volume IOCP orchestration: per-volume state machines, completion-key dispatch, and rebalancing in-flight slots have to share one event loop to keep IOCP fairness; extracting helpers would either inline the same control flow or hide IO-completion invariants"
     )]
-    pub fn read_all_volumes(&mut self) -> Result<Vec<crate::index::MftIndex>> {
+    pub(crate) fn read_all_volumes(&mut self) -> Result<Vec<crate::index::MftIndex>> {
         use core::pin::Pin;
 
         use windows::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
@@ -413,7 +413,7 @@ impl MultiVolumeIocpReader {
 /// Helper function to prepare volume state for multi-volume reading.
 #[cfg(windows)]
 #[must_use]
-pub fn prepare_volume_state(
+pub(crate) fn prepare_volume_state(
     drive_letter: char,
     handle: HANDLE,
     extent_map: MftExtentMap,

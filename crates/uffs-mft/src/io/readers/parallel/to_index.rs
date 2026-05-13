@@ -80,7 +80,7 @@ impl ParallelMftReader {
     ///
     /// Returns [`MftError::Io`] when an IOCP `ReadFile` or the completion
     /// wait fails for any outstanding sliding-window request.
-    pub fn read_all_sliding_window_iocp_to_index<F>(
+    pub(crate) fn read_all_sliding_window_iocp_to_index<F>(
         &self,
         overlapped_handle: HANDLE,
         volume: char,

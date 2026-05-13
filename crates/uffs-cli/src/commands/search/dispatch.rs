@@ -110,7 +110,10 @@ pub fn write_rows(rows: &[serde_json::Value], args: &[String]) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error if writing fails.
-pub fn write_aggregations(aggregations: &[serde_json::Value], args: &[String]) -> Result<()> {
+pub(crate) fn write_aggregations(
+    aggregations: &[serde_json::Value],
+    args: &[String],
+) -> Result<()> {
     let format = arg_val(args, "--format")
         .or_else(|| arg_val(args, "-f"))
         .unwrap_or("csv");

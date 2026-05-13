@@ -11,7 +11,7 @@
 //! - Header control
 mod column;
 mod config;
-pub mod display_rows;
+pub(crate) mod display_rows;
 pub mod display_rows_format_bridge;
 
 use uffs_polars::DataFrame;

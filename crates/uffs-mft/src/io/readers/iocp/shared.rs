@@ -33,7 +33,7 @@ pub(crate) const fn set_overlapped_offset(
 /// This provides IOCP-based overlapped I/O for maximum I/O parallelism,
 /// mirroring the legacy implementation's approach of having multiple reads
 /// in flight simultaneously.
-pub struct IoCompletionPort {
+pub(crate) struct IoCompletionPort {
     /// The IOCP handle.
     handle: HANDLE,
 }
@@ -77,7 +77,7 @@ impl IoCompletionPort {
         unsafe_code,
         reason = "FFI: CreateIoCompletionPort to associate file handle with IOCP"
     )]
-    pub fn associate(&self, file_handle: HANDLE, key: usize) -> Result<()> {
+    pub(crate) fn associate(&self, file_handle: HANDLE, key: usize) -> Result<()> {
         use windows::Win32::System::IO::CreateIoCompletionPort;
 
         // SAFETY: `self.handle` is a live IOCP handle and `file_handle` is an
@@ -119,7 +119,7 @@ impl Drop for IoCompletionPort {
 /// This structure is pinned in memory because the OVERLAPPED pointer
 /// is passed to Windows and must remain valid until completion.
 #[repr(C)]
-pub struct OverlappedRead {
+pub(crate) struct OverlappedRead {
     /// The Windows OVERLAPPED structure (must be first field for pointer
     /// casting).
     pub overlapped: windows::Win32::System::IO::OVERLAPPED,

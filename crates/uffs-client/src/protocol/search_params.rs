@@ -33,7 +33,7 @@ impl SearchParams {
 
     /// Resolve the effective canonical predicate list.
     #[must_use]
-    pub fn resolved_predicates(&self) -> Vec<SearchPredicate> {
+    pub(crate) fn resolved_predicates(&self) -> Vec<SearchPredicate> {
         if !self.predicates.is_empty() {
             return self.predicates.clone();
         }
@@ -217,7 +217,7 @@ impl SearchParams {
     /// **Secondary fields:** use field-type defaults (numeric/time → desc,
     /// string → asc) unless overridden with prefix or suffix.
     #[must_use]
-    pub fn canonicalize_legacy_sort(sort: &str, sort_desc: bool) -> Vec<SearchSortSpec> {
+    pub(crate) fn canonicalize_legacy_sort(sort: &str, sort_desc: bool) -> Vec<SearchSortSpec> {
         sort.split(',')
             .enumerate()
             .filter_map(|(index, raw_part)| {

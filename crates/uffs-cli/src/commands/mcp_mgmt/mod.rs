@@ -17,7 +17,7 @@ use anyhow::{Context as _, Result};
 /// # Errors
 ///
 /// Returns an error if `uffsmcp` is not found or exits with a non-zero code.
-pub fn mcp_from_args(args: &[String]) -> Result<()> {
+pub(crate) fn mcp_from_args(args: &[String]) -> Result<()> {
     exec_uffsmcp(args)
 }
 

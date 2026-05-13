@@ -32,7 +32,7 @@ use crate::daemon_child::DaemonChildHandle;
 ///
 /// Has no effect on Unix — Unix spawn never triggers UAC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ElevationPolicy {
+pub(crate) enum ElevationPolicy {
     /// Spawn only if this process is already elevated.  If not, return
     /// [`crate::error::ClientError::DaemonNeedsElevation`] without
     /// touching the UI.
@@ -65,7 +65,7 @@ pub enum ElevationPolicy {
 /// Kept env-free so both the async and sync clients (and tests) can
 /// share one decision matrix without racing on real environment state.
 #[must_use]
-pub fn elevation_policy_from(force_allow: bool, env_value: Option<&str>) -> ElevationPolicy {
+pub(crate) fn elevation_policy_from(force_allow: bool, env_value: Option<&str>) -> ElevationPolicy {
     if force_allow {
         return ElevationPolicy::AllowUacPrompt;
     }
@@ -85,7 +85,7 @@ pub fn elevation_policy_from(force_allow: bool, env_value: Option<&str>) -> Elev
 /// result into [`elevation_policy_from`].  `force_allow = true` from
 /// an explicit `--elevate` flag short-circuits the env lookup.
 #[must_use]
-pub fn resolve_elevation_policy(force_allow: bool) -> ElevationPolicy {
+pub(crate) fn resolve_elevation_policy(force_allow: bool) -> ElevationPolicy {
     elevation_policy_from(force_allow, std::env::var("UFFS_ELEVATE").ok().as_deref())
 }
 
@@ -112,7 +112,7 @@ pub fn resolve_elevation_policy(force_allow: bool) -> ElevationPolicy {
 /// [`crate::error::ClientError::DaemonNeedsElevation`] if the policy
 /// does not allow a UAC prompt in the current elevation state.
 #[cfg(unix)]
-pub fn spawn_daemon(
+pub(crate) fn spawn_daemon(
     exe: &std::path::Path,
     args: &[&str],
     _policy: ElevationPolicy,
@@ -138,7 +138,7 @@ pub fn spawn_daemon(
 /// * [`crate::error::ClientError::DaemonStartFailed`] when `CreateProcessW` /
 ///   `ShellExecuteW` itself rejects the launch.
 #[cfg(windows)]
-pub fn spawn_daemon(
+pub(crate) fn spawn_daemon(
     exe: &std::path::Path,
     args: &[&str],
     policy: ElevationPolicy,

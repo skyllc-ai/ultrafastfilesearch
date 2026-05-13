@@ -37,7 +37,7 @@ impl MftBitmap {
 
     /// Checks if a specific record is in use.
     #[must_use]
-    pub fn is_record_in_use(&self, frs: u64) -> bool {
+    pub(crate) fn is_record_in_use(&self, frs: u64) -> bool {
         let Ok(frs_idx) = usize::try_from(frs) else {
             return false;
         };
@@ -134,7 +134,7 @@ impl MftBitmap {
 
     /// Calculates skip ranges for a cluster-aligned read.
     #[must_use]
-    pub fn calculate_skip_range(&self, start_frs: u64, end_frs: u64) -> (u64, u64) {
+    pub(crate) fn calculate_skip_range(&self, start_frs: u64, end_frs: u64) -> (u64, u64) {
         let start = frs_to_index(start_frs);
         let end = frs_to_index(end_frs).min(self.record_count);
 
@@ -167,7 +167,7 @@ impl MftBitmap {
 
     /// Checks if an entire cluster range has any in-use records.
     #[must_use]
-    pub fn cluster_has_in_use(&self, start_frs: u64, records_per_cluster: u32) -> bool {
+    pub(crate) fn cluster_has_in_use(&self, start_frs: u64, records_per_cluster: u32) -> bool {
         let start = frs_to_index(start_frs);
         let end = (start + records_per_cluster as usize).min(self.record_count);
 
@@ -197,7 +197,7 @@ impl MftBitmap {
     }
 
     /// Returns ranges of clusters that contain in-use records.
-    pub fn in_use_cluster_ranges(
+    pub(crate) fn in_use_cluster_ranges(
         &self,
         records_per_cluster: u32,
     ) -> impl Iterator<Item = (u64, u64)> + '_ {

@@ -55,7 +55,7 @@ pub struct DriveFooterContext<'a> {
 
 /// Row-count threshold below which a full-scan pattern triggers the
 /// `MMMmmm that was FAST` warning line.  Matches the baseline CLI.
-pub const FAST_SCAN_ROW_LIMIT: usize = 20_000;
+pub(crate) const FAST_SCAN_ROW_LIMIT: usize = 20_000;
 
 /// Append the legacy drive footer to `writer`.
 ///
@@ -120,7 +120,7 @@ fn format_legacy_drive_letters(output_targets: &[char]) -> String {
 /// so the regression test below can pin every accepted / rejected
 /// shape without running the full footer writer.
 #[must_use]
-pub fn is_full_scan_pattern(pattern: &str) -> bool {
+pub(crate) fn is_full_scan_pattern(pattern: &str) -> bool {
     matches!(pattern, "" | "*" | "**" | "**/*")
         || pattern.strip_prefix('>').is_some_and(|rest| {
             rest.split('|')

@@ -43,7 +43,7 @@ impl AggregatePlan {
 
     /// Create a fresh set of accumulators for this plan.
     #[must_use]
-    pub fn create_accumulators(&self) -> Vec<GroupAccumulator> {
+    pub(crate) fn create_accumulators(&self) -> Vec<GroupAccumulator> {
         self.specs
             .iter()
             .map(|spec| GroupAccumulator::from_kind(&spec.kind, spec.label.clone()))

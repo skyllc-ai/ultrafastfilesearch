@@ -36,7 +36,7 @@ pub enum SizeBucket {
 }
 
 /// Number of size bucket variants.
-pub const SIZE_BUCKET_COUNT: usize = 7;
+pub(crate) const SIZE_BUCKET_COUNT: usize = 7;
 
 /// Size bucket boundary upper limits (exclusive).
 const SIZE_BOUNDARIES: [u64; 6] = [
@@ -121,7 +121,7 @@ pub enum AgeBucket {
 }
 
 /// Number of age bucket variants.
-pub const AGE_BUCKET_COUNT: usize = 8;
+pub(crate) const AGE_BUCKET_COUNT: usize = 8;
 
 /// Age bucket boundary thresholds in microseconds (age from now).
 const AGE_BOUNDARIES_US: [i64; 7] = [

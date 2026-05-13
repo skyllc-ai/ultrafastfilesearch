@@ -69,9 +69,15 @@ pub use polars::{chunked_array, datatypes, error, frame, lazy, series};
 /// - `modified`: `Datetime[μs]` - Modification timestamp
 /// - `accessed`: `Datetime[μs]` - Access timestamp
 /// - `flags`: `UInt16` - Bit-packed file attributes
+// NOTE: Reserved schema alias retained for Phase 3 type-safety wave.
+// Phase 2.5 audit shows 0 current consumers, but this is part of the
+// documented MFT DataFrame contract surface.  Targeted allow is
+// preferred over deletion — the alias is a public API anchor.
 pub type MftDataFrame = DataFrame;
 
 /// A `LazyFrame` for deferred MFT query execution.
+// NOTE: Reserved schema alias retained for Phase 3 lazy-query wave.
+// Same rationale as `MftDataFrame` above.
 pub type MftLazyFrame = LazyFrame;
 
 // ============================================================================
@@ -83,6 +89,8 @@ pub mod columns {
     /// File Record Segment number (primary key)
     pub const FRS: &str = "frs";
     /// Parent directory FRS (foreign key)
+    // NOTE: Reserved column name retained for Phase 3 schema work.
+    // Currently 0 consumers but part of the documented MFT schema.
     pub const PARENT_FRS: &str = "parent_frs";
     /// File or directory name
     pub const NAME: &str = "name";
@@ -99,5 +107,7 @@ pub mod columns {
     /// Full resolved path (computed column)
     pub const PATH: &str = "path";
     /// File extension (computed column)
+    // NOTE: Reserved column name retained for Phase 3 schema work.
+    // Currently 0 consumers but part of the documented MFT schema.
     pub const EXTENSION: &str = "extension";
 }

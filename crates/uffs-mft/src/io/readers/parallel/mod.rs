@@ -112,7 +112,7 @@ impl ReadParseTiming {
 /// Windows-only: requires HANDLE for live MFT reading.
 #[cfg(windows)]
 #[derive(Debug)]
-pub struct ParallelMftReader {
+pub(crate) struct ParallelMftReader {
     /// Extent map for VCN-to-LCN translation.
     extent_map: MftExtentMap,
     /// Optional bitmap for skip optimization.
@@ -159,15 +159,15 @@ impl ParallelMftReader {
     /// Default chunk size for SSD (64 KB) — let OS read-ahead handle
     /// prefetching. With `FILE_FLAG_SEQUENTIAL_SCAN`, smaller buffers keep
     /// the I/O pipeline fed while the OS does aggressive read-ahead.
-    pub const DEFAULT_CHUNK_SIZE_SSD: usize = 64 * 1024;
+    pub(crate) const DEFAULT_CHUNK_SIZE_SSD: usize = 64 * 1024;
 
     /// Default chunk size for HDD (64 KB) — let OS read-ahead handle
     /// prefetching. With `FILE_FLAG_SEQUENTIAL_SCAN`, smaller buffers keep
     /// the I/O pipeline fed while the OS does aggressive read-ahead.
-    pub const DEFAULT_CHUNK_SIZE_HDD: usize = 64 * 1024;
+    pub(crate) const DEFAULT_CHUNK_SIZE_HDD: usize = 64 * 1024;
 
     /// 1 MB chunk size constant.
-    pub const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
+    pub(crate) const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
 
     /// Creates a new parallel reader using the default HDD chunk size.
     /// Assumes HDD for conservative defaults.
@@ -191,7 +191,7 @@ impl ParallelMftReader {
 
     /// Creates a new parallel reader optimized for the given drive type.
     #[must_use]
-    pub fn new_optimized(
+    pub(crate) fn new_optimized(
         extent_map: MftExtentMap,
         bitmap: Option<crate::platform::MftBitmap>,
         drive_type: crate::platform::DriveType,
@@ -218,7 +218,7 @@ impl ParallelMftReader {
 
     /// Sets the chunk size for I/O operations.
     #[must_use]
-    pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
+    pub(crate) fn with_chunk_size(mut self, chunk_size: usize) -> Self {
         self.chunk_size = chunk_size;
         // M1 8.4: Resize buffer to match new chunk size
         self.buffer = RefCell::new(AlignedBuffer::new(chunk_size + SECTOR_SIZE));
@@ -227,7 +227,7 @@ impl ParallelMftReader {
 
     /// Returns the number of records processed so far.
     #[must_use]
-    pub fn records_processed(&self) -> u64 {
+    pub(crate) fn records_processed(&self) -> u64 {
         self.records_processed.load(Ordering::Relaxed)
     }
 
@@ -254,7 +254,7 @@ impl ParallelMftReader {
     ///
     /// Returns [`MftError::Io`] if any chunk read fails. Per-record fixup or
     /// parse failures are logged and skipped rather than propagated.
-    pub fn read_all_parallel(&self, handle: HANDLE) -> Result<Vec<ParsedRecord>> {
+    pub(crate) fn read_all_parallel(&self, handle: HANDLE) -> Result<Vec<ParsedRecord>> {
         self.read_all_parallel_with_progress::<fn(u64, u64)>(handle, false, None)
     }
 
@@ -277,7 +277,7 @@ impl ParallelMftReader {
     ///
     /// Returns [`MftError::Io`] if any chunk read fails. Extension-record
     /// merge failures are counted internally rather than propagated.
-    pub fn read_all_parallel_with_merge(
+    pub(crate) fn read_all_parallel_with_merge(
         &self,
         handle: HANDLE,
         merge_extensions: bool,
@@ -320,7 +320,7 @@ impl ParallelMftReader {
                   the closure's lifetime; switching to `Option<&dyn Fn(..)>` \
                   would force every call site to introduce a separate let-binding"
     )]
-    pub fn read_all_parallel_with_progress<F>(
+    pub(crate) fn read_all_parallel_with_progress<F>(
         &self,
         handle: HANDLE,
         merge_extensions: bool,

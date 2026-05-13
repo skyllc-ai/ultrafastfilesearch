@@ -78,7 +78,7 @@ impl ExtensionTable {
 
     /// Get the extension string for a given ID.
     #[must_use]
-    pub fn get_extension(&self, extension_id: u16) -> Option<&str> {
+    pub(crate) fn get_extension(&self, extension_id: u16) -> Option<&str> {
         self.names
             .get(extension_id as usize)
             .map(|ext_arc: &Arc<str>| ext_arc.as_ref())
@@ -86,13 +86,13 @@ impl ExtensionTable {
 
     /// Get the file count for a given extension ID.
     #[must_use]
-    pub fn get_count(&self, extension_id: u16) -> u32 {
+    pub(crate) fn get_count(&self, extension_id: u16) -> u32 {
         self.counts.get(extension_id as usize).copied().unwrap_or(0)
     }
 
     /// Get the total bytes for a given extension ID.
     #[must_use]
-    pub fn get_bytes(&self, extension_id: u16) -> u64 {
+    pub(crate) fn get_bytes(&self, extension_id: u16) -> u64 {
         self.bytes.get(extension_id as usize).copied().unwrap_or(0)
     }
 

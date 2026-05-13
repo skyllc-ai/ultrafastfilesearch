@@ -17,7 +17,7 @@ use crate::search::field::FieldId;
 
 /// Composite key for duplicate grouping.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CompositeKey {
+pub(crate) struct CompositeKey {
     /// Key components as u64 values.
     components: Vec<u64>,
     /// Name component (if name is part of the key).
@@ -27,7 +27,7 @@ pub struct CompositeKey {
 impl CompositeKey {
     /// Build a composite key from a record using the specified fields.
     #[must_use]
-    pub fn from_record(
+    pub(crate) fn from_record(
         record: &CompactRecord,
         drive: &DriveCompactIndex,
         key_fields: &[FieldId],

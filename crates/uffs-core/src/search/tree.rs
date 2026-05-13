@@ -166,7 +166,7 @@ fn resolve_path_inner(
 /// Returns `true` if the pattern contains a path separator (`\` or `/`),
 /// indicating it should be handled by tree search rather than name trigram.
 #[must_use]
-pub fn is_path_pattern(pattern: &str) -> bool {
+pub(crate) fn is_path_pattern(pattern: &str) -> bool {
     pattern.contains('\\') || pattern.contains('/')
 }
 
@@ -178,7 +178,11 @@ pub fn is_path_pattern(pattern: &str) -> bool {
 /// 3. Collect children of those directories
 /// 4. Filter leaf matches on the final segment
 #[must_use]
-pub fn tree_search(drive: &DriveCompactIndex, pattern_lower: &str, limit: usize) -> Vec<u32> {
+pub(crate) fn tree_search(
+    drive: &DriveCompactIndex,
+    pattern_lower: &str,
+    limit: usize,
+) -> Vec<u32> {
     // Normalize separators to backslash, strip leading separator
     let normalized = pattern_lower.replace('/', "\\");
     let stripped = normalized.strip_prefix('\\').unwrap_or(&normalized);
@@ -386,7 +390,7 @@ fn trigram_filtered_records(
 /// - OR operator: `*.rs|*.py` → match if ANY sub-pattern matches
 /// - No wildcards: plain substring match
 #[must_use]
-pub fn name_matches(name: &str, pattern: &str) -> bool {
+pub(crate) fn name_matches(name: &str, pattern: &str) -> bool {
     if name.is_empty() || name == "." {
         return false;
     }
@@ -417,7 +421,7 @@ fn name_matches_single(name: &str, pattern: &str) -> bool {
 /// Unlike [`name_matches`] which does substring matching for bare literals
 /// (search behaviour), this requires an **exact** match for non-glob segments.
 #[must_use]
-pub fn segment_matches(name: &str, segment: &str) -> bool {
+pub(crate) fn segment_matches(name: &str, segment: &str) -> bool {
     if name.is_empty() || name == "." {
         return false;
     }

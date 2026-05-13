@@ -167,7 +167,7 @@ fn child_of_ancestor(drive: &DriveCompactIndex, idx: usize, ancestor_idx: u32) -
 /// For drive rollups, key is the drive letter ordinal.
 /// For path/ancestor rollups, key is the record index → look up name.
 #[must_use]
-pub fn resolve_rollup_key(key: u32, mode: RollupMode, drive: &DriveCompactIndex) -> String {
+pub(crate) fn resolve_rollup_key(key: u32, mode: RollupMode, drive: &DriveCompactIndex) -> String {
     match mode {
         RollupMode::Drive => {
             let ch = char::from(u8::try_from(key).unwrap_or(b'?'));

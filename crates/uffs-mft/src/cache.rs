@@ -471,7 +471,7 @@ pub fn remove_all_cached_indices() {
 ///
 /// Returns a vector of drive letters that have cached indices.
 #[must_use]
-pub fn list_cached_drives() -> Vec<char> {
+pub(crate) fn list_cached_drives() -> Vec<char> {
     let dir = cache_dir();
     let mut drives = Vec::new();
 
@@ -529,7 +529,7 @@ pub fn any_cache_expired(drives: &[char], ttl_seconds: u64) -> bool {
 ///
 /// `true` if all cached indices are expired (or no indices exist).
 #[must_use]
-pub fn all_caches_expired(ttl_seconds: u64) -> bool {
+pub(crate) fn all_caches_expired(ttl_seconds: u64) -> bool {
     let drives = list_cached_drives();
     if drives.is_empty() {
         return true;

@@ -67,13 +67,13 @@ impl StandardInfo {
     // RULE: Always use these named constants — never raw hex values.
 
     /// `FILE_ATTRIBUTE_READONLY` (0x0001)
-    pub const IS_READONLY: u32 = 0x0001;
+    pub(crate) const IS_READONLY: u32 = 0x0001;
     /// `FILE_ATTRIBUTE_HIDDEN` (0x0002)
-    pub const IS_HIDDEN: u32 = 0x0002;
+    pub(crate) const IS_HIDDEN: u32 = 0x0002;
     /// `FILE_ATTRIBUTE_SYSTEM` (0x0004)
-    pub const IS_SYSTEM: u32 = 0x0004;
+    pub(crate) const IS_SYSTEM: u32 = 0x0004;
     /// `FILE_ATTRIBUTE_DIRECTORY` (0x0010)
-    pub const IS_DIRECTORY: u32 = 0x0010;
+    pub(crate) const IS_DIRECTORY: u32 = 0x0010;
     /// `FILE_ATTRIBUTE_ARCHIVE` (0x0020)
     pub const IS_ARCHIVE: u32 = 0x0020;
     /// `FILE_ATTRIBUTE_DEVICE` (0x0040)
@@ -81,33 +81,33 @@ impl StandardInfo {
     /// `FILE_ATTRIBUTE_NORMAL` (0x0080)
     pub const IS_NORMAL: u32 = 0x0080;
     /// `FILE_ATTRIBUTE_TEMPORARY` (0x0100)
-    pub const IS_TEMPORARY: u32 = 0x0100;
+    pub(crate) const IS_TEMPORARY: u32 = 0x0100;
     /// `FILE_ATTRIBUTE_SPARSE_FILE` (0x0200)
-    pub const IS_SPARSE: u32 = 0x0200;
+    pub(crate) const IS_SPARSE: u32 = 0x0200;
     /// `FILE_ATTRIBUTE_REPARSE_POINT` (0x0400)
-    pub const IS_REPARSE: u32 = 0x0400;
+    pub(crate) const IS_REPARSE: u32 = 0x0400;
     /// `FILE_ATTRIBUTE_COMPRESSED` (0x0800)
-    pub const IS_COMPRESSED: u32 = 0x0800;
+    pub(crate) const IS_COMPRESSED: u32 = 0x0800;
     /// `FILE_ATTRIBUTE_OFFLINE` (0x1000)
-    pub const IS_OFFLINE: u32 = 0x1000;
+    pub(crate) const IS_OFFLINE: u32 = 0x1000;
     /// `FILE_ATTRIBUTE_NOT_CONTENT_INDEXED` (0x2000)
-    pub const IS_NOT_INDEXED: u32 = 0x2000;
+    pub(crate) const IS_NOT_INDEXED: u32 = 0x2000;
     /// `FILE_ATTRIBUTE_ENCRYPTED` (0x4000)
-    pub const IS_ENCRYPTED: u32 = 0x4000;
+    pub(crate) const IS_ENCRYPTED: u32 = 0x4000;
     /// `FILE_ATTRIBUTE_INTEGRITY_STREAM` (0x8000)
-    pub const IS_INTEGRITY_STREAM: u32 = 0x8000;
+    pub(crate) const IS_INTEGRITY_STREAM: u32 = 0x8000;
     /// `FILE_ATTRIBUTE_VIRTUAL` (0x10000)
-    pub const IS_VIRTUAL: u32 = 0x0001_0000;
+    pub(crate) const IS_VIRTUAL: u32 = 0x0001_0000;
     /// `FILE_ATTRIBUTE_NO_SCRUB_DATA` (0x20000)
-    pub const IS_NO_SCRUB_DATA: u32 = 0x0002_0000;
+    pub(crate) const IS_NO_SCRUB_DATA: u32 = 0x0002_0000;
     /// `FILE_ATTRIBUTE_PINNED` (0x80000)
-    pub const IS_PINNED: u32 = 0x0008_0000;
+    pub(crate) const IS_PINNED: u32 = 0x0008_0000;
     /// `FILE_ATTRIBUTE_UNPINNED` (0x100000)
-    pub const IS_UNPINNED: u32 = 0x0010_0000;
+    pub(crate) const IS_UNPINNED: u32 = 0x0010_0000;
     /// `FILE_ATTRIBUTE_RECALL_ON_OPEN` (0x40000)
-    pub const IS_RECALL_ON_OPEN: u32 = 0x0004_0000;
+    pub(crate) const IS_RECALL_ON_OPEN: u32 = 0x0004_0000;
     /// `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` (0x400000)
-    pub const IS_RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
+    pub(crate) const IS_RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
 
     /// Create from [`ExtendedStandardInfo`] - the canonical conversion point.
     ///

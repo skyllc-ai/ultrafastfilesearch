@@ -38,21 +38,21 @@ use aes_gcm::{AeadInPlace as _, Aes256Gcm, KeyInit as _, Nonce};
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Magic bytes identifying an encrypted UFFS cache file.
-pub const ENCRYPTED_MAGIC: &[u8; 8] = b"UFFSENC\0";
+pub(crate) const ENCRYPTED_MAGIC: &[u8; 8] = b"UFFSENC\0";
 
 /// Magic bytes identifying a legacy plaintext UFFS cache file.
-pub const LEGACY_MAGIC: &[u8; 8] = b"UFFSIDX\0";
+pub(crate) const LEGACY_MAGIC: &[u8; 8] = b"UFFSIDX\0";
 
 /// Current encryption format version (v2: u64 plaintext length).
-pub const ENC_FORMAT_VERSION: u16 = 2;
+pub(crate) const ENC_FORMAT_VERSION: u16 = 2;
 
 /// Algorithm ID for AES-256-GCM.
-pub const ALGO_AES_256_GCM: u8 = 0x01;
+pub(crate) const ALGO_AES_256_GCM: u8 = 0x01;
 
 /// KDF ID: Windows DPAPI.
 pub const KDF_DPAPI: u8 = 0x01;
 /// KDF ID: macOS Keychain.
-pub const KDF_KEYCHAIN: u8 = 0x02;
+pub(crate) const KDF_KEYCHAIN: u8 = 0x02;
 /// KDF ID: Linux Secret Service (D-Bus).
 pub const KDF_SECRET_SERVICE: u8 = 0x03;
 /// KDF ID: HKDF fallback (headless Linux).

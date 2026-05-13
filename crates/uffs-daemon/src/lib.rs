@@ -75,7 +75,7 @@ pub(crate) mod telemetry;
 /// Falls back to `./uffsd.log` if the platform data directory
 /// cannot be determined.
 #[must_use]
-pub fn default_log_file() -> PathBuf {
+pub(crate) fn default_log_file() -> PathBuf {
     dirs_next::data_local_dir().map_or_else(
         || PathBuf::from("uffsd.log"),
         |dir| dir.join("uffs").join("uffsd.log"),

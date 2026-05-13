@@ -37,7 +37,7 @@ impl BridgeError {
     /// connection (e.g. daemon crashed, pipe broken) rather than a
     /// user-facing validation error.
     #[must_use]
-    pub fn is_daemon_connection_error(&self) -> bool {
+    pub(crate) fn is_daemon_connection_error(&self) -> bool {
         match self {
             Self::Daemon(msg) => {
                 let lower = msg.to_lowercase();

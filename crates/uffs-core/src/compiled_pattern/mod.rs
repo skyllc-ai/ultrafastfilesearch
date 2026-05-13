@@ -141,7 +141,7 @@ impl CompiledPattern {
                   each arm produces a distinct Polars expression; splitting would scatter \
                   the pattern→expr mapping across functions"
     )]
-    pub fn to_expr(&self, column: &str, case_sensitive: bool) -> Expr {
+    pub(crate) fn to_expr(&self, column: &str, case_sensitive: bool) -> Expr {
         // For case-sensitive matching, use optimized string operations directly.
         // For case-insensitive matching, we use regex with (?i) flag which is
         // more efficient than calling to_lowercase() on every row.

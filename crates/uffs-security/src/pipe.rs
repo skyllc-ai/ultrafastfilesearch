@@ -99,7 +99,7 @@ pub fn pipe_name_for_current_user() -> io::Result<String> {
 ///
 /// Returns [`io::Error`] if both resolution paths fail — typically only
 /// in very broken token scenarios.
-pub fn current_user_sid_string() -> io::Result<String> {
+pub(crate) fn current_user_sid_string() -> io::Result<String> {
     // Try the linked-token path first.
     match linked_token_user_sid() {
         Ok(sid) => Ok(sid),
@@ -151,7 +151,7 @@ impl OwnerOnlySd {
     /// # Errors
     ///
     /// Returns [`io::Error`] if the SDDL conversion fails.
-    pub fn for_sid_string(sid: &str) -> io::Result<Self> {
+    pub(crate) fn for_sid_string(sid: &str) -> io::Result<Self> {
         // SDDL: DACL with one ACE — Allow, GenericAll, to <sid>.
         let sddl = format!("D:(A;;GA;;;{sid})");
         let sddl_wide: Vec<u16> = sddl.encode_utf16().chain(core::iter::once(0)).collect();

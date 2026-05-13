@@ -73,7 +73,7 @@ pub mod collections {
 /// If `token` is a known alias (e.g. `"documents"`), returns the list of
 /// extensions.  Otherwise returns `None` (treat as a literal extension).
 #[must_use]
-pub fn expand_collection(token: &str) -> Option<&'static [&'static str]> {
+pub(crate) fn expand_collection(token: &str) -> Option<&'static [&'static str]> {
     match token {
         "pictures" | "images" => Some(collections::PICTURES),
         "documents" | "docs" => Some(collections::DOCUMENTS),

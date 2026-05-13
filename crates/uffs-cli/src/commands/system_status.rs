@@ -19,7 +19,7 @@ use uffs_client::protocol::response::{DaemonStatus, ShardTier};
 ///
 /// Returns an error if the operation fails.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub fn system_status() {
+pub(crate) fn system_status() {
     println!("═══ UFFS System Status ═══");
     println!();
     print_daemon_status();

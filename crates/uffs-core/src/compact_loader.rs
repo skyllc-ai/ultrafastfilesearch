@@ -454,7 +454,7 @@ pub fn load_mft_file(
 /// Returns an error if the drive cannot be read.
 #[cfg(windows)]
 #[deprecated(note = "Use load_drive(MftSource::Live(...)) instead")]
-pub fn load_live_drive(
+pub(crate) fn load_live_drive(
     drive_letter: char,
     no_cache: bool,
 ) -> anyhow::Result<(DriveCompactIndex, LoadTiming)> {

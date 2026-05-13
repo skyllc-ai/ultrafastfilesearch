@@ -19,7 +19,6 @@
 //  • wildcard_enum_match_arm — forward-compat not a concern for internal enums
 //  • used_underscore_binding — convention for unused-but-meaningful fields
 //  • significant_drop_tightening — mutex guard lifetime is correct
-//  • impl_trait_in_params — ergonomic API for closures
 //  • manual_checked_div — explicit division-by-zero guards are clearer
 //  • std_instead_of_core — HashMap/Mutex are std-only
 //  • map_err_ignore — intentional simplification of error types
@@ -35,7 +34,6 @@
     clippy::wildcard_enum_match_arm,
     clippy::used_underscore_binding,
     clippy::significant_drop_tightening,
-    clippy::impl_trait_in_params,
     clippy::integer_division_remainder_used,
     clippy::std_instead_of_core,
     clippy::map_err_ignore,
@@ -75,11 +73,11 @@ pub mod export;
 pub mod finalize;
 pub mod pagination;
 pub mod parser;
-pub mod planner;
+pub(crate) mod planner;
 pub mod presets;
 pub mod rollup;
 /// Per-bucket sample heap for tracking top-N records.
-pub mod sample_heap;
+pub(crate) mod sample_heap;
 pub mod spec;
 /// Duplicate verification (first-bytes / SHA-256).
 pub mod verify;
@@ -358,7 +356,7 @@ pub fn run_aggregate(
 ///
 /// Returns an error if any spec references an invalid field or if
 /// accumulator construction fails.
-pub fn run_aggregate_filtered(
+pub(crate) fn run_aggregate_filtered(
     drives: &[&DriveCompactIndex],
     specs: &[AggregateSpec],
     options: &FinalizeOptions,

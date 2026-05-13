@@ -88,7 +88,7 @@ impl ParallelMftReader {
     ///
     /// Returns [`MftError::Io`] if IOCP setup, `ReadFile`, or completion wait
     /// fails in either the I/O or parse worker pool.
-    pub fn read_all_sliding_window_iocp_to_index_parallel<F>(
+    pub(crate) fn read_all_sliding_window_iocp_to_index_parallel<F>(
         &self,
         overlapped_handle: HANDLE,
         volume: char,

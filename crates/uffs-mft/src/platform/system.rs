@@ -93,14 +93,14 @@ pub fn is_elevated() -> bool {
 /// Returns the path to the volume root (e.g., "C:\").
 #[cfg(windows)]
 #[must_use]
-pub fn volume_root_path(volume: char) -> PathBuf {
+pub(crate) fn volume_root_path(volume: char) -> PathBuf {
     PathBuf::from(format!("{}:\\", volume.to_ascii_uppercase()))
 }
 
 /// Infer drive letter from a file path.
 #[cfg(windows)]
 #[must_use]
-pub fn infer_drive_from_path(path: &Path) -> Option<char> {
+pub(crate) fn infer_drive_from_path(path: &Path) -> Option<char> {
     use std::path::{Component, Prefix};
 
     if let Some(Component::Prefix(prefix)) = path.components().next()
@@ -125,7 +125,7 @@ pub fn infer_drive_from_path(path: &Path) -> Option<char> {
 /// Falls back to `'C'` if the environment variable is missing or malformed.
 #[cfg(windows)]
 #[must_use]
-pub fn detect_boot_drive() -> char {
+pub(crate) fn detect_boot_drive() -> char {
     std::env::var("SystemDrive")
         .ok()
         .and_then(|drive| drive.chars().next())
@@ -137,7 +137,7 @@ pub fn detect_boot_drive() -> char {
 /// Returns `true` if the given drive letter is the boot/system drive.
 #[cfg(windows)]
 #[must_use]
-pub fn is_boot_drive(drive_letter: char) -> bool {
+pub(crate) fn is_boot_drive(drive_letter: char) -> bool {
     drive_letter.to_ascii_uppercase() == detect_boot_drive()
 }
 
@@ -222,7 +222,7 @@ fn is_ntfs_volume(drive_letter: char) -> bool {
 #[cfg(windows)]
 #[must_use]
 #[expect(unsafe_code, reason = "FFI: windows API (GetVolumeInformationW)")]
-pub fn is_volume_read_only(drive_letter: char) -> bool {
+pub(crate) fn is_volume_read_only(drive_letter: char) -> bool {
     use windows::Win32::Storage::FileSystem::GetVolumeInformationW;
 
     const FILE_READ_ONLY_VOLUME: u32 = 0x0008_0000;
@@ -352,7 +352,7 @@ impl DriveType {
     clippy::too_many_lines,
     reason = "drive-type detection ladder: opens a single physical-drive handle then runs a fall-through sequence of IOCTL probes (storage descriptor for NVMe → seek-penalty for SSD/HDD → TRIM-support fallback). Splitting would either replicate the FFI handle/struct setup per-probe or hide the ordered fall-through behind helper indirection"
 )]
-pub fn detect_drive_type(drive_letter: char) -> DriveType {
+pub(crate) fn detect_drive_type(drive_letter: char) -> DriveType {
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };

@@ -23,7 +23,7 @@ impl ParallelMftReader {
     ///
     /// Returns [`MftError::Io`] if `SetFilePointerEx` or `ReadFile` fails, or
     /// if the volume read returns fewer bytes than the requested chunk size.
-    pub fn read_chunk(
+    pub(crate) fn read_chunk(
         &self,
         handle: HANDLE,
         chunk: &ReadChunk,

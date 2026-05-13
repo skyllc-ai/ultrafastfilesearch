@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 /// 2. Copy the `arguments` object directly into a `tools/call`.
 /// 3. Adapt the example by changing one or two parameters.
 #[must_use]
-pub fn cookbook_json() -> String {
+pub(crate) fn cookbook_json() -> String {
     let cookbook = json!({
         "description": "UFFS MCP Cookbook — ready-to-use example tool calls for common \
             file-system questions. Each entry has a tool name, arguments object, and \

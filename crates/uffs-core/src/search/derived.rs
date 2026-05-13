@@ -132,7 +132,7 @@ pub const ALL_TYPE_CATEGORIES: &[&str] = &[
 ///
 /// The order matches [`SEMANTIC_TYPE_NAMES`].
 #[must_use]
-pub fn semantic_type_id_from_extension(ext: &str) -> u64 {
+pub(crate) fn semantic_type_id_from_extension(ext: &str) -> u64 {
     // Must stay in sync with SEMANTIC_TYPE_NAMES.
     if collections::DOCUMENTS.contains(&ext) {
         1
@@ -184,7 +184,7 @@ pub fn semantic_type_id_from_extension(ext: &str) -> u64 {
 /// Ordered names matching the IDs from [`semantic_type_id_from_extension`].
 ///
 /// Index 0 = "other", index 22 = "directory", index 23 = "file".
-pub const SEMANTIC_TYPE_NAMES: &[&str] = &[
+pub(crate) const SEMANTIC_TYPE_NAMES: &[&str] = &[
     "other",      // 0
     "document",   // 1
     "picture",    // 2
@@ -212,14 +212,14 @@ pub const SEMANTIC_TYPE_NAMES: &[&str] = &[
 ];
 
 /// ID for directory entries (not extension-based).
-pub const SEMANTIC_TYPE_ID_DIRECTORY: u64 = 22;
+pub(crate) const SEMANTIC_TYPE_ID_DIRECTORY: u64 = 22;
 
 /// ID for files with no extension.
-pub const SEMANTIC_TYPE_ID_FILE: u64 = 23;
+pub(crate) const SEMANTIC_TYPE_ID_FILE: u64 = 23;
 
 /// Resolve a numeric type ID back to a category name.
 #[must_use]
-pub fn semantic_type_name_from_id(id: u64) -> &'static str {
+pub(crate) fn semantic_type_name_from_id(id: u64) -> &'static str {
     SEMANTIC_TYPE_NAMES
         .get(usize::try_from(id).unwrap_or(usize::MAX))
         .copied()
@@ -282,7 +282,7 @@ pub fn semantic_type_from_extension(ext: &str) -> &'static str {
 /// Types like `"directory"`, `"file"`, and `"other"` return `None` because
 /// they are not defined by a fixed set of extensions.
 #[must_use]
-pub fn extensions_for_type(type_name: &str) -> Option<&'static [&'static str]> {
+pub(crate) fn extensions_for_type(type_name: &str) -> Option<&'static [&'static str]> {
     match type_name {
         "document" => Some(collections::DOCUMENTS),
         "picture" => Some(collections::PICTURES),

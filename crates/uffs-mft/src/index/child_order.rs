@@ -20,7 +20,7 @@ impl MftIndex {
     /// If the parent record does not exist yet, this creates a placeholder
     /// record so child entries are preserved even when chunks are processed
     /// out of order.
-    pub fn add_child_entry(&mut self, parent_frs: u64, child_frs: u64, name_index: u16) {
+    pub(crate) fn add_child_entry(&mut self, parent_frs: u64, child_frs: u64, name_index: u16) {
         // Create a parent placeholder if it does not exist yet so
         // child edges are not dropped during out-of-order processing.
         let parent_frs_usize = frs_to_usize(parent_frs);
@@ -76,7 +76,7 @@ impl MftIndex {
     ///
     /// Call this as a fallback if tree metrics computation leaves directories
     /// with `descendants == 0`, which indicates the child graph was incomplete.
-    pub fn rebuild_children_from_names(&mut self) {
+    pub(crate) fn rebuild_children_from_names(&mut self) {
         tracing::debug!(
             records = self.records.len(),
             "[TRIP] MftIndex::rebuild_children_from_names ENTER"
@@ -164,7 +164,7 @@ impl MftIndex {
     /// // ... parse MFT records ...
     /// index.sort_directory_children(); // Sort all directory children
     /// ```
-    pub fn sort_directory_children(&mut self) {
+    pub(crate) fn sort_directory_children(&mut self) {
         // Temporary buffer for collecting children (reused across directories)
         let mut child_indices: Vec<u32> = Vec::new();
 

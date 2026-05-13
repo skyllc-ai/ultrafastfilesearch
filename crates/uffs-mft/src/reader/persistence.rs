@@ -66,7 +66,7 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
-    pub fn read_raw(&self) -> Result<(Vec<u8>, u32)> {
+    pub(crate) fn read_raw(&self) -> Result<(Vec<u8>, u32)> {
         self.read_raw_internal()
     }
 
@@ -638,7 +638,7 @@ impl MftReader {
     ///
     /// Returns an error if raw MFT reading or writing the output file fails.
     #[cfg(windows)]
-    pub fn save_iocp_capture<P: AsRef<Path>>(
+    pub(crate) fn save_iocp_capture<P: AsRef<Path>>(
         &self,
         path: P,
         options: &crate::raw_iocp::IocpCaptureOptions,
@@ -659,7 +659,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    pub fn save_iocp_capture<P: AsRef<Path>>(
+    pub(crate) fn save_iocp_capture<P: AsRef<Path>>(
         &self,
         _path: P,
         _options: &crate::raw_iocp::IocpCaptureOptions,

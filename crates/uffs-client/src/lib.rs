@@ -30,7 +30,7 @@ pub mod connect;
 /// external callers import `KeepaliveGuard` directly from this module
 /// (no cascade through `connect`).
 #[cfg(feature = "async")]
-pub mod connect_keepalive;
+pub(crate) mod connect_keepalive;
 /// Tracing helpers used only by [`connect`].  Private; sibling file
 /// to keep `connect.rs` under the 800-LOC file-size policy after the
 /// v0.5.36 UAC work expanded its public entry points.
@@ -64,7 +64,7 @@ mod connect_sync_tests;
 /// stays under the 800-LOC policy ceiling without a file-size
 /// exception.  Same precedent as the daemon-state types in
 /// [`protocol::response_status`].
-pub mod connect_sync_tiering;
+pub(crate) mod connect_sync_tiering;
 /// Wire-protocol unit tests for [`connect::UffsClient`].
 ///
 /// Exercises the JSON-RPC request/response path via in-memory tokio
@@ -78,14 +78,14 @@ mod connect_tests;
 ///
 /// Exposes `DaemonChildHandle`, `try_wait`, and the platform-specific
 /// cleanup logic.  Canonical home — no cascade through `daemon_ctl`.
-pub mod daemon_child;
+pub(crate) mod daemon_child;
 pub mod daemon_ctl;
 /// Daemon spawn implementation.
 ///
 /// Exposes `spawn_daemon`, `ElevationPolicy`, the MSVCRT-compatible
 /// arg quoter, and the Windows UAC helpers.  Canonical home — no
 /// cascade through `daemon_ctl`.
-pub mod daemon_spawn;
+pub(crate) mod daemon_spawn;
 pub mod error;
 pub mod format;
 pub mod mcp_pid;

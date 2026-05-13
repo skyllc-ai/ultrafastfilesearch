@@ -96,7 +96,7 @@ fn with_clean_output_schema<T: schemars::JsonSchema + 'static>(tool: Tool) -> To
 }
 
 /// Known tool names — used for early rejection before daemon dispatch.
-pub const KNOWN_TOOLS: &[&str] = &[
+pub(crate) const KNOWN_TOOLS: &[&str] = &[
     "uffs_search",
     "uffs_drives",
     "uffs_status",
@@ -107,13 +107,13 @@ pub const KNOWN_TOOLS: &[&str] = &[
 
 /// Check if a tool name is known.
 #[must_use]
-pub fn is_known_tool(name: &str) -> bool {
+pub(crate) fn is_known_tool(name: &str) -> bool {
     KNOWN_TOOLS.contains(&name)
 }
 
 /// Build the static list of tool definitions for `tools/list`.
 #[must_use]
-pub fn tool_definitions() -> Vec<Tool> {
+pub(crate) fn tool_definitions() -> Vec<Tool> {
     use crate::schemas::{DrivesOutput, InfoOutput, StatusOutput};
 
     let read_only = ToolAnnotations::from_raw(
@@ -184,7 +184,7 @@ pub fn tool_definitions() -> Vec<Tool> {
 
 /// Build the static list of prompt definitions for `prompts/list`.
 #[must_use]
-pub fn prompt_definitions() -> Vec<rmcp::model::Prompt> {
+pub(crate) fn prompt_definitions() -> Vec<rmcp::model::Prompt> {
     use rmcp::model::{Prompt, PromptArgument};
 
     vec![
@@ -261,7 +261,7 @@ pub fn prompt_definitions() -> Vec<rmcp::model::Prompt> {
 ///
 /// Handles `%XX` sequences (e.g. `%20` → space, `%5C` → backslash).
 #[must_use]
-pub fn percent_decode_path(encoded: &str) -> String {
+pub(crate) fn percent_decode_path(encoded: &str) -> String {
     let mut decoded = Vec::with_capacity(encoded.len());
     let bytes = encoded.as_bytes();
     let mut idx = 0;

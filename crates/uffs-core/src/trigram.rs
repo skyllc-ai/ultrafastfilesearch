@@ -226,7 +226,7 @@ impl TrigramIndex {
 
     /// Borrow the CSR components for serialization.
     #[must_use]
-    pub fn as_csr(&self) -> (&[u64], &[u32], &[u32]) {
+    pub(crate) fn as_csr(&self) -> (&[u64], &[u32], &[u32]) {
         (&self.keys, &self.offsets, &self.values)
     }
 

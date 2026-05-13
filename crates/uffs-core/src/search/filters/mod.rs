@@ -13,7 +13,7 @@ mod ext_match;
 mod path_normalize;
 mod time_parsing;
 
-pub use apply::*;
+pub(crate) use apply::*;
 pub use attr_parsing::*;
 pub(crate) use ext_match::extract_extension_after_dot;
 pub(super) use ext_match::{extension_matches_filter, lowercase_into};
@@ -25,7 +25,7 @@ use crate::compact::CompactRecord;
 use crate::search::tree::name_matches;
 
 /// Apply filter mode to a set of display rows.
-pub fn apply_filter(rows: &mut Vec<DisplayRow>, filter: FilterMode) {
+pub(crate) fn apply_filter(rows: &mut Vec<DisplayRow>, filter: FilterMode) {
     match filter {
         FilterMode::All => {}
         FilterMode::FilesOnly => rows.retain(|row| !row.is_directory),
@@ -401,7 +401,7 @@ impl SearchFilters {
 
     /// Pre-resolve extension filter strings to `u16` IDs for a specific
     /// drive.  Call this **once per drive** before the hot record loop.
-    pub fn resolve_ext_ids_for_drive(&mut self, drive: &crate::compact::DriveCompactIndex) {
+    pub(crate) fn resolve_ext_ids_for_drive(&mut self, drive: &crate::compact::DriveCompactIndex) {
         if self.extensions.is_empty() {
             self.resolved_ext_ids.clear();
             tracing::trace!(drive = %drive.letter, "no extension filter active for drive");
@@ -510,7 +510,7 @@ impl SearchFilters {
     /// matching).
     #[must_use]
     #[inline]
-    pub fn matches_record(
+    pub(crate) fn matches_record(
         &self,
         rec: &CompactRecord,
         names: &[u8],

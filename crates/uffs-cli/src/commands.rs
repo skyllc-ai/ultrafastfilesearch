@@ -13,18 +13,18 @@ pub mod aggregate;
 /// Split off `daemon_mgmt` so the lifecycle file stays under the
 /// 800-LOC policy ceiling without a file-size exception (mirrors
 /// the `daemon_tiering` decomposition for the Phase 8 commands).
-pub mod daemon_load;
+pub(crate) mod daemon_load;
 /// Daemon management subcommands.
-pub mod daemon_mgmt;
+pub(crate) mod daemon_mgmt;
 /// Memory-tiering operator commands (`hibernate` / `preload`).
 ///
 /// Phase 8-B / 8-C — split off `daemon_mgmt` so each cluster stays
 /// under the 800-LOC policy ceiling.  Forward-looking: 8-D `forget`
 /// and 8-E `status_drives` will land their shims here as well.
-pub mod daemon_tiering;
+pub(crate) mod daemon_tiering;
 // Index and info subcommands were merged into other modules.
 /// MCP server management subcommands.
-pub mod mcp_mgmt;
+pub(crate) mod mcp_mgmt;
 /// Output helpers for search results.
 pub mod output;
 /// Search command implementation.
@@ -32,7 +32,7 @@ pub mod search;
 /// Stats subcommand implementation.
 pub mod stats;
 /// Combined `uffs status` command.
-pub mod system_status;
+pub(crate) mod system_status;
 
 /// Render a one-line version summary suitable for `daemon status`,
 /// `daemon stats`, and `uffs status` output.

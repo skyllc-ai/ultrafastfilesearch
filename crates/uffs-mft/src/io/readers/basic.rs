@@ -12,7 +12,7 @@ use super::prelude::*;
 
 /// Reads MFT records from a volume, handling fragmented MFTs.
 #[derive(Debug)]
-pub struct MftRecordReader {
+pub(crate) struct MftRecordReader {
     /// Size of each file record in bytes.
     record_size: u32,
     /// Extent map for VCN-to-LCN translation.
@@ -64,7 +64,7 @@ impl MftRecordReader {
     ///
     /// * `extent_map` - The extent map for the MFT
     #[must_use]
-    pub fn new_with_extents(extent_map: MftExtentMap) -> Self {
+    pub(crate) fn new_with_extents(extent_map: MftExtentMap) -> Self {
         let record_size = extent_map.bytes_per_record;
 
         // Allocate buffer for one record (rounded up to sector boundary)
@@ -107,7 +107,7 @@ impl MftRecordReader {
         unsafe_code,
         reason = "FFI: SetFilePointerEx and ReadFile for MFT record access"
     )]
-    pub fn read_record(&mut self, handle: HANDLE, frs: u64) -> Result<&[u8]> {
+    pub(crate) fn read_record(&mut self, handle: HANDLE, frs: u64) -> Result<&[u8]> {
         // Use extent map to get the physical offset (handles fragmentation)
         let record_offset =
             self.extent_map
@@ -190,7 +190,7 @@ impl MftRecordReader {
 /// Reads multiple records per I/O operation by reading entire clusters
 /// or extent chunks at once.
 #[derive(Debug)]
-pub struct BatchMftReader {
+pub(crate) struct BatchMftReader {
     /// Extent map for VCN-to-LCN translation.
     extent_map: MftExtentMap,
     /// Size of each file record in bytes.
@@ -205,7 +205,7 @@ pub struct BatchMftReader {
 
 impl BatchMftReader {
     /// Default read block size (1 MB).
-    pub const DEFAULT_BLOCK_SIZE: usize = 1024 * 1024;
+    pub(crate) const DEFAULT_BLOCK_SIZE: usize = 1024 * 1024;
 
     /// Creates a new batch reader.
     ///
@@ -226,7 +226,7 @@ impl BatchMftReader {
     /// * `bytes_per_cluster` - Cluster size in bytes
     /// * `block_size` - Read block size (will be rounded to cluster boundary)
     #[must_use]
-    pub fn with_block_size(
+    pub(crate) fn with_block_size(
         extent_map: MftExtentMap,
         bytes_per_cluster: u32,
         block_size: usize,
@@ -284,7 +284,11 @@ impl BatchMftReader {
         unsafe_code,
         reason = "FFI: SetFilePointerEx and ReadFile for batched MFT access"
     )]
-    pub fn read_batch(&mut self, handle: HANDLE, start_frs: u64) -> Result<(&[u8], u64, usize)> {
+    pub(crate) fn read_batch(
+        &mut self,
+        handle: HANDLE,
+        start_frs: u64,
+    ) -> Result<(&[u8], u64, usize)> {
         // Get physical offset for the starting FRS
         let start_offset =
             self.extent_map
@@ -360,7 +364,11 @@ impl BatchMftReader {
     ///
     /// The record data slice, or `None` if the index is out of bounds.
     #[must_use]
-    pub fn extract_record<'a>(&self, batch_buffer: &'a [u8], index: usize) -> Option<&'a [u8]> {
+    pub(crate) fn extract_record<'a>(
+        &self,
+        batch_buffer: &'a [u8],
+        index: usize,
+    ) -> Option<&'a [u8]> {
         let record_size = u32_as_usize(self.record_size);
         let start = index * record_size;
         let end = start + record_size;

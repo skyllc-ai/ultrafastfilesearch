@@ -9,13 +9,13 @@ use serde_json::Value;
 
 /// Helper to extract a string argument from the prompt args map.
 #[must_use]
-pub fn str_arg<'a>(args: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
+pub(crate) fn str_arg<'a>(args: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
     args.get(key).and_then(|val| val.as_str())
 }
 
 /// Helper to extract a numeric argument from the prompt args map.
 #[must_use]
-pub fn u64_arg(args: &serde_json::Map<String, Value>, key: &str, default: u64) -> u64 {
+pub(crate) fn u64_arg(args: &serde_json::Map<String, Value>, key: &str, default: u64) -> u64 {
     str_arg(args, key)
         .and_then(|raw| raw.parse::<u64>().ok())
         .unwrap_or(default)
@@ -34,7 +34,7 @@ fn user_msg(text: String) -> Vec<PromptMessage> {
 /// # Errors
 ///
 /// Returns `McpError::invalid_params` if the prompt name is unknown.
-pub fn build_prompt_messages(
+pub(crate) fn build_prompt_messages(
     name: &str,
     args: &serde_json::Map<String, Value>,
 ) -> Result<Vec<PromptMessage>, McpError> {

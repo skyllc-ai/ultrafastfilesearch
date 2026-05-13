@@ -105,7 +105,7 @@ impl PathResolver {
     /// circuit the parent-chain walk when a directory ancestor is already
     /// resolved.
     #[must_use]
-    pub fn pre_cache_directory_paths(&self, index: &MftIndex) -> Vec<String> {
+    pub(crate) fn pre_cache_directory_paths(&self, index: &MftIndex) -> Vec<String> {
         let n = index.records.len();
         let mut cache: Vec<String> = vec![String::new(); n];
         for (idx, slot) in cache.iter_mut().enumerate().take(n) {

@@ -303,7 +303,7 @@ pub fn parse_size(spec: &str) -> Result<u64, String> {
 /// this is a lightweight check so the thin CLI can validate user input
 /// before sending it over the wire.
 #[must_use]
-pub fn is_aggregate_preset(spec: &str) -> bool {
+pub(crate) fn is_aggregate_preset(spec: &str) -> bool {
     matches!(
         spec.to_ascii_lowercase().as_str(),
         "overview"

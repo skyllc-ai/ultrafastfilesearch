@@ -132,13 +132,6 @@ impl CaseFold {
         }
     }
 
-    /// Case-insensitive equality of two UTF-8 strings.
-    #[inline]
-    #[must_use]
-    pub fn eq_str(&self, lhs: &str, rhs: &str) -> bool {
-        self.cmp_str(lhs, rhs) == core::cmp::Ordering::Equal
-    }
-
     // ── Pre-folded codepoint helpers (Tier 1b — zero-alloc) ────────
 
     /// Fold a string to a `Vec<u16>` of uppercase codepoints.

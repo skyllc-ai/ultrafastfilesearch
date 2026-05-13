@@ -38,7 +38,7 @@ use crate::stats::McpStats;
 
 /// Shared state for the axum application.
 #[derive(Clone)]
-pub struct AppState {
+pub(crate) struct AppState {
     /// Bearer token required for `/mcp` — `None` means no auth.
     auth_token: Option<Arc<str>>,
     /// Server boot time (for uptime reporting).
@@ -63,7 +63,7 @@ pub struct HttpGatewayConfig {
 /// Build the axum [`Router`] with MCP, health, and status endpoints.
 ///
 /// The router is returned without binding — call [`run_gateway`] to serve.
-pub fn build_router(config: &HttpGatewayConfig) -> Router {
+pub(crate) fn build_router(config: &HttpGatewayConfig) -> Router {
     let spawn_args: Arc<[String]> = config.daemon_spawn_args.clone().into();
     let spawn_args_clone = Arc::clone(&spawn_args);
     let stats = Arc::new(McpStats::default());

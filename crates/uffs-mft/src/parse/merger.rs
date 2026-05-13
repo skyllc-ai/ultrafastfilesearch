@@ -256,7 +256,7 @@ impl MftRecordMerger {
     ///   rows (matching expected behavior). If `false`, output one row per
     ///   unique FRS (power user mode).
     #[must_use]
-    pub fn merge_into_columns(self, expand_links: bool) -> ParsedColumns {
+    pub(crate) fn merge_into_columns(self, expand_links: bool) -> ParsedColumns {
         self.merge_into_columns_internal(expand_links)
     }
 

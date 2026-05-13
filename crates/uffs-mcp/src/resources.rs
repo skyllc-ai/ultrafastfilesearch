@@ -49,7 +49,7 @@ struct FieldEntry {
 
 /// Build the `uffs://schema/fields` JSON string.
 #[must_use]
-pub fn field_catalog_json() -> String {
+pub(crate) fn field_catalog_json() -> String {
     let entries: Vec<FieldEntry> = FieldId::ALL
         .iter()
         .map(|id| {
@@ -86,7 +86,7 @@ pub fn field_catalog_json() -> String {
 
 /// Build the `uffs://schema/search` JSON string from the schemars schema.
 #[must_use]
-pub fn search_schema_json() -> String {
+pub(crate) fn search_schema_json() -> String {
     let schema = schemars::schema_for!(crate::tools::search::SearchArgs);
     serde_json::to_string_pretty(&schema).unwrap_or_else(|_| "{}".to_owned())
 }
@@ -95,7 +95,7 @@ pub fn search_schema_json() -> String {
 
 /// Build the `uffs://schema/aggregate` JSON string from the schemars schema.
 #[must_use]
-pub fn aggregate_schema_json() -> String {
+pub(crate) fn aggregate_schema_json() -> String {
     let schema = schemars::schema_for!(crate::tools::aggregate::AggregateArgs);
     serde_json::to_string_pretty(&schema).unwrap_or_else(|_| "{}".to_owned())
 }
@@ -113,7 +113,7 @@ struct PresetEntry {
 
 /// Build the `uffs://presets/aggregate` JSON string.
 #[must_use]
-pub fn aggregate_presets_json() -> String {
+pub(crate) fn aggregate_presets_json() -> String {
     let presets = vec![
         PresetEntry {
             name: "overview",

@@ -401,7 +401,7 @@ mod windows_impl {
     /// vaporized the per-shard tempfiles — only the empty
     /// `<pid>/` directory remains, which the sweep removes.
     #[derive(Debug, Default, Clone, Copy)]
-    pub struct WindowsRuntimeDir;
+    pub(crate) struct WindowsRuntimeDir;
 
     impl RuntimeDir for WindowsRuntimeDir {
         fn create_owner_only(&self, path: &Path) -> io::Result<RuntimeFile> {

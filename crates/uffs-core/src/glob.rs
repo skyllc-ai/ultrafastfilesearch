@@ -19,7 +19,7 @@ use crate::error::{CoreError, Result};
 /// # Errors
 ///
 /// Returns an error if the glob pattern is invalid.
-pub fn glob_to_regex(pattern: &str) -> Result<String> {
+pub(crate) fn glob_to_regex(pattern: &str) -> Result<String> {
     let mut regex = String::with_capacity(pattern.len() * 2);
     regex.push('^');
 
