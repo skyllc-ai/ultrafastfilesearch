@@ -587,7 +587,15 @@ $cfgPath = "$env:LOCALAPPDATA\uffs\daemon.toml"
 min_tier = "WARM"
 '@ | Set-Content -Encoding UTF8 -Path $cfgPath
 uffs daemon stop
-$env:RUST_LOG = "uffs_daemon=info,shard.ttl=debug,shard.transition=info"
+# shard.ttl at TRACE (not DEBUG) is REQUIRED — see the 2026-05-11
+# soak findings in §6 ("Reference captures") sub-section §4.5b
+# below.  The DEBUG `idle-demote` /
+# `min-tier-clamp` events only fire when the controller is
+# proposing a demote; during the synthetic-load window drive C
+# sits in Warm/Hot with `idle_secs ≈ 0`, so only the catch-all
+# TRACE-level `below-ttl` event carries the bonused
+# `warm_ttl_sec` field that criterion 3 below scrapes for.
+$env:RUST_LOG = "uffs_daemon=info,shard.ttl=trace,shard.transition=info"
 uffs daemon start --drives C,D,E,F,G,M,S 2>&1 | Tee-Object -FilePath C:\Temp\uffsd-phase6-soak.log
 ```
 
@@ -640,16 +648,25 @@ daemon's tracing fields, update these patterns in the same commit.
 
 3. **Different TTLs for high-rate vs low-rate drives.**  After the
    soak, drive a synthetic 5-min load against C, leave the others
-   idle, and grep for the per-drive `chosen_ttl_sec` field on the
-   `shard.ttl` debug events (descriptive message text
-   `"Adaptive idle-demote evaluation produced demote target"`):
+   idle, and grep for the per-drive `warm_ttl_sec` field on the
+   `shard.ttl` events.  `warm_ttl_sec` (not the older
+   `chosen_ttl_sec`) is the right field for the cross-drive
+   comparison: it is the rate-sensitive Warm→Parked edge that
+   exists on **every** drive's events regardless of current tier,
+   so the target-vs-peers compare is apples-to-apples (the
+   pre-2026-05-07 `chosen_ttl_sec` compare was structurally
+   impossible to pass when drives were in different tiers — see
+   `crate::index::tests::shard_ttl_events` for the contract pin):
    ```powershell
-   Select-String -Path C:\Temp\uffsd-phase6-soak.log -Pattern 'chosen_ttl_sec' |
+   Select-String -Path C:\Temp\uffsd-phase6-soak.log -Pattern 'warm_ttl_sec' |
        Select-Object -Last 30 -ExpandProperty Line
    ```
-   The C row's `chosen_ttl_sec` should exceed the others' by the
-   `60·log2(rate)` bonus from the §5.2 formula
-   (`crate::cache::policy::hot_ttl`).
+   The C row's `warm_ttl_sec` during the synthetic-load window
+   should exceed the peers' by the `600·log2(rate)` bonus from
+   the §5.2 formula (`crate::cache::policy::warm_ttl`).  Per-tick
+   evidence requires `shard.ttl=trace` in `RUST_LOG` (see the
+   Setup block above and the 2026-05-11 finding in §6 sub-section
+   §4.5b).
 
 #### Reset
 
@@ -733,15 +750,30 @@ Four acceptance criteria (the Phase 7 contract under
    the budget.
 
 2. **Encrypted-cache refresh fired during the soak** (≤ 1× / 5 min,
-   ≥ 1× total over 24 h).  Grep the daemon log for
-   `shard.refresh` save-trigger events:
+   ≥ 1× total over 24 h).  Grep the daemon log for the literal
+   substring of the `journal_loop::process_tick`-emitted save
+   event:
    ```powershell
    Select-String -Path C:\Temp\uffsd-phase7-soak.log `
-       -Pattern 'USN refresh tick|trigger_save|threshold.*save|encrypted cache refresh' |
+       -Pattern 'compact-cache save' |
        Select-Object -ExpandProperty Line | Measure-Object
    ```
    `count` must be `≥ 1` (≥ 1× total).  A 24 h soak typically
-   produces 50-300 events depending on the threshold mix.
+   produces 10-30 events depending on the threshold mix.
+
+   The matching INFO line shape is:
+
+   ```text
+   INFO Journal poll: triggered background compact-cache save \
+       drive=F reason=AgeElapsed cursor=151008
+   ```
+
+   The literal `"compact-cache save"` substring is pinned by
+   `crate::cache::journal_loop::tests::save_log_message::
+   compact_cache_save_log_message_pins_string_target_and_level`
+   so a future rename fails CI before reaching a 24-h soak.
+   See the 2026-05-11 finding in §6 sub-section §4.5c for the
+   validator-regex fix history.
 
 3. **`uffsd.exe` Working Set ≤ 1.5× over 24 h.**  Hourly
    `Get-Process uffsd | Select Id, WS, ...` snapshots.  Compare
@@ -1114,7 +1146,11 @@ sign off without re-running the soak:
   `$env:USERPROFILE\uffs_soak\phase6-<timestamp>\` plus the three
   grep-result files under `validation/` (`Drive_C_never_demotes_below_Warm.pass`,
   the per-peer-drive `Warm-Parked.pass` files, and
-  `Drive_C_chosen_ttl_sec_exceeds_peers.pass`).
+  `Drive_C_warm_ttl_sec_exceeds_peers__adaptive_bonus_engaged_.pass`).
+  Note: the file name pivoted from
+  `Drive_C_chosen_ttl_sec_exceeds_peers.pass` to the `warm_ttl_sec`
+  shape in the 2026-05-07 validator update; runs against the
+  pre-update harness produce the older breadcrumb shape.
 * **Phase 7 24-h soak** capture — `summary.txt` from
   `$env:USERPROFILE\uffs_soak\phase7-<timestamp>\` plus the four
   grep-result files under `validation/`
@@ -1308,6 +1344,120 @@ Three end-to-end contracts demonstrated in this excerpt:
    collapses these into one event with
    `reason="pressure-cascade"`; future capture passes will not
    exhibit this pattern.
+
+### 4.5b 2026-05-11 Phase 6 24-h capture — adaptive-bonus visibility deferred
+
+Source: `LOG/uffs_soak/phase6-20260509-213122/` (24-h run on the
+7-drive reference box, May 9-10 2026).
+
+Run summary: **8 of 9 harness assertions PASS; 1 assertion deferred**
+to a re-run with the post-2026-05-13 harness fix.
+
+| Contract (from §2 above) | 24-h evidence | Status |
+|---|---|---|
+| 1. `C` never demotes below `Warm` | 0 `to=Parked` events for letter=C; 2 871 `min-tier-clamp` debug events | ✅ end-to-end verified |
+| 2. Peer drives demote `Warm → Parked` normally | D / E / F / G / M / S each fired ≥ 2 Warm→Parked transitions | ✅ end-to-end verified |
+| 3. Adaptive TTL bonus (`+600·log2(rate)`) engages under load | Daemon computed `warm_ttl_sec ≈ 3 687 s` every tick during the synthetic-load window but emitted it only at TRACE; harness's `RUST_LOG=shard.ttl=debug` filter dropped every `below-ttl` event | ⚠️ **deferred** — see below |
+
+**Root cause of the deferred criterion.**  `crate::index::transitions::
+evaluate_idle_demote` emits its `shard.ttl` event at one of three
+levels depending on the demote-eval ladder's outcome:
+
+| Arm | Level | Fires when |
+|---|---|---|
+| `idle-demote` | DEBUG | drive idle past TTL → demote target accepted |
+| `min-tier-clamp` | DEBUG | drive idle past TTL → demote suppressed by `min_tier` floor |
+| `below-ttl` | **TRACE** | drive not yet idle past TTL (the catch-all) |
+
+During the synthetic-load window drive C sits in Warm/Hot with
+`idle_secs ≈ 0`, so the demote-eval ladder never reaches either
+DEBUG arm — only the TRACE-level `below-ttl` event fires, carrying
+the bonused `warm_ttl_sec` field that criterion 3 scrapes for.
+The pre-2026-05-13 runbook `RUST_LOG` was
+`shard.ttl=debug`, filtering the trace events out.
+
+**Fix landed in PR #218 (2026-05-13):**
+
+* `scripts/dev/long-soak.rs:746` — `shard.ttl=debug` → `shard.ttl=trace`.
+  Cost: ~23 k extra trace events over 24 h (~3.5 MB), marginal
+  against the existing 75 MB log volume the WARN
+  journal-not-active spam already produces.
+* `crates/uffs-daemon/src/index/tests/shard_ttl_events.rs::
+  below_ttl_event_pins_target_level_message_and_reason` —
+  daemon-side regression test pinning target = `shard.ttl`,
+  level = TRACE, message = `"Adaptive idle-demote evaluation: not
+  yet idle past TTL"`, `reason="below-ttl"`, and the four TTL
+  fields the harness's `parse_max_ttl_field` reads.
+
+**The Phase 6 contract is satisfied at code + unit-test level**
+(the EMA-integration formula is pinned by
+`crate::cache::shard::tests::decay_ema_integrates_new_queries_into_rate_estimate`
+from PR #146; the field shape is pinned by the new regression
+test above).  **Direct end-to-end evidence of the adaptive bonus
+engaging during a synthetic-load window requires one more 24-h
+run with the harness fix on the Windows host.**
+
+### 4.5c 2026-05-11 Phase 7 24-h capture — retroactively ALL GREEN
+
+Source: `LOG/uffs_soak/phase7-20260510-214412/` (24-h run on the
+7-drive reference box, May 10-11 2026).
+
+Run summary: **6 of 7 harness assertions PASS at run time**; **7
+of 7 with the post-2026-05-13 validator regex fix** (no new soak
+required — the fix is a pure regex change against the existing
+24-h `daemon.log`).
+
+| Contract (from §3 above) | 24-h evidence | Status |
+|---|---|---|
+| 1. New-item latency ≤ 2 s | initial probe = 14 ms, final probe = 18 ms | ✅ end-to-end verified |
+| 2. Encrypted-cache refresh fired ≥ 1× over 24 h | 11 `Journal poll: triggered background compact-cache save` events captured | ✅ end-to-end verified (after regex fix) |
+| 3. `uffsd.exe` Working Set ≤ 1.5× over 24 h | first=7 259 754 496 B, last=12 767 232 B, ratio=0.00× | ✅ within bound (see footnote) |
+| 4. No `panic` / `OutOfMemoryError` / `FATAL` | 0 fatal-class log lines | ✅ end-to-end verified |
+| **harness bonus** Demote-to-Parked count ≤ 12 | 6 `to=Parked` events (ceiling 12) | ✅ within bound |
+
+**Root cause of the single PASS-after-fix.**  The pre-fix
+validator's regex was a speculative
+`USN refresh tick|trigger_save|threshold.*save|encrypted cache refresh`
+— **none** of those alternatives match the daemon's actual INFO
+line `Journal poll: triggered background compact-cache save`.
+The save pipeline was healthy all along; the validator was just
+hunting for strings the daemon never emits.
+
+**Fix landed in PR #218 (2026-05-13):**
+
+* `scripts/dev/long-soak.rs:1244` — regex re-anchored on
+  `compact-cache save`.  Retroactively passes the existing 24-h
+  log:
+  ```sh
+  grep -c 'compact-cache save' \
+    LOG/uffs_soak/phase7-20260510-214412/daemon.log
+  # → 11
+  ```
+* `crates/uffs-daemon/src/cache/journal_loop/tests/
+  save_log_message.rs` — daemon-side regression test pinning
+  target = `uffs_daemon::cache::journal_loop`, level = INFO, and
+  the literal `compact-cache save` substring so a future log-
+  message rename fails CI before reaching a 24-h soak.
+
+> **Footnote on the Working-Set ratio (criterion 3).**  The ratio
+> passed the ≤ 1.5× bound vacuously (Working Set dropped 500× over
+> 24 h — `7 259 754 496 B` → `12 767 232 B`).  This indicates the
+> daemon retired most drives to Parked rather than holding
+> steady-state operator-load memory; the assertion correctly fires
+> "no growth" but doesn't exercise the "no leak under sustained
+> load" intent.  This is a separate concern about whether the 5
+> file / sec churn workload is sufficient to keep drives Warm — a
+> future refinement could either bump the churn rate or run the
+> WS-trace gate (§1.7 in `memory-tiering-bake-criteria.md`) for
+> steady-state coverage.  It does **not** invalidate the "no leak"
+> assertion for the v0.6.0 cut: a leak would have grown the WS,
+> not shrunk it.
+
+**Phase 7 closes retroactively** — no new 24-h soak required.
+The validator-only re-run can be done by replaying the existing
+`daemon.log` through the fixed `scripts/dev/long-soak.rs`
+`validate_phase7` (manual `grep` shown above suffices for the
+acceptance bar).
 
 ### 4.6 Lifecycle load-stall force-retire at 2 h 11 min (Phase 7 scope)
 

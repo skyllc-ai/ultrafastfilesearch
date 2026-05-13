@@ -578,6 +578,67 @@ L1 zigbuild) now ✅; §8 acceptance items all checked.
   into a red required check rather than the documented advisory
   warning.
 
+### Fixed — Phase 6 + Phase 7 24-h soak harness (PR #218)
+
+Two harness-side bugs surfaced by the 2026-05-09 / 2026-05-10
+24-h Windows-host soak runs.  Both are validator scrape-pattern
+bugs — the daemon's actual contracts (`min_tier` floor, peer
+demotes, USN-journal save pipeline, working-set bound, fatal-class
+log lines) were satisfied in every run; the validator was just
+hunting for the wrong things.
+
+- **Phase 6 — `scripts/dev/long-soak.rs:746` `RUST_LOG` raised to
+  `shard.ttl=trace`.**  The catch-all `below-ttl` event in
+  `crate::index::transitions::evaluate_idle_demote` is emitted at
+  TRACE — the level needed by the soak harness's
+  `parse_max_ttl_field("warm_ttl_sec")` scrape during the
+  synthetic-load window, when drive `C` is in Warm/Hot with
+  `idle_secs ≈ 0` and the DEBUG-level `idle-demote` /
+  `min-tier-clamp` arms never fire.  Cost: ~23 k extra trace
+  events over 24 h (~3.5 MB) — marginal against the existing
+  ~75 MB log volume.
+
+- **Phase 7 — `scripts/dev/long-soak.rs:1244` regex re-anchored on
+  `compact-cache save`.**  The pre-fix regex hunted for
+  `USN refresh tick|trigger_save|threshold.*save|encrypted cache refresh`
+  — **none** of those alternatives match the daemon's actual INFO
+  message `Journal poll: triggered background compact-cache save`.
+  Retroactively closes Phase 7 for the existing 24-h log
+  (`grep -c 'compact-cache save'
+  LOG/uffs_soak/phase7-20260510-214412/daemon.log` = 11; the save
+  pipeline was healthy all along).
+
+- **Two new daemon-side regression tests** pin the literal log-
+  message strings + tracing target + level + structured fields so
+  any future rename fails CI before reaching another 24-h soak
+  gate:
+  * `crate::cache::journal_loop::tests::save_log_message::
+    compact_cache_save_log_message_pins_string_target_and_level`
+    — pins target = `uffs_daemon::cache::journal_loop`, level =
+    INFO, and the literal `compact-cache save` substring.
+  * `crate::index::tests::shard_ttl_events::
+    below_ttl_event_pins_target_level_message_and_reason` —
+    pins target = `shard.ttl`, level = TRACE, message =
+    `"Adaptive idle-demote evaluation: not yet idle past TTL"`,
+    `reason="below-ttl"`, and the four TTL fields.
+
+- **Visibility hoist** — the existing
+  `crate::index::tests::tracing_capture::{EventLog, CapturedEvent}`
+  scaffold flipped from `pub(super)` → `pub(crate)`, plus
+  `pub(crate)` on `mod tests;` in `crate::index` and
+  `mod tracing_capture;` in `crate::index::tests`, so the same
+  scaffold serves both modules' contract pins.  No production-code
+  visibility change.
+
+- **Runbook + bake-criteria updates** —
+  [`docs/architecture/memory-tiering-windows-host-validation.md`](docs/architecture/memory-tiering-windows-host-validation.md)
+  §2, §3, and §6 (new §6.2 + §6.3 capture sub-sections) now reflect
+  the post-2026-05-13 grep patterns + the 2026-05-11 capture
+  findings.
+  [`docs/architecture/memory-tiering-bake-criteria.md`](docs/architecture/memory-tiering-bake-criteria.md)
+  ticks Phase 7 retroactively; Phase 6 stays open pending one
+  more 24-h run with the trace-level harness fix.
+
 ## [0.5.95] - 2026-05-08
 
 > **Note on the v0.5.91 gap.**  v0.5.91 was prepared and tagged but never

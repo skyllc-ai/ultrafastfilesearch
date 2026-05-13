@@ -283,8 +283,31 @@ minor-bump invocation:
       lightweight smoke on soak days).
 - [ ] **Phase 6 24-h soak captured** (§1.5) and `summary.txt` shows all
       assertions PASS — closes the master-plan §5.1 Phase 6 row.
-- [ ] **Phase 7 24-h soak captured** (§1.6) and `summary.txt` shows all
+
+      Status (2026-05-13): 8 of 9 assertions PASS end-to-end in
+      `LOG/uffs_soak/phase6-20260509-213122/` (May 9-10 reference-box
+      run); the 9th (adaptive-bonus visibility) is deferred to a
+      re-run after PR #218's harness fix
+      (`shard.ttl=debug` → `shard.ttl=trace`) lands.  See
+      `memory-tiering-windows-host-validation.md` §6.2 for the
+      root-cause walkthrough.  Daemon-side regression test
+      `crate::index::tests::shard_ttl_events::
+      below_ttl_event_pins_target_level_message_and_reason`
+      protects the wire-format contract against future drift.
+- [x] **Phase 7 24-h soak captured** (§1.6) and `summary.txt` shows all
       assertions PASS — closes the master-plan §5.1 Phase 7 row.
+
+      Status (2026-05-13): 6 of 7 assertions PASS at run-time in
+      `LOG/uffs_soak/phase7-20260510-214412/` (May 10-11 reference-box
+      run); the 7th (encrypted-cache refresh) was a validator-regex
+      bug — the save pipeline emitted 11 `compact-cache save` events
+      during the soak.  Retroactively closes 7 of 7 with the PR #218
+      regex fix; no new soak required.  See
+      `memory-tiering-windows-host-validation.md` §6.3 for the
+      root-cause walkthrough.  Daemon-side regression test
+      `crate::cache::journal_loop::tests::save_log_message::
+      compact_cache_save_log_message_pins_string_target_and_level`
+      protects the wire-format contract against future drift.
 - [ ] **Working-Set trajectory captured** (§1.7) within pass criteria
       (≤ 1.5× over 24 h).
 - [ ] **CHANGELOG `Unreleased` section finalized** — every shipped PR
