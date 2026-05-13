@@ -74,9 +74,13 @@ impl StatsAccumulator {
 
     /// Compute the average value (returns 0 if count is 0).
     #[must_use]
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "integer count→f64 division is the documented average formula"
+    )]
     pub(crate) fn avg(&self) -> f64 {
         if self.count == 0 {
-            0.0
+            0.0_f64
         } else {
             uffs_mft::u64_to_f64(self.sum) / uffs_mft::u64_to_f64(self.count)
         }
@@ -90,12 +94,16 @@ impl StatsAccumulator {
 
     /// Compute waste percentage.
     #[must_use]
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "integer waste→f64 division×100 is the documented percentage formula"
+    )]
     pub(crate) fn waste_pct(&self) -> f64 {
         if self.sum_allocated == 0 {
-            0.0
+            0.0_f64
         } else {
             uffs_mft::u64_to_f64(self.waste_bytes()) / uffs_mft::u64_to_f64(self.sum_allocated)
-                * 100.0
+                * 100.0_f64
         }
     }
 }
@@ -211,6 +219,10 @@ pub enum AccumulatorKind {
 impl GroupAccumulator {
     /// Create a new accumulator for the given aggregate kind.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exhaustive match over AggregateKind variants — each arm is short but the enum has many cases; splitting per-variant helpers would obscure the dispatch structure"
+    )]
     pub(crate) fn from_kind(kind: &AggregateKind, label: Option<String>) -> Self {
         let (acc_kind, field) = match kind {
             AggregateKind::Count => (AccumulatorKind::Count { count: 0 }, None),
@@ -227,11 +239,12 @@ impl GroupAccumulator {
                 metrics,
                 sample,
             } => {
-                let (heaps, spec) = if let Some(s) = sample {
-                    (Some(std::collections::HashMap::new()), Some(s.clone()))
-                } else {
-                    (None, None)
-                };
+                let (heaps, spec) = sample.as_ref().map_or((None, None), |sample_spec| {
+                    (
+                        Some(std::collections::HashMap::new()),
+                        Some(sample_spec.clone()),
+                    )
+                });
                 (
                     AccumulatorKind::Terms {
                         groups: std::collections::HashMap::new(),
@@ -243,11 +256,7 @@ impl GroupAccumulator {
                     Some(*field),
                 )
             }
-            AggregateKind::Histogram {
-                field,
-                interval: _,
-                metrics,
-            } => {
+            AggregateKind::Histogram { field, metrics, .. } => {
                 // For now, use pre-defined size buckets; interval-based
                 // histogram expansion happens in the planner.
                 (
@@ -299,8 +308,8 @@ impl GroupAccumulator {
                 mode,
                 top,
                 metrics,
-                sample: _,
                 sub,
+                ..
             } => {
                 let sub_accumulators = sub
                     .as_ref()
@@ -319,11 +328,11 @@ impl GroupAccumulator {
             AggregateKind::Duplicates {
                 keys,
                 verify,
-                top: _,
                 sample,
                 max_groups,
+                ..
             } => {
-                let sample_count = sample.as_ref().map_or(2, |s| s.count);
+                let sample_count = sample.as_ref().map_or(2, |sample_spec| sample_spec.count);
                 (
                     AccumulatorKind::Duplicates {
                         inner: super::duplicates::DuplicateAccumulator::new(
@@ -350,7 +359,7 @@ impl GroupAccumulator {
     ///
     /// * `record` — the compact record being scanned.
     /// * `drive`  — the drive index (used for group key extraction).
-    /// * `_idx`   — the record's index within the drive's `records` array.
+    /// * `idx`   — the record's index within the drive's `records` array.
     /// * `drive_ordinal` — the ordinal position of this drive in the drives
     ///   array, stored in sample heap entries for later materialization.
     #[inline]
@@ -358,7 +367,7 @@ impl GroupAccumulator {
         &mut self,
         record: &CompactRecord,
         drive: &DriveCompactIndex,
-        _idx: usize,
+        idx: usize,
         drive_ordinal: u8,
         ext_map: Option<&super::ExtensionMap>,
     ) {
@@ -385,7 +394,7 @@ impl GroupAccumulator {
                     let heap = heaps
                         .entry(key)
                         .or_insert_with(|| super::sample_heap::SampleHeap::from_spec(spec));
-                    heap.push(record, uffs_mft::len_to_u32(_idx), drive_ordinal);
+                    heap.push(record, uffs_mft::len_to_u32(idx), drive_ordinal);
                 }
             }
             AccumulatorKind::Histogram {
@@ -394,12 +403,14 @@ impl GroupAccumulator {
                 ..
             } => {
                 let value = extract_value(field, record);
-                let bucket_idx = boundaries.partition_point(|&b| b <= value);
+                let bucket_idx = boundaries.partition_point(|&boundary| boundary <= value);
                 // Grow buckets if needed.
                 while buckets.len() <= bucket_idx {
                     buckets.push(StatsAccumulator::new());
                 }
-                buckets[bucket_idx].feed_value(record.size, record.allocated);
+                if let Some(bucket) = buckets.get_mut(bucket_idx) {
+                    bucket.feed_value(record.size, record.allocated);
+                }
             }
             AccumulatorKind::DateHistogram {
                 buckets, calendar, ..
@@ -427,7 +438,7 @@ impl GroupAccumulator {
                 ..
             } => {
                 // Compute group key and feed the top-level stats.
-                inner.feed(record, drive, _idx);
+                inner.feed(record, drive, idx);
 
                 // If nested sub-aggregation is configured, feed the
                 // per-group sub-accumulator.
@@ -438,20 +449,29 @@ impl GroupAccumulator {
                     let sub_acc = sub_map
                         .entry(key)
                         .or_insert_with(|| Self::from_kind(&sub_spec.kind, sub_spec.label.clone()));
-                    sub_acc.feed(record, drive, _idx, drive_ordinal, ext_map);
+                    sub_acc.feed(record, drive, idx, drive_ordinal, ext_map);
                 }
             }
             AccumulatorKind::Duplicates { inner, .. } => {
                 inner.set_drive_ordinal(drive_ordinal);
-                inner.feed(record, drive, _idx);
+                inner.feed(record, drive, idx);
             }
         }
     }
 
     /// Merge another accumulator into this one (for cross-drive merging).
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "per-key merge is order-independent: each entry is merged into self by key"
+    )]
+    #[expect(
+        clippy::min_ident_chars,
+        reason = "`a` (self) and `b` (other) are the conventional pair-destructure bindings in this merge function; renaming to verbose names would obscure the parallel structure of each match arm"
+    )]
     pub fn merge(&mut self, other: &Self) {
         match (&mut self.kind, &other.kind) {
-            (AccumulatorKind::Count { count: a }, AccumulatorKind::Count { count: b }) => {
+            (AccumulatorKind::Count { count: a }, AccumulatorKind::Count { count: b })
+            | (AccumulatorKind::Missing { count: a }, AccumulatorKind::Missing { count: b }) => {
                 *a += b;
             }
             (AccumulatorKind::Stats { stats: a, .. }, AccumulatorKind::Stats { stats: b, .. }) => {
@@ -494,8 +514,8 @@ impl GroupAccumulator {
                 while a.len() < b.len() {
                     a.push(StatsAccumulator::new());
                 }
-                for (i, b_stats) in b.iter().enumerate() {
-                    a[i].merge(b_stats);
+                for (lhs, rhs) in a.iter_mut().zip(b.iter()) {
+                    lhs.merge(rhs);
                 }
             }
             (
@@ -507,9 +527,6 @@ impl GroupAccumulator {
                         .and_modify(|a_stats| a_stats.merge(b_stats))
                         .or_insert_with(|| b_stats.clone());
                 }
-            }
-            (AccumulatorKind::Missing { count: a }, AccumulatorKind::Missing { count: b }) => {
-                *a += b;
             }
             (AccumulatorKind::Distinct { seen: a }, AccumulatorKind::Distinct { seen: b }) => {
                 for key in b {
@@ -598,13 +615,10 @@ fn extract_group_key(
     ext_map: Option<&super::ExtensionMap>,
 ) -> u64 {
     match field {
-        Some(FieldId::Extension) => {
-            if let Some(map) = ext_map {
-                map.canonical_id(drive_ordinal, record.extension_id)
-            } else {
-                u64::from(record.extension_id)
-            }
-        }
+        Some(FieldId::Extension) => ext_map.map_or_else(
+            || u64::from(record.extension_id),
+            |map| map.canonical_id(drive_ordinal, record.extension_id),
+        ),
         Some(FieldId::Drive) => u64::from(u32::from(drive.letter)),
         Some(FieldId::Type) => {
             use crate::search::derived::{
@@ -620,14 +634,13 @@ fn extract_group_key(
             }
             // Stack-based lowercase for short extensions (covers 99%+).
             let mut buf = [0_u8; 16];
-            let ext_lower = if ext.len() <= buf.len() {
-                for (i, b) in ext.bytes().enumerate() {
-                    buf[i] = b.to_ascii_lowercase();
+            let ext_len = ext.len();
+            let ext_lower = buf.get_mut(..ext_len).map_or(ext, |slot| {
+                for (dst, src) in slot.iter_mut().zip(ext.bytes()) {
+                    *dst = src.to_ascii_lowercase();
                 }
-                core::str::from_utf8(&buf[..ext.len()]).unwrap_or(ext)
-            } else {
-                ext
-            };
+                core::str::from_utf8(slot).unwrap_or(ext)
+            });
             semantic_type_id_from_extension(ext_lower)
         }
         Some(FieldId::DirectoryFlag) => u64::from(record.flags & 0x0010 != 0),
@@ -642,13 +655,13 @@ fn extract_group_key(
         Some(FieldId::Temporary) => u64::from(record.flags & 0x0100 != 0),
         Some(FieldId::Offline) => u64::from(record.flags & 0x1000 != 0),
         Some(FieldId::NotIndexed) => u64::from(record.flags & 0x2000 != 0),
-        Some(FieldId::Virtual) => u64::from(record.flags & 0x10000 != 0),
+        Some(FieldId::Virtual) => u64::from(record.flags & 0x1_0000 != 0),
         Some(FieldId::Integrity) => u64::from(record.flags & 0x8000 != 0),
-        Some(FieldId::NoScrub) => u64::from(record.flags & 0x20000 != 0),
-        Some(FieldId::Pinned) => u64::from(record.flags & 0x80000 != 0),
-        Some(FieldId::Unpinned) => u64::from(record.flags & 0x100000 != 0),
-        Some(FieldId::RecallOnOpen) => u64::from(record.flags & 0x40000 != 0),
-        Some(FieldId::RecallOnDataAccess) => u64::from(record.flags & 0x400000 != 0),
+        Some(FieldId::NoScrub) => u64::from(record.flags & 0x2_0000 != 0),
+        Some(FieldId::Pinned) => u64::from(record.flags & 0x8_0000 != 0),
+        Some(FieldId::Unpinned) => u64::from(record.flags & 0x10_0000 != 0),
+        Some(FieldId::RecallOnOpen) => u64::from(record.flags & 0x4_0000 != 0),
+        Some(FieldId::RecallOnDataAccess) => u64::from(record.flags & 0x40_0000 != 0),
         _ => 0,
     }
 }

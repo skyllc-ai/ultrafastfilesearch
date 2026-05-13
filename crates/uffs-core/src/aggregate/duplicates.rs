@@ -27,6 +27,10 @@ pub(crate) struct CompositeKey {
 impl CompositeKey {
     /// Build a composite key from a record using the specified fields.
     #[must_use]
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "only key-eligible FieldId variants contribute to composite hash; non-key fields are intentionally ignored"
+    )]
     pub(crate) fn from_record(
         record: &CompactRecord,
         drive: &DriveCompactIndex,
@@ -202,6 +206,10 @@ impl DuplicateAccumulator {
     /// * `current_drive` is a transient scan-time field and is not touched —
     ///   members already carry the correct drive ordinal from when they were
     ///   fed on each per-drive pass.
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "per-key merge is order-independent: each group merges by key into self"
+    )]
     pub fn merge(&mut self, other: &Self) {
         for (key, other_builder) in &other.groups {
             if let Some(existing) = self.groups.get_mut(key) {
@@ -223,20 +231,16 @@ impl DuplicateAccumulator {
         let mut groups: Vec<DuplicateGroup> = self
             .groups
             .into_iter()
-            .filter(|(_, g)| g.stats.count > 1) // Drop singletons
-            .map(|(_, g)| {
-                let file_size = if g.stats.count > 0 {
-                    g.stats.sum / g.stats.count
-                } else {
-                    0
-                };
-                let reclaimable = g.stats.sum.saturating_sub(file_size);
+            .filter(|(_, group)| group.stats.count > 1) // Drop singletons
+            .map(|(_, group)| {
+                let file_size = group.stats.sum.checked_div(group.stats.count).unwrap_or(0);
+                let reclaimable = group.stats.sum.saturating_sub(file_size);
                 DuplicateGroup {
-                    count: g.stats.count,
-                    total_bytes: g.stats.sum,
+                    count: group.stats.count,
+                    total_bytes: group.stats.sum,
                     file_size,
                     reclaimable_bytes: reclaimable,
-                    member_indices: g.members,
+                    member_indices: group.members,
                     sample_rows: Vec::new(), // populated by finalize_one
                     verified: matches!(self.verify, DuplicateVerify::None),
                 }
@@ -244,18 +248,18 @@ impl DuplicateAccumulator {
             .collect();
 
         // Sort by reclaimable bytes descending.
-        groups.sort_by(|a, b| b.reclaimable_bytes.cmp(&a.reclaimable_bytes));
+        groups.sort_by_key(|group| core::cmp::Reverse(group.reclaimable_bytes));
 
         let total_groups = groups.len();
-        let total_duplicate_files: u64 = groups.iter().map(|g| g.count).sum();
-        let total_reclaimable: u64 = groups.iter().map(|g| g.reclaimable_bytes).sum();
+        let total_duplicate_files: u64 = groups.iter().map(|group| group.count).sum();
+        let total_reclaimable: u64 = groups.iter().map(|group| group.reclaimable_bytes).sum();
 
         groups.truncate(usize::from(top));
 
         DuplicateResult {
             candidate_groups: total_groups,
             candidate_files: total_duplicate_files,
-            total_duplicate_bytes: groups.iter().map(|g| g.total_bytes).sum(),
+            total_duplicate_bytes: groups.iter().map(|group| group.total_bytes).sum(),
             total_reclaimable_bytes: total_reclaimable,
             groups,
             verification_mode: self.verify,
@@ -281,6 +285,10 @@ pub struct DuplicateResult {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "tests assert against fixtures with known shape; indexing panic = test failure"
+)]
 mod tests {
     use uffs_mft::index::{IndexNameRef, MftIndex, ROOT_FRS, SizeInfo};
 
@@ -518,7 +526,7 @@ mod tests {
         let ordinals: std::collections::HashSet<u8> = result.groups[0]
             .member_indices
             .iter()
-            .map(|(_, d)| *d)
+            .map(|(_, dist)| *dist)
             .collect();
         assert!(
             ordinals.contains(&0) && ordinals.contains(&1),
@@ -743,7 +751,7 @@ mod tests {
         let result = acc.finalize(100);
 
         // On any real Windows install there should be known duplicates
-        // (e.g., DLLs in System32 and SysWOW64 with same name+size).
+        // (e.group., DLLs in System32 and SysWOW64 with same name+size).
         assert!(
             result.candidate_groups > 0,
             "a real Windows C: drive should contain duplicate files"
@@ -770,8 +778,8 @@ mod tests {
 
         // Each group must have count ≥ 2.
         for g in &result.groups {
-            assert!(g.count >= 2, "each group must have at least 2 files");
-            assert!(g.file_size > 0, "zero-byte files should be excluded");
+            assert!(group.count >= 2, "each group must have at least 2 files");
+            assert!(group.file_size > 0, "zero-byte files should be excluded");
         }
     }
 }

@@ -173,11 +173,11 @@ pub enum DuplicateVerify {
 
 /// Maximum allowed sample rows per bucket.
 /// Maximum number of sample rows per bucket.
-pub(crate) const MAX_SAMPLE_COUNT: u8 = 5;
+pub const MAX_SAMPLE_COUNT: u8 = 5;
 
 /// Default sample projection: the fields returned for each sample row
 /// when the caller doesn't specify a custom projection.
-pub(crate) const DEFAULT_PROJECTION: &[FieldId] = &[
+pub const DEFAULT_PROJECTION: &[FieldId] = &[
     FieldId::Name,
     FieldId::Size,
     FieldId::Modified,
@@ -255,7 +255,7 @@ impl TopHitsSpec {
     /// Return the effective projection — custom if non-empty, otherwise
     /// the default compact set.
     #[must_use]
-    pub(crate) fn effective_projection(&self) -> &[FieldId] {
+    pub fn effective_projection(&self) -> &[FieldId] {
         if self.projection.is_empty() {
             DEFAULT_PROJECTION
         } else {
@@ -360,8 +360,8 @@ impl CalendarInterval {
     ///
     /// Returns `None` if the string is not a recognized interval.
     #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
+    pub fn parse(input: &str) -> Option<Self> {
+        match input.to_ascii_lowercase().as_str() {
             "hour" | "h" | "hourly" => Some(Self::Hour),
             "day" | "d" | "daily" => Some(Self::Day),
             "week" | "w" | "weekly" => Some(Self::Week),
@@ -374,6 +374,10 @@ impl CalendarInterval {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "tests assert against fixtures with known shape; indexing panic = test failure"
+)]
 mod tests {
     use super::*;
 
@@ -453,9 +457,9 @@ mod tests {
             ScalarMetric::ValueCount,
             ScalarMetric::MissingCount,
         ];
-        for (i, a) in all.iter().enumerate() {
-            for (j, b) in all.iter().enumerate() {
-                assert_eq!(i == j, a == b);
+        for (i, lhs) in all.iter().enumerate() {
+            for (j, rhs) in all.iter().enumerate() {
+                assert_eq!(i == j, lhs == rhs);
             }
         }
     }
@@ -474,9 +478,9 @@ mod tests {
             BucketMetric::ShareOfTotalCount,
             BucketMetric::ShareOfTotalBytes,
         ];
-        for (i, a) in all.iter().enumerate() {
-            for (j, b) in all.iter().enumerate() {
-                assert_eq!(i == j, a == b);
+        for (i, lhs) in all.iter().enumerate() {
+            for (j, rhs) in all.iter().enumerate() {
+                assert_eq!(i == j, lhs == rhs);
             }
         }
     }
@@ -589,9 +593,9 @@ mod tests {
             sample: Some(TopHitsSpec::with_count(3)),
         });
         if let AggregateKind::Terms { sample, .. } = &spec.kind {
-            let s = sample.as_ref().expect("sample should be Some");
-            assert_eq!(s.count, 3);
-            assert_eq!(s.sort_field, FieldId::Size);
+            let sample_spec = sample.as_ref().expect("sample should be Some");
+            assert_eq!(sample_spec.count, 3);
+            assert_eq!(sample_spec.sort_field, FieldId::Size);
         } else {
             panic!("expected Terms");
         }
@@ -607,10 +611,10 @@ mod tests {
             max_groups: 100_000,
         });
         if let AggregateKind::Duplicates { sample, .. } = &spec.kind {
-            let s = sample.as_ref().expect("sample should be Some");
-            assert_eq!(s.count, 2);
-            assert_eq!(s.sort_field, FieldId::Modified);
-            assert!(!s.sort_desc);
+            let sample_spec = sample.as_ref().expect("sample should be Some");
+            assert_eq!(sample_spec.count, 2);
+            assert_eq!(sample_spec.sort_field, FieldId::Modified);
+            assert!(!sample_spec.sort_desc);
         } else {
             panic!("expected Duplicates");
         }

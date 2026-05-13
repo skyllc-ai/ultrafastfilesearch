@@ -65,7 +65,10 @@ impl AggregatePlan {
     /// Validate that a spec's field supports the requested operation.
     fn validate_spec(spec: &AggregateSpec) -> Result<(), AggregateError> {
         match &spec.kind {
-            AggregateKind::Count => Ok(()),
+            AggregateKind::Count
+            | AggregateKind::Missing { .. }
+            | AggregateKind::Rollup { .. }
+            | AggregateKind::Duplicates { .. } => Ok(()),
 
             AggregateKind::Stats { field, .. } => {
                 let meta = field.metadata();
@@ -111,8 +114,6 @@ impl AggregatePlan {
                 Ok(())
             }
 
-            AggregateKind::Missing { .. } => Ok(()),
-
             AggregateKind::Distinct { field } => {
                 let meta = field.metadata();
                 if !meta.aggregate.groupable {
@@ -123,10 +124,6 @@ impl AggregatePlan {
                 }
                 Ok(())
             }
-
-            AggregateKind::Rollup { .. } => Ok(()),
-
-            AggregateKind::Duplicates { .. } => Ok(()),
         }
     }
 }

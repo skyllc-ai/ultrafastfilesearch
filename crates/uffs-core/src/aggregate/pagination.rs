@@ -49,13 +49,13 @@ impl AggregateCursor {
     /// Decode a cursor from an opaque string token.
     #[must_use]
     pub fn decode(token: &str) -> Option<Self> {
-        let parts: Vec<&str> = token.split(':').collect();
-        if parts.len() != 3 {
+        let mut parts = token.split(':');
+        let result_index = parts.next()?.parse().ok()?;
+        let offset = parts.next()?.parse().ok()?;
+        let page_size = parts.next()?.parse().ok()?;
+        if parts.next().is_some() {
             return None;
         }
-        let result_index = parts[0].parse().ok()?;
-        let offset = parts[1].parse().ok()?;
-        let page_size = parts[2].parse().ok()?;
         Some(Self {
             result_index,
             offset,
@@ -88,16 +88,19 @@ pub fn paginate_result(
     result: &AggregateResult,
     cursor: &AggregateCursor,
 ) -> Option<PaginatedBuckets> {
-    let rows = match &result.data {
-        AggregateResultData::Buckets { rows, .. } => rows,
-        AggregateResultData::Rollup { rows, .. } => rows,
-        _ => return None,
+    let (AggregateResultData::Buckets { rows, .. } | AggregateResultData::Rollup { rows, .. }) =
+        &result.data
+    else {
+        return None;
     };
 
     let total = rows.len();
     let start = cursor.offset.min(total);
-    let end = (start + cursor.page_size).min(total);
-    let page_rows = rows[start..end].to_vec();
+    let end = start.saturating_add(cursor.page_size).min(total);
+    let page_rows = rows
+        .get(start..end)
+        .map(<[BucketRow]>::to_vec)
+        .unwrap_or_default();
     let has_more = end < total;
 
     let next_cursor = has_more.then(|| cursor.next().encode());

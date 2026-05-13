@@ -48,8 +48,8 @@ pub enum AggregatePreset {
 impl AggregatePreset {
     /// Parse a preset name from a string.
     #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
+    pub fn parse(input: &str) -> Option<Self> {
+        match input.to_ascii_lowercase().as_str() {
             "overview" => Some(Self::Overview),
             "by_type" | "bytype" | "type" => Some(Self::ByType),
             "by_extension" | "byextension" | "extension" | "by_ext" | "ext" => {
@@ -476,6 +476,10 @@ fn expand_cleanup() -> Vec<AggregateSpec> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "tests assert against fixtures with known shape; indexing panic = test failure"
+)]
 mod tests {
     use super::*;
 
@@ -500,7 +504,10 @@ mod tests {
         assert!(specs.len() >= 5, "overview should have at least 5 specs");
 
         // Check labels.
-        let labels: Vec<_> = specs.iter().filter_map(|s| s.label.as_deref()).collect();
+        let labels: Vec<_> = specs
+            .iter()
+            .filter_map(|spec| spec.label.as_deref())
+            .collect();
         assert!(labels.contains(&"total_count"));
         assert!(labels.contains(&"files_vs_dirs"));
         assert!(labels.contains(&"size_stats"));

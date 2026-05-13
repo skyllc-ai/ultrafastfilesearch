@@ -23,8 +23,8 @@ pub enum ExportFormat {
 impl ExportFormat {
     /// Parse from a string.
     #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
+    pub fn parse(input: &str) -> Option<Self> {
+        match input.to_ascii_lowercase().as_str() {
             "csv" => Some(Self::Csv),
             "tsv" => Some(Self::Tsv),
             "json" => Some(Self::Json),
@@ -105,13 +105,13 @@ fn export_csv<W: Write>(
                 writeln!(writer, "{field}{sep_char}{count}")?;
             }
 
-            AggregateResultData::Duplicates { result } => {
+            AggregateResultData::Duplicates { result: dup_result } => {
                 writeln!(writer, "# {label}")?;
                 writeln!(
                     writer,
                     "key{sep_char}count{sep_char}file_size{sep_char}total_bytes{sep_char}reclaimable"
                 )?;
-                for group in &result.groups {
+                for group in &dup_result.groups {
                     writeln!(
                         writer,
                         "{}x{}{sep_char}{}{sep_char}{}{sep_char}{}{sep_char}{}",

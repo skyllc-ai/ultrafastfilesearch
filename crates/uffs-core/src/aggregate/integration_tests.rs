@@ -816,9 +816,8 @@ fn s3f4_nested_rollup_drive_with_terms_type() {
     let output = run_aggregate(&[&drive], &[spec], &FinalizeOptions::default()).unwrap();
     let result = &output.response.results[0];
 
-    let rows = match &result.data {
-        AggregateResultData::Rollup { rows, .. } => rows,
-        other => panic!("expected Rollup, got: {other:?}"),
+    let AggregateResultData::Rollup { rows, .. } = &result.data else {
+        panic!("expected Rollup, got: {:?}", result.data);
     };
 
     // Single drive C: → exactly 1 bucket.

@@ -240,6 +240,10 @@ impl PathRiskBucket {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "tests assert against fixtures with known shape; indexing panic = test failure"
+)]
 mod tests {
     use super::*;
 

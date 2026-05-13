@@ -28,9 +28,10 @@
 //! the TTL.
 
 use core::sync::atomic::{AtomicU64, Ordering};
+use core::time::Duration;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::AggregateOutput;
 
@@ -98,12 +99,19 @@ impl AggregateCache {
     ///
     /// When this changes, all existing cache entries are invalidated.
     pub fn set_index_version(&self, version: u64) {
-        let mut current = self
-            .index_version
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *current != version {
-            *current = version;
+        let needs_invalidation = {
+            let mut current = self
+                .index_version
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *current == version {
+                false
+            } else {
+                *current = version;
+                true
+            }
+        };
+        if needs_invalidation {
             // Invalidate all entries.
             let mut entries = self
                 .entries
@@ -120,33 +128,34 @@ impl AggregateCache {
     /// miss in [`Self::stats`].
     #[must_use]
     pub fn get(&self, spec_hash: u64) -> Option<AggregateOutput> {
-        let entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(entry) = entries.get(&spec_hash) else {
-            self.misses.fetch_add(1, Ordering::Relaxed);
-            return None;
-        };
-
-        // Check TTL.
-        if entry.created.elapsed() > self.ttl {
-            self.misses.fetch_add(1, Ordering::Relaxed);
-            return None;
-        }
-
-        // Check index version.
+        // Snapshot current index version first (single-lock scope), then
+        // examine entries (separate single-lock scope).  Tighter drops
+        // and consistent lock ordering with `set_index_version`.
         let current_version = *self
             .index_version
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if entry.index_version != current_version {
-            self.misses.fetch_add(1, Ordering::Relaxed);
-            return None;
-        }
 
-        self.hits.fetch_add(1, Ordering::Relaxed);
-        Some(entry.output.clone())
+        let cached = {
+            let entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            entries.get(&spec_hash).and_then(|entry| {
+                if entry.created.elapsed() > self.ttl || entry.index_version != current_version {
+                    None
+                } else {
+                    Some(entry.output.clone())
+                }
+            })
+        };
+
+        if cached.is_some() {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.misses.fetch_add(1, Ordering::Relaxed);
+        }
+        cached
     }
 
     /// Insert a result into the cache.
@@ -171,7 +180,7 @@ impl AggregateCache {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // Evict expired entries first.
-        entries.retain(|_, e| e.created.elapsed() <= self.ttl);
+        entries.retain(|_, existing| existing.created.elapsed() <= self.ttl);
 
         entries.insert(spec_hash, entry);
     }

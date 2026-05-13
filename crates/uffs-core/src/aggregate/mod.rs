@@ -1,51 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-// The aggregate module performs statistical analytics over millions of NTFS
-// records.  The code is inherently numeric-heavy: u64→f64 casts for averages,
-// float arithmetic for percentages, single-char iterator vars (k, v, n) in
-// closures, indexing into pre-validated slices, and controlled truncation
-// casts.  Each `#[allow]` below is justified by the domain:
-//
-//  • cast_precision_loss / cast_possible_truncation / cast_sign_loss —
-//    acceptable in aggregate statistics; values are counters & sizes
-//  • float_arithmetic — percentages, averages, and share calculations
-//  • min_ident_chars — terse loop/closure vars in statistical code
-//  • indexing_slicing / string_slice — bounds verified by prior logic
-//  • too_many_lines — single-pass scan functions with many branches
-//  • shadow_reuse / shadow_unrelated — parser re-binds input on each step
-//  • iter_over_hash_type — deterministic order not required for aggregation
-//  • option_if_let_else — more readable than `map_or` in multi-line blocks
-//  • wildcard_enum_match_arm — forward-compat not a concern for internal enums
-//  • used_underscore_binding — convention for unused-but-meaningful fields
-//  • significant_drop_tightening — mutex guard lifetime is correct
-//  • manual_checked_div — explicit division-by-zero guards are clearer
-//  • std_instead_of_core — HashMap/Mutex are std-only
-//  • map_err_ignore — intentional simplification of error types
-#![expect(
-    clippy::float_arithmetic,
-    clippy::min_ident_chars,
-    clippy::too_many_lines,
-    clippy::indexing_slicing,
-    clippy::string_slice,
-    clippy::shadow_reuse,
-    clippy::iter_over_hash_type,
-    clippy::option_if_let_else,
-    clippy::wildcard_enum_match_arm,
-    clippy::used_underscore_binding,
-    clippy::significant_drop_tightening,
-    clippy::integer_division_remainder_used,
-    clippy::std_instead_of_core,
-    clippy::map_err_ignore,
-    clippy::match_same_arms,
-    clippy::unreadable_literal,
-    clippy::unneeded_field_pattern,
-    clippy::manual_checked_ops,
-    clippy::unnecessary_sort_by,
-    clippy::default_numeric_fallback,
-    reason = "aggregation module uses dynamic dispatch, float math, hash iteration, and complex pattern matching throughout"
-)]
-
 //! Aggregation engine for UFFS.
 //!
 //! Provides high-performance, single-pass aggregate computations over
@@ -234,7 +189,7 @@ impl ExtensionMap {
     fn canonical_id(&self, drive_ordinal: u8, local_ext_id: u16) -> u64 {
         self.per_drive
             .get(usize::from(drive_ordinal))
-            .and_then(|m| m.get(usize::from(local_ext_id)))
+            .and_then(|map| map.get(usize::from(local_ext_id)))
             .copied()
             .unwrap_or(u64::MAX)
     }
@@ -290,13 +245,13 @@ pub fn run_aggregate(
         .enumerate()
         .map(|(drive_ordinal, drive)| {
             let ordinal = u8::try_from(drive_ordinal).unwrap_or(u8::MAX);
-            let t = std::time::Instant::now();
+            let per_drive_start = std::time::Instant::now();
             let (local, scanned, matched) = scan_drive(drive, &plan, ordinal, Some(&ext_map));
             tracing::debug!(
                 drive = %drive.letter,
                 scanned,
                 matched,
-                elapsed_ms = t.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+                elapsed_ms = per_drive_start.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
                 "run_aggregate: drive scan"
             );
             (local, scanned, matched)
@@ -356,7 +311,7 @@ pub fn run_aggregate(
 ///
 /// Returns an error if any spec references an invalid field or if
 /// accumulator construction fails.
-pub(crate) fn run_aggregate_filtered(
+pub fn run_aggregate_filtered(
     drives: &[&DriveCompactIndex],
     specs: &[AggregateSpec],
     options: &FinalizeOptions,
@@ -372,9 +327,9 @@ pub(crate) fn run_aggregate_filtered(
     // Compile search pattern.
     let fold = CaseFold::default_table();
     let parsed = ParsedPattern::parse(pattern)
-        .map_err(|e| AggregateError::InvalidConfig(format!("bad pattern: {e}")))?;
+        .map_err(|err| AggregateError::InvalidConfig(format!("bad pattern: {err}")))?;
     let index_pat = compile_parsed_pattern(&parsed)
-        .map_err(|e| AggregateError::InvalidConfig(format!("bad pattern: {e}")))?;
+        .map_err(|err| AggregateError::InvalidConfig(format!("bad pattern: {err}")))?;
     tracing::info!(
         pattern,
         index_pattern = ?index_pat,
@@ -476,7 +431,7 @@ pub fn run_aggregate_with_filters(
     use crate::index_search::compile_parsed_pattern;
     use crate::pattern::ParsedPattern;
 
-    let trivial_pattern = pattern.is_none_or(|p| matches!(p, "*" | "**" | "**/*" | ""));
+    let trivial_pattern = pattern.is_none_or(|pat| matches!(pat, "*" | "**" | "**/*" | ""));
     if filter.is_empty() && trivial_pattern {
         return run_aggregate(drives, specs, options);
     }
@@ -497,10 +452,10 @@ pub fn run_aggregate_with_filters(
     } else {
         let pat = pattern.unwrap_or("*");
         let parsed = ParsedPattern::parse(pat)
-            .map_err(|e| AggregateError::InvalidConfig(format!("bad pattern: {e}")))?;
+            .map_err(|err| AggregateError::InvalidConfig(format!("bad pattern: {err}")))?;
         Some(
             compile_parsed_pattern(&parsed)
-                .map_err(|e| AggregateError::InvalidConfig(format!("bad pattern: {e}")))?,
+                .map_err(|err| AggregateError::InvalidConfig(format!("bad pattern: {err}")))?,
         )
     };
 
@@ -595,8 +550,8 @@ pub fn run_aggregate_with_filters(
 /// `Terms` sample heaps and `Duplicates` groups) implements `merge`
 /// correctly as of v0.5.40.
 #[inline]
-fn merge_accumulator_sets(a: &mut [GroupAccumulator], b: &[GroupAccumulator]) {
-    for (left, right) in a.iter_mut().zip(b.iter()) {
+fn merge_accumulator_sets(into: &mut [GroupAccumulator], from: &[GroupAccumulator]) {
+    for (left, right) in into.iter_mut().zip(from.iter()) {
         left.merge(right);
     }
 }

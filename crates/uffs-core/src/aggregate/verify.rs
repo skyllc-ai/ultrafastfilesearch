@@ -253,19 +253,15 @@ impl DuplicateVerifier {
         result.candidate_files = result
             .groups
             .iter()
-            .map(|g| g.member_indices.len() as u64)
+            .map(|group| group.member_indices.len() as u64)
             .sum();
-        result.total_duplicate_bytes = result.groups.iter().map(|g| g.total_bytes).sum();
+        result.total_duplicate_bytes = result.groups.iter().map(|group| group.total_bytes).sum();
         result.total_reclaimable_bytes = result
             .groups
             .iter()
-            .map(|g| {
-                let per_copy = if g.count > 0 {
-                    g.total_bytes / g.count
-                } else {
-                    0
-                };
-                g.total_bytes.saturating_sub(per_copy)
+            .map(|group| {
+                let per_copy = group.total_bytes.checked_div(group.count).unwrap_or(0);
+                group.total_bytes.saturating_sub(per_copy)
             })
             .sum();
         result.verification_mode = self.mode;
@@ -357,6 +353,10 @@ impl DuplicateVerifier {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "tests assert against fixtures with known shape; indexing panic = test failure"
+)]
 mod tests {
     use super::*;
     use crate::aggregate::duplicates::{DuplicateGroup, DuplicateResult};
@@ -417,9 +417,9 @@ mod tests {
     }
 
     fn make_result(groups: Vec<DuplicateGroup>) -> DuplicateResult {
-        let candidate_files: u64 = groups.iter().map(|g| g.count).sum();
-        let total_dup = groups.iter().map(|g| g.total_bytes).sum();
-        let total_reclaim = groups.iter().map(|g| g.reclaimable_bytes).sum();
+        let candidate_files: u64 = groups.iter().map(|group| group.count).sum();
+        let total_dup = groups.iter().map(|group| group.total_bytes).sum();
+        let total_reclaim = groups.iter().map(|group| group.reclaimable_bytes).sum();
         DuplicateResult {
             candidate_groups: groups.len(),
             candidate_files,
@@ -639,6 +639,6 @@ mod tests {
         assert_eq!(vfy_result.groups.len(), 2); // group 2 rejected
         assert_eq!(summary.groups_verified, 2);
         assert_eq!(summary.groups_rejected, 1);
-        assert!(vfy_result.groups.iter().all(|g| g.verified));
+        assert!(vfy_result.groups.iter().all(|group| group.verified));
     }
 }

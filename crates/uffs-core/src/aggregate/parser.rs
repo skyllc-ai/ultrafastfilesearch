@@ -28,14 +28,10 @@ use crate::search::field::FieldId;
 ///
 /// Returns an error string if the spec is malformed.
 pub fn parse_agg_spec(input: &str) -> Result<AggregateSpec, String> {
-    let input = input.trim();
+    let trimmed = input.trim();
 
     // Split on first ':'
-    let (kind_str, rest) = if let Some(pos) = input.find(':') {
-        (&input[..pos], &input[pos + 1..])
-    } else {
-        (input, "")
-    };
+    let (kind_str, rest) = trimmed.split_once(':').unwrap_or((trimmed, ""));
 
     match kind_str {
         "count" => Ok(AggregateSpec::new(AggregateKind::Count)),
@@ -65,23 +61,17 @@ pub fn parse_agg_spec(input: &str) -> Result<AggregateSpec, String> {
 }
 
 /// Parse key=value options from a comma-separated string.
-fn parse_options(s: &str) -> Vec<(&str, &str)> {
-    s.split(',')
+fn parse_options(input: &str) -> Vec<(&str, &str)> {
+    input
+        .split(',')
         .filter(|part| !part.is_empty())
-        .filter_map(|part| {
-            let eq = part.find('=')?;
-            Some((&part[..eq], &part[eq + 1..]))
-        })
+        .filter_map(|part| part.split_once('='))
         .collect()
 }
 
 /// Extract the field and remaining options from "field,opt=val,opt=val".
-fn split_field_and_options(s: &str) -> (&str, &str) {
-    if let Some(pos) = s.find(',') {
-        (&s[..pos], &s[pos + 1..])
-    } else {
-        (s, "")
-    }
+fn split_field_and_options(input: &str) -> (&str, &str) {
+    input.split_once(',').unwrap_or((input, ""))
 }
 
 /// Parse a field name to `FieldId`.
@@ -96,10 +86,10 @@ fn parse_stats(rest: &str) -> Result<AggregateSpec, String> {
     let opts = parse_options(opts_str);
     let mut metrics = Vec::new();
 
-    for (k, v) in &opts {
-        if *k == "metrics" {
-            for m in v.split('+') {
-                metrics.push(parse_scalar_metric(m)?);
+    for (key, val) in &opts {
+        if *key == "metrics" {
+            for metric in val.split('+') {
+                metrics.push(parse_scalar_metric(metric)?);
             }
         }
     }
@@ -125,18 +115,22 @@ fn parse_terms(rest: &str) -> Result<AggregateSpec, String> {
     let mut metrics = Vec::new();
     let mut sample_count: u8 = 0;
 
-    for (k, v) in &opts {
-        match *k {
+    for (key, val) in &opts {
+        match *key {
             "top" => {
-                top = v.parse().map_err(|_| format!("Invalid top: `{v}`"))?;
+                top = val
+                    .parse()
+                    .map_err(|err| format!("Invalid top: `{val}`: {err}"))?;
             }
             "metrics" => {
-                for m in v.split('+') {
-                    metrics.push(parse_bucket_metric(m)?);
+                for metric in val.split('+') {
+                    metrics.push(parse_bucket_metric(metric)?);
                 }
             }
             "sample" => {
-                sample_count = v.parse().map_err(|_| format!("Invalid sample: `{v}`"))?;
+                sample_count = val
+                    .parse()
+                    .map_err(|err| format!("Invalid sample: `{val}`: {err}"))?;
             }
             _ => {}
         }
@@ -164,15 +158,17 @@ fn parse_histogram(rest: &str) -> Result<AggregateSpec, String> {
     let mut interval: u64 = 1_048_576; // 1 MB default
     let mut metrics = vec![BucketMetric::Count, BucketMetric::TotalBytes];
 
-    for (k, v) in &opts {
-        match *k {
+    for (key, val) in &opts {
+        match *key {
             "interval" => {
-                interval = v.parse().map_err(|_| format!("Invalid interval: `{v}`"))?;
+                interval = val
+                    .parse()
+                    .map_err(|err| format!("Invalid interval: `{val}`: {err}"))?;
             }
             "metrics" => {
                 metrics.clear();
-                for m in v.split('+') {
-                    metrics.push(parse_bucket_metric(m)?);
+                for metric in val.split('+') {
+                    metrics.push(parse_bucket_metric(metric)?);
                 }
             }
             _ => {}
@@ -194,16 +190,16 @@ fn parse_date_histogram(rest: &str) -> Result<AggregateSpec, String> {
     let mut calendar = CalendarInterval::Month;
     let mut metrics = vec![BucketMetric::Count, BucketMetric::TotalBytes];
 
-    for (k, v) in &opts {
-        match *k {
+    for (key, val) in &opts {
+        match *key {
             "calendar" | "interval" => {
-                calendar = CalendarInterval::parse(v)
-                    .ok_or_else(|| format!("Invalid calendar interval: `{v}`"))?;
+                calendar = CalendarInterval::parse(val)
+                    .ok_or_else(|| format!("Invalid calendar interval: `{val}`"))?;
             }
             "metrics" => {
                 metrics.clear();
-                for m in v.split('+') {
-                    metrics.push(parse_bucket_metric(m)?);
+                for metric in val.split('+') {
+                    metrics.push(parse_bucket_metric(metric)?);
                 }
             }
             _ => {}
@@ -225,18 +221,18 @@ fn parse_range(rest: &str) -> Result<AggregateSpec, String> {
     let mut boundaries: Vec<u64> = Vec::new();
     let mut metrics = vec![BucketMetric::Count, BucketMetric::TotalBytes];
 
-    for (k, v) in &opts {
-        match *k {
+    for (key, val) in &opts {
+        match *key {
             "bins" | "boundaries" => {
-                for boundary_str in v.split('+') {
+                for boundary_str in val.split('+') {
                     // Each bin can be "A..B" or just "A". Extract the boundary values.
                     for part in boundary_str.split("..") {
                         if !part.is_empty() {
-                            let val: u64 = part
-                                .parse()
-                                .map_err(|_| format!("Invalid range boundary: `{part}`"))?;
-                            if !boundaries.contains(&val) {
-                                boundaries.push(val);
+                            let boundary_val: u64 = part.parse().map_err(|err| {
+                                format!("Invalid range boundary: `{part}`: {err}")
+                            })?;
+                            if !boundaries.contains(&boundary_val) {
+                                boundaries.push(boundary_val);
                             }
                         }
                     }
@@ -246,8 +242,8 @@ fn parse_range(rest: &str) -> Result<AggregateSpec, String> {
             }
             "metrics" => {
                 metrics.clear();
-                for m in v.split('+') {
-                    metrics.push(parse_bucket_metric(m)?);
+                for metric in val.split('+') {
+                    metrics.push(parse_bucket_metric(metric)?);
                 }
             }
             _ => {}
@@ -275,28 +271,38 @@ fn parse_rollup(rest: &str) -> Result<AggregateSpec, String> {
     let mut record_idx: Option<u32> = None;
     let mut sub_spec: Option<Box<AggregateSpec>> = None;
 
-    for (k, v) in &opts {
-        match *k {
-            "depth" => depth = v.parse().map_err(|_| format!("Invalid depth: `{v}`"))?,
-            "top" => top = v.parse().map_err(|_| format!("Invalid top: `{v}`"))?,
+    for (key, val) in &opts {
+        match *key {
+            "depth" => {
+                depth = val
+                    .parse()
+                    .map_err(|err| format!("Invalid depth: `{val}`: {err}"))?;
+            }
+            "top" => {
+                top = val
+                    .parse()
+                    .map_err(|err| format!("Invalid top: `{val}`: {err}"))?;
+            }
             "record" | "frs" | "ancestor" => {
                 record_idx = Some(
-                    v.parse()
-                        .map_err(|_| format!("Invalid record index: `{v}`"))?,
+                    val.parse()
+                        .map_err(|err| format!("Invalid record index: `{val}`: {err}"))?,
                 );
             }
             "metrics" => {
                 metrics.clear();
-                for m in v.split('+') {
-                    metrics.push(parse_bucket_metric(m)?);
+                for metric in val.split('+') {
+                    metrics.push(parse_bucket_metric(metric)?);
                 }
             }
             "sample" => {
-                sample_count = v.parse().map_err(|_| format!("Invalid sample: `{v}`"))?;
+                sample_count = val
+                    .parse()
+                    .map_err(|err| format!("Invalid sample: `{val}`: {err}"))?;
             }
             "sub" => {
                 // Parse nested sub-aggregation spec (e.g. "terms:type").
-                let inner = parse_agg_spec(v)?;
+                let inner = parse_agg_spec(val)?;
                 sub_spec = Some(Box::new(inner));
             }
             _ => {}
@@ -335,8 +341,8 @@ fn parse_duplicates(rest: &str) -> Result<AggregateSpec, String> {
     let opts = parse_options(opts_str);
 
     let mut keys: Vec<FieldId> = Vec::new();
-    for k in keys_str.split('+') {
-        keys.push(parse_field(k)?);
+    for key in keys_str.split('+') {
+        keys.push(parse_field(key)?);
     }
     if keys.is_empty() {
         keys = vec![FieldId::Size, FieldId::Name];
@@ -347,24 +353,30 @@ fn parse_duplicates(rest: &str) -> Result<AggregateSpec, String> {
     let mut sample_count: u8 = 2;
     let mut max_groups: u32 = 500_000;
 
-    for (k, v) in &opts {
-        match *k {
+    for (key, val) in &opts {
+        match *key {
             "verify" => {
-                verify = match *v {
+                verify = match *val {
                     "none" => DuplicateVerify::None,
                     "first_bytes" | "first" => DuplicateVerify::FirstBytes { count: 4096 },
                     "sha256" | "hash" => DuplicateVerify::Sha256,
-                    _ => return Err(format!("Unknown verify mode: `{v}`")),
+                    _ => return Err(format!("Unknown verify mode: `{val}`")),
                 };
             }
-            "top" => top = v.parse().map_err(|_| format!("Invalid top: `{v}`"))?,
+            "top" => {
+                top = val
+                    .parse()
+                    .map_err(|err| format!("Invalid top: `{val}`: {err}"))?;
+            }
             "sample" => {
-                sample_count = v.parse().map_err(|_| format!("Invalid sample: `{v}`"))?;
+                sample_count = val
+                    .parse()
+                    .map_err(|err| format!("Invalid sample: `{val}`: {err}"))?;
             }
             "max_groups" => {
-                max_groups = v
+                max_groups = val
                     .parse()
-                    .map_err(|_| format!("Invalid max_groups: `{v}`"))?;
+                    .map_err(|err| format!("Invalid max_groups: `{val}`: {err}"))?;
             }
             _ => {}
         }
@@ -607,8 +619,8 @@ mod tests {
         {
             assert_eq!(*field, FieldId::Extension);
             assert_eq!(*top, 10);
-            let s = sample.as_ref().expect("sample should be Some");
-            assert_eq!(s.count, 3);
+            let sample_spec = sample.as_ref().expect("sample should be Some");
+            assert_eq!(sample_spec.count, 3);
         } else {
             panic!("expected Terms");
         }
@@ -640,8 +652,8 @@ mod tests {
         let spec = parse_agg_spec("rollup:path,depth=2,sample=2").unwrap();
         if let AggregateKind::Rollup { mode, sample, .. } = &spec.kind {
             assert_eq!(*mode, RollupMode::Path { depth: 2 });
-            let s = sample.as_ref().expect("sample should be Some");
-            assert_eq!(s.count, 2);
+            let sample_spec = sample.as_ref().expect("sample should be Some");
+            assert_eq!(sample_spec.count, 2);
         } else {
             panic!("expected Rollup");
         }
@@ -656,8 +668,8 @@ mod tests {
         {
             assert_eq!(keys.len(), 2);
             assert_eq!(*top, 50);
-            let s = sample.as_ref().expect("sample should be Some");
-            assert_eq!(s.count, 5);
+            let sample_spec = sample.as_ref().expect("sample should be Some");
+            assert_eq!(sample_spec.count, 5);
         } else {
             panic!("expected Duplicates");
         }

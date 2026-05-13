@@ -34,13 +34,13 @@ pub(crate) struct SampleEntry {
 }
 
 impl PartialOrd for SampleEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for SampleEntry {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.sort_key
             .cmp(&other.sort_key)
             .then_with(|| self.rec_idx.cmp(&other.rec_idx))
@@ -61,7 +61,7 @@ impl Ord for SampleEntry {
 struct DescKey(SampleEntry);
 
 impl Ord for DescKey {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         // "Greater" = worse for desc.
         //   * smaller `sort_key` is worse  → reverse the comparison.
         //   * on tie, larger `rec_idx` is worse → forward comparison.
@@ -74,7 +74,7 @@ impl Ord for DescKey {
 }
 
 impl PartialOrd for DescKey {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
@@ -89,7 +89,7 @@ impl PartialOrd for DescKey {
 struct AscKey(SampleEntry);
 
 impl Ord for AscKey {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         // "Greater" = worse for asc.
         //   * larger `sort_key` is worse → forward comparison.
         //   * on tie, larger `rec_idx` is worse → forward comparison.
@@ -101,7 +101,7 @@ impl Ord for AscKey {
 }
 
 impl PartialOrd for AscKey {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
@@ -144,6 +144,10 @@ impl SampleHeap {
 
     /// Extract the sort key from a record for the configured field.
     #[inline]
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "FieldId is open-ended; non-orderable fields collapse to a constant sort key"
+    )]
     fn extract_sort_key(field: FieldId, record: &CompactRecord) -> i64 {
         match field {
             FieldId::Size => record.size.cast_signed(),
@@ -256,11 +260,15 @@ impl SampleHeap {
     ///
     /// - `sort_desc=true`  → largest sort key first
     /// - `sort_desc=false` → smallest sort key first
+    #[expect(
+        clippy::min_ident_chars,
+        reason = "`a`/`b` are conventional sort-comparator bindings; descriptive names would obscure the comparison structure"
+    )]
     pub(crate) fn drain_sorted(&mut self) -> Vec<SampleEntry> {
         let mut entries: Vec<SampleEntry> = if self.sort_desc {
-            self.heap_desc.drain().map(|DescKey(e)| e).collect()
+            self.heap_desc.drain().map(|DescKey(entry)| entry).collect()
         } else {
-            self.heap_asc.drain().map(|AscKey(e)| e).collect()
+            self.heap_asc.drain().map(|AscKey(entry)| entry).collect()
         };
         // Final presentation order: by sort_key only (primary), and on
         // ties preserve the deterministic `rec_idx` ordering established
@@ -284,6 +292,10 @@ impl SampleHeap {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "tests assert against fixtures with known shape; indexing panic = test failure"
+)]
 mod tests {
     use super::*;
 
@@ -422,7 +434,7 @@ mod tests {
             let mut pairs: Vec<(i64, u32)> = heap
                 .drain_sorted()
                 .into_iter()
-                .map(|e| (e.sort_key, e.rec_idx))
+                .map(|entry| (entry.sort_key, entry.rec_idx))
                 .collect();
             pairs.sort_by_key(|&(_, rec_idx)| rec_idx);
             results.push(pairs);
@@ -457,8 +469,11 @@ mod tests {
             for &rec_idx in &order {
                 heap.push(&rec, rec_idx, 0);
             }
-            let mut winners: Vec<u32> =
-                heap.drain_sorted().into_iter().map(|e| e.rec_idx).collect();
+            let mut winners: Vec<u32> = heap
+                .drain_sorted()
+                .into_iter()
+                .map(|entry| entry.rec_idx)
+                .collect();
             winners.sort_unstable();
             results.push(winners);
         }

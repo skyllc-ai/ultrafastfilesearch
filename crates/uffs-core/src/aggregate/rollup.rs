@@ -65,11 +65,15 @@ impl RollupAccumulator {
     }
 
     /// Merge another rollup accumulator.
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "per-key merge is order-independent: each group merges by key into self"
+    )]
     pub fn merge(&mut self, other: &Self) {
         for (&key, other_stats) in &other.groups {
             self.groups
                 .entry(key)
-                .and_modify(|s| s.merge(other_stats))
+                .and_modify(|stats| stats.merge(other_stats))
                 .or_insert_with(|| other_stats.clone());
         }
     }
@@ -78,8 +82,8 @@ impl RollupAccumulator {
     /// Returns (key, stats) pairs.
     #[must_use]
     pub fn finalize(&self) -> Vec<(u32, &StatsAccumulator)> {
-        let mut entries: Vec<_> = self.groups.iter().map(|(&k, v)| (k, v)).collect();
-        entries.sort_by(|a, b| b.1.sum.cmp(&a.1.sum));
+        let mut entries: Vec<_> = self.groups.iter().map(|(&key, val)| (key, val)).collect();
+        entries.sort_by_key(|entry| core::cmp::Reverse(entry.1.sum));
         entries.truncate(usize::from(self.top));
         entries
     }
@@ -104,11 +108,10 @@ fn ancestor_at_depth(
     // Walk up to root (parent_idx == 0 or self-referencing means root).
     loop {
         chain.push(current);
-        let ci = uffs_mft::u32_as_usize(current);
-        if ci >= records.len() {
+        let Some(record) = records.get(uffs_mft::u32_as_usize(current)) else {
             break;
-        }
-        let parent = records[ci].parent_idx;
+        };
+        let parent = record.parent_idx;
         if parent == current || parent == 0 {
             break;
         }
@@ -123,12 +126,10 @@ fn ancestor_at_depth(
 
     // depth=1 → index 1 in chain (first child of root).
     let depth_idx = uffs_mft::u32_as_usize(target_depth);
-    if depth_idx < chain.len() {
-        chain[depth_idx]
-    } else {
-        // Record is shallower than requested depth — use itself.
-        uffs_mft::len_to_u32(idx)
-    }
+    chain
+        .get(depth_idx)
+        .copied()
+        .unwrap_or_else(|| uffs_mft::len_to_u32(idx))
 }
 
 /// Walk the parent chain to find which direct child of `ancestor_idx`
@@ -146,11 +147,10 @@ fn child_of_ancestor(drive: &DriveCompactIndex, idx: usize, ancestor_idx: u32) -
         if current == ancestor_idx {
             return child;
         }
-        let ci = uffs_mft::u32_as_usize(current);
-        if ci >= records.len() {
+        let Some(record) = records.get(uffs_mft::u32_as_usize(current)) else {
             break;
-        }
-        let parent = records[ci].parent_idx;
+        };
+        let parent = record.parent_idx;
         if parent == current {
             break; // self-referencing root — ancestor not found
         }
@@ -175,17 +175,22 @@ pub(crate) fn resolve_rollup_key(key: u32, mode: RollupMode, drive: &DriveCompac
         }
         RollupMode::Path { .. } | RollupMode::Ancestor { .. } => {
             let idx = uffs_mft::u32_as_usize(key);
-            if idx < drive.records.len() {
-                let name = drive.records[idx].name(&drive.names);
-                format!("{}:\\{name}", drive.letter)
-            } else {
-                format!("record_{key}")
-            }
+            drive.records.get(idx).map_or_else(
+                || format!("record_{key}"),
+                |record| {
+                    let name = record.name(&drive.names);
+                    format!("{}:\\{name}", drive.letter)
+                },
+            )
         }
     }
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "tests assert against fixtures with known shape; indexing panic = test failure"
+)]
 mod tests {
     use super::*;
 

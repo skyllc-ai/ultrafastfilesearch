@@ -213,6 +213,10 @@ pub struct SampleRow {
 
 impl BucketRow {
     /// Create a bucket row from a stats accumulator and context.
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "integer count/byte→f64 share-of-total percentages are the documented bucket-row formula"
+    )]
     fn from_stats(
         key: String,
         stats: &StatsAccumulator,
@@ -220,14 +224,14 @@ impl BucketRow {
         total_bytes: u64,
     ) -> Self {
         let share_count = if total_matched == 0 {
-            0.0
+            0.0_f64
         } else {
-            uffs_mft::u64_to_f64(stats.count) / uffs_mft::u64_to_f64(total_matched) * 100.0
+            uffs_mft::u64_to_f64(stats.count) / uffs_mft::u64_to_f64(total_matched) * 100.0_f64
         };
         let share_bytes = if total_bytes == 0 {
-            0.0
+            0.0_f64
         } else {
-            uffs_mft::u64_to_f64(stats.sum) / uffs_mft::u64_to_f64(total_bytes) * 100.0
+            uffs_mft::u64_to_f64(stats.sum) / uffs_mft::u64_to_f64(total_bytes) * 100.0_f64
         };
         Self {
             key,
@@ -314,6 +318,10 @@ fn finalize_accumulator(
 ///
 /// Extracts `BucketRow`s from bucket-like result variants; non-bucket
 /// results (count, stats, missing, distinct) produce an empty vec.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "non-bucket result variants intentionally collapse to empty rows"
+)]
 fn sub_result_to_bucket_rows(result: &AggregateResult) -> Vec<BucketRow> {
     match &result.data {
         AggregateResultData::Buckets { rows, .. } | AggregateResultData::Rollup { rows, .. } => {
@@ -333,9 +341,9 @@ fn finalize_one(
     ext_map: Option<&super::ExtensionMap>,
 ) -> AggregateResult {
     let label = acc.label.clone();
-    let field_name = acc
-        .field
-        .map(|f| f.metadata().canonical_name.to_owned())
+    let field = acc.field;
+    let field_name = field
+        .map(|f_id| f_id.metadata().canonical_name.to_owned())
         .unwrap_or_default();
 
     let data = match acc.kind {
@@ -357,75 +365,22 @@ fn finalize_one(
         AccumulatorKind::Terms {
             groups,
             top,
-            mut sample_heaps,
+            sample_heaps,
             sample_spec,
             ..
-        } => {
-            let total_groups = groups.len();
-
-            // Build (group_key, BucketRow) pairs so we can correlate
-            // surviving keys with their sample heaps.
-            let mut keyed_rows: Vec<(u64, BucketRow)> = groups
-                .iter()
-                .map(|(&key, stats)| {
-                    let key_str = resolve_group_key(acc.field, key, drives, ext_map);
-                    (
-                        key,
-                        BucketRow::from_stats(key_str, stats, total_matched, total_bytes),
-                    )
-                })
-                .collect();
-
-            keyed_rows.sort_by(|a, b| b.1.count.cmp(&a.1.count));
-
-            let limit = usize::from(top);
-            let other_count = if keyed_rows.len() > limit {
-                let other: u64 = keyed_rows[limit..].iter().map(|r| r.1.count).sum();
-                keyed_rows.truncate(limit);
-                other
-            } else {
-                0
-            };
-
-            // Materialize sample rows for surviving buckets only.
-            if let Some(ref mut heaps) = sample_heaps {
-                let projection = sample_spec
-                    .as_ref()
-                    .map(super::spec::TopHitsSpec::effective_projection)
-                    .unwrap_or_default();
-                for (group_key, row) in &mut keyed_rows {
-                    if let Some(heap) = heaps.get_mut(group_key) {
-                        let entries = heap.drain_sorted();
-                        row.sample_rows = entries
-                            .iter()
-                            .map(|entry| materialize_sample_entry(entry, projection, drives))
-                            .collect();
-                    }
-                }
-            }
-
-            // Attach drill-down predicates: original query preds + bucket key.
-            let bucket_field = acc.field;
-            for (group_key, row) in &mut keyed_rows {
-                row.drilldown = build_drilldown(
-                    &options.query_predicates,
-                    bucket_field,
-                    *group_key,
-                    &row.key,
-                    drives,
-                );
-            }
-
-            let rows: Vec<BucketRow> = keyed_rows.into_iter().map(|(_, row)| row).collect();
-
-            AggregateResultData::Buckets {
-                field: field_name,
-                rows,
-                other_count,
-                total_groups,
-                exact: true,
-            }
-        }
+        } => finalize_terms(
+            field,
+            field_name,
+            &groups,
+            top,
+            sample_heaps,
+            sample_spec.as_ref(),
+            total_matched,
+            total_bytes,
+            options,
+            drives,
+            ext_map,
+        ),
 
         AccumulatorKind::Histogram {
             buckets,
@@ -435,7 +390,7 @@ fn finalize_one(
             let rows: Vec<_> = buckets
                 .iter()
                 .enumerate()
-                .filter(|(_, s)| options.include_empty_buckets || s.count > 0)
+                .filter(|(_, stats)| options.include_empty_buckets || stats.count > 0)
                 .map(|(i, stats)| {
                     let key = format_range_key(i, &boundaries);
                     BucketRow::from_stats(key, stats, total_matched, total_bytes)
@@ -454,7 +409,7 @@ fn finalize_one(
         AccumulatorKind::DateHistogram { buckets, .. } => {
             let rows: Vec<_> = buckets
                 .iter()
-                .filter(|(_, s)| options.include_empty_buckets || s.count > 0)
+                .filter(|(_, stats)| options.include_empty_buckets || stats.count > 0)
                 .map(|(&ts, stats)| {
                     let key = format_timestamp_key(ts);
                     BucketRow::from_stats(key, stats, total_matched, total_bytes)
@@ -482,68 +437,171 @@ fn finalize_one(
 
         AccumulatorKind::Rollup {
             inner,
-            mut sub_accumulators,
+            sub_accumulators,
             ..
-        } => {
-            let mode_str = match inner.mode {
-                super::spec::RollupMode::Drive => "drive".to_owned(),
-                super::spec::RollupMode::Path { depth } => format!("path(depth={depth})"),
-                super::spec::RollupMode::Ancestor { record_idx } => {
-                    format!("ancestor(record={record_idx})")
-                }
-            };
-            let entries = inner.finalize();
-            let rows: Vec<_> = entries
-                .into_iter()
-                .map(|(key, stats)| {
-                    let key_str = if drives.is_empty() {
-                        format!("{key}")
-                    } else {
-                        super::rollup::resolve_rollup_key(key, inner.mode, drives[0])
-                    };
-                    let mut row = BucketRow::from_stats(key_str, stats, total_matched, total_bytes);
-
-                    // Attach sub-aggregation from nested sub-accumulator.
-                    if let Some(sub_acc) = sub_accumulators.as_mut().and_then(|m| m.remove(&key)) {
-                        let sub_result =
-                            finalize_accumulator(sub_acc, total_matched, total_bytes, drives, &[]);
-                        row.sub_buckets = sub_result_to_bucket_rows(&sub_result);
-                    }
-
-                    row
-                })
-                .collect();
-            AggregateResultData::Rollup {
-                mode: mode_str,
-                rows,
-            }
-        }
+        } => finalize_rollup(&inner, sub_accumulators, total_matched, total_bytes, drives),
 
         AccumulatorKind::Duplicates { inner, sample_spec } => {
-            let dup_top = 100; // default
-            let mut result = inner.finalize(dup_top);
-            // Materialize member_indices → SampleRows for each group.
-            let spec = sample_spec.unwrap_or_default();
-            let projection = spec.effective_projection();
-            for group in &mut result.groups {
-                group.sample_rows = group
-                    .member_indices
-                    .iter()
-                    .map(|&(rec_idx, drive_ord)| {
-                        let entry = super::sample_heap::SampleEntry {
-                            sort_key: 0,
-                            rec_idx: uffs_mft::len_to_u32(rec_idx),
-                            drive_ordinal: drive_ord,
-                        };
-                        materialize_sample_entry(&entry, projection, drives)
-                    })
-                    .collect();
-            }
-            AggregateResultData::Duplicates { result }
+            finalize_duplicates(inner, sample_spec, drives)
         }
     };
 
     AggregateResult { label, data }
+}
+
+/// Finalize a `Terms` accumulator: sort buckets by count, take top-N, attach
+/// sample rows and drill-down predicates.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit parameter list keeps the helper signature transparent at the call site"
+)]
+fn finalize_terms(
+    field: Option<crate::search::field::FieldId>,
+    field_name: String,
+    groups: &std::collections::HashMap<u64, StatsAccumulator>,
+    top: u16,
+    mut sample_heaps: Option<std::collections::HashMap<u64, super::sample_heap::SampleHeap>>,
+    sample_spec: Option<&super::spec::TopHitsSpec>,
+    total_matched: u64,
+    total_bytes: u64,
+    options: &FinalizeOptions,
+    drives: &[&DriveCompactIndex],
+    ext_map: Option<&super::ExtensionMap>,
+) -> AggregateResultData {
+    let total_groups = groups.len();
+
+    // Build (group_key, BucketRow) pairs so we can correlate surviving keys
+    // with their sample heaps.
+    let mut keyed_rows: Vec<(u64, BucketRow)> = groups
+        .iter()
+        .map(|(&key, stats)| {
+            let key_str = resolve_group_key(field, key, drives, ext_map);
+            (
+                key,
+                BucketRow::from_stats(key_str, stats, total_matched, total_bytes),
+            )
+        })
+        .collect();
+
+    keyed_rows.sort_by_key(|row| core::cmp::Reverse(row.1.count));
+
+    let limit = usize::from(top);
+    let other_count = match keyed_rows.get(limit..) {
+        Some(tail) if !tail.is_empty() => {
+            let other: u64 = tail.iter().map(|row| row.1.count).sum();
+            keyed_rows.truncate(limit);
+            other
+        }
+        _ => 0,
+    };
+
+    // Materialize sample rows for surviving buckets only.
+    if let Some(ref mut heaps) = sample_heaps {
+        let projection = sample_spec
+            .map(super::spec::TopHitsSpec::effective_projection)
+            .unwrap_or_default();
+        for (group_key, row) in &mut keyed_rows {
+            if let Some(heap) = heaps.get_mut(group_key) {
+                let entries = heap.drain_sorted();
+                row.sample_rows = entries
+                    .iter()
+                    .map(|entry| materialize_sample_entry(entry, projection, drives))
+                    .collect();
+            }
+        }
+    }
+
+    // Attach drill-down predicates: original query preds + bucket key.
+    for (group_key, row) in &mut keyed_rows {
+        row.drilldown = build_drilldown(
+            &options.query_predicates,
+            field,
+            *group_key,
+            &row.key,
+            drives,
+        );
+    }
+
+    let rows: Vec<BucketRow> = keyed_rows.into_iter().map(|(_, row)| row).collect();
+
+    AggregateResultData::Buckets {
+        field: field_name,
+        rows,
+        other_count,
+        total_groups,
+        exact: true,
+    }
+}
+
+/// Finalize a `Rollup` accumulator: compute mode label, finalize the inner
+/// rollup, attach nested sub-aggregation rows where present.
+fn finalize_rollup(
+    inner: &super::rollup::RollupAccumulator,
+    mut sub_accumulators: Option<std::collections::HashMap<u32, GroupAccumulator>>,
+    total_matched: u64,
+    total_bytes: u64,
+    drives: &[&DriveCompactIndex],
+) -> AggregateResultData {
+    let mode_str = match inner.mode {
+        super::spec::RollupMode::Drive => "drive".to_owned(),
+        super::spec::RollupMode::Path { depth } => format!("path(depth={depth})"),
+        super::spec::RollupMode::Ancestor { record_idx } => {
+            format!("ancestor(record={record_idx})")
+        }
+    };
+    let entries = inner.finalize();
+    let rows: Vec<_> = entries
+        .into_iter()
+        .map(|(key, stats)| {
+            let key_str = drives.first().map_or_else(
+                || format!("{key}"),
+                |drive| super::rollup::resolve_rollup_key(key, inner.mode, drive),
+            );
+            let mut row = BucketRow::from_stats(key_str, stats, total_matched, total_bytes);
+
+            // Attach sub-aggregation from nested sub-accumulator.
+            if let Some(sub_acc) = sub_accumulators.as_mut().and_then(|map| map.remove(&key)) {
+                let sub_result =
+                    finalize_accumulator(sub_acc, total_matched, total_bytes, drives, &[]);
+                row.sub_buckets = sub_result_to_bucket_rows(&sub_result);
+            }
+
+            row
+        })
+        .collect();
+    AggregateResultData::Rollup {
+        mode: mode_str,
+        rows,
+    }
+}
+
+/// Finalize a `Duplicates` accumulator: take top-N groups, materialize sample
+/// rows for each group's members.
+fn finalize_duplicates(
+    inner: super::duplicates::DuplicateAccumulator,
+    sample_spec: Option<super::spec::TopHitsSpec>,
+    drives: &[&DriveCompactIndex],
+) -> AggregateResultData {
+    let dup_top = 100; // default
+    let mut result = inner.finalize(dup_top);
+    // Materialize member_indices → SampleRows for each group.
+    let spec = sample_spec.unwrap_or_default();
+    let projection = spec.effective_projection();
+    for group in &mut result.groups {
+        group.sample_rows = group
+            .member_indices
+            .iter()
+            .map(|&(rec_idx, drive_ord)| {
+                let entry = super::sample_heap::SampleEntry {
+                    sort_key: 0,
+                    rec_idx: uffs_mft::len_to_u32(rec_idx),
+                    drive_ordinal: drive_ord,
+                };
+                materialize_sample_entry(&entry, projection, drives)
+            })
+            .collect();
+    }
+    AggregateResultData::Duplicates { result }
 }
 
 /// Build drill-down predicates for a bucket row.
@@ -581,14 +639,15 @@ fn materialize_sample_entry(
     projection: &[crate::search::field::FieldId],
     drives: &[&DriveCompactIndex],
 ) -> SampleRow {
-    let drive = drives.get(usize::from(entry.drive_ordinal));
-    let record = drive.and_then(|d| d.records.get(uffs_mft::u32_as_usize(entry.rec_idx)));
+    let drive_ref = drives.get(usize::from(entry.drive_ordinal));
+    let record =
+        drive_ref.and_then(|drive| drive.records.get(uffs_mft::u32_as_usize(entry.rec_idx)));
 
     let fields: Vec<(String, String)> = projection
         .iter()
         .map(|fid| {
             let name = fid.metadata().canonical_name.to_owned();
-            let value = match (record, drive) {
+            let value = match (record, drive_ref) {
                 (Some(rec), Some(drv)) => format_field(*fid, rec, drv),
                 _ => String::new(),
             };
@@ -603,6 +662,10 @@ fn materialize_sample_entry(
 }
 
 /// Format a single field value for sample row output.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "FieldId is open-ended; fields without a textual representation fall back to empty string"
+)]
 fn format_field(
     field: crate::search::field::FieldId,
     record: &crate::compact::CompactRecord,
@@ -685,7 +748,9 @@ fn resolve_group_key(
                 "file".to_owned()
             }
         }
-        Some(f) if f.metadata().field_type == crate::search::field::FieldType::Bool => {
+        Some(bool_field)
+            if bool_field.metadata().field_type == crate::search::field::FieldType::Bool =>
+        {
             if key == 1 {
                 "true".to_owned()
             } else {
@@ -698,15 +763,18 @@ fn resolve_group_key(
 
 /// Format a range bucket key.
 fn format_range_key(index: usize, boundaries: &[u64]) -> String {
-    if boundaries.is_empty() {
+    let Some((first, last)) = boundaries.first().zip(boundaries.last()) else {
         return format!("bucket_{index}");
-    }
+    };
     if index == 0 {
-        format!("< {}", boundaries[0])
+        format!("< {first}")
     } else if index >= boundaries.len() {
-        format!(">= {}", boundaries[boundaries.len() - 1])
+        format!(">= {last}")
     } else {
-        format!("{} - {}", boundaries[index - 1], boundaries[index])
+        match (boundaries.get(index - 1), boundaries.get(index)) {
+            (Some(lo), Some(hi)) => format!("{lo} - {hi}"),
+            _ => format!("bucket_{index}"),
+        }
     }
 }
 
