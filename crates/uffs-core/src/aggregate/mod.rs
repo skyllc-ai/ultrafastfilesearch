@@ -311,7 +311,7 @@ pub fn run_aggregate(
 ///
 /// Returns an error if any spec references an invalid field or if
 /// accumulator construction fails.
-pub fn run_aggregate_filtered(
+pub(crate) fn run_aggregate_filtered(
     drives: &[&DriveCompactIndex],
     specs: &[AggregateSpec],
     options: &FinalizeOptions,

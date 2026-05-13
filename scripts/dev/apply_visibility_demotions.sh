@@ -26,7 +26,7 @@ if [[ -z "$CRATE" ]]; then
   exit 1
 fi
 
-REPORT="docs/dev/baseline/2026-05-12/phase_2_5_audits/${CRATE}.md"
+REPORT="${REPORT_DIR:-docs/dev/baseline/2026-05-12/phase_2_5_audits}/${CRATE}.md"
 if [[ ! -f "$REPORT" ]]; then
   echo "ERROR: audit report not found: $REPORT" >&2
   echo "Run scripts/dev/visibility_audit.sh $CRATE first." >&2

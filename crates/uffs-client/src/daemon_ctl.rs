@@ -183,7 +183,7 @@ pub(crate) fn verify_daemon_after_connect_strict_at(
 /// On Unix, opens the `AF_UNIX` socket at `sock_path`.
 /// On Windows, opens the named pipe (no `ws2_32` cost) — `sock_path` is
 /// unused but kept for API stability.
-pub fn keepalive_send_blocking(sock_path: &std::path::Path) {
+pub(crate) fn keepalive_send_blocking(sock_path: &std::path::Path) {
     #[cfg(unix)]
     {
         use std::io::Write as _;

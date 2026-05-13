@@ -38,7 +38,7 @@ use crate::ntfs::DataRun;
 const UPCASE_FRS: u64 = 10;
 
 /// Expected data size in bytes (65 536 entries × 2).
-pub const UPCASE_SIZE_BYTES: usize = 65_536 * 2;
+pub(crate) const UPCASE_SIZE_BYTES: usize = 65_536 * 2;
 
 /// Magic bytes identifying a UFFS `$UpCase` file (before encryption).
 const UPCASE_MAGIC: &[u8; 8] = b"UFFSUP\0\0";

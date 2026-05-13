@@ -95,7 +95,7 @@ const _: () = assert!(
 /// `deserialize` boundaries (e.g. embedding it in a `manifest.json`
 /// next to the runtime file) is straightforward.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeLayout {
+pub(crate) struct RuntimeLayout {
     /// Byte offset of the records column in the runtime file.  Always
     /// `0` in the current layout, but kept explicit so a future
     /// layout (e.g. a small fixed header) can shift it without
@@ -116,8 +116,13 @@ pub struct RuntimeLayout {
 
 impl RuntimeLayout {
     /// Byte length of the records column.
+    ///
+    /// Used by unit tests to verify layout arithmetic; not needed in the
+    /// production hot path because `materialise_columns` computes lengths
+    /// inline.
+    #[cfg(test)]
     #[must_use]
-    pub const fn records_bytes_len(&self) -> usize {
+    pub(crate) const fn records_bytes_len(&self) -> usize {
         self.records_count
             .saturating_mul(size_of::<CompactRecord>())
     }

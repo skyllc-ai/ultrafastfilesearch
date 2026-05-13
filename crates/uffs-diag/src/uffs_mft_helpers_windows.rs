@@ -27,7 +27,7 @@ use uffs_mft::io::{apply_fixup, parse_record_full};
 
 /// Run `apply_fixup` + `parse_record_full` for a single FRS from a
 /// `RawMftData`, printing a compact diagnostic line.
-pub fn run_fixup_and_parse_for_frs(raw: &RawMftData, frs: u64) {
+pub(crate) fn run_fixup_and_parse_for_frs(raw: &RawMftData, frs: u64) {
     let Some(record) = raw.get_record(frs) else {
         println!(
             "[WIN] FRS {frs}: out of range (max FRS = {})",
