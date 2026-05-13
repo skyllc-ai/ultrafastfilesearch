@@ -1,24 +1,32 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
-//
-// gen-hooks — gate-manifest hook generator.
-//
-// Phase 2/3a of `docs/architecture/gates-manifest-plan.md`.  Reads
-// `scripts/ci/gates.toml` and emits one of two hook files depending
-// on `--target`:
-//   * `pre-push`   → `scripts/hooks/_lint_pre_push.sh` (Phase 2)
-//   * `pre-commit` → `scripts/hooks/_lint_fast.sh`     (Phase 3a)
-//
-// Both targets share the manifest reader, validator, and verbose
-// dump; they differ only in the embedded preamble/footer templates
-// and the dispatch generator (see `emit.rs`).
-//
-// USAGE: gen-hooks [--check] [--target {pre-push|pre-commit}] [--verbose]
-//
-// EXIT:
-//   0  emit succeeded (or no-op with --check)
-//   1  diff detected (with --check)
-//   2  schema error (manifest invalid) or unknown target
+
+//! `gen-hooks` — gate-manifest hook generator.
+//!
+//! Phase 2/3a of `docs/architecture/gates-manifest-plan.md`.  Reads
+//! `scripts/ci/gates.toml` and emits one of two hook files depending
+//! on `--target`:
+//!
+//! * `pre-push`   → `scripts/hooks/_lint_pre_push.sh` (Phase 2)
+//! * `pre-commit` → `scripts/hooks/_lint_fast.sh`     (Phase 3a)
+//!
+//! Both targets share the manifest reader, validator, and verbose
+//! dump; they differ only in the embedded preamble/footer templates
+//! and the dispatch generator (see [`emit`]).
+//!
+//! # Usage
+//!
+//! ```text
+//! gen-hooks [--check] [--target {pre-push|pre-commit}] [--verbose]
+//! ```
+//!
+//! # Exit codes
+//!
+//! | code | meaning |
+//! |---:|---|
+//! | 0 | emit succeeded (or no-op with `--check`) |
+//! | 1 | diff detected (with `--check`) |
+//! | 2 | schema error (manifest invalid) or unknown target |
 
 /// Per-target hook emission — turns a parsed manifest into the bash
 /// text of `_lint_pre_push.sh`.
