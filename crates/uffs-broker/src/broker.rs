@@ -7,27 +7,36 @@
 //! Listens on a named pipe, verifies client identity, and provides
 //! read-only volume handles for MFT access.
 //!
-//! # Protocol (binary, over named pipe)
+//! # Protocol
 //!
-//! Request:  1 byte = drive letter ASCII (e.g., b'C')
-//! Response: 1 byte status (0=ok, 1=error) + 8 bytes HANDLE value
-//! (little-endian u64)
+//! See [`uffs_broker::protocol`](crate::protocol) for the authoritative
+//! wire-format definition (1-byte drive-letter request, 9-byte status +
+//! LE-u64 handle response).  Both this binary and
+//! `uffs_daemon::broker_client` consume the same module — there is no
+//! second copy of the protocol constants or byte layout anywhere in the
+//! tree.
 //!
 //! The broker opens `\\.\X:` with `FILE_READ_DATA` + `SeBackupPrivilege`,
 //! then `DuplicateHandle`s it into the client process with read-only access.
 
-/// Pipe name for broker communication.
+// `broker` is a module inside the binary crate; the lib crate (whose
+// crate-root is `src/lib.rs`) is reachable from here via its package
+// name `uffs_broker`.  See `Cargo.toml [lib].name`.
 #[cfg(windows)]
-const BROKER_PIPE_NAME: &str = r"\\.\pipe\uffs-broker";
+use uffs_broker::protocol::{HandleRequest, HandleResponse, PIPE_NAME, RESPONSE_WIRE_LEN};
 
 /// Run the broker (called from main).
+///
+/// Scope is `pub(crate)` because `broker` is a private module of the
+/// binary crate — only `main.rs` invokes this, and the lib (`lib.rs`)
+/// deliberately does not re-export any of the Windows-only broker logic.
 ///
 /// # Errors
 ///
 /// Returns an error if service installation/uninstallation fails, or if the
 /// foreground pipe-serving loop encounters an unrecoverable error.
 #[cfg(windows)]
-pub fn run() -> anyhow::Result<()> {
+pub(crate) fn run() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
     if args.iter().any(|arg| arg == "--install") {
@@ -107,7 +116,7 @@ fn warn_if_not_elevated() {
 /// - S5.5: Read-only handles only (enforced in `handle_pipe_request`)
 #[cfg(windows)]
 fn serve_pipe_requests() -> anyhow::Result<()> {
-    tracing::info!(pipe = BROKER_PIPE_NAME, "Listening for handle requests");
+    tracing::info!(pipe = PIPE_NAME, "Listening for handle requests");
 
     // S5.4: Rate limiter — tracks last request time per drive letter
     let mut rate_limit: std::collections::HashMap<char, std::time::Instant> =
@@ -203,22 +212,28 @@ fn handle_pipe_request_with_rate_limit(
     client_pid: u32,
     rate_limit: &mut std::collections::HashMap<char, std::time::Instant>,
 ) -> anyhow::Result<char> {
-    // Peek at drive letter first for rate limiting
-    let mut drive_buf = [0_u8; 1];
-    read_pipe(pipe, &mut drive_buf)?;
-    let drive_letter = (drive_buf[0] as char).to_ascii_uppercase();
-
-    if !drive_letter.is_ascii_alphabetic() {
-        write_pipe(pipe, &[1_u8; 1])?;
-        anyhow::bail!("Invalid drive letter: {drive_letter}");
-    }
+    // Peek at the 1-byte request via the shared protocol parser.
+    // `HandleRequest::parse` rejects non-ASCII bytes and non-alphabetic
+    // ASCII bytes with structured errors — replaces the two-step
+    // `is_ascii_alphabetic` validation we used to do here.
+    let mut req_buf = [0_u8; uffs_broker::protocol::REQUEST_WIRE_LEN];
+    read_pipe(pipe, &mut req_buf)?;
+    let drive_letter = match HandleRequest::parse(req_buf[0]) {
+        Ok(req) => req.drive,
+        Err(parse_err) => {
+            write_pipe(pipe, &HandleResponse::error().encode())?;
+            return Err(anyhow::anyhow!(
+                "invalid drive-letter request byte: {parse_err}"
+            ));
+        }
+    };
 
     // S5.4: Rate limit — 1 request per drive per 10 seconds
     let now = std::time::Instant::now();
     if let Some(last) = rate_limit.get(&drive_letter)
         && now.duration_since(*last).as_secs() < 10
     {
-        write_pipe(pipe, &[1_u8; 1])?;
+        write_pipe(pipe, &HandleResponse::error().encode())?;
         anyhow::bail!("Rate limited: drive {drive_letter} requested too recently");
     }
     rate_limit.insert(drive_letter, now);
@@ -386,7 +401,7 @@ fn create_broker_pipe() -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
     };
     use windows::core::PCWSTR;
 
-    let pipe_name: Vec<u16> = std::ffi::OsStr::new(BROKER_PIPE_NAME)
+    let pipe_name: Vec<u16> = std::ffi::OsStr::new(PIPE_NAME)
         .encode_wide()
         .chain(Some(0))
         .collect();
@@ -615,18 +630,21 @@ fn duplicate_volume_handle_to_client(
     Ok(client_handle)
 }
 
-/// Write the 9-byte success response (1 status byte + 8-byte little-endian
-/// handle value) to the pipe.  Returns the serialised handle value on success.
+/// Write the success response (`status=Ok` + LE-u64 handle) to the
+/// pipe via the shared protocol encoder.  Returns the serialised handle
+/// value on success.
 #[cfg(windows)]
 fn write_success_response(
     pipe: windows::Win32::Foundation::HANDLE,
     client_handle: windows::Win32::Foundation::HANDLE,
 ) -> anyhow::Result<u64> {
-    // isize→u64: handle serialization for IPC
+    // Win32 `HANDLE.0` is `isize`; reinterpret its bit pattern as `u64`
+    // for IPC.  The receiving daemon does the inverse via
+    // `HANDLE(handle_value as isize)` so the kernel-object pointer
+    // round-trips unchanged.  No clippy expect needed here — the
+    // workspace's cast lints don't fire on the cast in this context.
     let handle_value = client_handle.0 as u64;
-    let mut response = [0_u8; 9];
-    response[0] = 0; // success
-    response[1..9].copy_from_slice(&handle_value.to_le_bytes());
+    let response: [u8; RESPONSE_WIRE_LEN] = HandleResponse::ok(handle_value).encode();
     write_pipe(pipe, &response)?;
     Ok(handle_value)
 }
@@ -649,7 +667,7 @@ fn handle_pipe_request_inner(
     let volume_handle = match open_volume_read_only(drive_letter) {
         Ok(handle) => handle,
         Err(err) => {
-            write_pipe(pipe, &[1_u8; 1])?; // error byte
+            write_pipe(pipe, &HandleResponse::error().encode())?;
             return Err(err);
         }
     };
@@ -667,7 +685,7 @@ fn handle_pipe_request_inner(
     let client_handle = match dup_result {
         Ok(handle) => handle,
         Err(err) => {
-            write_pipe(pipe, &[1_u8; 1])?;
+            write_pipe(pipe, &HandleResponse::error().encode())?;
             return Err(err);
         }
     };

@@ -4338,9 +4338,9 @@ name = "uffs-broker"
 version = "0.5.95"
 dependencies = [
  "anyhow",
+ "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
- "uffs-security",
  "windows 0.62.2",
 ]
 
@@ -4447,6 +4447,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "uffs-broker",
  "uffs-client",
  "uffs-core",
  "uffs-format",

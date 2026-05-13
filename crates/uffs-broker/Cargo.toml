@@ -31,22 +31,39 @@ rustdoc-args = ["--cfg", "docsrs"]
 targets = ["x86_64-pc-windows-msvc"]
 default-target = "x86_64-pc-windows-msvc"
 
+# Library target: exposes the `protocol` module — wire-protocol types
+# (`HandleRequest`, `HandleResponse`, `Status`, `PIPE_NAME`,
+# `ProtocolError`) shared with `uffs-daemon::broker_client`.  The
+# Windows-only handle-brokering logic stays in `[[bin]]`; only the
+# cross-platform protocol types live in `[lib]` so they can be
+# unit-tested on every CI lane (F5 / issue #205).
+[lib]
+name = "uffs_broker"
+path = "src/lib.rs"
+
 [[bin]]
 name = "uffs-broker"
 path = "src/main.rs"
 
 [dependencies]
-# Internal
-uffs-security.workspace = true
+# `thiserror` powers the `protocol` module's structured `ProtocolError`
+# enum.  Cross-platform: the protocol types are pure-logic and live in
+# `[lib]`, not gated by `cfg(windows)`.
+thiserror.workspace = true
 
-# Error handling
-anyhow.workspace = true
-
-# Logging
+# `tracing` macros are used cross-platform: the bin's non-Windows path
+# in `main.rs` emits `tracing::error!` before exiting.  The Windows-only
+# broker logic uses `tracing` heavily in `broker.rs`.
 tracing.workspace = true
-tracing-subscriber.workspace = true
 
+# Windows-only deps: the elevated handle-broker logic in `broker.rs` is
+# fully `#[cfg(windows)]`, so its supporting crates compile only on the
+# Windows target.  Moving these here (rather than carrying them as
+# cross-platform deps with `use … as _;` placeholders in `main.rs`) lets
+# the cross-platform `[lib]` target compile clean — F5 / issue #205.
 [target.'cfg(windows)'.dependencies]
+anyhow.workspace = true
+tracing-subscriber.workspace = true
 windows.workspace = true
 
 [lints]

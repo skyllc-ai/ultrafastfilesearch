@@ -104,6 +104,12 @@ uffs-mft = { path = "crates/uffs-mft", version = "0.5.95" }
 uffs-format = { path = "crates/uffs-format", version = "0.5.95" }
 uffs-core = { path = "crates/uffs-core", version = "0.5.95" }
 uffs-client = { path = "crates/uffs-client", version = "0.5.95" }
+# `uffs-broker` exposes a small `protocol` library (wire-protocol types
+# shared with `uffs-daemon::broker_client`) alongside its Windows-only
+# `[[bin]]`.  Added as a workspace dep in F5 (issue #205) so `uffs-daemon`
+# can import the shared types and stop duplicating `BROKER_PIPE_NAME`
+# and the wire-format byte literals.
+uffs-broker = { path = "crates/uffs-broker", version = "0.5.95" }
 # NOTE: no `uffs-diag` workspace dependency alias on purpose.
 # It is a top-level diagnostic/tool crate, not a shared runtime dependency.
 

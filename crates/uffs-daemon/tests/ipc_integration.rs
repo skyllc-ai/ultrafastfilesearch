@@ -40,6 +40,13 @@ use toml as _;
 use tracing as _;
 use tracing_appender as _;
 use tracing_subscriber as _;
+// F5 / issue #205 — `uffs_broker` is in `[target.'cfg(windows)'.dependencies]`
+// of `uffs-daemon`, consumed by `broker_client.rs` on Windows.  This
+// Unix-focused integration test never touches it, so on Windows the
+// extern crate is in scope but unused.  Marker is gated to `cfg(windows)`
+// because on non-Windows the dep doesn't exist as an extern crate.
+#[cfg(windows)]
+use uffs_broker as _;
 use uffs_client as _;
 use uffs_core as _;
 use uffs_daemon as _;

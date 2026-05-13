@@ -18,12 +18,28 @@
 //!
 //! On non-Windows platforms, this binary prints an error and exits.
 
-// Deps used by broker.rs on Windows only — suppress unused-crate warnings
-use anyhow as _;
-use tracing_subscriber as _;
-use uffs_security as _;
+// Windows-only modules: `broker` consumes `anyhow`, `tracing-subscriber`,
+// `windows` — all of which are scoped to `[target.'cfg(windows)'.dependencies]`
+// in `Cargo.toml`, so they don't even exist as `extern crate`s on
+// non-Windows targets.  The cross-platform `[lib]` (see `lib.rs`)
+// exposes the wire-protocol types regardless of host platform.
 
-pub mod broker;
+#[cfg(windows)]
+mod broker;
+
+// `thiserror` is a cross-platform `[dependencies]` entry consumed by
+// `protocol::ProtocolError` in the `[lib]` target.  This binary doesn't
+// touch it directly — silence `unused_crate_dependencies` with the
+// rustc-documented marker (NOT a blanket allow; the dep IS used by the
+// package, just not by this compilation unit).
+use thiserror as _;
+// `uffs_broker` is this package's own `[lib]`.  The binary uses
+// `uffs_broker::protocol::*` only inside `#[cfg(windows)]` code paths
+// in `broker.rs`, so on non-Windows compilations the bin sees the lib
+// in scope but doesn't observably link any symbol from it — silence
+// `unused_crate_dependencies` accordingly.
+#[cfg(not(windows))]
+use uffs_broker as _;
 
 fn main() {
     #[cfg(windows)]
