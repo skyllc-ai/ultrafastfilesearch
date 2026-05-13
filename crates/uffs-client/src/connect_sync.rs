@@ -156,7 +156,7 @@ impl UffsClientSync {
     /// Connect to a running daemon, or auto-start one with extra CLI args.
     ///
     /// Auto-start uses the default
-    /// [`ElevationPolicy::RequireExistingElevation`].  On Windows, if
+    /// `ElevationPolicy::RequireExistingElevation`.  On Windows, if
     /// the daemon must be spawned and the current process is not
     /// elevated, this returns
     /// [`crate::error::ClientError::DaemonNeedsElevation`] instead of
@@ -175,7 +175,7 @@ impl UffsClientSync {
     /// UAC prompt on Windows when the current process is not elevated.
     ///
     /// Used by `uffs daemon start --elevate`.  All other entry points
-    /// default to [`ElevationPolicy::RequireExistingElevation`].
+    /// default to `ElevationPolicy::RequireExistingElevation`.
     ///
     /// # Errors
     ///

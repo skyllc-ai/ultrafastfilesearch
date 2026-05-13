@@ -50,7 +50,7 @@
 //! `records` starts at offset 0 (trivially page-aligned).  `names`
 //! starts at the next 4 KiB boundary after the records section.
 //! Both are page-aligned, satisfying the `align_of::<T>() <= page_size`
-//! requirement of [`ColumnStorage::from_mmap_region`] for any `T: Pod`.
+//! requirement of `ColumnStorage::from_mmap_region` for any `T: Pod`.
 
 use alloc::sync::Arc;
 use core::mem::{align_of, size_of};

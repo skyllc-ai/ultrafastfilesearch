@@ -52,7 +52,7 @@ pub(crate) const ALGO_AES_256_GCM: u8 = 0x01;
 /// KDF ID: Windows DPAPI.
 pub const KDF_DPAPI: u8 = 0x01;
 /// KDF ID: macOS Keychain.
-pub(crate) const KDF_KEYCHAIN: u8 = 0x02;
+pub const KDF_KEYCHAIN: u8 = 0x02;
 /// KDF ID: Linux Secret Service (D-Bus).
 pub const KDF_SECRET_SERVICE: u8 = 0x03;
 /// KDF ID: HKDF fallback (headless Linux).

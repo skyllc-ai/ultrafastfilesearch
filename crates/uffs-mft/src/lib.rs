@@ -155,7 +155,8 @@ mod reader;
 // Public API re-exports
 // ============================================================================
 
-// Re-export cache types
+// Re-export cache types.  `load_or_build_dataframe_cached` is Windows-only
+// (depends on the `uffs_polars::DataFrame` build) and gated below.
 #[cfg(windows)]
 pub use cache::load_or_build_dataframe_cached;
 pub use cache::{
@@ -175,13 +176,17 @@ pub use index::{
     f64_to_usize, frs_to_usize, len_to_u16, len_to_u32, micros_to_i64, millis_to_u64, nanos_to_u64,
     nonneg_to_u64, u32_as_usize, u32_to_f64, u64_to_f64, usize_to_f64, usize_to_u64,
 };
-// Re-export I/O types for advanced usage
+// Re-export I/O types for advanced usage.  Public-API anchors that have
+// no current external consumers but are part of the documented surface are
+// kept pub.  The Windows-only reader structs are pub(crate) at their
+// definition site and have no `crate::<reader>` consumers (only
+// `crate::io::readers::<reader>` paths), so no crate-root re-export is
+// needed for them.
 #[cfg(windows)]
 pub use io::{
-    AlignedBuffer, BatchMftReader, ExtensionAttributes, MftExtentMap, MftRecordMerger,
-    MftRecordReader, ParallelMftReader, ParseResult, ParsedColumns, ParsedRecord,
-    PipelinedMftReader, PrefetchMftReader, ReadChunk, ReadParseTiming, StreamingMftReader,
-    apply_fixup, generate_read_chunks, parse_record_full, parse_record_zero_alloc,
+    AlignedBuffer, ExtensionAttributes, MftExtentMap, MftRecordMerger, ParseResult, ParsedColumns,
+    ParsedRecord, ReadChunk, apply_fixup, generate_read_chunks, parse_record_full,
+    parse_record_zero_alloc,
 };
 // Re-export NTFS constants and types (pure Rust data structures, cross-platform)
 pub use ntfs::SECTOR_SIZE;
@@ -197,11 +202,12 @@ pub use ntfs::{
 // Windows-specific types and functions (VolumeHandle, detect_ntfs_drives, etc.) only on
 // Windows
 pub use platform::{DriveType, MftBitmap, MftExtent, SystemMemory, query_system_memory};
+// External-API anchors with cross-crate consumers.  Other Windows-only
+// platform items (NtfsVolumeData, detect_drive_type, infer_drive_from_path,
+// is_volume_read_only) are pub(crate) and consumed only via
+// `crate::platform::*` paths, so no crate-root re-export is needed.
 #[cfg(windows)]
-pub use platform::{
-    NtfsVolumeData, VolumeHandle, detect_drive_type, detect_ntfs_drives, infer_drive_from_path,
-    is_elevated, is_volume_read_only,
-};
+pub use platform::{VolumeHandle, detect_ntfs_drives, is_elevated};
 pub use raw::{
     LoadRawOptions, RawMftData, RawMftHeader, SaveRawOptions, load_raw_mft, load_raw_mft_header,
     save_raw_mft,

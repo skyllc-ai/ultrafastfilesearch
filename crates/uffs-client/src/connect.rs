@@ -135,7 +135,7 @@ impl UffsClient {
     /// loaded).
     ///
     /// Auto-start uses the default
-    /// [`ElevationPolicy::RequireExistingElevation`] — on Windows, if
+    /// `ElevationPolicy::RequireExistingElevation` — on Windows, if
     /// the daemon must be spawned and the current process is not
     /// elevated, this returns
     /// [`crate::error::ClientError::DaemonNeedsElevation`] instead of
@@ -165,7 +165,7 @@ impl UffsClient {
     ///
     /// This is the opt-in variant used by `uffs daemon start --elevate`.
     /// All other entry points default to
-    /// [`ElevationPolicy::RequireExistingElevation`].
+    /// `ElevationPolicy::RequireExistingElevation`.
     ///
     /// # Errors
     ///

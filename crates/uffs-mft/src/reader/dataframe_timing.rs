@@ -47,7 +47,7 @@ impl MftReader {
     ///
     /// Returns an error if MFT reading fails.
     #[cfg(windows)]
-    pub(crate) fn read_with_timing(
+    pub fn read_with_timing(
         &self,
         skip_df_build: bool,
     ) -> Result<(Option<DataFrame>, BenchmarkResult)> {

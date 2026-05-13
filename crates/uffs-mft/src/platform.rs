@@ -28,12 +28,21 @@ pub use extents::MftExtent;
 // Export DriveType unconditionally (needed for tests), but Windows-specific functions only on
 // Windows
 pub use system::DriveType;
-// is_volume_read_only is available on all platforms (stub on non-Windows)
+// is_volume_read_only — Windows-only (non-Windows stub was removed because
+// every caller in this crate is #[cfg(windows)]-gated).  Consumed by the
+// uffs_mft bin (commands/windows/incremental.rs) via the external-style
+// `uffs_mft::platform::is_volume_read_only` path, so must be pub.
+#[cfg(windows)]
 pub use system::is_volume_read_only;
 #[cfg(windows)]
 pub(crate) use system::u32_size_of;
 // System memory query — available on all platforms
 pub use system::{SystemMemory, query_system_memory};
+// Public API surface — consumed cross-crate (uffs-daemon), by the
+// uffs_mft bin (commands/) via `uffs_mft::platform::*` external-style
+// paths, and as platform utility helpers (infer_drive_from_path,
+// volume_root_path are stable public API restored from the Phase 2.5
+// demotion in commit 1529cb162).
 #[cfg(windows)]
 pub use system::{
     detect_boot_drive, detect_drive_type, detect_ntfs_drives, infer_drive_from_path, is_boot_drive,
@@ -44,6 +53,9 @@ pub(crate) use volume::{
     IOCP_WAIT_COMPLETION_DEADLINE, IOCP_WAIT_POLL_INTERVAL_MS, WAIT_TIMEOUT_ERROR_CODE,
     classify_wait_error_code, wait_deadline_exceeded,
 };
+// Both VolumeHandle and NtfsVolumeData are part of the public API —
+// `VolumeHandle::volume_data()` returns `&NtfsVolumeData` so the latter
+// must be at least as public as the former.
 #[cfg(windows)]
 pub use volume::{NtfsVolumeData, VolumeHandle};
 

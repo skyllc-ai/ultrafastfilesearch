@@ -313,12 +313,12 @@ impl OutputConfig {
     /// implementation (sequential + rayon-parallel write branches, the
     /// column→text dispatch, attribute bit constants, and the
     /// FILETIME → text helper) lives in the sibling
-    /// [`crate::output::display_rows`] module — this method is a thin
+    /// `crate::output::display_rows` module — this method is a thin
     /// delegation kept here so the public entry point stays a method
     /// on [`OutputConfig`] while the file stays under the 800-LOC
     /// policy.  Callers that want the formatter directly (e.g. to
     /// reuse `attr` bit constants or `append_datetime_native`) should
-    /// reference [`crate::output::display_rows`] at its canonical
+    /// reference `crate::output::display_rows` at its canonical
     /// root, not via a re-export.
     ///
     /// # Errors

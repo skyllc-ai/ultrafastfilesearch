@@ -97,7 +97,7 @@ impl BloomDecision {
 ///   term hit).
 ///
 /// The bloom term encoding mirrors
-/// [`crate::compact::DriveCompactIndex::build_bloom`]:
+/// `crate::compact::DriveCompactIndex::build_bloom`:
 /// extensions are inserted lowercase, dot-stripped, as raw bytes
 /// (e.g. `"toml"`, not `".toml"` or `".TOML"`).  Callers that hold
 /// extensions in [`crate::search::filters::SearchFilters::extensions`]

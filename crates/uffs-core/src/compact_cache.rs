@@ -540,7 +540,7 @@ pub fn deserialize_compact(
 ///   missing);
 /// * writing the layout into the tempfile fails (I/O / disk-full);
 /// * mmap creation fails (the only safe entry: [`mmap_read_only`]);
-/// * the layout fails [`compact_mmap::load_from_runtime`]'s alignment or bounds
+/// * the layout fails `compact_mmap::load_from_runtime`'s alignment or bounds
 ///   checks (would indicate a `write_runtime_layout` bug).
 pub fn deserialize_compact_into_runtime(
     data: &[u8],

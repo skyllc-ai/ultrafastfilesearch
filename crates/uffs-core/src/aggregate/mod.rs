@@ -83,11 +83,11 @@ pub struct AggregateOutput {
 /// aggregation scan without path resolution.
 ///
 /// Extension IDs are **per-drive** — call
-/// [`DriveCompactIndex::resolve_ext_ids`] once per drive before scanning.
+/// `DriveCompactIndex::resolve_ext_ids` once per drive before scanning.
 #[derive(Debug, Clone, Default, Hash)]
 pub struct AggregateFilter {
     /// Extension name strings (lowercase, no dot).  Resolved to per-drive
-    /// `u16` IDs before scanning via [`DriveCompactIndex::resolve_ext_ids`].
+    /// `u16` IDs before scanning via `DriveCompactIndex::resolve_ext_ids`.
     pub extensions: Vec<String>,
     /// If `Some(true)` only directories; `Some(false)` only files.
     pub directory_only: Option<bool>,
@@ -406,7 +406,7 @@ pub(crate) fn run_aggregate_filtered(
 
 /// Run aggregation with both pattern and record-level filters.
 ///
-/// Combines the glob/regex pattern matching of [`run_aggregate_filtered`]
+/// Combines the glob/regex pattern matching of `run_aggregate_filtered`
 /// with the O(1) per-record checks from [`AggregateFilter`] (extension IDs,
 /// directory flag, size bounds).  This is the entry point for MCP/daemon
 /// aggregate queries that combine `pattern` + `type_filter` + `filter`.

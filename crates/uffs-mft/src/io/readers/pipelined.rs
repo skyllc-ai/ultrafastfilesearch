@@ -39,7 +39,7 @@ struct ReadBuffer {
 /// - **True overlap**: I/O and parsing happen concurrently
 /// - **Backpressure**: Bounded channel prevents memory explosion
 /// - **Buffer pool**: Reuses buffers to minimize allocations
-pub(crate) struct PipelinedMftReader {
+pub struct PipelinedMftReader {
     /// Extent map for VCN-to-LCN translation.
     extent_map: MftExtentMap,
     /// Optional bitmap for skip optimization.
@@ -94,7 +94,7 @@ impl PipelinedMftReader {
     /// terminates early, or if the bounded channel is closed before all
     /// chunks have been processed. Any platform syscall failure surfaces the
     /// underlying Win32 error code.
-    pub(crate) fn read_all_pipelined<F>(
+    pub fn read_all_pipelined<F>(
         &self,
         handle: HANDLE,
         merge_extensions: bool,
@@ -211,7 +211,7 @@ impl PipelinedMftReader {
     /// Returns [`MftError::Io`] if a chunk read fails or the reader thread
     /// terminates early, or [`MftError::RecordRead`] for record-level
     /// fixup/parse failures surfaced by the parallel parsing stage.
-    pub(crate) fn read_all_pipelined_parallel<F>(
+    pub fn read_all_pipelined_parallel<F>(
         &self,
         handle: HANDLE,
         merge_extensions: bool,

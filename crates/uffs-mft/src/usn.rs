@@ -63,9 +63,9 @@ pub mod reason {
     /// Data in the default data stream was overwritten.
     pub const DATA_OVERWRITE: u32 = 0x0000_0001;
     /// Data in the default data stream was extended.
-    pub(crate) const DATA_EXTEND: u32 = 0x0000_0002;
+    pub const DATA_EXTEND: u32 = 0x0000_0002;
     /// Data in the default data stream was truncated.
-    pub(crate) const DATA_TRUNCATION: u32 = 0x0000_0004;
+    pub const DATA_TRUNCATION: u32 = 0x0000_0004;
     /// Data in a named data stream was overwritten.
     pub const NAMED_DATA_OVERWRITE: u32 = 0x0000_0010;
     /// Data in a named data stream was extended.
@@ -73,9 +73,9 @@ pub mod reason {
     /// Data in a named data stream was truncated.
     pub const NAMED_DATA_TRUNCATION: u32 = 0x0000_0040;
     /// A new file or directory was created.
-    pub(crate) const FILE_CREATE: u32 = 0x0000_0100;
+    pub const FILE_CREATE: u32 = 0x0000_0100;
     /// A file or directory was deleted.
-    pub(crate) const FILE_DELETE: u32 = 0x0000_0200;
+    pub const FILE_DELETE: u32 = 0x0000_0200;
     /// Extended attributes were changed.
     pub const EA_CHANGE: u32 = 0x0000_0400;
     /// Security descriptor was changed.
@@ -83,11 +83,11 @@ pub mod reason {
     /// File or directory was renamed (old name).
     pub const RENAME_OLD_NAME: u32 = 0x0000_1000;
     /// File or directory was renamed (new name).
-    pub(crate) const RENAME_NEW_NAME: u32 = 0x0000_2000;
+    pub const RENAME_NEW_NAME: u32 = 0x0000_2000;
     /// Indexable content was changed.
     pub const INDEXABLE_CHANGE: u32 = 0x0000_4000;
     /// Basic file attributes were changed.
-    pub(crate) const BASIC_INFO_CHANGE: u32 = 0x0000_8000;
+    pub const BASIC_INFO_CHANGE: u32 = 0x0000_8000;
     /// Hard link was added or removed.
     pub const HARD_LINK_CHANGE: u32 = 0x0001_0000;
     /// Compression state was changed.
@@ -105,7 +105,7 @@ pub mod reason {
     /// Integrity state was changed.
     pub const INTEGRITY_CHANGE: u32 = 0x0080_0000;
     /// File handle was closed (final record for a change).
-    pub(crate) const CLOSE: u32 = 0x8000_0000;
+    pub const CLOSE: u32 = 0x8000_0000;
 }
 
 /// Categorized change type for easier processing.
@@ -203,7 +203,9 @@ pub fn aggregate_changes(records: &[UsnRecord]) -> HashMap<u64, FileChange> {
     changes
 }
 
-// Re-export platform-specific functions
+// Re-export platform-specific functions.  All three are consumed by the
+// uffs_mft bin (commands/windows/*) via the external-style `uffs_mft::usn::*`
+// path and so must be pub.
 #[cfg(windows)]
 pub use windows_impl::{query_usn_journal, read_targeted_frs_records, read_usn_journal};
 
@@ -552,7 +554,7 @@ mod windows_impl {
     ///
     /// Returns an error if the volume cannot be opened or extents cannot be
     /// retrieved. Individual record read failures are logged and skipped.
-    pub(crate) fn read_targeted_frs_records(
+    pub fn read_targeted_frs_records(
         volume: &crate::platform::VolumeHandle,
         index: &mut crate::index::MftIndex,
         frs_list: &[u64],

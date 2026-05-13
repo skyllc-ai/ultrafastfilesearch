@@ -13,7 +13,7 @@
 //! pulling polars / chrono / rayon into the CLI binary.
 //!
 //! This module hosts the one-way conversion `FieldId → OutputColumn`
-//! used by [`super::display_rows::write_display_rows`] and by the
+//! used by `super::display_rows::write_display_rows` and by the
 //! `format_parity_*` regression tests in `super::tests_format_parity`
 //! (split out of `super::tests` during the v0.5.64 file-size
 //! reduction).  The `OutputColumn` variant set is pinned to match

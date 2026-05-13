@@ -471,7 +471,7 @@ pub fn remove_all_cached_indices() {
 ///
 /// Returns a vector of drive letters that have cached indices.
 #[must_use]
-pub(crate) fn list_cached_drives() -> Vec<char> {
+pub fn list_cached_drives() -> Vec<char> {
     let dir = cache_dir();
     let mut drives = Vec::new();
 

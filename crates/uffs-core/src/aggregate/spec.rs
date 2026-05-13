@@ -204,7 +204,7 @@ pub(crate) const DEFAULT_PROJECTION: &[FieldId] = &[
 /// | `projection` | name, size, modified, path, type, ext |
 #[derive(Debug, Clone, Hash)]
 pub struct TopHitsSpec {
-    /// Number of sample rows per bucket (1–[`MAX_SAMPLE_COUNT`]).
+    /// Number of sample rows per bucket (1–`MAX_SAMPLE_COUNT`).
     pub count: u8,
     /// Sort sample rows by this field.
     pub sort_field: FieldId,
@@ -212,7 +212,7 @@ pub struct TopHitsSpec {
     pub sort_desc: bool,
     /// Fields to include in each sample row.
     ///
-    /// When empty, [`DEFAULT_PROJECTION`] is used during finalization.
+    /// When empty, `DEFAULT_PROJECTION` is used during finalization.
     pub projection: Vec<FieldId>,
 }
 
@@ -230,7 +230,7 @@ impl Default for TopHitsSpec {
 impl TopHitsSpec {
     /// Create a spec with just a sample count (all other fields default).
     ///
-    /// `count` is clamped to 1–[`MAX_SAMPLE_COUNT`].
+    /// `count` is clamped to 1–`MAX_SAMPLE_COUNT`.
     #[must_use]
     pub fn with_count(count: u8) -> Self {
         Self {
@@ -241,7 +241,7 @@ impl TopHitsSpec {
 
     /// Create a fully specified `TopHitsSpec`.
     ///
-    /// `count` is clamped to 1–[`MAX_SAMPLE_COUNT`].
+    /// `count` is clamped to 1–`MAX_SAMPLE_COUNT`.
     #[must_use]
     pub fn new(count: u8, sort_field: FieldId, sort_desc: bool, projection: Vec<FieldId>) -> Self {
         Self {

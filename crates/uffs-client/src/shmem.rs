@@ -17,7 +17,7 @@
 //! ```
 //!
 //! The string table holds all `path` and `name` values back-to-back.
-//! Each [`ShmemRecord`] stores an offset + length pair pointing into the
+//! Each `ShmemRecord` stores an offset + length pair pointing into the
 //! table.
 
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -529,7 +529,7 @@ pub(crate) const STREAM_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 /// UTF-8 re-validation.  The daemon wrote valid UTF-8, and stdout
 /// does not care about encoding (it takes bytes).
 ///
-/// The write loop issues at most [`STREAM_CHUNK_BYTES`] per
+/// The write loop issues at most `STREAM_CHUNK_BYTES` per
 /// `writer.write_all` call.  That bounds each underlying syscall
 /// (`write(2)` on Unix, `WriteFile` / `WriteConsoleW` on Windows) to
 /// a size every tested OS and shell handles cleanly — see the

@@ -445,22 +445,6 @@ pub fn load_mft_file(
     load_drive(&MftSource::File(mft_path.to_path_buf(), drive), no_cache)
 }
 
-/// Load a live NTFS drive and build a compact index (Windows only).
-///
-/// **Deprecated:** Use [`load_drive`] with [`MftSource::Live`] instead.
-///
-/// # Errors
-///
-/// Returns an error if the drive cannot be read.
-#[cfg(windows)]
-#[deprecated(note = "Use load_drive(MftSource::Live(...)) instead")]
-pub(crate) fn load_live_drive(
-    drive_letter: char,
-    no_cache: bool,
-) -> anyhow::Result<(DriveCompactIndex, LoadTiming)> {
-    load_drive(&MftSource::Live(drive_letter), no_cache)
-}
-
 /// Apply USN changes in-place to the compact index.
 ///
 /// Mutates records (`parent_idx`, names, flags) and the

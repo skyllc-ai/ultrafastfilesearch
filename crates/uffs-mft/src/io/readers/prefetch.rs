@@ -15,7 +15,7 @@ use super::prelude::*;
 /// - Double-buffering: Read into buffer A while processing buffer B
 /// - Prefetch thread: Background I/O doesn't block processing
 /// - Large chunks: 4-8 MB based on drive type
-pub(crate) struct PrefetchMftReader {
+pub struct PrefetchMftReader {
     /// Extent map for VCN-to-LCN translation.
     extent_map: MftExtentMap,
     /// Optional bitmap for skip optimization.
@@ -55,7 +55,7 @@ impl PrefetchMftReader {
     /// Returns [`MftError::Io`] when `ReadFile`/`SetFilePointerEx` fails for
     /// the current or prefetch chunk, or the prefetch thread panics before
     /// delivering its buffer.
-    pub(crate) fn read_all_prefetch<F>(
+    pub fn read_all_prefetch<F>(
         &self,
         handle: HANDLE,
         merge_extensions: bool,

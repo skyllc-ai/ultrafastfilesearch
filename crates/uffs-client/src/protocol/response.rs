@@ -5,9 +5,9 @@
 //!
 //! Daemon-state responses (`DrivesResponse`, `StatusResponse`,
 //! `StatsResponse`, `DaemonStatus`, `DriveMemoryInfo`, `DriveInfo`)
-//! live in the sibling [`response_status`](super::response_status)
-//! module and are re-exported below for back-compat with the historical
-//! `crate::protocol::response::*` import surface.
+//! live in the sibling `response_status` module and are re-exported below
+//! for back-compat with the historical `crate::protocol::response::*`
+//! import surface.
 
 use serde::{Deserialize, Serialize};
 

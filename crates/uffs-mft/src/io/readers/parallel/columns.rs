@@ -79,7 +79,7 @@ impl ParallelMftReader {
                   the closure's lifetime; switching to `Option<&dyn Fn(..)>` \
                   would force every call site to introduce a separate let-binding"
     )]
-    pub(crate) fn read_all_parallel_to_columns<F>(
+    pub fn read_all_parallel_to_columns<F>(
         &self,
         handle: HANDLE,
         merge_extensions: bool,

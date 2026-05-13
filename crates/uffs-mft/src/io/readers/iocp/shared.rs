@@ -47,7 +47,7 @@ impl IoCompletionPort {
         unsafe_code,
         reason = "FFI: CreateIoCompletionPort to create IOCP handle"
     )]
-    pub fn new(concurrency: u32) -> Result<Self> {
+    pub(crate) fn new(concurrency: u32) -> Result<Self> {
         use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
         use windows::Win32::System::IO::CreateIoCompletionPort;
 
@@ -94,7 +94,7 @@ impl IoCompletionPort {
 
     /// Gets the raw IOCP handle.
     #[must_use]
-    pub const fn raw_handle(&self) -> HANDLE {
+    pub(crate) const fn raw_handle(&self) -> HANDLE {
         self.handle
     }
 }
@@ -138,7 +138,7 @@ pub(crate) struct OverlappedRead {
 impl OverlappedRead {
     /// Creates a new overlapped read operation.
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         buffer: AlignedBuffer,
         chunk: ReadChunk,
         record_size: u32,
@@ -155,7 +155,7 @@ impl OverlappedRead {
     }
 
     /// Sets the file offset for the overlapped read.
-    pub const fn set_offset(&mut self, offset: u64) {
+    pub(crate) const fn set_offset(&mut self, offset: u64) {
         set_overlapped_offset(&mut self.overlapped, offset);
     }
 
@@ -163,7 +163,9 @@ impl OverlappedRead {
     ///
     /// The returned pointer is valid as long as `self` is pinned and alive.
     /// Creating the raw pointer is safe; dereferencing it requires `unsafe`.
-    pub const fn as_overlapped_ptr(&mut self) -> *mut windows::Win32::System::IO::OVERLAPPED {
+    pub(crate) const fn as_overlapped_ptr(
+        &mut self,
+    ) -> *mut windows::Win32::System::IO::OVERLAPPED {
         &raw mut self.overlapped
     }
 }

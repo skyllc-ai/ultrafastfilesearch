@@ -19,9 +19,6 @@ use uffs_mft::index::MftIndex;
 
 use crate::bloom::Bloom;
 pub use crate::compact_loader::apply_usn_patch;
-#[cfg(windows)]
-#[expect(deprecated, reason = "re-export kept for backward compatibility")]
-pub use crate::compact_loader::load_live_drive;
 // Re-export loader types and functions so callers can still use `compact::*`.
 #[expect(deprecated, reason = "re-export kept for backward compatibility")]
 pub use crate::compact_loader::{
@@ -343,7 +340,7 @@ pub struct DriveCompactIndex {
     /// swap the heap-resident `Vec` for a memory-mapped runtime
     /// tempfile.  Read-side call sites use [`Deref<[T]>`]; mutating
     /// callers (Windows USN-patch path) go through
-    /// [`ColumnStorage::as_mut_vec`].
+    /// `ColumnStorage::as_mut_vec` (internal helper).
     pub records: ColumnStorage<CompactRecord>,
     /// All filenames concatenated (UTF-8 bytes, original case).
     ///

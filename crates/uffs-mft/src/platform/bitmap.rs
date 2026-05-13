@@ -37,7 +37,7 @@ impl MftBitmap {
 
     /// Checks if a specific record is in use.
     #[must_use]
-    pub(crate) fn is_record_in_use(&self, frs: u64) -> bool {
+    pub fn is_record_in_use(&self, frs: u64) -> bool {
         let Ok(frs_idx) = usize::try_from(frs) else {
             return false;
         };
@@ -134,7 +134,7 @@ impl MftBitmap {
 
     /// Calculates skip ranges for a cluster-aligned read.
     #[must_use]
-    pub(crate) fn calculate_skip_range(&self, start_frs: u64, end_frs: u64) -> (u64, u64) {
+    pub fn calculate_skip_range(&self, start_frs: u64, end_frs: u64) -> (u64, u64) {
         let start = frs_to_index(start_frs);
         let end = frs_to_index(end_frs).min(self.record_count);
 

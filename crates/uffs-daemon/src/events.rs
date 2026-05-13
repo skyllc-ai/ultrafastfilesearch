@@ -3,10 +3,10 @@
 
 //! Daemon event broadcasting — push notifications to connected clients.
 //!
-//! The daemon emits [`DaemonEvent`](crate::events::DaemonEvent)s at lifecycle
-//! milestones (drive loaded, ready, refresh, shutdown) and periodic stats
-//! heartbeats. Events are serialized as JSON-RPC 2.0 notifications (no `id`
-//! field) and pushed to all connected clients via `tokio::sync::broadcast`.
+//! The daemon emits `DaemonEvent`s at lifecycle milestones (drive loaded,
+//! ready, refresh, shutdown) and periodic stats heartbeats. Events are
+//! serialized as JSON-RPC 2.0 notifications (no `id` field) and pushed to
+//! all connected clients via `tokio::sync::broadcast`.
 //!
 //! Clients that don't read fast enough simply miss events (broadcast
 //! channel lag) — this is fire-and-forget, never blocks the daemon.

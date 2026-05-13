@@ -113,11 +113,11 @@ impl StandardInfo {
     ///
     /// This is the **single source of truth** for converting parsed NTFS
     /// attributes to compact index storage. All code paths should use:
-    /// 1. [`ExtendedStandardInfo::from_attributes()`] to parse raw flags
+    /// 1. `ExtendedStandardInfo::from_attributes()` (internal helper) to parse
+    ///    raw flags
     /// 2. This method to convert to compact [`StandardInfo`]
     ///
     /// [`ExtendedStandardInfo`]: crate::ntfs::ExtendedStandardInfo
-    /// [`ExtendedStandardInfo::from_attributes()`]: crate::ntfs::ExtendedStandardInfo::from_attributes
     #[must_use]
     pub const fn from_extended(ext: &crate::ntfs::ExtendedStandardInfo) -> Self {
         let mut flags = 0_u32;

@@ -24,7 +24,7 @@
 //! ```
 //!
 //! The fast-scan block is suppressed for result sets of 20 000 rows or
-//! more and for any pattern the [`is_full_scan_pattern`] heuristic
+//! more and for any pattern the `is_full_scan_pattern` heuristic
 //! does not classify as a full scan.
 
 use std::io::{self, Write};

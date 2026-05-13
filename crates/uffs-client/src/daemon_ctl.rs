@@ -13,8 +13,8 @@
 //! | Module                         | Responsibility                                                        |
 //! |--------------------------------|-----------------------------------------------------------------------|
 //! | `daemon_ctl` (this)            | paths, identity verify, keepalive, exe discovery, health-check toggle |
-//! | [`crate::daemon_spawn`]        | `ElevationPolicy`, `spawn_daemon`, arg quoting, Windows UAC helpers   |
-//! | [`crate::daemon_child`]        | `DaemonChildHandle` and the cross-platform `try_wait` poll            |
+//! | `crate::daemon_spawn`          | `ElevationPolicy`, `spawn_daemon`, arg quoting, Windows UAC helpers   |
+//! | `crate::daemon_child`          | `DaemonChildHandle` and the cross-platform `try_wait` poll            |
 
 use std::path::PathBuf;
 
@@ -86,7 +86,7 @@ pub(crate) fn deep_health_check_enabled() -> bool {
 /// **Legacy variant kept for backward compatibility** — if identity
 /// verification fails, this only logs a `tracing::warn!` and returns,
 /// leaving the caller with an untrusted connection.  New call sites
-/// should prefer [`verify_daemon_after_connect_strict`], which refuses
+/// should prefer `verify_daemon_after_connect_strict`, which refuses
 /// to continue on mismatch.
 pub fn verify_daemon_after_connect() {
     let pid_path = pid_file_path();

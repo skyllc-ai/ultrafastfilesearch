@@ -34,7 +34,6 @@ mod prelude {
         generate_read_chunks, parse_record, parse_record_full, parse_record_zero_alloc,
         process_record,
     };
-    pub(super) use crate::platform::VolumeHandle;
     pub(super) use crate::{MftError, Result};
 }
 
@@ -57,12 +56,19 @@ mod zero_copy;
 // Parallel reader available on all platforms (contains ChaosMftReader)
 pub mod parallel;
 
+// Reader re-exports.  The Windows IOCP readers (IocpMftReader,
+// MultiVolumeIocpReader, VolumeState, prepare_volume_state) and the
+// other specialized readers were Phase 2.5-demoted from pub in commit
+// 1529cb162 — restored here to preserve their public API contracts.
+// IoCompletionPort / OverlappedRead remain pub(crate) (always-internal
+// FFI primitives).  MftRecordReader is pub(crate) (was always so).
 #[cfg(windows)]
-pub use basic::{BatchMftReader, MftRecordReader};
+pub(crate) use basic::MftRecordReader;
+#[cfg(windows)]
+pub(crate) use iocp::{IoCompletionPort, OverlappedRead};
 #[cfg(windows)]
 pub use iocp::{
-    IoCompletionPort, IocpMftReader, MultiVolumeIoOp, MultiVolumeIocpReader, OverlappedRead,
-    VolumeState, prepare_volume_state,
+    IocpMftReader, MultiVolumeIoOp, MultiVolumeIocpReader, VolumeState, prepare_volume_state,
 };
 #[cfg(windows)]
 pub use parallel::ParallelMftReader;

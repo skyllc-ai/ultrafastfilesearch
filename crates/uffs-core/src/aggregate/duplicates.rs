@@ -777,7 +777,7 @@ mod tests {
         }
 
         // Each group must have count ≥ 2.
-        for g in &result.groups {
+        for group in &result.groups {
             assert!(group.count >= 2, "each group must have at least 2 files");
             assert!(group.file_size > 0, "zero-byte files should be excluded");
         }

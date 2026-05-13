@@ -38,7 +38,7 @@ fn unpoison<T>(err: std::sync::PoisonError<T>) -> T {
 ///
 /// At most `N` threads can hold a ticket simultaneously.  Additional
 /// callers block in [`acquire`](Self::acquire) until a ticket is
-/// returned (either explicitly or via [`SlotGuard`] drop).
+/// returned (either explicitly or via `SlotGuard` drop).
 pub struct SlotPool {
     /// `(available, total)` — `available` is decremented on acquire,
     /// incremented on release.
@@ -71,7 +71,7 @@ impl SlotPool {
         Self::new(hw.min(max_slots).max(1))
     }
 
-    /// Blocks until a slot is available, then returns a [`SlotGuard`]
+    /// Blocks until a slot is available, then returns a `SlotGuard`
     /// that will release the slot on drop.
     #[must_use]
     pub fn acquire(&self) -> SlotGuard<'_> {

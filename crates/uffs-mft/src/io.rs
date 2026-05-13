@@ -40,10 +40,15 @@ pub use parser::{
     add_missing_parent_placeholders_to_vec, create_placeholder_record, parse_record,
     parse_record_full, parse_record_to_index, parse_record_zero_alloc, process_record,
 };
-// Export Windows-specific readers (require HANDLE)
+#[cfg(windows)]
+pub(crate) use readers::{IoCompletionPort, MftRecordReader, OverlappedRead};
+// Re-export Windows-specific readers (require HANDLE).  All public
+// readers were Phase 2.5-demoted in commit 1529cb162 — restored here to
+// preserve their public API contracts.  IoCompletionPort / OverlappedRead
+// stay pub(crate) (FFI primitives).  MftRecordReader is pub(crate) (was
+// always so).
 #[cfg(windows)]
 pub use readers::{
-    BatchMftReader, IoCompletionPort, IocpMftReader, MftRecordReader, MultiVolumeIoOp,
-    MultiVolumeIocpReader, OverlappedRead, ParallelMftReader, PipelinedMftReader,
-    PrefetchMftReader, ReadParseTiming, StreamingMftReader, VolumeState, prepare_volume_state,
+    IocpMftReader, MultiVolumeIoOp, MultiVolumeIocpReader, ParallelMftReader, PipelinedMftReader,
+    PrefetchMftReader, StreamingMftReader, VolumeState, prepare_volume_state,
 };

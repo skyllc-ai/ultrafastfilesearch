@@ -77,9 +77,9 @@ pub struct SearchFilters {
     /// Allowed extensions (lowercase, without dot). Empty = no filter.
     pub extensions: Vec<String>,
     /// Pre-resolved extension IDs for the current drive.
-    /// Set via [`resolve_ext_ids_for_drive`](Self::resolve_ext_ids_for_drive)
-    /// before the hot loop — enables O(1) `u16` comparison per record
-    /// instead of per-record string parsing.
+    /// Set via `resolve_ext_ids_for_drive` (internal helper) before the hot
+    /// loop — enables O(1) `u16` comparison per record instead of per-record
+    /// string parsing.
     pub resolved_ext_ids: Vec<u16>,
     /// Exclude pattern (glob, lowered).
     pub exclude_lower: Option<String>,

@@ -13,7 +13,7 @@ use super::prelude::*;
 /// - Streaming processing (parse while reading)
 /// - Larger I/O chunks (4-8 MB based on drive type)
 #[derive(Debug)]
-pub(crate) struct StreamingMftReader {
+pub struct StreamingMftReader {
     /// Extent map for VCN-to-LCN translation.
     extent_map: MftExtentMap,
     /// Optional bitmap for skip optimization.
@@ -57,7 +57,7 @@ impl StreamingMftReader {
     ///
     /// Returns [`MftError::Io`] if any streaming `ReadFile`/`SetFilePointerEx`
     /// call fails mid-enumeration.
-    pub(crate) fn read_all_streaming<F>(
+    pub fn read_all_streaming<F>(
         &mut self,
         handle: HANDLE,
         merge_extensions: bool,

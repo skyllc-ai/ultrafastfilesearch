@@ -119,8 +119,8 @@ impl DriveCompactIndex {
     ///
     /// Phase 4 Commit F.  Reuses the in-memory `bloom` / `path_trie`
     /// fields when present (the common case after Phase 4 Commit C
-    /// landed); falls back to [`Self::build_bloom`] /
-    /// [`Self::build_path_trie`] for indices constructed before the
+    /// landed); falls back to `Self::build_bloom` /
+    /// `Self::build_path_trie` for indices constructed before the
     /// Phase 4 wiring (or for legacy v ≤ 8 caches whose loader
     /// rebuilds the filters on the fly — see
     /// [`crate::compact_cache::deserialize_compact`]).

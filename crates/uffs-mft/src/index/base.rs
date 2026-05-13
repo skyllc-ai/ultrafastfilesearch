@@ -234,9 +234,9 @@ impl MftIndex {
     /// Get or create a record using zero-based counts for the unified parser.
     ///
     /// Same lookup/create logic as [`get_or_create()`](Self::get_or_create),
-    /// but newly created records use
-    /// [`FileRecord::new_unified(frs)`](FileRecord::new_unified) which starts
-    /// all counts at 0.  Existing records are returned as-is.
+    /// but newly created records use `FileRecord::new_unified(frs)`
+    /// (internal helper) which starts all counts at 0.  Existing records
+    /// are returned as-is.
     #[expect(
         clippy::indexing_slicing,
         reason = "bounds checked: resize ensures frs_usize < len"

@@ -85,9 +85,9 @@ pub(crate) fn default_log_file() -> PathBuf {
 /// Initialise tracing for the daemon process.
 ///
 /// * `log_file = Some(path)` — write to that file (append mode). A path of
-///   `"-"` or empty string uses [`default_log_file`].
+///   `"-"` or empty string uses `default_log_file`.
 /// * `log_file = None` **and** the effective log level is `debug` or `trace` —
-///   automatically write to [`default_log_file`] so that diagnostic output is
+///   automatically write to `default_log_file` so that diagnostic output is
 ///   never lost to `/dev/null`.
 /// * `log_file = None` with a higher level — write to stdout.
 ///

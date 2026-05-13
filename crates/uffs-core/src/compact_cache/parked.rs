@@ -74,7 +74,7 @@ pub struct ParkedBody {
     /// from — used as a staleness check on promote.
     pub source_epoch: u64,
     /// Bloom over folded basenames + extensions.  See
-    /// [`crate::compact::DriveCompactIndex::build_bloom`]
+    /// `crate::compact::DriveCompactIndex::build_bloom`
     /// for the insertion contract that `bloom.contains()` callers
     /// must mirror.
     pub bloom: Bloom,

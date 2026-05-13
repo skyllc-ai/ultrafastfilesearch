@@ -204,8 +204,7 @@ pub struct SampleRow {
     /// Key-value pairs of projected fields.
     ///
     /// Each entry is `(field_name, display_value)`.  The set of fields
-    /// is determined by
-    /// [`TopHitsSpec::effective_projection`](super::spec::TopHitsSpec::effective_projection).
+    /// is determined by `TopHitsSpec::effective_projection` (internal helper).
     pub fields: Vec<(String, String)>,
     /// The sort key that determined this row's position.
     pub sort_key: i64,
