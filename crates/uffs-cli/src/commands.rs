@@ -76,6 +76,12 @@ fn format_number(num: u64) -> String {
 }
 
 /// Format file size in human-readable format.
+///
+/// Boundary thresholds are typed as `u64` to compare against the input
+/// without a cast; the human-readable divisors are typed as `f64`
+/// directly so the only remaining f64 conversion is the input byte
+/// count via [`u64_to_display_f64`] (which carries the single
+/// `cast_precision_loss` justification this function needs).
 #[expect(
     clippy::float_arithmetic,
     reason = "division for human-readable size formatting"
@@ -85,42 +91,34 @@ fn format_size(bytes: u64) -> String {
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;
     const TB: u64 = GB * 1024;
+    const KB_F: f64 = 1024.0_f64;
+    const MB_F: f64 = KB_F * 1024.0_f64;
+    const GB_F: f64 = MB_F * 1024.0_f64;
+    const TB_F: f64 = GB_F * 1024.0_f64;
 
-    // Precision loss acceptable — display-only formatting where ±1 byte is fine.
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "display-only human-readable formatting"
-    )]
-    let bytes_f64 = bytes as f64;
+    let bytes_f64 = u64_to_display_f64(bytes);
     if bytes >= TB {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "display-only human-readable formatting"
-        )]
-        let divisor = TB as f64;
-        format!("{:.2} TB", bytes_f64 / divisor)
+        format!("{:.2} TB", bytes_f64 / TB_F)
     } else if bytes >= GB {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "display-only human-readable formatting"
-        )]
-        let divisor = GB as f64;
-        format!("{:.2} GB", bytes_f64 / divisor)
+        format!("{:.2} GB", bytes_f64 / GB_F)
     } else if bytes >= MB {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "display-only human-readable formatting"
-        )]
-        let divisor = MB as f64;
-        format!("{:.2} MB", bytes_f64 / divisor)
+        format!("{:.2} MB", bytes_f64 / MB_F)
     } else if bytes >= KB {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "display-only human-readable formatting"
-        )]
-        let divisor = KB as f64;
-        format!("{:.2} KB", bytes_f64 / divisor)
+        format!("{:.2} KB", bytes_f64 / KB_F)
     } else {
         format!("{bytes} B")
     }
+}
+
+/// Lossy `u64 -> f64` conversion for human-readable telemetry output.
+///
+/// Values above `2^53` lose low bits, which is acceptable for the
+/// `{:.2}` MB/GB/TB display format used by `format_size`.
+#[inline]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "display-only `format!(\"{:.2} ...\")` byte counts; ±1 byte rounding is invisible at MB resolution"
+)]
+const fn u64_to_display_f64(value: u64) -> f64 {
+    value as f64
 }

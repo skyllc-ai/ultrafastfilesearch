@@ -737,9 +737,9 @@ fn auto_start_daemon(
 fn is_process_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        // First, cheap signal-zero check.
-        #[expect(clippy::cast_possible_wrap, reason = "Unix PIDs are always < 2^31")]
-        let pid_i32 = pid as i32;
+        // Cheap signal-zero check.  Unix PIDs fit in i32 by spec, so the
+        // saturating `try_from` fallback is unreachable in practice.
+        let pid_i32 = i32::try_from(pid).unwrap_or(i32::MAX);
         // SAFETY: kill(pid, 0) only checks if a signal *could* be sent
         // to the given PID — it does not actually deliver any signal.
         // The pid comes from our own PID file (trusted input).

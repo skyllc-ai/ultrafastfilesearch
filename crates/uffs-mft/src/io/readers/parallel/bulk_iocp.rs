@@ -24,7 +24,7 @@ struct BulkOverlappedRead {
 /// provided by the kernel itself, which is the only invariant the
 /// wrapper relies on.
 #[derive(Clone, Copy)]
-struct SendHandle(isize);
+struct SendHandle(usize);
 #[expect(
     unsafe_code,
     reason = "FFI: copies a kernel IOCP handle value; thread-safety is provided by the kernel."
@@ -424,11 +424,7 @@ fn drain_bulk_iocp_completions(
     // pointer address via `expose_provenance` / `with_exposed_provenance_mut`,
     // wrapped in `SendHandle` so the kernel-managed pointer satisfies `Send` /
     // `Sync`.  The orchestrator owns the IoCompletionPort for the full drain.
-    #[expect(
-        clippy::cast_possible_wrap,
-        reason = "Win32 HANDLE address fits in isize on every supported 64-bit target"
-    )]
-    let iocp_handle_raw = SendHandle(iocp.raw_handle().0.expose_provenance() as isize);
+    let iocp_handle_raw = SendHandle(iocp.raw_handle().0.expose_provenance());
 
     let mut workers = Vec::with_capacity(num_workers);
     for _ in 0..num_workers {
@@ -441,12 +437,8 @@ fn drain_bulk_iocp_completions(
         workers.push(std::thread::spawn(move || {
             // `iocp_handle_raw` was constructed from a live IOCP handle
             // owned by the orchestrator and outlives every worker.
-            #[expect(
-                clippy::cast_sign_loss,
-                reason = "isize -> usize round-trip preserves the original Win32 HANDLE address"
-            )]
             let iocp_handle = HANDLE(core::ptr::with_exposed_provenance_mut::<core::ffi::c_void>(
-                handle_raw.0 as usize,
+                handle_raw.0,
             ));
             bulk_iocp_drain_loop(iocp_handle, pending, &bytes_read, &completed_count, &error);
         }));
@@ -461,14 +453,11 @@ fn drain_bulk_iocp_completions(
 
     let error_code = error_flag.load(Ordering::Acquire);
     if error_code != 0 {
-        // The atomic stored a `WIN32_ERROR` (`u32`); reinterpret the same
-        // bit pattern as `i32` for `from_raw_os_error`.
-        #[expect(
-            clippy::cast_possible_wrap,
-            reason = "Win32 error code stored as u32; from_raw_os_error takes i32 with matching bit pattern"
-        )]
+        // The atomic stored a `WIN32_ERROR` (`u32`); `u32::cast_signed`
+        // reinterprets the same bit pattern as `i32` for
+        // `from_raw_os_error` without a `cast_possible_wrap` expect.
         return Err(MftError::Io(std::io::Error::from_raw_os_error(
-            error_code as i32,
+            error_code.cast_signed(),
         )));
     }
 

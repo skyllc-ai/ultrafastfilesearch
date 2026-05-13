@@ -160,15 +160,12 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
 
         // Seek to extent start.
         //
-        // Win32 `SetFilePointerEx` takes the offset as `i64`; NTFS volume
-        // sizes never exceed `i64::MAX`, so the wrap below cannot occur in
-        // practice — the per-site `cast_possible_wrap` expect documents
-        // that contract.
-        #[expect(
-            clippy::cast_possible_wrap,
-            reason = "SetFilePointerEx accepts i64; NTFS volume offsets never exceed i64::MAX"
-        )]
-        let signed_offset = extent_byte_offset as i64;
+        // Win32 `SetFilePointerEx` takes the offset as `i64`.  NTFS
+        // volume sizes never exceed `i64::MAX`, so the same bit pattern
+        // represents both unsigned (NTFS) and signed (Win32) views;
+        // `u64::cast_signed` documents that reinterpret without needing
+        // a `cast_possible_wrap` expect.
+        let signed_offset = extent_byte_offset.cast_signed();
         // SAFETY: `raw_handle` is a live volume handle owned by `vol_data`'s
         // `VolumeHandle` and `signed_offset` is bounded by the MFT extent
         // returned by Windows; the cast to `i64` is safe because volume sizes

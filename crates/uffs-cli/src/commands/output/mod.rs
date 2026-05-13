@@ -34,13 +34,14 @@ fn vi(row: &Value, key: &str) -> i64 {
 }
 
 /// Get u32 field (clamped to `u32::MAX` on overflow).
+///
+/// NTFS file attributes (`FILE_ATTRIBUTE_*`) are documented as `u32` by
+/// Microsoft, so the saturating `try_from` fallback is unreachable for
+/// well-formed daemon responses; it nevertheless replaces the previous
+/// truncating `as u32` to keep the conversion idiomatic and lint-free.
 fn vu32(row: &Value, key: &str) -> u32 {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "flags are stored as u32 in NTFS — overflow is not possible in practice"
-    )]
-    let val = row.get(key).and_then(Value::as_u64).unwrap_or(0) as u32;
-    val
+    let raw = row.get(key).and_then(Value::as_u64).unwrap_or(0);
+    u32::try_from(raw).unwrap_or(u32::MAX)
 }
 
 /// Get bool field.

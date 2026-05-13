@@ -128,12 +128,13 @@ impl IpcServer {
             uid: 0,
             gid: 0,
         };
-        // ucred is 12 bytes (3 × i32), always fits in socklen_t (u32).
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "size_of::<ucred>() is 12, which fits in u32 socklen_t"
-        )]
-        let mut len = size_of::<libc::ucred>() as libc::socklen_t;
+        // `ucred` is 12 bytes (3 × i32) on every supported platform, so
+        // `try_from` is the lossless, lint-free conversion to
+        // `socklen_t` (u32 on Linux, u32 on macOS); the saturating
+        // fallback exists only to satisfy the type-system contract and
+        // is unreachable in practice.
+        let mut len =
+            libc::socklen_t::try_from(size_of::<libc::ucred>()).unwrap_or(libc::socklen_t::MAX);
 
         // SAFETY: `getsockopt` with `SO_PEERCRED` reads the ucred struct for
         // the peer of a Unix domain socket.  We pass a valid fd and correctly

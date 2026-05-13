@@ -402,16 +402,7 @@ fn daemon_stats() -> Result<()> {
         // Aggregate cache observability.  Hit-rate is computed on
         // demand to avoid a division-by-zero for cold daemons.
         let lookups = stats.agg_cache_hits.saturating_add(stats.agg_cache_misses);
-        #[expect(
-            clippy::float_arithmetic,
-            clippy::cast_precision_loss,
-            reason = "hit-rate display is best-effort approximate"
-        )]
-        let hit_rate = if lookups > 0 {
-            (stats.agg_cache_hits as f64 / lookups as f64) * 100.0_f64
-        } else {
-            0.0_f64
-        };
+        let hit_rate = compute_hit_rate_percent(stats.agg_cache_hits, lookups);
         println!(
             "Agg cache:         {} hits / {} misses ({:.1}% hit-rate, {} entries)",
             stats.agg_cache_hits, stats.agg_cache_misses, hit_rate, stats.agg_cache_entries,
@@ -420,6 +411,25 @@ fn daemon_stats() -> Result<()> {
         println!("Daemon is not running.");
     }
     Ok(())
+}
+
+/// Compute aggregate-cache hit-rate as a percentage for daemon status display.
+///
+/// Returns `0.0` when no lookups have occurred, avoiding a division by
+/// zero on cold daemons.  The `cast_precision_loss` expect is justified
+/// for telemetry display: well over `2^53` cache lookups would be
+/// required to lose a single bit of precision, and the output is
+/// rendered with `{:.1}` so single-bit differences are invisible.
+#[expect(
+    clippy::float_arithmetic,
+    clippy::cast_precision_loss,
+    reason = "telemetry hit-rate percent; rendered with `{:.1}` so precision loss is invisible"
+)]
+fn compute_hit_rate_percent(hits: u64, lookups: u64) -> f64 {
+    if lookups == 0 {
+        return 0.0_f64;
+    }
+    (hits as f64 / lookups as f64) * 100.0_f64
 }
 
 /// `uffs daemon stop` — graceful shutdown via RPC.

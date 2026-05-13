@@ -205,11 +205,12 @@ fn try_wait_windows(
     #[expect(unsafe_code, reason = "Win32 GetExitCodeProcess FFI")]
     let got_code = unsafe { GetExitCodeProcess(handle, &raw mut exit_code) };
     got_code.map_err(|err| std::io::Error::other(err.to_string()))?;
-    #[expect(
-        clippy::cast_possible_wrap,
-        reason = "Windows exit codes are u32 in the API but semantically i32"
-    )]
-    let signed = exit_code as i32;
+    // Windows exit codes are documented as `u32` by `GetExitCodeProcess`
+    // but the historical Unix-style return type is `i32` (high bit
+    // signals an exception code).  `u32::cast_signed` is the
+    // documented exact-bit-pattern reinterpret that preserves both
+    // representations without triggering `clippy::cast_possible_wrap`.
+    let signed = exit_code.cast_signed();
     Ok(Some(signed))
 }
 

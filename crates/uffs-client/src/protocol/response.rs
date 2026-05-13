@@ -629,14 +629,16 @@ impl RpcErrorResponse {
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Format a byte count as human-readable size (e.g. "1.23 MB").
+///
+/// Routes the `u64 -> f64` conversion through [`crate::format::u64_to_f64`]
+/// so this function no longer needs a local `cast_precision_loss` expect.
 #[must_use]
 #[expect(
     clippy::float_arithmetic,
     reason = "floating-point division is intentional for human-readable size formatting"
 )]
 pub fn format_size(bytes: u64) -> String {
-    #[expect(clippy::cast_precision_loss, reason = "u64→f64 acceptable for display")]
-    let bytes_f64 = bytes as f64;
+    let bytes_f64 = crate::format::u64_to_f64(bytes);
     if bytes < 1024 {
         format!("{bytes} B")
     } else if bytes < 1024 * 1024 {
