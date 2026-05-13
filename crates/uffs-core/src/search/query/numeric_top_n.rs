@@ -32,45 +32,38 @@ const RESOLVE_CHUNK_SIZE: usize = 4096;
 /// inside the per-drive scan.  Moved out of the scan closure so the
 /// drive loop can be parallelised without duplicating the 100-line
 /// `match` across each branch.
-#[expect(clippy::cast_possible_wrap, reason = "file sizes within i64 range")]
 fn extract_sort_key(rec: &CompactRecord, sort_column: FieldId, drive: &DriveCompactIndex) -> i64 {
     let drive_fold = drive.fold;
+    // All `u64 -> i64` conversions below use `u64::cast_signed` (stable
+    // since Rust 1.87) to document the exact-bit-pattern reinterpret
+    // without needing a `cast_possible_wrap` expect.  Real NTFS file /
+    // tree sizes never approach `i64::MAX`, so the high-bit flip is
+    // unreachable in practice.
     match sort_column {
-        FieldId::Size => rec.size as i64,
-        #[expect(
-            clippy::cast_possible_wrap,
-            reason = "allocated sizes within i64 range"
-        )]
-        FieldId::SizeOnDisk => rec.allocated as i64,
+        FieldId::Size => rec.size.cast_signed(),
+        FieldId::SizeOnDisk => rec.allocated.cast_signed(),
         FieldId::Created => rec.created,
         FieldId::Accessed => rec.accessed,
         FieldId::Descendants => i64::from(rec.descendants),
-        #[expect(
-            clippy::cast_possible_wrap,
-            reason = "allocated values are expected within i64 range"
-        )]
         FieldId::TreeAllocated => {
             if rec.is_directory() {
-                rec.tree_allocated as i64
+                rec.tree_allocated.cast_signed()
             } else {
-                rec.allocated as i64
+                rec.allocated.cast_signed()
             }
         }
-        #[expect(
-            clippy::cast_possible_wrap,
-            reason = "scaled bulkiness metric is expected within i64 range"
-        )]
-        FieldId::Bulkiness => bulkiness_for_record(rec) as i64,
+        FieldId::Bulkiness => bulkiness_for_record(rec).cast_signed(),
         FieldId::Extension | FieldId::Type => i64::from(rec.extension_id),
         FieldId::Name => {
             let name = rec.name(&drive.names);
             let mut key = [0_u8; 8];
             for (dst, ch) in key.iter_mut().zip(name.chars()) {
                 let folded = drive_fold.fold_char(ch);
-                #[expect(clippy::cast_possible_truncation, reason = "sort key prefix")]
-                {
-                    *dst = folded as u8;
-                }
+                // Sort-key prefix: the low byte of the folded u16 is the
+                // canonical 8-byte name-prefix; `to_be_bytes()[1]` is the
+                // lint-free way to take it (vs `folded as u8` which would
+                // trigger `clippy::cast_possible_truncation`).
+                *dst = folded.to_be_bytes()[1];
             }
             i64::from_be_bytes(key)
         }
@@ -80,22 +73,15 @@ fn extract_sort_key(rec: &CompactRecord, sort_column: FieldId, drive: &DriveComp
             key[0] = u8::try_from(u32::from(drive.letter)).unwrap_or(b'?');
             for (dst, ch) in key[1..].iter_mut().zip(name.chars()) {
                 let folded = drive_fold.fold_char(ch);
-                #[expect(clippy::cast_possible_truncation, reason = "sort key prefix")]
-                {
-                    *dst = folded as u8;
-                }
+                *dst = folded.to_be_bytes()[1];
             }
             i64::from_be_bytes(key)
         }
-        #[expect(
-            clippy::cast_possible_wrap,
-            reason = "treesize values within i64 range"
-        )]
         FieldId::TreeSize => {
             if rec.is_directory() {
-                rec.treesize as i64
+                rec.treesize.cast_signed()
             } else {
-                rec.size as i64
+                rec.size.cast_signed()
             }
         }
         // Boolean attribute flags: extract the individual bit as 0/1.

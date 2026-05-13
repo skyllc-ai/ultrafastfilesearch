@@ -480,12 +480,12 @@ pub fn serialize_compact_to_writer<W: io::Write>(
 }
 
 /// Write a `usize` as little-endian `u32` to a writer.
+///
+/// Record/name counts fit in u32 for any realistic MFT (NTFS caps at
+/// ~4 G entries per volume), so the saturating `try_from` fallback is
+/// unreachable in practice and replaces the previous truncating cast.
 fn write_u32<W: io::Write>(writer: &mut W, val: usize) -> io::Result<()> {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "record/name counts fit in u32 for any realistic MFT"
-    )]
-    let val_u32 = val as u32;
+    let val_u32 = u32::try_from(val).unwrap_or(u32::MAX);
     writer.write_all(&val_u32.to_le_bytes())
 }
 

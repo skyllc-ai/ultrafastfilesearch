@@ -257,13 +257,12 @@ fn compare_numeric_field(
                 stats.exact_matches += 1;
             } else {
                 stats.mismatches += 1;
-                // u64→i64 wrapping_sub for signed difference; .unsigned_abs() recovers
-                // magnitude
-                #[expect(
-                    clippy::cast_possible_wrap,
-                    reason = "u64→i64 for signed diff of file sizes"
-                )]
-                let diff = uffs_mft::u64_to_f64((c as i64).wrapping_sub(r as i64).unsigned_abs());
+                // `u64::abs_diff` returns the unsigned magnitude
+                // `|c - r|` directly, replacing the previous
+                // `wrapping_sub(...).unsigned_abs()` chain (which
+                // required a `cast_possible_wrap` expect on every
+                // `as i64` cast).
+                let diff = uffs_mft::u64_to_f64(c.abs_diff(r));
                 stats.sum_abs_diff += diff;
                 if diff > stats.max_abs_diff {
                     stats.max_abs_diff = diff;
@@ -648,13 +647,12 @@ fn print_results(results: &ComparisonResults) {
         format_num(results.reference_total_rows)
     );
     println!("  Rust rows:  {:>12}", format_num(results.rust_total_rows));
-    // usize→i64 wrapping_sub: row counts are well within i64 range for any
-    // practical MFT
-    #[expect(
-        clippy::cast_possible_wrap,
-        reason = "usize→i64 for signed row count diff"
-    )]
-    let diff = (results.rust_total_rows as i64).wrapping_sub(results.reference_total_rows as i64);
+    // Row counts are well within `i64::MAX` for any practical MFT;
+    // `i64::try_from` is the lint-free way to compute the signed
+    // difference without a `cast_possible_wrap` expect.
+    let rust_i64 = i64::try_from(results.rust_total_rows).unwrap_or(i64::MAX);
+    let ref_i64 = i64::try_from(results.reference_total_rows).unwrap_or(i64::MAX);
+    let diff = rust_i64.wrapping_sub(ref_i64);
     println!("  Difference: {:>+12}", diff);
 
     println!("\n🔗 PATH MATCHING");
@@ -800,12 +798,11 @@ fn write_markdown_report(results: &ComparisonResults, path: &Path) -> Result<()>
         format_num(results.reference_total_rows)
     )?;
     writeln!(f, "| Rust rows | {} |", format_num(results.rust_total_rows))?;
-    // usize→i64 wrapping_sub: row counts within i64 range
-    #[expect(
-        clippy::cast_possible_wrap,
-        reason = "usize→i64 for signed row count diff"
-    )]
-    let diff = (results.rust_total_rows as i64).wrapping_sub(results.reference_total_rows as i64);
+    // Row counts within `i64::MAX` — see `print_summary` for the
+    // identical `i64::try_from` rationale.
+    let rust_i64 = i64::try_from(results.rust_total_rows).unwrap_or(i64::MAX);
+    let ref_i64 = i64::try_from(results.reference_total_rows).unwrap_or(i64::MAX);
+    let diff = rust_i64.wrapping_sub(ref_i64);
     writeln!(f, "| Difference | {:+} |", diff)?;
     writeln!(f)?;
 

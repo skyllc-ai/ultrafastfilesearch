@@ -496,11 +496,11 @@ fn main() -> Result<()> {
     println!("  - Match rate (no ADS): {match_rate_no_ads:.2}%");
 
     println!("\nLikely Issues:");
-    #[expect(
-        clippy::cast_possible_wrap,
-        reason = "ADS counts are small enough that i64 wrapping cannot occur"
-    )]
-    let ads_diff = reference_ads_count as i64 - rust_ads_count as i64;
+    // ADS counts are small enough that `i64::try_from` is infallible in
+    // practice; the saturating fallback is unreachable.
+    let ref_i64 = i64::try_from(reference_ads_count).unwrap_or(i64::MAX);
+    let rust_i64 = i64::try_from(rust_ads_count).unwrap_or(i64::MAX);
+    let ads_diff = ref_i64 - rust_i64;
     println!(
         "  1. ADS entries: {reference_ads_count} in reference output, {rust_ads_count} in Rust (diff: {ads_diff})"
     );
