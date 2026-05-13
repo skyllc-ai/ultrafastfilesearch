@@ -94,18 +94,13 @@ impl CaseFold {
             let fallback = u16::try_from(cp).unwrap_or(0);
             self.table.get(cp as usize).copied().unwrap_or(fallback)
         } else {
-            // Non-BMP — no uppercase mapping; truncate to u16 is intentional:
-            // callers comparing two non-BMP chars will get the same low 16 bits
-            // for identical chars and almost certainly different bits for
-            // different chars. Full correctness for supplementary planes is
-            // deferred to i18n Phase 2.
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "non-BMP identity: only low 16 bits stored; acceptable for filename trigrams"
-            )]
-            {
-                cp as u16
-            }
+            // Non-BMP — no uppercase mapping; the documented behaviour
+            // is to keep only the low 16 bits as the trigram-bucket
+            // identity (full correctness for supplementary planes is
+            // deferred to i18n Phase 2).  `cp & 0xFFFF` is provably in
+            // u16 range, so the saturating `try_from` fallback is
+            // unreachable and the conversion is lint-free.
+            u16::try_from(cp & 0xFFFF).unwrap_or(0)
         }
     }
 

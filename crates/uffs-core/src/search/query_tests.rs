@@ -1241,14 +1241,10 @@ fn build_modified_gradient_drive(letter: char, base_frs: u64, count: usize) -> D
         rec.stdinfo.flags = 0x20;
         // Monotonic timestamps: ensures Modified-DESC order is
         // fully determined by FRS, independent of drive order or
-        // rayon scheduling.
-        #[expect(
-            clippy::cast_possible_wrap,
-            reason = "small test-only FRS values stay well inside i64"
-        )]
-        {
-            rec.stdinfo.modified = frs as i64;
-        }
+        // rayon scheduling.  `u64::cast_signed` is the Rust 1.87
+        // exact-bit-pattern reinterpret; small test-only FRS values
+        // stay well inside i64 so the high bit never flips.
+        rec.stdinfo.modified = frs.cast_signed();
     }
     let (drive, _, _) = build_compact_index(letter, &idx);
     drive
