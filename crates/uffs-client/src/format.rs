@@ -170,13 +170,10 @@ mod platform_tz {
             return 0; // fallback to UTC
         }
 
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "tm_gmtoff is at most ±50400 (±14h), fits i32"
-        )]
-        {
-            tm_buf.tm_gmtoff as i32
-        }
+        // `tm_gmtoff` is at most ±50400 (±14h) by POSIX timezone spec,
+        // so the saturating `try_from` fallbacks are unreachable.  This
+        // replaces the previous truncating `as i32` cast.
+        i32::try_from(tm_buf.tm_gmtoff).unwrap_or(0)
     }
 }
 

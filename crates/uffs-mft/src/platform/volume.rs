@@ -23,6 +23,7 @@ use zerocopy::FromBytes as _;
 use super::bitmap::MftBitmap;
 use super::extents::{MftExtent, get_retrieval_pointers};
 use crate::error::{MftError, Result};
+use crate::index::{frs_to_usize, u32_as_usize};
 use crate::ntfs::NtfsBootSector;
 
 /// `FILE_READ_DATA` access right (0x0001) - required to read data from a
@@ -599,14 +600,6 @@ impl VolumeHandle {
         clippy::unnecessary_wraps,
         reason = "every failure branch returns `Ok(MftBitmap::new_all_valid(...))` (graceful fallback); the `Result<_>` signature documents the fallible Win32 call surface and aligns with `get_mft_bitmap` / `get_mft_bitmap_verbose` callers"
     )]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "buffer / file-size arithmetic targets x86_64 Windows where `usize == u64`; bitmap is bounded by NTFS cluster_count * bytes_per_cluster which never exceeds `usize::MAX` on 64-bit pointers"
-    )]
-    #[expect(
-        clippy::cast_sign_loss,
-        reason = "`file_size` and `bytes_read` are returned by `GetFileSizeEx` / `ReadFile` and are never negative for the bitmap MFT record; the cast is documented at each use"
-    )]
     fn get_mft_bitmap_internal(&self, verbose: bool) -> Result<MftBitmap> {
         use windows::Win32::Storage::FileSystem::{
             FILE_BEGIN, GetFileSizeEx, ReadFile, SYNCHRONIZE, SetFilePointerEx,
@@ -650,9 +643,9 @@ impl VolumeHandle {
                         "CreateFileW for MFT bitmap failed; falling back to all-valid bitmap"
                     );
                 }
-                return Ok(MftBitmap::new_all_valid(
-                    self.estimated_record_count() as usize
-                ));
+                return Ok(MftBitmap::new_all_valid(frs_to_usize(
+                    self.estimated_record_count(),
+                )));
             }
         };
 
@@ -670,9 +663,9 @@ impl VolumeHandle {
                         "GetFileSizeEx for MFT bitmap failed; falling back to all-valid bitmap"
                     );
                 }
-                return Ok(MftBitmap::new_all_valid(
-                    self.estimated_record_count() as usize
-                ));
+                return Ok(MftBitmap::new_all_valid(frs_to_usize(
+                    self.estimated_record_count(),
+                )));
             }
         }
 
@@ -711,9 +704,9 @@ impl VolumeHandle {
                         "get_retrieval_pointers returned no MFT bitmap extents; falling back to all-valid bitmap"
                     );
                 }
-                return Ok(MftBitmap::new_all_valid(
-                    self.estimated_record_count() as usize
-                ));
+                return Ok(MftBitmap::new_all_valid(frs_to_usize(
+                    self.estimated_record_count(),
+                )));
             }
             Err(err) => {
                 if verbose {
@@ -723,15 +716,15 @@ impl VolumeHandle {
                         "get_retrieval_pointers for MFT bitmap failed; falling back to all-valid bitmap"
                     );
                 }
-                return Ok(MftBitmap::new_all_valid(
-                    self.estimated_record_count() as usize
-                ));
+                return Ok(MftBitmap::new_all_valid(frs_to_usize(
+                    self.estimated_record_count(),
+                )));
             }
         };
 
         let bytes_per_cluster = self.volume_data.bytes_per_cluster;
         let total_clusters: u64 = extents.iter().map(|ext| ext.cluster_count).sum();
-        let aligned_size = (total_clusters * u64::from(bytes_per_cluster)) as usize;
+        let aligned_size = frs_to_usize(total_clusters * u64::from(bytes_per_cluster));
         let mut buffer = vec![0_u8; aligned_size];
         let mut buffer_offset = 0_usize;
 
@@ -747,7 +740,7 @@ impl VolumeHandle {
 
         for (i, extent) in extents.iter().enumerate() {
             let byte_offset = extent.lcn * i64::from(bytes_per_cluster);
-            let extent_bytes = (extent.cluster_count * u64::from(bytes_per_cluster)) as usize;
+            let extent_bytes = frs_to_usize(extent.cluster_count * u64::from(bytes_per_cluster));
 
             if extent_bytes == 0 {
                 continue;
@@ -782,9 +775,9 @@ impl VolumeHandle {
                             "SetFilePointerEx for MFT bitmap extent failed; falling back to all-valid bitmap"
                         );
                     }
-                    return Ok(MftBitmap::new_all_valid(
-                        self.estimated_record_count() as usize
-                    ));
+                    return Ok(MftBitmap::new_all_valid(frs_to_usize(
+                        self.estimated_record_count(),
+                    )));
                 }
             }
 
@@ -801,9 +794,9 @@ impl VolumeHandle {
                         "MFT bitmap extent exceeds buffer size; falling back to all-valid bitmap"
                     );
                 }
-                return Ok(MftBitmap::new_all_valid(
-                    self.estimated_record_count() as usize
-                ));
+                return Ok(MftBitmap::new_all_valid(frs_to_usize(
+                    self.estimated_record_count(),
+                )));
             };
             // SAFETY: `self.handle` is a live volume handle, the slice points to
             // a contiguous writable region of `extent_bytes`, and `bytes_read`
@@ -824,16 +817,16 @@ impl VolumeHandle {
                             "ReadFile for MFT bitmap extent failed; falling back to all-valid bitmap"
                         );
                     }
-                    return Ok(MftBitmap::new_all_valid(
-                        self.estimated_record_count() as usize
-                    ));
+                    return Ok(MftBitmap::new_all_valid(frs_to_usize(
+                        self.estimated_record_count(),
+                    )));
                 }
             }
 
             if verbose && i < 3 {
                 tracing::info!(volume = %self.volume, extent_index = i, bytes_read, "Read MFT bitmap extent bytes");
                 if i == 0 && bytes_read > 0 {
-                    let sample_end = buffer_offset + 32.min(bytes_read as usize);
+                    let sample_end = buffer_offset + 32.min(u32_as_usize(bytes_read));
                     let sample: Vec<String> = buffer
                         .get(buffer_offset..sample_end)
                         .unwrap_or(&[])
@@ -849,7 +842,7 @@ impl VolumeHandle {
                 }
             }
 
-            buffer_offset += bytes_read as usize;
+            buffer_offset += u32_as_usize(bytes_read);
         }
 
         if verbose {
@@ -859,18 +852,19 @@ impl VolumeHandle {
                 file_size,
                 "Completed MFT bitmap read; truncating to reported file size"
             );
+            let file_size_usize = usize::try_from(file_size).unwrap_or(0);
             let all_ff = buffer
                 .iter()
-                .take(file_size as usize)
+                .take(file_size_usize)
                 .all(|&byte| byte == 0xFF);
             let all_00 = buffer
                 .iter()
-                .take(file_size as usize)
+                .take(file_size_usize)
                 .all(|&byte| byte == 0x00);
             tracing::info!(volume = %self.volume, all_ff, all_00, "Computed MFT bitmap byte-pattern summary");
         }
 
-        buffer.truncate(file_size as usize);
+        buffer.truncate(usize::try_from(file_size).unwrap_or(0));
         Ok(MftBitmap::from_bytes(buffer))
     }
 }
