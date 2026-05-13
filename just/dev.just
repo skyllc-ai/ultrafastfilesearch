@@ -407,3 +407,281 @@ quick-deploy:
     SECS=$((ELAPSED % 60))
     printf "\n\033[1;32m⚡ Quick deploy complete: v%s in %dm %ds\033[0m\n" "$NEW_VERSION" "$MINS" "$SECS"
     printf "\033[0;34m💡 On Windows: git pull && just use\033[0m\n"
+
+# Capture a workspace baseline snapshot under `docs/dev/baseline/<date>/`.
+#
+# Companion to `docs/dev/architecture/code_clean/phase_0_baseline_implementation_plan.md`
+# and `docs/dev/architecture/code_clean/world_class_rust_workspace_refactor_playbook.md`
+# (Phase 0).  The recipe captures the cheap (sub-5-minute) inventory
+# artifacts — workspace metadata, per-crate risk markers, unsafe blocks,
+# feature flags, API surface, CI inventory, dependency graph, supply-chain
+# checks.  Compile-bound baselines (`cargo check`, `cargo test`,
+# `cargo clippy`, `cargo doc`, `cargo build --timings`) are intentionally
+# skipped because they're already published by `pr-fast.yml` on every PR;
+# running them locally duplicates ~45 min of CI work with no new info.
+#
+# The output directory lives under `docs/dev/baseline/` which is
+# gitignored (see `.gitignore:135` — "internal dev docs, local only"),
+# so the snapshots stay on the local filesystem and never pollute git
+# history.
+#
+# Usage:
+#   just baseline-snapshot              # today's date (UTC)
+#   just baseline-snapshot 2026-05-12   # specific date
+#
+# Re-running on the same date overwrites the snapshot's contents.
+
+# Capture a workspace baseline snapshot under docs/dev/baseline/<date>/ (Phase-0 inventory).
+baseline-snapshot DATE=`date -u +%Y-%m-%d`:
+    #!/usr/bin/env bash
+    # `set -eu` only: rg returns exit-1 when a pattern has no matches in a
+    # directory, which is a normal outcome for inventory greps (e.g. an
+    # async-marker grep over a sync-only crate).  Enabling `pipefail` would
+    # propagate every such "no match" as a recipe failure.
+    set -eu
+    B="docs/dev/baseline/{{ DATE }}"
+    mkdir -p "$B"
+    printf "\033[0;34m📸 Capturing UFFS workspace baseline → %s\033[0m\n" "$B"
+
+    # ── Pre-flight: env + commit ──────────────────────────────────────────
+    git rev-parse HEAD > "$B/_commit.txt"
+    git log -1 --oneline >> "$B/_commit.txt"
+    {
+      echo "## Captured: $(date -u +%FT%TZ)"
+      echo
+      echo "### Host"; uname -mrsv
+      sw_vers 2>/dev/null || true
+      echo
+      echo "### Toolchain"; rustc --version --verbose
+      echo
+      echo "### Cargo tooling"
+      cargo --version
+      cargo nextest --version 2>&1 | head -1 || echo "(cargo-nextest not on PATH)"
+      cargo xwin --version    2>/dev/null   || echo "(cargo-xwin not on PATH)"
+      cargo deny --version    2>/dev/null   || echo "(cargo-deny not on PATH)"
+      cargo vet --version     2>/dev/null   || echo "(cargo-vet not on PATH)"
+      cargo audit --version   2>/dev/null   || echo "(cargo-audit not on PATH)"
+      just --version          2>&1 | head -1
+      gh --version            2>&1 | head -1 || echo "(gh not on PATH)"
+    } > "$B/_env.txt"
+
+    # ── Workspace metadata ────────────────────────────────────────────────
+    cargo metadata --format-version 1 --no-deps --frozen > "$B/_metadata.json" 2>/dev/null
+
+    # ── Per-crate risk markers (production paths only) ────────────────────
+    printf "  • risk_markers.md "
+    {
+      echo "# Per-crate dimension probes (UFFS baseline)"
+      echo
+      echo "Captured: $(date -u +%FT%TZ)  ·  commit $(git rev-parse --short HEAD)"
+      echo
+      printf "| crate | LOC src | unsafe { blocks | async sites | win FFI | unix FFI | pub@root | cast suppress | unwrap prod | expect prod | panic prod | build.rs | crate-doc //! |\n"
+      printf "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:-:|:-:|\n"
+      for c in crates/uffs-polars crates/uffs-security crates/uffs-text crates/uffs-time \
+               crates/uffs-mft crates/uffs-format crates/uffs-core crates/uffs-daemon \
+               crates/uffs-client crates/uffs-mcp crates/uffs-broker crates/uffs-cli \
+               crates/uffs-diag scripts/ci-pipeline scripts/ci/gen-hooks scripts/ci/gen-workflow; do
+        name=$(basename "$c")
+        src="$c/src"
+        [ -d "$src" ] || { printf "| %s | (no src/) | | | | | | | | | | | |\n" "$name"; continue; }
+        loc=$(find "$src" -name '*.rs' -not -name '*test*.rs' -not -path '*/tests/*' 2>/dev/null | xargs wc -l 2>/dev/null | awk 'END{print $1+0}')
+        # Multi-line `unsafe {` (real blocks only, not doc-comment text)
+        unsafe_n=$(rg --count-matches -U --multiline '^[^/]*\bunsafe\s*\{' "$src" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')
+        async_n=$(rg --count-matches 'async fn|impl .*Future\b' "$src" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')
+        winff=$(rg --count-matches '#\[cfg\(windows\)\]|windows::Win32' "$src" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')
+        unixff=$(rg --count-matches '#\[cfg\(unix\)\]|libc::' "$src" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')
+        pubroot=$(rg --count-matches '^pub ' "$src/lib.rs" 2>/dev/null | awk -F: '{print $NF+0}')
+        [ -z "$pubroot" ] && pubroot=0
+        # Multi-line attribute support: clippy::cast_* lint names
+        cast=$(rg --count-matches -U --multiline 'clippy::cast_possible_truncation|clippy::cast_sign_loss|clippy::cast_possible_wrap|clippy::cast_precision_loss|clippy::cast_lossless' "$src" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')
+        unwrap_p=$(rg --count-matches '\.unwrap\(\)' "$src" -g '!*test*.rs' -g '!tests/' 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')
+        expect_p=$(rg --count-matches '\.expect\(' "$src" -g '!*test*.rs' -g '!tests/' 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')
+        panic_p=$(rg --count-matches 'panic!\(|todo!\(|unimplemented!\(|unreachable!\(' "$src" -g '!*test*.rs' -g '!tests/' 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')
+        build=$([ -f "$c/build.rs" ] && echo "✅" || echo "")
+        # Look for `//!` in first 15 lines of lib.rs or main.rs (window large
+        # enough to skip SPDX + Copyright + blank line).
+        docs=""
+        for entry in "$src/lib.rs" "$src/main.rs"; do
+          if [ -f "$entry" ] && head -15 "$entry" | grep -q '^//!'; then docs="✅"; break; fi
+        done
+        printf "| \`%s\` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n" \
+          "$name" "$loc" "$unsafe_n" "$async_n" "$winff" "$unixff" "$pubroot" "$cast" "$unwrap_p" "$expect_p" "$panic_p" "$build" "$docs"
+      done
+    } > "$B/risk_markers.md"
+    printf "✓\n"
+
+    # ── Unsafe inventory ──────────────────────────────────────────────────
+    printf "  • unsafe_inventory.md "
+    {
+      echo "# Unsafe-block inventory"
+      echo
+      echo "Captured: $(date -u +%FT%TZ)  ·  commit $(git rev-parse --short HEAD)"
+      echo
+      total=$(rg -nU --multiline '^[^/]*\bunsafe\s*\{' crates/ scripts/ 2>/dev/null | wc -l | xargs)
+      echo "**Total real \`unsafe {\` blocks (excludes doc-comment matches): $total**"
+      echo
+      echo "## Per-crate density"
+      echo
+      echo "| crate | unsafe { blocks | SAFETY comments | coverage |"
+      echo "|---|---:|---:|---:|"
+      for c in crates/uffs-* scripts/ci-pipeline scripts/ci/gen-hooks scripts/ci/gen-workflow; do
+        name=$(basename "$c"); src="$c/src"; [ -d "$src" ] || continue
+        nbl=$(rg --count-matches -U --multiline '^[^/]*\bunsafe\s*\{' "$src" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')
+        nsa=$(rg --count-matches 'SAFETY:' "$src" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')
+        ratio="—"; if [ "$nbl" -gt 0 ]; then ratio=$(awk -v s="$nsa" -v b="$nbl" 'BEGIN { printf "%.2f", s/b }'); fi
+        [ "$nbl" -gt 0 ] && printf "| %s | %d | %d | %s |\n" "$name" "$nbl" "$nsa" "$ratio"
+      done | sort -t'|' -k3 -rn
+    } > "$B/unsafe_inventory.md"
+    printf "✓\n"
+
+    # ── Feature inventory ─────────────────────────────────────────────────
+    printf "  • feature_inventory.md "
+    {
+      echo "# Feature flag inventory"
+      echo
+      echo "Captured: $(date -u +%FT%TZ)  ·  commit $(git rev-parse --short HEAD)"
+      echo
+      for c in crates/*/Cargo.toml scripts/*/Cargo.toml scripts/ci/*/Cargo.toml; do
+        name=$(awk -F'"' '/^name *=/ {print $2; exit}' "$c")
+        block=$(awk '/^\[features\]/{f=1;next} /^\[/{f=0} f' "$c")
+        if [ -n "$block" ]; then echo "### \`$name\`"; echo '```toml'; echo "$block"; echo '```'; fi
+      done
+    } > "$B/feature_inventory.md"
+    printf "✓\n"
+
+    # ── API surface ───────────────────────────────────────────────────────
+    printf "  • api_surface.md "
+    {
+      echo "# Public API surface — root-level \`pub\` items per crate"
+      echo
+      echo "Captured: $(date -u +%FT%TZ)  ·  commit $(git rev-parse --short HEAD)"
+      echo
+      echo "| crate | total pub | pub use | pub mod | pub fn | pub struct | pub enum | pub trait | pub const |"
+      echo "|---|---:|---:|---:|---:|---:|---:|---:|---:|"
+      # Helper: count matches of a pattern in a file, returning 0 when no
+      # matches (rg exits 1 on no-match, which would trip `set -e`).
+      count_in() { rg --count-matches "$1" "$2" 2>/dev/null || echo 0; }
+      for c in crates/uffs-*/; do
+        name=$(basename "$c"); lib="$c/src/lib.rs"; [ -f "$lib" ] || continue
+        n=$(count_in '^pub '         "$lib")
+        u=$(count_in '^pub use '     "$lib")
+        m=$(count_in '^pub mod '     "$lib")
+        f=$(count_in '^pub fn '      "$lib")
+        s=$(count_in '^pub struct '  "$lib")
+        e=$(count_in '^pub enum '    "$lib")
+        t=$(count_in '^pub trait '   "$lib")
+        k=$(count_in '^pub const '   "$lib")
+        printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n" \
+          "$name" "$n" "$u" "$m" "$f" "$s" "$e" "$t" "$k"
+      done
+    } > "$B/api_surface.md"
+    printf "✓\n"
+
+    # ── CI workflow inventory ─────────────────────────────────────────────
+    printf "  • ci_inventory.md "
+    {
+      echo "# CI workflow inventory"
+      echo
+      echo "Captured: $(date -u +%FT%TZ)  ·  commit $(git rev-parse --short HEAD)"
+      echo
+      echo "## Workflows under \`.github/workflows/\`"
+      echo
+      echo "| workflow | trigger | jobs | runs-on (primary) |"
+      echo "|---|---|---:|---|"
+      for f in .github/workflows/*.yml; do
+        name=$(basename "$f")
+        trig=$(awk '/^on:/{in_on=1; next} in_on && /^[a-z]/{print; exit}' "$f" | head -1 | tr -d ':' | xargs)
+        jobs=$(awk '/^jobs:/{in_j=1; next} in_j && /^  [a-z]/{c++} END{print c+0}' "$f")
+        ros=$(grep -m1 'runs-on:' "$f" | sed 's/.*runs-on: *//' | tr -d "'\"")
+        printf "| \`%s\` | %s | %s | %s |\n" "$name" "$trig" "$jobs" "$ros"
+      done
+      echo
+      echo "Total workflow files: $(ls .github/workflows/*.yml | wc -l | xargs)"
+    } > "$B/ci_inventory.md"
+    printf "✓\n"
+
+    # ── Dependency graph ──────────────────────────────────────────────────
+    #
+    # Source of truth: `Cargo.lock` (static file, sub-second grep/awk).
+    # We DO NOT use `cargo tree --workspace --prefix none --no-dedupe |
+    # sort -u | wc -l` — that pattern materialises every occurrence of
+    # every crate in the resolved graph (~10 MB of text for this workspace)
+    # only to throw most of it away.  The lockfile already encodes the
+    # resolved (deduplicated) graph: one `[[package]] name = "…"` block
+    # per crate-version.  Two grep/awk passes give identical numbers in
+    # < 100 ms — see PR #186 review thread for the perf comparison.
+    #
+    # `cargo tree --workspace -d` is still invoked, but only for the
+    # human-readable `duplicate_deps.txt` artifact (which shows the
+    # call-graph paths that pull in each duplicated crate).  The COUNTS
+    # come from the lockfile, not from grepping the cargo-tree output.
+    printf "  • duplicate_deps.md "
+    cv=$(grep -c '^name = ' Cargo.lock)
+    dn=$(awk -F'"' '/^name = /{print $2}' Cargo.lock | sort -u | wc -l | xargs)
+    dup=$(awk -F'"' '/^name = /{print $2}' Cargo.lock | sort | uniq -d | wc -l | xargs)
+    wsm=$(jq -r '.packages | length' "$B/_metadata.json" 2>/dev/null || echo 0)
+    cargo tree --workspace -d --edges normal,build --color never \
+      > "$B/duplicate_deps.txt" 2>&1 || true
+    {
+      echo "# Dependency baseline"
+      echo
+      echo "Captured: $(date -u +%FT%TZ)  ·  commit $(git rev-parse --short HEAD)"
+      echo
+      echo "Counts derived from \`Cargo.lock\` (sub-second).  See"
+      echo "\`duplicate_deps.txt\` (\`cargo tree -d\`) for the human-readable"
+      echo "call-graph paths."
+      echo
+      echo "| metric | value |"
+      echo "|---|---:|"
+      echo "| crate-versions in Cargo.lock | $cv |"
+      echo "| distinct crate names         | $dn |"
+      echo "| workspace members            | $wsm |"
+      echo "| external crate-versions      | $((cv - wsm)) |"
+      echo "| external distinct names      | $((dn - wsm)) |"
+      echo "| crates with ≥2 versions      | $dup |"
+    } > "$B/duplicate_deps.md"
+    printf "✓\n"
+
+    # ── Test enumeration (no compile) ─────────────────────────────────────
+    printf "  • test_count.txt "
+    cargo nextest list --workspace 2>/dev/null > "$B/_tests_full.txt" || true
+    total_tests=$(grep -cE '^[a-z][a-z0-9_-]+ ' "$B/_tests_full.txt" || echo 0)
+    {
+      echo "# Test inventory (cargo nextest list --workspace)"
+      echo
+      echo "Captured: $(date -u +%FT%TZ)  ·  commit $(git rev-parse --short HEAD)"
+      echo
+      echo "**Total unit + integration tests: $total_tests**"
+      echo
+      echo "| crate suite | tests |"
+      echo "|---|---:|"
+      grep -E '^[a-z][a-z0-9_-]+ ' "$B/_tests_full.txt" | awk '{print $1}' | \
+        sort | uniq -c | sort -rn | awk '{printf "| %s | %d |\n", $2, $1}'
+    } > "$B/test_count.txt"
+    printf "✓\n"
+
+    # ── Supply chain ──────────────────────────────────────────────────────
+    printf "  • supply chain (deny/vet/audit) "
+    cargo deny  check 2>&1 | tee "$B/deny_baseline.txt"  > /dev/null || true
+    cargo vet         2>&1 | tee "$B/vet_baseline.txt"   > /dev/null || true
+    cargo audit --quiet 2>&1 | tee "$B/audit_baseline.txt" > /dev/null || true
+    printf "✓\n"
+
+    # ── README index ──────────────────────────────────────────────────────
+    {
+      echo "# Workspace baseline snapshot — {{ DATE }}"
+      echo
+      echo "| Field | Value |"
+      echo "|---|---|"
+      echo "| Captured (UTC) | $(date -u +%FT%TZ) |"
+      echo "| Commit | \`$(git rev-parse --short HEAD)\` |"
+      echo "| Recipe | \`just baseline-snapshot {{ DATE }}\` |"
+      echo
+      echo "Companion plan: \`docs/dev/architecture/code_clean/phase_0_baseline_implementation_plan.md\`"
+      echo
+      echo "## Contents"
+      echo
+      ls -1 "$B" | grep -v '^README\.md$' | awk '{printf "- \x60%s\x60\n", $1}'
+    } > "$B/README.md"
+
+    printf "\033[0;32m✓ Snapshot complete → %s\033[0m\n" "$B"
