@@ -29,7 +29,7 @@ categories.workspace = true
 # `docs/architecture/release-automation-plan.md`.  (A future R9+ RFC
 # could move `len_to_u16` and `parity_attributes` into a polars-free
 # foundation crate to break this transitive chain.)
-publish = false
+publish.workspace = true
 
 # Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
 # Multi-target build so the Unix-domain-socket and Windows-named-pipe IPC

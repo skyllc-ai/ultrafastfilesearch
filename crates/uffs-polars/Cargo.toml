@@ -44,7 +44,7 @@ categories.workspace = true
 # upstream publishes a release with those patches, this crate cannot
 # ship to crates.io.  See `docs/architecture/release-automation-plan.md`
 # deviation log row 5 for the full trail.
-publish = false
+publish.workspace = true
 
 # Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
 # `all-features = true` is acceptable here because all `[features]` below

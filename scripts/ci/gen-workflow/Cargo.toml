@@ -20,7 +20,11 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Gate-manifest workflow structural validator (gates-manifest-plan.md Phase 3)"
-publish = false
+# Posture: **permanently non-publishable** — internal workspace CI tooling.
+# Distinct from the 8 Polars-blocked deferred-publishable crates: this
+# crate would remain non-publishable even if Polars upstream released,
+# because it is internal CI orchestration, not a reusable library.
+publish.workspace = true
 
 [[bin]]
 name = "gen-workflow"

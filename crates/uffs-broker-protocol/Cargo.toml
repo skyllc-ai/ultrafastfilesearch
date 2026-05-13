@@ -29,6 +29,11 @@ authors.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
+# Explicitly publishable — overrides the workspace default `publish = false`
+# set in root `Cargo.toml`'s `[workspace.package]`.  Member of the 5-crate
+# publishable subset (`uffs-broker`, `uffs-broker-protocol`, `uffs-security`,
+# `uffs-text`, `uffs-time`) per `release-automation-baseline.md` §10 row 5.
+publish = true
 
 # Phase R6 of `release-automation-plan.md` step 3: docs.rs build configuration.
 # Pure-logic crate — docs.rs's default Linux build renders everything; no

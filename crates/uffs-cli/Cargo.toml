@@ -35,7 +35,7 @@ categories.workspace = true
 # was never the recommended install method anyway.  See
 # `crates/uffs-polars/Cargo.toml` and the deviation log row 5 in
 # `docs/architecture/release-automation-plan.md`.
-publish = false
+publish.workspace = true
 
 # Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
 # Multi-target build so platform-gated CLI subcommands render in docs.

@@ -40,7 +40,7 @@ categories.workspace = true
 # until polars upstream publishes a release with the nightly-API
 # patches.  See `crates/uffs-polars/Cargo.toml` and the deviation log
 # row 5 in `docs/architecture/release-automation-plan.md`.
-publish = false
+publish.workspace = true
 
 # Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
 # See `uffs-time/Cargo.toml` for the full rationale.

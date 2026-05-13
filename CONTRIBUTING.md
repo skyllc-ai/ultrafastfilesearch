@@ -20,7 +20,6 @@ Thanks for helping improve UFFS.
 ## Toolchain and setup
 
 - Use the pinned nightly toolchain from `rust-toolchain.toml`.
-- The workspace MSRV is Rust 1.91, but day-to-day development should use the pinned nightly.
 - `just` is the primary workflow entry point.
 
 Recommended setup:
@@ -29,6 +28,17 @@ Recommended setup:
 2. Install `just`: `cargo install just`
 3. Install the common contributor toolchain: `just setup`
 4. List available workflows any time with `just`
+
+### MSRV policy
+
+The workspace pins **Rust 1.91** as its declared minimum supported stable version (`rust-version = "1.91"` in `Cargo.toml`'s `[workspace.package]`).  This declaration sets four contracts:
+
+- **Supported stable version:** Pure-Rust workspace code (i.e., everything outside the Polars-backed compilation surface) compiles on stable Rust **1.91 or newer**.  This is verified weekly by the `tier-2.yml::msrv` CI job, which installs stable 1.91 and runs `cargo +1.91 check --workspace --locked --all-features` plus a sibling `--no-default-features` run, failing the job on any stable-incompatible feature use.  `cargo check` (rather than `build`) is sufficient because every MSRV breach surfaces during type-checking.
+- **Nightly is required, not advisory:** Day-to-day development uses the pinned nightly toolchain from `rust-toolchain.toml`.  Nightly is **required** for two reasons: (1) `uffs-polars` is built with `features = ["nightly", "simd"]` to unlock Polars's SIMD-accelerated compute kernels, which need nightly intrinsics; (2) the workspace `[workspace.lints.rust]` policy enables `#[expect(...)]` (stable since 1.81, but other unstable lints are also gated to nightly).  The `tier-2.yml::msrv` stable build proves the *non-Polars* surface still compiles on stable; it does NOT prove the binary distribution is stable-buildable.
+- **Update cadence:** MSRV bumps are coupled to **major workspace-version boundaries** (`0.X.0` → `0.Y.0`).  Patch-level releases (`0.5.95` → `0.5.96`) NEVER raise MSRV.  Minor releases bump MSRV only when a transitive dep we cannot pin around (e.g., Polars, Tokio) bumps its own MSRV — in which case the bump is announced in `CHANGELOG.md` under that release's `### Toolchain` heading.  The nightly channel pin (`rust-toolchain.toml`'s `channel = "nightly-YYYY-MM-DD"`) bumps more frequently — see that file's header comment for the bump-cadence history and rollback rationale.
+- **Older release branches:** UFFS is pre-1.0 and has **no maintained back-branches**.  Only the latest `main`-derived release line carries MSRV.  Once UFFS reaches 1.0, this section will be expanded to cover branch-specific MSRV (e.g., `release-1.x` may stay on Rust 1.91 while `main` advances to 1.95).  Until then, "the workspace MSRV" unambiguously means "the MSRV at `main`'s `HEAD`".
+
+If any of these contracts changes, the MSRV section in `CHANGELOG.md` MUST be updated **in the same PR** that lands the change; reviewers should reject changes to `rust-version` (or to the `tier-2.yml::msrv` job) that don't update this section.
 
 For cross-compilation from macOS/Linux hosts:
 

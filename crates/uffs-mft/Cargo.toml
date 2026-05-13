@@ -31,7 +31,7 @@ categories.workspace = true
 # carries, `cargo package` (and therefore release-plz) hard-fails.  See
 # `crates/uffs-polars/Cargo.toml` and the deviation log row 5 in
 # `docs/architecture/release-automation-plan.md`.
-publish = false
+publish.workspace = true
 
 # Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
 # Multi-target build so `#[cfg(windows)]` MFT readers and `#[cfg(unix)]`

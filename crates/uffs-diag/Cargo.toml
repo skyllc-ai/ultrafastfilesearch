@@ -48,9 +48,15 @@ categories.workspace = true
 #
 # Per workspace-layout in root `Cargo.toml::[workspace.members]`, this is
 # explicitly tagged "Retained workspace-only diagnostic tools (not shipped
-# in dist/)".  The `publish = false` here makes that retention contract
-# enforceable at `cargo publish` time, not just by convention.
-publish = false
+# in dist/)".  Inheriting the workspace default `publish = false` here
+# makes that retention contract enforceable at `cargo publish` time, not
+# just by convention.
+#
+# Posture: **permanently non-publishable** — distinct from the 8
+# Polars-blocked deferred-publishable crates (uffs-mft, uffs-core, etc.).
+# uffs-diag would remain non-publishable even if Polars upstream
+# released its nightly-API patches; it is internal-by-design tooling.
+publish.workspace = true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Binaries
