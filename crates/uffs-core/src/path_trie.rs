@@ -63,6 +63,7 @@
 use core::mem::size_of;
 
 use rustc_hash::FxHashMap;
+use uffs_mft::len_to_u32;
 
 use crate::compact::CompactRecord;
 
@@ -142,37 +143,28 @@ impl PathTrie {
         let mut nodes: Vec<TrieNode> = Vec::with_capacity(dir_count_estimate);
         let mut trie_names: Vec<u8> = Vec::with_capacity(dir_count_estimate * 16);
 
+        // Every `usize -> u32` conversion below uses the centralized
+        // `len_to_u32` helper (which saturates at `u32::MAX`), so the
+        // call sites stay free of `cast_possible_truncation` expects.
+        // The saturating fallback is unreachable for any realistic NTFS
+        // MFT: records.len() and nodes.len() are bounded by the NTFS
+        // ~4 G entries-per-volume cap, and trie_names.len() is bounded
+        // by the sum of u16 name_len fields across directories.
         for (record_idx_usize, record) in records.iter().enumerate() {
             if !record.is_directory() {
                 continue;
             }
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "records.len() ≤ u32::MAX by NTFS MFT layout (max ~4 G \
-                          entries per volume); the index fits u32 by construction"
-            )]
-            let record_idx = record_idx_usize as u32;
+            let record_idx = len_to_u32(record_idx_usize);
 
             // Slice the basename out of the shared name buffer.
             let name_start = record.name_offset as usize;
             let name_end = name_start + record.name_len as usize;
             let basename = names.get(name_start..name_end).unwrap_or(&[]);
 
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "trie_names.len() growth is bounded by sum of u16 name_len \
-                          across directories; an entire-drive trie's names buffer \
-                          stays under 4 GB by an enormous margin"
-            )]
-            let trie_name_offset = trie_names.len() as u32;
+            let trie_name_offset = len_to_u32(trie_names.len());
             trie_names.extend_from_slice(basename);
 
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "nodes.len() ≤ records.len() ≤ u32::MAX by the same NTFS \
-                          MFT bound"
-            )]
-            let trie_idx = nodes.len() as u32;
+            let trie_idx = len_to_u32(nodes.len());
             record_to_trie.insert(record_idx, trie_idx);
 
             // Stash the *record-side* parent_idx temporarily; pass 2
@@ -286,11 +278,7 @@ impl PathTrie {
         let mut roots: Vec<u32> = Vec::new();
         for (idx, node) in self.nodes.iter().enumerate() {
             if node.parent_idx == NO_PARENT {
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "nodes.len() ≤ u32::MAX by the same MFT bound as build"
-                )]
-                let trie_idx = idx as u32;
+                let trie_idx = len_to_u32(idx);
                 roots.push(trie_idx);
             }
         }
@@ -473,11 +461,7 @@ fn build_children_csr(nodes: &[TrieNode]) -> (Vec<u32>, Vec<u32>) {
         let Some(target) = indices.get_mut(*pos_slot as usize) else {
             continue;
         };
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "nodes.len() ≤ u32::MAX (build precondition)"
-        )]
-        let child_idx = idx_usize as u32;
+        let child_idx = len_to_u32(idx_usize);
         *target = child_idx;
         *pos_slot += 1;
     }
@@ -593,17 +577,11 @@ mod tests {
         let mut expected_dir_names: Vec<String> = Vec::with_capacity(1000);
         for i in 0_u32..1000 {
             let name = format!("dir{i}");
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "names.len() in the test stays well under u32::MAX"
-            )]
-            let off = names.len() as u32;
+            // Test fixture sizes are statically bounded, so the
+            // saturating `try_from` fallbacks are unreachable.
+            let off = len_to_u32(names.len());
             names.extend_from_slice(name.as_bytes());
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "name.len() ≤ 'dir' + 3 digits = 6 bytes"
-            )]
-            let len = name.len() as u16;
+            let len = uffs_mft::len_to_u16(name.len());
             records.push(make_record(off, len, 0, true));
             expected_dir_names.push(name);
         }
@@ -622,11 +600,9 @@ mod tests {
         for (offset, expected_name) in expected_dir_names.iter().enumerate() {
             let segs: [&[u8]; 2] = [b"C", expected_name.as_bytes()];
             let found = trie.lookup_path(&segs).expect("lookup_path missed");
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "offset < 1000 fits u32 trivially"
-            )]
-            let expected_idx = offset as u32 + 1;
+            // offset < 1000 fits u32 trivially; saturating fallback is
+            // unreachable.
+            let expected_idx = len_to_u32(offset) + 1;
             assert_eq!(found, expected_idx);
         }
     }
