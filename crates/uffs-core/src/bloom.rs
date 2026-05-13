@@ -134,38 +134,31 @@ impl Bloom {
 
         // m / n = -ln(p) / ln(2)^2
         let ln2 = core::f64::consts::LN_2;
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "n_items > 1<<53 would mean a multi-petabyte bloom; not a real \
-                      use case for filesystem-name filters"
-        )]
-        let n_as_float = n_items as f64;
+        // `usize -> f64` precision-loss cast routed through the
+        // centralized `uffs_mft::usize_to_f64` helper.  `n_items >
+        // 1<<53` would mean a multi-petabyte bloom, which is not a
+        // real filesystem-name-filter use case.
+        let n_as_float = uffs_mft::usize_to_f64(n_items);
         let bits_per_element = -target_fpr.ln() / (ln2 * ln2);
         let nbits_as_float = (n_as_float * bits_per_element).ceil();
 
         // Round up to next multiple of 64 so the bit-packed Vec<u64>
         // has whole-word alignment.  Saturate to u64::MAX on overflow
-        // (a 16-EB bloom is well outside any realistic call site).
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "nbits_as_float is non-negative and bounded by ceil(n * 30) for \
-                      reasonable inputs; the f64-to-u64 cast is the standard \
-                      conversion clippy permits via `#[expect]`"
-        )]
-        let nbits_raw = nbits_as_float as u64;
+        // (a 16-EB bloom is well outside any realistic call site);
+        // `uffs_mft::f64_to_u64` carries the single documented
+        // `cast_possible_truncation` / `cast_sign_loss` /
+        // `cast_precision_loss` triplet.
+        let nbits_raw = uffs_mft::f64_to_u64(nbits_as_float);
         let aligned_nbits = nbits_raw.div_ceil(64).saturating_mul(64).max(64);
 
-        // k = (m / n) * ln(2), clamped to [1, 32].  The clamp protects
-        // the u8 cast and matches the tiering-plan §6.2 envelope.
+        // k = (m / n) * ln(2), clamped to [1, 32].  The clamp bounds
+        // the value into u8 range; we go through u64 first via the
+        // centralized `f64_to_u64` helper so the only remaining
+        // narrowing is the saturating `u8::try_from` (which is
+        // lint-free).
         let k_as_float = (bits_per_element * ln2).round();
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "k_as_float is in [1.0, 32.0] after clamp; the f64-to-u8 cast \
-                      is well-defined (the clamp bounds the value into u8 range)"
-        )]
-        let k_clamped = k_as_float.clamp(1.0_f64, 32.0_f64) as u8;
+        let k_clamped_f64 = k_as_float.clamp(1.0_f64, 32.0_f64);
+        let k_clamped = u8::try_from(uffs_mft::f64_to_u64(k_clamped_f64)).unwrap_or(32_u8);
 
         Self::with_size_and_k(aligned_nbits, k_clamped)
     }
@@ -308,18 +301,15 @@ impl Bloom {
         if n_inserted == 0 || self.nbits == 0 {
             return 0.0_f64;
         }
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "n_inserted up to 2^53 is representable exactly in f64; beyond \
-                      that the FPR estimate is already saturated near 1.0 anyway"
-        )]
-        let n_as_float = n_inserted as f64;
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "see above; nbits up to 2^53 is exact, beyond that the bloom is \
-                      petabyte-scale and FPR is dominated by k, not m"
-        )]
-        let m_as_float = self.nbits as f64;
+        // Both `usize -> f64` and `u64 -> f64` conversions go through
+        // the centralized `uffs_mft::{usize_to_f64, u64_to_f64}`
+        // helpers (each of which carries a single documented
+        // `cast_precision_loss` expect).  Beyond the 2^53 representable
+        // range, the FPR estimate is already saturated near 1.0 and
+        // dominated by `k_hashes`, so the precision loss is invisible
+        // to callers.
+        let n_as_float = uffs_mft::usize_to_f64(n_inserted);
+        let m_as_float = uffs_mft::u64_to_f64(self.nbits);
         let k_as_float = f64::from(self.k_hashes);
         let inner = 1.0_f64 - (-k_as_float * n_as_float / m_as_float).exp();
         inner.powf(k_as_float)
