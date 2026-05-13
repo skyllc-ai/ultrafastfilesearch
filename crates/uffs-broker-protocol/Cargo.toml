@@ -1,0 +1,48 @@
+# ============================================================================
+# uffs-broker-protocol: Broker wire-protocol types
+# ============================================================================
+# Layer 0 Foundation crate.  Tiny dedicated lib with a single dep
+# (`thiserror`).  Pure-logic byte-shuffling — no Windows FFI, no I/O.
+#
+# Shared between `uffs-broker` (the elevated handle vendor, Windows-only
+# binary) and `uffs-daemon::broker_client` (the handle consumer, also
+# Windows-only).  Before F5 (issue #205), both sides duplicated a
+# `BROKER_PIPE_NAME` const + hand-rolled wire-byte slicing, kept in
+# sync by a textual `// must match` reviewer-comment.  This crate
+# replaces that textual coupling with a compile-enforced single source
+# of truth.
+#
+# Cross-platform by design: tests run on every CI lane (Linux + macOS +
+# Windows).  The Windows-only FFI machinery stays in `uffs-broker`'s
+# `[[bin]]` where it belongs.
+# ============================================================================
+
+[package]
+name = "uffs-broker-protocol"
+description = "UFFS Access Broker wire-protocol types (cross-platform, shared by uffs-broker + uffs-daemon)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+# Phase R6 of `release-automation-plan.md` step 3: docs.rs build configuration.
+# Pure-logic crate — docs.rs's default Linux build renders everything; no
+# multi-target override needed.  `--cfg docsrs` enables future
+# `#[cfg_attr(docsrs, doc(cfg(...)))]` should this crate ever gate a feature
+# behind a cfg.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+# Structured error type for `ProtocolError`.  Single non-trivial dep
+# in this crate; protocol encode/decode are otherwise plain bytes.
+thiserror.workspace = true
+
+[lints]
+workspace = true

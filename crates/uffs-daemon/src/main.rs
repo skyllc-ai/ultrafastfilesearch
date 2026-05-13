@@ -59,14 +59,14 @@ use toml as _;
 use tracing as _;
 use tracing_appender as _;
 use tracing_subscriber as _;
-// `uffs_broker` is in `[target.'cfg(windows)'.dependencies]` and
-// consumed only by the library's `broker_client.rs` on Windows.  The
-// thin binary `uffsd` doesn't reference it.  Mark intentional on
-// Windows so `unused_crate_dependencies` stays quiet; on non-Windows
-// the dep doesn't exist as an extern crate so no marker is needed
-// (F5 / issue #205).
+// `uffs_broker_protocol` is in `[target.'cfg(windows)'.dependencies]`
+// of this crate and consumed only by the library's `broker_client.rs`
+// on Windows.  The thin binary `uffsd` doesn't reference it directly.
+// Mark intentional on Windows so `unused_crate_dependencies` stays
+// quiet; on non-Windows the dep doesn't exist as an extern crate so
+// no marker is needed (F5 / issue #205).
 #[cfg(windows)]
-use uffs_broker as _;
+use uffs_broker_protocol as _;
 use uffs_client::connect_sync::UffsClientSync;
 use uffs_client::protocol::response::LoadDriveResponse;
 use uffs_core as _;

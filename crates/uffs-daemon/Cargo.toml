@@ -103,12 +103,12 @@ libc.workspace = true
 # Windows PID file liveness check + shared broker wire-protocol types
 # (consumed by `broker_client.rs`, which is fully `#[cfg(windows)]`).
 # Target-gating eliminates the non-Windows extern-crate visibility of
-# `uffs-broker` — no `use uffs_broker as _;` markers needed in main.rs
+# `uffs-broker-protocol` — no `use … as _;` markers needed in main.rs
 # or the integration tests because the dep simply doesn't exist on
 # non-Windows targets.  F5 / issue #205.
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
-uffs-broker.workspace = true
+uffs-broker-protocol.workspace = true
 
 [dev-dependencies]
 # Phase 1 of memory-tiering: property-test the `ShardState` legal-transition

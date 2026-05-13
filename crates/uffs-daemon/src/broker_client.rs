@@ -7,29 +7,31 @@
 //! to obtain elevated volume handles instead of requiring its own elevation.
 //!
 //! Flow:
-//! 1. Check if the broker pipe exists ([`uffs_broker::protocol::PIPE_NAME`])
+//! 1. Check if the broker pipe exists ([`uffs_broker_protocol::PIPE_NAME`])
 //! 2. Connect to it
 //! 3. Encode the drive letter via
-//!    [`uffs_broker::protocol::HandleRequest::encode`]
-//! 4. Decode the response via [`uffs_broker::protocol::HandleResponse::parse`]
+//!    [`uffs_broker_protocol::HandleRequest::encode`]
+//! 4. Decode the response via [`uffs_broker_protocol::HandleResponse::parse`]
 //! 5. Use the handle for MFT reading
 //!
 //! The wire format used to be duplicated here as a `const BROKER_PIPE_NAME`
 //! plus hand-rolled byte-slicing with a `// must match
 //! uffs-broker/src/broker.rs` reviewer-comment as the only protection
 //! against drift.  F5 (issue #205) promoted those shared symbols to
-//! `uffs_broker::protocol`, eliminating the textual coupling.
+//! the dedicated [`uffs_broker_protocol`] crate, eliminating the
+//! textual coupling.
 //!
-//! `uffs-broker` is scoped to `[target.'cfg(windows)'.dependencies]`
-//! in `Cargo.toml`, so it isn't an extern crate at all on non-Windows
-//! targets — no `use uffs_broker as _;` marker is needed.
+//! `uffs-broker-protocol` is scoped to
+//! `[target.'cfg(windows)'.dependencies]` in `Cargo.toml`, so it isn't
+//! an extern crate at all on non-Windows targets — no `use … as _;`
+//! marker is needed.
 
 /// Check if the Access Broker is available (pipe exists).
 #[cfg(windows)]
 pub(crate) fn broker_available() -> bool {
     use std::os::windows::ffi::OsStrExt as _;
 
-    use uffs_broker::protocol::PIPE_NAME;
+    use uffs_broker_protocol::PIPE_NAME;
     use windows::Win32::Storage::FileSystem::GetFileAttributesW;
     use windows::core::PCWSTR;
 
@@ -56,7 +58,7 @@ pub(crate) fn broker_available() -> bool {
 pub(crate) fn request_volume_handle(drive_letter: char) -> anyhow::Result<u64> {
     use std::io::{Read as _, Write as _};
 
-    use uffs_broker::protocol::{
+    use uffs_broker_protocol::{
         HandleRequest, HandleResponse, PIPE_NAME, RESPONSE_WIRE_LEN, Status,
     };
 

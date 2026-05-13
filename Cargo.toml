@@ -20,13 +20,14 @@
 resolver = "3"
 members = [
   # ── Foundation ──
-  "crates/uffs-polars",   # 🚀 Polars facade (compilation isolation)
-  "crates/uffs-security", # 🔒 Crypto, key storage, secure FS ops
-  "crates/uffs-text",     # 📝 Unicode text processing, i18n foundation
-  "crates/uffs-time",     # ⏱️ NTFS FILETIME arithmetic (pure, zero deps)
-  "crates/uffs-mft",      # 📦 MFT reading → Polars DataFrame
-  "crates/uffs-format",   # 🧾 Shared CSV formatter (daemon + thin CLI)
-  "crates/uffs-core",     # 🎯 Query engine + compact search engine
+  "crates/uffs-polars",          # 🚀 Polars facade (compilation isolation)
+  "crates/uffs-security",        # 🔒 Crypto, key storage, secure FS ops
+  "crates/uffs-text",            # 📝 Unicode text processing, i18n foundation
+  "crates/uffs-time",            # ⏱️ NTFS FILETIME arithmetic (pure, zero deps)
+  "crates/uffs-broker-protocol", # 📟 Cross-platform broker wire-protocol types (F5)
+  "crates/uffs-mft",             # 📦 MFT reading → Polars DataFrame
+  "crates/uffs-format",          # 🧾 Shared CSV formatter (daemon + thin CLI)
+  "crates/uffs-core",            # 🎯 Query engine + compact search engine
   # ── Daemon Architecture ──
   "crates/uffs-daemon", # 🛡️ Background service process
   "crates/uffs-client", # 📡 Thin client library
@@ -104,12 +105,17 @@ uffs-mft = { path = "crates/uffs-mft", version = "0.5.95" }
 uffs-format = { path = "crates/uffs-format", version = "0.5.95" }
 uffs-core = { path = "crates/uffs-core", version = "0.5.95" }
 uffs-client = { path = "crates/uffs-client", version = "0.5.95" }
-# `uffs-broker` exposes a small `protocol` library (wire-protocol types
-# shared with `uffs-daemon::broker_client`) alongside its Windows-only
-# `[[bin]]`.  Added as a workspace dep in F5 (issue #205) so `uffs-daemon`
-# can import the shared types and stop duplicating `BROKER_PIPE_NAME`
-# and the wire-format byte literals.
-uffs-broker = { path = "crates/uffs-broker", version = "0.5.95" }
+# `uffs-broker-protocol` carries the wire-protocol types shared between
+# `uffs-broker` (the elevated handle vendor, Windows-only binary) and
+# `uffs-daemon::broker_client` (the handle consumer).  Pure-logic
+# Layer-0 lib — cross-platform tests run on every CI lane.  Added in
+# F5 (issue #205) so neither side duplicates `BROKER_PIPE_NAME` /
+# wire-format byte literals.
+uffs-broker-protocol = { path = "crates/uffs-broker-protocol", version = "0.5.95" }
+# NOTE: no `uffs-broker` workspace dependency alias on purpose —
+# `uffs-broker` is a binary-only crate (the only `[lib]` it carries is
+# this protocol module's now-extracted sibling); no other workspace
+# member consumes it as a library.
 # NOTE: no `uffs-diag` workspace dependency alias on purpose.
 # It is a top-level diagnostic/tool crate, not a shared runtime dependency.
 

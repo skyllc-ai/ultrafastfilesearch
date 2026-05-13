@@ -4,6 +4,12 @@
 //! Wire protocol between `uffs-broker` (elevated handle vendor) and
 //! `uffs-daemon::broker_client` (handle consumer).
 //!
+//! This crate is a dedicated cross-platform Layer-0 library — pure
+//! byte-shuffling, no Windows FFI, no I/O.  Both sides of the wire
+//! (the broker binary on Windows, the daemon-side client also on
+//! Windows) import the types defined here so the wire format has a
+//! single source of truth.
+//!
 //! # Wire format (1-RTT, little-endian)
 //!
 //! Request: `[u8; 1]`
@@ -106,7 +112,7 @@ pub enum ProtocolError {
 /// # Example
 ///
 /// ```
-/// use uffs_broker::protocol::{HandleRequest, REQUEST_WIRE_LEN};
+/// use uffs_broker_protocol::{HandleRequest, REQUEST_WIRE_LEN};
 ///
 /// let req = HandleRequest { drive: 'c' };
 /// let bytes = req.encode();
@@ -223,7 +229,7 @@ impl Status {
 /// # Example
 ///
 /// ```
-/// use uffs_broker::protocol::{HandleResponse, RESPONSE_WIRE_LEN, Status};
+/// use uffs_broker_protocol::{HandleResponse, RESPONSE_WIRE_LEN, Status};
 ///
 /// let resp = HandleResponse {
 ///     status: Status::Ok,

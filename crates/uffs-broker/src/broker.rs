@@ -9,27 +9,23 @@
 //!
 //! # Protocol
 //!
-//! See [`uffs_broker::protocol`](crate::protocol) for the authoritative
-//! wire-format definition (1-byte drive-letter request, 9-byte status +
-//! LE-u64 handle response).  Both this binary and
-//! `uffs_daemon::broker_client` consume the same module — there is no
-//! second copy of the protocol constants or byte layout anywhere in the
-//! tree.
+//! See [`uffs_broker_protocol`] for the authoritative wire-format
+//! definition (1-byte drive-letter request, 9-byte status + LE-u64
+//! handle response).  Both this binary and
+//! `uffs_daemon::broker_client` consume the same crate — there is no
+//! second copy of the protocol constants or byte layout anywhere in
+//! the tree.
 //!
 //! The broker opens `\\.\X:` with `FILE_READ_DATA` + `SeBackupPrivilege`,
 //! then `DuplicateHandle`s it into the client process with read-only access.
 
-// `broker` is a module inside the binary crate; the lib crate (whose
-// crate-root is `src/lib.rs`) is reachable from here via its package
-// name `uffs_broker`.  See `Cargo.toml [lib].name`.
 #[cfg(windows)]
-use uffs_broker::protocol::{HandleRequest, HandleResponse, PIPE_NAME, RESPONSE_WIRE_LEN};
+use uffs_broker_protocol::{HandleRequest, HandleResponse, PIPE_NAME, RESPONSE_WIRE_LEN};
 
 /// Run the broker (called from main).
 ///
 /// Scope is `pub(crate)` because `broker` is a private module of the
-/// binary crate — only `main.rs` invokes this, and the lib (`lib.rs`)
-/// deliberately does not re-export any of the Windows-only broker logic.
+/// binary crate — only `main.rs` invokes this.
 ///
 /// # Errors
 ///
@@ -216,7 +212,7 @@ fn handle_pipe_request_with_rate_limit(
     // `HandleRequest::parse` rejects non-ASCII bytes and non-alphabetic
     // ASCII bytes with structured errors — replaces the two-step
     // `is_ascii_alphabetic` validation we used to do here.
-    let mut req_buf = [0_u8; uffs_broker::protocol::REQUEST_WIRE_LEN];
+    let mut req_buf = [0_u8; uffs_broker_protocol::REQUEST_WIRE_LEN];
     read_pipe(pipe, &mut req_buf)?;
     let drive_letter = match HandleRequest::parse(req_buf[0]) {
         Ok(req) => req.drive,

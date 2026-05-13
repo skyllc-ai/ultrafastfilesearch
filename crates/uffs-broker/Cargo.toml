@@ -31,26 +31,11 @@ rustdoc-args = ["--cfg", "docsrs"]
 targets = ["x86_64-pc-windows-msvc"]
 default-target = "x86_64-pc-windows-msvc"
 
-# Library target: exposes the `protocol` module — wire-protocol types
-# (`HandleRequest`, `HandleResponse`, `Status`, `PIPE_NAME`,
-# `ProtocolError`) shared with `uffs-daemon::broker_client`.  The
-# Windows-only handle-brokering logic stays in `[[bin]]`; only the
-# cross-platform protocol types live in `[lib]` so they can be
-# unit-tested on every CI lane (F5 / issue #205).
-[lib]
-name = "uffs_broker"
-path = "src/lib.rs"
-
 [[bin]]
 name = "uffs-broker"
 path = "src/main.rs"
 
 [dependencies]
-# `thiserror` powers the `protocol` module's structured `ProtocolError`
-# enum.  Cross-platform: the protocol types are pure-logic and live in
-# `[lib]`, not gated by `cfg(windows)`.
-thiserror.workspace = true
-
 # `tracing` macros are used cross-platform: the bin's non-Windows path
 # in `main.rs` emits `tracing::error!` before exiting.  The Windows-only
 # broker logic uses `tracing` heavily in `broker.rs`.
@@ -58,13 +43,20 @@ tracing.workspace = true
 
 # Windows-only deps: the elevated handle-broker logic in `broker.rs` is
 # fully `#[cfg(windows)]`, so its supporting crates compile only on the
-# Windows target.  Moving these here (rather than carrying them as
-# cross-platform deps with `use … as _;` placeholders in `main.rs`) lets
-# the cross-platform `[lib]` target compile clean — F5 / issue #205.
+# Windows target.  Scoped to `[target.'cfg(windows)'.dependencies]` so
+# the bin's non-Windows compilation (a tiny error-message stub in
+# `main.rs`) doesn't pull in `anyhow`, `tracing-subscriber`, `windows`,
+# or the broker protocol — each would otherwise be visible-but-unused
+# on Linux/macOS and need a `use X as _;` marker.  F5 / issue #205.
 [target.'cfg(windows)'.dependencies]
 anyhow.workspace = true
 tracing-subscriber.workspace = true
 windows.workspace = true
+# Wire-protocol types shared with `uffs-daemon::broker_client`.  Lives
+# in its own dedicated crate (`crates/uffs-broker-protocol/`) so the
+# pure-logic protocol module is cross-platform-testable without
+# dragging the Windows FFI surface along.
+uffs-broker-protocol.workspace = true
 
 [lints]
 workspace = true
