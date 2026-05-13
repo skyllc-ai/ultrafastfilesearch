@@ -331,15 +331,13 @@ fn parse_named_time_range(name: &str, now_ft: i64, is_newer: bool) -> Option<i64
 /// Convert days since FILETIME epoch (1601-01-01) to (year, month, day).
 ///
 /// Uses the Hinnant algorithm. 1601-01-01 = day 584389 since 0000-03-01.
-#[expect(
-    clippy::cast_sign_loss,
-    clippy::cast_possible_truncation,
-    reason = "Hinnant algorithm: intermediate values are bounded for valid dates"
-)]
 fn days_to_ymd_1601(days_since_1601: i64) -> (i64, i64, i64) {
     let z = days_since_1601 + 584_694; // days since 0000-03-01
     let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
-    let doe = (z - era * 146_097) as u32;
+    // `z - era * 146_097` is bounded by the era division to
+    // `[0, 146_096]`; `try_from` is the lint-free way to narrow it
+    // to u32 (saturating fallback is unreachable in practice).
+    let doe = u32::try_from(z - era * 146_097).unwrap_or(0);
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
     let y = i64::from(yoe) + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
@@ -369,11 +367,6 @@ const fn days_in_month(year: i64, month: i64) -> i64 {
 /// Convert (year, month, day) to days since FILETIME epoch (1601-01-01).
 ///
 /// Inverse of `days_to_ymd_1601`.
-#[expect(
-    clippy::cast_sign_loss,
-    clippy::cast_possible_truncation,
-    reason = "Hinnant algorithm: intermediate values are bounded for valid dates"
-)]
 fn ymd_to_days_1601(year: i64, month: i64, day: i64) -> i64 {
     // Shift to March-based year for the Hinnant inverse algorithm.
     let (adj_year, adj_month) = if month <= 2 {
@@ -386,8 +379,15 @@ fn ymd_to_days_1601(year: i64, month: i64, day: i64) -> i64 {
     } else {
         adj_year - 399
     }) / 400;
-    let yoe = (adj_year - era * 400) as u32;
-    let doy = (153 * adj_month as u32 + 2) / 5 + day as u32 - 1;
+    // All three narrowings below are bounded by the algorithm:
+    // `adj_year - era * 400` lives in `[0, 399]`, `adj_month` in
+    // `[0, 11]`, and `day` in `[1, 31]`.  `try_from` is the lint-free
+    // narrowing pattern; the saturating fallback is unreachable for
+    // any valid civil date.
+    let yoe = u32::try_from(adj_year - era * 400).unwrap_or(0);
+    let adj_month_u32 = u32::try_from(adj_month).unwrap_or(0);
+    let day_u32 = u32::try_from(day).unwrap_or(1);
+    let doy = (153 * adj_month_u32 + 2) / 5 + day_u32 - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = i64::from(doe) + era * 146_097;
     days - 584_694 // convert from 0000-03-01 epoch to 1601-01-01 epoch

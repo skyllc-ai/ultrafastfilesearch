@@ -653,12 +653,12 @@ pub fn format_size(bytes: u64) -> String {
 /// Format a raw FILETIME timestamp as `YYYY-MM-DD HH:MM`.
 ///
 /// Decomposes the FILETIME directly — no intermediate Unix conversion.
+/// Every `as u32` narrowing in the Hinnant algorithm goes through
+/// `u32::try_from(...).unwrap_or(...)`; the algorithm's intermediate
+/// values are bounded (`hour` ∈ `[0, 23]`, `minute` ∈ `[0, 59]`,
+/// `doe` ∈ `[0, 146_096]`) so the saturating fallbacks are unreachable
+/// for any valid FILETIME.
 #[must_use]
-#[expect(
-    clippy::cast_sign_loss,
-    clippy::cast_possible_truncation,
-    reason = "Hinnant algorithm: intermediate values are bounded for valid dates"
-)]
 pub fn format_time(filetime: i64) -> String {
     const TICKS_PER_SECOND: i64 = 10_000_000; // 100-ns intervals per second
     if filetime == 0 {
@@ -667,14 +667,14 @@ pub fn format_time(filetime: i64) -> String {
     let total_secs = filetime / TICKS_PER_SECOND;
     let days_since_1601 = total_secs.div_euclid(86400);
     let day_secs = total_secs.rem_euclid(86400);
-    let hour = (day_secs / 3600) as u32;
-    let minute = ((day_secs % 3600) / 60) as u32;
+    let hour = u32::try_from(day_secs / 3600).unwrap_or(0);
+    let minute = u32::try_from((day_secs % 3600) / 60).unwrap_or(0);
 
     // Hinnant civil_from_days:
     // 719468 (0000-03-01→1970-01-01) − 134774 (1601-01-01→1970-01-01) = 584694
     let z = days_since_1601 + 584_694;
     let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
-    let doe = (z - era * 146_097) as u32;
+    let doe = u32::try_from(z - era * 146_097).unwrap_or(0);
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
     let y = i64::from(yoe) + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
