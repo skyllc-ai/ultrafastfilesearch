@@ -259,7 +259,6 @@ pub(crate) struct TierThresholds {
 #[must_use]
 #[expect(
     clippy::float_arithmetic,
-    clippy::cast_precision_loss,
     reason = "TTL formula uses log2 + multiply + clamp on a non-negative \
               rate; precision loss bounded by `Duration::from_secs_f64` \
               and the explicit `cap` ceiling."
@@ -267,8 +266,11 @@ pub(crate) struct TierThresholds {
 pub(crate) fn hot_ttl(rate_ema_qpm: f64, base_secs: u64, cap_secs: u64) -> Duration {
     const HOT_BONUS_COEF_SECS: f64 = 60.0;
     let bonus_secs = HOT_BONUS_COEF_SECS * rate_ema_qpm.log2().max(0.0);
-    let total_secs = (base_secs as f64) + bonus_secs;
-    let capped_secs = total_secs.min(cap_secs as f64).max(base_secs as f64);
+    // All `u64 -> f64` conversions go through `uffs_mft::u64_to_f64`
+    // (centralized `cast_precision_loss` expect at the helper site).
+    let base_f64 = uffs_mft::u64_to_f64(base_secs);
+    let total_secs = base_f64 + bonus_secs;
+    let capped_secs = total_secs.min(uffs_mft::u64_to_f64(cap_secs)).max(base_f64);
     Duration::from_secs_f64(capped_secs)
 }
 
@@ -289,7 +291,6 @@ pub(crate) fn hot_ttl(rate_ema_qpm: f64, base_secs: u64, cap_secs: u64) -> Durat
 #[must_use]
 #[expect(
     clippy::float_arithmetic,
-    clippy::cast_precision_loss,
     reason = "TTL formula uses log2 + multiply + clamp on a non-negative \
               rate; precision loss bounded by `Duration::from_secs_f64` \
               and the explicit `cap` ceiling."
@@ -297,8 +298,9 @@ pub(crate) fn hot_ttl(rate_ema_qpm: f64, base_secs: u64, cap_secs: u64) -> Durat
 pub(crate) fn warm_ttl(rate_ema_qpm: f64, base_secs: u64, cap_secs: u64) -> Duration {
     const WARM_BONUS_COEF_SECS: f64 = 600.0;
     let bonus_secs = WARM_BONUS_COEF_SECS * rate_ema_qpm.log2().max(0.0);
-    let total_secs = (base_secs as f64) + bonus_secs;
-    let capped_secs = total_secs.min(cap_secs as f64).max(base_secs as f64);
+    let base_f64 = uffs_mft::u64_to_f64(base_secs);
+    let total_secs = base_f64 + bonus_secs;
+    let capped_secs = total_secs.min(uffs_mft::u64_to_f64(cap_secs)).max(base_f64);
     Duration::from_secs_f64(capped_secs)
 }
 
