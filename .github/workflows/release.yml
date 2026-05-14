@@ -327,7 +327,7 @@ jobs:
           # Gated on `apple-darwin` so Windows / Linux artifact paths
           # stay untouched.
           set -euo pipefail
-          for bin in uffs uffsd uffsmcp uffs_mft; do
+          for bin in uffs uffsd uffsmcp uffs-mft; do
             path="target/${{ matrix.target }}/release/$bin"
             if [[ -f "$path" ]]; then
               codesign --force --sign - "$path"
@@ -339,7 +339,7 @@ jobs:
         shell: bash
         run: |
           echo "📐 Release binary sizes:"
-          ls -lh target/${{ matrix.target }}/release/ 2>/dev/null | grep -E 'uffs|uffsd|uffsmcp|uffs_mft' || true
+          ls -lh target/${{ matrix.target }}/release/ 2>/dev/null | grep -E 'uffs|uffsd|uffsmcp|uffs-mft' || true
 
       - name: Package binaries
         shell: bash
@@ -350,13 +350,13 @@ jobs:
           # scripts/ci/build-cross-all.rs.  Diagnostic binaries are NOT
           # shipped; they live in uffs-diag and stay workspace-only.
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            for binary in uffs.exe uffsd.exe uffsmcp.exe uffs_mft.exe; do
+            for binary in uffs.exe uffsd.exe uffsmcp.exe uffs-mft.exe; do
               if [[ -f "target/${{ matrix.target }}/release/$binary" ]]; then
                 cp "target/${{ matrix.target }}/release/$binary" release-artifacts/
               fi
             done
           else
-            for binary in uffs uffsd uffsmcp uffs_mft; do
+            for binary in uffs uffsd uffsmcp uffs-mft; do
               if [[ -f "target/${{ matrix.target }}/release/$binary" ]]; then
                 cp "target/${{ matrix.target }}/release/$binary" release-artifacts/
               fi
@@ -386,13 +386,13 @@ jobs:
           # Same shipping set as `Package binaries` above.  Diagnostic
           # binaries (uffs-diag) stay workspace-only and are not shipped.
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            for bin in uffs.exe uffsd.exe uffsmcp.exe uffs_mft.exe; do
+            for bin in uffs.exe uffsd.exe uffsmcp.exe uffs-mft.exe; do
               if [[ -f "target/${{ matrix.target }}/release/$bin" ]]; then
                 cp "target/${{ matrix.target }}/release/$bin" "$STAGE_DIR/"
               fi
             done
           else
-            for bin in uffs uffsd uffsmcp uffs_mft; do
+            for bin in uffs uffsd uffsmcp uffs-mft; do
               if [[ -f "target/${{ matrix.target }}/release/$bin" ]]; then
                 cp "target/${{ matrix.target }}/release/$bin" "$STAGE_DIR/"
               fi
@@ -666,14 +666,14 @@ jobs:
             + MFT tooling + icon + docs.  The `.exe`s ship with the UFFS
             icon and `asInvoker` manifest embedded.
           - Raw binaries: `uffs-windows-x64.exe`, `uffsd-windows-x64.exe`,
-            `uffsmcp-windows-x64.exe`, `uffs_mft-windows-x64.exe`.
+            `uffsmcp-windows-x64.exe`, `uffs-mft-windows-x64.exe`.
 
           ### 🍏 macOS Apple Silicon — offline MFT analysis
           - **`uffs-macos-arm64.zip`** — recommended: raw binaries + a
             ready-to-run `UFFS.app` bundle + icns + docs +
             `packaging/macos/bundle.sh` for rebuilding.
           - Raw binaries: `uffs-macos-arm64`, `uffsd-macos-arm64`,
-            `uffsmcp-macos-arm64`, `uffs_mft-macos-arm64`.
+            `uffsmcp-macos-arm64`, `uffs-mft-macos-arm64`.
           - Intel Macs: run the arm64 build under Rosetta 2.
 
           ### 🐧 Linux x86_64 — offline MFT analysis
@@ -682,7 +682,7 @@ jobs:
             `.desktop` entry and icons under `/usr/local` with one
             `sudo` invocation) + docs.
           - Raw binaries: `uffs-linux-x64`, `uffsd-linux-x64`,
-            `uffsmcp-linux-x64`, `uffs_mft-linux-x64`.
+            `uffsmcp-linux-x64`, `uffs-mft-linux-x64`.
           - Use with `--mft-file` to analyse captured MFT snapshots on servers, forensics VMs, or in Docker.
 
           ## 🔐 Verification

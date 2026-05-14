@@ -14,7 +14,7 @@
 [CmdletBinding()]
 param(
     [string[]]$Drives = @(),           # Drives to test (empty = auto-detect NTFS drives)
-    [switch]$SkipMft,                  # Skip uffs_mft save tests
+    [switch]$SkipMft,                  # Skip uffs-mft save tests
     [switch]$SkipComparison,           # Skip Rust vs C++ comparison
     [string]$BinDir = ""               # Custom bin directory (default: $HOME\bin)
 )
@@ -274,7 +274,7 @@ try {
 
     $UffsExe = Join-Path $BinDir "uffs.exe"
     $UffsCom = Join-Path $BinDir "uffs.com"
-    $UffsMftExe = Join-Path $BinDir "uffs_mft.exe"
+    $UffsMftExe = Join-Path $BinDir "uffs-mft.exe"
 
     $hasRust = Test-Path -LiteralPath $UffsExe
     $hasCpp = Test-Path -LiteralPath $UffsCom
@@ -286,13 +286,13 @@ try {
     LogLine "|--------|------|--------|"
     LogLine ("| uffs.exe (Rust) | ``$UffsExe`` | " + $(if ($hasRust) { "✅" } else { "❌" }) + " |")
     LogLine ("| uffs.com (C++) | ``$UffsCom`` | " + $(if ($hasCpp) { "✅" } else { "❌" }) + " |")
-    LogLine ("| uffs_mft.exe | ``$UffsMftExe`` | " + $(if ($hasMft) { "✅" } else { "❌" }) + " |")
+    LogLine ("| uffs-mft.exe | ``$UffsMftExe`` | " + $(if ($hasMft) { "✅" } else { "❌" }) + " |")
     LogLine ""
 
     Write-Host "Binaries:" -ForegroundColor Yellow
     Write-Host "  uffs.exe (Rust): $(if ($hasRust) { '✅' } else { '❌' }) $UffsExe"
     Write-Host "  uffs.com (C++):  $(if ($hasCpp) { '✅' } else { '❌' }) $UffsCom"
-    Write-Host "  uffs_mft.exe:    $(if ($hasMft) { '✅' } else { '❌' }) $UffsMftExe"
+    Write-Host "  uffs-mft.exe:    $(if ($hasMft) { '✅' } else { '❌' }) $UffsMftExe"
     Write-Host ""
 
     # Determine drives to test
@@ -327,15 +327,15 @@ try {
         $mftRaw = "${mftDrive}_mft.raw"
         $mftNoCompress = "${mftDrive}_mft_no_compress.bin"
 
-        Invoke-Logged -Title "uffs_mft save (compressed)" `
+        Invoke-Logged -Title "uffs-mft save (compressed)" `
             -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o $mftBin") `
             -RecordTiming
 
-        Invoke-Logged -Title "uffs_mft save (no compress)" `
+        Invoke-Logged -Title "uffs-mft save (no compress)" `
             -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive --output $mftNoCompress --no-compress") `
             -RecordTiming
 
-        Invoke-Logged -Title "uffs_mft save (raw)" `
+        Invoke-Logged -Title "uffs-mft save (raw)" `
             -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o $mftRaw --raw") `
             -RecordTiming
 

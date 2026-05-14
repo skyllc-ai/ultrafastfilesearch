@@ -550,7 +550,7 @@ fn write_display_rows_emits_name_length_and_path_length() {
 // interpret values as FILETIME, not Unix microseconds.
 //
 // The DataFrames produced by `MftIndex::to_dataframe` (and the Windows
-// live-scan DataFrame in `uffs-mft::reader::dataframe_build`) declare
+// live-scan DataFrame in `uffs_mft::reader::dataframe_build`) declare
 // timestamp columns as `Datetime(Microseconds)` for Polars compatibility
 // but populate them with raw FILETIME i64 values (100-ns ticks since
 // 1601-01-01).  The `write_value` formatter at `output::config` must

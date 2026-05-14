@@ -117,7 +117,7 @@ use anyhow as _;
 // ============================================================================
 // Suppress unused crate warnings
 // ============================================================================
-// These dependencies are used by the uffs_mft binary (src/main.rs), not the
+// These dependencies are used by the uffs-mft binary (src/main.rs), not the
 // library. Cargo doesn't support per-binary dependencies, so we suppress the
 // warnings here. The binary uses these for CLI, logging, and async runtime.
 // Platform-specific dependencies (used on Windows only)

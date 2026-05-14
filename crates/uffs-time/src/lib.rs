@@ -11,7 +11,7 @@
 //! - Convert to Unix microseconds for legacy callers
 //!   ([`filetime_to_unix_micros`])
 //!
-//! Extracted from `uffs-mft::ntfs` so the thin CLI can format timestamps
+//! Extracted from `uffs_mft::ntfs` so the thin CLI can format timestamps
 //! without pulling in the full MFT reader (which in turn depends on
 //! `polars`, `tokio`, `reqwest`, and `object_store`).
 

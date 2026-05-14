@@ -45,7 +45,7 @@ We will credit reporters in the advisory unless anonymity is requested.
 
 This policy covers:
 
-- The `uffs` and `uffs_mft` binaries
+- The `uffs` and `uffs-mft` binaries
 - All crates in the `crates/` workspace
 - The `uffs-daemon` service and its JSON-RPC / MCP interfaces
 - Index files written to disk (`.uffs-index`)

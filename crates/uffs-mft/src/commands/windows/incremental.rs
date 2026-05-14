@@ -331,8 +331,8 @@ pub(crate) async fn cmd_cache_clear(drive: Option<char>, all: bool) -> Result<()
         println!("❌ Please specify --drive C or --all");
         println!();
         println!("Examples:");
-        println!("  uffs_mft cache-clear --drive C");
-        println!("  uffs_mft cache-clear --all");
+        println!("  uffs-mft cache-clear --drive C");
+        println!("  uffs-mft cache-clear --all");
     }
 
     Ok(())

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Command dispatch for the `uffs_mft` binary.
+//! Command dispatch for the `uffs-mft` binary.
 
 use anyhow::Result;
 

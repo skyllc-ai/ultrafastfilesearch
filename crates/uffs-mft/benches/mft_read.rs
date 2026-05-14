@@ -10,8 +10,8 @@
 //!
 //! For real-world MFT benchmarks, use the CLI:
 //! ```powershell
-//! uffs_mft bench --drive C --runs 3
-//! uffs_mft bench-all
+//! uffs-mft bench --drive C --runs 3
+//! uffs-mft bench-all
 //! ```
 
 // Suppress unused crate warnings for dependencies used by the main crate

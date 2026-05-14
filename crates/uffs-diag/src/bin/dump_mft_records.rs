@@ -3,14 +3,14 @@
 
 //! Dump raw MFT records from a `.raw` snapshot for specific FRS values.
 //!
-//! Offline, cross-platform tool operating on `uffs_mft`'s raw MFT format
-//! (`*.raw` produced by `uffs_mft save`). This lets us inspect header flags
+//! Offline, cross-platform tool operating on `uffs-mft`'s raw MFT format
+//! (`*.raw` produced by `uffs-mft save`). This lets us inspect header flags
 //! and basic structure for selected records to verify parse correctness.
 //!
 //! Usage:
 //! ```text
-//!   dump_mft_records <raw_path> <frs1> [frs2] ...
-//!   dump_mft_records --test-merge <raw_path> <base_frs> <ext_frs>
+//!   dump-mft-records <raw_path> <frs1> [frs2] ...
+//!   dump-mft-records --test-merge <raw_path> <base_frs> <ext_frs>
 //! ```
 
 #![expect(
@@ -152,7 +152,7 @@ fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
         eprintln!(
-            "Usage: dump_mft_records <mft.raw> <frs1> [frs2 frs3 ...]\n       dump_mft_records --test-merge <mft.raw> <base_frs> <ext_frs>"
+            "Usage: dump-mft-records <mft.raw> <frs1> [frs2 frs3 ...]\n       dump-mft-records --test-merge <mft.raw> <base_frs> <ext_frs>"
         );
         std::process::exit(1);
     }
@@ -160,7 +160,7 @@ fn main() -> Result<()> {
     // Check for --test-merge mode
     if args.get(1).map(String::as_str) == Some("--test-merge") {
         if args.len() < 5 {
-            eprintln!("Usage: dump_mft_records --test-merge <mft.raw> <base_frs> <ext_frs>");
+            eprintln!("Usage: dump-mft-records --test-merge <mft.raw> <base_frs> <ext_frs>");
             std::process::exit(1);
         }
         let raw_path = args

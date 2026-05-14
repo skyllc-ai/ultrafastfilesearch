@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! # `uffs_mft`: MFT Command-Line Tool
+//! # `uffs-mft`: MFT Command-Line Tool
 //!
 //! Low-level tool for reading and exporting NTFS Master File Table data.
 //!
@@ -9,20 +9,20 @@
 //!
 //! ```bash
 //! # Read MFT from C: drive and export to Parquet
-//! uffs_mft read --drive C --output c_drive.parquet
+//! uffs-mft read --drive C --output c_drive.parquet
 //!
 //! # Show MFT information for a drive
-//! uffs_mft info --drive C
+//! uffs-mft info --drive C
 //!
 //! # List all NTFS drives
-//! uffs_mft drives
+//! uffs-mft drives
 //! ```
 //!
 //! ## Logging
 
 //! Use `-v` / `--verbose` for debug-level terminal output:
 //! ```bash
-//! uffs_mft -v info --drive C
+//! uffs-mft -v info --drive C
 //! ```
 //!
 //! For finer control, use environment variables:
@@ -80,9 +80,9 @@ use zstd as _;
 #[cfg(not(windows))]
 use {chrono as _, hostname as _};
 
-/// CLI definitions for the `uffs_mft` binary.
+/// CLI definitions for the `uffs-mft` binary.
 mod cli;
-/// Command dispatch and handlers for the `uffs_mft` binary.
+/// Command dispatch and handlers for the `uffs-mft` binary.
 mod commands;
 /// Formatting and display helpers shared by command handlers.
 mod display;
@@ -93,8 +93,8 @@ mod progress;
 
 use crate::cli::Cli;
 
-/// Operation label used for `uffs_mft` shutdown classification.
-const MFT_BINARY_OPERATION: &str = "uffs_mft";
+/// Operation label used for `uffs-mft` shutdown classification.
+const MFT_BINARY_OPERATION: &str = "uffs-mft";
 
 /// Maps spawned binary task failures onto the approved cancellation taxonomy.
 #[must_use]
@@ -201,20 +201,20 @@ mod tests {
             return;
         };
 
-        let error = classify_binary_task_error("uffs_mft", &join_error);
+        let error = classify_binary_task_error("uffs-mft", &join_error);
 
         assert!(matches!(error, uffs_mft::MftError::Cancelled {
-            operation: "uffs_mft",
+            operation: "uffs-mft",
             ..
         }));
     }
 
     #[test]
     fn shutdown_requested_error_is_cancelled() {
-        let error = shutdown_requested_error("uffs_mft");
+        let error = shutdown_requested_error("uffs-mft");
 
         assert!(matches!(error, uffs_mft::MftError::Cancelled {
-            operation: "uffs_mft",
+            operation: "uffs-mft",
             ..
         }));
     }
@@ -222,10 +222,10 @@ mod tests {
     #[test]
     fn ctrl_c_listener_error_is_wait_failed() {
         let error =
-            ctrl_c_listener_error("uffs_mft", &std::io::Error::other("listener unavailable"));
+            ctrl_c_listener_error("uffs-mft", &std::io::Error::other("listener unavailable"));
 
         assert!(matches!(error, uffs_mft::MftError::WaitFailed {
-            operation: "uffs_mft",
+            operation: "uffs-mft",
             ..
         }));
     }

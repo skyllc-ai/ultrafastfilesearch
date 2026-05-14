@@ -9,7 +9,7 @@
 //! # Usage
 //!
 //! ```text
-//! compare_raw_mft <file_a> <file_b>
+//! compare-raw-mft <file_a> <file_b>
 //! ```
 
 #![expect(
@@ -34,7 +34,7 @@ use std::time::Instant;
 
 use anyhow::{Context as _, Result, bail};
 
-/// Header size in bytes (matches `uffs-mft::raw`).
+/// Header size in bytes (matches `uffs_mft::raw`).
 const HEADER_SIZE: usize = 64;
 
 /// Maximum number of sample diffs to collect for display.
@@ -122,7 +122,7 @@ fn read_header<P: AsRef<Path>>(path: P) -> Result<(RawMftHeader, BufReader<File>
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
-        eprintln!("Usage: compare_raw_mft <file_a> <file_b>");
+        eprintln!("Usage: compare-raw-mft <file_a> <file_b>");
         std::process::exit(1);
     }
 

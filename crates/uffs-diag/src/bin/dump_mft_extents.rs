@@ -11,7 +11,7 @@
 //! # Usage
 //!
 //! ```powershell
-//! dump_mft_extents F
+//! dump-mft-extents F
 //! ```
 //!
 //! (Pass the drive letter without a colon.)
@@ -47,7 +47,7 @@ fn main() -> std::process::ExitCode {
     #[cfg(windows)]
     {
         if let Err(error) = real_main() {
-            eprintln!("dump_mft_extents failed: {error:#}");
+            eprintln!("dump-mft-extents failed: {error:#}");
             return std::process::ExitCode::from(1);
         }
         std::process::ExitCode::SUCCESS
@@ -55,7 +55,7 @@ fn main() -> std::process::ExitCode {
 
     #[cfg(not(windows))]
     {
-        eprintln!("dump_mft_extents is only supported on Windows targets.");
+        eprintln!("dump-mft-extents is only supported on Windows targets.");
         std::process::ExitCode::from(1)
     }
 }
@@ -68,8 +68,8 @@ fn main() -> std::process::ExitCode {
 fn real_main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     let drive_arg = args.get(1).cloned().ok_or_else(|| {
-        eprintln!("Usage: dump_mft_extents <drive_letter>");
-        eprintln!("Example: dump_mft_extents F");
+        eprintln!("Usage: dump-mft-extents <drive_letter>");
+        eprintln!("Example: dump-mft-extents F");
         anyhow::anyhow!("missing <drive_letter> argument")
     })?;
     if args.len() != 2 {

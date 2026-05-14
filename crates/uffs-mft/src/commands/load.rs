@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Cross-platform command handlers for `uffs_mft`.
+//! Cross-platform command handlers for `uffs-mft`.
 
 use std::path::Path;
 

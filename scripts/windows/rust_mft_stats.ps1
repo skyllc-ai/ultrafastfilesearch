@@ -3,13 +3,13 @@
 #
 # Rust MFT Statistics Collection Script
 #
-# This script runs `uffs_mft info --deep` for each NTFS drive and summarizes the results.
+# This script runs `uffs-mft info --deep` for each NTFS drive and summarizes the results.
 # Run this on Windows with administrator privileges.
 #
 # Usage:
 #   .\scripts\windows\rust_mft_stats.ps1
 #   .\scripts\windows\rust_mft_stats.ps1 -Drives C,D,E
-#   .\scripts\windows\rust_mft_stats.ps1 -UffsMftPath "C:\path\to\uffs_mft.exe"
+#   .\scripts\windows\rust_mft_stats.ps1 -UffsMftPath "C:\path\to\uffs-mft.exe"
 
 param(
     [string[]]$Drives = @(),
@@ -28,15 +28,15 @@ if (-not $isAdmin) {
     Write-Host ""
 }
 
-# Find uffs_mft executable
+# Find uffs-mft executable
 if ([string]::IsNullOrEmpty($UffsMftPath) -or -not (Test-Path $UffsMftPath)) {
     # Try common locations - use full paths or .\prefix
     $candidates = @(
-        ".\uffs_mft.exe",
-        ".\target\release\uffs_mft.exe",
-        ".\target\debug\uffs_mft.exe",
-        "$env:USERPROFILE\bin\uffs_mft.exe",
-        "$env:USERPROFILE\.cargo\bin\uffs_mft.exe"
+        ".\uffs-mft.exe",
+        ".\target\release\uffs-mft.exe",
+        ".\target\debug\uffs-mft.exe",
+        "$env:USERPROFILE\bin\uffs-mft.exe",
+        "$env:USERPROFILE\.cargo\bin\uffs-mft.exe"
     )
     $UffsMftPath = ""
     foreach ($candidate in $candidates) {
@@ -48,9 +48,9 @@ if ([string]::IsNullOrEmpty($UffsMftPath) -or -not (Test-Path $UffsMftPath)) {
 }
 
 if ([string]::IsNullOrEmpty($UffsMftPath) -or -not (Test-Path $UffsMftPath)) {
-    Write-Host "ERROR: Cannot find uffs_mft.exe" -ForegroundColor Red
+    Write-Host "ERROR: Cannot find uffs-mft.exe" -ForegroundColor Red
     Write-Host "Please build it first: cargo build --release -p uffs-mft" -ForegroundColor Yellow
-    Write-Host "Or specify path: .\rust_mft_stats.ps1 -UffsMftPath 'C:\path\to\uffs_mft.exe'" -ForegroundColor Yellow
+    Write-Host "Or specify path: .\rust_mft_stats.ps1 -UffsMftPath 'C:\path\to\uffs-mft.exe'" -ForegroundColor Yellow
     exit 1
 }
 
@@ -87,7 +87,7 @@ foreach ($drive in $Drives) {
         $exitCode = $LASTEXITCODE
         
         if ($exitCode -ne 0) {
-            Write-Host "  ERROR: uffs_mft failed with exit code $exitCode" -ForegroundColor Red
+            Write-Host "  ERROR: uffs-mft failed with exit code $exitCode" -ForegroundColor Red
             Write-Host "  Output: $output" -ForegroundColor Red
             $results[$driveLetter] = @{ Error = "Exit code $exitCode"; Files = 0; Dirs = 0 }
             continue

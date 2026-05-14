@@ -76,9 +76,9 @@ For each 1KB record in MFT:
 
 ---
 
-## The `uffs_mft` Utility Binary
+## The `uffs-mft` Utility Binary
 
-The `uffs_mft` binary (from the `uffs-mft` crate) provides MFT-specific operations beyond search:
+The `uffs-mft` binary (from the `uffs-mft` crate) provides MFT-specific operations beyond search:
 
 ### Save Raw MFT
 
@@ -86,13 +86,13 @@ Capture a byte-perfect snapshot of the MFT for offline analysis:
 
 ```bash
 # Save with zstd compression (default)
-uffs_mft save C: C_mft.bin
+uffs-mft save C: C_mft.bin
 
 # Save uncompressed
-uffs_mft save C: C_mft.bin --no-compress
+uffs-mft save C: C_mft.bin --no-compress
 
 # Save as IOCP capture (preserves chunk boundaries and extent metadata)
-uffs_mft save C: C_capture.iocp --iocp
+uffs-mft save C: C_capture.iocp --iocp
 ```
 
 The IOCP capture format preserves the exact I/O chunking and extent metadata, enabling replay of the read pipeline on another machine for debugging.
@@ -101,13 +101,13 @@ The IOCP capture format preserves the exact I/O chunking and extent metadata, en
 
 ```bash
 # Parse offline MFT and display index stats
-uffs_mft load C_mft.bin --build-index
+uffs-mft load C_mft.bin --build-index
 
 # Parse with forensic mode
-uffs_mft load C_mft.bin --build-index --forensic
+uffs-mft load C_mft.bin --build-index --forensic
 
 # Export to Parquet for Polars analysis
-uffs_mft load C_mft.bin --export parquet --output C_index.parquet
+uffs-mft load C_mft.bin --export parquet --output C_index.parquet
 ```
 
 ### Cross-Platform Workflow
@@ -115,7 +115,7 @@ uffs_mft load C_mft.bin --export parquet --output C_index.parquet
 The critical forensic workflow: capture on Windows, analyze anywhere:
 
 ```
-1. Windows (admin):  uffs_mft save C: C_mft.bin
+1. Windows (admin):  uffs-mft save C: C_mft.bin
 2. Copy to macOS:    scp C_mft.bin mac:~/analysis/
 3. macOS (no admin): uffs "*" --mft-file C_mft.bin --forensic
 ```
@@ -132,30 +132,30 @@ The `uffs-diag` crate contains 10 specialized diagnostic tools for deep MFT anal
 
 | Tool | Platform | Purpose |
 |------|----------|---------|
-| `dump_mft_records` | Cross-platform | Inspect raw MFT records at byte level |
-| `scan_mft_magic` | Cross-platform | Analyze magic value distribution across all records |
-| `compare_raw_mft` | Cross-platform | Compare two raw MFT files record-by-record |
-| `analyze_mft_parents` | Cross-platform | Analyze parent-child coverage and orphans |
-| `inspect_mft_record_flow` | Cross-platform | Trace the raw→fixup→parse pipeline for specific FRS |
-| `cross_check_mft_reference` | Cross-platform | Cross-check MFT records against reference CSV |
-| `dump_mft_extents` | Windows only | Display $MFT extent map from a live volume |
-| `analyze_diff` | Cross-platform | Deep comparison of two scan outputs |
-| `compare_scan_parity` | Cross-platform | Comprehensive scan output comparison (regression detection) |
-| `verify_iocp_capture` | Cross-platform | Validate IOCP capture file integrity |
+| `dump-mft-records` | Cross-platform | Inspect raw MFT records at byte level |
+| `scan-mft-magic` | Cross-platform | Analyze magic value distribution across all records |
+| `compare-raw-mft` | Cross-platform | Compare two raw MFT files record-by-record |
+| `analyze-mft-parents` | Cross-platform | Analyze parent-child coverage and orphans |
+| `inspect-mft-record-flow` | Cross-platform | Trace the raw→fixup→parse pipeline for specific FRS |
+| `cross-check-mft-reference` | Cross-platform | Cross-check MFT records against reference CSV |
+| `dump-mft-extents` | Windows only | Display $MFT extent map from a live volume |
+| `analyze-diff` | Cross-platform | Deep comparison of two scan outputs |
+| `compare-scan-parity` | Cross-platform | Comprehensive scan output comparison (regression detection) |
+| `verify-iocp-capture` | Cross-platform | Validate IOCP capture file integrity |
 
-### `dump_mft_records` — Record-Level Inspection
+### `dump-mft-records` — Record-Level Inspection
 
 Inspect specific MFT records at the byte level. Essential for debugging parsing issues.
 
 ```bash
 # Dump specific FRS records
-dump_mft_records C_mft.bin --frs 0,5,42,100003
+dump-mft-records C_mft.bin --frs 0,5,42,100003
 
 # Dump with full attribute details
-dump_mft_records C_mft.bin --frs 5 --verbose
+dump-mft-records C_mft.bin --frs 5 --verbose
 
 # Dump hex bytes
-dump_mft_records C_mft.bin --frs 42 --hex
+dump-mft-records C_mft.bin --frs 42 --hex
 ```
 
 **Output includes:**
@@ -166,12 +166,12 @@ dump_mft_records C_mft.bin --frs 42 --hex
 - For `$DATA`: data size, allocated size, data runs
 - For `$REPARSE_POINT`: reparse tag
 
-### `scan_mft_magic` — Magic Value Distribution
+### `scan-mft-magic` — Magic Value Distribution
 
 Scan all records in a raw MFT file and report the distribution of magic values:
 
 ```bash
-scan_mft_magic C_mft.bin
+scan-mft-magic C_mft.bin
 ```
 
 **Output:**
@@ -186,22 +186,22 @@ Total records: 5,000,012
 
 Useful for quickly assessing MFT health and utilization.
 
-### `compare_raw_mft` — Record-by-Record Comparison
+### `compare-raw-mft` — Record-by-Record Comparison
 
 Compare two raw MFT snapshots to find differences:
 
 ```bash
-compare_raw_mft before.bin after.bin
+compare-raw-mft before.bin after.bin
 ```
 
 Identifies records that were created, deleted, or modified between the two snapshots. Uses SHA-256 hashing for efficient comparison.
 
-### `analyze_mft_parents` — Parent-Child Coverage
+### `analyze-mft-parents` — Parent-Child Coverage
 
 Analyze the completeness of parent-child relationships:
 
 ```bash
-analyze_mft_parents C_index.parquet
+analyze-mft-parents C_index.parquet
 ```
 
 Finds:
@@ -210,23 +210,23 @@ Finds:
 - Records with parent FRS 0 (should only be FRS 5)
 - Directory records with no children
 
-### `inspect_mft_record_flow` — Pipeline Tracing
+### `inspect-mft-record-flow` — Pipeline Tracing
 
 Trace a specific FRS through the entire parse pipeline:
 
 ```bash
 # Show raw bytes → USA fixup → parsed attributes → final FileRecord
-inspect_mft_record_flow C_mft.bin --frs 42
+inspect-mft-record-flow C_mft.bin --frs 42
 ```
 
 Shows each transformation step, making it easy to identify where a parsing issue occurs.
 
-### `dump_mft_extents` — Extent Map (Windows Only)
+### `dump-mft-extents` — Extent Map (Windows Only)
 
 Display the physical extent map for `$MFT` on a live volume:
 
 ```bash
-dump_mft_extents C:
+dump-mft-extents C:
 ```
 
 **Output:**
@@ -239,12 +239,12 @@ Total: 3 extents, 1000000 clusters, 3.91 GB
 Fragmentation: 3 fragments (moderately fragmented)
 ```
 
-### `verify_iocp_capture` — Capture Validation
+### `verify-iocp-capture` — Capture Validation
 
 Validate the integrity of an IOCP capture file:
 
 ```bash
-verify_iocp_capture C_capture.iocp
+verify-iocp-capture C_capture.iocp
 ```
 
 Checks: magic bytes, version, chunk count, chunk boundaries, record alignment, and optionally verifies individual record magic values.
@@ -303,7 +303,7 @@ rust-script scripts/dev/analyze_missing_frs.rs C_mft.bin C_index.parquet
 
 ```bash
 # 1. Capture MFT on Windows
-uffs_mft save C: C_mft.bin
+uffs-mft save C: C_mft.bin
 
 # 2. Search for deleted files (any platform)
 uffs "*.docx" --mft-file C_mft.bin --forensic --files-only \
@@ -318,14 +318,14 @@ uffs "*.docx" --mft-file C_mft.bin --forensic --files-only \
 
 ```bash
 # 1. Quick magic distribution scan
-scan_mft_magic C_mft.bin
+scan-mft-magic C_mft.bin
 
 # 2. Inspect any corrupt records
-dump_mft_records C_mft.bin --corrupt-only
+dump-mft-records C_mft.bin --corrupt-only
 
 # 3. Check parent-child integrity
-uffs_mft load C_mft.bin --build-index --export parquet -o C.parquet
-analyze_mft_parents C.parquet
+uffs-mft load C_mft.bin --build-index --export parquet -o C.parquet
+analyze-mft-parents C.parquet
 ```
 
 ### Workflow 3: Timeline Analysis
@@ -346,15 +346,15 @@ uffs "*" --mft-file C_mft.bin --forensic \
 
 ```bash
 # 1. Capture "before" state
-uffs_mft save C: before.bin
+uffs-mft save C: before.bin
 
 # 2. (... activity occurs ...)
 
 # 3. Capture "after" state
-uffs_mft save C: after.bin
+uffs-mft save C: after.bin
 
 # 4. Compare at record level
-compare_raw_mft before.bin after.bin
+compare-raw-mft before.bin after.bin
 
 # 5. Or compare at scan output level
 uffs "*" --mft-file before.bin --forensic > before.csv
@@ -366,9 +366,9 @@ python scripts/dev/compare_outputs.py before.csv after.csv
 
 ```bash
 # Windows only — inspect live MFT layout
-dump_mft_extents C:
-dump_mft_extents D:
-dump_mft_extents S:
+dump-mft-extents C:
+dump-mft-extents D:
+dump-mft-extents S:
 
 # Compare fragmentation across drives
 # More extents = more fragmented = slower HDD reads

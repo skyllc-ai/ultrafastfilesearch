@@ -220,7 +220,7 @@ Expected MFT entries (approx):
 
 To test:
   1. Run C++: UltraFastFileSearch.exe --drive $TargetDrive > cpp_test.csv
-  2. Run Rust: uffs_mft.exe read --drive $TargetDrive > rust_test.csv
+  2. Run Rust: uffs-mft.exe read --drive $TargetDrive > rust_test.csv
   3. Compare the outputs
 
 "@ -ForegroundColor White

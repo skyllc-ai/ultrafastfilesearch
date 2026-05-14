@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! CLI definitions for the `uffs_mft` binary.
+//! CLI definitions for the `uffs-mft` binary.
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-/// `uffs_mft`: Low-level NTFS MFT reading tool.
+/// `uffs-mft`: Low-level NTFS MFT reading tool.
 #[derive(Parser)]
-#[command(name = "uffs_mft")]
+#[command(name = "uffs-mft")]
 #[command(author, version, about, long_about = None)]
 pub(crate) struct Cli {
     /// Enable verbose output.
@@ -21,7 +21,7 @@ pub(crate) struct Cli {
     pub command: Commands,
 }
 
-/// Available subcommands for the `uffs_mft` CLI.
+/// Available subcommands for the `uffs-mft` CLI.
 #[derive(Subcommand)]
 pub(crate) enum Commands {
     /// Read MFT from a drive and export to Parquet
@@ -156,11 +156,11 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft save --drive C --output mft_c.mft
-    /// uffs_mft save -d C -o mft_c.mft --no-compress
-    /// uffs_mft save -d C -o mft_c.raw --raw  # Compatible with other MFT tools
-    /// uffs_mft save --upcase                  # Boot drive → upcase.bin
-    /// uffs_mft save --upcase -d D -o D_upcase.bin
+    /// uffs-mft save --drive C --output mft_c.mft
+    /// uffs-mft save -d C -o mft_c.mft --no-compress
+    /// uffs-mft save -d C -o mft_c.raw --raw  # Compatible with other MFT tools
+    /// uffs-mft save --upcase                  # Boot drive → upcase.bin
+    /// uffs-mft save --upcase -d D -o D_upcase.bin
     /// ```
     Save {
         /// Drive letter to read MFT from (e.g., C, D, E).
@@ -218,12 +218,12 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft load mft_c.mft --info-only
-    /// uffs_mft load mft_c.mft --output index.parquet
-    /// uffs_mft load mft_c.mft -o index.csv
-    /// uffs_mft load mft_c.mft --build-index  # Debug tree metrics
-    /// uffs_mft load mft_c.raw --drive C -o output.csv  # Raw NTFS format
-    /// uffs_mft load mft_c.iocp -o output.csv  # IOCP capture format
+    /// uffs-mft load mft_c.mft --info-only
+    /// uffs-mft load mft_c.mft --output index.parquet
+    /// uffs-mft load mft_c.mft -o index.csv
+    /// uffs-mft load mft_c.mft --build-index  # Debug tree metrics
+    /// uffs-mft load mft_c.raw --drive C -o output.csv  # Raw NTFS format
+    /// uffs-mft load mft_c.iocp -o output.csv  # IOCP capture format
     /// ```
     Load {
         /// Input raw MFT file path (created with 'save' command or other tools)
@@ -269,8 +269,8 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft benchmark-mft --drive C
-    /// uffs_mft benchmark-mft -d S
+    /// uffs-mft benchmark-mft --drive C
+    /// uffs-mft benchmark-mft -d S
     /// ```
     BenchmarkMft {
         /// Drive letter (e.g., C, D, E)
@@ -287,8 +287,8 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft benchmark-index --drive C
-    /// uffs_mft benchmark-index -d S
+    /// uffs-mft benchmark-index --drive C
+    /// uffs-mft benchmark-index -d S
     /// ```
     BenchmarkIndex {
         /// Drive letter (e.g., C, D, E)
@@ -305,9 +305,9 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft benchmark-index-lean --drive C
-    /// uffs_mft benchmark-index-lean -d S
-    /// uffs_mft benchmark-index-lean -d S --mode pipelined-parallel
+    /// uffs-mft benchmark-index-lean --drive C
+    /// uffs-mft benchmark-index-lean -d S
+    /// uffs-mft benchmark-index-lean -d S --mode pipelined-parallel
     /// ```
     BenchmarkIndexLean {
         /// Drive letter (e.g., C, D, E)
@@ -377,9 +377,9 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft benchmark-tree --drive C
-    /// uffs_mft benchmark-tree -d C --iterations 5
-    /// uffs_mft benchmark-tree -d C --no-cache
+    /// uffs-mft benchmark-tree --drive C
+    /// uffs-mft benchmark-tree -d C --iterations 5
+    /// uffs-mft benchmark-tree -d C --no-cache
     /// ```
     BenchmarkTree {
         /// Drive letter (e.g., C, D, E)
@@ -406,8 +406,8 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft benchmark-multi-volume --drives C,D,S
-    /// uffs_mft benchmark-multi-volume -d C,F
+    /// uffs-mft benchmark-multi-volume --drives C,D,S
+    /// uffs-mft benchmark-multi-volume -d C,F
     /// ```
     BenchmarkMultiVolume {
         /// Comma-separated list of drive letters (e.g., C,D,S)
@@ -423,7 +423,7 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft usn-info --drive C
+    /// uffs-mft usn-info --drive C
     /// ```
     UsnInfo {
         /// Drive letter (e.g., C, D, E)
@@ -439,9 +439,9 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft usn-read --drive C
-    /// uffs_mft usn-read --drive C --start-usn 12345678
-    /// uffs_mft usn-read --drive C --limit 100
+    /// uffs-mft usn-read --drive C
+    /// uffs-mft usn-read --drive C --start-usn 12345678
+    /// uffs-mft usn-read --drive C --limit 100
     /// ```
     UsnRead {
         /// Drive letter (e.g., C, D, E)
@@ -465,7 +465,7 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft index-save --drive C --output c_index.uffs
+    /// uffs-mft index-save --drive C --output c_index.uffs
     /// ```
     IndexSave {
         /// Drive letter (e.g., C, D, E)
@@ -484,7 +484,7 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft index-load --input c_index.uffs
+    /// uffs-mft index-load --input c_index.uffs
     /// ```
     IndexLoad {
         /// Input file path
@@ -500,9 +500,9 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft cache-status
-    /// uffs_mft cache-status --clean
-    /// uffs_mft cache-status --purge
+    /// uffs-mft cache-status
+    /// uffs-mft cache-status --clean
+    /// uffs-mft cache-status --purge
     /// ```
     CacheStatus {
         /// Remove expired cache files
@@ -522,8 +522,8 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft cache-get --drive C
-    /// uffs_mft cache-get --drive C --force
+    /// uffs-mft cache-get --drive C
+    /// uffs-mft cache-get --drive C --force
     /// ```
     CacheGet {
         /// Drive letter (e.g., C, D, E)
@@ -547,8 +547,8 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft cache-clear --drive C
-    /// uffs_mft cache-clear --all
+    /// uffs-mft cache-clear --drive C
+    /// uffs-mft cache-clear --all
     /// ```
     CacheClear {
         /// Drive letter to clear (e.g., C, D, E)
@@ -568,8 +568,8 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft index-update --drive C
-    /// uffs_mft index-update --drive C --force-full
+    /// uffs-mft index-update --drive C
+    /// uffs-mft index-update --drive C --force-full
     /// ```
     IndexUpdate {
         /// Drive letter (e.g., C, D, E)
@@ -597,10 +597,10 @@ pub(crate) enum Commands {
     /// # Examples
     ///
     /// ```text
-    /// uffs_mft index-all
-    /// uffs_mft index-all --drives C,D,E
-    /// uffs_mft index-all --no-cache
-    /// uffs_mft index-all --ttl 300
+    /// uffs-mft index-all
+    /// uffs-mft index-all --drives C,D,E
+    /// uffs-mft index-all --no-cache
+    /// uffs-mft index-all --ttl 300
     /// ```
     IndexAll {
         /// Comma-separated list of drive letters (default: all NTFS drives)

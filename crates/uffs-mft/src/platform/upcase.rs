@@ -25,8 +25,8 @@
 //! # Usage
 //!
 //! ```text
-//! uffs_mft save --upcase
-//! uffs_mft save --upcase --drive D --output D_upcase.bin
+//! uffs-mft save --upcase
+//! uffs-mft save --upcase --drive D --output D_upcase.bin
 //! ```
 
 use crate::error::{MftError, Result};

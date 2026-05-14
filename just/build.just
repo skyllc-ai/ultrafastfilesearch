@@ -262,7 +262,7 @@ use:
         ["uffs-macos-arm64"]="uffs"
         ["uffsd-macos-arm64"]="uffsd"
         ["uffsmcp-macos-arm64"]="uffsmcp"
-        ["uffs_mft-macos-arm64"]="uffs_mft"
+        ["uffs-mft-macos-arm64"]="uffs-mft"
     )
     INSTALLED=0
     SKIPPED=0
@@ -433,7 +433,7 @@ use:
     if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }
 
     # Kill running UFFS processes before copying to avoid file locks.
-    foreach ($proc in @('uffsd', 'uffs', 'uffsmcp', 'uffs_mft')) {
+    foreach ($proc in @('uffsd', 'uffs', 'uffsmcp', 'uffs-mft')) {
         $running = Get-Process -Name $proc -ErrorAction SilentlyContinue
         if ($running) {
             Write-Host "  Stopping $proc (PID $($running.Id -join ', '))..." -ForegroundColor Yellow
@@ -446,7 +446,7 @@ use:
         'uffs-windows-x64.exe' = 'uffs.exe'
         'uffsd-windows-x64.exe' = 'uffsd.exe'
         'uffsmcp-windows-x64.exe' = 'uffsmcp.exe'
-        'uffs_mft-windows-x64.exe' = 'uffs_mft.exe'
+        'uffs-mft-windows-x64.exe' = 'uffs-mft.exe'
     }
     $installed = 0; $skipped = 0
     foreach ($src in $binaries.Keys) {

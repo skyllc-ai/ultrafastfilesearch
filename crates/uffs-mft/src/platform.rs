@@ -30,7 +30,7 @@ pub use extents::MftExtent;
 pub use system::DriveType;
 // is_volume_read_only — Windows-only (non-Windows stub was removed because
 // every caller in this crate is #[cfg(windows)]-gated).  Consumed by the
-// uffs_mft bin (commands/windows/incremental.rs) via the external-style
+// uffs-mft bin (commands/windows/incremental.rs) via the external-style
 // `uffs_mft::platform::is_volume_read_only` path, so must be pub.
 #[cfg(windows)]
 pub use system::is_volume_read_only;
@@ -39,7 +39,7 @@ pub(crate) use system::u32_size_of;
 // System memory query — available on all platforms
 pub use system::{SystemMemory, query_system_memory};
 // Public API surface — consumed cross-crate (uffs-daemon), by the
-// uffs_mft bin (commands/) via `uffs_mft::platform::*` external-style
+// uffs-mft bin (commands/) via `uffs_mft::platform::*` external-style
 // paths, and as platform utility helpers (infer_drive_from_path,
 // volume_root_path are stable public API restored from the Phase 2.5
 // demotion in commit 1529cb162).
