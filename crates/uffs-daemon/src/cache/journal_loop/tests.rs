@@ -19,12 +19,17 @@
 //!   [`CursorStore::load`], cursor-on-save persistence, journal-wrap detection
 //!   via `journal_id` comparison).
 //!
-//! All tests use real wall-clock time (`tokio::time::sleep`) because
-//! the loop's `spawn_blocking` poll runs on a real OS thread and
-//! tokio's `pause`-mode virtual time cannot drive it forward.
-//! Convergence is deadline-driven via [`wait_for`] which mirrors
-//! the established `lifecycle_hooks.rs::CASCADE_DEADLINE` pattern
-//! in this crate.
+//! All tests use real wall-clock time because the loop's
+//! `spawn_blocking` poll runs on a real OS thread and tokio's
+//! `pause`-mode virtual time cannot drive it forward.  Convergence
+//! is **always** deadline-driven via [`wait_for`] — never via a
+//! standalone `tokio::time::sleep(N ms)` followed by an assertion,
+//! because a fixed N-ms sleep races on slow CI runners (see
+//! issue #208 history).  The pattern mirrors
+//! `lifecycle_hooks.rs::CASCADE_DEADLINE` and is the only way to
+//! get a reliable "give the runtime up to `CONVERGENCE_DEADLINE` to
+//! reach state X" assertion against a `spawn_blocking`-driven
+//! loop.
 //!
 //! [`MacStubJournalSource`]: super::MacStubJournalSource
 

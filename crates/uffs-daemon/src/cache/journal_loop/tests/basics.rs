@@ -20,7 +20,6 @@
 //!   source on macOS / Linux returns `(empty, cursor, 0)` without I/O.
 
 use alloc::sync::Arc;
-use core::time::Duration;
 
 use super::super::sources::MacStubJournalSource;
 use super::super::{JournalSource, PatchSink, spawn_journal_loop};
@@ -43,21 +42,30 @@ async fn empty_tick_does_not_call_accept() {
         fast_config(),
     );
 
-    // Let several ticks fire — every one returns empty changes.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Deterministic synchronisation (issue #208): wait until the
+    // loop has actually polled the source at least 3 times — well
+    // above any first-tick startup race — then assert the empty-tick
+    // contract held across those ticks.  Replaces the previous
+    // wall-clock `sleep(50ms)` which raced on slow CI runners and
+    // produced `FLKY-FL` retries (see issue #208).  Uses the same
+    // [`wait_for`] deadline-driven helper every other liveness test
+    // in this module already uses.
+    let source_for_pred = Arc::clone(&source);
+    let polled = wait_for(move || source_for_pred.cursors_seen().len() >= 3).await;
 
     let join = handle.cancel();
     drop(tokio::time::timeout(CONVERGENCE_DEADLINE, join).await);
 
     assert!(
+        polled,
+        "loop must have polled the source ≥ 3 times within \
+         {CONVERGENCE_DEADLINE:?} so the empty-tick contract is \
+         exercised across multiple ticks; got {} polls",
+        source.cursors_seen().len()
+    );
+    assert!(
         sink.calls().is_empty(),
         "no accept() call should fire when every poll returns empty changes"
-    );
-    // The source must still have been polled — prove the loop
-    // wasn't simply stuck before reaching the source.
-    assert!(
-        !source.cursors_seen().is_empty(),
-        "loop must have polled the source at least once"
     );
 }
 
