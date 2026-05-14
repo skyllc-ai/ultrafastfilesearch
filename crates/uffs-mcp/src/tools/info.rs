@@ -12,7 +12,7 @@ use crate::error::BridgeError;
 
 /// Input parameters for the `uffs_info` tool.
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct InfoArgs {
+pub(crate) struct InfoArgs {
     /// Full file or directory path to look up.
     pub path: String,
 }
@@ -22,7 +22,10 @@ pub struct InfoArgs {
 /// # Errors
 ///
 /// Returns [`BridgeError`] if the daemon call fails or path is missing.
-pub async fn run(client: &mut UffsClient, args: InfoArgs) -> Result<CallToolResult, BridgeError> {
+pub(crate) async fn run(
+    client: &mut UffsClient,
+    args: InfoArgs,
+) -> Result<CallToolResult, BridgeError> {
     if args.path.is_empty() {
         return Err(BridgeError::MissingParam("path"));
     }

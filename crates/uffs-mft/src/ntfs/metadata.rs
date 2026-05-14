@@ -28,7 +28,7 @@ pub struct StandardInformation {
 /// Standard Information attribute content (NTFS 3.0+ - 72 bytes).
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
-pub struct StandardInformationExtended {
+pub(crate) struct StandardInformationExtended {
     /// File creation time (FILETIME).
     pub creation_time: i64,
     /// Last modification time (FILETIME).
@@ -56,24 +56,10 @@ pub struct StandardInformationExtended {
 }
 
 /// Size of NTFS 1.2 `$STANDARD_INFORMATION` (36 bytes).
-pub const STANDARD_INFO_SIZE_V12: usize = 36;
+pub(crate) const STANDARD_INFO_SIZE_V12: usize = 36;
 
 /// Size of NTFS 3.0+ `$STANDARD_INFORMATION` (72 bytes).
-pub const STANDARD_INFO_SIZE_V30: usize = 72;
-
-/// File name namespace flags.
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileNamespace {
-    /// POSIX (case-sensitive, allows most characters).
-    Posix = 0,
-    /// Win32 (case-insensitive, standard Windows names).
-    Win32 = 1,
-    /// DOS 8.3 format.
-    Dos = 2,
-    /// Win32 and DOS (name is valid for both).
-    Win32AndDos = 3,
-}
+pub(crate) const STANDARD_INFO_SIZE_V30: usize = 72;
 
 /// File Name attribute content.
 #[repr(C, packed)]
@@ -101,7 +87,9 @@ pub struct FileNameAttribute {
     pub reserved: u16,
     /// File name length in characters.
     pub file_name_length: u8,
-    /// File name namespace.
+    /// File name namespace.  NTFS spec values: `0` = POSIX
+    /// (case-sensitive), `1` = Win32 (case-insensitive), `2` = DOS
+    /// (8.3 short name), `3` = Win32 and DOS (valid for both).
     pub file_name_namespace: u8,
 }
 
@@ -439,7 +427,7 @@ impl ExtendedStandardInfo {
 /// filtered out during output expansion.
 #[inline]
 #[must_use]
-pub fn is_internal_windows_stream(name: &str) -> bool {
+pub(crate) fn is_internal_windows_stream(name: &str) -> bool {
     name.strip_prefix('$').is_some_and(|rest| {
         rest.chars()
             .next()

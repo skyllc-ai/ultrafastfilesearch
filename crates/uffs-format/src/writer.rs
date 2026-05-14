@@ -27,12 +27,12 @@ use crate::row::FormatRow;
 /// allocation + channel overhead of rayon outweighs the formatting
 /// cost.  Above it, the 8-core parallel writer roughly halves the
 /// wall-clock (~24 ms → ~10 ms).
-pub const PARALLEL_WRITE_THRESHOLD: usize = 16_384;
+pub(crate) const PARALLEL_WRITE_THRESHOLD: usize = 16_384;
 
 /// Rows per parallel chunk.  Sized for ~4096 rows × ~128 bytes/row =
 /// ~512 KB — large enough to amortise the per-chunk fixed cost,
 /// small enough that 8 workers get at least a few chunks each.
-pub const PARALLEL_WRITE_CHUNK: usize = 4096;
+pub(crate) const PARALLEL_WRITE_CHUNK: usize = 4096;
 
 /// Write `rows` through `writer` using the columns + formatting
 /// specified by `cfg`.
@@ -113,7 +113,7 @@ where
     clippy::too_many_lines,
     reason = "exhaustive match over ~38 OutputColumn variants; the table is its own readability"
 )]
-pub fn write_row<R: FormatRow>(
+pub(crate) fn write_row<R: FormatRow>(
     buf: &mut String,
     itoa_buf: &mut itoa::Buffer,
     output_cols: &[OutputColumn],

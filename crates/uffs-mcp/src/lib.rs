@@ -110,27 +110,34 @@ fn default_mcp_log_file() -> std::path::PathBuf {
         .join("uffs_mcp.log")
 }
 
+// Phase 3 module-layout: most submodules are crate-internal. Only
+// `http` (bin/http_gateway.rs + main.rs `--gateway`) and `text`
+// (main_tests.rs format_aggregate_summary) need cross-bin visibility.
+// All other submodules are reachable only via internal `crate::*` paths.
 /// Agent cookbook — curated example queries (backing `uffs://cookbook`).
-pub mod cookbook;
+pub(crate) mod cookbook;
 /// MCP bridge error types.
-pub mod error;
+pub(crate) mod error;
 /// MCP [`ServerHandler`](rmcp::ServerHandler) implementation.
+///
+/// Kept `pub` because `tests/mcp_protocol.rs` (integration test,
+/// separate compilation unit) imports `uffs_mcp::handler::UffsMcpServer`.
 pub mod handler;
 /// Streamable HTTP gateway (feature-gated).
 #[cfg(feature = "streamable-http")]
 pub mod http;
 /// Static and live MCP resource implementations.
-pub mod resources;
+pub(crate) mod resources;
 /// MCP roots mapping policy.
-pub mod roots;
+pub(crate) mod roots;
 /// Output schema types for `outputSchema` / `structuredContent`.
-pub mod schemas;
+pub(crate) mod schemas;
 /// MCP server runtime statistics (lock-free counters).
-pub mod stats;
+pub(crate) mod stats;
 /// Human-readable text formatting for tool responses.
 pub mod text;
 /// Individual MCP tool handlers.
-pub mod tools;
+pub(crate) mod tools;
 
 // tower-service is used by http::tests — suppress unused-crate-dep warning.
 use core::sync::atomic::Ordering;

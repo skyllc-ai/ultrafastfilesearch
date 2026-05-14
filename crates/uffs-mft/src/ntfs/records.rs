@@ -10,10 +10,7 @@ use zerocopy::{FromBytes, Immutable, KnownLayout};
 use crate::ntfs::extract_data_runs_from_attribute;
 
 /// Magic number for FILE records ("FILE" in little-endian).
-pub const FILE_RECORD_MAGIC: u32 = 0x454C_4946;
-
-/// Magic number for INDX records ("INDX" in little-endian).
-pub const INDX_RECORD_MAGIC: u32 = 0x5844_4E49;
+pub(crate) const FILE_RECORD_MAGIC: u32 = 0x454C_4946;
 
 /// Sector size (standard for NTFS).
 pub const SECTOR_SIZE: usize = 512;
@@ -22,13 +19,19 @@ pub const SECTOR_SIZE: usize = 512;
 ///
 /// NTFS disk offsets are tracked as `u64`; aliasing the same compile-time
 /// constant in the wider integer type avoids `as u64` truncation casts at
-/// every alignment site without introducing runtime conversion.
-pub const SECTOR_SIZE_U64: u64 = 512;
+/// every alignment site without introducing runtime conversion.  Only the
+/// Windows-only I/O readers consume this alias, so the constant itself is
+/// gated to keep the non-Windows build's dead-code analysis honest.
+#[cfg(windows)]
+pub(crate) const SECTOR_SIZE_U64: u64 = 512;
 
 /// Multi-sector header present at the start of FILE and INDX records.
 ///
 /// Contains the Update Sequence Array (USA) used for sector-level
 /// integrity checking.
+///
+/// `pub` because it is the type of
+/// [`FileRecordSegmentHeader::multi_sector_header`] (a public-API field).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, FromBytes, Immutable, KnownLayout)]
 pub struct MultiSectorHeader {
@@ -45,12 +48,6 @@ impl MultiSectorHeader {
     #[must_use]
     pub const fn is_file_record(self) -> bool {
         self.magic == FILE_RECORD_MAGIC
-    }
-
-    /// Checks if this is a valid INDX record.
-    #[must_use]
-    pub const fn is_index_record(self) -> bool {
-        self.magic == INDX_RECORD_MAGIC
     }
 }
 
@@ -349,16 +346,6 @@ pub(crate) fn parse_non_resident_attribute_data(data: &[u8]) -> Option<NonReside
         data_size: read_i64_le(data, 32)?,
         initialized_size: read_i64_le(data, 40)?,
     })
-}
-
-/// Flags for file record segments.
-#[repr(u16)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileRecordFlags {
-    /// Record is in use.
-    InUse = 0x0001,
-    /// Record is a directory.
-    Directory = 0x0002,
 }
 
 /// File Record Segment Header (MFT entry header).

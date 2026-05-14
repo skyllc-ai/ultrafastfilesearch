@@ -124,15 +124,18 @@ use windows as _;
 // ============================================================================
 
 pub mod discovery;
-pub mod error;
-pub mod flags;
+// Phase 3: error, flags, ntfs have zero external module-path use;
+// downstream callers go through the flat `uffs_mft::{MftError, Result,
+// FileFlags, SECTOR_SIZE, AttributeIterator, ...}` re-exports below.
+pub(crate) mod error;
+pub(crate) mod flags;
 pub mod index;
 pub mod raw;
 pub mod raw_iocp;
 pub(crate) mod tree_metrics;
 
 // Cross-platform modules (NTFS structures and parsing)
-pub mod ntfs; // NTFS structure definitions - cross-platform
+pub(crate) mod ntfs; // NTFS structure definitions - cross-platform
 pub mod parse; // MFT record parsing - cross-platform
 
 // I/O operations module
@@ -193,9 +196,10 @@ pub use ntfs::SECTOR_SIZE;
 pub use ntfs::{
     AttributeIterator, AttributeListEntry, AttributeRecordHeader, AttributeRef, AttributeType,
     DataRun, ExtendedStandardInfo, FileNameAttribute, FileRecordSegmentHeader, IndexHeader,
-    IndexRoot, NameInfo, NonResidentAttributeData, NtfsBootSector, ReparseMountPointBuffer,
-    ReparsePointHeader, ReparseTag, ResidentAttributeData, StandardInformation, StreamInfo,
-    apply_usa_fixup, extract_data_runs_from_attribute, fixup_file_record, parse_data_runs,
+    IndexRoot, MultiSectorHeader, NameInfo, NonResidentAttributeData, NtfsBootSector,
+    ReparseMountPointBuffer, ReparsePointHeader, ReparseTag, ResidentAttributeData,
+    StandardInformation, StreamInfo, apply_usa_fixup, extract_data_runs_from_attribute,
+    fixup_file_record, parse_data_runs,
 };
 // Re-export platform types
 // Core types (DriveType, MftBitmap, MftExtent) are pure data — available on all platforms

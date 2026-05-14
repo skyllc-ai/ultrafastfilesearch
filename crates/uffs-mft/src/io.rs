@@ -13,7 +13,12 @@
 //! Available on all platforms for offline MFT processing (chaos mode, testing).
 //! Live MFT access via HANDLE is Windows-only and gated per-function.
 
-pub use crate::ntfs::{SECTOR_SIZE, SECTOR_SIZE_U64};
+pub use crate::ntfs::SECTOR_SIZE;
+// `SECTOR_SIZE_U64` is the matching u64 alias used by the I/O readers.
+// Gated to `cfg(windows)` to match its only consumers (the Windows-only
+// reader implementations under `io::readers::*` + `reader::persistence_capture`).
+#[cfg(windows)]
+pub(crate) use crate::ntfs::SECTOR_SIZE_U64;
 
 mod aligned_buffer;
 mod chunking;

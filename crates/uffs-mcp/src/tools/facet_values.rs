@@ -15,7 +15,7 @@ use crate::text::format_aggregate_summary;
 
 /// Input parameters for the `uffs_facet_values` tool.
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct FacetValuesArgs {
+pub(crate) struct FacetValuesArgs {
     /// Field to facet on (e.g. `extension`, `type`, `drive`).
     pub field: String,
     /// Search pattern to scope facet (default: `*`).
@@ -57,7 +57,7 @@ const fn default_top() -> u16 {
 /// # Errors
 ///
 /// Returns [`BridgeError`] if the daemon call fails.
-pub async fn run(
+pub(crate) async fn run(
     client: &mut UffsClient,
     args: FacetValuesArgs,
     roots_state: &RootsState,

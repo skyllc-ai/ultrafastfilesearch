@@ -40,14 +40,18 @@
 
 #![forbid(unsafe_code)]
 
-pub mod attr;
-pub mod column;
-pub mod config;
-pub mod datetime;
-pub mod derived;
-pub mod footer;
-pub mod row;
-pub mod writer;
+// Phase 3 module-layout: submodules are crate-internal organization.
+// External callers consume the curated `pub use` items below; no
+// downstream crate uses the `uffs_format::<sub>::Item` module path
+// (verified by workspace-wide grep on 2026-05-13 post-PR #220).
+pub(crate) mod attr;
+pub(crate) mod column;
+pub(crate) mod config;
+pub(crate) mod datetime;
+pub(crate) mod derived;
+pub(crate) mod footer;
+pub(crate) mod row;
+pub(crate) mod writer;
 
 pub use column::{BASELINE_COLUMN_ORDER, OutputColumn, PARITY_COLUMN_ORDER};
 pub use config::OutputConfig;

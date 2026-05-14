@@ -7,15 +7,16 @@
 //! and an [`UffsClient`](uffs_client::connect::UffsClient), returning an
 //! [`rmcp::model::CallToolResult`].
 
+// Phase 3: parent `tools` is `pub(crate)`; siblings stay private to it.
 /// `uffs_aggregate` — server-side aggregation summaries.
-pub mod aggregate;
+pub(crate) mod aggregate;
 /// `uffs_drives` — list indexed NTFS drives.
-pub mod drives;
+pub(crate) mod drives;
 /// `uffs_facet_values` — search within facet values for a field.
-pub mod facet_values;
+pub(crate) mod facet_values;
 /// `uffs_info` — file/directory detail lookup by path.
-pub mod info;
+pub(crate) mod info;
 /// `uffs_search` — file search across all indexed drives.
-pub mod search;
+pub(crate) mod search;
 /// `uffs_status` — daemon health and loading progress.
-pub mod status;
+pub(crate) mod status;

@@ -19,7 +19,7 @@
 use crate::row::FormatRow;
 
 /// Bulkiness fixed-point scale — `1.0 == BULKINESS_SCALE`.
-pub const BULKINESS_SCALE: u64 = 1_000_000;
+pub(crate) const BULKINESS_SCALE: u64 = 1_000_000;
 
 /// Executable file extensions.
 const EXECUTABLES: &[&str] = &["exe", "msi", "bat", "cmd", "ps1", "com", "scr"];
@@ -131,7 +131,7 @@ pub(crate) fn extension_from_name(name: &str) -> Option<&str> {
 /// `"directory"`; files with no extension return `"file"`; otherwise
 /// the filename's extension is matched against the category tables
 /// above.  Unknown extensions fall through to `"other"`.
-pub fn semantic_type_for_row<R: FormatRow>(row: &R) -> &'static str {
+pub(crate) fn semantic_type_for_row<R: FormatRow>(row: &R) -> &'static str {
     if row.is_directory() {
         return "directory";
     }
@@ -144,7 +144,7 @@ pub fn semantic_type_for_row<R: FormatRow>(row: &R) -> &'static str {
 
 /// Map an extension string to its category label.
 #[must_use]
-pub fn semantic_type_from_extension(ext: &str) -> &'static str {
+pub(crate) fn semantic_type_from_extension(ext: &str) -> &'static str {
     if DOCUMENTS.contains(&ext) {
         "document"
     } else if PICTURES.contains(&ext) {
@@ -211,7 +211,7 @@ const fn bulkiness_from_sizes(logical: u64, allocated: u64) -> u64 {
 /// Directories use `treesize` / `tree_allocated`; files use `size` /
 /// `allocated`.  Matches `uffs_core::search::derived::bulkiness_for_row`
 /// byte-for-byte on shared inputs.
-pub fn bulkiness_for_row<R: FormatRow>(row: &R) -> u64 {
+pub(crate) fn bulkiness_for_row<R: FormatRow>(row: &R) -> u64 {
     let (logical, allocated) = if row.is_directory() {
         (row.treesize(), row.tree_allocated())
     } else {

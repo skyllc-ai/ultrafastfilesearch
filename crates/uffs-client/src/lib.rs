@@ -92,8 +92,9 @@ pub mod mcp_pid;
 pub mod protocol;
 pub mod shmem;
 pub mod stdout_kind;
-pub mod types;
-pub mod verify;
+// Phase 3: types and verify have zero external module-path use.
+pub(crate) mod types;
+pub(crate) mod verify;
 /// Windows-only per-RPC deadline enforcement.
 ///
 /// Background watchdog thread that cancels synchronous I/O on the

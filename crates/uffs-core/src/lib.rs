@@ -62,15 +62,26 @@ pub mod compact;
 pub mod compact_cache;
 pub(crate) mod compact_filters;
 pub mod compact_loader;
-pub mod compact_mmap;
-pub mod compact_reader;
+// Phase 3: `compact_mmap` and `glob` have zero external module-path
+// consumers (verified 2026-05-13 via workspace grep).  They retain
+// internal use via `crate::*` paths.
+pub(crate) mod compact_mmap;
 pub mod compact_storage;
 pub(crate) mod compiled_pattern;
 mod error;
 mod export;
 pub mod extensions;
-pub mod format;
-pub mod glob;
+pub(crate) mod glob;
+// Phase 3 audit (2026-05-13): `index_search` and its `pub use {…}`
+// re-exports have ZERO external module-path consumers, but the
+// submodule itself has ~91 pre-existing dead-code items (variants,
+// methods, functions never used internally either) that strict
+// dead-code analysis only sees once visibility is reduced.  Demotion
+// is deferred to a focused dead-code-cleanup PR — Phase 3 keeps the
+// module `pub` to avoid scope creep.  Tracked in the Phase 3 outcome
+// report; recommended next pass: prune `index_search::{routing,
+// query::{planning, filtering, expansion, execution, builder}, pattern,
+// result}` to remove the unused enums, methods, and re-exports.
 pub mod index_search;
 pub mod output;
 mod path_resolver;

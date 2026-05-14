@@ -130,7 +130,7 @@ pub(crate) struct StatusOutput {
 
 /// Structured output for `uffs_aggregate`.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct AggregateOutput {
+pub(crate) struct AggregateOutput {
     /// Total records scanned.
     pub records_scanned: usize,
     /// Query execution time in milliseconds.

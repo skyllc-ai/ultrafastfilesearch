@@ -19,7 +19,7 @@ use core::fmt::Write as _;
 /// `"0000-00-00 00:00:00"` instead of decomposing to a 1601 date, so
 /// callers (and users reading CSV output) can recognise missing
 /// timestamps.
-pub fn append_datetime_native(buf: &mut String, filetime: i64, tz_offset_secs: i32) {
+pub(crate) fn append_datetime_native(buf: &mut String, filetime: i64, tz_offset_secs: i32) {
     let local_ft = uffs_time::filetime_with_tz_bias(filetime, tz_offset_secs);
     if let Some((year, month, day, hour, minute, second)) =
         uffs_time::filetime_to_calendar(local_ft)

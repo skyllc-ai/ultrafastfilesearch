@@ -218,7 +218,9 @@ fn append_datetime_tz(buf: &mut String, filetime: i64, tz_offset_secs: i32) {
 /// `RequestHandler::try_pack_csv_blob` fast path and this CLI slow
 /// path emit byte-identical footer bytes.  Any change to the footer
 /// shape (CRLF, fast-scan heuristic, drive-letter formatting) MUST
-/// go through [`uffs_format::footer`] so both sites pick it up.
+/// go through [`uffs_format::write_legacy_drive_footer`] (the public
+/// entry point of the now-`pub(crate)` `uffs_format::footer` module)
+/// so both sites pick it up.
 ///
 /// # Errors
 ///

@@ -28,33 +28,46 @@ mod records;
 #[cfg(test)]
 mod tests;
 
+// Phase 3 — split re-exports by reachability from `lib.rs`.
+//
+// `pub use` for items that `crates/uffs-mft/src/lib.rs::pub use ntfs::{…}`
+// re-publishes at crate root (external API).
+//
+// `pub(crate) use` for items only consumed within `uffs-mft` itself
+// (kept as items here but not part of the crate's public surface).
+
 pub use self::boot_sector::NtfsBootSector;
 pub use self::data_runs::{DataRun, extract_data_runs_from_attribute, parse_data_runs};
 pub use self::metadata::{
-    AttributeListEntry, ExtendedStandardInfo, FileNameAttribute, FileNamespace, IndexHeader,
-    IndexRoot, NameInfo, ReparseMountPointBuffer, ReparsePointHeader, ReparseTag,
-    STANDARD_INFO_SIZE_V12, STANDARD_INFO_SIZE_V30, StandardInformation,
-    StandardInformationExtended, StreamInfo, is_internal_windows_stream,
+    AttributeListEntry, ExtendedStandardInfo, FileNameAttribute, IndexHeader, IndexRoot, NameInfo,
+    ReparseMountPointBuffer, ReparsePointHeader, ReparseTag, StandardInformation, StreamInfo,
 };
+pub(crate) use self::metadata::{
+    STANDARD_INFO_SIZE_V12, STANDARD_INFO_SIZE_V30, StandardInformationExtended,
+    is_internal_windows_stream,
+};
+// `FILE_RECORD_MAGIC` is the on-disk magic value used by [`parse::fixup`] to
+// recognise FILE records.  `SECTOR_SIZE_U64` is the u64 alias used by the
+// Windows-only I/O readers.  Neither is part of the crate's public surface;
+// `pub(crate) use` keeps them reachable through this module-level facade for
+// internal consumers without re-publishing them externally.
+pub(crate) use self::records::FILE_RECORD_MAGIC;
+#[cfg(windows)]
+pub(crate) use self::records::SECTOR_SIZE_U64;
 pub use self::records::{
-    AttributeIterator, AttributeRecordHeader, AttributeRef, AttributeType, FILE_RECORD_MAGIC,
-    FileRecordFlags, FileRecordSegmentHeader, INDX_RECORD_MAGIC, MultiSectorHeader,
-    NonResidentAttributeData, ResidentAttributeData, SECTOR_SIZE, SECTOR_SIZE_U64, apply_usa_fixup,
-    fixup_file_record,
+    AttributeIterator, AttributeRecordHeader, AttributeRef, AttributeType, FileRecordSegmentHeader,
+    MultiSectorHeader, NonResidentAttributeData, ResidentAttributeData, SECTOR_SIZE,
+    apply_usa_fixup, fixup_file_record,
 };
 
 /// Extracts the File Record Segment number from a file reference.
 ///
-/// The lower 48 bits contain the FRS number.
+/// NTFS file references pack the FRS into the lower 48 bits and the
+/// sequence number into the upper 16 bits.  Production code currently
+/// only consumes the FRS half; the sequence-number extraction is
+/// verified inline in `tests::file_reference_extraction` against the
+/// bit layout this function relies on.
 #[must_use]
-pub const fn file_reference_to_frs(file_reference: u64) -> u64 {
+pub(crate) const fn file_reference_to_frs(file_reference: u64) -> u64 {
     file_reference & 0x0000_FFFF_FFFF_FFFF
-}
-
-/// Extracts the sequence number from a file reference.
-///
-/// The upper 16 bits contain the sequence number.
-#[must_use]
-pub const fn file_reference_to_sequence(file_reference: u64) -> u16 {
-    (file_reference >> 48_i32) as u16
 }

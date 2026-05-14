@@ -24,7 +24,7 @@ const MAX_TEXT_CHARS: usize = 50_000;
 
 /// Input parameters for the `uffs_aggregate` tool.
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct AggregateArgs {
+pub(crate) struct AggregateArgs {
     /// Search pattern to scope aggregation (default: `*`).
     #[serde(default = "default_pattern")]
     pub pattern: String,
@@ -66,7 +66,7 @@ fn default_pattern() -> String {
 /// # Errors
 ///
 /// Returns [`BridgeError`] if the daemon call fails.
-pub async fn run(
+pub(crate) async fn run(
     client: &mut UffsClient,
     args: AggregateArgs,
     roots_state: &RootsState,
