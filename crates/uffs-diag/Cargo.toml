@@ -58,6 +58,20 @@ categories.workspace = true
 # released its nightly-API patches; it is internal-by-design tooling.
 publish.workspace = true
 
+# Phase R6 of `release-automation-plan.md` step 3: docs.rs build configuration.
+# This crate is `publish = false` (internal tooling), so docs.rs will never
+# build it; this block is preserved for workspace-uniform manifest shape (per
+# Phase 1 follow-up F1.15 / issue #214).  Should this crate ever flip to
+# publishable, the block is already in place.
+#
+# `targets` mirrors `uffs-mft` / `uffs-broker`: the diagnostic tools include
+# Windows-only entry points (`dump_mft_extents`, `scan_mft_magic`) alongside
+# cross-platform analysis tools (`analyze_diff`, `compare_scan_parity`).
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Binaries
 # ─────────────────────────────────────────────────────────────────────────────

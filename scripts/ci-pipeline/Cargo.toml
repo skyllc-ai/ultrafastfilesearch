@@ -36,6 +36,15 @@ description = "UFFS internal CI pipeline driver (promoted from rust-script; not 
 # because it is internal CI orchestration, not a reusable library.
 publish.workspace = true
 
+# Phase R6 of `release-automation-plan.md` step 3: docs.rs build configuration.
+# This crate is `publish = false` (internal CI orchestration), so docs.rs will
+# never build it; this block is preserved for workspace-uniform manifest shape
+# (per Phase 1 follow-up F1.15 / issue #214).  Pure Rust CLI tooling — the
+# docs.rs default (Linux x86_64) build is sufficient if it ever runs.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [[bin]]
 name = "uffs-ci-pipeline"
 path = "src/main.rs"
