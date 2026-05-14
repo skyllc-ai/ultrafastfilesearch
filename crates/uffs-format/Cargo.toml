@@ -31,15 +31,24 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-# Phase R6→R8 deviation row 5 — polars-subtree publishability deferred.
-# This crate has zero direct polars references in code (the "thin-client
-# invariant" comment above is faithful) but its dep tree includes
-# `uffs-mft → uffs-polars` for cross-crate helpers (`len_to_u16`,
-# `StandardInfo::parity_attributes`).  `cargo package` resolves the full
-# dep tree, so this crate inherits uffs-polars's publishability problem
-# until polars upstream publishes a release with the nightly-API
-# patches.  See `crates/uffs-polars/Cargo.toml` and the deviation log
-# row 5 in `docs/architecture/release-automation-plan.md`.
+# Phase R6→R8 deviation row 5 — historical context (issue #216 closed
+# this entanglement on 2026-05-13).  This crate previously inherited
+# uffs-polars's publishability deferral via the `uffs-mft → uffs-polars`
+# dep edge that existed solely to call `uffs_mft::len_to_u16` from
+# `src/writer.rs`.  Issue #216 broke that edge by inlining the 3-line
+# saturating-cast helper into `writer.rs::len_to_u16` (Option B from
+# the issue).  The `StandardInfo::parity_attributes()` reference in
+# `src/attr.rs` is a documentation cross-reference only (it doesn't
+# compile against the type), so the dep was genuinely single-use.
+#
+# Net effect: `uffs-format` now has *no* uffs-polars in its transitive
+# dep tree (verified post-removal).  Its publishability is no longer
+# Polars-blocked — it can flip to `publish = true` independently of
+# the uffs-polars deferral, pending its own publishability review.
+# For now it inherits the workspace default (`publish = false`) to
+# match the conservative "publish nothing until the architecture
+# review signs off on each crate" posture established in
+# `docs/architecture/release-automation-plan.md`.
 publish.workspace = true
 
 # Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
@@ -49,9 +58,10 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-# Foundation crates — FILETIME arithmetic and len-to-u32 helpers.
+# Foundation crate — FILETIME arithmetic in `datetime::append_datetime_native`.
+# The previous `uffs-mft.workspace = true` dep was removed by issue #216
+# (Option B: inline `len_to_u16` into `src/writer.rs`).
 uffs-time.workspace = true
-uffs-mft.workspace = true
 
 # No-alloc integer-to-string formatter for the per-row hot path.
 itoa.workspace = true
